@@ -218,6 +218,7 @@ The reference relay writes a single `relay_disputes` row with JSON resolution da
 
 - Adjudication deadline: 72 hours from evidence window close.
 - Timeout without resolution defaults to `split` with `split_ratio: 0.5`.
+- **Minimum federation size for happy-path validation.** The "≥3-peer quorum" floor in §6.2 combined with the no-self-adjudication rule in §6.5 implies that a single-operator federation needs at least 4 relays for the orchestrator to ever validate the happy path: the leader is one, and three OTHER active peers are required to vote. A 3-relay triangle gives each leader only 2 others and always falls through to "insufficient federation peers." This is operator guidance, not a normative wire-format constraint — independent operators are encouraged to peer with each other to satisfy §6.2 with smaller individual fleets, since vote independence (the actual property §6.2 protects) is a multi-operator property regardless of single-operator fleet size.
 
 ## 7. Fund Handling
 

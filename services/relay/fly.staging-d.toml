@@ -1,0 +1,67 @@
+# Staging-D / fourth federation-peer-test instance of @motebit/relay.
+#
+# Sibling of `fly.staging.toml`, `fly.staging-b.toml`, `fly.staging-c.toml`.
+# Identical Docker image, identical config — only the app name, endpoint URL,
+# display name, and volume name differ. Purpose: closes the §6.2 dispute
+# orchestration ≥3-OTHER-peer quorum that a 3-relay triangle does NOT meet
+# (each leader in a triangle sees only 2 other peers; spec/dispute-v1.md §6.2
+# requires "minimum 3-peer quorum from the federation graph" and §6.5 forbids
+# self-adjudication so the leader cannot self-vote into the count).
+#
+# K4 mesh (stg, stg-b, stg-c, stg-d) gives each leader exactly 3 OTHER active
+# peers — the §6.2 floor. This is the smallest spec-true topology for live
+# §6.2 happy-path validation.
+#
+# Single-operator caveat: all four relays run in Daniel's fly account, so
+# this validates the orchestration code path but NOT vote independence.
+# Vote independence requires a multi-operator mesh — see
+# operator_transparency_stage_2_deferred.
+#
+# Deploy:    fly deploy --config fly.staging-d.toml
+# Status:    fly status --config fly.staging-d.toml
+# Tail logs: fly logs --config fly.staging-d.toml
+# Destroy:   fly apps destroy motebit-sync-stg-d
+#
+# This config intentionally does NOT enable litestream (ephemeral SQLite is
+# fine for a peer-test instance).
+app = "motebit-sync-stg-d"
+primary_region = "sjc"
+kill_signal = "SIGINT"
+kill_timeout = 5
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+  MOTEBIT_DB_PATH = "/data/motebit.db"
+  # Federation: announce this relay at its public fly URL so peer relays
+  # can route heartbeats and forwarded tasks back. Display name is what
+  # shows up in the peer relay's federation/v1/peers list.
+  MOTEBIT_FEDERATION_ENDPOINT_URL = "https://motebit-sync-stg-d.fly.dev"
+  MOTEBIT_FEDERATION_DISPLAY_NAME = "motebit-sync-stg-d (fourth peer-test relay, §6.2 K4 quorum)"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 250
+    soft_limit = 200
+
+  [[http_service.checks]]
+    interval = "15s"
+    grace_period = "5s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    timeout = "2s"
+
+[mounts]
+  source = "motebit_sync_stg_d_data"
+  destination = "/data"

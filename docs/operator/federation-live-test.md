@@ -15,7 +15,7 @@ Phase numbering preserves the original 1-5 sequence; 6 + 7 land between Phase 4 
 
 ## Prerequisites
 
-Two real relay deployments are required. The reference setup uses Fly.io:
+The live test uses two real relay deployments. The reference setup uses Fly.io:
 
 | Relay | URL                                  | Config                              |
 | ----- | ------------------------------------ | ----------------------------------- |
@@ -24,14 +24,16 @@ Two real relay deployments are required. The reference setup uses Fly.io:
 
 Both apps share the **same** `MOTEBIT_API_TOKEN`. The script registers a test agent on B and discovers it from A under that bearer.
 
+The full staging fleet is larger — four relays in a K4 mesh; see "Staging fleet topology" below. The live test exercises only A + B; relays C + D are the §6.2 dispute-orchestration mesh complement that the orchestrator's Phase 8 will use.
+
 To rotate the test token:
 
 ```bash
 TOKEN=$(node -e 'console.log(require("crypto").randomBytes(16).toString("hex"))')
-fly secrets set MOTEBIT_API_TOKEN="$TOKEN" -a motebit-sync-stg --stage
-fly secrets set MOTEBIT_API_TOKEN="$TOKEN" -a motebit-sync-stg-b --stage
-fly machine restart $(fly machine list -a motebit-sync-stg --json | jq -r '.[0].id') -a motebit-sync-stg
-fly machine restart $(fly machine list -a motebit-sync-stg-b --json | jq -r '.[0].id') -a motebit-sync-stg-b
+for app in motebit-sync-stg motebit-sync-stg-b motebit-sync-stg-c motebit-sync-stg-d; do
+  fly secrets set MOTEBIT_API_TOKEN="$TOKEN" -a "$app" --stage
+  fly machine restart $(fly machine list -a "$app" --json | jq -r '.[0].id') -a "$app"
+done
 ```
 
 ## Run
@@ -71,23 +73,40 @@ The two relays don't share the same `MOTEBIT_API_TOKEN`. Re-run the rotation blo
 
 ### Both relays unreachable
 
-Check `fly status -a motebit-sync-stg` and `fly status -a motebit-sync-stg-b`. If a machine is in `stopped` state, fly's `auto_stop_machines` parked it; the next request will wake it but Phase 1 may time out on the cold start. Wait 10 seconds and re-run.
+Check `fly status` across all four staging relays (`motebit-sync-stg{,-b,-c,-d}`). If a machine is in `stopped` state, fly's `auto_stop_machines` parked it; the next request will wake it but Phase 1 may time out on the cold start. Wait 10 seconds and re-run.
 
 ## What this does NOT validate
 
-- **§6.2 dispute orchestration.** Adjudicator quorum requires ≥3 peers; staging only has 2. Deferred until a third peer is deployed.
+- **§6.2 execution-ledger dispute orchestration happy path.** The K4 staging mesh exists (stg, stg-b, stg-c, stg-d — see "Staging fleet topology"), satisfying the `dispute-v1.md` §6.2 + §6.5 + §6.6 minimum mesh size for a single-operator fleet. The orchestrator's Phase 8 will be added by shape 2 of the §6.2 arc; until then, the live test exercises only the §15 horizon-cert dispute path (Phases 6 + 7) and not the §6 execution-ledger dispute path. Single-operator caveat: K4 validates orchestration code paths, not vote independence.
 - **Real cross-relay task forwarding under load.** The script registers a test agent and discovers it; it does not submit a real task that gets routed across the federation boundary. That's an additional scenario.
 - **Heartbeat-based peer suspension.** The 3-missed-heartbeat suspension rule is exercised in `federation-chaos.test.ts` against in-memory relays; a real-network test would need a deliberate disconnect (firewall rule, fly machine stop) which this script doesn't do.
 - **Recovery semantics after a peer comes back online.** Same — chaos territory, not a single-pass live test.
 
 ## Operational cost
 
-`motebit-sync-stg-b` is a shared-CPU 1x machine on Fly.io with a 1GB volume. Approximately $5/month at current Fly pricing. Auto-stop is enabled, so idle hours don't burn full price.
+Each staging relay (`motebit-sync-stg{-b,-c,-d}`) is a shared-CPU 1x machine on Fly.io with a 1GB volume — approximately $5/month each at current Fly pricing, ~$20/month for the full K4 staging fleet (`stg` + three §6.2 mesh complements). Auto-stop is enabled, so idle hours don't burn full price.
+
+## Staging fleet topology
+
+The staging federation is a K4 mesh of four `motebit-sync-stg{,-b,-c,-d}` apps, all peered bidirectionally. K4 (each leader sees 3 active OTHER peers) is the minimum that satisfies `dispute-v1.md` §6.2 + §6.5 + §6.6 for a single-operator fleet — a 3-relay triangle would give each leader only 2 others, failing the §6.2 quorum floor.
+
+| Relay   | URL                                  | Config                              | Purpose                              |
+| ------- | ------------------------------------ | ----------------------------------- | ------------------------------------ |
+| A (stg) | `https://motebit-sync-stg.fly.dev`   | `services/relay/fly.staging.toml`   | Live-test "A"; also peered with prod |
+| B       | `https://motebit-sync-stg-b.fly.dev` | `services/relay/fly.staging-b.toml` | Live-test "B"                        |
+| C       | `https://motebit-sync-stg-c.fly.dev` | `services/relay/fly.staging-c.toml` | §6.2 mesh complement                 |
+| D       | `https://motebit-sync-stg-d.fly.dev` | `services/relay/fly.staging-d.toml` | §6.2 mesh complement                 |
+
+To re-establish the mesh from scratch (e.g., after destroying + recreating any apps): `node scripts/staging-federation-mesh.mjs`. Six pair handshakes (n choose 2 with n=4), per-pair failure isolation. Verify via `curl <relay>/federation/v1/peers | jq` — each relay should report 3 active OTHER peers (stg additionally shows prod).
+
+Single-operator caveat: all four relays run in one fly account, so the mesh validates §6.2 orchestration code paths but not vote independence (vote independence is a multi-operator property — see `operator_transparency_stage_2_deferred`).
 
 ## Cleanup if not running tests for a while
 
 ```bash
-fly apps destroy motebit-sync-stg-b
+for app in motebit-sync-stg-b motebit-sync-stg-c motebit-sync-stg-d; do
+  fly apps destroy "$app"
+done
 ```
 
-Removes the second peer cleanly. The first peer (`motebit-sync-stg`) stays — it's federation-peered with prod and serves as the always-on cross-cloud probe.
+Removes the §6.2 K4-mesh complement cleanly. The first peer (`motebit-sync-stg`) stays — it's federation-peered with prod and serves as the always-on cross-cloud probe. To rebuild after teardown: `fly deploy --config services/relay/fly.staging-{b,c,d}.toml --remote-only` for each, set the shared `MOTEBIT_API_TOKEN`, then re-run `node scripts/staging-federation-mesh.mjs`.
