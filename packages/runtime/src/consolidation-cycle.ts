@@ -1,7 +1,7 @@
 /**
  * Consolidation cycle — the proactive interior's sole maintenance loop.
  *
- * Four phases run in order on each invocation:
+ * Five phases run in order on each invocation:
  *
  *   orient      — read the current memory index and the recent-activity
  *                 window. Cheap projection over the live graph.
@@ -12,7 +12,12 @@
  *                 memory, link parents with PartOf edges, tombstone the
  *                 cluster members.
  *   prune       — retention enforcement, decay tombstoning, low-notability
- *                 noise-removal.
+ *                 noise-removal. Memory's `mutable_pruning` retention
+ *                 shape per docs/doctrine/retention-policy.md.
+ *   flush       — `consolidation_flush` retention shape over the
+ *                 conversation store + tool-audit sink: erase records
+ *                 past `max(sensitivity_floor, obligation_floor)`,
+ *                 lazy-classify on read, sign per-record certs.
  *
  * Each phase has an independent budget (default 15s). When the budget
  * fires, the phase yields partial work and the cycle moves to the next
