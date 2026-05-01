@@ -86,23 +86,25 @@ export class TauriToolAuditSink implements AuditLogSink {
   private _flushCandidatesCache: ToolAuditEntry[] = [];
 
   async preloadFlushCandidates(beforeTimestamp: number): Promise<void> {
-    const rows = (await this.invoke("db_query", {
+    const rows = await this.invoke<
+      Array<{
+        call_id: string;
+        turn_id: string;
+        run_id: string | null;
+        tool: string;
+        args: string;
+        decision: string;
+        result: string | null;
+        injection: string | null;
+        cost_units: number;
+        timestamp: number;
+        sensitivity: string | null;
+      }>
+    >("db_query", {
       sql: `SELECT call_id, turn_id, run_id, tool, args, decision, result, injection, cost_units, timestamp, sensitivity
             FROM tool_audit_log WHERE timestamp < ? ORDER BY timestamp ASC`,
       params: [beforeTimestamp],
-    })) as Array<{
-      call_id: string;
-      turn_id: string;
-      run_id: string | null;
-      tool: string;
-      args: string;
-      decision: string;
-      result: string | null;
-      injection: string | null;
-      cost_units: number;
-      timestamp: number;
-      sensitivity: string | null;
-    }>;
+    });
     this._flushCandidatesCache = rows.map((r) => {
       const entry: ToolAuditEntry = {
         callId: r.call_id,
