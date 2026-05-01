@@ -127,7 +127,8 @@ export function createDisputeTables(db: DatabaseDriver): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS relay_dispute_resolutions (
       resolution_id     TEXT PRIMARY KEY,
-      dispute_id        TEXT NOT NULL UNIQUE,
+      dispute_id        TEXT NOT NULL,
+      round             INTEGER NOT NULL DEFAULT 1,
       resolution        TEXT NOT NULL,
       rationale         TEXT NOT NULL,
       fund_action       TEXT NOT NULL,
@@ -137,6 +138,7 @@ export function createDisputeTables(db: DatabaseDriver): void {
       resolved_at       INTEGER NOT NULL,
       signature         TEXT NOT NULL,
       is_appeal         INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (dispute_id, round),
       FOREIGN KEY (dispute_id) REFERENCES relay_disputes(dispute_id)
     );
   `);
@@ -193,7 +195,12 @@ function tryFinalizeIfWindowExpired(
   // fund_action atomically. Pull fund_action + split_ratio from the
   // resolution row (the orchestrator persisted them at /resolve time).
   const resolution = db
-    .prepare("SELECT fund_action, split_ratio FROM relay_dispute_resolutions WHERE dispute_id = ?")
+    .prepare(
+      // Round=1 specifically: lazy-finalize fires when round-1 resolved
+      // without an appeal. Round=2 resolutions trigger their own
+      // appealed → final transition inline (commit 4b /appeal flow).
+      "SELECT fund_action, split_ratio FROM relay_dispute_resolutions WHERE dispute_id = ? AND round = 1",
+    )
     .get(dispute.dispute_id as string) as
     | { fund_action: DisputeFundAction; split_ratio: number }
     | undefined;
@@ -474,7 +481,11 @@ export async function orchestrateFederationResolution(
   },
 ): Promise<FederationResolutionResult> {
   const { db, relayIdentity } = deps;
-  const fetchImpl = deps.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  // Defer-bind the default so vi.stubGlobal in tests is observed at
+  // call time, not construction time. Pure binding at registerDisputeRoutes
+  // time would freeze the pre-stub global fetch.
+  const fetchImpl: typeof fetch =
+    deps.fetchImpl ?? ((...args) => globalThis.fetch(...(args as Parameters<typeof fetch>)));
   const timeoutMs = deps.voteRequestTimeoutMs ?? FEDERATION_VOTE_REQUEST_TIMEOUT_MS;
 
   // 1. Enumerate active peers (excluding self per §6.5)
@@ -610,7 +621,11 @@ export async function orchestrateFederationResolution(
 
 export function registerDisputeRoutes(deps: DisputeDeps): void {
   const { db, app, relayIdentity } = deps;
-  const fetchImpl = deps.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  // Defer-bind the default so vi.stubGlobal in tests is observed at
+  // call time, not construction time. Pure binding at registerDisputeRoutes
+  // time would freeze the pre-stub global fetch.
+  const fetchImpl: typeof fetch =
+    deps.fetchImpl ?? ((...args) => globalThis.fetch(...(args as Parameters<typeof fetch>)));
   const voteRequestTimeoutMs = deps.voteRequestTimeoutMs ?? FEDERATION_VOTE_REQUEST_TIMEOUT_MS;
 
   // ── POST /api/v1/allocations/:allocationId/dispute (§4) ──
@@ -913,7 +928,10 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     //    the persisted resolution).
     const existing = db
       .prepare(
-        "SELECT resolution, rationale, fund_action, split_ratio, adjudicator_votes, resolved_at FROM relay_dispute_resolutions WHERE dispute_id = ?",
+        // ORDER BY round DESC LIMIT 1: if round 2 exists (post-appeal),
+        // return it; else return round 1. /resolve cached-path always
+        // reflects the latest signed verdict.
+        "SELECT resolution, rationale, fund_action, split_ratio, adjudicator_votes, resolved_at FROM relay_dispute_resolutions WHERE dispute_id = ? ORDER BY round DESC LIMIT 1",
       )
       .get(disputeId) as
       | {
@@ -1085,11 +1103,12 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       try {
         db.prepare(
           `INSERT INTO relay_dispute_resolutions
-             (resolution_id, dispute_id, resolution, rationale, fund_action, split_ratio, adjudicator, adjudicator_votes, resolved_at, signature)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (resolution_id, dispute_id, round, resolution, rationale, fund_action, split_ratio, adjudicator, adjudicator_votes, resolved_at, signature)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           resolutionId,
           disputeId,
+          1, // Round 1 = original adjudication; round 2 lands via /appeal
           resolutionOutcome,
           resolutionRationale,
           resolutionFundAction,
@@ -1232,11 +1251,133 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       reason: ap.reason,
     });
 
+    // §8.3 Appeal Adjudication: federation appeals trigger a second
+    // vote round. If this dispute is on the federation path (relay is
+    // filer or respondent), run the round-2 orchestrator inline,
+    // persist the round-2 resolution, transition appealed → final,
+    // execute fund_action (per §7.1+§7.3, fund movement happens at
+    // `final`, not on first `resolved`).
+    //
+    // Single-relay appeals stay in `appealed` for operator manual
+    // review (existing behavior, unchanged).
+    //
+    // Round-2 evidence union (v1 simplification): the orchestrator
+    // pulls all `relay_dispute_evidence` rows for the dispute. The
+    // existing /evidence endpoint accepts submissions only in
+    // {opened, evidence} states, so post-`resolved` evidence cannot
+    // currently be added — round-2 adjudicates on the original
+    // round-1 evidence + the appeal `reason` text. Per §8.4 spec,
+    // "new evidence may be submitted with the appeal" — extending
+    // /evidence to accept post-`resolved` submissions is a future
+    // arc tracked in the dispute_v1_fund_action_federation_parity
+    // sibling memo.
+    const isFederationPath =
+      dispute.filed_by === relayIdentity.relayMotebitId ||
+      dispute.respondent === relayIdentity.relayMotebitId;
+
+    if (!isFederationPath) {
+      return c.json({
+        ok: true,
+        dispute_id: disputeId,
+        state: "appealed" as DisputeState,
+        appealed_at: ap.appealed_at,
+      });
+    }
+
+    // Federation appeal: orchestrate round 2.
+    const round2Result = await orchestrateFederationResolution(
+      {
+        dispute_id: disputeId,
+        body_json: (dispute.body_json as string | null) ?? "",
+      },
+      2,
+      { db, relayIdentity, fetchImpl, voteRequestTimeoutMs },
+    );
+
+    const round2ResolvedAt = Date.now();
+    const round2Signed = await signDisputeResolution(
+      {
+        dispute_id: disputeId,
+        resolution: round2Result.resolution,
+        rationale: round2Result.rationale,
+        fund_action: round2Result.fund_action,
+        split_ratio: round2Result.split_ratio,
+        adjudicator: relayIdentity.relayMotebitId,
+        adjudicator_votes: round2Result.adjudicator_votes,
+        resolved_at: round2ResolvedAt,
+      },
+      relayIdentity.privateKey,
+    );
+
+    const round2ResolutionId = `res-${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const finalAt = Date.now();
+
+    // Atomic terminal transition: round-2 resolution insert + state →
+    // final + fund_action all in one txn. INSERT OR REPLACE handles
+    // crash-mid-orchestration recovery (re-call after partial round-2
+    // overwrites the prior round-2 row idempotently). UNIQUE(dispute_id,
+    // round) from migration 19 lets round-2 coexist with round-1's
+    // signed audit row.
+    db.exec("BEGIN");
+    try {
+      db.prepare(
+        `INSERT OR REPLACE INTO relay_dispute_resolutions
+           (resolution_id, dispute_id, round, resolution, rationale, fund_action, split_ratio, adjudicator, adjudicator_votes, resolved_at, signature, is_appeal)
+         VALUES (?, ?, 2, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(
+        round2ResolutionId,
+        disputeId,
+        round2Result.resolution,
+        round2Result.rationale,
+        round2Result.fund_action,
+        round2Result.split_ratio,
+        relayIdentity.relayMotebitId,
+        JSON.stringify(round2Result.adjudicator_votes),
+        round2ResolvedAt,
+        round2Signed.signature,
+      );
+      db.prepare(
+        "UPDATE relay_disputes SET state = 'final', final_at = ?, resolution = ?, rationale = ?, fund_action = ?, split_ratio = ?, adjudicator = ?, resolved_at = ? WHERE dispute_id = ?",
+      ).run(
+        finalAt,
+        round2Result.resolution,
+        round2Result.rationale,
+        round2Result.fund_action,
+        round2Result.split_ratio,
+        relayIdentity.relayMotebitId,
+        round2ResolvedAt,
+        disputeId,
+      );
+      executeFundAction(db, dispute, round2Result.fund_action, round2Result.split_ratio);
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw new HTTPException(500, {
+        message: `Round-2 finalization failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+
+    logger.info("dispute.finalized.round_2", {
+      disputeId,
+      resolution: round2Result.resolution,
+      fundAction: round2Result.fund_action,
+      splitRatio: round2Result.split_ratio,
+      voteCount: round2Result.adjudicator_votes.length,
+    });
+
     return c.json({
       ok: true,
       dispute_id: disputeId,
-      state: "appealed" as DisputeState,
+      state: "final" as DisputeState,
       appealed_at: ap.appealed_at,
+      resolved_at: round2ResolvedAt,
+      final_at: finalAt,
+      resolution: round2Result.resolution,
+      fund_action: round2Result.fund_action,
+      split_ratio: round2Result.split_ratio,
+      adjudicator_votes: round2Result.adjudicator_votes,
     });
   });
 

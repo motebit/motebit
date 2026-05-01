@@ -879,4 +879,74 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 19,
+    name: "phase_6_2_dispute_resolutions_round",
+    up: (db) => {
+      // Phase 6.2 — add `round` column to relay_dispute_resolutions
+      // and replace `UNIQUE(dispute_id)` with `UNIQUE(dispute_id, round)`
+      // so §8.3 federation appeals can persist a second resolution row
+      // without overwriting round-1's signed audit artifact.
+      //
+      // Why: each adjudication round produces a separately-signed
+      // DisputeResolution. Round-1's resolution carries the round-1
+      // adjudicator_votes; round-2's resolution carries round-2's
+      // votes (after appeal). Overwriting round-1 with round-2 would
+      // lose the signed round-1 verdict for audit reconstruction —
+      // round-1 votes survive in relay_dispute_votes (PK includes
+      // round), but the signed resolution that bound them does not.
+      // Two-row preservation matches the dispute-v1.md §6.4 + §8.3
+      // foundation-law combination: each round's resolution is its own
+      // signed artifact.
+      //
+      // SQLite limitation: ALTER TABLE doesn't support DROP CONSTRAINT,
+      // so the canonical pattern is table-rebuild — create new table
+      // with the desired schema, copy rows, drop old, rename new.
+      // Defensive on table existence (mirrors migration 18); skip if
+      // createDisputeTables hasn't run yet (fresh install — the new
+      // schema is already declared inline there).
+      const tableRows = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='relay_dispute_resolutions'",
+        )
+        .all() as Array<{ name: string }>;
+      if (tableRows.length === 0) return;
+      const cols = db.prepare("PRAGMA table_info(relay_dispute_resolutions)").all() as Array<{
+        name: string;
+      }>;
+      const colNames = new Set(cols.map((c) => c.name));
+      if (colNames.has("round")) return; // already migrated
+
+      db.exec(`
+        CREATE TABLE relay_dispute_resolutions_new (
+          resolution_id     TEXT PRIMARY KEY,
+          dispute_id        TEXT NOT NULL,
+          round             INTEGER NOT NULL DEFAULT 1,
+          resolution        TEXT NOT NULL,
+          rationale         TEXT NOT NULL,
+          fund_action       TEXT NOT NULL,
+          split_ratio       REAL NOT NULL,
+          adjudicator       TEXT NOT NULL,
+          adjudicator_votes TEXT,
+          resolved_at       INTEGER NOT NULL,
+          signature         TEXT NOT NULL,
+          is_appeal         INTEGER NOT NULL DEFAULT 0,
+          UNIQUE (dispute_id, round),
+          FOREIGN KEY (dispute_id) REFERENCES relay_disputes(dispute_id)
+        );
+        INSERT INTO relay_dispute_resolutions_new (
+          resolution_id, dispute_id, round, resolution, rationale,
+          fund_action, split_ratio, adjudicator, adjudicator_votes,
+          resolved_at, signature, is_appeal
+        )
+        SELECT
+          resolution_id, dispute_id, 1, resolution, rationale,
+          fund_action, split_ratio, adjudicator, adjudicator_votes,
+          resolved_at, signature, is_appeal
+        FROM relay_dispute_resolutions;
+        DROP TABLE relay_dispute_resolutions;
+        ALTER TABLE relay_dispute_resolutions_new RENAME TO relay_dispute_resolutions;
+      `);
+    },
+  },
 ];
