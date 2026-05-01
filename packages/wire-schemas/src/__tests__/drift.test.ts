@@ -67,11 +67,13 @@ import {
 } from "../hardware-attestation-claim.js";
 import {
   ADJUDICATOR_VOTE_SCHEMA_ID,
+  VOTE_REQUEST_SCHEMA_ID,
   DISPUTE_APPEAL_SCHEMA_ID,
   DISPUTE_EVIDENCE_SCHEMA_ID,
   DISPUTE_REQUEST_SCHEMA_ID,
   DISPUTE_RESOLUTION_SCHEMA_ID,
   buildAdjudicatorVoteJsonSchema,
+  buildVoteRequestJsonSchema,
   buildDisputeAppealJsonSchema,
   buildDisputeEvidenceJsonSchema,
   buildDisputeRequestJsonSchema,
@@ -293,6 +295,12 @@ const CASES: SchemaCase[] = [
     filename: "adjudicator-vote-v1.json",
     expectedId: ADJUDICATOR_VOTE_SCHEMA_ID,
     build: buildAdjudicatorVoteJsonSchema,
+  },
+  {
+    name: "vote-request-v1",
+    filename: "vote-request-v1.json",
+    expectedId: VOTE_REQUEST_SCHEMA_ID,
+    build: buildVoteRequestJsonSchema,
   },
   {
     name: "dispute-resolution-v1",

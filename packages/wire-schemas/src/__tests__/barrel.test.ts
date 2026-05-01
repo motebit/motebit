@@ -163,6 +163,7 @@ describe("@motebit/wire-schemas barrel", () => {
     expect(barrel.buildDisputeRequestJsonSchema().title).toBe("DisputeRequest (v1)");
     expect(barrel.buildDisputeEvidenceJsonSchema().title).toBe("DisputeEvidence (v1)");
     expect(barrel.buildAdjudicatorVoteJsonSchema().title).toBe("AdjudicatorVote (v1)");
+    expect(barrel.buildVoteRequestJsonSchema().title).toBe("VoteRequest (v1)");
     expect(barrel.buildDisputeResolutionJsonSchema().title).toBe("DisputeResolution (v1)");
     expect(barrel.buildDisputeAppealJsonSchema().title).toBe("DisputeAppeal (v1)");
     expect(barrel.buildReputationCredentialSubjectJsonSchema().title).toBe(
