@@ -1145,6 +1145,7 @@ export interface EventStoreAdapter {
     query(filter: EventFilter): Promise<EventLogEntry[]>;
     // (undocumented)
     tombstone(eventId: string, motebitId: string): Promise<void>;
+    truncateBeforeHorizon?(motebitId: string, horizonTs: number): Promise<number>;
 }
 
 // @public (undocumented)

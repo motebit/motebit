@@ -139,6 +139,37 @@ export class IdbEventStore implements EventStoreAdapter {
     });
   }
 
+  async truncateBeforeHorizon(motebitId: string, horizonTs: number): Promise<number> {
+    // `append_only_horizon` whole-prefix truncation. IDB has no native
+    // index on (motebit_id, timestamp), so we scan the motebit's slice
+    // via the existing `motebit_clock` index then filter by timestamp.
+    // Strict less-than per the cert's "entries BEFORE horizon" claim.
+    const tx = this.db.transaction("events", "readwrite");
+    const store = tx.objectStore("events");
+    const index = store.index("motebit_clock");
+    const range = IDBKeyRange.bound([motebitId, -Infinity], [motebitId, Infinity]);
+
+    let deleted = 0;
+    return new Promise((resolve, reject) => {
+      const req = index.openCursor(range);
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (cursor) {
+          const entry = cursor.value as EventLogEntry;
+          if (entry.timestamp < horizonTs) {
+            cursor.delete();
+            deleted++;
+          }
+          cursor.continue();
+        } else {
+          resolve(deleted);
+        }
+      };
+      req.onerror = () =>
+        reject(req.error ?? new Error("IDB truncateBeforeHorizon request failed"));
+    });
+  }
+
   async countEvents(motebitId: string): Promise<number> {
     const tx = this.db.transaction("events", "readonly");
     const store = tx.objectStore("events");

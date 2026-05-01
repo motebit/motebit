@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { InMemoryEventStore, EventStore, type EventStoreAdapter } from "../index";
 import { EventType } from "@motebit/protocol";
-import type { EventLogEntry } from "@motebit/protocol";
+import type { EventLogEntry, MotebitId } from "@motebit/protocol";
+import { generateEd25519Keypair, verifyDeletionCertificate } from "@motebit/crypto";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -713,5 +714,157 @@ describe("edge cases", () => {
     await store.append(makeEvent());
     const results = await store.query({ event_types: [] });
     expect(results).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 4a — `append_only_horizon` retention truncation
+// ---------------------------------------------------------------------------
+
+describe("InMemoryEventStore.truncateBeforeHorizon", () => {
+  it("erases entries with timestamp < horizonTs", async () => {
+    const store = new InMemoryEventStore();
+    await store.append(makeEvent({ event_id: "old-1", motebit_id: "m1", timestamp: 100 }));
+    await store.append(makeEvent({ event_id: "old-2", motebit_id: "m1", timestamp: 200 }));
+    await store.append(makeEvent({ event_id: "fresh", motebit_id: "m1", timestamp: 500 }));
+    await store.append(makeEvent({ event_id: "other-mote", motebit_id: "m2", timestamp: 50 }));
+
+    const erased = await store.truncateBeforeHorizon("m1", 300);
+
+    expect(erased).toBe(2);
+    const remaining = await store.query({});
+    expect(remaining.map((e) => e.event_id).sort()).toEqual(["fresh", "other-mote"]);
+  });
+
+  it("is whole-prefix-only — never affects entries at or after horizonTs", async () => {
+    const store = new InMemoryEventStore();
+    await store.append(makeEvent({ motebit_id: "m1", timestamp: 100 }));
+    await store.append(makeEvent({ motebit_id: "m1", timestamp: 200 }));
+
+    // horizon EQUAL to an entry's timestamp does not erase that entry.
+    const erased = await store.truncateBeforeHorizon("m1", 200);
+    expect(erased).toBe(1);
+    const remaining = await store.query({ motebit_id: "m1" });
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.timestamp).toBe(200);
+  });
+});
+
+describe("EventStore.advanceHorizon (phase 4a — local-only)", () => {
+  it("signs an append_only_horizon cert and truncates the prefix", async () => {
+    const adapter = new InMemoryEventStore();
+    const store = new EventStore(adapter);
+    await adapter.append(makeEvent({ event_id: "a", motebit_id: "m1", timestamp: 100 }));
+    await adapter.append(makeEvent({ event_id: "b", motebit_id: "m1", timestamp: 200 }));
+    await adapter.append(makeEvent({ event_id: "c", motebit_id: "m1", timestamp: 500 }));
+
+    const { publicKey, privateKey } = await generateEd25519Keypair();
+
+    const { cert, truncatedCount } = await store.advanceHorizon("event-log", 300, {
+      subject: { kind: "motebit", motebit_id: "m1" as MotebitId },
+      privateKey,
+    });
+
+    expect(truncatedCount).toBe(2);
+    expect(cert.kind).toBe("append_only_horizon");
+    expect(cert.subject.kind).toBe("motebit");
+    if (cert.subject.kind === "motebit") {
+      expect(cert.subject.motebit_id).toBe("m1");
+    }
+    expect(cert.horizon_ts).toBe(300);
+    expect(cert.witnessed_by).toEqual([]); // local-only — phase 4a
+
+    const verify = await verifyDeletionCertificate(cert, {
+      resolveMotebitPublicKey: async (id: string) => (id === "m1" ? publicKey : null),
+      resolveOperatorPublicKey: async () => null,
+    });
+    expect(verify.valid).toBe(true);
+    expect(verify.steps.horizon_issuer_signature_valid).toBe(true);
+    expect(verify.steps.horizon_witnesses_present_count).toBe(0);
+
+    const remaining = await adapter.query({ motebit_id: "m1" });
+    expect(remaining.map((e) => e.event_id)).toEqual(["c"]);
+  });
+
+  it("operator-wide horizon advance truncates every supplied motebit's slice", async () => {
+    const adapter = new InMemoryEventStore();
+    const store = new EventStore(adapter);
+    await adapter.append(makeEvent({ event_id: "m1-old", motebit_id: "m1", timestamp: 100 }));
+    await adapter.append(makeEvent({ event_id: "m1-new", motebit_id: "m1", timestamp: 500 }));
+    await adapter.append(makeEvent({ event_id: "m2-old", motebit_id: "m2", timestamp: 100 }));
+    await adapter.append(makeEvent({ event_id: "m2-new", motebit_id: "m2", timestamp: 500 }));
+    await adapter.append(makeEvent({ event_id: "m3-old", motebit_id: "m3", timestamp: 100 }));
+    // m3 NOT in the operator's motebit set — should survive.
+
+    const { publicKey, privateKey } = await generateEd25519Keypair();
+    const { cert, truncatedCount } = await store.advanceHorizon(
+      "event-log",
+      300,
+      { subject: { kind: "operator", operator_id: "op-A" }, privateKey },
+      { motebitIdsForOperator: ["m1", "m2"] },
+    );
+
+    expect(truncatedCount).toBe(2); // m1-old + m2-old
+    expect(cert.subject.kind).toBe("operator");
+    if (cert.subject.kind === "operator") {
+      expect(cert.subject.operator_id).toBe("op-A");
+    }
+
+    const verify = await verifyDeletionCertificate(cert, {
+      resolveMotebitPublicKey: async () => null,
+      resolveOperatorPublicKey: async (id: string) => (id === "op-A" ? publicKey : null),
+    });
+    expect(verify.valid).toBe(true);
+
+    const remaining = await adapter.query({});
+    expect(remaining.map((e) => e.event_id).sort()).toEqual(["m1-new", "m2-new", "m3-old"]);
+  });
+
+  it("operator-wide horizon advance requires motebitIdsForOperator", async () => {
+    const adapter = new InMemoryEventStore();
+    const store = new EventStore(adapter);
+    const { privateKey } = await generateEd25519Keypair();
+
+    await expect(
+      store.advanceHorizon("event-log", 300, {
+        subject: { kind: "operator", operator_id: "op-A" },
+        privateKey,
+      }),
+    ).rejects.toThrow(/motebitIdsForOperator/);
+  });
+
+  it("operator-wide horizon advance accepts an empty motebit set (no-tenant relay)", async () => {
+    const adapter = new InMemoryEventStore();
+    const store = new EventStore(adapter);
+    const { privateKey } = await generateEd25519Keypair();
+
+    const { cert, truncatedCount } = await store.advanceHorizon(
+      "event-log",
+      300,
+      { subject: { kind: "operator", operator_id: "op-A" }, privateKey },
+      { motebitIdsForOperator: [] },
+    );
+
+    expect(truncatedCount).toBe(0);
+    expect(cert.kind).toBe("append_only_horizon");
+  });
+
+  it("throws when adapter does not implement truncateBeforeHorizon", async () => {
+    // Build an adapter without the optional method to confirm fail-loud.
+    const partial: EventStoreAdapter = {
+      append: async () => {},
+      query: async () => [],
+      getLatestClock: async () => 0,
+      tombstone: async () => {},
+    };
+    const store = new EventStore(partial);
+    const { privateKey } = await generateEd25519Keypair();
+
+    await expect(
+      store.advanceHorizon("event-log", 300, {
+        subject: { kind: "motebit", motebit_id: "m1" as MotebitId },
+        privateKey,
+      }),
+    ).rejects.toThrow(/truncateBeforeHorizon/);
   });
 });

@@ -173,6 +173,15 @@ export class TauriEventStore implements EventStoreAdapter {
     );
   }
 
+  async truncateBeforeHorizon(motebitId: string, horizonTs: number): Promise<number> {
+    // `append_only_horizon` whole-prefix truncation. Strict less-than
+    // per the cert's "entries BEFORE horizon" claim.
+    return dbExecute(this.invoke, "DELETE FROM events WHERE motebit_id = ? AND timestamp < ?", [
+      motebitId,
+      horizonTs,
+    ]);
+  }
+
   async countEvents(motebitId: string): Promise<number> {
     const rows = await dbQuery<{ cnt: number }>(
       this.invoke,

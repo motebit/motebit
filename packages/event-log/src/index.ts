@@ -1,6 +1,18 @@
-import type { EventLogEntry } from "@motebit/protocol";
+import type { EventLogEntry, DeletionCertificate, HorizonSubject } from "@motebit/protocol";
 export type { EventFilter, EventStoreAdapter } from "@motebit/protocol";
 import type { EventFilter, EventStoreAdapter } from "@motebit/protocol";
+import { signHorizonCertAsIssuer } from "@motebit/crypto";
+
+/**
+ * Signer for an `append_only_horizon` deletion certificate. Whichever
+ * authority advances the horizon (per-motebit subject or operator-wide)
+ * provides the corresponding identity key. Decision 8 of
+ * docs/doctrine/retention-policy.md.
+ */
+export interface HorizonSigner {
+  readonly subject: HorizonSubject;
+  readonly privateKey: Uint8Array;
+}
 
 // === In-Memory Adapter (for testing and lightweight use) ===
 
@@ -78,6 +90,16 @@ export class InMemoryEventStore implements EventStoreAdapter {
     this.events = this.events.filter(
       (e) => e.motebit_id !== motebitId || e.version_clock > beforeClock,
     );
+    return Promise.resolve(before - this.events.length);
+  }
+
+  truncateBeforeHorizon(motebitId: string, horizonTs: number): Promise<number> {
+    // Whole-prefix truncation per `append_only_horizon` semantics.
+    // Entries with `timestamp < horizonTs` are unrecoverable after
+    // this returns; the seenIds replay-defense set DOES NOT clear, so
+    // resurfacing a truncated event_id still fails the dedup check.
+    const before = this.events.length;
+    this.events = this.events.filter((e) => e.motebit_id !== motebitId || e.timestamp >= horizonTs);
     return Promise.resolve(before - this.events.length);
   }
 
@@ -160,5 +182,92 @@ export class EventStore {
   async countEvents(motebitId: string): Promise<number> {
     if (!this.adapter.countEvents) return -1;
     return this.adapter.countEvents(motebitId);
+  }
+
+  /**
+   * Advance the event-log horizon. Whole-prefix retention truncation
+   * for an `append_only_horizon`-shaped store, per
+   * docs/doctrine/retention-policy.md §"Decision 4" + §"Decision 8".
+   *
+   * Two subject kinds (decision 8):
+   *   - `motebit`: per-motebit horizon advance, signed by the motebit's
+   *     identity key. Truncates only that motebit's slice of the log.
+   *   - `operator`: operator-wide horizon advance, signed by the
+   *     operator key. Iterates `motebitIdsForOperator` (caller-supplied)
+   *     and truncates each. The relay's federation peer set determines
+   *     `witness_required`; for no-peer deployments the witness array
+   *     is empty and the manifest derives `witness_required = false`.
+   *
+   * Phase 4b ships per-motebit + operator-wide for no-peer deployments.
+   * Federation co-witness solicitation (witness array populated +
+   * `federation_graph_anchor` Merkle root) is phase 4b-3 — the wire
+   * format spec for cross-relay solicitation lives at services/relay.
+   *
+   * Order is load-bearing: sign FIRST, truncate AFTER. The signed cert
+   * references `horizon_ts`; truncation is the storage commitment to
+   * that cert. Truncation before signing would leave a window where
+   * entries are gone but no cert exists to attest it.
+   *
+   * Returns the signed cert and the total count of erased entries
+   * (sum across motebits for operator-wide advances).
+   */
+  async advanceHorizon(
+    storeId: string,
+    horizonTs: number,
+    signer: HorizonSigner,
+    options?: {
+      /**
+       * Required when `signer.subject.kind === "operator"`. The list of
+       * motebit ids whose log-slices the operator-wide horizon advance
+       * truncates. The caller (typically `services/relay`) computes
+       * this from the relay's tenant set at `horizon_ts`.
+       */
+      readonly motebitIdsForOperator?: readonly string[];
+    },
+  ): Promise<{
+    cert: Extract<DeletionCertificate, { kind: "append_only_horizon" }>;
+    truncatedCount: number;
+  }> {
+    if (!this.adapter.truncateBeforeHorizon) {
+      throw new Error(
+        "EventStore.advanceHorizon: adapter does not implement truncateBeforeHorizon",
+      );
+    }
+
+    const cert = await signHorizonCertAsIssuer(
+      {
+        kind: "append_only_horizon",
+        subject: signer.subject,
+        store_id: storeId,
+        horizon_ts: horizonTs,
+        witnessed_by: [],
+        issued_at: Date.now(),
+      },
+      signer.privateKey,
+    );
+
+    let truncatedCount = 0;
+    if (signer.subject.kind === "motebit") {
+      truncatedCount = await this.adapter.truncateBeforeHorizon(
+        signer.subject.motebit_id as string,
+        horizonTs,
+      );
+    } else {
+      // Operator-wide: caller supplies the motebit set the operator
+      // hosts at `horizon_ts`. Empty list is permitted (no-tenant relay)
+      // — the cert is still signed and represents the operator's
+      // commitment to truncate any future tenants' pre-horizon entries.
+      const ids = options?.motebitIdsForOperator;
+      if (ids === undefined) {
+        throw new Error(
+          "EventStore.advanceHorizon: operator-wide subject requires `motebitIdsForOperator`",
+        );
+      }
+      for (const id of ids) {
+        truncatedCount += await this.adapter.truncateBeforeHorizon(id, horizonTs);
+      }
+    }
+
+    return { cert, truncatedCount };
   }
 }

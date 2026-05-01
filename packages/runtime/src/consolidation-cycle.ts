@@ -446,7 +446,13 @@ async function prunePhase(
       const ageMs = ctx.now - node.created_at;
       const maxMs = retentionRules.max_retention_days * MS_PER_DAY;
       if (ageMs > maxMs) {
-        await deps.privacy.deleteMemory(node.node_id, "retention_enforcement");
+        // `self_enforcement` not `retention_enforcement`: the subject's
+        // own runtime is driving the policy here (the consolidation
+        // cycle on the user's device, signing with the motebit's
+        // identity key). `retention_enforcement` is reserved for the
+        // operator-driven path where the relay key signs. See decision
+        // 5 of docs/doctrine/retention-policy.md.
+        await deps.privacy.deleteMemory(node.node_id, "self_enforcement");
         retention++;
         continue;
       }

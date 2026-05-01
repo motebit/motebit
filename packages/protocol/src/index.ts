@@ -1968,6 +1968,19 @@ export interface EventStoreAdapter {
   tombstone(eventId: string, motebitId: string): Promise<void>;
   /** Delete events with version_clock <= beforeClock. Returns count deleted. */
   compact?(motebitId: string, beforeClock: number): Promise<number>;
+  /**
+   * Erase events with `timestamp < horizonTs`. Returns count erased.
+   * Distinct from `compact` (state-snapshot driven, version-clock-keyed):
+   * `truncateBeforeHorizon` is the storage operation behind an
+   * `append_only_horizon` deletion certificate per
+   * docs/doctrine/retention-policy.md §"Decision 4". Whole-prefix
+   * truncation only — entries before `horizonTs` are unrecoverable.
+   *
+   * Optional in phase 4a (local-only horizon advance ships first).
+   * Phase 4b tightens to required once federation co-witness lands and
+   * every operator's event log is expected to support horizon advance.
+   */
+  truncateBeforeHorizon?(motebitId: string, horizonTs: number): Promise<number>;
   /** Count total events for a motebit. */
   countEvents?(motebitId: string): Promise<number>;
 }

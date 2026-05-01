@@ -141,7 +141,10 @@ describe("runConsolidationCycle", () => {
 
     expect(result.summary.prunedDecay).toBe(1);
     const after = await harness.runtime.memory.exportAll();
-    expect(after.nodes.filter((n) => !n.tombstoned)).toHaveLength(0);
+    // Phase 3: deleteMemory erases the row entirely (decision 7).
+    // Pre-phase-3 this asserted `!n.tombstoned` filter; the same
+    // outcome holds via the stronger erase semantics.
+    expect(after.nodes).toHaveLength(0);
   });
 
   it("preserves pinned memories during prune even when decayed", async () => {
