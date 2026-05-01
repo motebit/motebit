@@ -1,0 +1,870 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/deletion-certificate-v1.json",
+  "title": "DeletionCertificate (v1)",
+  "description": "Signed retention deletion certificate. Single discriminated union by `kind`. Adding a new shape ships as an additive arm here plus a new dispatch arm in `verifyDeletionCertificate` — never a rename of an existing one.",
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "mutable_pruning",
+          "description": "Discriminator. Interop law per protocol-model.md §'Naming: interop law vs reference default' — verifiers dispatch on this exact string; alternative implementations cannot rename."
+        },
+        "target_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The deleted record's identifier in the originating store (a NodeId for memory)."
+        },
+        "sensitivity": {
+          "type": "string",
+          "enum": ["none", "personal", "medical", "financial", "secret"],
+          "description": "Sensitivity level of the deleted record at deletion time. Same closed union as `SensitivityLevel` in @motebit/protocol. Drives the retention-floor check the runtime applied before issuing the cert."
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "user_request",
+            "retention_enforcement",
+            "retention_enforcement_post_classification",
+            "operator_request",
+            "delegated_request",
+            "self_enforcement",
+            "guardian_request"
+          ],
+          "description": "Action class — constrains the permitted signer set per the reason × signer × mode table (decision 5). Verifiers admit a cert iff the present signature(s) match the row for this reason and the operator's declared deployment mode."
+        },
+        "deleted_at": {
+          "type": "number",
+          "description": "Unix milliseconds when the runtime erased the record."
+        },
+        "subject_signature": {
+          "type": "object",
+          "properties": {
+            "motebit_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The motebit whose identity key produced this signature."
+            },
+            "suite": {
+              "type": "string",
+              "const": "motebit-jcs-ed25519-b64-v1",
+              "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Base64url-encoded Ed25519 signature over `canonicalJson(cert_body)` where `cert_body` is the cert with every `*_signature` field removed. All present signers sign identical bytes — mirrors identity-v1 §3.8.1 dual-signature succession."
+            }
+          },
+          "required": ["motebit_id", "suite", "signature"],
+          "additionalProperties": false
+        },
+        "operator_signature": {
+          "type": "object",
+          "properties": {
+            "operator_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Stable identifier for the operator key in the operator's transparency manifest."
+            },
+            "suite": {
+              "type": "string",
+              "const": "motebit-jcs-ed25519-b64-v1",
+              "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Base64url-encoded Ed25519 signature, same canonical bytes as `subject_signature.signature`."
+            }
+          },
+          "required": ["operator_id", "suite", "signature"],
+          "additionalProperties": false
+        },
+        "delegate_signature": {
+          "type": "object",
+          "properties": {
+            "motebit_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The delegate's motebit identity (a third party authorized via delegation-v1.md §5.5)."
+            },
+            "delegation_receipt_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Reference to the delegation receipt that authorized this scope. Verifiers MAY cross-check the receipt to confirm retention-scope authorization is in force."
+            },
+            "suite": {
+              "type": "string",
+              "const": "motebit-jcs-ed25519-b64-v1",
+              "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Base64url-encoded Ed25519 signature, same canonical bytes."
+            }
+          },
+          "required": ["motebit_id", "delegation_receipt_id", "suite", "signature"],
+          "additionalProperties": false
+        },
+        "guardian_signature": {
+          "type": "object",
+          "properties": {
+            "guardian_public_key": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Hex-encoded guardian Ed25519 public key. Verifiers MUST cross-check this against the subject motebit's `motebit.md` §3.3 `guardian.public_key` field — drift means the guardian binding is forged."
+            },
+            "suite": {
+              "type": "string",
+              "const": "motebit-jcs-ed25519-b64-v1",
+              "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Base64url-encoded Ed25519 signature by the guardian over the same canonical bytes."
+            }
+          },
+          "required": ["guardian_public_key", "suite", "signature"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["kind", "target_id", "sensitivity", "reason", "deleted_at"],
+      "additionalProperties": false,
+      "description": "Mutable pruning cert — interior-structure deletion (memory). Attests bytes-unrecoverable, not tombstone (decision 7). Verifiers check at-least-one-signature-required AND every present signature against canonical bytes."
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "append_only_horizon"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "motebit"
+                },
+                "motebit_id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["kind", "motebit_id"],
+              "additionalProperties": false,
+              "description": "Per-motebit horizon — signed by the motebit's identity key."
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "operator"
+                },
+                "operator_id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["kind", "operator_id"],
+              "additionalProperties": false,
+              "description": "Operator-wide horizon — signed by the operator key."
+            }
+          ]
+        },
+        "store_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable identifier for the audit log within the operator's deployment."
+        },
+        "horizon_ts": {
+          "type": "number",
+          "description": "Unix milliseconds. Entries with `timestamp < horizon_ts` are unrecoverable from this point on. Witnesses attest they accept the horizon at this value."
+        },
+        "witnessed_by": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "motebit_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Witnessing motebit's identity. The pubkey resolves through the same `resolveMotebitPublicKey` path as subject signatures."
+              },
+              "signature": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Base64url-encoded Ed25519 signature over `canonicalJson(cert minus signature)` — the SAME bytes the issuer signed. Witnesses sign the body INCLUDING themselves, so the array layout at issuer-signing time is fixed."
+              },
+              "inclusion_proof": {
+                "type": "object",
+                "properties": {
+                  "siblings": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Hex-encoded sibling hashes ordered leaf-to-root. Same shape as credential-anchor-v1 §6."
+                  },
+                  "leaf_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "0-based index of the witness's pubkey in the sorted peer set."
+                  },
+                  "layer_sizes": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "description": "Per-layer node counts, used to detect odd-leaf promotion when reconstructing the root."
+                  }
+                },
+                "required": ["siblings", "leaf_index", "layer_sizes"],
+                "additionalProperties": false,
+                "description": "Optional Merkle inclusion proof for the witness's pubkey against `federation_graph_anchor.merkle_root`. Phase 4 quorum mechanisms either require this or accept signature-only witnesses; reserved here so phase 4 lands without a wire break."
+              }
+            },
+            "required": ["motebit_id", "signature"],
+            "additionalProperties": false
+          },
+          "description": "Federation peers co-witnessing the horizon advance. Empty array is permitted only when `witness_required` was false at issuance time (decision 9 — derived from federation graph state)."
+        },
+        "federation_graph_anchor": {
+          "type": "object",
+          "properties": {
+            "algo": {
+              "type": "string",
+              "const": "merkle-sha256-v1",
+              "description": "Closed registry of Merkle algorithm identifiers. `merkle-sha256-v1` body: SHA-256 leaves, binary tree with odd-leaf promotion (no duplication) per credential-anchor-v1 §3-5 + relay-federation-v1 §7.6, composed with this doctrine's peer-set canonicalization (operator's federation-peer Ed25519 public keys, hex-encoded lowercase, sorted ascending, at horizon_ts)."
+            },
+            "merkle_root": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Hex-encoded SHA-256 root over the canonical peer-set leaves."
+            },
+            "leaf_count": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of peer pubkeys in the anchored set."
+            }
+          },
+          "required": ["algo", "merkle_root", "leaf_count"],
+          "additionalProperties": false
+        },
+        "issued_at": {
+          "type": "number",
+          "description": "Unix milliseconds when the issuer signed."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded Ed25519 signature over `canonicalJson(cert minus signature)`. Same bytes every witness signed."
+        }
+      },
+      "required": [
+        "kind",
+        "subject",
+        "store_id",
+        "horizon_ts",
+        "witnessed_by",
+        "issued_at",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Append-only horizon cert — whole-prefix truncation of an audit ledger. Subject discriminator names the issuer (per-motebit or operator-wide); both can coexist with `max` precedence (decision 8)."
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "consolidation_flush"
+        },
+        "target_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The flushed record's identifier in the originating store (a turn id, audit row id, etc.)."
+        },
+        "sensitivity": {
+          "type": "string",
+          "enum": ["none", "personal", "medical", "financial", "secret"],
+          "description": "Sensitivity level of the deleted record at deletion time. Same closed union as `SensitivityLevel` in @motebit/protocol. Drives the retention-floor check the runtime applied before issuing the cert."
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "user_request",
+            "retention_enforcement",
+            "retention_enforcement_post_classification",
+            "operator_request",
+            "delegated_request",
+            "self_enforcement",
+            "guardian_request"
+          ],
+          "description": "Action class — constrains the permitted signer set per the reason × signer × mode table (decision 5). Verifiers admit a cert iff the present signature(s) match the row for this reason and the operator's declared deployment mode."
+        },
+        "flushed_to": {
+          "type": "string",
+          "enum": ["memory_node", "expire"],
+          "description": "Disposition: `memory_node` if the flush produced a memory node (the node's `mutable_pruning` policy applies thereafter), `expire` if no derived structure was retained."
+        },
+        "memory_node_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Present iff `flushed_to: memory_node`. References the consolidated node so audit trails reconstruct the derivation."
+        },
+        "flushed_at": {
+          "type": "number",
+          "description": "Unix milliseconds."
+        },
+        "subject_signature": {
+          "type": "object",
+          "properties": {
+            "motebit_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The motebit whose identity key produced this signature."
+            },
+            "suite": {
+              "type": "string",
+              "const": "motebit-jcs-ed25519-b64-v1",
+              "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Base64url-encoded Ed25519 signature over `canonicalJson(cert_body)` where `cert_body` is the cert with every `*_signature` field removed. All present signers sign identical bytes — mirrors identity-v1 §3.8.1 dual-signature succession."
+            }
+          },
+          "required": ["motebit_id", "suite", "signature"],
+          "additionalProperties": false
+        },
+        "operator_signature": {
+          "type": "object",
+          "properties": {
+            "operator_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Stable identifier for the operator key in the operator's transparency manifest."
+            },
+            "suite": {
+              "type": "string",
+              "const": "motebit-jcs-ed25519-b64-v1",
+              "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Base64url-encoded Ed25519 signature, same canonical bytes as `subject_signature.signature`."
+            }
+          },
+          "required": ["operator_id", "suite", "signature"],
+          "additionalProperties": false
+        },
+        "delegate_signature": {
+          "type": "object",
+          "properties": {
+            "motebit_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The delegate's motebit identity (a third party authorized via delegation-v1.md §5.5)."
+            },
+            "delegation_receipt_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Reference to the delegation receipt that authorized this scope. Verifiers MAY cross-check the receipt to confirm retention-scope authorization is in force."
+            },
+            "suite": {
+              "type": "string",
+              "const": "motebit-jcs-ed25519-b64-v1",
+              "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Base64url-encoded Ed25519 signature, same canonical bytes."
+            }
+          },
+          "required": ["motebit_id", "delegation_receipt_id", "suite", "signature"],
+          "additionalProperties": false
+        },
+        "guardian_signature": {
+          "type": "object",
+          "properties": {
+            "guardian_public_key": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Hex-encoded guardian Ed25519 public key. Verifiers MUST cross-check this against the subject motebit's `motebit.md` §3.3 `guardian.public_key` field — drift means the guardian binding is forged."
+            },
+            "suite": {
+              "type": "string",
+              "const": "motebit-jcs-ed25519-b64-v1",
+              "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Base64url-encoded Ed25519 signature by the guardian over the same canonical bytes."
+            }
+          },
+          "required": ["guardian_public_key", "suite", "signature"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["kind", "target_id", "sensitivity", "reason", "flushed_to", "flushed_at"],
+      "additionalProperties": false,
+      "description": "Consolidation flush cert — surface-flow record disposition (conversation turn, tool-audit row). Multi-signature shape mirrors mutable_pruning; flushed_to discriminator names the disposition."
+    }
+  ],
+  "definitions": {
+    "DeletionCertificate": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "mutable_pruning",
+              "description": "Discriminator. Interop law per protocol-model.md §'Naming: interop law vs reference default' — verifiers dispatch on this exact string; alternative implementations cannot rename."
+            },
+            "target_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The deleted record's identifier in the originating store (a NodeId for memory)."
+            },
+            "sensitivity": {
+              "type": "string",
+              "enum": ["none", "personal", "medical", "financial", "secret"],
+              "description": "Sensitivity level of the deleted record at deletion time. Same closed union as `SensitivityLevel` in @motebit/protocol. Drives the retention-floor check the runtime applied before issuing the cert."
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "user_request",
+                "retention_enforcement",
+                "retention_enforcement_post_classification",
+                "operator_request",
+                "delegated_request",
+                "self_enforcement",
+                "guardian_request"
+              ],
+              "description": "Action class — constrains the permitted signer set per the reason × signer × mode table (decision 5). Verifiers admit a cert iff the present signature(s) match the row for this reason and the operator's declared deployment mode."
+            },
+            "deleted_at": {
+              "type": "number",
+              "description": "Unix milliseconds when the runtime erased the record."
+            },
+            "subject_signature": {
+              "type": "object",
+              "properties": {
+                "motebit_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The motebit whose identity key produced this signature."
+                },
+                "suite": {
+                  "type": "string",
+                  "const": "motebit-jcs-ed25519-b64-v1",
+                  "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+                },
+                "signature": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Base64url-encoded Ed25519 signature over `canonicalJson(cert_body)` where `cert_body` is the cert with every `*_signature` field removed. All present signers sign identical bytes — mirrors identity-v1 §3.8.1 dual-signature succession."
+                }
+              },
+              "required": ["motebit_id", "suite", "signature"],
+              "additionalProperties": false
+            },
+            "operator_signature": {
+              "type": "object",
+              "properties": {
+                "operator_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Stable identifier for the operator key in the operator's transparency manifest."
+                },
+                "suite": {
+                  "type": "string",
+                  "const": "motebit-jcs-ed25519-b64-v1",
+                  "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+                },
+                "signature": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Base64url-encoded Ed25519 signature, same canonical bytes as `subject_signature.signature`."
+                }
+              },
+              "required": ["operator_id", "suite", "signature"],
+              "additionalProperties": false
+            },
+            "delegate_signature": {
+              "type": "object",
+              "properties": {
+                "motebit_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The delegate's motebit identity (a third party authorized via delegation-v1.md §5.5)."
+                },
+                "delegation_receipt_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Reference to the delegation receipt that authorized this scope. Verifiers MAY cross-check the receipt to confirm retention-scope authorization is in force."
+                },
+                "suite": {
+                  "type": "string",
+                  "const": "motebit-jcs-ed25519-b64-v1",
+                  "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+                },
+                "signature": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Base64url-encoded Ed25519 signature, same canonical bytes."
+                }
+              },
+              "required": ["motebit_id", "delegation_receipt_id", "suite", "signature"],
+              "additionalProperties": false
+            },
+            "guardian_signature": {
+              "type": "object",
+              "properties": {
+                "guardian_public_key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Hex-encoded guardian Ed25519 public key. Verifiers MUST cross-check this against the subject motebit's `motebit.md` §3.3 `guardian.public_key` field — drift means the guardian binding is forged."
+                },
+                "suite": {
+                  "type": "string",
+                  "const": "motebit-jcs-ed25519-b64-v1",
+                  "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+                },
+                "signature": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Base64url-encoded Ed25519 signature by the guardian over the same canonical bytes."
+                }
+              },
+              "required": ["guardian_public_key", "suite", "signature"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["kind", "target_id", "sensitivity", "reason", "deleted_at"],
+          "additionalProperties": false,
+          "description": "Mutable pruning cert — interior-structure deletion (memory). Attests bytes-unrecoverable, not tombstone (decision 7). Verifiers check at-least-one-signature-required AND every present signature against canonical bytes."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "append_only_horizon"
+            },
+            "subject": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "motebit"
+                    },
+                    "motebit_id": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["kind", "motebit_id"],
+                  "additionalProperties": false,
+                  "description": "Per-motebit horizon — signed by the motebit's identity key."
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "operator"
+                    },
+                    "operator_id": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["kind", "operator_id"],
+                  "additionalProperties": false,
+                  "description": "Operator-wide horizon — signed by the operator key."
+                }
+              ]
+            },
+            "store_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Stable identifier for the audit log within the operator's deployment."
+            },
+            "horizon_ts": {
+              "type": "number",
+              "description": "Unix milliseconds. Entries with `timestamp < horizon_ts` are unrecoverable from this point on. Witnesses attest they accept the horizon at this value."
+            },
+            "witnessed_by": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "motebit_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Witnessing motebit's identity. The pubkey resolves through the same `resolveMotebitPublicKey` path as subject signatures."
+                  },
+                  "signature": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Base64url-encoded Ed25519 signature over `canonicalJson(cert minus signature)` — the SAME bytes the issuer signed. Witnesses sign the body INCLUDING themselves, so the array layout at issuer-signing time is fixed."
+                  },
+                  "inclusion_proof": {
+                    "type": "object",
+                    "properties": {
+                      "siblings": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "description": "Hex-encoded sibling hashes ordered leaf-to-root. Same shape as credential-anchor-v1 §6."
+                      },
+                      "leaf_index": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "0-based index of the witness's pubkey in the sorted peer set."
+                      },
+                      "layer_sizes": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "description": "Per-layer node counts, used to detect odd-leaf promotion when reconstructing the root."
+                      }
+                    },
+                    "required": ["siblings", "leaf_index", "layer_sizes"],
+                    "additionalProperties": false,
+                    "description": "Optional Merkle inclusion proof for the witness's pubkey against `federation_graph_anchor.merkle_root`. Phase 4 quorum mechanisms either require this or accept signature-only witnesses; reserved here so phase 4 lands without a wire break."
+                  }
+                },
+                "required": ["motebit_id", "signature"],
+                "additionalProperties": false
+              },
+              "description": "Federation peers co-witnessing the horizon advance. Empty array is permitted only when `witness_required` was false at issuance time (decision 9 — derived from federation graph state)."
+            },
+            "federation_graph_anchor": {
+              "type": "object",
+              "properties": {
+                "algo": {
+                  "type": "string",
+                  "const": "merkle-sha256-v1",
+                  "description": "Closed registry of Merkle algorithm identifiers. `merkle-sha256-v1` body: SHA-256 leaves, binary tree with odd-leaf promotion (no duplication) per credential-anchor-v1 §3-5 + relay-federation-v1 §7.6, composed with this doctrine's peer-set canonicalization (operator's federation-peer Ed25519 public keys, hex-encoded lowercase, sorted ascending, at horizon_ts)."
+                },
+                "merkle_root": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Hex-encoded SHA-256 root over the canonical peer-set leaves."
+                },
+                "leaf_count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Number of peer pubkeys in the anchored set."
+                }
+              },
+              "required": ["algo", "merkle_root", "leaf_count"],
+              "additionalProperties": false
+            },
+            "issued_at": {
+              "type": "number",
+              "description": "Unix milliseconds when the issuer signed."
+            },
+            "suite": {
+              "type": "string",
+              "const": "motebit-jcs-ed25519-b64-v1",
+              "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Base64url-encoded Ed25519 signature over `canonicalJson(cert minus signature)`. Same bytes every witness signed."
+            }
+          },
+          "required": [
+            "kind",
+            "subject",
+            "store_id",
+            "horizon_ts",
+            "witnessed_by",
+            "issued_at",
+            "suite",
+            "signature"
+          ],
+          "additionalProperties": false,
+          "description": "Append-only horizon cert — whole-prefix truncation of an audit ledger. Subject discriminator names the issuer (per-motebit or operator-wide); both can coexist with `max` precedence (decision 8)."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "consolidation_flush"
+            },
+            "target_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The flushed record's identifier in the originating store (a turn id, audit row id, etc.)."
+            },
+            "sensitivity": {
+              "type": "string",
+              "enum": ["none", "personal", "medical", "financial", "secret"],
+              "description": "Sensitivity level of the deleted record at deletion time. Same closed union as `SensitivityLevel` in @motebit/protocol. Drives the retention-floor check the runtime applied before issuing the cert."
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "user_request",
+                "retention_enforcement",
+                "retention_enforcement_post_classification",
+                "operator_request",
+                "delegated_request",
+                "self_enforcement",
+                "guardian_request"
+              ],
+              "description": "Action class — constrains the permitted signer set per the reason × signer × mode table (decision 5). Verifiers admit a cert iff the present signature(s) match the row for this reason and the operator's declared deployment mode."
+            },
+            "flushed_to": {
+              "type": "string",
+              "enum": ["memory_node", "expire"],
+              "description": "Disposition: `memory_node` if the flush produced a memory node (the node's `mutable_pruning` policy applies thereafter), `expire` if no derived structure was retained."
+            },
+            "memory_node_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Present iff `flushed_to: memory_node`. References the consolidated node so audit trails reconstruct the derivation."
+            },
+            "flushed_at": {
+              "type": "number",
+              "description": "Unix milliseconds."
+            },
+            "subject_signature": {
+              "type": "object",
+              "properties": {
+                "motebit_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The motebit whose identity key produced this signature."
+                },
+                "suite": {
+                  "type": "string",
+                  "const": "motebit-jcs-ed25519-b64-v1",
+                  "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+                },
+                "signature": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Base64url-encoded Ed25519 signature over `canonicalJson(cert_body)` where `cert_body` is the cert with every `*_signature` field removed. All present signers sign identical bytes — mirrors identity-v1 §3.8.1 dual-signature succession."
+                }
+              },
+              "required": ["motebit_id", "suite", "signature"],
+              "additionalProperties": false
+            },
+            "operator_signature": {
+              "type": "object",
+              "properties": {
+                "operator_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Stable identifier for the operator key in the operator's transparency manifest."
+                },
+                "suite": {
+                  "type": "string",
+                  "const": "motebit-jcs-ed25519-b64-v1",
+                  "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+                },
+                "signature": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Base64url-encoded Ed25519 signature, same canonical bytes as `subject_signature.signature`."
+                }
+              },
+              "required": ["operator_id", "suite", "signature"],
+              "additionalProperties": false
+            },
+            "delegate_signature": {
+              "type": "object",
+              "properties": {
+                "motebit_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The delegate's motebit identity (a third party authorized via delegation-v1.md §5.5)."
+                },
+                "delegation_receipt_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Reference to the delegation receipt that authorized this scope. Verifiers MAY cross-check the receipt to confirm retention-scope authorization is in force."
+                },
+                "suite": {
+                  "type": "string",
+                  "const": "motebit-jcs-ed25519-b64-v1",
+                  "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+                },
+                "signature": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Base64url-encoded Ed25519 signature, same canonical bytes."
+                }
+              },
+              "required": ["motebit_id", "delegation_receipt_id", "suite", "signature"],
+              "additionalProperties": false
+            },
+            "guardian_signature": {
+              "type": "object",
+              "properties": {
+                "guardian_public_key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Hex-encoded guardian Ed25519 public key. Verifiers MUST cross-check this against the subject motebit's `motebit.md` §3.3 `guardian.public_key` field — drift means the guardian binding is forged."
+                },
+                "suite": {
+                  "type": "string",
+                  "const": "motebit-jcs-ed25519-b64-v1",
+                  "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for deletion certificates: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
+                },
+                "signature": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Base64url-encoded Ed25519 signature by the guardian over the same canonical bytes."
+                }
+              },
+              "required": ["guardian_public_key", "suite", "signature"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["kind", "target_id", "sensitivity", "reason", "flushed_to", "flushed_at"],
+          "additionalProperties": false,
+          "description": "Consolidation flush cert — surface-flow record disposition (conversation turn, tool-audit row). Multi-signature shape mirrors mutable_pruning; flushed_to discriminator names the disposition."
+        }
+      ],
+      "description": "Signed retention deletion certificate. Single discriminated union by `kind`. Adding a new shape ships as an additive arm here plus a new dispatch arm in `verifyDeletionCertificate` — never a rename of an existing one."
+    }
+  }
+}

@@ -96,6 +96,8 @@ import {
   buildSkillRegistrySubmitRequestJsonSchema,
   buildSkillRegistrySubmitResponseJsonSchema,
 } from "../src/skill-registry.js";
+import { buildDeletionCertificateJsonSchema } from "../src/deletion-certificate.js";
+import { buildRetentionManifestJsonSchema } from "../src/retention-manifest.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Schemas live in `spec/schemas/` alongside the Markdown protocol
@@ -203,6 +205,8 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   },
   { filename: "skill-registry-listing-v1.json", build: buildSkillRegistryListingJsonSchema },
   { filename: "skill-registry-bundle-v1.json", build: buildSkillRegistryBundleJsonSchema },
+  { filename: "deletion-certificate-v1.json", build: buildDeletionCertificateJsonSchema },
+  { filename: "retention-manifest-v1.json", build: buildRetentionManifestJsonSchema },
 ];
 
 for (const { filename, build } of SCHEMAS) {

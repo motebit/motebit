@@ -250,3 +250,13 @@ export {
   buildSkillRegistryListingJsonSchema,
   buildSkillRegistryBundleJsonSchema,
 } from "./skill-registry.js";
+export {
+  DeletionCertificateSchema,
+  DELETION_CERTIFICATE_SCHEMA_ID,
+  buildDeletionCertificateJsonSchema,
+} from "./deletion-certificate.js";
+export {
+  RetentionManifestSchema,
+  RETENTION_MANIFEST_SCHEMA_ID,
+  buildRetentionManifestJsonSchema,
+} from "./retention-manifest.js";

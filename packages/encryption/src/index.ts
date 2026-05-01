@@ -155,6 +155,22 @@ export interface EncryptedPayload {
   tag: Uint8Array;
 }
 
+/**
+ * Legacy unsigned deletion certificate. Pre-dates the
+ * `DeletionCertificate` discriminated union in `@motebit/protocol`,
+ * which carries `kind`, `suite`, and signatures (subject / operator /
+ * delegate / guardian per the reason × signer × mode table).
+ *
+ * @deprecated Use `DeletionCertificate` from `@motebit/protocol` (the
+ *   `mutable_pruning` arm is the direct successor for memory deletions).
+ *   Sign + verify primitives live in `@motebit/crypto`
+ *   (`signCertAsSubject`, `signCertAsOperator`,
+ *   `verifyDeletionCertificate`).
+ *   Reason: the legacy shape carries no `suite` or signature, failing
+ *   the self-attesting three-test check
+ *   (docs/doctrine/self-attesting-system.md). See
+ *   docs/doctrine/retention-policy.md for the replacement contract.
+ */
 export interface DeletionCertificate {
   target_id: string;
   target_type: "memory" | "event" | "identity";
@@ -162,6 +178,27 @@ export interface DeletionCertificate {
   deleted_by: string;
   tombstone_hash: string;
 }
+
+// ── New retention types — re-exported from @motebit/protocol ─────────
+// Phase 2 of the retention-policy doctrine. Consumers that need the
+// signed deletion certificate import from here for backward-compatible
+// vocabulary. Sign + verify primitives live in @motebit/crypto.
+
+export type {
+  DeletionCertificate as SignedDeletionCertificate,
+  DeletionReason,
+  RetentionShape,
+  RetentionManifest,
+  RetentionStoreDeclaration,
+  HorizonSubject,
+  HorizonWitness,
+  FederationGraphAnchor,
+  MerkleInclusionProof,
+} from "@motebit/protocol";
+export {
+  MAX_RETENTION_DAYS_BY_SENSITIVITY,
+  REFERENCE_RETENTION_DAYS_BY_SENSITIVITY,
+} from "@motebit/protocol";
 
 /**
  * Generate a random 256-bit key.
@@ -297,7 +334,15 @@ export async function deriveSyncEncryptionKey(privateKey: Uint8Array): Promise<U
 }
 
 /**
- * Create a deletion certificate for audit-trail purposes.
+ * Create a legacy (unsigned) deletion certificate for audit-trail purposes.
+ *
+ * @deprecated Use `DeletionCertificate` from `@motebit/protocol` plus
+ *   the sign primitives in `@motebit/crypto` (`signCertAsSubject` etc.) —
+ *   the signed union is the direct successor.
+ *   Reason: produces an unsigned cert that fails the self-attesting
+ *   three-test check; the legacy `tombstone_hash` is not a signature,
+ *   so receivers cannot verify the cert's origin or detect tampering.
+ *   See docs/doctrine/retention-policy.md §"Decision 6a".
  */
 export async function createDeletionCertificate(
   targetId: string,

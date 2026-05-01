@@ -1706,3 +1706,20 @@ export {
   type SkillVerifyReason,
   type SkillVerifyDetail,
 } from "./skills.js";
+export {
+  DELETION_CERTIFICATE_SUITE,
+  canonicalizeMultiSignatureCert,
+  canonicalizeHorizonCert,
+  canonicalizeHorizonCertForWitness,
+  signCertAsSubject,
+  signCertAsOperator,
+  signCertAsDelegate,
+  signCertAsGuardian,
+  signHorizonCertAsIssuer,
+  signHorizonWitness,
+  verifyDeletionCertificate,
+  verifyRetentionManifest,
+  type DeletionCertificateVerifyResult,
+  type DeletionCertificateVerifyContext,
+  type RetentionManifestVerifyResult,
+} from "./deletion-certificate.js";

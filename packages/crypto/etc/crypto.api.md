@@ -8,11 +8,14 @@ import type { AdjudicatorVote } from '@motebit/protocol';
 import type { BalanceWaiver } from '@motebit/protocol';
 import type { ConsolidationReceipt } from '@motebit/protocol';
 import type { DelegationToken } from '@motebit/protocol';
+import type { DeletionCertificate } from '@motebit/protocol';
 import type { DisputeAppeal } from '@motebit/protocol';
 import type { DisputeEvidence } from '@motebit/protocol';
 import type { DisputeRequest } from '@motebit/protocol';
 import type { DisputeResolution } from '@motebit/protocol';
 import type { HardwareAttestationClaim } from '@motebit/protocol';
+import type { HorizonWitness } from '@motebit/protocol';
+import type { RetentionManifest } from '@motebit/protocol';
 import type { SettlementRecord } from '@motebit/protocol';
 import type { SkillEnvelope } from '@motebit/protocol';
 import type { SkillManifest } from '@motebit/protocol';
@@ -43,6 +46,21 @@ export function base58btcEncode(bytes: Uint8Array): string;
 
 // @public (undocumented)
 export function bytesToHex(bytes: Uint8Array): string;
+
+// @public
+export function canonicalizeHorizonCert(cert: Extract<DeletionCertificate, {
+    kind: "append_only_horizon";
+}>): Uint8Array;
+
+// @public
+export function canonicalizeHorizonCertForWitness(cert: Extract<DeletionCertificate, {
+    kind: "append_only_horizon";
+}>): Uint8Array;
+
+// @public
+export function canonicalizeMultiSignatureCert(cert: Extract<DeletionCertificate, {
+    kind: "mutable_pruning" | "consolidation_flush";
+}>): Uint8Array;
 
 // @public
 export function canonicalizeSkillEnvelopeBytes(envelope: SkillEnvelope): Uint8Array;
@@ -180,6 +198,36 @@ export function decodeSkillSignaturePublicKey(sig: SkillSignature): Uint8Array;
 export const DELEGATION_TOKEN_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 export { DelegationToken }
+
+// @public
+export const DELETION_CERTIFICATE_SUITE: SuiteId;
+
+// @public
+export interface DeletionCertificateVerifyContext {
+    // Warning: (ae-forgotten-export) The symbol "DeploymentMode" needs to be exported by the entry point index.d.ts
+    readonly deploymentMode?: DeploymentMode;
+    readonly resolveMotebitPublicKey: (motebitId: string) => Promise<Uint8Array | null>;
+    readonly resolveOperatorPublicKey: (operatorId: string) => Promise<Uint8Array | null>;
+    readonly validateGuardianBinding?: (targetMotebitId: string | undefined, guardianPublicKeyHex: string) => Promise<boolean>;
+}
+
+// @public
+export interface DeletionCertificateVerifyResult {
+    // (undocumented)
+    readonly errors: string[];
+    readonly steps: {
+        readonly reason_table_satisfied: boolean;
+        readonly subject_signature_valid: boolean | null;
+        readonly operator_signature_valid: boolean | null;
+        readonly delegate_signature_valid: boolean | null;
+        readonly guardian_signature_valid: boolean | null;
+        readonly horizon_issuer_signature_valid: boolean | null;
+        readonly horizon_witnesses_valid_count: number | null;
+        readonly horizon_witnesses_present_count: number | null;
+    };
+    // (undocumented)
+    readonly valid: boolean;
+}
 
 // @public
 export const DEVICE_REGISTRATION_MAX_AGE_MS: number;
@@ -684,6 +732,15 @@ export interface ReputationCredentialSubject {
 }
 
 // @public
+export interface RetentionManifestVerifyResult {
+    // (undocumented)
+    readonly errors: string[];
+    readonly manifest: RetentionManifest | null;
+    // (undocumented)
+    readonly valid: boolean;
+}
+
+// @public
 export interface RevocationAnchorProof {
     anchor: {
         chain: string;
@@ -827,6 +884,26 @@ export function signBalanceWaiver(waiver: Omit<BalanceWaiver, "signature" | "sui
 export function signBySuite(suite: SuiteId, canonicalBytes: Uint8Array, privateKeyBytes: Uint8Array): Promise<Uint8Array>;
 
 // @public
+export function signCertAsDelegate<T extends Extract<DeletionCertificate, {
+    kind: "mutable_pruning" | "consolidation_flush";
+}>>(cert: T, delegateMotebitId: string, delegationReceiptId: string, privateKey: Uint8Array): Promise<T>;
+
+// @public
+export function signCertAsGuardian<T extends Extract<DeletionCertificate, {
+    kind: "mutable_pruning" | "consolidation_flush";
+}>>(cert: T, guardianPublicKey: Uint8Array, privateKey: Uint8Array): Promise<T>;
+
+// @public
+export function signCertAsOperator<T extends Extract<DeletionCertificate, {
+    kind: "mutable_pruning" | "consolidation_flush";
+}>>(cert: T, operatorId: string, privateKey: Uint8Array): Promise<T>;
+
+// @public
+export function signCertAsSubject<T extends Extract<DeletionCertificate, {
+    kind: "mutable_pruning" | "consolidation_flush";
+}>>(cert: T, motebitId: string, privateKey: Uint8Array): Promise<T>;
+
+// @public
 export function signCollaborativeReceipt(receipt: Omit<SignableCollaborativeReceipt, "content_hash" | "initiator_signature" | "suite">, initiatorPrivateKey: Uint8Array): Promise<SignableCollaborativeReceipt>;
 
 // @public
@@ -887,6 +964,18 @@ export function signGuardianRevocation(identityPrivateKey: Uint8Array, guardianP
     guardian_signature: string;
     timestamp: number;
 }>;
+
+// @public
+export function signHorizonCertAsIssuer(cert: Omit<Extract<DeletionCertificate, {
+    kind: "append_only_horizon";
+}>, "suite" | "signature">, privateKey: Uint8Array): Promise<Extract<DeletionCertificate, {
+    kind: "append_only_horizon";
+}>>;
+
+// @public
+export function signHorizonWitness(cert: Extract<DeletionCertificate, {
+    kind: "append_only_horizon";
+}>, witnessMotebitId: string, privateKey: Uint8Array, inclusionProof?: HorizonWitness["inclusion_proof"]): Promise<HorizonWitness>;
 
 // @public
 export function signKeySuccession(oldPrivateKey: Uint8Array, newPrivateKey: Uint8Array, newPublicKey: Uint8Array, oldPublicKey: Uint8Array, reason?: string): Promise<KeySuccessionRecord>;
@@ -1137,6 +1226,9 @@ export function verifyDelegationChain(chain: DelegationToken[]): Promise<{
     error?: string;
 }>;
 
+// @public
+export function verifyDeletionCertificate(cert: DeletionCertificate, ctx: DeletionCertificateVerifyContext): Promise<DeletionCertificateVerifyResult>;
+
 // @public (undocumented)
 export function verifyDeviceRegistration(body: SignableDeviceRegistration, now?: number): Promise<DeviceRegistrationVerifyResult>;
 
@@ -1194,6 +1286,9 @@ export function verifyReceiptSequence(chain: ReceiptChainEntry[]): Promise<{
 
 // @public (undocumented)
 export type VerifyResult = IdentityVerifyResult | ReceiptVerifyResult | CredentialVerifyResult | PresentationVerifyResult | SkillVerifyResult;
+
+// @public
+export function verifyRetentionManifest(manifest: RetentionManifest, operatorPublicKey: Uint8Array): Promise<RetentionManifestVerifyResult>;
 
 // @public
 export function verifyRevocationAnchor(proof: RevocationAnchorProof, revocationPayload: string, chainVerifier?: (anchor: {

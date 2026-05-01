@@ -1,0 +1,262 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/retention-manifest-v1.json",
+  "title": "RetentionManifest (v1)",
+  "description": "Operator-published retention manifest. Signed; browser-side re-verifiable through the same primitive pattern as verifySkillBundle (commit 87e2f174).",
+  "type": "object",
+  "properties": {
+    "spec": {
+      "type": "string",
+      "const": "motebit/retention-manifest@1",
+      "description": "Specification version. MUST be `motebit/retention-manifest@1` for this version."
+    },
+    "operator_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The operator publishing this manifest. Cross-references the operator-transparency manifest's `operator_id`."
+    },
+    "issued_at": {
+      "type": "number",
+      "description": "Unix milliseconds when the manifest was signed."
+    },
+    "stores": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "store_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stable identifier for the store within the operator's deployment."
+          },
+          "store_name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Human-readable name for tooling display."
+          },
+          "shape": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "mutable_pruning"
+                  },
+                  "max_retention_days_by_sensitivity": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "number"
+                    },
+                    "description": "Map of sensitivity-level string → max retention days. Keys: `none | personal | medical | financial | secret`. Values MUST be at-or-below `MAX_RETENTION_DAYS_BY_SENSITIVITY` for every key. `Infinity` is encoded as JSON's `null` — schemas accept either; verifiers normalize."
+                  }
+                },
+                "required": ["kind", "max_retention_days_by_sensitivity"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "append_only_horizon"
+                  },
+                  "horizon_advance_period_days": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "How often the operator advances the store's horizon, in days."
+                  },
+                  "witness_required": {
+                    "type": "boolean",
+                    "description": "Whether co-witness signatures are required on horizon certs for this store. Decision 9: this value is DERIVED from federation state — verifiers SHOULD cross-check against the operator's federation discovery surface (spec/discovery-v1.md) at manifest issuance time. A relay with peers cannot honestly publish `witness_required: false`."
+                  }
+                },
+                "required": ["kind", "horizon_advance_period_days", "witness_required"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "consolidation_flush"
+                  },
+                  "flush_to": {
+                    "type": "string",
+                    "enum": ["memory", "expire"],
+                    "description": "Default disposition for flushed records that did not consolidate into a memory node."
+                  },
+                  "has_min_floor_resolver": {
+                    "type": "boolean",
+                    "description": "Whether this store registers a per-record min-floor resolver (decision 3). When true, settlement-relevant records carry an obligation floor beyond the sensitivity floor. The resolver itself is BSL runtime code; the manifest declares only its presence so users can confirm the operator runs an obligation-aware flush."
+                  }
+                },
+                "required": ["kind", "flush_to", "has_min_floor_resolver"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": ["store_id", "store_name", "shape"],
+        "additionalProperties": false
+      },
+      "description": "Per-store retention declarations. The drift gate `check-retention-coverage` enumerates every store holding sensitivity-classified content and asserts each appears here."
+    },
+    "pre_classification_default_sensitivity": {
+      "type": "string",
+      "enum": ["none", "personal", "medical", "financial", "secret"],
+      "description": "Default sensitivity for un-classified pre-deploy records under `consolidation_flush` (decision 6b). Defaults to `personal` if omitted. The operator's lazy-classify-on-flush path uses this value as the floor until classification fires."
+    },
+    "honest_gaps": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Operator-declared gaps. Same pattern as operator-transparency.md §'Reference implementation' — stage 1 ships with the chain-anchor in honest_gaps until stage 2."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-hex-v1",
+      "description": "Cryptosuite identifier. `motebit-jcs-ed25519-hex-v1`: JCS canonicalization, Ed25519 primitive, hex signature encoding, hex public-key encoding. Sibling to the operator-transparency manifest."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Hex-encoded Ed25519 signature over `canonicalJson(manifest minus signature)`, signed by the operator's transparency key."
+    }
+  },
+  "required": ["spec", "operator_id", "issued_at", "stores", "suite", "signature"],
+  "additionalProperties": false,
+  "definitions": {
+    "RetentionManifest": {
+      "type": "object",
+      "properties": {
+        "spec": {
+          "type": "string",
+          "const": "motebit/retention-manifest@1",
+          "description": "Specification version. MUST be `motebit/retention-manifest@1` for this version."
+        },
+        "operator_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The operator publishing this manifest. Cross-references the operator-transparency manifest's `operator_id`."
+        },
+        "issued_at": {
+          "type": "number",
+          "description": "Unix milliseconds when the manifest was signed."
+        },
+        "stores": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "store_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Stable identifier for the store within the operator's deployment."
+              },
+              "store_name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Human-readable name for tooling display."
+              },
+              "shape": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "mutable_pruning"
+                      },
+                      "max_retention_days_by_sensitivity": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "number"
+                        },
+                        "description": "Map of sensitivity-level string → max retention days. Keys: `none | personal | medical | financial | secret`. Values MUST be at-or-below `MAX_RETENTION_DAYS_BY_SENSITIVITY` for every key. `Infinity` is encoded as JSON's `null` — schemas accept either; verifiers normalize."
+                      }
+                    },
+                    "required": ["kind", "max_retention_days_by_sensitivity"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "append_only_horizon"
+                      },
+                      "horizon_advance_period_days": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": "How often the operator advances the store's horizon, in days."
+                      },
+                      "witness_required": {
+                        "type": "boolean",
+                        "description": "Whether co-witness signatures are required on horizon certs for this store. Decision 9: this value is DERIVED from federation state — verifiers SHOULD cross-check against the operator's federation discovery surface (spec/discovery-v1.md) at manifest issuance time. A relay with peers cannot honestly publish `witness_required: false`."
+                      }
+                    },
+                    "required": ["kind", "horizon_advance_period_days", "witness_required"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "consolidation_flush"
+                      },
+                      "flush_to": {
+                        "type": "string",
+                        "enum": ["memory", "expire"],
+                        "description": "Default disposition for flushed records that did not consolidate into a memory node."
+                      },
+                      "has_min_floor_resolver": {
+                        "type": "boolean",
+                        "description": "Whether this store registers a per-record min-floor resolver (decision 3). When true, settlement-relevant records carry an obligation floor beyond the sensitivity floor. The resolver itself is BSL runtime code; the manifest declares only its presence so users can confirm the operator runs an obligation-aware flush."
+                      }
+                    },
+                    "required": ["kind", "flush_to", "has_min_floor_resolver"],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": ["store_id", "store_name", "shape"],
+            "additionalProperties": false
+          },
+          "description": "Per-store retention declarations. The drift gate `check-retention-coverage` enumerates every store holding sensitivity-classified content and asserts each appears here."
+        },
+        "pre_classification_default_sensitivity": {
+          "type": "string",
+          "enum": ["none", "personal", "medical", "financial", "secret"],
+          "description": "Default sensitivity for un-classified pre-deploy records under `consolidation_flush` (decision 6b). Defaults to `personal` if omitted. The operator's lazy-classify-on-flush path uses this value as the floor until classification fires."
+        },
+        "honest_gaps": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Operator-declared gaps. Same pattern as operator-transparency.md §'Reference implementation' — stage 1 ships with the chain-anchor in honest_gaps until stage 2."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-hex-v1",
+          "description": "Cryptosuite identifier. `motebit-jcs-ed25519-hex-v1`: JCS canonicalization, Ed25519 primitive, hex signature encoding, hex public-key encoding. Sibling to the operator-transparency manifest."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hex-encoded Ed25519 signature over `canonicalJson(manifest minus signature)`, signed by the operator's transparency key."
+        }
+      },
+      "required": ["spec", "operator_id", "issued_at", "stores", "suite", "signature"],
+      "additionalProperties": false,
+      "description": "Operator-published retention manifest. Signed; browser-side re-verifiable through the same primitive pattern as verifySkillBundle (commit 87e2f174)."
+    }
+  }
+}

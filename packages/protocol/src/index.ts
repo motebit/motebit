@@ -2196,6 +2196,36 @@ export type {
 } from "./crypto-suite.js";
 export { SUITE_REGISTRY, ALL_SUITE_IDS, isSuiteId, getSuiteEntry } from "./crypto-suite.js";
 
+// ── Retention policy (protocol-level) ────────────────────────────────
+// Three retention shapes, one signed `DeletionCertificate` discriminated
+// union, sensitivity ceilings as interop law + reference defaults,
+// signed retention manifest. See docs/doctrine/retention-policy.md.
+
+export {
+  MAX_RETENTION_DAYS_BY_SENSITIVITY,
+  REFERENCE_RETENTION_DAYS_BY_SENSITIVITY,
+} from "./retention-policy.js";
+
+export type {
+  RetentionCeilingDays,
+  RetentionShape,
+  RetentionShapeDeclaration,
+  RetentionStoreDeclaration,
+  RetentionManifest,
+  DeletionCertificate,
+  DeletionReason,
+  HorizonSubject,
+  HorizonWitness,
+  FederationGraphAnchor,
+  MerkleAlgo,
+  MerkleInclusionProof,
+  SubjectSignature,
+  OperatorSignature,
+  DelegateSignature,
+  GuardianSignature,
+  SensitivityLevelString,
+} from "./retention-policy.js";
+
 // ── Memory event payloads (spec/memory-delta-v1.md) ───────────────
 export type {
   MemoryDecayedPayload,

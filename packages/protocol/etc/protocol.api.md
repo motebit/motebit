@@ -810,6 +810,18 @@ export interface DelegatedStepResult {
 }
 
 // @public
+export interface DelegateSignature {
+    // (undocumented)
+    readonly delegation_receipt_id: string;
+    // (undocumented)
+    readonly motebit_id: MotebitId;
+    // (undocumented)
+    readonly signature: string;
+    // (undocumented)
+    readonly suite: SuiteId;
+}
+
+// @public
 export interface DelegationReceiptLike {
     // (undocumented)
     delegation_receipts?: DelegationReceiptLike[];
@@ -851,6 +863,44 @@ export interface DelegationToken {
     signature: string;
     suite: "motebit-jcs-ed25519-b64-v1";
 }
+
+// @public
+export type DeletionCertificate = {
+    readonly kind: "mutable_pruning";
+    readonly target_id: NodeId;
+    readonly sensitivity: SensitivityLevelString;
+    readonly reason: DeletionReason;
+    readonly deleted_at: number;
+    readonly subject_signature?: SubjectSignature;
+    readonly operator_signature?: OperatorSignature;
+    readonly delegate_signature?: DelegateSignature;
+    readonly guardian_signature?: GuardianSignature;
+} | {
+    readonly kind: "append_only_horizon";
+    readonly subject: HorizonSubject;
+    readonly store_id: string;
+    readonly horizon_ts: number;
+    readonly witnessed_by: HorizonWitness[];
+    readonly federation_graph_anchor?: FederationGraphAnchor;
+    readonly issued_at: number;
+    readonly suite: SuiteId;
+    readonly signature: string;
+} | {
+    readonly kind: "consolidation_flush";
+    readonly target_id: string;
+    readonly sensitivity: SensitivityLevelString;
+    readonly reason: DeletionReason;
+    readonly flushed_to: "memory_node" | "expire";
+    readonly memory_node_id?: NodeId;
+    readonly flushed_at: number;
+    readonly subject_signature?: SubjectSignature;
+    readonly operator_signature?: OperatorSignature;
+    readonly delegate_signature?: DelegateSignature;
+    readonly guardian_signature?: GuardianSignature;
+};
+
+// @public
+export type DeletionReason = "user_request" | "retention_enforcement" | "retention_enforcement_post_classification" | "operator_request" | "delegated_request" | "self_enforcement" | "guardian_request";
 
 // @public
 export interface DepartureAttestation {
@@ -1299,6 +1349,14 @@ export interface ExecutionTimelineEntry {
 export type ExecutionTimelineType = "goal_started" | "plan_created" | "step_started" | "tool_invoked" | "tool_result" | "step_completed" | "step_failed" | "step_delegated" | "plan_completed" | "plan_failed" | "goal_completed" | "proposal_created" | "proposal_accepted" | "proposal_rejected" | "proposal_countered" | "collaborative_step_completed";
 
 // @public
+export interface FederationGraphAnchor {
+    // (undocumented)
+    readonly algo: MerkleAlgo;
+    readonly leaf_count: number;
+    readonly merkle_root: string;
+}
+
+// @public
 export function getSuiteEntry(id: SuiteId): SuiteEntry;
 
 // @public (undocumented)
@@ -1408,6 +1466,15 @@ export interface GradientCredentialSubject {
 }
 
 // @public
+export interface GuardianSignature {
+    readonly guardian_public_key: string;
+    // (undocumented)
+    readonly signature: string;
+    // (undocumented)
+    readonly suite: SuiteId;
+}
+
+// @public
 export interface GuestRail extends SettlementRail {
     attachProof(settlementId: string, proof: PaymentProof): Promise<void>;
     // (undocumented)
@@ -1425,6 +1492,23 @@ export interface HardwareAttestationClaim {
     attestation_receipt?: string;
     key_exported?: boolean;
     platform: "secure_enclave" | "tpm" | "play_integrity" | "android_keystore" | "device_check" | "webauthn" | "software";
+}
+
+// @public
+export type HorizonSubject = {
+    readonly kind: "motebit";
+    readonly motebit_id: MotebitId;
+} | {
+    readonly kind: "operator";
+    readonly operator_id: string;
+};
+
+// @public (undocumented)
+export interface HorizonWitness {
+    readonly inclusion_proof?: MerkleInclusionProof;
+    // (undocumented)
+    readonly motebit_id: MotebitId;
+    readonly signature: string;
 }
 
 // @public
@@ -1571,6 +1655,15 @@ export interface MarketConfig {
 }
 
 // @public
+export const MAX_RETENTION_DAYS_BY_SENSITIVITY: Readonly<{
+    none: RetentionCeilingDays;
+    personal: RetentionCeilingDays;
+    medical: RetentionCeilingDays;
+    financial: RetentionCeilingDays;
+    secret: RetentionCeilingDays;
+}>;
+
+// @public
 export const MaxProductLogSemiring: Semiring<number>;
 
 // @public
@@ -1664,6 +1757,19 @@ export enum MemoryType {
 }
 
 // @public
+export type MerkleAlgo = "merkle-sha256-v1";
+
+// @public
+export interface MerkleInclusionProof {
+    // (undocumented)
+    readonly layer_sizes: number[];
+    // (undocumented)
+    readonly leaf_index: number;
+    // (undocumented)
+    readonly siblings: string[];
+}
+
+// @public
 export interface MigrationPresentation {
     credential_bundle: CredentialBundle;
     departure_attestation: DepartureAttestation;
@@ -1736,6 +1842,16 @@ export interface MouseMoveAction {
 
 // @public (undocumented)
 export type NodeId = Brand<string, "NodeId">;
+
+// @public
+export interface OperatorSignature {
+    // (undocumented)
+    readonly operator_id: string;
+    // (undocumented)
+    readonly signature: string;
+    // (undocumented)
+    readonly suite: SuiteId;
+}
 
 // @public
 export function optimalPath<T>(graph: WeightedDigraph<T>, source: string, target: string): T;
@@ -2076,6 +2192,15 @@ export function recordSemiring<R extends Record<string, unknown>>(fields: {
     [K in keyof R]: Semiring<R[K]>;
 }): Semiring<R>;
 
+// @public
+export const REFERENCE_RETENTION_DAYS_BY_SENSITIVITY: Readonly<{
+    none: RetentionCeilingDays;
+    personal: RetentionCeilingDays;
+    medical: RetentionCeilingDays;
+    financial: RetentionCeilingDays;
+    secret: RetentionCeilingDays;
+}>;
+
 // @public (undocumented)
 export const REFERENCE_TRUST_THRESHOLDS: TrustTransitionThresholds;
 
@@ -2124,6 +2249,62 @@ export interface ReputationCredentialSubject {
     task_count: number;
     // (undocumented)
     trust_score: number;
+}
+
+// @public
+export type RetentionCeilingDays = number;
+
+// @public
+export interface RetentionManifest {
+    readonly honest_gaps?: string[];
+    // (undocumented)
+    readonly issued_at: number;
+    readonly operator_id: string;
+    readonly pre_classification_default_sensitivity?: SensitivityLevelString;
+    // (undocumented)
+    readonly signature: string;
+    readonly spec: "motebit/retention-manifest@1";
+    readonly stores: RetentionStoreDeclaration[];
+    // (undocumented)
+    readonly suite: SuiteId;
+}
+
+// @public
+export type RetentionShape = {
+    readonly kind: "mutable_pruning";
+    readonly max_retention_days_by_sensitivity: Readonly<Record<string, RetentionCeilingDays>>;
+    readonly deletion_cert: true;
+} | {
+    readonly kind: "append_only_horizon";
+    readonly horizon_advance_period_days: number;
+    readonly horizon_cert: true;
+    readonly witness_required: boolean;
+} | {
+    readonly kind: "consolidation_flush";
+    readonly flush_to: "memory" | "expire";
+    readonly min_floor_resolver?: (record: unknown) => number | Promise<number>;
+    readonly flush_cert: true;
+};
+
+// @public
+export type RetentionShapeDeclaration = {
+    readonly kind: "mutable_pruning";
+    readonly max_retention_days_by_sensitivity: Readonly<Record<string, RetentionCeilingDays>>;
+} | {
+    readonly kind: "append_only_horizon";
+    readonly horizon_advance_period_days: number;
+    readonly witness_required: boolean;
+} | {
+    readonly kind: "consolidation_flush";
+    readonly flush_to: "memory" | "expire";
+    readonly has_min_floor_resolver: boolean;
+};
+
+// @public
+export interface RetentionStoreDeclaration {
+    readonly shape: RetentionShapeDeclaration;
+    readonly store_id: string;
+    readonly store_name: string;
 }
 
 // @public (undocumented)
@@ -2217,6 +2398,9 @@ export enum SensitivityLevel {
     // (undocumented)
     Secret = "secret"
 }
+
+// @public
+export type SensitivityLevelString = "none" | "personal" | "medical" | "financial" | "secret";
 
 // @public (undocumented)
 export interface ServiceListingStoreAdapter {
@@ -2506,6 +2690,16 @@ export interface StoredCredential {
     issued_at: number;
     issuer_did: string;
     subject_motebit_id: string;
+}
+
+// @public
+export interface SubjectSignature {
+    // (undocumented)
+    readonly motebit_id: MotebitId;
+    // (undocumented)
+    readonly signature: string;
+    // (undocumented)
+    readonly suite: SuiteId;
 }
 
 // @public
