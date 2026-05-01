@@ -1178,6 +1178,18 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
   // File appeal against a resolution. The body MUST be a signed
   // `DisputeAppeal` wire artifact per spec §8.2 — verified against the
   // appealing party's registered public key.
+  //
+  // Federation appeals trigger round-2 orchestration inline (§8.3);
+  // single-relay appeals stay in `appealed` for operator manual review.
+  //
+  // V1 evidence simplification: §8.3 specifies that round-2 vote-request
+  // carries the union of round-1 evidence + new evidence introduced
+  // with the appeal. The relay's /evidence endpoint currently accepts
+  // submissions only in {opened, evidence} states, so post-`resolved`
+  // evidence cannot be added today — round-2 adjudicates on the
+  // original round-1 evidence + the appeal `reason` text. Extending
+  // /evidence to accept post-`resolved` submissions is a future arc
+  // (documented in dispute-v1.md §8.3 + memory).
   /** @spec motebit/dispute@1.0 */
   app.post("/api/v1/disputes/:disputeId/appeal", async (c) => {
     const disputeId = c.req.param("disputeId");
@@ -1414,9 +1426,16 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       )
       .all(disputeId);
 
-    // Fetch resolution
+    // Fetch resolution. Migration 19 added UNIQUE(dispute_id, round)
+    // — both round-1 and round-2 rows can coexist post-§8.3 appeal.
+    // Return the latest signed verdict (round 2 if appealed, else
+    // round 1) to preserve the existing one-resolution wire-format
+    // contract. Audit-history endpoint exposing both rounds is a
+    // future arc; see memory/dispute_resolution_audit_history_endpoint_followup.md.
     const resolution = db
-      .prepare("SELECT * FROM relay_dispute_resolutions WHERE dispute_id = ?")
+      .prepare(
+        "SELECT * FROM relay_dispute_resolutions WHERE dispute_id = ? ORDER BY round DESC LIMIT 1",
+      )
       .get(disputeId);
 
     return c.json({

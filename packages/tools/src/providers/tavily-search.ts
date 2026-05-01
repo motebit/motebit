@@ -57,7 +57,13 @@ export class TavilySearchProvider implements SearchProvider {
 
   constructor(apiKey: string, options: TavilySearchProviderOptions = {}) {
     this.apiKey = apiKey;
-    this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+    // Defer-bind the default so test stubs of globalThis.fetch
+    // (e.g., vi.stubGlobal) installed AFTER constructor execution
+    // are observed at call time. Bind-at-construction would freeze
+    // the pre-stub global fetch — same shape as the §6.2 orchestrator
+    // bug fixed in commit 4b.
+    this.fetchImpl =
+      options.fetch ?? ((...args) => globalThis.fetch(...(args as Parameters<typeof fetch>)));
     this.searchDepth = options.searchDepth ?? "basic";
   }
 

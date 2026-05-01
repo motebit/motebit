@@ -142,6 +142,144 @@ afterEach(async () => {
   await relay.close();
 });
 
+describe("Federation appeal: §8.3 round-binding cryptographic isolation", () => {
+  it("round-1 vote signature does NOT verify when reattributed to round 2 (round-binding replay defense)", async () => {
+    // Daniel's design hint, made grep-discoverable: the named
+    // property "round-1 vote can't be replayed as round-2" is
+    // load-bearing for §8.3 round isolation. The cryptographic
+    // binding holds at the verifyAdjudicatorVote layer (signature
+    // covers `round` per §6.5 + §8.3), but a focused, named test
+    // here lets future readers grep for the property by intent.
+    //
+    // Sibling coverage:
+    //   - packages/crypto/src/__tests__/verify-artifacts.test.ts
+    //     "signature binds to round" (commit 2)
+    //   - federation-orchestrator.test.ts "round mismatch in
+    //     response → vote dropped" (commit 3)
+    const peerKp = await generateKeypair();
+    const round1Vote = await signAdjudicatorVote(
+      {
+        dispute_id: "dispute-replay-test",
+        round: 1,
+        peer_id: "peer-replay",
+        vote: "upheld" as DisputeOutcome,
+        rationale: "round 1 vote",
+      },
+      peerKp.privateKey,
+    );
+
+    // Mutate the round to 2 — the signed canonical body still says
+    // round 1, so verify-against-round-2-bytes fails.
+    const replayedAsRound2 = { ...round1Vote, round: 2 };
+    const { verifyAdjudicatorVote } = await import("@motebit/crypto");
+    const valid = await verifyAdjudicatorVote(replayedAsRound2, peerKp.publicKey);
+    expect(valid).toBe(false);
+  });
+});
+
+describe("Federation appeal: round-2 quorum failure", () => {
+  it("round-2 fan-out → all peers return 501 → split fallback (parity with round-1 quorum-failure coverage)", async () => {
+    // Round 1: peers vote upheld (success)
+    // Round 2: peers all 501 → 0 valid votes → split fallback per §6.6
+    stubPeerFetch(peers, new Map<number, DisputeOutcome>([[1, "upheld"]]));
+    // Override the round-2 path: replace stub with one that 501s for round 2
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const peer = peers.find((p) => url.startsWith(p.endpointUrl));
+      if (!peer) throw new Error(`unrouted url: ${url}`);
+      const body = JSON.parse(init!.body as string) as VoteRequest;
+      if (body.round === 1) {
+        const signed = await signAdjudicatorVote(
+          {
+            dispute_id: body.dispute_id,
+            round: 1,
+            peer_id: peer.relayMotebitId,
+            vote: "upheld",
+            rationale: "round 1",
+          },
+          peer.privateKey,
+        );
+        return new Response(JSON.stringify(signed), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      // Round 2: all peers 501 policy_not_configured
+      return new Response(
+        JSON.stringify({ error_code: "policy_not_configured", message: "test" }),
+        { status: 501, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const relayMotebitId = relay.relayIdentity.relayMotebitId;
+    const allocId = "alloc-r2qf";
+    const taskId = "task-r2qf";
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, 100000, 'settled', ?)",
+      )
+      .run(allocId, taskId, "del-fa", Date.now());
+
+    const delPriv = agentKeys.get("del-fa")!.privateKey;
+    const disputeId = `dispute-r2qf-${crypto.randomUUID().slice(0, 8)}`;
+    const disputeReq: DisputeRequest = await signDisputeRequest(
+      {
+        dispute_id: disputeId,
+        task_id: taskId,
+        allocation_id: allocId,
+        filed_by: "del-fa",
+        respondent: relayMotebitId,
+        category: "quality",
+        description: "test",
+        evidence_refs: ["x"],
+        filed_at: Date.now(),
+      },
+      delPriv,
+    );
+    await relay.app.request(`/api/v1/allocations/${allocId}/dispute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(disputeReq),
+    });
+    await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "upheld",
+        rationale: "ignored",
+        fund_action: "release_to_worker",
+      }),
+    });
+
+    const appeal = await signDisputeAppeal(
+      {
+        dispute_id: disputeId,
+        appealed_by: "del-fa",
+        reason: "appeal",
+        appealed_at: Date.now(),
+      },
+      delPriv,
+    );
+    const res = await relay.app.request(`/api/v1/disputes/${disputeId}/appeal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(appeal),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      state: string;
+      resolution: DisputeOutcome;
+      split_ratio: number;
+      adjudicator_votes: Array<unknown>;
+    };
+    // §6.6 quorum-failure fallback: 0 valid round-2 votes → split, 0.5
+    expect(body.state).toBe("final");
+    expect(body.resolution).toBe("split");
+    expect(body.split_ratio).toBe(0.5);
+    expect(body.adjudicator_votes).toHaveLength(0);
+  });
+});
+
 describe("Federation appeal: round-1 resolved → /appeal → round-2 → final", () => {
   it("happy path: round-2 majority `overturned` → state=final, fund_action executes, round-1 votes preserved", async () => {
     // Round 1: peers vote `upheld` (filer wins).
