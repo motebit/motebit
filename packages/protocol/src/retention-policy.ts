@@ -157,6 +157,9 @@ export type MerkleAlgo = "merkle-sha256-v1";
  * federation peer set at `horizon_ts`. Phase 4 quorum verification
  * recomputes the root from the operator's published peer set or
  * verifies inclusion proofs against it.
+ *
+ * `leaf_count = 0` is the canonical self-witnessed encoding (no peers
+ * at `horizon_ts`); see `EMPTY_FEDERATION_GRAPH_ANCHOR`.
  */
 export interface FederationGraphAnchor {
   readonly algo: MerkleAlgo;
@@ -165,6 +168,27 @@ export interface FederationGraphAnchor {
   /** Number of peer pubkeys in the anchored set. */
   readonly leaf_count: number;
 }
+
+/**
+ * Empty-tree federation graph anchor — the canonical self-witnessed
+ * encoding when an operator has no federation peers at `horizon_ts`.
+ *
+ * `merkle_root` is the hex-encoded SHA-256 of the empty byte string
+ * (`sha256(new Uint8Array(0))`). Verifiers in `@motebit/crypto` admit
+ * `append_only_horizon` certs carrying this anchor as self-witnessed —
+ * `witnessed_by[]` may be empty since there are no peers to solicit.
+ *
+ * Phase 4b-3 makes `federation_graph_anchor` mandatory on certs from
+ * federation-aware deployments; pre-4b-3 certs without the field are
+ * grandfathered self-witnessed (verifier policy enforces
+ * presence-when-peered, not presence-always).
+ */
+export const EMPTY_FEDERATION_GRAPH_ANCHOR: FederationGraphAnchor = Object.freeze({
+  algo: "merkle-sha256-v1",
+  // SHA-256 of zero bytes — well-known constant.
+  merkle_root: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  leaf_count: 0,
+});
 
 /**
  * Merkle inclusion proof — same wire shape as
@@ -302,6 +326,11 @@ export type DeletionCertificate =
       readonly store_id: string;
       readonly horizon_ts: number;
       readonly witnessed_by: HorizonWitness[];
+      /**
+       * Optional pre-4b-3, mandatory from 4b-3+. When present with
+       * `leaf_count = 0` (`EMPTY_FEDERATION_GRAPH_ANCHOR`) the cert is
+       * self-witnessed — `witnessed_by` may be empty.
+       */
       readonly federation_graph_anchor?: FederationGraphAnchor;
       readonly issued_at: number;
       readonly suite: SuiteId;

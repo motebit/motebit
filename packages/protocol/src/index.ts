@@ -2249,6 +2249,10 @@ export type {
   AdjudicatorVote,
   DisputeResolution,
   DisputeAppeal,
+  WitnessOmissionDispute,
+  WitnessOmissionEvidence,
+  WitnessOmissionInclusionProofEvidence,
+  WitnessOmissionAlternativePeeringEvidence,
 } from "./dispute.js";
 
 // ── Settlement Mode (protocol-level) ────────────────────────────
@@ -2289,6 +2293,7 @@ export {
   MAX_RETENTION_DAYS_BY_SENSITIVITY,
   REFERENCE_RETENTION_DAYS_BY_SENSITIVITY,
   RUNTIME_RETENTION_REGISTRY,
+  EMPTY_FEDERATION_GRAPH_ANCHOR,
 } from "./retention-policy.js";
 
 export type {
