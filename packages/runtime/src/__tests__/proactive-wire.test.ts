@@ -60,10 +60,10 @@ describe("Runtime — proactive interior wire-in", () => {
     expect(transitions[transitions.length - 1]).toBe("idle");
   });
 
-  it("consolidationCycle returns the cycle result with all four phases run", async () => {
+  it("consolidationCycle returns the cycle result with all five phases run", async () => {
     const result = await runtime.consolidationCycle();
     expect(result.cycleId).toBeTruthy();
-    expect(result.phasesRun).toEqual(["orient", "gather", "consolidate", "prune"]);
+    expect(result.phasesRun).toEqual(["orient", "gather", "consolidate", "prune", "flush"]);
   });
 
   it("re-entry guard: second call while first in flight returns empty result", async () => {

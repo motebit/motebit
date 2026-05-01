@@ -13,6 +13,7 @@ import type {
   MotebitState,
   BehaviorCues,
   ConversationMessage,
+  ConversationStoreAdapter,
   ToolRegistry,
   ToolResult,
   AgentTask,
@@ -250,6 +251,7 @@ export class MotebitRuntime {
   private provider: StreamingProvider | null;
   private loopDeps: MotebitLoopDependencies | null = null;
   private conversation: ConversationManager;
+  private conversationStore: ConversationStoreAdapter | null;
   private _isProcessing = false;
   private _isFirstConversation = false;
   private latestCues: BehaviorCues = {
@@ -574,11 +576,12 @@ export class MotebitRuntime {
     }
 
     // Conversation lifecycle
+    this.conversationStore = adapters.storage.conversationStore ?? null;
     this.conversation = new ConversationManager({
       motebitId: this.motebitId,
       maxHistory: config.maxConversationHistory ?? 40,
       summarizeAfterMessages: config.summarizeAfterMessages ?? 20,
-      store: adapters.storage.conversationStore ?? null,
+      store: this.conversationStore,
       getProvider: () => this.provider,
       getTaskRouter: () => this.taskRouter,
       generateCompletion: (prompt, taskType) => this.generateCompletion(prompt, taskType),
@@ -2076,6 +2079,13 @@ export class MotebitRuntime {
           setCuriosityTargets: (targets) => this.gradientManager.setCuriosityTargets(targets),
           computeAndStoreGradient: (nodes) =>
             this.gradientManager.computeAndStoreGradient(nodes).then(() => {}),
+          // Phase 5-ship — register conversations + tool-audit under the
+          // consolidation_flush retention shape per
+          // docs/doctrine/retention-policy.md. Both wires are optional;
+          // surfaces that haven't pre-loaded their flush candidates (e.g.,
+          // the desktop renderer's IPC-async cache) silently no-op.
+          conversationStore: this.conversationStore,
+          toolAuditSink: this.toolAuditSink,
           logger: this._logger,
         },
         {
@@ -2252,6 +2262,8 @@ export class MotebitRuntime {
           pruned_decay: cycleResult.summary.prunedDecay,
           pruned_notability: cycleResult.summary.prunedNotability,
           pruned_retention: cycleResult.summary.prunedRetention,
+          flushed_conversations: cycleResult.summary.flushedConversations,
+          flushed_tool_audits: cycleResult.summary.flushedToolAudits,
         },
       };
       const signed = await signConsolidationReceipt(unsigned, keys.privateKey, keys.publicKey);

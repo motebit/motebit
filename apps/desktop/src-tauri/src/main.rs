@@ -77,7 +77,12 @@ CREATE TABLE IF NOT EXISTS tool_audit_log (
   decision TEXT NOT NULL,
   result TEXT,
   cost_units INTEGER DEFAULT 0,
-  timestamp INTEGER NOT NULL
+  timestamp INTEGER NOT NULL,
+  -- Sensitivity tier classified at write time. NULL on pre-phase-5 rows;
+  -- the consolidation-cycle flush phase lazy-classifies on read per
+  -- docs/doctrine/retention-policy.md §"Decision 6b". Desktop migration
+  -- v1 adds the column to existing installs.
+  sensitivity TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_audit_turn ON tool_audit_log (turn_id);
@@ -139,7 +144,12 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
   tool_calls TEXT,
   tool_call_id TEXT,
   created_at INTEGER NOT NULL,
-  token_estimate INTEGER NOT NULL DEFAULT 0
+  token_estimate INTEGER NOT NULL DEFAULT 0,
+  -- Sensitivity tier classified at write time. NULL on pre-phase-5 rows;
+  -- the consolidation-cycle flush phase lazy-classifies on read per
+  -- docs/doctrine/retention-policy.md §"Decision 6b". Desktop migration
+  -- v1 adds the column to existing installs.
+  sensitivity TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_conv_messages ON conversation_messages (conversation_id, created_at ASC);
 

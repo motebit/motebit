@@ -19,7 +19,22 @@ import {
 
 import type { InvokeFn } from "./tauri-storage.js";
 
-export const DESKTOP_MIGRATIONS: readonly Migration[] = [];
+export const DESKTOP_MIGRATIONS: readonly Migration[] = [
+  {
+    version: 1,
+    description: "conversation_messages.sensitivity + tool_audit_log.sensitivity",
+    statements: [
+      // Phase 5-ship — registers conversations + tool-audit under the
+      // `consolidation_flush` retention shape per
+      // docs/doctrine/retention-policy.md. Pre-phase-5 rows leave
+      // sensitivity NULL and the flush phase lazy-classifies on read
+      // per decision 6b. Sibling entries land in persistence (v34) and
+      // mobile (v19) the same release.
+      "ALTER TABLE conversation_messages ADD COLUMN sensitivity TEXT",
+      "ALTER TABLE tool_audit_log ADD COLUMN sensitivity TEXT",
+    ],
+  },
+];
 
 interface UserVersionRow {
   user_version: number;

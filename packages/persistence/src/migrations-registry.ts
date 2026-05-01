@@ -261,4 +261,18 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
     description: "devices.hardware_attestation_credential",
     statements: ["ALTER TABLE devices ADD COLUMN hardware_attestation_credential TEXT"],
   },
+  {
+    version: 34,
+    description: "conversation_messages.sensitivity + tool_audit_log.sensitivity",
+    statements: [
+      // Phase 5-ship — registers conversations + tool-audit under the
+      // `consolidation_flush` retention shape per
+      // docs/doctrine/retention-policy.md. Pre-phase-5 rows leave
+      // sensitivity NULL and the flush phase lazy-classifies on read
+      // per decision 6b. Sibling entries land in mobile (v19) and
+      // desktop (v1) the same release.
+      "ALTER TABLE conversation_messages ADD COLUMN sensitivity TEXT",
+      "ALTER TABLE tool_audit_log ADD COLUMN sensitivity TEXT",
+    ],
+  },
 ];

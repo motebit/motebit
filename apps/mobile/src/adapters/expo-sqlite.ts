@@ -152,7 +152,12 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
   tool_calls TEXT,
   tool_call_id TEXT,
   created_at INTEGER NOT NULL,
-  token_estimate INTEGER NOT NULL DEFAULT 0
+  token_estimate INTEGER NOT NULL DEFAULT 0,
+  -- Sensitivity tier classified at write time. NULL on pre-phase-5 rows;
+  -- the consolidation-cycle flush phase lazy-classifies on read per
+  -- docs/doctrine/retention-policy.md §"Decision 6b". Mobile migration
+  -- v19 adds the column to existing installs.
+  sensitivity TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_conv_messages
   ON conversation_messages (conversation_id, created_at ASC);
@@ -735,6 +740,7 @@ interface ConversationMessageRow {
   tool_call_id: string | null;
   created_at: number;
   token_estimate: number;
+  sensitivity: string | null;
 }
 
 export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
@@ -759,14 +765,15 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
       content: string;
       toolCalls?: string;
       toolCallId?: string;
+      sensitivity?: SensitivityLevel;
     },
   ): void {
     const messageId = crypto.randomUUID();
     const now = Date.now();
     const tokenEstimate = Math.ceil(msg.content.length / 4);
     this.db.runSync(
-      `INSERT INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         messageId,
         conversationId,
@@ -777,6 +784,7 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
         msg.toolCallId ?? null,
         now,
         tokenEstimate,
+        msg.sensitivity ?? null,
       ],
     );
     this.db.runSync(
@@ -798,6 +806,7 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
     toolCallId: string | null;
     createdAt: number;
     tokenEstimate: number;
+    sensitivity?: SensitivityLevel;
   }> {
     let sql =
       "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at ASC";
@@ -807,17 +816,34 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
       params.push(limit);
     }
     const rows = this.db.getAllSync<ConversationMessageRow>(sql, params);
-    return rows.map((r) => ({
-      messageId: r.message_id,
-      conversationId: r.conversation_id,
-      motebitId: r.motebit_id,
-      role: r.role,
-      content: r.content,
-      toolCalls: r.tool_calls,
-      toolCallId: r.tool_call_id,
-      createdAt: r.created_at,
-      tokenEstimate: r.token_estimate,
-    }));
+    return rows.map((r) => {
+      const out: {
+        messageId: string;
+        conversationId: string;
+        motebitId: string;
+        role: string;
+        content: string;
+        toolCalls: string | null;
+        toolCallId: string | null;
+        createdAt: number;
+        tokenEstimate: number;
+        sensitivity?: SensitivityLevel;
+      } = {
+        messageId: r.message_id,
+        conversationId: r.conversation_id,
+        motebitId: r.motebit_id,
+        role: r.role,
+        content: r.content,
+        toolCalls: r.tool_calls,
+        toolCallId: r.tool_call_id,
+        createdAt: r.created_at,
+        tokenEstimate: r.token_estimate,
+      };
+      if (r.sensitivity !== null) {
+        out.sensitivity = r.sensitivity as SensitivityLevel;
+      }
+      return out;
+    });
   }
 
   getActiveConversation(motebitId: string): {
@@ -890,6 +916,60 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
       conversationId,
     ]);
     this.db.runSync("DELETE FROM conversations WHERE conversation_id = ?", [conversationId]);
+  }
+
+  // === consolidation_flush retention shape ===
+  // Phase 5-ship — docs/doctrine/retention-policy.md §"Consolidation flush".
+
+  enumerateForFlush(
+    motebitId: string,
+    beforeCreatedAt: number,
+  ): Array<{
+    messageId: string;
+    conversationId: string;
+    role: string;
+    content: string;
+    createdAt: number;
+    sensitivity?: SensitivityLevel;
+  }> {
+    const rows = this.db.getAllSync<{
+      message_id: string;
+      conversation_id: string;
+      role: string;
+      content: string;
+      created_at: number;
+      sensitivity: string | null;
+    }>(
+      `SELECT message_id, conversation_id, role, content, created_at, sensitivity
+       FROM conversation_messages
+       WHERE motebit_id = ? AND created_at < ?
+       ORDER BY created_at ASC`,
+      [motebitId, beforeCreatedAt],
+    );
+    return rows.map((r) => {
+      const out: {
+        messageId: string;
+        conversationId: string;
+        role: string;
+        content: string;
+        createdAt: number;
+        sensitivity?: SensitivityLevel;
+      } = {
+        messageId: r.message_id,
+        conversationId: r.conversation_id,
+        role: r.role,
+        content: r.content,
+        createdAt: r.created_at,
+      };
+      if (r.sensitivity !== null) {
+        out.sensitivity = r.sensitivity as SensitivityLevel;
+      }
+      return out;
+    });
+  }
+
+  eraseMessage(messageId: string): void {
+    this.db.runSync("DELETE FROM conversation_messages WHERE message_id = ?", [messageId]);
   }
 }
 
@@ -1989,6 +2069,7 @@ interface ToolAuditRow {
   injection: string | null;
   cost_units: number | null;
   timestamp: number;
+  sensitivity: string | null;
 }
 
 function rowToToolAudit(row: ToolAuditRow): ToolAuditEntry {
@@ -2012,6 +2093,9 @@ function rowToToolAudit(row: ToolAuditRow): ToolAuditEntry {
   if (row.cost_units != null && row.cost_units > 0) {
     entry.costUnits = row.cost_units;
   }
+  if (row.sensitivity !== null) {
+    entry.sensitivity = row.sensitivity as SensitivityLevel;
+  }
   return entry;
 }
 
@@ -2020,8 +2104,8 @@ export class ExpoToolAuditSink implements AuditLogSink {
 
   append(entry: ToolAuditEntry): void {
     this.db.runSync(
-      `INSERT INTO tool_audit (call_id, turn_id, run_id, tool, args, decision, result, injection, cost_units, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tool_audit (call_id, turn_id, run_id, tool, args, decision, result, injection, cost_units, timestamp, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         entry.callId,
         entry.turnId,
@@ -2033,8 +2117,21 @@ export class ExpoToolAuditSink implements AuditLogSink {
         entry.injection ? JSON.stringify(entry.injection) : null,
         entry.costUnits ?? 0,
         entry.timestamp,
+        entry.sensitivity ?? null,
       ],
     );
+  }
+
+  enumerateForFlush(beforeTimestamp: number): ToolAuditEntry[] {
+    const rows = this.db.getAllSync<ToolAuditRow>(
+      "SELECT * FROM tool_audit WHERE timestamp < ? ORDER BY timestamp ASC",
+      [beforeTimestamp],
+    );
+    return rows.map(rowToToolAudit);
+  }
+
+  erase(callId: string): void {
+    this.db.runSync("DELETE FROM tool_audit WHERE call_id = ?", [callId]);
   }
 
   query(turnId: string): ToolAuditEntry[] {

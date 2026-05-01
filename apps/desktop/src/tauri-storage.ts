@@ -672,6 +672,7 @@ interface ConversationMessageRow {
   tool_call_id: string | null;
   created_at: number;
   token_estimate: number;
+  sensitivity: string | null;
 }
 
 /** 4-hour window for session continuity. */
@@ -701,6 +702,7 @@ export class TauriConversationStore implements ConversationStoreAdapter {
       toolCallId: string | null;
       createdAt: number;
       tokenEstimate: number;
+      sensitivity?: SensitivityLevel;
     }>
   >();
 
@@ -729,17 +731,34 @@ export class TauriConversationStore implements ConversationStoreAdapter {
       );
       this._messagesCache.set(
         row.conversation_id,
-        msgRows.map((r) => ({
-          messageId: r.message_id,
-          conversationId: r.conversation_id,
-          motebitId: r.motebit_id,
-          role: r.role,
-          content: r.content,
-          toolCalls: r.tool_calls,
-          toolCallId: r.tool_call_id,
-          createdAt: r.created_at,
-          tokenEstimate: r.token_estimate,
-        })),
+        msgRows.map((r) => {
+          const out: {
+            messageId: string;
+            conversationId: string;
+            motebitId: string;
+            role: string;
+            content: string;
+            toolCalls: string | null;
+            toolCallId: string | null;
+            createdAt: number;
+            tokenEstimate: number;
+            sensitivity?: SensitivityLevel;
+          } = {
+            messageId: r.message_id,
+            conversationId: r.conversation_id,
+            motebitId: r.motebit_id,
+            role: r.role,
+            content: r.content,
+            toolCalls: r.tool_calls,
+            toolCallId: r.tool_call_id,
+            createdAt: r.created_at,
+            tokenEstimate: r.token_estimate,
+          };
+          if (r.sensitivity !== null) {
+            out.sensitivity = r.sensitivity as SensitivityLevel;
+          }
+          return out;
+        }),
       );
     } else {
       this._activeCache.set(motebitId, null);
@@ -766,6 +785,7 @@ export class TauriConversationStore implements ConversationStoreAdapter {
       content: string;
       toolCalls?: string;
       toolCallId?: string;
+      sensitivity?: SensitivityLevel;
     },
   ): void {
     const messageId = crypto.randomUUID();
@@ -773,8 +793,8 @@ export class TauriConversationStore implements ConversationStoreAdapter {
     const tokenEstimate = Math.ceil(msg.content.length / 4);
     void dbExecute(
       this.invoke,
-      `INSERT INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         messageId,
         conversationId,
@@ -785,6 +805,7 @@ export class TauriConversationStore implements ConversationStoreAdapter {
         msg.toolCallId ?? null,
         now,
         tokenEstimate,
+        msg.sensitivity ?? null,
       ],
     );
     void dbExecute(
@@ -807,6 +828,7 @@ export class TauriConversationStore implements ConversationStoreAdapter {
     toolCallId: string | null;
     createdAt: number;
     tokenEstimate: number;
+    sensitivity?: SensitivityLevel;
   }> {
     // Return from preloaded cache (sync interface requirement)
     return this._messagesCache.get(conversationId) ?? [];
@@ -1027,11 +1049,12 @@ export class TauriConversationStore implements ConversationStoreAdapter {
     tool_call_id: string | null;
     created_at: number;
     token_estimate: number;
+    sensitivity?: SensitivityLevel | string | null;
   }): Promise<void> {
     await dbExecute(
       this.invoke,
-      `INSERT OR IGNORE INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         msg.message_id,
         msg.conversation_id,
@@ -1042,8 +1065,87 @@ export class TauriConversationStore implements ConversationStoreAdapter {
         msg.tool_call_id,
         msg.created_at,
         msg.token_estimate,
+        msg.sensitivity ?? null,
       ],
     );
+  }
+
+  // === consolidation_flush retention shape ===
+  // Phase 5-ship — docs/doctrine/retention-policy.md §"Consolidation flush".
+  //
+  // The desktop sync surface is sync (renderer-cache backed), but the flush
+  // phase runs on a long timer cadence and tolerates IPC. Both methods are
+  // sync by adapter contract — they fire-and-forget the IPC and refresh the
+  // cache opportunistically. The cycle's flush phase reads from this cache
+  // (populated by `preloadFlushCandidates`) and dispatches per-row erases.
+
+  private _flushCandidatesCache: Array<{
+    messageId: string;
+    conversationId: string;
+    role: string;
+    content: string;
+    createdAt: number;
+    sensitivity?: SensitivityLevel;
+  }> = [];
+
+  /** Pre-load flush candidates ahead of the consolidation cycle's flush phase. */
+  async preloadFlushCandidates(motebitId: string, beforeCreatedAt: number): Promise<void> {
+    const rows = await dbQuery<{
+      message_id: string;
+      conversation_id: string;
+      role: string;
+      content: string;
+      created_at: number;
+      sensitivity: string | null;
+    }>(
+      this.invoke,
+      `SELECT message_id, conversation_id, role, content, created_at, sensitivity
+       FROM conversation_messages
+       WHERE motebit_id = ? AND created_at < ?
+       ORDER BY created_at ASC`,
+      [motebitId, beforeCreatedAt],
+    );
+    this._flushCandidatesCache = rows.map((r) => {
+      const out: {
+        messageId: string;
+        conversationId: string;
+        role: string;
+        content: string;
+        createdAt: number;
+        sensitivity?: SensitivityLevel;
+      } = {
+        messageId: r.message_id,
+        conversationId: r.conversation_id,
+        role: r.role,
+        content: r.content,
+        createdAt: r.created_at,
+      };
+      if (r.sensitivity !== null) {
+        out.sensitivity = r.sensitivity as SensitivityLevel;
+      }
+      return out;
+    });
+  }
+
+  enumerateForFlush(
+    _motebitId: string,
+    _beforeCreatedAt: number,
+  ): Array<{
+    messageId: string;
+    conversationId: string;
+    role: string;
+    content: string;
+    createdAt: number;
+    sensitivity?: SensitivityLevel;
+  }> {
+    // Sync interface returns from cache (populated by preloadFlushCandidates).
+    return this._flushCandidatesCache;
+  }
+
+  eraseMessage(messageId: string): void {
+    void dbExecute(this.invoke, "DELETE FROM conversation_messages WHERE message_id = ?", [
+      messageId,
+    ]);
   }
 
   deleteConversation(conversationId: string): void {

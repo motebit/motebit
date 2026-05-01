@@ -290,6 +290,8 @@ export interface AuditLogAdapter {
 export interface AuditLogSink {
     // (undocumented)
     append(entry: ToolAuditEntry): void;
+    enumerateForFlush?(beforeTimestamp: number): ToolAuditEntry[];
+    erase?(callId: string): void;
     // (undocumented)
     getAll(): ToolAuditEntry[];
     // (undocumented)
@@ -614,8 +616,8 @@ export interface ConsolidationReceipt {
     // (undocumented)
     finished_at: number;
     motebit_id: MotebitId;
-    phases_run: ReadonlyArray<"orient" | "gather" | "consolidate" | "prune">;
-    phases_yielded: ReadonlyArray<"orient" | "gather" | "consolidate" | "prune">;
+    phases_run: ReadonlyArray<"orient" | "gather" | "consolidate" | "prune" | "flush">;
+    phases_yielded: ReadonlyArray<"orient" | "gather" | "consolidate" | "prune" | "flush">;
     public_key?: string;
     receipt_id: string;
     // (undocumented)
@@ -630,6 +632,8 @@ export interface ConsolidationReceipt {
         pruned_decay?: number;
         pruned_notability?: number;
         pruned_retention?: number;
+        flushed_conversations?: number;
+        flushed_tool_audits?: number;
     };
 }
 
@@ -644,11 +648,21 @@ export interface ConversationStoreAdapter {
         content: string;
         toolCalls?: string;
         toolCallId?: string;
+        sensitivity?: SensitivityLevel;
     }): void;
     // (undocumented)
     createConversation(motebitId: string): string;
     // (undocumented)
     deleteConversation(conversationId: string): void;
+    enumerateForFlush?(motebitId: string, beforeCreatedAt: number): Array<{
+        messageId: string;
+        conversationId: string;
+        role: string;
+        content: string;
+        createdAt: number;
+        sensitivity?: SensitivityLevel;
+    }>;
+    eraseMessage?(messageId: string): void;
     // (undocumented)
     getActiveConversation(motebitId: string): {
         conversationId: string;
@@ -675,6 +689,7 @@ export interface ConversationStoreAdapter {
         toolCallId: string | null;
         createdAt: number;
         tokenEstimate: number;
+        sensitivity?: SensitivityLevel;
     }>;
     // (undocumented)
     updateSummary(conversationId: string, summary: string): void;
@@ -2786,6 +2801,7 @@ export interface SyncConversationMessage {
     motebit_id: MotebitId;
     // (undocumented)
     role: string;
+    sensitivity?: SensitivityLevelString;
     // (undocumented)
     token_estimate: number;
     // (undocumented)
@@ -2894,6 +2910,7 @@ export interface ToolAuditEntry {
     };
     // (undocumented)
     runId?: string;
+    sensitivity?: SensitivityLevel;
     // (undocumented)
     timestamp: number;
     // (undocumented)

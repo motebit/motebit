@@ -320,4 +320,20 @@ export const MOBILE_MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX IF NOT EXISTS idx_tool_audit_ts ON tool_audit(timestamp)",
     ],
   },
+  {
+    version: 19,
+    description: "conversation_messages.sensitivity + tool_audit.sensitivity",
+    statements: [
+      // Phase 5-ship — registers conversations + tool-audit under the
+      // `consolidation_flush` retention shape per
+      // docs/doctrine/retention-policy.md. Pre-phase-5 rows leave
+      // sensitivity NULL and the flush phase lazy-classifies on read
+      // per decision 6b. Sibling entries land in persistence (v34) and
+      // desktop (v1) the same release. Note the table-name divergence:
+      // mobile uses `tool_audit`, persistence/desktop use
+      // `tool_audit_log` — the column is the same.
+      "ALTER TABLE conversation_messages ADD COLUMN sensitivity TEXT",
+      "ALTER TABLE tool_audit ADD COLUMN sensitivity TEXT",
+    ],
+  },
 ];

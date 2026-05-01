@@ -108,7 +108,12 @@ CREATE TABLE IF NOT EXISTS tool_audit_log (
   args TEXT NOT NULL,
   decision TEXT NOT NULL,
   result TEXT,
-  timestamp INTEGER NOT NULL
+  timestamp INTEGER NOT NULL,
+  -- Sensitivity tier classified at write time. NULL on pre-phase-5 rows;
+  -- the consolidation-cycle flush phase lazy-classifies on read per
+  -- docs/doctrine/retention-policy.md §"Decision 6b". Migration v34 adds
+  -- the column to existing installs.
+  sensitivity TEXT
 );
 
 CREATE TABLE IF NOT EXISTS devices (
@@ -190,7 +195,12 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
   tool_calls TEXT,
   tool_call_id TEXT,
   created_at INTEGER NOT NULL,
-  token_estimate INTEGER NOT NULL DEFAULT 0
+  token_estimate INTEGER NOT NULL DEFAULT 0,
+  -- Sensitivity tier classified at write time. NULL on pre-phase-5 rows;
+  -- the consolidation-cycle flush phase lazy-classifies on read per
+  -- docs/doctrine/retention-policy.md §"Decision 6b". Migration v34 adds
+  -- the column to existing installs.
+  sensitivity TEXT
 );
 
 CREATE TABLE IF NOT EXISTS plans (
@@ -919,6 +929,7 @@ interface ToolAuditRow {
   injection: string | null;
   cost_units: number;
   timestamp: number;
+  sensitivity: string | null;
 }
 
 function rowToToolAudit(row: ToolAuditRow): ToolAuditEntry {
@@ -942,6 +953,9 @@ function rowToToolAudit(row: ToolAuditRow): ToolAuditEntry {
   if (row.cost_units > 0) {
     entry.costUnits = row.cost_units;
   }
+  if (row.sensitivity !== null) {
+    entry.sensitivity = row.sensitivity as SensitivityLevel;
+  }
   return entry;
 }
 
@@ -952,10 +966,10 @@ export class SqliteToolAuditSink implements AuditLogSink {
   private stmtGetAll: PreparedStatement;
   private stmtStatsSince: PreparedStatement;
 
-  constructor(db: DatabaseDriver) {
+  constructor(private db: DatabaseDriver) {
     this.stmtAppend = db.prepare(
-      `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, injection, cost_units, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, injection, cost_units, timestamp, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtQueryTurn = db.prepare(
       `SELECT * FROM tool_audit_log WHERE turn_id = ? ORDER BY timestamp ASC`,
@@ -987,7 +1001,19 @@ export class SqliteToolAuditSink implements AuditLogSink {
       entry.injection ? JSON.stringify(entry.injection) : null,
       entry.costUnits ?? 0,
       entry.timestamp,
+      entry.sensitivity ?? null,
     );
+  }
+
+  enumerateForFlush(beforeTimestamp: number): ToolAuditEntry[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM tool_audit_log WHERE timestamp < ? ORDER BY timestamp ASC`)
+      .all(beforeTimestamp) as ToolAuditRow[];
+    return rows.map(rowToToolAudit);
+  }
+
+  erase(callId: string): void {
+    this.db.prepare(`DELETE FROM tool_audit_log WHERE call_id = ?`).run(callId);
   }
 
   query(turnId: string): ToolAuditEntry[] {
@@ -1480,6 +1506,8 @@ export interface ConversationMessage {
   toolCallId: string | null;
   createdAt: number;
   tokenEstimate: number;
+  /** Sensitivity tier classified at write time. NULL on pre-phase-5 rows. */
+  sensitivity?: SensitivityLevel;
 }
 
 interface ConversationRow {
@@ -1514,10 +1542,11 @@ interface ConversationMessageRow {
   tool_call_id: string | null;
   created_at: number;
   token_estimate: number;
+  sensitivity: string | null;
 }
 
 function rowToConversationMessage(row: ConversationMessageRow): ConversationMessage {
-  return {
+  const out: ConversationMessage = {
     messageId: row.message_id,
     conversationId: row.conversation_id,
     motebitId: row.motebit_id,
@@ -1528,6 +1557,10 @@ function rowToConversationMessage(row: ConversationMessageRow): ConversationMess
     createdAt: row.created_at,
     tokenEstimate: row.token_estimate,
   };
+  if (row.sensitivity !== null) {
+    out.sensitivity = row.sensitivity as SensitivityLevel;
+  }
+  return out;
 }
 
 /** 4-hour window for session continuity. */
@@ -1548,8 +1581,8 @@ export class SqliteConversationStore {
        VALUES (?, ?, ?, ?, ?, ?, 0)`,
     );
     this.stmtAppendMessage = db.prepare(
-      `INSERT INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO conversation_messages (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtUpdateActivity = db.prepare(
       `UPDATE conversations SET last_active_at = ?, message_count = message_count + 1 WHERE conversation_id = ?`,
@@ -1583,6 +1616,7 @@ export class SqliteConversationStore {
       content: string;
       toolCalls?: string;
       toolCallId?: string;
+      sensitivity?: SensitivityLevel;
     },
   ): void {
     const messageId = crypto.randomUUID();
@@ -1598,6 +1632,7 @@ export class SqliteConversationStore {
       msg.toolCallId ?? null,
       now,
       tokenEstimate,
+      msg.sensitivity ?? null,
     );
     this.stmtUpdateActivity.run(now, conversationId);
   }
@@ -1642,6 +1677,61 @@ export class SqliteConversationStore {
       .prepare(`DELETE FROM conversation_messages WHERE conversation_id = ?`)
       .run(conversationId);
     this.db.prepare(`DELETE FROM conversations WHERE conversation_id = ?`).run(conversationId);
+  }
+
+  // === consolidation_flush retention shape ===
+  // Phase 5-ship — docs/doctrine/retention-policy.md §"Consolidation flush".
+
+  enumerateForFlush(
+    motebitId: string,
+    beforeCreatedAt: number,
+  ): Array<{
+    messageId: string;
+    conversationId: string;
+    role: string;
+    content: string;
+    createdAt: number;
+    sensitivity?: SensitivityLevel;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT message_id, conversation_id, role, content, created_at, sensitivity
+         FROM conversation_messages
+         WHERE motebit_id = ? AND created_at < ?
+         ORDER BY created_at ASC`,
+      )
+      .all(motebitId, beforeCreatedAt) as Array<{
+      message_id: string;
+      conversation_id: string;
+      role: string;
+      content: string;
+      created_at: number;
+      sensitivity: string | null;
+    }>;
+    return rows.map((r) => {
+      const out: {
+        messageId: string;
+        conversationId: string;
+        role: string;
+        content: string;
+        createdAt: number;
+        sensitivity?: SensitivityLevel;
+      } = {
+        messageId: r.message_id,
+        conversationId: r.conversation_id,
+        role: r.role,
+        content: r.content,
+        createdAt: r.created_at,
+      };
+      if (r.sensitivity !== null) {
+        out.sensitivity = r.sensitivity as SensitivityLevel;
+      }
+      return out;
+    });
+  }
+
+  eraseMessage(messageId: string): void {
+    this.db.prepare(`DELETE FROM conversation_messages WHERE message_id = ?`).run(messageId);
   }
 
   // === Sync-oriented methods ===
@@ -1694,8 +1784,8 @@ export class SqliteConversationStore {
     this.db
       .prepare(
         `INSERT OR IGNORE INTO conversation_messages
-       (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         msg.messageId,
@@ -1707,6 +1797,7 @@ export class SqliteConversationStore {
         msg.toolCallId,
         msg.createdAt,
         msg.tokenEstimate,
+        msg.sensitivity ?? null,
       );
   }
 

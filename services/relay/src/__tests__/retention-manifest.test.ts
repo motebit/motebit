@@ -90,12 +90,32 @@ describe("retention manifest — content honesty", () => {
     expect(RETENTION_MANIFEST_CONTENT.pre_classification_default_sensitivity).toBe("personal");
   });
 
-  it("honest_gaps name the deferred phases", async () => {
+  it("honest_gaps split into pending / out_of_deployment / different_mechanism", async () => {
     const gaps = RETENTION_MANIFEST_CONTENT.honest_gaps;
     expect(gaps).toBeDefined();
     if (gaps === undefined) return;
-    expect(gaps.some((g) => g.includes("phase 4b-3"))).toBe(true);
-    expect(gaps.some((g) => g.includes("phase 5"))).toBe(true);
+    // Phase 6a follow-up — every gap carries one of the three discriminator
+    // prefixes, so verifiers can distinguish "we will run this once enforcement
+    // lands" from "this isn't ours regardless of phase" from "different doctrine."
+    for (const gap of gaps) {
+      expect(
+        gap.startsWith("pending:") ||
+          gap.startsWith("out_of_deployment:") ||
+          gap.startsWith("different_mechanism:"),
+      ).toBe(true);
+    }
+    expect(gaps.some((g) => g.startsWith("pending:") && g.includes("phase 4b-3"))).toBe(true);
+    expect(
+      gaps.some(
+        (g) =>
+          g.startsWith("out_of_deployment:") &&
+          g.includes("conversation_messages") &&
+          g.toLowerCase().includes("phase 5-ship"),
+      ),
+    ).toBe(true);
+    expect(gaps.some((g) => g.startsWith("different_mechanism:") && g.includes("presence"))).toBe(
+      true,
+    );
     expect(gaps.some((g) => g.includes("onchain anchor"))).toBe(true);
   });
 

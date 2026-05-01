@@ -7,6 +7,7 @@
  */
 
 import type { ConversationMessage, ConversationStoreAdapter } from "@motebit/sdk";
+import { SensitivityLevel } from "@motebit/sdk";
 import type { StreamingProvider, ContextBudget, TaskType } from "@motebit/ai-core";
 import { trimConversation, summarizeConversation, shouldSummarize } from "@motebit/ai-core";
 import type { TaskRouter } from "@motebit/ai-core";
@@ -55,6 +56,16 @@ export interface ConversationDeps {
   getTaskRouter(): TaskRouter | null;
   /** Generate a plain text completion for titling. */
   generateCompletion(prompt: string, taskType?: TaskType): Promise<string>;
+  /**
+   * Default sensitivity tier stamped on every persisted message. Mirrors
+   * the operator manifest's `pre_classification_default_sensitivity`
+   * (docs/doctrine/retention-policy.md §"Decision 6b") — the runtime
+   * resolves this from the relay's
+   * `/.well-known/motebit-retention.json` at boot when available, and
+   * defaults to `personal` otherwise. The flush phase lazy-classifies
+   * any message whose tier turns out to be tighter than the default.
+   */
+  defaultSensitivity?: SensitivityLevel;
 }
 
 /** Default context window budget — conservative to fit most models. */
@@ -172,6 +183,7 @@ export class ConversationManager {
       this.history = this.history.slice(-this.deps.maxHistory);
     }
 
+    const sensitivity = this.deps.defaultSensitivity ?? SensitivityLevel.Personal;
     const { store } = this.deps;
     if (store != null) {
       if (this.currentId == null || this.currentId === "") {
@@ -180,6 +192,7 @@ export class ConversationManager {
       store.appendMessage(this.currentId, this.deps.motebitId, {
         role: "assistant",
         content: cleaned,
+        sensitivity,
       });
     }
   }
@@ -194,6 +207,7 @@ export class ConversationManager {
       this.history = this.history.slice(-this.deps.maxHistory);
     }
 
+    const sensitivity = this.deps.defaultSensitivity ?? SensitivityLevel.Personal;
     const { store } = this.deps;
     if (store != null) {
       if (this.currentId == null || this.currentId === "") {
@@ -202,10 +216,12 @@ export class ConversationManager {
       store.appendMessage(this.currentId, this.deps.motebitId, {
         role: "user",
         content: userMessage,
+        sensitivity,
       });
       store.appendMessage(this.currentId, this.deps.motebitId, {
         role: "assistant",
         content: cleaned,
+        sensitivity,
       });
     }
 

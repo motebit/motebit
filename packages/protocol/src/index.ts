@@ -437,6 +437,16 @@ export interface ToolAuditEntry {
   injection?: InjectionWarning;
   costUnits?: number;
   timestamp: number;
+  /**
+   * Sensitivity tier classified at write time. Optional in v1: pre-
+   * phase-5 entries drop the field, and the consolidation-cycle flush
+   * phase lazy-classifies on read per docs/doctrine/retention-policy.md
+   * §"Decision 6b". Tool-audit entries also carry an obligation floor
+   * resolved per record (settlement window, dispute window, regulatory
+   * floor); the cycle's flush phase computes
+   * `max(sensitivity_floor, obligation_floor)` per decision 3.
+   */
+  sensitivity?: SensitivityLevel;
 }
 
 // === Tools ===
@@ -552,6 +562,14 @@ export interface SyncConversationMessage {
   tool_call_id: string | null;
   created_at: number;
   token_estimate: number;
+  /**
+   * Sensitivity tier classified at write time. Optional in v1: peers
+   * running pre-phase-5 builds drop the field on push, and the receiver
+   * lazy-classifies on flush per docs/doctrine/retention-policy.md
+   * §"Decision 6b" using the operator's
+   * `pre_classification_default_sensitivity`.
+   */
+  sensitivity?: import("./retention-policy.js").SensitivityLevelString;
 }
 
 /** Result of a conversation sync cycle. */
@@ -897,10 +915,10 @@ export interface ConsolidationReceipt {
   finished_at: number;
   /** Phases that ran to completion. Closed union — adding a phase is a
    *  protocol-coordinated change. */
-  phases_run: ReadonlyArray<"orient" | "gather" | "consolidate" | "prune">;
+  phases_run: ReadonlyArray<"orient" | "gather" | "consolidate" | "prune" | "flush">;
   /** Phases that yielded mid-execution because their AbortSignal fired
    *  (budget exhausted or parent signal aborted). Subset of `phases_run`. */
-  phases_yielded: ReadonlyArray<"orient" | "gather" | "consolidate" | "prune">;
+  phases_yielded: ReadonlyArray<"orient" | "gather" | "consolidate" | "prune" | "flush">;
   /** Structural counts only — never memory content. The privacy boundary
    *  is the type: there is no field here that could leak a memory's text
    *  or embedding. Adding such a field is a protocol break. */
@@ -912,6 +930,10 @@ export interface ConsolidationReceipt {
     pruned_decay?: number;
     pruned_notability?: number;
     pruned_retention?: number;
+    /** Conversation messages flushed under `consolidation_flush` (phase 5-ship). */
+    flushed_conversations?: number;
+    /** Tool-audit entries flushed under `consolidation_flush` (phase 5-ship). */
+    flushed_tool_audits?: number;
   };
   /**
    * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` for
@@ -1856,6 +1878,15 @@ export interface ConversationStoreAdapter {
       content: string;
       toolCalls?: string;
       toolCallId?: string;
+      /**
+       * Sensitivity tier the message was classified at on write.
+       * Optional in v1: pre-classification messages and adapters that
+       * haven't yet been migrated to the phase-5-ship column drop the
+       * field, and the consolidation-cycle flush phase lazy-classifies
+       * on read per docs/doctrine/retention-policy.md §"Decision 6b"
+       * (operator manifest's `pre_classification_default_sensitivity`).
+       */
+      sensitivity?: SensitivityLevel;
     },
   ): void;
   loadMessages(
@@ -1871,6 +1902,7 @@ export interface ConversationStoreAdapter {
     toolCallId: string | null;
     createdAt: number;
     tokenEstimate: number;
+    sensitivity?: SensitivityLevel;
   }>;
   getActiveConversation(motebitId: string): {
     conversationId: string;
@@ -1891,6 +1923,31 @@ export interface ConversationStoreAdapter {
     messageCount: number;
   }>;
   deleteConversation(conversationId: string): void;
+  /**
+   * Enumerate messages older than `beforeCreatedAt`. The
+   * consolidation-cycle flush phase calls this per
+   * docs/doctrine/retention-policy.md §"Consolidation flush" to find
+   * candidates whose retention floor may have passed. Optional — when
+   * absent, the flush phase is a no-op for this store on this surface.
+   */
+  enumerateForFlush?(
+    motebitId: string,
+    beforeCreatedAt: number,
+  ): Array<{
+    messageId: string;
+    conversationId: string;
+    role: string;
+    content: string;
+    createdAt: number;
+    sensitivity?: SensitivityLevel;
+  }>;
+  /**
+   * Erase a single message row — physical row removal, the storage
+   * operation behind a `consolidation_flush` deletion certificate per
+   * decision 7. Distinct from `deleteConversation` (whole-conversation
+   * tombstone). Optional — paired with `enumerateForFlush`.
+   */
+  eraseMessage?(messageId: string): void;
 }
 
 export interface StateSnapshotAdapter {
@@ -2036,6 +2093,20 @@ export interface AuditLogSink {
   queryStatsSince(afterTimestamp: number): AuditStatsSince;
   /** Query tool audit entries by run_id (plan execution). Optional — returns [] if not implemented. */
   queryByRunId?(runId: string): ToolAuditEntry[];
+  /**
+   * Enumerate entries older than `beforeTimestamp`. The
+   * consolidation-cycle flush phase calls this per
+   * docs/doctrine/retention-policy.md §"Consolidation flush" to find
+   * candidates whose retention floor may have passed. Optional — when
+   * absent, the flush phase is a no-op for this store on this surface.
+   */
+  enumerateForFlush?(beforeTimestamp: number): ToolAuditEntry[];
+  /**
+   * Erase a single tool-audit entry — physical row removal, the storage
+   * operation behind a `consolidation_flush` deletion certificate per
+   * decision 7. Optional — paired with `enumerateForFlush`.
+   */
+  erase?(callId: string): void;
 }
 
 export interface PlanStoreAdapter {

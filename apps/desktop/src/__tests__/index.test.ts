@@ -1328,6 +1328,11 @@ describe("DesktopApp.goalTick (via startGoalScheduler)", () => {
     const invoke = vi.fn(createMockInvoke(db)) as unknown as InvokeFn & ReturnType<typeof vi.fn>;
     await app.initAI({ provider: "local-server", isTauri: true, invoke });
 
+    // Drain executions captured during init (e.g. desktop schema migrations
+    // run via tauri-migrations). The assertion below is about goal-tick
+    // side effects, not boot-time setup.
+    db.executions.length = 0;
+
     app.startGoalScheduler(invoke);
 
     // Advance past the 5s initial delay
@@ -1452,6 +1457,9 @@ describe("DesktopApp.goalTick (via startGoalScheduler)", () => {
 
     const invoke = vi.fn(createMockInvoke(db)) as unknown as InvokeFn & ReturnType<typeof vi.fn>;
     await app.initAI({ provider: "local-server", isTauri: true, invoke });
+
+    // Drain executions captured during init (desktop schema migrations).
+    db.executions.length = 0;
 
     const statusCalls: boolean[] = [];
     app.onGoalStatus((executing) => statusCalls.push(executing));

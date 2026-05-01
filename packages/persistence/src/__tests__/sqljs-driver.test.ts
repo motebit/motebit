@@ -184,7 +184,7 @@ describe("sql.js driver (in-memory)", () => {
     // migration applied. Bump this alongside any new migration so CI catches
     // a forgotten version bump in the migrate block.
     const result = mdb.db.pragma("user_version") as { user_version: number }[];
-    expect(result[0]!.user_version).toBe(33);
+    expect(result[0]!.user_version).toBe(34);
 
     mdb.db.pragma("user_version = 99");
     const result2 = mdb.db.pragma("user_version") as { user_version: number }[];
@@ -419,7 +419,7 @@ describe("sql.js driver (file-backed)", () => {
     expect(indexes.map((i) => i.name)).toContain("idx_goals_routine");
 
     const v = mdb3.db.pragma("user_version") as { user_version: number }[];
-    expect(v[0]!.user_version).toBe(33);
+    expect(v[0]!.user_version).toBe(34);
     mdb3.close();
   });
 });

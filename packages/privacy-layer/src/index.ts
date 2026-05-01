@@ -238,6 +238,55 @@ export class DeleteManager {
 
     return cert;
   }
+
+  /**
+   * Sign a `consolidation_flush` certificate for an expired record from
+   * the conversation store or tool-audit store. The caller erases the
+   * underlying row; the privacy layer signs and audits.
+   */
+  async flushRecord(args: {
+    targetKind: "conversation_message" | "tool_audit";
+    targetId: string;
+    sensitivity: SensitivityLevel;
+    reason:
+      | "user_request"
+      | "retention_enforcement"
+      | "retention_enforcement_post_classification"
+      | "self_enforcement";
+  }): Promise<DeletionCertificate> {
+    const flushedAt = Date.now();
+
+    const certBody: Extract<DeletionCertificate, { kind: "consolidation_flush" }> = {
+      kind: "consolidation_flush",
+      target_id: args.targetId,
+      sensitivity: args.sensitivity,
+      reason: args.reason,
+      flushed_to: "expire",
+      flushed_at: flushedAt,
+    };
+    const cert = await signCertAsSubject(
+      certBody,
+      this.signer.motebitId as string,
+      this.signer.privateKey,
+    );
+
+    await this.auditLog.record({
+      audit_id: crypto.randomUUID(),
+      motebit_id: this.motebitId,
+      timestamp: flushedAt,
+      action: "flush_record",
+      target_type: args.targetKind,
+      target_id: args.targetId,
+      details: {
+        reason: args.reason,
+        sensitivity: args.sensitivity,
+        cert_kind: cert.kind,
+        cert_signature: cert.subject_signature?.signature ?? null,
+      },
+    });
+
+    return cert;
+  }
 }
 
 // Re-export the new wire types so downstream consumers (runtime, cli,
@@ -381,6 +430,37 @@ export class PrivacyLayer {
   async deleteMemory(nodeId: string, deletedBy: string): Promise<DeletionCertificate> {
     try {
       return await this.deleteManager.deleteMemory(nodeId, deletedBy);
+    } catch (error) {
+      throw new Error("Privacy layer: access denied (fail-closed)", { cause: error });
+    }
+  }
+
+  /**
+   * Sign a `consolidation_flush` deletion certificate for one expired
+   * record (conversation message or tool-audit entry). The caller is
+   * responsible for the underlying erase — the privacy layer signs the
+   * cert and writes the audit trail.
+   *
+   * Phase 5-ship per docs/doctrine/retention-policy.md §"Consolidation
+   * flush". Decision 5: subject signature; the consolidation cycle
+   * runs on the user's device, signing with the motebit's identity
+   * key, so `self_enforcement` is the structural reason (not
+   * `retention_enforcement` which requires operator signature).
+   * `retention_enforcement_post_classification` distinguishes the
+   * lazy-classify-on-flush cohort per decision 6b.
+   */
+  async signFlushCert(args: {
+    targetKind: "conversation_message" | "tool_audit";
+    targetId: string;
+    sensitivity: SensitivityLevel;
+    reason:
+      | "user_request"
+      | "retention_enforcement"
+      | "retention_enforcement_post_classification"
+      | "self_enforcement";
+  }): Promise<DeletionCertificate> {
+    try {
+      return await this.deleteManager.flushRecord(args);
     } catch (error) {
       throw new Error("Privacy layer: access denied (fail-closed)", { cause: error });
     }

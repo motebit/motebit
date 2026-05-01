@@ -31,8 +31,13 @@
  * wasteful.
  */
 
-import { EventType, MemoryType, RelationType } from "@motebit/sdk";
-import type { MemoryNode } from "@motebit/sdk";
+import { EventType, MemoryType, RelationType, SensitivityLevel } from "@motebit/sdk";
+import type {
+  MemoryNode,
+  ConversationStoreAdapter,
+  AuditLogSink,
+  ToolAuditEntry,
+} from "@motebit/sdk";
 import type { StreamingProvider } from "@motebit/ai-core";
 import {
   computeDecayedConfidence,
@@ -50,7 +55,7 @@ import { MemoryClass } from "@motebit/policy";
 import type { MemoryGovernor } from "@motebit/policy";
 import type { PrivacyLayer } from "@motebit/privacy-layer";
 
-export const PHASES = ["orient", "gather", "consolidate", "prune"] as const;
+export const PHASES = ["orient", "gather", "consolidate", "prune", "flush"] as const;
 export type Phase = (typeof PHASES)[number];
 
 export interface ConsolidationCycleDeps {
@@ -82,6 +87,39 @@ export interface ConsolidationCycleDeps {
    *  at wire-in — making the cycle the single proactive path that keeps
    *  the gradient fresh during long idle periods. */
   computeAndStoreGradient?: (nodes: MemoryNode[]) => Promise<void>;
+  /**
+   * Conversation store registered under the `consolidation_flush`
+   * retention shape per docs/doctrine/retention-policy.md
+   * §"Consolidation flush". Optional — when omitted (or when the
+   * adapter doesn't implement `enumerateForFlush`/`eraseMessage`), the
+   * flush phase is a no-op for this store.
+   */
+  conversationStore?: ConversationStoreAdapter | null;
+  /**
+   * Tool-audit sink registered under `consolidation_flush`. Optional;
+   * same composition rules as `conversationStore`. The settlement-floor
+   * resolver for tool-audit per decision 3 lives at `toolAuditObligationFloorMs`.
+   */
+  toolAuditSink?: AuditLogSink | null;
+  /**
+   * Settlement-floor resolver for tool-audit records per
+   * docs/doctrine/retention-policy.md §"Decision 3". Returns the
+   * minimum-retention floor in milliseconds for a given record. The
+   * flush phase computes `max(sensitivity_floor, obligation_floor)`
+   * and skips records whose age has not yet exceeded both. Default
+   * implementation returns 0 (no obligation) — concrete obligations
+   * (settlement window, dispute window, regulatory floor) plug in
+   * here. Pure function of the record; no I/O.
+   */
+  toolAuditObligationFloorMs?: (entry: ToolAuditEntry) => number;
+  /**
+   * Default sensitivity stamped on records that are missing the field
+   * at flush time per docs/doctrine/retention-policy.md §"Decision 6b"
+   * (lazy-classify-on-flush). Mirrors the operator manifest's
+   * `pre_classification_default_sensitivity`. Defaults to `personal`
+   * when omitted.
+   */
+  preClassificationDefaultSensitivity?: SensitivityLevel;
   /** Structured logger — consistent with ReflectionDeps. */
   logger: { warn(message: string, context?: Record<string, unknown>): void };
 }
@@ -126,6 +164,8 @@ export interface ConsolidationCycleResult {
     prunedDecay?: number;
     prunedNotability?: number;
     prunedRetention?: number;
+    flushedConversations?: number;
+    flushedToolAudits?: number;
   };
 }
 
@@ -235,6 +275,12 @@ export async function runConsolidationCycle(
           result.summary.prunedDecay = out.decay;
           result.summary.prunedNotability = out.notability;
           result.summary.prunedRetention = out.retention;
+          break;
+        }
+        case "flush": {
+          const out = await flushPhase(deps, ctx);
+          result.summary.flushedConversations = out.flushedConversations;
+          result.summary.flushedToolAudits = out.flushedToolAudits;
           break;
         }
       }
@@ -477,6 +523,122 @@ async function prunePhase(
 
   return { decay, notability, retention };
 }
+
+/**
+ * Flush phase — `consolidation_flush` retention shape per
+ * docs/doctrine/retention-policy.md §"Consolidation flush". Iterates
+ * the conversation store and tool-audit sink for records past
+ * `max(sensitivity_floor, obligation_floor)`, lazy-classifies on read
+ * per decision 6b when the field is missing, signs a
+ * `consolidation_flush` cert per arm, then erases the row.
+ *
+ * Sibling to `prunePhase` for memory: same retention-floor calculation
+ * pattern, same `self_enforcement` / `retention_enforcement_post_classification`
+ * reason discipline (decision 5), same fail-soft per-record discipline
+ * (one bad row never stops the phase).
+ */
+async function flushPhase(
+  deps: ConsolidationCycleDeps,
+  ctx: PhaseContext,
+): Promise<{ flushedConversations: number; flushedToolAudits: number }> {
+  const defaultSensitivity = deps.preClassificationDefaultSensitivity ?? SensitivityLevel.Personal;
+
+  let flushedConversations = 0;
+  let flushedToolAudits = 0;
+
+  // Conversations — sensitivity floor only; no obligation floor on
+  // conversation messages (the obligation discipline applies to the
+  // tool-audit register per decision 3).
+  if (deps.conversationStore?.enumerateForFlush && deps.conversationStore.eraseMessage) {
+    // Enumerate windows-back-the-longest-sensitivity-floor: any record
+    // older than the loosest ceiling is a candidate; tighter ceilings
+    // narrow inside the loop.
+    const longestFloorMs =
+      Math.max(...Object.values(REFERENCE_FLUSH_DAYS).filter((d) => d !== Infinity)) * MS_PER_DAY;
+    const cutoffTs = ctx.now - longestFloorMs;
+    const candidates = deps.conversationStore.enumerateForFlush(deps.motebitId, cutoffTs);
+    for (const candidate of candidates) {
+      if (ctx.signal.aborted) break;
+      const recordSensitivity = candidate.sensitivity ?? defaultSensitivity;
+      const lazyClassified = candidate.sensitivity === undefined;
+      const floorDays = REFERENCE_FLUSH_DAYS[recordSensitivity];
+      if (floorDays === Infinity) continue;
+      const ageMs = ctx.now - candidate.createdAt;
+      if (ageMs <= floorDays * MS_PER_DAY) continue;
+
+      try {
+        await deps.privacy.signFlushCert({
+          targetKind: "conversation_message",
+          targetId: candidate.messageId,
+          sensitivity: recordSensitivity,
+          reason: lazyClassified ? "retention_enforcement_post_classification" : "self_enforcement",
+        });
+        deps.conversationStore.eraseMessage(candidate.messageId);
+        flushedConversations++;
+      } catch (err: unknown) {
+        deps.logger.warn("flush phase: conversation_message erase failed", {
+          messageId: candidate.messageId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  // Tool-audit — sensitivity floor max obligation floor per decision 3.
+  if (deps.toolAuditSink?.enumerateForFlush && deps.toolAuditSink.erase) {
+    const longestFloorMs =
+      Math.max(...Object.values(REFERENCE_FLUSH_DAYS).filter((d) => d !== Infinity)) * MS_PER_DAY;
+    const cutoffTs = ctx.now - longestFloorMs;
+    const candidates = deps.toolAuditSink.enumerateForFlush(cutoffTs);
+    const obligationFloorMs = deps.toolAuditObligationFloorMs ?? (() => 0);
+    for (const candidate of candidates) {
+      if (ctx.signal.aborted) break;
+      const recordSensitivity = candidate.sensitivity ?? defaultSensitivity;
+      const lazyClassified = candidate.sensitivity === undefined;
+      const floorDays = REFERENCE_FLUSH_DAYS[recordSensitivity];
+      const sensitivityFloorMs = floorDays === Infinity ? Infinity : floorDays * MS_PER_DAY;
+      const obligationMs = obligationFloorMs(candidate);
+      const effectiveFloorMs = Math.max(sensitivityFloorMs, obligationMs);
+      if (effectiveFloorMs === Infinity) continue;
+      const ageMs = ctx.now - candidate.timestamp;
+      if (ageMs <= effectiveFloorMs) continue;
+
+      try {
+        await deps.privacy.signFlushCert({
+          targetKind: "tool_audit",
+          targetId: candidate.callId,
+          sensitivity: recordSensitivity,
+          reason: lazyClassified ? "retention_enforcement_post_classification" : "self_enforcement",
+        });
+        deps.toolAuditSink.erase(candidate.callId);
+        flushedToolAudits++;
+      } catch (err: unknown) {
+        deps.logger.warn("flush phase: tool_audit erase failed", {
+          callId: candidate.callId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  return { flushedConversations, flushedToolAudits };
+}
+
+/**
+ * Reference flush ceilings, in days, per sensitivity tier. Mirrors
+ * `REFERENCE_RETENTION_DAYS_BY_SENSITIVITY` in `@motebit/protocol` —
+ * inlined here because runtime depends on @motebit/sdk, not directly
+ * on @motebit/protocol. The values are reference defaults
+ * (`docs/doctrine/retention-policy.md` §"Decision 2"); operators MAY
+ * ship a stricter policy (lower numbers) and remain interop-compliant.
+ */
+const REFERENCE_FLUSH_DAYS: Record<SensitivityLevel, number> = {
+  [SensitivityLevel.None]: Infinity,
+  [SensitivityLevel.Personal]: 365,
+  [SensitivityLevel.Medical]: 90,
+  [SensitivityLevel.Financial]: 90,
+  [SensitivityLevel.Secret]: 30,
+};
 
 // ── Budget machinery ─────────────────────────────────────────────
 
