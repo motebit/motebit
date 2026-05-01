@@ -765,6 +765,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const { registerTransparencyRoutes } = await import("./transparency.js");
   await registerTransparencyRoutes({ app, relayIdentity });
 
+  // --- Retention manifest routes (docs/doctrine/retention-policy.md §"Self-attesting transparency") ---
+  // Phase 6a: signed manifest at /.well-known/motebit-retention.json,
+  // sibling to motebit-transparency.json. Stores enumerate as phase 4b-3
+  // and phase 5 land their respective enforcement; today's manifest lists
+  // the gaps explicitly.
+  const { registerRetentionManifestRoutes } = await import("./retention-manifest.js");
+  await registerRetentionManifestRoutes({ app, relayIdentity });
+
   // --- Skills registry routes (skills-registry-v1.md) ---
   const { registerSkillRegistryRoutes, createSkillRegistryTables, parseFeaturedSubmitters } =
     await import("./skill-registry.js");
