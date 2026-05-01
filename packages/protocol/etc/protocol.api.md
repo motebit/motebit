@@ -1109,6 +1109,9 @@ export interface Edge<T> {
     readonly weight: T;
 }
 
+// @public
+export const EMPTY_FEDERATION_GRAPH_ANCHOR: FederationGraphAnchor;
+
 // @public (undocumented)
 export interface EventFilter {
     // (undocumented)
@@ -3140,6 +3143,36 @@ export interface WithdrawalResult {
     amount: number;
     currency: string;
     proof: PaymentProof;
+}
+
+// @public
+export interface WitnessOmissionAlternativePeeringEvidence {
+    // (undocumented)
+    kind: "alternative_peering";
+    peering_artifact: Record<string, unknown>;
+}
+
+// @public
+export interface WitnessOmissionDispute {
+    cert_issuer: string;
+    cert_signature: string;
+    disputant_motebit_id: string;
+    dispute_id: string;
+    evidence: WitnessOmissionEvidence;
+    filed_at: number;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
+
+// @public
+export type WitnessOmissionEvidence = WitnessOmissionInclusionProofEvidence | WitnessOmissionAlternativePeeringEvidence;
+
+// @public
+export interface WitnessOmissionInclusionProofEvidence {
+    // (undocumented)
+    kind: "inclusion_proof";
+    leaf_hash: string;
+    proof: MerkleInclusionProof;
 }
 
 // (No @packageDocumentation comment for this package)

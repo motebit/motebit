@@ -40,6 +40,26 @@ import { signBySuite, verifyBySuite } from "./suite-dispatch.js";
 /** The cryptosuite every deletion certificate signs under today. */
 export const DELETION_CERTIFICATE_SUITE: SuiteId = "motebit-jcs-ed25519-b64-v1";
 
+/**
+ * Filing window for `WitnessOmissionDispute` (retention phase 4b-3).
+ * A dispute MUST be filed within 24h of the cert's `issued_at`;
+ * `verifyWitnessOmissionDispute` rejects beyond this window. Mirrors
+ * the 24h cadence of `spec/dispute-v1.md` §7.5 (filing / withdrawal /
+ * appeal windows).
+ */
+export const WITNESS_OMISSION_DISPUTE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Canonical empty-tree merkle root — hex-encoded SHA-256 of zero
+ * bytes. The verifier in `verifyHorizonCert` rejects horizon certs
+ * whose `federation_graph_anchor.leaf_count = 0` carries a
+ * `merkle_root` other than this value, so a malicious issuer cannot
+ * mint a self-witnessed cert with arbitrary anchor bytes. Mirrors
+ * `EMPTY_FEDERATION_GRAPH_ANCHOR.merkle_root` in `@motebit/protocol`.
+ */
+const EMPTY_FEDERATION_GRAPH_ANCHOR_ROOT =
+  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
 // ── Reason × signer × mode table (decision 5) ────────────────────────
 
 type SignerKind = "subject" | "operator" | "delegate" | "guardian";
@@ -493,6 +513,21 @@ async function verifyHorizonCert(
   ctx: DeletionCertificateVerifyContext,
 ): Promise<DeletionCertificateVerifyResult> {
   const errors: string[] = [];
+
+  // Empty-tree anchor sanity check — when `leaf_count = 0`, the only
+  // admissible `merkle_root` is the empty-tree value. Otherwise an
+  // issuer could mint a self-witnessed cert with arbitrary anchor
+  // bytes and dodge inclusion-proof scrutiny in WitnessOmissionDispute.
+  const anchor = cert.federation_graph_anchor;
+  if (anchor !== undefined) {
+    if (anchor.leaf_count === 0 && anchor.merkle_root !== EMPTY_FEDERATION_GRAPH_ANCHOR_ROOT) {
+      errors.push("federation_graph_anchor.leaf_count=0 requires the empty-tree merkle_root");
+    }
+    if (anchor.leaf_count < 0 || !Number.isInteger(anchor.leaf_count)) {
+      errors.push("federation_graph_anchor.leaf_count must be a non-negative integer");
+    }
+  }
+
   const issuerBytes = canonicalizeHorizonCert(cert);
   const witnessBytes = canonicalizeHorizonCertForWitness(cert);
 

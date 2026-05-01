@@ -1708,6 +1708,7 @@ export {
 } from "./skills.js";
 export {
   DELETION_CERTIFICATE_SUITE,
+  WITNESS_OMISSION_DISPUTE_WINDOW_MS,
   canonicalizeMultiSignatureCert,
   canonicalizeHorizonCert,
   canonicalizeHorizonCertForWitness,
@@ -1723,3 +1724,11 @@ export {
   type DeletionCertificateVerifyContext,
   type RetentionManifestVerifyResult,
 } from "./deletion-certificate.js";
+export {
+  canonicalizeWitnessOmissionDispute,
+  signWitnessOmissionDispute,
+  verifyWitnessOmissionDispute,
+  type WitnessOmissionDisputeVerifyResult,
+  type WitnessOmissionDisputeVerifyContext,
+} from "./witness-omission-dispute.js";
+export { verifyMerkleInclusion } from "./merkle.js";

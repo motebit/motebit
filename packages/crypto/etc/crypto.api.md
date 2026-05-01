@@ -21,6 +21,7 @@ import type { SkillEnvelope } from '@motebit/protocol';
 import type { SkillManifest } from '@motebit/protocol';
 import type { SkillSignature } from '@motebit/protocol';
 import type { SuiteId } from '@motebit/protocol';
+import type { WitnessOmissionDispute } from '@motebit/protocol';
 
 // @public
 export const ADJUDICATOR_VOTE_SUITE: "motebit-jcs-ed25519-b64-v1";
@@ -67,6 +68,9 @@ export function canonicalizeSkillEnvelopeBytes(envelope: SkillEnvelope): Uint8Ar
 
 // @public
 export function canonicalizeSkillManifestBytes(manifest: SkillManifest, body: Uint8Array): Uint8Array;
+
+// @public
+export function canonicalizeWitnessOmissionDispute(dispute: WitnessOmissionDispute): Uint8Array;
 
 // @public
 export function canonicalJson(obj: unknown): string;
@@ -1007,6 +1011,9 @@ export function signVerifiableCredential<T = Record<string, unknown>>(unsignedVC
 export function signVerifiablePresentation(unsignedVP: Omit<VerifiablePresentation, "proof">, privateKey: Uint8Array, publicKey: Uint8Array): Promise<VerifiablePresentation>;
 
 // @public
+export function signWitnessOmissionDispute(body: Omit<WitnessOmissionDispute, "suite" | "signature">, privateKey: Uint8Array): Promise<WitnessOmissionDispute>;
+
+// @public
 export const SKILL_SIGNATURE_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
@@ -1266,6 +1273,9 @@ export function verifyIdentityFile(content: string): Promise<LegacyVerifyResult>
 // @public
 export function verifyKeySuccession(record: KeySuccessionRecord, guardianPublicKeyHex?: string): Promise<boolean>;
 
+// @public
+export function verifyMerkleInclusion(leaf: string, index: number, siblings: string[], layerSizes: number[], expectedRoot: string): Promise<boolean>;
+
 // @public (undocumented)
 export interface VerifyOptions {
     clockSkewSeconds?: number;
@@ -1333,6 +1343,36 @@ export function verifyVerifiablePresentation(vp: VerifiablePresentation): Promis
     valid: boolean;
     errors: string[];
 }>;
+
+// @public
+export function verifyWitnessOmissionDispute(dispute: WitnessOmissionDispute, ctx: WitnessOmissionDisputeVerifyContext): Promise<WitnessOmissionDisputeVerifyResult>;
+
+// @public
+export const WITNESS_OMISSION_DISPUTE_WINDOW_MS: number;
+
+// @public
+export interface WitnessOmissionDisputeVerifyContext {
+    readonly cert: Extract<DeletionCertificate, {
+        kind: "append_only_horizon";
+    }>;
+    readonly disputantPublicKey: Uint8Array | null;
+    readonly issuerPublicKey: Uint8Array;
+    readonly now: number;
+}
+
+// @public
+export interface WitnessOmissionDisputeVerifyResult {
+    // (undocumented)
+    readonly errors: string[];
+    readonly steps: {
+        readonly window_open: boolean;
+        readonly cert_binding_valid: boolean;
+        readonly disputant_signature_valid: boolean;
+        readonly evidence_valid: boolean | null;
+    };
+    // (undocumented)
+    readonly valid: boolean;
+}
 
 // Warnings were encountered during analysis:
 //

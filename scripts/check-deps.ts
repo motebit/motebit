@@ -251,6 +251,15 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // and motebit.com/skills both end up here). No I/O, no policy —
     // the shape on either side of the call is identical.
     "verifySkillBundle",
+    // Merkle inclusion-proof primitive (extracted from credential-anchor
+    // for reuse in witness-omission disputes). Pure, browser-safe.
+    "verifyMerkleInclusion",
+    // Witness-omission dispute (retention phase 4b-3) — sign + verify +
+    // canonicalization. Permissive-floor primitive for Path A quorum
+    // accountability on append_only_horizon certs.
+    "canonicalizeWitnessOmissionDispute",
+    "signWitnessOmissionDispute",
+    "verifyWitnessOmissionDispute",
   ]),
 };
 

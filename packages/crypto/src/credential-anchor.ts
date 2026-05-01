@@ -8,33 +8,11 @@
  * motebit/credential-anchor@1.0 §3 (leaf hash) and §5.2 (verification).
  */
 
-import { canonicalJson, sha256, hexToBytes, verifyBySuite } from "./signing.js";
+import { canonicalJson, sha256, hexToBytes, bytesToHex, verifyBySuite } from "./signing.js";
+import { verifyMerkleInclusion } from "./merkle.js";
 
 /** The one suite CredentialAnchorBatch records sign under today. */
 export const CREDENTIAL_ANCHOR_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
-
-// === Helpers (inlined — zero monorepo deps) ===
-
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function fromHex(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-  }
-  return bytes;
-}
-
-function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a);
-  out.set(b, a.length);
-  return out;
-}
 
 // === Leaf Hash ===
 
@@ -51,47 +29,7 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
 export async function computeCredentialLeaf(credential: Record<string, unknown>): Promise<string> {
   const canonical = canonicalJson(credential);
   const hash = await sha256(new TextEncoder().encode(canonical));
-  return toHex(hash);
-}
-
-// === Merkle Proof Verification ===
-
-/**
- * Verify a Merkle inclusion proof against an expected root.
- *
- * Binary tree with odd-leaf promotion (no duplication).
- * Same algorithm as @motebit/encryption/merkle.ts — inlined here
- * so the crypto package remains zero-monorepo-deps.
- */
-async function verifyMerkleInclusion(
-  leaf: string,
-  index: number,
-  siblings: string[],
-  layerSizes: number[],
-  expectedRoot: string,
-): Promise<boolean> {
-  let current = fromHex(leaf);
-  let idx = index;
-  let sibIdx = 0;
-
-  for (const layerSize of layerSizes) {
-    const siblingPos = idx % 2 === 0 ? idx + 1 : idx - 1;
-    const hasSibling = siblingPos >= 0 && siblingPos < layerSize;
-
-    if (hasSibling) {
-      if (sibIdx >= siblings.length) return false;
-      const siblingBytes = fromHex(siblings[sibIdx]!);
-      const combined =
-        idx % 2 === 0 ? concat(current, siblingBytes) : concat(siblingBytes, current);
-      current = await sha256(combined);
-      sibIdx++;
-    }
-    // Odd promotion: current passes through unchanged
-
-    idx = Math.floor(idx / 2);
-  }
-
-  return toHex(current) === expectedRoot;
+  return bytesToHex(hash);
 }
 
 // === Anchor Verification ===
