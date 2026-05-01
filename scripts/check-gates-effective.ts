@@ -985,7 +985,7 @@ export function __probeOnlyRegisterAdminUnauth(app: Hono): void {
       // perturbation" — so the probe self-rots are visible.
       mutateFile("README.md", (src) =>
         src.replace(
-          "**48 packages across 7 architectural layers",
+          "**49 packages across 7 architectural layers",
           "**37 packages across 7 architectural layers",
         ),
       ),
@@ -1160,6 +1160,32 @@ export function __probeOnlyRegisterAdminUnauth(app: Hono): void {
         src.replace(
           /(CREATE TABLE IF NOT EXISTS conversation_messages \()/,
           "CREATE TABLE IF NOT EXISTS __probe_unregistered (\n  id TEXT PRIMARY KEY,\n  sensitivity TEXT\n);\n\n$1",
+        ),
+      ),
+  },
+  {
+    script: "check-relay-retention-coverage",
+    proves:
+      "flags a `RETENTION_MANIFEST_CONTENT.stores[]` entry whose `store_id` has no matching alias in `RELAY_STORE_TABLE_ALIASES` — the missing-alias drift class (a manifest declaration of an enforcement that doesn't exist, the operator's transparency claim silently rotting). Sibling to check-retention-coverage's probe but scoped to the relay-side manifest projection rather than the runtime-side registry.",
+    perturb: () =>
+      // Inject an orphan manifest store entry into OPERATIONAL_LEDGER_STORES
+      // in retention-manifest.ts. The store_id `__probe_orphan_store`
+      // doesn't appear in RELAY_STORE_TABLE_ALIASES, so the gate's
+      // forward-direction `missing-alias` check fires on the next scan.
+      // mutateFile restores byte-identical on cleanup.
+      mutateFile("services/relay/src/retention-manifest.ts", (src) =>
+        src.replace(
+          /(const OPERATIONAL_LEDGER_STORES: RetentionStoreDeclaration\[\] = \[)/,
+          `$1
+  {
+    store_id: "__probe_orphan_store",
+    store_name: "Probe orphan store (gate-effectiveness probe)",
+    shape: {
+      kind: "append_only_horizon",
+      horizon_advance_period_days: 1,
+      witness_required: false,
+    },
+  },`,
         ),
       ),
   },
