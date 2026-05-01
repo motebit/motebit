@@ -12,14 +12,27 @@
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import {
+  canonicalJson,
   hexToBytes,
+  sign,
   signDisputeResolution,
+  toBase64Url,
   verifyDisputeAppeal,
   verifyDisputeEvidence,
   verifyDisputeRequest,
 } from "@motebit/encryption";
-import type { DisputeState, DisputeOutcome, DisputeFundAction } from "@motebit/protocol";
+import { verifyAdjudicatorVote } from "@motebit/crypto";
+import type {
+  AdjudicatorVote,
+  DisputeEvidence,
+  DisputeRequest,
+  DisputeState,
+  DisputeOutcome,
+  DisputeFundAction,
+  VoteRequest,
+} from "@motebit/protocol";
 import {
+  AdjudicatorVoteSchema,
   DisputeAppealSchema,
   DisputeEvidenceSchema,
   DisputeRequestSchema,
@@ -45,6 +58,21 @@ const MAX_ACTIVE_DISPUTES_PER_AGENT = 3;
 const OPENED_EXPIRE_MS = 60 * 60 * 1000;
 /** Filing fee: 1% of disputed allocation amount (§9.4). */
 const FILING_FEE_RATE = 0.01;
+/**
+ * Per-request timeout for outbound vote-request fan-out
+ * (`spec/relay-federation-v1.md` §16.3). Per-request timeout IS the
+ * fan-out deadline since the orchestrator uses `Promise.allSettled` over
+ * a parallel fan-out — no aggregation across attempts.
+ */
+const FEDERATION_VOTE_REQUEST_TIMEOUT_MS = 10_000;
+/**
+ * Federation adjudication minimum quorum from `spec/dispute-v1.md` §6.2:
+ * "minimum 3-peer quorum from the federation graph." Combined with §6.5
+ * (no self-adjudication when defendant), this means ≥3 OTHER active
+ * peers; orchestrator returns 503 `insufficient_federation_peers` below
+ * this floor. See §6.6 for the operator-note derivation.
+ */
+const FEDERATION_QUORUM_MIN = 3;
 
 // === Database ===
 
@@ -63,6 +91,7 @@ export function createDisputeTables(db: DatabaseDriver): void {
       filing_fee        INTEGER NOT NULL DEFAULT 0,
       filed_at          INTEGER NOT NULL,
       evidence_deadline INTEGER NOT NULL,
+      body_json         TEXT NOT NULL DEFAULT '',
       resolution        TEXT,
       rationale         TEXT,
       fund_action       TEXT,
@@ -127,12 +156,339 @@ export interface DisputeDeps {
   db: DatabaseDriver;
   app: Hono;
   relayIdentity: RelayIdentity;
+  /**
+   * Optional fetch implementation override for the §6.2 federation
+   * orchestrator's outbound vote-request fan-out. Defaults to
+   * `globalThis.fetch`. Tests inject a mock that routes to in-process
+   * Hono apps; production uses the global.
+   */
+  fetchImpl?: typeof fetch;
+  /**
+   * Optional override for the per-request timeout
+   * (`FEDERATION_VOTE_REQUEST_TIMEOUT_MS`). Tests use small values to
+   * exercise timeout paths without real-time waits.
+   */
+  voteRequestTimeoutMs?: number;
+}
+
+// === §6.2 Federation Orchestrator ===
+//
+// Replaces the prior 409 self-adjudication guard with the federation
+// fan-out path described in `spec/relay-federation-v1.md` §16.1.
+//
+// Sync v1 trade: single Promise.allSettled fan-out collapses per-peer
+// fan-out timeout into the spec timeout — a peer hiccup at fan-out
+// time becomes a permanently-lost vote even though the §6.6 72h
+// adjudication window would technically permit retrying. Async
+// retry-within-72h is a future arc; see
+// memory/section_6_2_orchestrator_async_deferral.md.
+//
+// Fund-action mapping: federation v1 always emits `fund_action: "split"`
+// with `split_ratio` encoding the verdict (1.0 upheld, 0.0 overturned,
+// 0.5 split). Verdict semantics live in `resolution`; financial
+// mechanics in `(fund_action, split_ratio)`. Granular release_to_worker
+// / refund_to_delegator parity is a future arc; see
+// memory/dispute_v1_fund_action_federation_parity_followup.md and
+// `spec/dispute-v1.md` §7.2.
+
+interface PeerRow {
+  peer_relay_id: string;
+  public_key: string;
+  endpoint_url: string;
+}
+
+interface FederationResolutionResult {
+  resolution: DisputeOutcome;
+  rationale: string;
+  fund_action: DisputeFundAction;
+  split_ratio: number;
+  adjudicator_votes: AdjudicatorVote[];
+}
+
+/**
+ * Fetch a single peer's `AdjudicatorVote`. Returns `null` on any
+ * failure (timeout, fetch error, non-200, schema fail, signature
+ * mismatch, suite mismatch, round mismatch). The §6.5 + §8.3
+ * independent-review property is preserved by under-counting: failed
+ * peers do not contribute synthesized votes (a leader cannot
+ * manufacture quorum from absent peers).
+ */
+async function fetchPeerVote(
+  peer: PeerRow,
+  signedRequest: VoteRequest,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
+  disputeId: string,
+): Promise<AdjudicatorVote | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const url = `${peer.endpoint_url}/federation/v1/disputes/${signedRequest.dispute_id}/vote-request`;
+    const res = await fetchImpl(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(signedRequest),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const bodyText = await res.text().catch(() => "");
+      logger.warn("federation.orchestrator.peer_response_error", {
+        disputeId,
+        peerId: peer.peer_relay_id,
+        status: res.status,
+        body: bodyText.slice(0, 200),
+      });
+      return null;
+    }
+    const body = (await res.json()) as unknown;
+    const parsed = AdjudicatorVoteSchema.safeParse(body);
+    if (!parsed.success) {
+      logger.warn("federation.orchestrator.peer_response_malformed", {
+        disputeId,
+        peerId: peer.peer_relay_id,
+        error: parsed.error.message.slice(0, 200),
+      });
+      return null;
+    }
+    const vote = parsed.data;
+    if (vote.dispute_id !== signedRequest.dispute_id || vote.round !== signedRequest.round) {
+      logger.warn("federation.orchestrator.peer_response_binding_mismatch", {
+        disputeId,
+        peerId: peer.peer_relay_id,
+        expectedDispute: signedRequest.dispute_id,
+        gotDispute: vote.dispute_id,
+        expectedRound: signedRequest.round,
+        gotRound: vote.round,
+      });
+      return null;
+    }
+    if (vote.peer_id !== peer.peer_relay_id) {
+      logger.warn("federation.orchestrator.peer_response_id_mismatch", {
+        disputeId,
+        peerId: peer.peer_relay_id,
+        gotPeerId: vote.peer_id,
+      });
+      return null;
+    }
+    const valid = await verifyAdjudicatorVote(vote, hexToBytes(peer.public_key));
+    if (!valid) {
+      logger.warn("federation.orchestrator.peer_signature_invalid", {
+        kind: "signature_invalid",
+        disputeId,
+        peerId: peer.peer_relay_id,
+      });
+      return null;
+    }
+    return vote;
+  } catch (err) {
+    logger.warn("federation.orchestrator.peer_fetch_failed", {
+      disputeId,
+      peerId: peer.peer_relay_id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Aggregate valid peer votes into a `FederationResolutionResult`.
+ *
+ * §6.4: Majority wins; ties resolve to `split`.
+ * §6.6: If valid count < FEDERATION_QUORUM_MIN OR no majority, the
+ *       resolution defaults to `split` with `split_ratio: 0.5` per the
+ *       72h timeout convention.
+ * §7.2: Federation v1 always emits `fund_action: "split"` with
+ *       `split_ratio` encoding the verdict (1.0/0.0/0.5).
+ */
+function aggregateVotes(
+  validVotes: AdjudicatorVote[],
+  attemptedPeers: number,
+): FederationResolutionResult {
+  if (validVotes.length < FEDERATION_QUORUM_MIN) {
+    return {
+      resolution: "split",
+      rationale: `federation quorum not met within 72h adjudication window (${validVotes.length} valid vote(s) of ${attemptedPeers} peer(s) attempted; minimum ${FEDERATION_QUORUM_MIN} required per §6.2 + §6.6)`,
+      fund_action: "split",
+      split_ratio: 0.5,
+      adjudicator_votes: validVotes,
+    };
+  }
+  const counts: Record<DisputeOutcome, number> = { upheld: 0, overturned: 0, split: 0 };
+  for (const v of validVotes) counts[v.vote]++;
+  const max = Math.max(counts.upheld, counts.overturned, counts.split);
+  const winners = (Object.keys(counts) as DisputeOutcome[]).filter((k) => counts[k] === max);
+  const resolution: DisputeOutcome = winners.length === 1 ? winners[0]! : "split";
+  const split_ratio = resolution === "upheld" ? 1.0 : resolution === "overturned" ? 0.0 : 0.5;
+  return {
+    resolution,
+    rationale: `federation adjudication: ${counts.upheld} upheld, ${counts.overturned} overturned, ${counts.split} split (${validVotes.length} valid of ${attemptedPeers} attempted)`,
+    fund_action: "split",
+    split_ratio,
+    adjudicator_votes: validVotes,
+  };
+}
+
+/**
+ * Run the §6.2 federation adjudication orchestrator for a dispute the
+ * local relay is a party to. Throws `HTTPException(503, ...)` when the
+ * mesh is too small or the dispute body cannot be retrieved. Otherwise
+ * returns the federation-derived `FederationResolutionResult` for the
+ * caller to sign + persist.
+ *
+ * @spec motebit/relay-federation@1.2 §16.1
+ * @spec motebit/dispute@1.0 §6.2 + §6.6 + §7.2
+ */
+export async function orchestrateFederationResolution(
+  dispute: { dispute_id: string; body_json: string },
+  round: number,
+  deps: {
+    db: DatabaseDriver;
+    relayIdentity: RelayIdentity;
+    fetchImpl?: typeof fetch;
+    voteRequestTimeoutMs?: number;
+  },
+): Promise<FederationResolutionResult> {
+  const { db, relayIdentity } = deps;
+  const fetchImpl = deps.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const timeoutMs = deps.voteRequestTimeoutMs ?? FEDERATION_VOTE_REQUEST_TIMEOUT_MS;
+
+  // 1. Enumerate active peers (excluding self per §6.5)
+  const peers = db
+    .prepare(
+      `SELECT peer_relay_id, public_key, endpoint_url
+       FROM relay_peers
+       WHERE state IN ('active', 'suspended') AND peer_relay_id != ?`,
+    )
+    .all(relayIdentity.relayMotebitId) as PeerRow[];
+
+  if (peers.length < FEDERATION_QUORUM_MIN) {
+    throw new HTTPException(503, {
+      message: JSON.stringify({
+        error_code: "insufficient_federation_peers",
+        message: `Federation adjudication requires ≥${FEDERATION_QUORUM_MIN} OTHER active peers (spec/dispute-v1.md §6.2 + §6.5 + §6.6). Active peer count: ${peers.length}.`,
+      }),
+    });
+  }
+
+  // 2. Pull dispute body (defensive guard for the unreachable empty case;
+  //    legacy disputes pre-migration-18 would hit this)
+  if (!dispute.body_json) {
+    throw new HTTPException(503, {
+      message: JSON.stringify({
+        error_code: "legacy_dispute_no_signed_body",
+        message:
+          "Dispute predates the §6.2 body_json migration; federation adjudication unavailable for this dispute.",
+      }),
+    });
+  }
+  let parsedDisputeRequest: DisputeRequest;
+  try {
+    parsedDisputeRequest = JSON.parse(dispute.body_json) as DisputeRequest;
+  } catch (err) {
+    throw new HTTPException(500, {
+      message: `Failed to parse dispute body_json: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
+
+  // 3. Pull evidence_bundle from the relay_dispute_evidence table
+  const evidenceRows = db
+    .prepare("SELECT evidence_data FROM relay_dispute_evidence WHERE dispute_id = ?")
+    .all(dispute.dispute_id) as Array<{ evidence_data: string }>;
+  const evidence_bundle: DisputeEvidence[] = evidenceRows.map(
+    (r) => JSON.parse(r.evidence_data) as DisputeEvidence,
+  );
+
+  // 4. Construct + sign the VoteRequest
+  const requestBody: Omit<VoteRequest, "signature"> = {
+    dispute_id: dispute.dispute_id,
+    round,
+    dispute_request: parsedDisputeRequest,
+    evidence_bundle,
+    requester_id: relayIdentity.relayMotebitId,
+    requested_at: Date.now(),
+    suite: "motebit-jcs-ed25519-b64-v1",
+  };
+  const sigBytes = await sign(
+    new TextEncoder().encode(canonicalJson(requestBody)),
+    relayIdentity.privateKey,
+  );
+  // VoteRequest suite is `motebit-jcs-ed25519-b64-v1` per the spec
+  // (`spec/relay-federation-v1.md` §16.2 + `spec/dispute-v1.md` §6.4
+  // signing recipe). Signature MUST be base64url-encoded — the peer's
+  // gate-4 verify uses `fromBase64Url(signature)`. Hex encoding is for
+  // `motebit-concat-ed25519-hex-v1` (federation peering / heartbeat),
+  // a different suite entirely.
+  const signedRequest: VoteRequest = { ...requestBody, signature: toBase64Url(sigBytes) };
+
+  // 5. Parallel fan-out with per-request timeout (§16.3 default 10s)
+  logger.info("federation.orchestrator.fanout_started", {
+    disputeId: dispute.dispute_id,
+    round,
+    peerCount: peers.length,
+    timeoutMs,
+  });
+  const settled = await Promise.allSettled(
+    peers.map((peer) =>
+      fetchPeerVote(peer, signedRequest, fetchImpl, timeoutMs, dispute.dispute_id),
+    ),
+  );
+  const validVotes: AdjudicatorVote[] = [];
+  for (const result of settled) {
+    if (result.status === "fulfilled" && result.value !== null) {
+      validVotes.push(result.value);
+    }
+  }
+
+  // 6. Persist each valid vote (PK on (dispute_id, round, peer_id);
+  //    upsert covers re-orchestration of the same round)
+  const insertVote = db.prepare(
+    `INSERT INTO relay_dispute_votes
+       (dispute_id, round, peer_id, vote, rationale, suite, signature, received_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(dispute_id, round, peer_id) DO UPDATE SET
+       vote = excluded.vote,
+       rationale = excluded.rationale,
+       suite = excluded.suite,
+       signature = excluded.signature,
+       received_at = excluded.received_at`,
+  );
+  const receivedAt = Date.now();
+  for (const vote of validVotes) {
+    insertVote.run(
+      vote.dispute_id,
+      vote.round,
+      vote.peer_id,
+      vote.vote,
+      vote.rationale,
+      vote.suite,
+      vote.signature,
+      receivedAt,
+    );
+  }
+
+  // 7. Aggregate
+  const result = aggregateVotes(validVotes, peers.length);
+
+  logger.info("federation.orchestrator.aggregated", {
+    disputeId: dispute.dispute_id,
+    round,
+    peerCount: peers.length,
+    validVoteCount: validVotes.length,
+    resolution: result.resolution,
+    splitRatio: result.split_ratio,
+  });
+
+  return result;
 }
 
 // === Route Registration ===
 
 export function registerDisputeRoutes(deps: DisputeDeps): void {
   const { db, app, relayIdentity } = deps;
+  const fetchImpl = deps.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const voteRequestTimeoutMs = deps.voteRequestTimeoutMs ?? FEDERATION_VOTE_REQUEST_TIMEOUT_MS;
 
   // ── POST /api/v1/allocations/:allocationId/dispute (§4) ──
   // Open a dispute, lock funds. The body MUST be a signed `DisputeRequest`
@@ -245,8 +601,8 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
 
     db.prepare(
       `INSERT INTO relay_disputes
-       (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'opened', ?, ?, ?, ?)`,
+       (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline, body_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'opened', ?, ?, ?, ?, ?)`,
     ).run(
       req.dispute_id,
       req.task_id,
@@ -259,6 +615,11 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       filingFee,
       req.filed_at,
       evidenceDeadline,
+      // Phase 6.2: persist the verified DisputeRequest body so the
+      // §6.2 federation orchestrator can hand the original signed
+      // artifact to peers verbatim (spec §16.2). Mirrors the
+      // relay_horizon_certs.cert_json convention from migration 16.
+      JSON.stringify(req),
     );
 
     // Transition to evidence state immediately (dispute has initial evidence)
@@ -400,50 +761,71 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       });
     }
 
-    // Foundation law §6.5: "A relay must not self-adjudicate when it
-    // is the defendant." The same logic applies when the relay is the
-    // filing party — no entity may judge its own case (§6.2). Refuse
-    // to sign a single-relay resolution in either direction; the
-    // dispute must go to federation adjudication per §6.3. Federation
-    // orchestration is not yet implemented — without federation peers,
-    // the agent's onchain credential anchors and settlement proofs
-    // stand as independent evidence (§6.3, §10).
-    if (
+    // §6.5 + §6.2: when the relay is a party to the dispute, single-relay
+    // adjudication is forbidden; route resolution through the federation
+    // orchestrator (replaces the prior 409 self-adjudication guard).
+    // The orchestrator pulls the dispute body + evidence, fans out to
+    // active peers, verifies + persists each AdjudicatorVote, aggregates
+    // by majority (ties → split per §6.4), and returns the federation-
+    // derived resolution shape. Body.{resolution, rationale, fund_action,
+    // split_ratio} are IGNORED on this path — the operator cannot
+    // participate in adjudication when their relay is a party.
+    const isFederationPath =
       dispute.filed_by === relayIdentity.relayMotebitId ||
-      dispute.respondent === relayIdentity.relayMotebitId
-    ) {
-      throw new HTTPException(409, {
-        message:
-          "Relay is a party to this dispute; federation adjudication required (spec/dispute-v1.md §6.3, §6.5). " +
-          "This relay has no federation peers configured — the dispute remains unresolved here; " +
-          "the agent's onchain credential anchors and settlement proofs stand as independent evidence.",
-      });
+      dispute.respondent === relayIdentity.relayMotebitId;
+
+    let resolutionOutcome: DisputeOutcome;
+    let resolutionRationale: string;
+    let resolutionFundAction: DisputeFundAction;
+    let splitRatio: number;
+    let adjudicatorVotes: AdjudicatorVote[];
+
+    if (isFederationPath) {
+      // Round=1 for original adjudication. §8.3 appeals re-run the
+      // orchestrator with round=2 (commit 4).
+      const federationResult = await orchestrateFederationResolution(
+        {
+          dispute_id: disputeId,
+          body_json: (dispute.body_json as string | null) ?? "",
+        },
+        1,
+        { db, relayIdentity, fetchImpl, voteRequestTimeoutMs },
+      );
+      resolutionOutcome = federationResult.resolution;
+      resolutionRationale = federationResult.rationale;
+      resolutionFundAction = federationResult.fund_action;
+      splitRatio = federationResult.split_ratio;
+      adjudicatorVotes = federationResult.adjudicator_votes;
+    } else {
+      // Single-relay adjudication: operator's body is the resolution.
+      // Rationale required (§6.5).
+      if (!body.rationale) {
+        throw new HTTPException(400, { message: "Rationale is required" });
+      }
+      resolutionOutcome = body.resolution;
+      resolutionRationale = body.rationale;
+      resolutionFundAction = body.fund_action;
+      splitRatio =
+        body.split_ratio ??
+        (body.resolution === "upheld" ? 0 : body.resolution === "overturned" ? 1 : 0.5);
+      adjudicatorVotes = [];
     }
 
-    // Rationale required (§6.5)
-    if (!body.rationale) {
-      throw new HTTPException(400, { message: "Rationale is required" });
-    }
-
-    const splitRatio =
-      body.split_ratio ??
-      (body.resolution === "upheld" ? 0 : body.resolution === "overturned" ? 1 : 0.5);
     const resolvedAt = Date.now();
 
     // Sign the resolution through `@motebit/encryption`'s signer — the
     // protocol-primitive-placement rule says the sign recipe lives in
-    // the package layer, not inline here. `adjudicator_votes: []` is
-    // correct for single-relay (§6.4); federation orchestration fills
-    // this array when it lands.
+    // the package layer, not inline here. `adjudicator_votes` is empty
+    // for single-relay (§6.4) and populated for federation per §6.5.
     const signedResolution = await signDisputeResolution(
       {
         dispute_id: disputeId,
-        resolution: body.resolution,
-        rationale: body.rationale,
-        fund_action: body.fund_action,
+        resolution: resolutionOutcome,
+        rationale: resolutionRationale,
+        fund_action: resolutionFundAction,
         split_ratio: splitRatio,
         adjudicator: relayIdentity.relayMotebitId,
-        adjudicator_votes: [],
+        adjudicator_votes: adjudicatorVotes,
         resolved_at: resolvedAt,
       },
       relayIdentity.privateKey,
@@ -459,12 +841,12 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     ).run(
       resolutionId,
       disputeId,
-      body.resolution,
-      body.rationale,
-      body.fund_action,
+      resolutionOutcome,
+      resolutionRationale,
+      resolutionFundAction,
       splitRatio,
       relayIdentity.relayMotebitId,
-      "[]",
+      JSON.stringify(adjudicatorVotes),
       resolvedAt,
       signatureHex,
     );
@@ -476,9 +858,9 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       db.prepare(
         "UPDATE relay_disputes SET state = 'resolved', resolution = ?, rationale = ?, fund_action = ?, split_ratio = ?, adjudicator = ?, resolved_at = ? WHERE dispute_id = ?",
       ).run(
-        body.resolution,
-        body.rationale,
-        body.fund_action,
+        resolutionOutcome,
+        resolutionRationale,
+        resolutionFundAction,
         splitRatio,
         relayIdentity.relayMotebitId,
         resolvedAt,
@@ -486,7 +868,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       );
 
       // Execute fund action (§7.2) — must succeed or rollback
-      executeFundAction(db, dispute, body.fund_action, splitRatio);
+      executeFundAction(db, dispute, resolutionFundAction, splitRatio);
       db.exec("COMMIT");
     } catch (err) {
       db.exec("ROLLBACK");
@@ -497,19 +879,22 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
 
     logger.info("dispute.resolved", {
       disputeId,
-      resolution: body.resolution,
-      fundAction: body.fund_action,
+      resolution: resolutionOutcome,
+      fundAction: resolutionFundAction,
       splitRatio,
+      isFederation: isFederationPath,
+      voteCount: adjudicatorVotes.length,
     });
 
     return c.json({
       ok: true,
       dispute_id: disputeId,
       state: "resolved" as DisputeState,
-      resolution: body.resolution,
-      fund_action: body.fund_action,
+      resolution: resolutionOutcome,
+      fund_action: resolutionFundAction,
       split_ratio: splitRatio,
       resolved_at: resolvedAt,
+      adjudicator_votes: adjudicatorVotes,
     });
   });
 

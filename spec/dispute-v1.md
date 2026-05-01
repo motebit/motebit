@@ -235,6 +235,8 @@ When a dispute is opened, the referenced `BudgetAllocation` transitions to `disp
 | `overturned` | Original settlement      | The pre-dispute settlement stands                                        |
 | `split`      | Divide by `split_ratio`  | Worker receives `locked * split_ratio`, delegator receives the remainder |
 
+**Federation-resolved disputes (§6.2 orchestrator) emit `fund_action: "split"` with `split_ratio` encoding the verdict** — `1.0` for upheld (worker gets all locked funds), `0.0` for overturned (delegator gets all), `0.5` for split. The mechanically-equivalent `release_to_worker` and `refund_to_delegator` arms are reserved for single-relay resolution paths where the operator has direct access to task role assignments (worker vs delegator). Verdict semantics live in `resolution`; financial mechanics in `(fund_action, split_ratio)` — querying "all upheld disputes" goes through `resolution`, not `fund_action`. Federation parity with the granular arms is a future arc; see `memory/dispute_v1_fund_action_federation_parity_followup.md`.
+
 ### 7.3 Foundation Law
 
 - Funds must remain locked from `opened` through resolution. No partial release during the dispute.

@@ -830,4 +830,53 @@ export const relayMigrations: Migration[] = [
       );
     },
   },
+  {
+    version: 18,
+    name: "phase_6_2_dispute_body_json",
+    up: (db) => {
+      // Phase 6.2 — store the original signed `DisputeRequest` body so
+      // the §6.2 federation orchestrator can hand it to peers verbatim.
+      //
+      // Why: spec/relay-federation-v1.md §16.2 promises that the
+      // VoteRequest carries the "original signed dispute artifact" so
+      // peers can independently re-verify the filer's signature on the
+      // dispute. Three independent peers verifying the original filer's
+      // signature is a stronger trust shape than three peers trusting
+      // the leader's word about what the dispute says — the property
+      // §6.2 federation adjudication exists to provide.
+      //
+      // The pre-§6.2 filing handler verified the signature at filing
+      // time and discarded it (only unpacked fields were persisted).
+      // This migration adds `body_json` as NOT NULL with empty-string
+      // default. Filing handler now stores `JSON.stringify(req)`
+      // (mirroring the `relay_horizon_certs.cert_json` convention from
+      // migration 16). Orchestrator reads + parses on fan-out; defensive
+      // empty-string check covers the unreachable legacy case (verified
+      // 2026-05-01: stg + stg-b both have 0 disputes pre-migration).
+      //
+      // Defensive shape (PRAGMA-checked, mirrors migration 3): the
+      // `relay_disputes` table is created by `createDisputeTables` in
+      // disputes.ts (NOT a migration), so on fresh installs migrations
+      // run before the table exists. Skip the ALTER if the table is
+      // absent (createDisputeTables now declares the column inline) or
+      // if the column already exists (re-run idempotency). Existing
+      // deploys with the table but without the column get the ALTER.
+      //
+      // See spec/dispute-v1.md §7.2 + §16.2,
+      // memory/feedback_data_model_audit_for_spec_fields.md (lesson
+      // captured: spec fields naming "original signed X" need a
+      // data-model audit before spec approval).
+      const tableRows = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='relay_disputes'")
+        .all() as Array<{ name: string }>;
+      if (tableRows.length === 0) return;
+      const cols = db.prepare("PRAGMA table_info(relay_disputes)").all() as Array<{
+        name: string;
+      }>;
+      const colNames = new Set(cols.map((c) => c.name));
+      if (!colNames.has("body_json")) {
+        db.exec(`ALTER TABLE relay_disputes ADD COLUMN body_json TEXT NOT NULL DEFAULT ''`);
+      }
+    },
+  },
 ];

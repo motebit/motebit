@@ -16,6 +16,7 @@ import {
   publicKeyToDidKey,
   canonicalJson,
   bytesToHex,
+  fromBase64Url,
   hexToBytes,
 } from "@motebit/encryption";
 import {
@@ -1633,10 +1634,13 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     // requiring a code change here today.
 
     // Gate 4 — Signature verify (403 signature_invalid)
+    // VoteRequest suite is `motebit-jcs-ed25519-b64-v1`; signature is
+    // base64url-encoded (peer.public_key remains hex per the suite's
+    // public-key encoding rule).
     const { signature, ...bodyForVerify } = request;
     const canonical = canonicalJson(bodyForVerify);
     const valid = await verify(
-      hexToBytes(signature),
+      fromBase64Url(signature),
       new TextEncoder().encode(canonical),
       hexToBytes(peer.public_key),
     );

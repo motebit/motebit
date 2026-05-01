@@ -395,8 +395,23 @@ describe("Dispute: evidence + resolve", () => {
         fund_action: "refund_to_delegator",
       }),
     });
-    expect(resolveRes.status).toBe(409);
-    expect(await resolveRes.text()).toMatch(/federation adjudication required/i);
+    // Phase 6.2: the prior 409 self-adjudication guard is replaced by
+    // the federation orchestrator. Test relay has no peers, so the
+    // orchestrator's quorum-floor check fails fast → 503
+    // `insufficient_federation_peers`. The §6.5 self-adjudication
+    // property still holds — the relay does NOT produce a single-relay
+    // resolution when it's a party. With ≥3 active peers the
+    // orchestrator would fan out votes; that path is exercised in
+    // federation-orchestrator.test.ts.
+    expect(resolveRes.status).toBe(503);
+    // Relay's global error handler (middleware.ts:496-498) emits
+    // {error: <message>, status}; my orchestrator's HTTPException
+    // message is a JSON-encoded {error_code, message} blob, so the
+    // wire response is {error: '{"error_code":"...","message":"..."}', status: 503}.
+    // Parsing errBody.error gives us the spec-compliant code.
+    const errBody = (await resolveRes.json()) as { error: string };
+    const errPayload = JSON.parse(errBody.error) as { error_code: string };
+    expect(errPayload.error_code).toBe("insufficient_federation_peers");
   });
 
   it("refuses to self-adjudicate when relay is the filer (§6.2)", async () => {
@@ -420,8 +435,18 @@ describe("Dispute: evidence + resolve", () => {
         fund_action: "refund_to_delegator",
       }),
     });
-    expect(resolveRes.status).toBe(409);
-    expect(await resolveRes.text()).toMatch(/federation adjudication required/i);
+    // Phase 6.2: same shape as the respondent test above — federation
+    // orchestrator's quorum-floor check fails fast for a peerless test
+    // relay; §6.5 self-adjudication property is preserved.
+    expect(resolveRes.status).toBe(503);
+    // Relay's global error handler (middleware.ts:496-498) emits
+    // {error: <message>, status}; my orchestrator's HTTPException
+    // message is a JSON-encoded {error_code, message} blob, so the
+    // wire response is {error: '{"error_code":"...","message":"..."}', status: 503}.
+    // Parsing errBody.error gives us the spec-compliant code.
+    const errBody = (await resolveRes.json()) as { error: string };
+    const errPayload = JSON.parse(errBody.error) as { error_code: string };
+    expect(errPayload.error_code).toBe("insufficient_federation_peers");
   });
 
   it("resolution signature is verifiable with the relay's public key (single-relay path)", async () => {

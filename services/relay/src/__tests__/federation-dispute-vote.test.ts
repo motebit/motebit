@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair, sign, canonicalJson, bytesToHex } from "@motebit/encryption";
+import { generateKeypair, sign, canonicalJson, bytesToHex, toBase64Url } from "@motebit/encryption";
 import type { DisputeOutcome, DisputeRequest, VoteRequest } from "@motebit/protocol";
 import {
   registerFederationRoutes,
@@ -120,7 +120,9 @@ async function buildSignedVoteRequest(
 
   const canonical = canonicalJson(body);
   const sigBytes = await sign(new TextEncoder().encode(canonical), leaderRelay.privateKey);
-  return { ...body, signature: bytesToHex(sigBytes) };
+  // VoteRequest suite is `motebit-jcs-ed25519-b64-v1` — base64url
+  // signature encoding (peer-side gate-4 verify uses fromBase64Url).
+  return { ...body, signature: toBase64Url(sigBytes) };
 }
 
 let env: TestSetup;
