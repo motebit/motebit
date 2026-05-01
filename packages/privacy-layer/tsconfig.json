@@ -7,6 +7,9 @@
   "include": ["src"],
   "references": [
     {
+      "path": "../crypto"
+    },
+    {
       "path": "../encryption"
     },
     {
@@ -14,6 +17,9 @@
     },
     {
       "path": "../memory-graph"
+    },
+    {
+      "path": "../protocol"
     },
     {
       "path": "../sdk"

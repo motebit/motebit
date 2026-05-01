@@ -2,8 +2,21 @@ import type { MemoryNode, AuditRecord, ExportManifest, MotebitIdentity } from "@
 import { EventType, SensitivityLevel } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, MemoryStorageAdapter } from "@motebit/memory-graph";
-import type { DeletionCertificate } from "@motebit/encryption";
-import { createDeletionCertificate } from "@motebit/encryption";
+import type { DeletionCertificate, MotebitId, DeletionReason } from "@motebit/protocol";
+import { asNodeId } from "@motebit/protocol";
+import { signCertAsSubject } from "@motebit/crypto";
+
+/**
+ * Signer for `mutable_pruning` deletion certificates. The motebit's
+ * identity key signs each cert per docs/doctrine/retention-policy.md
+ * §"Decision 5". Production code injects the key from the runtime's
+ * key-keeper; tests pass a generated keypair directly.
+ */
+export interface DeletionCertSigner {
+  readonly motebitId: MotebitId;
+  /** Ed25519 private key (32 bytes). */
+  readonly privateKey: Uint8Array;
+}
 
 // === Audit Log ===
 
@@ -147,41 +160,97 @@ export class SensitivityManager {
 
 // === Delete Manager ===
 
+/**
+ * Map a string `deletedBy` parameter to a `DeletionReason`. The legacy
+ * API took a free-form string; phase 3 normalizes via this small set so
+ * the cert's reason field is verifier-checkable per the reason × signer
+ * × mode table (decision 5). Unknown values default to `user_request`.
+ */
+function normalizeDeletionReason(deletedBy: string): DeletionReason {
+  switch (deletedBy) {
+    case "user_request":
+    case "retention_enforcement":
+    case "retention_enforcement_post_classification":
+    case "operator_request":
+    case "delegated_request":
+    case "self_enforcement":
+    case "guardian_request":
+      return deletedBy;
+    default:
+      return "user_request";
+  }
+}
+
 export class DeleteManager {
   constructor(
     private memoryGraph: MemoryGraph,
     _eventStore: EventStore,
     private auditLog: AuditLogAdapter,
     private motebitId: string,
+    private signer: DeletionCertSigner,
   ) {}
 
   /**
-   * Delete a memory with full audit trail and deletion certificate.
+   * Erase a memory and emit a signed `mutable_pruning` deletion
+   * certificate. Decision 7: the underlying storage operation is
+   * physical erase, not tombstone. Decision 5: the cert is signed by
+   * the subject motebit's identity key.
    */
   async deleteMemory(nodeId: string, deletedBy: string): Promise<DeletionCertificate> {
-    // Create deletion certificate
-    const cert = await createDeletionCertificate(nodeId, "memory", deletedBy);
+    const node = await this.memoryGraph.getNode(nodeId);
+    const sensitivity = node?.sensitivity ?? SensitivityLevel.None;
+    const reason = normalizeDeletionReason(deletedBy);
+    const deletedAt = Date.now();
 
-    // Tombstone the memory
+    const certBody: Extract<DeletionCertificate, { kind: "mutable_pruning" }> = {
+      kind: "mutable_pruning",
+      target_id: asNodeId(nodeId),
+      sensitivity,
+      reason,
+      deleted_at: deletedAt,
+    };
+    const cert = await signCertAsSubject(
+      certBody,
+      this.signer.motebitId as string,
+      this.signer.privateKey,
+    );
+
+    // Erase the memory — bytes unrecoverable per decision 7.
     await this.memoryGraph.deleteMemory(nodeId);
 
-    // Audit
+    // Audit trail. Events live in append_only_horizon space and survive
+    // node erasure by design — they are the audit, not the deleted data.
     await this.auditLog.record({
       audit_id: crypto.randomUUID(),
       motebit_id: this.motebitId,
-      timestamp: Date.now(),
+      timestamp: deletedAt,
       action: "delete_memory",
       target_type: "memory",
       target_id: nodeId,
       details: {
         deleted_by: deletedBy,
-        tombstone_hash: cert.tombstone_hash,
+        reason,
+        sensitivity,
+        cert_kind: cert.kind,
+        cert_signature: cert.subject_signature?.signature ?? null,
       },
     });
 
     return cert;
   }
 }
+
+// Re-export the new wire types so downstream consumers (runtime, cli,
+// tests) import the cert union from a single product-vocabulary path.
+// The legacy unsigned `DeletionCertificate` in `@motebit/encryption`
+// remains available for migration but is the deprecated shape; new
+// consumers should import from here.
+export type { DeletionCertificate, DeletionReason } from "@motebit/protocol";
+export {
+  MAX_RETENTION_DAYS_BY_SENSITIVITY,
+  REFERENCE_RETENTION_DAYS_BY_SENSITIVITY,
+} from "@motebit/protocol";
+export { signCertAsSubject, verifyDeletionCertificate } from "@motebit/crypto";
 
 // === Export Manager ===
 
@@ -272,10 +341,11 @@ export class PrivacyLayer {
     eventStore: EventStore,
     auditLog: AuditLogAdapter,
     motebitId: string,
+    signer: DeletionCertSigner,
   ) {
     this.inspector = new MemoryInspector(storage, auditLog, motebitId);
     this.sensitivityManager = new SensitivityManager(storage, auditLog, motebitId);
-    this.deleteManager = new DeleteManager(memoryGraph, eventStore, auditLog, motebitId);
+    this.deleteManager = new DeleteManager(memoryGraph, eventStore, auditLog, motebitId, signer);
     this.exportManager = new ExportManager(memoryGraph, eventStore, auditLog, motebitId);
   }
 

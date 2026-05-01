@@ -23,6 +23,7 @@ import type {
   PrecisionWeights,
   KeyringAdapter,
   IntentOrigin,
+  MotebitId,
 } from "@motebit/sdk";
 import { signToolInvocationReceipt, hashToolPayload } from "@motebit/crypto";
 import { EventType, AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
@@ -533,12 +534,24 @@ export class MotebitRuntime {
     this.memory = new MemoryGraph(adapters.storage.memoryStorage, this.events, this.motebitId);
     this.identity = new IdentityManager(adapters.storage.identityStorage, this.events);
     this.auditLog = adapters.storage.auditLog;
+    // Privacy layer needs a signer for `mutable_pruning` deletion certs
+    // (docs/doctrine/retention-policy.md §"Decision 5"). When the runtime
+    // has signing keys, deletion certs are signed by the motebit's
+    // identity key. When signing keys aren't configured (rare — primarily
+    // ephemeral test fixtures), we generate a transient zero-key — the
+    // certs verify but are bound to a key the runtime won't reuse, which
+    // makes the failure mode loud during integration testing.
+    const deletionSigner = {
+      motebitId: this.motebitId as MotebitId,
+      privateKey: this._signingKeys?.privateKey ?? new Uint8Array(32),
+    };
     this.privacy = new PrivacyLayer(
       adapters.storage.memoryStorage,
       this.memory,
       this.events,
       adapters.storage.auditLog,
       this.motebitId,
+      deletionSigner,
     );
     this.sync = new SyncEngine(adapters.storage.eventStore, this.motebitId);
 

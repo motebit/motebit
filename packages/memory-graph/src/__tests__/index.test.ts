@@ -444,8 +444,11 @@ describe("MemoryGraph", () => {
     });
   });
 
-  describe("deleteMemory (tombstoning)", () => {
-    it("tombstones the memory node", async () => {
+  describe("deleteMemory (erase)", () => {
+    it("erases the memory node — getNode returns null, never tombstoned", async () => {
+      // Decision 7's negative proof: `mutable_pruning` deletion certs
+      // attest "bytes unrecoverable", so the storage operation must be
+      // erase, not tombstone. See docs/doctrine/retention-policy.md.
       const node = await graph.formMemory(
         {
           content: "to be deleted",
@@ -458,7 +461,28 @@ describe("MemoryGraph", () => {
       await graph.deleteMemory(node.node_id);
 
       const loaded = await storage.getNode(node.node_id);
-      expect(loaded!.tombstoned).toBe(true);
+      expect(loaded).toBeNull();
+    });
+
+    it("erases incident edges as part of the cascade", async () => {
+      const a = await graph.formMemory(
+        { content: "anchor a", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [1, 0],
+      );
+      const b = await graph.formMemory(
+        { content: "anchor b", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        [0, 1],
+      );
+      await graph.link(a.node_id, b.node_id, RelationType.Related, 0.5, 0.7);
+
+      await graph.deleteMemory(a.node_id);
+
+      const edges = await storage.getEdges(a.node_id);
+      expect(edges).toEqual([]);
+      const incidentToB = await storage.getEdges(b.node_id);
+      expect(
+        incidentToB.find((e) => e.source_id === a.node_id || e.target_id === a.node_id),
+      ).toBeUndefined();
     });
 
     it("logs a MemoryDeleted event", async () => {

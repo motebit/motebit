@@ -554,6 +554,17 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
     return Promise.resolve();
   }
 
+  eraseNode(nodeId: string): Promise<void> {
+    this.nodes.delete(nodeId);
+    // Cascade: remove every edge that references the erased node.
+    for (const [edgeId, edge] of this.edges) {
+      if (edge.source_id === nodeId || edge.target_id === nodeId) {
+        this.edges.delete(edgeId);
+      }
+    }
+    return Promise.resolve();
+  }
+
   pinNode(nodeId: string, pinned: boolean): Promise<void> {
     const node = this.nodes.get(nodeId);
     if (node !== undefined && !node.tombstoned) {
@@ -1027,10 +1038,33 @@ export class MemoryGraph {
   }
 
   /**
-   * Tombstone a memory (soft delete with audit trail).
+   * Read a single memory node by id. Passthrough to the storage adapter;
+   * exposed on MemoryGraph so callers (privacy-layer's DeleteManager,
+   * panel controllers) consume one product-vocabulary surface rather
+   * than reaching past the graph into storage.
+   */
+  async getNode(nodeId: string): Promise<MemoryNode | null> {
+    return this.storage.getNode(nodeId);
+  }
+
+  /**
+   * Erase a memory — physically remove the node row and any edges that
+   * reference it. Decision 7 of `docs/doctrine/retention-policy.md`:
+   * `mutable_pruning` deletion certificates attest "bytes are
+   * unrecoverable," so the underlying storage operation is erase, not
+   * tombstone. Receivers of the cert can rely on the byte-level claim.
+   *
+   * The `MemoryDeleted` event is appended after erasure as the audit
+   * trail. Events are append-only (`append_only_horizon` shape) and
+   * survive node erasure by design — the event log records the act of
+   * deletion; the node's bytes are gone.
+   *
+   * Storage-level `tombstoneNode` remains available on the adapter for
+   * any future caller that wants soft-delete semantics, but every
+   * production path through `MemoryGraph` is erase-by-default.
    */
   async deleteMemory(nodeId: string): Promise<void> {
-    await this.storage.tombstoneNode(nodeId);
+    await this.storage.eraseNode(nodeId);
 
     await this.eventStore.appendWithClock({
       event_id: crypto.randomUUID(),

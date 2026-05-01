@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { InMemoryAuditLog, PrivacyLayer } from "../index";
+import { InMemoryAuditLog, PrivacyLayer, type DeletionCertSigner } from "../index";
 import {
   InMemoryMemoryStorage,
   MemoryGraph,
@@ -7,13 +7,20 @@ import {
 } from "@motebit/memory-graph";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { SensitivityLevel, EventType } from "@motebit/sdk";
-import type { MemoryNode, AuditRecord, MotebitIdentity } from "@motebit/sdk";
+import type { MemoryNode, AuditRecord, MotebitIdentity, MotebitId } from "@motebit/sdk";
+import { generateEd25519Keypair } from "@motebit/crypto";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 const MOTEBIT_ID = "motebit-1";
+
+let TEST_SIGNER: DeletionCertSigner;
+beforeEach(async () => {
+  const { privateKey } = await generateEd25519Keypair();
+  TEST_SIGNER = { motebitId: MOTEBIT_ID as MotebitId, privateKey };
+});
 
 function makeNode(overrides: Partial<MemoryNode> = {}): MemoryNode {
   return {
@@ -151,7 +158,14 @@ describe("PrivacyLayer", () => {
     eventStore = new EventStore(new InMemoryEventStore());
     auditLog = new InMemoryAuditLog();
     memoryGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
-    privacyLayer = new PrivacyLayer(storage, memoryGraph, eventStore, auditLog, MOTEBIT_ID);
+    privacyLayer = new PrivacyLayer(
+      storage,
+      memoryGraph,
+      eventStore,
+      auditLog,
+      MOTEBIT_ID,
+      TEST_SIGNER,
+    );
   });
 
   describe("listMemories", () => {
@@ -176,7 +190,7 @@ describe("PrivacyLayer", () => {
   });
 
   describe("deleteMemory", () => {
-    it("creates a deletion certificate", async () => {
+    it("creates a signed mutable_pruning deletion certificate", async () => {
       const node = await memoryGraph.formMemory(
         {
           content: "to delete",
@@ -186,16 +200,23 @@ describe("PrivacyLayer", () => {
         [1, 0],
       );
 
-      const cert = await privacyLayer.deleteMemory(node.node_id, "user-1");
+      const cert = await privacyLayer.deleteMemory(node.node_id, "user_request");
 
+      // Decision 1: discriminated union under `kind`.
+      expect(cert.kind).toBe("mutable_pruning");
+      // Discriminant narrowing for the rest of the assertions.
+      if (cert.kind !== "mutable_pruning") return;
       expect(cert.target_id).toBe(node.node_id);
-      expect(cert.target_type).toBe("memory");
-      expect(cert.deleted_by).toBe("user-1");
-      expect(cert.tombstone_hash).toBeTruthy();
-      expect(cert.tombstone_hash.length).toBe(64);
+      expect(cert.reason).toBe("user_request");
+      expect(cert.sensitivity).toBe(SensitivityLevel.None);
+      expect(cert.deleted_at).toBeGreaterThan(0);
+      // Decision 5: subject_signature present (signer was injected).
+      expect(cert.subject_signature).toBeDefined();
+      expect(cert.subject_signature?.suite).toBe("motebit-jcs-ed25519-b64-v1");
+      expect(cert.subject_signature?.signature.length).toBeGreaterThan(0);
     });
 
-    it("tombstones the memory", async () => {
+    it("erases the memory — getNode returns null, never tombstoned", async () => {
       const node = await memoryGraph.formMemory(
         {
           content: "to delete",
@@ -205,10 +226,45 @@ describe("PrivacyLayer", () => {
         [1, 0],
       );
 
-      await privacyLayer.deleteMemory(node.node_id, "user-1");
+      await privacyLayer.deleteMemory(node.node_id, "user_request");
 
+      // Decision 7's negative proof: bytes unrecoverable, not soft-deleted.
       const loaded = await storage.getNode(node.node_id);
-      expect(loaded!.tombstoned).toBe(true);
+      expect(loaded).toBeNull();
+    });
+
+    it("issued cert verifies through verifyDeletionCertificate", async () => {
+      const { verifyDeletionCertificate, generateEd25519Keypair } = await import("@motebit/crypto");
+      // Build a fresh keypair, plug it as the signer, exercise the round-trip.
+      const { publicKey, privateKey } = await generateEd25519Keypair();
+      const localStorage = new InMemoryMemoryStorage();
+      const localEvents = new EventStore(new InMemoryEventStore());
+      const localAudit = new InMemoryAuditLog();
+      const localGraph = new MemoryGraph(localStorage, localEvents, MOTEBIT_ID);
+      const localLayer = new PrivacyLayer(
+        localStorage,
+        localGraph,
+        localEvents,
+        localAudit,
+        MOTEBIT_ID,
+        { motebitId: MOTEBIT_ID as MotebitId, privateKey },
+      );
+
+      const node = await localGraph.formMemory(
+        { content: "verify me", confidence: 0.9, sensitivity: SensitivityLevel.Personal },
+        [1, 0],
+      );
+      // Reason: self_enforcement — the subject's runtime drives policy and signs.
+      // Sibling `retention_enforcement` would require an operator_signature
+      // (operator-driven policy); decision 5's table.
+      const cert = await localLayer.deleteMemory(node.node_id, "self_enforcement");
+
+      const result = await verifyDeletionCertificate(cert, {
+        resolveMotebitPublicKey: async (id: string) => (id === MOTEBIT_ID ? publicKey : null),
+        resolveOperatorPublicKey: async () => null,
+      });
+      expect(result.valid).toBe(true);
+      expect(result.steps.subject_signature_valid).toBe(true);
     });
   });
 
@@ -350,6 +406,7 @@ describe("PrivacyLayer", () => {
         saveEdge: vi.fn(),
         getEdges: vi.fn(),
         tombstoneNode: vi.fn(),
+        eraseNode: vi.fn(),
         pinNode: vi.fn(),
         getAllNodes: vi.fn(),
         getAllEdges: vi.fn(),
@@ -361,6 +418,7 @@ describe("PrivacyLayer", () => {
         eventStore,
         auditLog,
         MOTEBIT_ID,
+        TEST_SIGNER,
       );
 
       await expect(failLayer.listMemories()).rejects.toThrow(
@@ -376,6 +434,7 @@ describe("PrivacyLayer", () => {
         saveEdge: vi.fn(),
         getEdges: vi.fn(),
         tombstoneNode: vi.fn(),
+        eraseNode: vi.fn(),
         pinNode: vi.fn(),
         getAllNodes: vi.fn(),
         getAllEdges: vi.fn(),
@@ -387,6 +446,7 @@ describe("PrivacyLayer", () => {
         eventStore,
         auditLog,
         MOTEBIT_ID,
+        TEST_SIGNER,
       );
 
       await expect(failLayer.inspectMemory("n1")).rejects.toThrow(
@@ -402,6 +462,7 @@ describe("PrivacyLayer", () => {
         saveEdge: vi.fn(),
         getEdges: vi.fn(),
         tombstoneNode: vi.fn(),
+        eraseNode: vi.fn(),
         pinNode: vi.fn(),
         getAllNodes: vi.fn(),
         getAllEdges: vi.fn(),
@@ -413,6 +474,7 @@ describe("PrivacyLayer", () => {
         eventStore,
         auditLog,
         MOTEBIT_ID,
+        TEST_SIGNER,
       );
 
       await expect(failLayer.setSensitivity("n1", SensitivityLevel.Secret)).rejects.toThrow(
@@ -426,7 +488,14 @@ describe("PrivacyLayer", () => {
       const failGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
       vi.spyOn(failGraph, "deleteMemory").mockRejectedValue(new Error("node not found"));
 
-      const failLayer = new PrivacyLayer(storage, failGraph, eventStore, auditLog, MOTEBIT_ID);
+      const failLayer = new PrivacyLayer(
+        storage,
+        failGraph,
+        eventStore,
+        auditLog,
+        MOTEBIT_ID,
+        TEST_SIGNER,
+      );
 
       await expect(failLayer.deleteMemory("missing", "user")).rejects.toThrow(
         "Privacy layer: access denied (fail-closed)",
@@ -437,7 +506,14 @@ describe("PrivacyLayer", () => {
       const failGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
       vi.spyOn(failGraph, "exportAll").mockRejectedValue(new Error("export failed"));
 
-      const failLayer = new PrivacyLayer(storage, failGraph, eventStore, auditLog, MOTEBIT_ID);
+      const failLayer = new PrivacyLayer(
+        storage,
+        failGraph,
+        eventStore,
+        auditLog,
+        MOTEBIT_ID,
+        TEST_SIGNER,
+      );
 
       await expect(failLayer.exportAll(makeIdentity())).rejects.toThrow(
         "Privacy layer: access denied (fail-closed)",

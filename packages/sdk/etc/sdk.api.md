@@ -484,6 +484,7 @@ export interface MemoryQuery {
 
 // @public (undocumented)
 export interface MemoryStorageAdapter {
+    eraseNode(nodeId: string): Promise<void>;
     // (undocumented)
     getAllEdges(motebitId: string): Promise<MemoryEdge[]>;
     // (undocumented)

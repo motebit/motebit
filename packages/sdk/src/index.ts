@@ -128,6 +128,22 @@ export interface MemoryStorageAdapter {
   tombstoneNode(nodeId: string): Promise<void>;
   /** Tombstone with ownership check. Returns true if the node existed and belonged to motebitId. */
   tombstoneNodeOwned?(nodeId: string, motebitId: string): Promise<boolean>;
+  /**
+   * Erase a node — physically remove the row and any edges referencing it.
+   * Required by the `mutable_pruning` retention contract per
+   * docs/doctrine/retention-policy.md §"Decision 7": certificates of
+   * kind `mutable_pruning` attest that the bytes are unrecoverable, so
+   * a tombstoned-but-stored node would silently weaken the cert's
+   * claim. Distinct from `tombstoneNode`, which keeps the row with a
+   * `tombstoned: true` flag for soft-delete lifecycle (decay /
+   * notability passes that don't issue a deletion cert).
+   *
+   * Implementations MUST remove the node row and every edge whose
+   * `source_id` or `target_id` references the erased node. After
+   * `eraseNode(id)` resolves, `getNode(id)` returns `null` and
+   * `getEdges(id)` returns `[]`.
+   */
+  eraseNode(nodeId: string): Promise<void>;
   pinNode(nodeId: string, pinned: boolean): Promise<void>;
   getAllNodes(motebitId: string): Promise<MemoryNode[]>;
   getAllEdges(motebitId: string): Promise<MemoryEdge[]>;

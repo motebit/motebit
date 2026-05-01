@@ -98,6 +98,21 @@ export class IdbMemoryStorage implements MemoryStorageAdapter {
     }
   }
 
+  async eraseNode(nodeId: string): Promise<void> {
+    const tx = this.db.transaction(["memory_nodes", "memory_edges"], "readwrite");
+    const nodeStore = tx.objectStore("memory_nodes");
+    await idbRequest(nodeStore.delete(nodeId));
+
+    // Cascade: remove every edge referencing the erased node.
+    const edgeStore = tx.objectStore("memory_edges");
+    const allEdges = (await idbRequest(edgeStore.getAll())) as MemoryEdge[];
+    for (const edge of allEdges) {
+      if (edge.source_id === nodeId || edge.target_id === nodeId) {
+        await idbRequest(edgeStore.delete(edge.edge_id));
+      }
+    }
+  }
+
   async pinNode(nodeId: string, pinned: boolean): Promise<void> {
     const tx = this.db.transaction("memory_nodes", "readwrite");
     const store = tx.objectStore("memory_nodes");

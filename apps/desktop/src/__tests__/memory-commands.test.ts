@@ -137,13 +137,13 @@ describe("memory-commands.formMemoryDirect", () => {
 
 describe("memory-commands.deleteMemory", () => {
   it("returns null if runtime is null", async () => {
-    expect(await deleteMemory(null, "m", "n")).toBeNull();
+    expect(await deleteMemory(null, "n")).toBeNull();
   });
 
   it("prefers the privacy layer", async () => {
     const runtime = makeRuntime();
-    const result = await deleteMemory(runtime, "m1", "n1");
-    expect(runtime.privacy.deleteMemory).toHaveBeenCalledWith("n1", "m1");
+    const result = await deleteMemory(runtime, "n1");
+    expect(runtime.privacy.deleteMemory).toHaveBeenCalledWith("n1", "user_request");
     expect(result).toMatchObject({ cert_id: "c1" });
   });
 
@@ -155,7 +155,7 @@ describe("memory-commands.deleteMemory", () => {
         }),
       },
     });
-    const result = await deleteMemory(runtime, "m1", "n1");
+    const result = await deleteMemory(runtime, "n1");
     expect(runtime.memory.deleteMemory).toHaveBeenCalledWith("n1");
     expect(result).toBeNull();
   });

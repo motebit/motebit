@@ -364,6 +364,17 @@ export class TauriMemoryStorage implements MemoryStorageAdapter {
     ]);
   }
 
+  async eraseNode(nodeId: string): Promise<void> {
+    // Erase semantics for `mutable_pruning` certs (decision 7) — bytes
+    // unrecoverable, edge cascade. Tauri's SQLite plugin runs each
+    // execute as its own statement; cascade is two ordered statements.
+    await dbExecute(this.invoke, "DELETE FROM memory_edges WHERE source_id = ? OR target_id = ?", [
+      nodeId,
+      nodeId,
+    ]);
+    await dbExecute(this.invoke, "DELETE FROM memory_nodes WHERE node_id = ?", [nodeId]);
+  }
+
   async pinNode(nodeId: string, pinned: boolean): Promise<void> {
     await dbExecute(
       this.invoke,

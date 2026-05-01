@@ -16,6 +16,8 @@
   },
   "dependencies": {
     "@motebit/sdk": "workspace:*",
+    "@motebit/protocol": "workspace:*",
+    "@motebit/crypto": "workspace:*",
     "@motebit/event-log": "workspace:*",
     "@motebit/memory-graph": "workspace:*",
     "@motebit/encryption": "workspace:*"

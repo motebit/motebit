@@ -18,7 +18,7 @@ import type { MemoryNode, MemoryEdge, SensitivityLevel } from "@motebit/sdk";
 import { SensitivityLevel as SensitivityLevelEnum } from "@motebit/sdk";
 import { computeDecayedConfidence, embedText } from "@motebit/memory-graph";
 import type { MotebitRuntime } from "@motebit/runtime";
-import type { DeletionCertificate } from "@motebit/encryption";
+import type { DeletionCertificate } from "@motebit/sdk";
 
 /**
  * List all non-tombstoned memories for the local agent, sorted newest first.
@@ -75,12 +75,13 @@ export async function formMemoryDirect(
  */
 export async function deleteMemory(
   runtime: MotebitRuntime | null,
-  motebitId: string,
   nodeId: string,
 ): Promise<DeletionCertificate | null> {
   if (!runtime) return null;
   try {
-    return await runtime.privacy.deleteMemory(nodeId, motebitId);
+    // `user_request` reason — UI invocation by the motebit's owner.
+    // Decision 5: subject_signature required, operator co-signature optional.
+    return await runtime.privacy.deleteMemory(nodeId, "user_request");
   } catch {
     // Fall back to direct deletion if privacy layer fails
     await runtime.memory.deleteMemory(nodeId);
