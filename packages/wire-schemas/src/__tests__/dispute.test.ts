@@ -134,12 +134,28 @@ describe("DisputeEvidenceSchema", () => {
 describe("AdjudicatorVoteSchema", () => {
   const SAMPLE: Record<string, unknown> = {
     dispute_id: "01HTV8X9QZ-dispute-1",
+    round: 1,
     peer_id: "019cd9d4-3275-7b24-8265-peer00000001",
     vote: "upheld",
     rationale: "Evidence clearly shows the receipt was tampered.",
     suite: SUITE,
     signature: SIG,
   };
+
+  it("rejects a vote without round (round-binding: signature MUST cover round per §6.5 + §8.3)", () => {
+    const bad = { ...SAMPLE };
+    delete bad.round;
+    expect(() => AdjudicatorVoteSchema.parse(bad)).toThrow();
+  });
+
+  it("rejects round < 1 (round counter is 1-indexed; 0 has no §8.3 semantics)", () => {
+    expect(() => AdjudicatorVoteSchema.parse({ ...SAMPLE, round: 0 })).toThrow();
+  });
+
+  it("accepts round = 2 (§8.3 appeal round)", () => {
+    const v = AdjudicatorVoteSchema.parse({ ...SAMPLE, round: 2 });
+    expect(v.round).toBe(2);
+  });
 
   it("parses a valid vote", () => {
     const v = AdjudicatorVoteSchema.parse(SAMPLE);
@@ -181,6 +197,7 @@ describe("AdjudicatorVoteSchema", () => {
 describe("DisputeResolutionSchema", () => {
   const VOTE = {
     dispute_id: "01HTV8X9QZ-dispute-1",
+    round: 1,
     peer_id: "peer-1",
     vote: "upheld" as const,
     rationale: "ok",

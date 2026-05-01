@@ -40,6 +40,7 @@ import type {
   DisputeEvidence,
   DisputeRequest,
   DisputeResolution,
+  VoteRequest,
 } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
@@ -56,6 +57,9 @@ export const DISPUTE_EVIDENCE_SCHEMA_ID =
 
 export const ADJUDICATOR_VOTE_SCHEMA_ID =
   "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/adjudicator-vote-v1.json";
+
+export const VOTE_REQUEST_SCHEMA_ID =
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/vote-request-v1.json";
 
 export const DISPUTE_RESOLUTION_SCHEMA_ID =
   "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/dispute-resolution-v1.json";
@@ -280,6 +284,13 @@ export const AdjudicatorVoteSchema = z
       .describe(
         "Dispute this vote applies to. Signature-bound: the canonical body includes this field, so a vote signed for dispute A cannot be replayed into dispute B (foundation law §6.5). A malicious adjudicator collecting old votes from other disputes cannot stuff them into a new resolution because the dispute_id binding breaks the per-vote signature.",
       ),
+    round: z
+      .number()
+      .int()
+      .min(1)
+      .describe(
+        "Adjudication round. 1 for original adjudication; 2 for §8.3 appeal. Signature-bound (foundation law §6.5 + §8.3): a peer's round-1 vote bytes do not satisfy round-2 binding even for the same evidence. Cross-round vote replay is cryptographically rejected, not enforced by leader bookkeeping alone.",
+      ),
     peer_id: z
       .string()
       .min(1)
@@ -292,7 +303,7 @@ export const AdjudicatorVoteSchema = z
       ),
     suite: suiteField(),
     signature: signatureField(
-      "Signed by the voting peer over canonical JSON of all fields except signature. The signature covers `dispute_id` (foundation law §6.5: votes are not portable across disputes).",
+      "Signed by the voting peer over canonical JSON of all fields except signature. The signature covers `dispute_id`, `round`, `peer_id`, and `vote` (foundation law §6.5 + §8.3: votes are not portable across disputes, rounds, peers, or outcomes).",
     ),
   })
   .strict();
@@ -321,6 +332,77 @@ export function buildAdjudicatorVoteJsonSchema(): Record<string, unknown> {
     title: "AdjudicatorVote (v1)",
     description:
       "Single federation peer's signed vote in federation adjudication (§6.2). Foundation law §6.5: federation resolutions MUST include individual votes — aggregated-only verdicts are rejected.",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// VoteRequest — leader-to-peer fan-out body for §6.2 federation adjudication
+// (relay-federation@1.2 §16)
+// ---------------------------------------------------------------------------
+
+export const VoteRequestSchema = z
+  .object({
+    dispute_id: z
+      .string()
+      .min(1)
+      .describe(
+        "The dispute being adjudicated. MUST equal the URL `:disputeId` parameter on the receiving peer's gate ladder.",
+      ),
+    round: z
+      .number()
+      .int()
+      .min(1)
+      .describe(
+        "Adjudication round. 1 for original adjudication; 2 for §8.3 appeal. Signature-bound: cross-round vote replay is cryptographically rejected. The peer's `AdjudicatorVote` response MUST echo this value.",
+      ),
+    dispute_request: DisputeRequestSchema.describe(
+      "Original signed dispute artifact (§4.2). The receiving peer can re-verify the dispute's provenance from this alone — no separate authentication of the dispute is required.",
+    ),
+    evidence_bundle: z
+      .array(DisputeEvidenceSchema)
+      .describe(
+        "All evidence collected during the dispute's evidence window (§5.2). For round=2 (appeal), MUST carry the original round-1 evidence plus any new evidence introduced with the appeal per §8.4.",
+      ),
+    requester_id: z
+      .string()
+      .min(1)
+      .describe(
+        "Leader relay's `motebit_id`. MUST be a known peer to the receiver (gate 2). MUST match the body's `requester_id` against the resolved peer row (gate 3) so a malicious peer cannot impersonate another relay's vote-request.",
+      ),
+    requested_at: z
+      .number()
+      .describe(
+        "Unix timestamp in milliseconds when the leader signed. Used by the peer-side gate-5 freshness check — requests where `now - requested_at > FEDERATION_VOTE_REQUEST_MAX_AGE_MS` (default 60000ms) are rejected with 400 `request_stale`.",
+      ),
+    suite: suiteField(),
+    signature: signatureField(
+      "Signed by the leader (requester) over canonical JSON of all fields except signature. The signature binds `dispute_id`, `round`, `requester_id`, and the evidence bundle so request-tampering and cross-round replay both fail-closed.",
+    ),
+  })
+  .strict();
+
+type _VoteRequestForward = VoteRequest extends z.infer<typeof VoteRequestSchema> ? true : never;
+type _VoteRequestReverse = z.infer<typeof VoteRequestSchema> extends VoteRequest ? true : never;
+
+export const _VOTE_REQUEST_TYPE_PARITY: {
+  forward: _VoteRequestForward;
+  reverse: _VoteRequestReverse;
+} = {
+  forward: true as _VoteRequestForward,
+  reverse: true as _VoteRequestReverse,
+};
+
+export function buildVoteRequestJsonSchema(): Record<string, unknown> {
+  const raw = zodToJsonSchema(VoteRequestSchema, {
+    name: "VoteRequest",
+    $refStrategy: "root",
+    target: "jsonSchema7",
+  }) as Record<string, unknown>;
+  return assembleJsonSchemaFor("VoteRequest", raw, {
+    $id: VOTE_REQUEST_SCHEMA_ID,
+    title: "VoteRequest (v1)",
+    description:
+      "Leader-to-peer fan-out body for §6.2 federation adjudication (relay-federation@1.2 §16). The leader (relay where dispute resolution was requested AND named as filer or respondent) POSTs this to each active federation peer; each peer returns a signed `AdjudicatorVote`.",
   });
 }
 

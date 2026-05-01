@@ -259,8 +259,8 @@ async function phase1() {
     // together — federation-e2e.test.ts has a defensive test that catches the constant↔doc
     // drift, but this live-test assertion has no such backstop.
     const specOk =
-      identityA.spec === "motebit/relay-federation@1.1" &&
-      identityB.spec === "motebit/relay-federation@1.1";
+      identityA.spec === "motebit/relay-federation@1.2" &&
+      identityB.spec === "motebit/relay-federation@1.2";
     expect(specOk, `A.spec=${identityA.spec}, B.spec=${identityB.spec}`);
   } else {
     fail("cannot check — identity fetch failed");

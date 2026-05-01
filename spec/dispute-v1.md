@@ -193,6 +193,7 @@ DisputeResolution {
 
 AdjudicatorVote {
   dispute_id:  string          // Dispute this vote applies to — signature-bound, prevents replay across disputes
+  round:       number          // Adjudication round (1 for original, 2 for §8.3 appeal). Signature-bound — round-1 vote bytes do not satisfy round-2 binding even for the same evidence.
   peer_id:     string          // Federation peer MotebitId
   vote:        string          // "upheld" | "overturned" | "split"
   rationale:   string          // Per-peer explanation
@@ -212,7 +213,7 @@ The reference relay writes a single `relay_disputes` row with JSON resolution da
 - Resolution must include a signed rationale. A bare verdict without explanation is rejected.
 - Federation resolution must include individual `AdjudicatorVote` entries from each participating peer. Aggregated-only verdicts are rejected.
 - A relay must not self-adjudicate when it is the defendant. Violation is a federation-level trust event.
-- Each `AdjudicatorVote` signature MUST cover its `dispute_id`. Votes are not portable across disputes — a malicious adjudicator collecting old votes from other disputes cannot stuff them into a new resolution because the dispute_id binding breaks the signature.
+- Each `AdjudicatorVote` signature MUST cover its `dispute_id` AND its `round`. Votes are not portable across disputes — a malicious adjudicator collecting old votes from other disputes cannot stuff them into a new resolution because the dispute_id binding breaks the signature. Votes are not portable across adjudication rounds — a leader (or attacker) cannot replay a peer's round-1 vote as round-2 evidence even for the same evidence bundle, because the round binding breaks the signature. The §8.3 round-isolation property is enforced cryptographically, not by leader bookkeeping alone.
 
 ### 6.6 Convention
 
@@ -300,6 +301,10 @@ The `DisputeAppeal` type in `@motebit/protocol` is the binding machine-readable 
 
 Single-relay appeals go to operator review with the additional evidence. Federation appeals trigger a second vote round with the new evidence included.
 
+Each adjudication round increments a counter: `round=1` for the original adjudication, `round=2` for the federation appeal. Each `AdjudicatorVote` signature binds its `round` per §6.5 — adjudicators sign each vote with the round they're voting in, so round-1 vote bytes do not satisfy round-2 binding even for the same evidence. Round-aggregation queries MUST filter `WHERE round = current_round` so a flipped-vote peer in round 2 cannot pull a round-2 majority back toward round-1's outcome.
+
+A vote-request with `round: 2` MUST carry the original round-1 evidence bundle plus any new evidence introduced with the appeal (§8.4 permits new evidence). The peer's vote callback receives the union and decides afresh.
+
 ### 8.4 Foundation Law
 
 - One appeal per dispute. The `final` state after appeal is terminal — no further recourse within the protocol.
@@ -383,14 +388,14 @@ The two gates are the structural defense against a backdated `filed_at` widening
 
 ## 11. Relationship to Other Specs
 
-| Spec                  | Relationship                                                                                                                                                                                  |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| delegation@1.0        | Defines `BudgetAllocation` with `disputed` state (§6.1). This spec defines the lifecycle that enters and exits that state.                                                                    |
-| execution-ledger@1.0  | `execution_receipt` and `execution_ledger` are primary evidence types (§5.1).                                                                                                                 |
-| credential@1.0        | Credentials serve as evidence. Dispute outcomes may trigger credential revocation for serious violations.                                                                                     |
-| credential-anchor@1.0 | Onchain anchored credentials are tamper-proof evidence that survives relay censorship (§6.3).                                                                                                 |
-| settlement@1.0        | Settlement proofs are evidence. Fund handling (§7) operates on amounts established by settlement.                                                                                             |
-| relay-federation@1.1  | Federation peers form the adjudication quorum for cross-relay and relay-as-defendant disputes (§6.2). §15 defines the witness-solicitation + omission-dispute endpoints that §9.6 references. |
-| market@1.0            | Virtual account balances are locked during dispute. Resolution credits/debits virtual accounts.                                                                                               |
-| identity@1.0          | All dispute messages are signed by the party's Ed25519 identity key.                                                                                                                          |
-| auth-token@1.0        | Dispute API endpoints require signed bearer tokens with appropriate audience binding.                                                                                                         |
+| Spec                  | Relationship                                                                                                                                                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| delegation@1.0        | Defines `BudgetAllocation` with `disputed` state (§6.1). This spec defines the lifecycle that enters and exits that state.                                                                                                                  |
+| execution-ledger@1.0  | `execution_receipt` and `execution_ledger` are primary evidence types (§5.1).                                                                                                                                                               |
+| credential@1.0        | Credentials serve as evidence. Dispute outcomes may trigger credential revocation for serious violations.                                                                                                                                   |
+| credential-anchor@1.0 | Onchain anchored credentials are tamper-proof evidence that survives relay censorship (§6.3).                                                                                                                                               |
+| settlement@1.0        | Settlement proofs are evidence. Fund handling (§7) operates on amounts established by settlement.                                                                                                                                           |
+| relay-federation@1.2  | Federation peers form the adjudication quorum for cross-relay and relay-as-defendant disputes (§6.2 + the §16 vote-request endpoint added in @1.2). §15 defines the witness-solicitation + omission-dispute endpoints that §9.6 references. |
+| market@1.0            | Virtual account balances are locked during dispute. Resolution credits/debits virtual accounts.                                                                                                                                             |
+| identity@1.0          | All dispute messages are signed by the party's Ed25519 identity key.                                                                                                                                                                        |
+| auth-token@1.0        | Dispute API endpoints require signed bearer tokens with appropriate audience binding.                                                                                                                                                       |

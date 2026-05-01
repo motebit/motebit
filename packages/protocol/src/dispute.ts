@@ -123,10 +123,12 @@ export interface DisputeEvidence {
  * Foundation Law (§6.5):
  * - Federation resolution must include individual AdjudicatorVote entries
  * - Aggregated-only verdicts are rejected
- * - Each vote signature MUST cover `dispute_id` — votes are not portable
- *   across disputes (a malicious adjudicator collecting old votes from
- *   other disputes cannot stuff them into a new resolution because the
- *   dispute_id binding breaks the signature).
+ * - Each vote signature MUST cover `dispute_id` AND `round` — votes are
+ *   not portable across disputes OR adjudication rounds (a malicious
+ *   adjudicator collecting old votes from other disputes cannot stuff
+ *   them into a new resolution because the dispute_id binding breaks
+ *   the signature; a leader cannot replay round-1 vote bytes as round-2
+ *   evidence because the round binding breaks the signature).
  */
 export interface AdjudicatorVote {
   /**
@@ -137,6 +139,13 @@ export interface AdjudicatorVote {
    * fails to verify against the wrong binding).
    */
   dispute_id: string;
+  /**
+   * Adjudication round. 1 for original adjudication; 2 for §8.3 appeal.
+   * Signature-bound (§6.5): a peer's round-1 vote bytes do not satisfy
+   * round-2 binding even for the same evidence. The §8.3 round-isolation
+   * property is enforced cryptographically, not by leader bookkeeping.
+   */
+  round: number;
   /** Federation peer MotebitId. */
   peer_id: string;
   /** Vote outcome. */
@@ -149,6 +158,56 @@ export interface AdjudicatorVote {
    */
   suite: "motebit-jcs-ed25519-b64-v1";
   /** Ed25519 by the voting peer over canonical JSON of all fields except signature. */
+  signature: string;
+}
+
+/**
+ * Federation vote request — leader-to-peer fan-out body for §6.2
+ * federation adjudication. The leader (the relay where the dispute
+ * resolution was requested AND named in the dispute as filer or
+ * respondent) POSTs this to each active federation peer; each peer
+ * returns a signed `AdjudicatorVote`.
+ *
+ * Wire-format protocol type for `relay-federation@1.2` §16. The
+ * peer-side gate ladder (`spec/relay-federation-v1.md` §16.2) enforces:
+ * schema → known peer → requester-id binding → signature → freshness
+ * → operator policy configured.
+ *
+ * Foundation Law (`spec/dispute-v1.md` §6.5):
+ * - Signature MUST cover `dispute_id`, `round`, `requester_id`, and the
+ *   evidence bundle. Cross-round replay and request-tampering both
+ *   fail-closed.
+ * - For round=2 (appeal), `evidence_bundle` MUST carry the original
+ *   round-1 evidence plus any new evidence introduced with the appeal
+ *   (per §8.4).
+ */
+export interface VoteRequest {
+  /** The dispute being adjudicated. MUST equal the URL `:disputeId` parameter. */
+  dispute_id: string;
+  /**
+   * Adjudication round. 1 for original adjudication; 2 for §8.3 appeal.
+   * Signature-bound — cross-round vote replay is cryptographically
+   * rejected.
+   */
+  round: number;
+  /** Original signed dispute artifact (§4.2). The peer can re-verify the dispute's provenance from this alone. */
+  dispute_request: DisputeRequest;
+  /**
+   * All evidence collected during the dispute's evidence window (§5.2).
+   * For round=2, MUST carry the original round-1 evidence plus any new
+   * evidence introduced with the appeal.
+   */
+  evidence_bundle: DisputeEvidence[];
+  /** Leader relay's `motebit_id`. MUST be a known peer to the receiver (gate 2). */
+  requester_id: string;
+  /** Unix ms when the leader signed. Used by gate 5 freshness check (default ±60s). */
+  requested_at: number;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"`
+   * (see DisputeRequest for the full recipe).
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
+  /** Base64url Ed25519 by the leader over `canonicalJson(body minus signature)`. */
   signature: string;
 }
 

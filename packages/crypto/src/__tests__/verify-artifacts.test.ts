@@ -707,9 +707,10 @@ describe("signConsolidationReceipt / verifyConsolidationReceipt", () => {
 // ---------------------------------------------------------------------------
 
 describe("signAdjudicatorVote / verifyAdjudicatorVote", () => {
-  function makeVote(overrides?: { dispute_id?: string; peer_id?: string }) {
+  function makeVote(overrides?: { dispute_id?: string; peer_id?: string; round?: number }) {
     return {
       dispute_id: overrides?.dispute_id ?? "dispute-alpha",
+      round: overrides?.round ?? 1,
       peer_id: overrides?.peer_id ?? "peer-one",
       vote: "upheld" as const,
       rationale: "Evidence favors the filing party.",
@@ -736,6 +737,17 @@ describe("signAdjudicatorVote / verifyAdjudicatorVote", () => {
     );
     const reattributedToB = { ...voteForA, dispute_id: "dispute-B" };
     expect(await verifyAdjudicatorVote(reattributedToB, kp.publicKey)).toBe(false);
+  });
+
+  // Sibling foundation-law invariant: §6.5 + §8.3 say the signature MUST
+  // cover round. If a peer's round-1 vote bytes verify when reattributed
+  // to round-2, the §8.3 round-isolation property collapses — a leader
+  // (or attacker) could replay round-1 votes as round-2 evidence.
+  it("signature binds to round — round-1 vote fails against round-2 bytes (§6.5 + §8.3)", async () => {
+    const kp = await generateKeypair();
+    const voteRound1 = await signAdjudicatorVote(makeVote({ round: 1 }), kp.privateKey);
+    const reattributedToRound2 = { ...voteRound1, round: 2 };
+    expect(await verifyAdjudicatorVote(reattributedToRound2, kp.publicKey)).toBe(false);
   });
 
   it("detects vote-outcome tampering", async () => {

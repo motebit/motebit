@@ -2247,6 +2247,7 @@ export type {
   DisputeEvidence,
   DisputeEvidenceType,
   AdjudicatorVote,
+  VoteRequest,
   DisputeResolution,
   DisputeAppeal,
   WitnessOmissionDispute,

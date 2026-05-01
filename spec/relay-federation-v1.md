@@ -1,13 +1,14 @@
-# motebit/relay-federation@1.1
+# motebit/relay-federation@1.2
 
 ## Relay Federation Specification
 
 **Status:** Stable
-**Version:** 1.1
+**Version:** 1.2
 **Date:** 2026-05-01
 
 **Version history:**
 
+- **1.2** (2026-05-01) — Additive: `/disputes/:disputeId/vote-request` endpoint (§16) for federation peer fan-out during execution-ledger dispute adjudication (`spec/dispute-v1.md` §6.2). Extends the route table from fourteen to fifteen entries. Backward-compatible — peers without §16 support continue to interoperate on §3–15; vote-request fan-out is opt-in (relays without peers self-adjudicate when not party, 503 when party per §6.5).
 - **1.1** (2026-05-01) — Additive: `/horizon/witness` + `/horizon/dispute` endpoints (§15) for federation co-witness solicitation on `append_only_horizon` retention certs (`docs/doctrine/retention-policy.md` decision 4 + 9). Extends the route table from twelve to fourteen entries. Backward-compatible — peers without §15 support continue to interoperate on §3–14; horizon-cert co-witnessing is opt-in (relays without peers self-witness).
 - **1.0** (2026-03-24) — Initial stable release. Peering handshake, heartbeat, federated discovery, cross-relay routing, settlement forwarding, Merkle anchor proofs.
 
@@ -59,6 +60,22 @@ A relay has exactly one row in this table. The identity is generated once and pe
 ### 2.3 — DID Representation
 
 A relay's public key can be expressed as `did:key:z6Mk...` using the same derivation as agent identities (identity-v1.0 §10.1). This enables interoperability with W3C DID ecosystems.
+
+### 2.4 — Public Identity Response
+
+The `GET /federation/v1/identity` endpoint returns the relay's publicly-discoverable identity for cross-relay use. This is the canonical wire-format any peer (or third-party verifier) consumes when checking a relay's identity, supported spec version, and capability flags.
+
+```text
+RelayPublicIdentity {
+  spec:                       string   // e.g., "motebit/relay-federation@1.2"
+  relay_motebit_id:           string   // The relay's UUID v7 identifier (§2.1)
+  public_key:                 string   // Hex-encoded Ed25519 public key
+  did:                        string   // DID representation (§2.3)
+  vote_policy_configured:     boolean  // True iff this relay has wired an operator vote callback for the §16 vote-request endpoint. Peers without configured policy are not eligible §6.2 adjudicators per §16.2; leaders MAY pre-filter them out of quorum enumeration. _Added in 1.2._
+}
+```
+
+The response carries no signature; the discovery surface is unauthenticated by design (see §10.2). Peers that need authenticated identity claims use the peering handshake (§3).
 
 ---
 
@@ -592,7 +609,7 @@ All federation endpoints are under the `/federation/v1/` path prefix. All reques
 
 #### Routes (foundation law)
 
-The fourteen routes below are the binding cross-relay contract. Renaming or relocating any of them is a wire break.
+The fifteen routes below are the binding cross-relay contract. Renaming or relocating any of them is a wire break.
 
 - `GET /federation/v1/identity` — return this relay's public identity.
 - `POST /federation/v1/peer/propose` — initiate peering handshake (step 1).
@@ -608,23 +625,25 @@ The fourteen routes below are the binding cross-relay contract. Renaming or relo
 - `GET /federation/v1/settlement/proof` — Merkle inclusion proof (§7.6.6).
 - `POST /federation/v1/horizon/witness` — co-witness a peer's `append_only_horizon` retention cert (§15.2). _Added in 1.1._
 - `POST /federation/v1/horizon/dispute` — file a `WitnessOmissionDispute` against a horizon cert (§15.3). _Added in 1.1._
+- `POST /federation/v1/disputes/:disputeId/vote-request` — receive a vote request from a leader during §6.2 federation adjudication (§16.2). _Added in 1.2._
 
 ### 10.1 — Endpoints
 
-| Method | Path                                | Description                                                       | Rate Limit      | Since |
-| ------ | ----------------------------------- | ----------------------------------------------------------------- | --------------- | ----- |
-| POST   | `/federation/v1/peer/propose`       | Initiate peering handshake (step 1).                              | 30/min per peer | 1.0   |
-| POST   | `/federation/v1/peer/confirm`       | Complete peering handshake (step 3).                              | 30/min per peer | 1.0   |
-| POST   | `/federation/v1/peer/heartbeat`     | Send heartbeat to peer.                                           | 30/min per peer | 1.0   |
-| POST   | `/federation/v1/peer/remove`        | Remove a peer relationship.                                       | 30/min per peer | 1.0   |
-| POST   | `/federation/v1/discover`           | Forward a discovery query.                                        | 30/min per peer | 1.0   |
-| POST   | `/federation/v1/task/forward`       | Forward a task to a peer relay.                                   | 30/min per peer | 1.0   |
-| POST   | `/federation/v1/task/result`        | Return a task result to origin relay.                             | 30/min per peer | 1.0   |
-| POST   | `/federation/v1/settlement/forward` | Forward settlement to peer relay.                                 | 30/min per peer | 1.0   |
-| GET    | `/federation/v1/settlement/proof`   | Merkle inclusion proof (§7.6.6).                                  | 30/min per peer | 1.0   |
-| GET    | `/federation/v1/identity`           | Return this relay's public identity.                              | 30/min per peer | 1.0   |
-| POST   | `/federation/v1/horizon/witness`    | Co-witness a peer's `append_only_horizon` retention cert (§15.2). | 30/min per peer | 1.1   |
-| POST   | `/federation/v1/horizon/dispute`    | File a `WitnessOmissionDispute` against a horizon cert (§15.3).   | 30/min per peer | 1.1   |
+| Method | Path                                              | Description                                                                       | Rate Limit      | Since |
+| ------ | ------------------------------------------------- | --------------------------------------------------------------------------------- | --------------- | ----- |
+| POST   | `/federation/v1/peer/propose`                     | Initiate peering handshake (step 1).                                              | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/peer/confirm`                     | Complete peering handshake (step 3).                                              | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/peer/heartbeat`                   | Send heartbeat to peer.                                                           | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/peer/remove`                      | Remove a peer relationship.                                                       | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/discover`                         | Forward a discovery query.                                                        | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/task/forward`                     | Forward a task to a peer relay.                                                   | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/task/result`                      | Return a task result to origin relay.                                             | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/settlement/forward`               | Forward settlement to peer relay.                                                 | 30/min per peer | 1.0   |
+| GET    | `/federation/v1/settlement/proof`                 | Merkle inclusion proof (§7.6.6).                                                  | 30/min per peer | 1.0   |
+| GET    | `/federation/v1/identity`                         | Return this relay's public identity.                                              | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/horizon/witness`                  | Co-witness a peer's `append_only_horizon` retention cert (§15.2).                 | 30/min per peer | 1.1   |
+| POST   | `/federation/v1/horizon/dispute`                  | File a `WitnessOmissionDispute` against a horizon cert (§15.3).                   | 30/min per peer | 1.1   |
+| POST   | `/federation/v1/disputes/:disputeId/vote-request` | Receive a vote request from a leader during §6.2 federation adjudication (§16.2). | 30/min per peer | 1.2   |
 
 ### 10.2 — Authentication
 
@@ -893,6 +912,89 @@ WitnessOmissionEvidence =
 | -------------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `federation.witness_solicitation_timeout_ms` | number | 10000   | Per-request timeout for outbound `/horizon/witness` solicitations. Per-request timeout IS the overall solicitation deadline (parallel `Promise.allSettled` fan-out), not per-attempt cumulative. |
 | `federation.revocation_horizon_interval_ms`  | number | 3600000 | Periodic interval (1h default) for the relay's `relay_revocation_events` horizon advance loop. Operational tuning knob, not a doctrinal commitment.                                              |
+
+---
+
+## 16. Federation Adjudication Vote Request
+
+_Added in 1.2._ Operationalizes `spec/dispute-v1.md` §6.2 — federation peer fan-out for execution-ledger dispute adjudication. When a dispute names the local relay as filer or respondent, §6.5 forbids self-adjudication; the relay must route resolution to its federation peers. This section defines the wire surface that fan-out uses.
+
+Wire-format protocol types live in `@motebit/protocol::{VoteRequest, AdjudicatorVote, DisputeResolution}`; zod runtime schemas in `@motebit/wire-schemas::{VoteRequestSchema, AdjudicatorVoteSchema, DisputeResolutionSchema}`; emitted JSON Schemas at `spec/schemas/{vote-request,adjudicator-vote,dispute-resolution}-v1.json`. Verifier primitives in `@motebit/crypto::{signAdjudicatorVote, verifyAdjudicatorVote, signDisputeResolution, verifyDisputeResolution}`.
+
+Round semantics for appeals are defined in `spec/dispute-v1.md` §8.3; `VoteRequest` and `AdjudicatorVote` both carry `round` (1 for original adjudication, 2 for §8.3 appeal), and the signature binds round so cross-round vote replay is cryptographically rejected.
+
+### 16.1 — Vote Solicitation Flow
+
+1. **Leader** (the relay receiving the resolve request AND named in the dispute as `filed_by` or `respondent`) enumerates active federation peers from `relay_peers WHERE state IN ('active', 'suspended') AND peer_relay_id != self`. The self-exclusion enforces §6.5 at the enumeration boundary.
+2. If active peer count < 3, leader returns 503 with `error_code: "insufficient_federation_peers"`. The `dispute-v1.md` §6.6 minimum-mesh-size derivation requires ≥3 OTHER active peers for a single-operator fleet (so ≥4 total relays); fewer means the orchestrator cannot reach a §6.2 quorum. (This 503 IS transient — restart on a larger mesh and the request would succeed; cf. the `policy_not_configured` 501 below which is non-transient.)
+3. **Leader** constructs a `VoteRequest` carrying the dispute artifact + collected evidence bundle + the current `round`, signs under `motebit-jcs-ed25519-b64-v1`, and POSTs in parallel to every active peer with a per-request timeout (default 10 seconds). Leaders MAY pre-filter the enumeration by checking each peer's `identity.vote_policy_configured` (§2.4) to avoid wasted fan-out, but the responder-side 501 (gate 6 below) is the load-bearing enforcement.
+4. **Each peer** runs the gate ladder in §16.2; on pass, calls its operator-configured vote callback, signs an `AdjudicatorVote` over `canonicalJson(body minus signature)` (which binds `dispute_id`, `round`, `peer_id`, and `vote` per §6.5 + §8.3), returns it.
+5. **Leader** verifies each `AdjudicatorVote` signature against the responding peer's stored federation pubkey, persists the vote to its local `relay_dispute_votes` table (PK on `(dispute_id, round, peer_id)`), aggregates by majority outcome (ties → `split` per §6.4), and signs a `DisputeResolution` with the votes embedded in `adjudicator_votes[]`.
+6. **Quorum failure** (valid vote count < 3 OR no majority by §6.6's 72h deadline): resolution = `split`, `split_ratio: 0.5`, `rationale: "federation quorum not met within 72h adjudication window"`. The leader does NOT synthesize per-peer votes for absent peers (timeout, 5xx, malformed, or sig-fail) — the §6.5 independent-review property is preserved by under-counting, not by fabrication.
+
+The reference implementation (`services/relay/src/disputes.ts`) collapses per-peer fan-out timeout into the spec timeout — single sync `Promise.allSettled` window, no retries within 72h. Async retry-within-72h is a future arc; see `memory/section_6_2_orchestrator_async_deferral.md` for the trade-off.
+
+### 16.2 — `POST /federation/v1/disputes/:disputeId/vote-request`
+
+**Request body — `VoteRequest`:**
+
+```text
+VoteRequest {
+  dispute_id:        string                 // The dispute being adjudicated; MUST equal :disputeId
+  round:             number                 // 1 for original adjudication, 2 for §8.3 appeal. Signature-bound; cross-round replay is cryptographically rejected.
+  dispute_request:   DisputeRequest         // Original signed dispute artifact (§4.2)
+  evidence_bundle:   DisputeEvidence[]      // All evidence collected during the window (§5.2). For round=2, MUST carry the original round-1 evidence bundle plus any new evidence per §8.4.
+  requester_id:      string                 // Leader relay's motebit_id; MUST be a known peer to the receiver
+  requested_at:      number                 // Unix ms when the leader signed; used by gate 5 freshness check
+  suite:             SuiteId                // "motebit-jcs-ed25519-b64-v1"
+  signature:         string                 // Base64url Ed25519 by leader over canonicalJson(body minus signature). Signature binds dispute_id, round, requester_id, and the evidence bundle so request-tampering and cross-round replay both fail-closed.
+}
+```
+
+**Response body — `AdjudicatorVote`** (defined in `spec/dispute-v1.md` §6.4):
+
+```text
+AdjudicatorVote {
+  dispute_id:  string                       // MUST equal request.dispute_id
+  round:       number                       // MUST equal request.round
+  peer_id:     string                       // The signing peer's motebit identity
+  vote:        "upheld" | "overturned" | "split"
+  rationale:   string                       // Per-peer explanation
+  suite:       SuiteId                      // "motebit-jcs-ed25519-b64-v1"
+  signature:   string                       // Base64url Ed25519 by the voting peer over canonicalJson(body minus signature). The signature covers dispute_id, round, peer_id, and vote per §6.5 + §8.3 — votes are not portable across disputes, rounds, peers, or outcomes.
+}
+```
+
+**Error response shape (all 4xx + 5xx responses on this route):**
+
+```text
+{
+  error_code: string   // Stable machine-readable identifier; see gate ladder below
+  message:    string   // Human-readable explanation; SHOULD NOT be relied on for control flow
+}
+```
+
+The `error_code` is the canonical wire-format signal; `message` is operator-facing context. Leaders consuming this route MUST switch on `error_code`, not `message`, for any branching logic. (The rest of `relay-federation-v1` currently returns plain `{message}`; aligning §3–15 with the `{error_code, message}` shape is a follow-up arc.)
+
+**Fail-closed gates** (peer-side, in order; each lists its HTTP status AND `error_code`):
+
+1. **Schema validation** via `VoteRequestSchema` — malformed bodies → **400** `schema_invalid`.
+2. **Known peer** — requester must be in `relay_peers` with `state IN ('active', 'suspended')` — unknown requester → **403** `unknown_peer`.
+3. **Requester-id binding** — body's `requester_id` MUST match the resolved peer row — disagreement → **400** `requester_id_mismatch`. Stops a malicious peer from impersonating another relay's vote-request.
+4. **Signature verify** — `signature` verifies under `motebit-jcs-ed25519-b64-v1` against `canonicalJson(body minus signature)` using the requester's federation pubkey — invalid → **403** `signature_invalid`.
+5. **Freshness** — `now - requested_at <= FEDERATION_VOTE_REQUEST_MAX_AGE_MS` (default 60000ms, 60s). Stale or future-dated requests → **400** `request_stale`. Mirrors the heartbeat clock-drift check in §3 but tighter: vote-requests are short-lived and have no legitimate reason to delay >60s.
+6. **Operator policy configured** — peer MUST have an operator vote callback wired (§2.4 `vote_policy_configured: true`). When no callback is configured → **501** `policy_not_configured`. **501 Not Implemented**, not 503: the missing callback is a deliberate operator-configuration gap, not a transient outage; retry-with-backoff is wasted effort. Leaders MAY pre-filter unconfigured peers via `identity.vote_policy_configured` to avoid the round-trip.
+
+**Default vote callback semantics.** The peer's vote callback is operator-configurable at relay construction. There is **no built-in default callback that produces binding votes**: a relay deployed without operator-wired policy returns 501 on every vote-request. Operator-defined callbacks may forward to a human review queue, run an automated rule engine, or apply policy-based logic; the wire shape is unchanged.
+
+**Peer-side simplification (v1).** The peer is a stateless responder — it does NOT persist its own vote in a peer-side `relay_dispute_votes` table. Only the leader persists. A peer asked "what did I vote on dispute Y three months ago?" cannot answer from its own state; the leader's stored vote (with the peer's signature) is the auditable record. Peer-side audit persistence is a future arc.
+
+### 16.3 — Configuration
+
+| Setting                              | Type   | Default | Description                                                                                                                                                                                 |
+| ------------------------------------ | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `federation.vote_request_timeout_ms` | number | 10000   | Per-request timeout for outbound `/disputes/:disputeId/vote-request` calls. Per-request timeout IS the fan-out deadline (parallel `Promise.allSettled`); see §6.6 for the 72h spec timeout. |
+| `FEDERATION_VOTE_REQUEST_MAX_AGE_MS` | number | 60000   | Peer-side gate-5 freshness window. Requests with `requested_at` older than this (or future-dated by more than this) → 400 `request_stale`.                                                  |
 
 ---
 

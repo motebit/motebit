@@ -44,6 +44,7 @@ import {
   buildDisputeEvidenceJsonSchema,
   buildDisputeRequestJsonSchema,
   buildDisputeResolutionJsonSchema,
+  buildVoteRequestJsonSchema,
 } from "../src/dispute.js";
 import {
   buildBalanceWaiverJsonSchema,
@@ -130,6 +131,7 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "dispute-request-v1.json", build: buildDisputeRequestJsonSchema },
   { filename: "dispute-evidence-v1.json", build: buildDisputeEvidenceJsonSchema },
   { filename: "adjudicator-vote-v1.json", build: buildAdjudicatorVoteJsonSchema },
+  { filename: "vote-request-v1.json", build: buildVoteRequestJsonSchema },
   { filename: "dispute-resolution-v1.json", build: buildDisputeResolutionJsonSchema },
   { filename: "dispute-appeal-v1.json", build: buildDisputeAppealJsonSchema },
   {

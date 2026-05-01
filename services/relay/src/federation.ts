@@ -19,11 +19,14 @@ import {
   hexToBytes,
 } from "@motebit/encryption";
 import {
+  signAdjudicatorVote,
   signHorizonWitnessRequestBody,
   verifyHorizonWitnessRequestSignature,
   verifyWitnessOmissionDispute,
 } from "@motebit/crypto";
+import type { DisputeOutcome, VoteRequest } from "@motebit/protocol";
 import {
+  VoteRequestSchema,
   WitnessOmissionDisputeSchema,
   WitnessSolicitationRequestSchema,
 } from "@motebit/wire-schemas";
@@ -48,7 +51,7 @@ const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1" as const;
  * 3. Update consumer assertions (`federation-e2e.test.ts`, `scripts/test-federation-live.mjs`)
  * 4. Update `@spec` jsdoc annotations on each endpoint that changed
  */
-export const RELAY_SPEC_VERSION = "motebit/relay-federation@1.1";
+export const RELAY_SPEC_VERSION = "motebit/relay-federation@1.2";
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -972,6 +975,31 @@ export interface FederationDeps {
   onSettlementReceived(
     settlement: VerifiedSettlement,
   ): Promise<{ feeAmount: number; netAmount: number }> | { feeAmount: number; netAmount: number };
+
+  /**
+   * Optional: operator-configured vote callback for the §16
+   * `/federation/v1/disputes/:disputeId/vote-request` endpoint
+   * (`spec/relay-federation-v1.md` §16.2).
+   *
+   * When undefined, the relay reports `vote_policy_configured: false`
+   * in its public identity (§2.4) and 501-`policy_not_configured`s
+   * every incoming vote-request. Mandate-callback semantics: there is
+   * no built-in default that produces binding votes — operators MUST
+   * wire policy explicitly to participate as §6.2 adjudicators.
+   *
+   * The callback receives a verified VoteRequest (signature already
+   * checked) and returns the vote outcome + per-peer rationale. Sync
+   * v1: the callback runs inside the request lifecycle, so an
+   * implementation that forwards to a human-review queue should return
+   * a deterministic placeholder (e.g., `split` with rationale "under
+   * operator review") rather than blocking the response.
+   */
+  voteCallback?: (req: VoteRequest) =>
+    | Promise<{ vote: DisputeOutcome; rationale: string }>
+    | {
+        vote: DisputeOutcome;
+        rationale: string;
+      };
 }
 
 /** Register all 11 federation endpoints on the Hono app. */
@@ -1062,19 +1090,26 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 1: Identity ──
 
-  /** @spec motebit/relay-federation@1.1 */
+  /** @spec motebit/relay-federation@1.2 */
   app.get("/federation/v1/identity", (c) => {
     return c.json({
       spec: RELAY_SPEC_VERSION,
       relay_motebit_id: relayIdentity.relayMotebitId,
       public_key: relayIdentity.publicKeyHex,
       did: relayIdentity.did,
+      // §2.4 capability flag: true iff this relay has wired an
+      // operator vote callback for the §16 vote-request endpoint.
+      // Peers without configured policy are not eligible §6.2
+      // adjudicators per §16.2 (501 `policy_not_configured` on
+      // incoming vote-requests); leaders MAY pre-filter them out
+      // of quorum enumeration.
+      vote_policy_configured: deps.voteCallback !== undefined,
     });
   });
 
   // ── Phase 2: Peering Protocol ──
 
-  /** @spec motebit/relay-federation@1.1 */
+  /** @spec motebit/relay-federation@1.2 */
   app.post("/federation/v1/peer/propose", async (c) => {
     const body = await c.req.json<{
       relay_id?: string;
@@ -1183,7 +1218,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.1 */
+  /** @spec motebit/relay-federation@1.2 */
   app.post("/federation/v1/peer/confirm", async (c) => {
     const body = await c.req.json<{ relay_id?: string; challenge_response?: string }>();
     const { relay_id, challenge_response } = body;
@@ -1226,7 +1261,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json({ status: "active", peered_at: now });
   });
 
-  /** @spec motebit/relay-federation@1.1 */
+  /** @spec motebit/relay-federation@1.2 */
   app.post("/federation/v1/peer/heartbeat", async (c) => {
     const body = await c.req.json<{
       relay_id?: string;
@@ -1339,7 +1374,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // — witnesses are portable across compositions of the same body. The
   // issuer's eventual final cert.signature binds the assembled witness
   // array.
-  /** @spec motebit/relay-federation@1.1 */
+  /** @spec motebit/relay-federation@1.2 */
   app.post("/federation/v1/horizon/witness", async (c) => {
     const rawBody = (await c.req.json()) as unknown;
     const parsed = WitnessSolicitationRequestSchema.safeParse(rawBody);
@@ -1418,7 +1453,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // Cert remains TERMINAL per retention-policy.md decision 5 — a
   // sustained dispute is a reputation hit on the issuer, not a cert
   // invalidation.
-  /** @spec motebit/relay-federation@1.1 */
+  /** @spec motebit/relay-federation@1.2 */
   app.post("/federation/v1/horizon/dispute", async (c) => {
     const rawBody = (await c.req.json()) as unknown;
     const parsed = WitnessOmissionDisputeSchema.safeParse(rawBody);
@@ -1520,7 +1555,166 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.1 */
+  /**
+   * Peer-side vote-request handler for §6.2 federation adjudication
+   * (`spec/relay-federation-v1.md` §16.2). Receives a `VoteRequest`
+   * from a leader relay, runs the six-gate ladder fail-closed, calls
+   * the operator's vote callback, signs an `AdjudicatorVote`, returns.
+   *
+   * Sync v1: the callback runs inside the request lifecycle. Operators
+   * who need human review must return a deterministic placeholder
+   * (e.g., `split` "under operator review") rather than block. See
+   * `memory/section_6_2_orchestrator_async_deferral.md`.
+   *
+   * Stateless responder: this peer does NOT persist its own vote.
+   * Only the leader persists (PK on `(dispute_id, round, peer_id)` in
+   * `relay_dispute_votes`). Peer-side audit persistence is a future arc.
+   *
+   * Error response shape: `{error_code, message}` per §16.2 — leaders
+   * MUST switch on `error_code`, not `message`. The rest of §3–15
+   * still uses plain `{message}`; aligning is a follow-up arc.
+   */
+  /** @spec motebit/relay-federation@1.2 */
+  app.post("/federation/v1/disputes/:disputeId/vote-request", async (c) => {
+    const disputeIdParam = c.req.param("disputeId");
+
+    // Gate 1 — Schema validation (400 schema_invalid)
+    const rawBody = (await c.req.json()) as unknown;
+    const parsed = VoteRequestSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return c.json(
+        {
+          error_code: "schema_invalid",
+          message: `VoteRequest schema rejected: ${parsed.error.message}`,
+        },
+        400,
+      );
+    }
+    const request: VoteRequest = parsed.data;
+
+    // URL-param consistency: dispute_id in the URL must match the body
+    if (request.dispute_id !== disputeIdParam) {
+      return c.json(
+        {
+          error_code: "schema_invalid",
+          message: `URL :disputeId (${disputeIdParam}) does not match body.dispute_id (${request.dispute_id})`,
+        },
+        400,
+      );
+    }
+
+    checkFederationEnabled();
+    checkPeerLimit(request.requester_id);
+
+    // Gate 2 — Known peer (403 unknown_peer)
+    const peer = db
+      .prepare(
+        "SELECT public_key FROM relay_peers WHERE peer_relay_id = ? AND state IN ('active', 'suspended')",
+      )
+      .get(request.requester_id) as { public_key: string } | undefined;
+    if (peer === undefined) {
+      return c.json(
+        {
+          error_code: "unknown_peer",
+          message: "requester is not a known active/suspended peer",
+        },
+        403,
+      );
+    }
+
+    // Gate 3 — Requester-id binding is enforced by gate 2 (lookup is keyed
+    // on body.requester_id; the resolved peer row is by definition for
+    // that id). The doctrinal spec text frames this as a separate gate
+    // because conceptually `body.requester_id` could mismatch a
+    // header-asserted id; in this v1 there is no header-asserted id, so
+    // the binding collapses into gate 2's lookup. Keeping the spec text
+    // forward-compatible with future header-asserted-identity additions
+    // (e.g., authenticated transport bound to peer mTLS) without
+    // requiring a code change here today.
+
+    // Gate 4 — Signature verify (403 signature_invalid)
+    const { signature, ...bodyForVerify } = request;
+    const canonical = canonicalJson(bodyForVerify);
+    const valid = await verify(
+      hexToBytes(signature),
+      new TextEncoder().encode(canonical),
+      hexToBytes(peer.public_key),
+    );
+    if (!valid) {
+      logger.warn("federation.vote_request.signature_invalid", {
+        kind: "signature_invalid",
+        peerId: request.requester_id,
+        disputeId: request.dispute_id,
+      });
+      return c.json(
+        {
+          error_code: "signature_invalid",
+          message: "VoteRequest signature verification failed",
+        },
+        403,
+      );
+    }
+
+    // Gate 5 — Freshness (400 request_stale). 60s window mirrors the
+    // tighter convention §16.2 names: vote-requests are short-lived and
+    // have no legitimate reason to delay >60s.
+    const FEDERATION_VOTE_REQUEST_MAX_AGE_MS = 60_000;
+    const ageMs = Math.abs(Date.now() - request.requested_at);
+    if (ageMs > FEDERATION_VOTE_REQUEST_MAX_AGE_MS) {
+      return c.json(
+        {
+          error_code: "request_stale",
+          message: `VoteRequest age ${ageMs}ms exceeds max ${FEDERATION_VOTE_REQUEST_MAX_AGE_MS}ms`,
+        },
+        400,
+      );
+    }
+
+    // Gate 6 — Operator policy configured (501 policy_not_configured).
+    // 501 Not Implemented, NOT 503: the missing callback is a deliberate
+    // operator-configuration gap, not a transient outage. Retry-with-
+    // backoff is wasted effort.
+    if (deps.voteCallback === undefined) {
+      return c.json(
+        {
+          error_code: "policy_not_configured",
+          message:
+            "operator vote callback not configured; this relay is not an eligible §6.2 adjudicator",
+        },
+        501,
+      );
+    }
+
+    // All gates passed. Call the operator policy.
+    const policyResult = await deps.voteCallback(request);
+    const voteOutcome: DisputeOutcome = policyResult.vote;
+    const voteRationale = policyResult.rationale;
+
+    // Sign the AdjudicatorVote via @motebit/crypto (no inline sign;
+    // protocol-primitive-placement rule). The primitive owns suite +
+    // signature; we provide everything else.
+    const signedVote = await signAdjudicatorVote(
+      {
+        dispute_id: request.dispute_id,
+        round: request.round,
+        peer_id: relayIdentity.relayMotebitId,
+        vote: voteOutcome,
+        rationale: voteRationale,
+      },
+      relayIdentity.privateKey,
+    );
+
+    logger.info("federation.vote_request.signed", {
+      disputeId: request.dispute_id,
+      round: request.round,
+      requesterId: request.requester_id,
+      vote: voteOutcome,
+    });
+
+    return c.json(signedVote);
+  });
+
+  /** @spec motebit/relay-federation@1.2 */
   app.post("/federation/v1/peer/remove", async (c) => {
     const body = await c.req.json<{ relay_id?: string; signature?: string }>();
     const { relay_id, signature: sig } = body;
@@ -1545,7 +1739,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json({ status: "removed" });
   });
 
-  /** @spec motebit/relay-federation@1.1 */
+  /** @spec motebit/relay-federation@1.2 */
   app.get("/federation/v1/peers", (c) => {
     const rows = db
       .prepare(
@@ -1571,7 +1765,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 3: Federated Discovery ──
 
-  /** @spec motebit/relay-federation@1.1 */
+  /** @spec motebit/relay-federation@1.2 */
   app.post("/federation/v1/discover", async (c) => {
     const body = await c.req.json<{
       query: { capability?: string; motebit_id?: string; limit?: number };
@@ -1698,7 +1892,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 4: Task Forwarding ──
 
-  /** @spec motebit/relay-federation@1.1 */
+  /** @spec motebit/relay-federation@1.2 */
   app.post("/federation/v1/task/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -1766,7 +1960,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     );
   });
 
-  /** @spec motebit/relay-federation@1.1 */
+  /** @spec motebit/relay-federation@1.2 */
   app.post("/federation/v1/task/result", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -1812,7 +2006,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement ──
 
-  /** @spec motebit/relay-federation@1.1 */
+  /** @spec motebit/relay-federation@1.2 */
   app.post("/federation/v1/settlement/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -1861,7 +2055,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.1 */
+  /** @spec motebit/relay-federation@1.2 */
   app.get("/federation/v1/settlements", (c) => {
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
     const rows = db
@@ -1872,7 +2066,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement Proof (§7.6.6) ──
 
-  /** @spec motebit/relay-federation@1.1 */
+  /** @spec motebit/relay-federation@1.2 */
   app.get("/federation/v1/settlement/proof", async (c) => {
     const settlementId = c.req.query("settlement_id");
     if (!settlementId) {
