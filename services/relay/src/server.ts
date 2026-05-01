@@ -45,6 +45,42 @@ const x402Env: X402Config = {
 // --- Shutdown state (shared with health check via config) ---
 let shuttingDown = false;
 
+// MOTEBIT_TEST_VOTE_POLICY: STAGING/development-only affordance for the
+// §6.2 federation orchestrator's peer-side vote callback. When set to
+// `upheld`/`overturned`/`split`, this relay returns a deterministic vote
+// for every incoming /federation/v1/disputes/:disputeId/vote-request,
+// satisfying the gate-6 `vote_policy_configured` check so federation
+// peers can validate the orchestrator end-to-end against the live K4
+// staging mesh (`scripts/test-federation-live.mjs` Phase 8).
+//
+// SECURITY: never set in production. Default behavior (no env var = no
+// callback wired = 501 `policy_not_configured`) is the safe production
+// posture per `spec/relay-federation-v1.md` §16.2 mandate-callback
+// semantics. The startup-log warning below makes prod misconfig
+// operator-visible immediately.
+const testVotePolicyRaw = process.env.MOTEBIT_TEST_VOTE_POLICY;
+let testVotePolicy: "upheld" | "overturned" | "split" | undefined;
+if (testVotePolicyRaw !== undefined) {
+  if (
+    testVotePolicyRaw === "upheld" ||
+    testVotePolicyRaw === "overturned" ||
+    testVotePolicyRaw === "split"
+  ) {
+    testVotePolicy = testVotePolicyRaw;
+    createLogger({ service: "relay" }).warn("relay.test_vote_policy.enabled", {
+      policy: testVotePolicy,
+      warning:
+        "STAGING/development affordance — every §6.2 vote-request returns this deterministic outcome. MUST NOT be set on production relays.",
+    });
+  } else {
+    createLogger({ service: "relay" }).error("relay.test_vote_policy.invalid", {
+      received: testVotePolicyRaw,
+      expected: "upheld | overturned | split",
+    });
+    process.exit(1);
+  }
+}
+
 const relay = await createSyncRelay({
   dbPath: process.env.MOTEBIT_DB_PATH,
   apiToken: process.env.MOTEBIT_API_TOKEN,
@@ -95,6 +131,7 @@ const relay = await createSyncRelay({
           webhookPublicKey: process.env.BRIDGE_WEBHOOK_PUBLIC_KEY,
         }
       : undefined,
+  testVotePolicy,
 });
 const app: Hono = relay.app;
 

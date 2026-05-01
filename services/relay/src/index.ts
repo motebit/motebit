@@ -281,6 +281,21 @@ export interface SyncRelayConfig {
     /** Webhook public key (PEM) for signature verification. Omit to skip verification (dev only). */
     webhookPublicKey?: string;
   };
+  /**
+   * STAGING/development-only: deterministic vote policy for the §6.2
+   * federation orchestrator's peer-side vote-request endpoint. When set,
+   * every incoming /federation/v1/disputes/:disputeId/vote-request
+   * returns this outcome. Used by `scripts/test-federation-live.mjs`
+   * Phase 8 to satisfy the gate-6 vote_policy_configured check across
+   * the K4 staging mesh.
+   *
+   * Production relays MUST leave this undefined — the safe default is
+   * 501 `policy_not_configured` per `spec/relay-federation-v1.md`
+   * §16.2 mandate-callback semantics. Standalone `createSyncRelayStandalone`
+   * reads `MOTEBIT_TEST_VOTE_POLICY` from the environment and emits a
+   * startup-log warning when set.
+   */
+  testVotePolicy?: "upheld" | "overturned" | "split";
 }
 
 export interface SyncRelay {
@@ -738,6 +753,20 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     onTaskForwarded: (v) => federationCallbacks.onTaskForwarded(v),
     onTaskResultReceived: (v) => federationCallbacks.onTaskResultReceived(v),
     onSettlementReceived: (v) => federationCallbacks.onSettlementReceived(v),
+    // §6.2 federation orchestrator's peer-side vote callback. When
+    // `testVotePolicy` is set (STAGING-only env var
+    // `MOTEBIT_TEST_VOTE_POLICY`), wire a deterministic callback so
+    // every incoming vote-request returns this outcome — used by the
+    // K4 staging mesh's live-test Phase 8 to satisfy gate-6
+    // `vote_policy_configured`. Production relays leave this undefined
+    // and 501 incoming vote-requests per spec §16.2 mandate-callback
+    // semantics.
+    voteCallback: config.testVotePolicy
+      ? () => ({
+          vote: config.testVotePolicy!,
+          rationale: `staging test policy: deterministic ${config.testVotePolicy}`,
+        })
+      : undefined,
   });
 
   // --- Discovery routes (discovery-v1.md §3, §5) ---
