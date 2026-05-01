@@ -9,6 +9,7 @@ export interface AdjudicatorVote {
     dispute_id: string;
     peer_id: string;
     rationale: string;
+    round: number;
     signature: string;
     suite: "motebit-jcs-ed25519-b64-v1";
     vote: DisputeOutcome;
@@ -3127,6 +3128,18 @@ export const VC_TYPE_REPUTATION = "AgentReputationCredential";
 
 // @public (undocumented)
 export const VC_TYPE_TRUST = "AgentTrustCredential";
+
+// @public
+export interface VoteRequest {
+    dispute_id: string;
+    dispute_request: DisputeRequest;
+    evidence_bundle: DisputeEvidence[];
+    requested_at: number;
+    requester_id: string;
+    round: number;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
 
 // @public
 export class WeightedDigraph<T> {
