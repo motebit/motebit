@@ -1354,7 +1354,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     // from soliciting witnesses for a cert it doesn't own).
     const subject = request.cert_body.subject;
     const projectedSubjectId =
-      subject.kind === "motebit" ? (subject.motebit_id as string) : subject.operator_id;
+      subject.kind === "motebit" ? subject.motebit_id : subject.operator_id;
     if (projectedSubjectId !== request.issuer_id) {
       throw new HTTPException(400, {
         message: `issuer_id (${request.issuer_id}) does not match cert_body.subject (${projectedSubjectId})`,

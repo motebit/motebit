@@ -144,7 +144,7 @@ describe("horizon — multi-peer fan-out", () => {
     // Mock fetch: each peer signs the canonical request body with its
     // own key and returns a valid WitnessSolicitationResponse.
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      const u = typeof url === "string" ? url : url.toString();
+      const u = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
       const peer = u.includes("peerA.test") ? peerA : peerB;
       const request = JSON.parse(init?.body as string) as WitnessSolicitationRequest;
       const sig = await signHorizonWitnessRequestBody(request.cert_body, peer.privateKey);
@@ -174,7 +174,7 @@ describe("horizon — multi-peer fan-out", () => {
 
   it("Path A floor of 1: succeeds when one peer times out and one responds", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      const u = typeof url === "string" ? url : url.toString();
+      const u = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
       if (u.includes("peerA.test")) {
         // Simulate timeout by throwing AbortError-shaped error.
         throw Object.assign(new Error("aborted"), { name: "AbortError" });
@@ -199,7 +199,7 @@ describe("horizon — multi-peer fan-out", () => {
 
   it("rejects forged peer signatures (signature_invalid) and treats as non-response", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      const u = typeof url === "string" ? url : url.toString();
+      const u = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
       if (u.includes("peerA.test")) {
         // Forged signature — peerA returns valid-shaped response with garbage sig
         const response: WitnessSolicitationResponse = {
@@ -272,7 +272,7 @@ describe("horizon — quorum failure + retry", () => {
     let peerBJoined = false;
 
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      const u = typeof url === "string" ? url : url.toString();
+      const u = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
       // Side effect: as soon as peerA's first solicitation arrives,
       // simulate peerB joining the federation. The peer is in DB by
       // the time attempt 2 re-snapshots.
