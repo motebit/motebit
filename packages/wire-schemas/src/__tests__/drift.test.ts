@@ -181,6 +181,14 @@ import {
   buildWitnessSolicitationRequestJsonSchema,
   buildWitnessSolicitationResponseJsonSchema,
 } from "../witness-omission-dispute.js";
+import {
+  DELETION_CERTIFICATE_SCHEMA_ID,
+  buildDeletionCertificateJsonSchema,
+} from "../deletion-certificate.js";
+import {
+  RETENTION_MANIFEST_SCHEMA_ID,
+  buildRetentionManifestJsonSchema,
+} from "../retention-manifest.js";
 
 interface SchemaCase {
   name: string;
@@ -554,6 +562,22 @@ const CASES: SchemaCase[] = [
     filename: "skill-registry-bundle-v1.json",
     expectedId: SKILL_REGISTRY_BUNDLE_SCHEMA_ID,
     build: buildSkillRegistryBundleJsonSchema,
+  },
+  // Phase 2 — retention-policy algebra. Both schemas shipped in
+  // commit fe0996e5 without drift cases; the gap was latent until the
+  // bundled retention-policy arc push surfaced it via wire-schemas
+  // coverage threshold (originating-package-self-coverage discipline).
+  {
+    name: "deletion-certificate-v1",
+    filename: "deletion-certificate-v1.json",
+    expectedId: DELETION_CERTIFICATE_SCHEMA_ID,
+    build: buildDeletionCertificateJsonSchema,
+  },
+  {
+    name: "retention-manifest-v1",
+    filename: "retention-manifest-v1.json",
+    expectedId: RETENTION_MANIFEST_SCHEMA_ID,
+    build: buildRetentionManifestJsonSchema,
   },
   // Phase 4b-3 — federation co-witness solicitation + omission dispute.
   // Three artifacts on the same solicitation/cert/dispute triangle.
