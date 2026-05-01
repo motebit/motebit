@@ -472,6 +472,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every runtime-side store with a `sensitivity` column or settlement obligation registers a `RetentionShape` in `RUNTIME_RETENTION_REGISTRY` (`packages/protocol/src/retention-policy.ts`), and every registered store has a matching at-rest schema in at least one runtime-side surface. Bidirectional drift check: stale-registry (registered store with no matching CREATE TABLE) and unregistered-table (CREATE TABLE with `sensitivity` column not in the registry) both fail (invariant #67, added 2026-04-30 closing the meta-version of the original CLAUDE.md gap — \"fail-closed privacy\" claimed retention enforcement existed; today the consolidation cycle's flush phase enforces, but a future schema adding `sensitivity TEXT` without registering would leak past the doctrinal ceiling because the cycle's flush phase doesn't see unregistered stores. Same enforcement pattern as `check-consolidation-primitives` (#34) and `check-suite-declared` (#10).",
     script: "check-retention-coverage",
   },
+  {
+    name: "check-relay-retention-coverage",
+    defends:
+      "every entry in the relay's `RETENTION_MANIFEST_CONTENT.stores[]` projection has a matching alias in `RELAY_STORE_TABLE_ALIASES` and a CREATE TABLE in `services/relay/src/`, and every alias has a matching manifest entry plus DDL. Sibling to #67 but scoped to relay-hosted operational ledgers (relay_execution_ledgers, relay_settlements, relay_credential_anchor_batches, relay_revocation_events, relay_disputes) rather than runtime-side stores (invariant #68, added 2026-05-01 with phase 4b-3 commit 5 — `RETENTION_MANIFEST_CONTENT.stores[]` graduated from empty to enumerating five operational ledgers under `append_only_horizon` once the federation co-witness handshake landed; bidirectional gate prevents the symmetric failure modes that #67 prevents on the runtime side: a manifest declaration of an enforcement that doesn't exist, or a future operational ledger that ships a CREATE TABLE without the corresponding manifest projection — operator's transparency claim \"every retention-obligated store is declared\" silently rotting either way).",
+    script: "check-relay-retention-coverage",
+  },
 ];
 
 interface Result {

@@ -782,7 +782,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // and phase 5 land their respective enforcement; today's manifest lists
   // the gaps explicitly.
   const { registerRetentionManifestRoutes } = await import("./retention-manifest.js");
-  await registerRetentionManifestRoutes({ app, relayIdentity });
+  await registerRetentionManifestRoutes({ app, relayIdentity, db: moteDb.db });
 
   // --- Skills registry routes (skills-registry-v1.md) ---
   const { registerSkillRegistryRoutes, createSkillRegistryTables, parseFeaturedSubmitters } =
