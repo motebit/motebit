@@ -779,4 +779,55 @@ export const relayMigrations: Migration[] = [
       );
     },
   },
+  {
+    version: 17,
+    name: "phase_6_2_dispute_votes",
+    up: (db) => {
+      // Phase 6.2 — federation dispute orchestration vote ledger.
+      //
+      // Each row is a signed `AdjudicatorVote` (spec/dispute-v1.md §6.4)
+      // received from a peer relay during federation adjudication of a
+      // dispute the local relay is a party to (filer or respondent —
+      // §6.5 forbids self-adjudication, so the local relay routes
+      // resolution to peers and persists each peer's vote here).
+      //
+      // Composite PK on (dispute_id, round, peer_id) supports §8.3
+      // appeal: round=2 is the second vote round triggered by an appeal,
+      // and aggregation queries MUST filter `WHERE round = current_round`
+      // so a flipped-vote peer in round 2 cannot pull a round-2 majority
+      // back toward round-1's outcome. Round=1 votes stay in the table
+      // for audit but are excluded from round-2 aggregation.
+      //
+      // suite + signature columns persist the wire-form of each vote so
+      // anyone can re-verify the signed `AdjudicatorVote` independently
+      // (the bytes inside `relay_dispute_resolutions.adjudicator_votes`
+      // JSON are derived from these rows, not the other way around).
+      //
+      // Adjunct to `relay_disputes` — no separate retention manifest
+      // entry, mirroring the `relay_horizon_certs` +
+      // `relay_witness_omission_disputes` pattern from migration 16.
+      // The primary operational ledger (`relay_disputes`) carries the
+      // retention shape; adjunct audit-on-receipt tables follow it.
+      //
+      // See spec/dispute-v1.md §6.2 + §6.4 + §8.3 and
+      // memory/section_6_2_orchestrator_async_deferral.md (v1 sync
+      // fan-out trade-off).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_dispute_votes (
+          dispute_id TEXT NOT NULL,
+          round INTEGER NOT NULL DEFAULT 1,
+          peer_id TEXT NOT NULL,
+          vote TEXT NOT NULL CHECK (vote IN ('upheld', 'overturned', 'split')),
+          rationale TEXT NOT NULL,
+          suite TEXT NOT NULL,
+          signature TEXT NOT NULL,
+          received_at INTEGER NOT NULL,
+          PRIMARY KEY (dispute_id, round, peer_id)
+        );
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_dispute_votes_lookup ON relay_dispute_votes(dispute_id, round);",
+      );
+    },
+  },
 ];
