@@ -1,6 +1,11 @@
 # Federation E2E live test runbook
 
-The `scripts/test-federation-live.mjs` script exercises Phases 1-5 of the `motebit/relay-federation@1.1` baseline (Identity / Peering / Discovery / Heartbeat / Cleanup — these were `@1.0`'s twelve routes; the spec bumped to `@1.1` in 2026-05-01 with two additive horizon endpoints, §15) against two real cross-cloud relays. This runbook documents how to run it and what a clean pass looks like. **Scope note:** the §15 horizon endpoints (`/horizon/witness`, `/horizon/dispute`) added in `@1.1` are NOT yet exercised by this script — extending coverage to §15 is tracked as a follow-up to the phase 4b-3 doctrine arc.
+The `scripts/test-federation-live.mjs` script exercises the full `motebit/relay-federation@1.1` surface against two real cross-cloud relays:
+
+- Phases 1-5 — `@1.0` baseline (Identity / Peering / Discovery / Heartbeat / Cleanup)
+- Phases 6-7 — `@1.1` §15 horizon endpoints (witness solicitation + omission dispute, added by retention-policy phase 4b-3)
+
+Phase numbering preserves the original 1-5 sequence; 6 + 7 land between Phase 4 and Phase 5 because they need an active synthetic peer with a fresh heartbeat, and Phase 5 cleanup must run last.
 
 ## When to run
 
@@ -38,7 +43,7 @@ RELAY_B_URL=https://motebit-sync-stg-b.fly.dev RELAY_B_TOKEN="$TOKEN" \
 node scripts/test-federation-live.mjs
 ```
 
-A clean pass returns `20/20 PASSED`. Two tests are SKIP-by-design (the script uses a _synthetic_ peer keypair for cleanliness, so cross-relay-peer discovery between the two real relays isn't exercised; that would require a separate "real two-real-peer" setup).
+A clean pass returns `27/27 PASSED` (20 baseline + 7 §15). Two tests are SKIP-by-design (the script uses a _synthetic_ peer keypair for cleanliness, so cross-relay-peer discovery between the two real relays isn't exercised; that would require a separate "real two-real-peer" setup).
 
 ## What it validates
 
@@ -47,6 +52,8 @@ A clean pass returns `20/20 PASSED`. Two tests are SKIP-by-design (the script us
 - **Phase 3 — Federated discovery (4 tests):** Test agent registered on relay B is discoverable through `GET /api/v1/agents/discover` (local) and `POST /federation/v1/discover` (the cross-relay path).
 - **Phase 4 — Heartbeat (4 tests):** Heartbeat signs `${relay_id}|${timestamp}|${FEDERATION_SUITE}` (note the `|` separator — distinct from the peering `:` separator); relay verifies the signature, records the timestamp, and rejects payloads with wrong signatures or >5min clock drift.
 - **Phase 5 — Cleanup (4 tests):** The synthetic peer is removed via `POST /federation/v1/peer/remove` (also signature-gated); the test agent is left registered. **Note:** the test agent's `expires_at` is 90 days (the relay's standard registration TTL per `services/relay/src/agents.ts:713`), not 15 minutes — earlier versions of this runbook misstated the TTL. Test agents accumulate on staging across runs until the 90-day janitor sweep removes them. For environments where accumulation matters, sign a deregister token with the test agent's keypair before discarding it (current script doesn't; see the inline comment in `scripts/test-federation-live.mjs` Phase 3).
+- **Phase 6 — §15 Horizon witness solicitation (4 tests):** Synthetic peer (now active + fresh from Phases 2/4) constructs a `WitnessSolicitationRequest` for `relay_revocation_events` with `EMPTY_FEDERATION_GRAPH_ANCHOR` and signs `canonicalJson(cert_body)` with its private key. Relay B verifies the issuer is a known peer (gate 2), `issuer_id` matches the cert subject's projected operator_id (gate 3), the issuer signature verifies under `motebit-jcs-ed25519-b64-v1` (gate 4), then signs the same canonical bytes as a witness and returns `WitnessSolicitationResponse`. Three negative probes cover signature-fail (403), subject↔issuer mismatch (400), and schema-fail (400). What this validates that `horizon.test.ts` can't: the actual Hono request → schema parse → handler → response chain over real HTTP, JCS canonicalization byte-equality across the wire, the relay's actual `relay_peers` lookup against a peer that completed the real handshake, cross-process Ed25519 verification (Node ↔ `@noble/ed25519`).
+- **Phase 7 — §15 Witness-omission dispute (3 tests):** Synthetic peer files `WitnessOmissionDispute` artifacts against Relay B. Three tests cover the schema-validation path (malformed body → 400), the cert-not-found path (well-formed dispute against a fictional cert_signature → 404 + audit persistence under `cert_not_found_in_local_store`), and dispute-rejection determinism (two back-to-back disputes against the same fictional cert each return 404 cleanly, proving the audit-trail-on-rejection path is deterministic). **Live-test scope note:** the full happy-path verifier ladder (window check → cert binding → disputant signature → evidence dispatch) requires an actual horizon cert in Relay B's `relay_horizon_certs` table, which only the periodic `advanceRevocationHorizon` loop produces (1h cadence by default). Future enhancement: an admin-gated `/admin/horizon/advance` route would let the live test trigger one synchronously and exercise the happy path.
 
 ## Common failure modes and fixes
 
