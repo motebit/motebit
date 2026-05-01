@@ -1172,7 +1172,10 @@ async function phase8() {
     console.log("");
     return;
   }
-  const synthPrivKey = makePrivKeyObj(phase2.syntheticPrivKey);
+  // phase2.syntheticPrivKey is already a PrivateKeyObject (wrapped by
+  // Phase 2 at script.ts:332 via makePrivKeyObj). Use directly — do
+  // NOT re-wrap.
+  const synthPrivKey = phase2.syntheticPrivKey;
   const disputeId = `dispute-test-${Date.now()}`;
 
   function buildSignedVoteRequest(round) {
