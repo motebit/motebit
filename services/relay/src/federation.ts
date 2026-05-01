@@ -1432,6 +1432,35 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       });
     }
 
+    // Defensive guard: explicit check that this relay actually issued
+    // the cert. Today `relay_horizon_certs` only contains certs we
+    // signed in `advanceRelayHorizon`, so cert.subject.operator_id
+    // always equals our motebit_id — but the assumption is encoded
+    // only in `persistHorizonCert`'s call site. A future code path
+    // that lands a peer's cert in the local store (e.g. adjudicator
+    // forwarding) would silently verify the dispute with the wrong
+    // issuer pubkey and return a misleading error. Make the implicit
+    // invariant explicit at the verification site, fail-closed by
+    // construction. Same shape as the empty-anchor sanity check in
+    // `@motebit/crypto::verifyDeletionCertificate`.
+    const certIssuerId =
+      cert.subject.kind === "operator"
+        ? cert.subject.operator_id
+        : (cert.subject.motebit_id as string);
+    if (cert.subject.kind !== "operator" || certIssuerId !== relayIdentity.relayMotebitId) {
+      persistWitnessOmissionDispute(
+        db,
+        dispute,
+        disputeJson,
+        "rejected",
+        `cert_not_issued_by_this_relay (cert.subject=${certIssuerId}, this_relay=${relayIdentity.relayMotebitId})`,
+      );
+      throw new HTTPException(404, {
+        message:
+          "this relay did not issue the disputed cert; adjudicator forwarding for peer-issued certs is not yet supported",
+      });
+    }
+
     // Disputant must be a known peer (we resolve their pubkey for
     // dispute-signature verification).
     const disputantRow = db
