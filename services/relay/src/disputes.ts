@@ -150,6 +150,99 @@ function getDispute(db: DatabaseDriver, disputeId: string) {
     | undefined;
 }
 
+/**
+ * Lazy-on-read appeal-window expiration handler. When a dispute in
+ * `resolved` state has passed the 24h appeal window without an appeal
+ * being filed, transition it to `final` and execute the fund_action
+ * atomically.
+ *
+ * Spec mapping:
+ *   - §7.1: "Funds are locked... from `opened` through `resolved` (or
+ *     `final`, if appealed)." Funds release on `final`, NOT on first
+ *     `resolved` — fund_action must NOT execute in /resolve.
+ *   - §7.3: "Funds must remain locked from `opened` through resolution."
+ *     Same rule, restated.
+ *   - §3.3: "`resolved` transitions to `final` automatically if no
+ *     appeal is filed within the appeal window." This helper IS the
+ *     transition machinery.
+ *   - §8.5: "Appeal window: 24 hours after `resolved_at`."
+ *
+ * Lazy-on-read shape (vs periodic sweep): simpler (no scheduler, no
+ * cross-process race), matches how SQLite-backed services typically
+ * handle state transitions. The trade is that a dispute that's never
+ * queried after resolution stays in `resolved` indefinitely, but funds
+ * are still locked + audit is consistent + no harm done. Any subsequent
+ * read triggers the transition.
+ *
+ * Called from every read path that returns dispute state: GET
+ * /:disputeId, GET /admin/disputes, /resolve cached-path, /appeal.
+ *
+ * Returns the (possibly mutated) dispute row.
+ */
+function tryFinalizeIfWindowExpired(
+  db: DatabaseDriver,
+  dispute: Record<string, unknown>,
+): Record<string, unknown> {
+  if (dispute.state !== "resolved") return dispute;
+  if (dispute.appealed_at != null) return dispute;
+  const resolvedAt = dispute.resolved_at as number | null | undefined;
+  if (resolvedAt == null) return dispute;
+  if (Date.now() <= resolvedAt + APPEAL_WINDOW_MS) return dispute;
+
+  // Window expired without an appeal — transition to `final` + execute
+  // fund_action atomically. Pull fund_action + split_ratio from the
+  // resolution row (the orchestrator persisted them at /resolve time).
+  const resolution = db
+    .prepare("SELECT fund_action, split_ratio FROM relay_dispute_resolutions WHERE dispute_id = ?")
+    .get(dispute.dispute_id as string) as
+    | { fund_action: DisputeFundAction; split_ratio: number }
+    | undefined;
+  if (!resolution) {
+    // Defensive: state=resolved without resolution row should not be
+    // reachable, but if it is, log + skip rather than crash. The next
+    // read after the missing resolution row appears will retry.
+    logger.warn("dispute.lazy_finalize.missing_resolution_row", {
+      disputeId: dispute.dispute_id,
+    });
+    return dispute;
+  }
+
+  const finalAt = Date.now();
+  db.exec("BEGIN");
+  try {
+    // WHERE state = 'resolved' guards against double-finalize under
+    // concurrent reads (the second concurrent caller would see state
+    // already updated and the UPDATE would no-op via WHERE clause).
+    const result = db
+      .prepare(
+        "UPDATE relay_disputes SET state = 'final', final_at = ? WHERE dispute_id = ? AND state = 'resolved'",
+      )
+      .run(finalAt, dispute.dispute_id as string);
+    if (result.changes === 0) {
+      // Concurrent caller beat us to the transition. Rollback and
+      // re-read.
+      db.exec("ROLLBACK");
+      const refreshed = getDispute(db, dispute.dispute_id as string);
+      return refreshed ?? dispute;
+    }
+    executeFundAction(db, dispute, resolution.fund_action, resolution.split_ratio);
+    db.exec("COMMIT");
+    logger.info("dispute.finalized.appeal_window_expired", {
+      disputeId: dispute.dispute_id,
+      fundAction: resolution.fund_action,
+      splitRatio: resolution.split_ratio,
+    });
+    return { ...dispute, state: "final", final_at: finalAt };
+  } catch (err) {
+    db.exec("ROLLBACK");
+    logger.error("dispute.lazy_finalize.failed", {
+      disputeId: dispute.dispute_id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return dispute;
+  }
+}
+
 // === Dispute Deps ===
 
 export interface DisputeDeps {
@@ -804,8 +897,15 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       split_ratio?: number;
     }>();
 
-    const dispute = getDispute(db, disputeId);
+    let dispute = getDispute(db, disputeId);
     if (!dispute) throw new HTTPException(404, { message: "Dispute not found" });
+
+    // Lazy-on-read finalize — if the appeal window expired without an
+    // appeal, transition resolved → final + execute fund_action before
+    // the cached-resolution check below returns. Idempotent: state
+    // mutates exactly once across concurrent reads (UPDATE WHERE
+    // state='resolved' guard).
+    dispute = tryFinalizeIfWindowExpired(db, dispute);
 
     // 1. Cached-resolution check — return existing resolution if present.
     //    Handles re-call after successful resolve + the second-caller-on-
@@ -973,9 +1073,14 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
 
       const resolutionId = `res-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-      // 4. Atomic terminal transition: resolution insert + state update +
-      //    fund-action all in one txn. If anything fails, the dispute
-      //    stays in `arbitration` and a re-resolve recovers cleanly.
+      // 4. Atomic resolution transition: resolution insert + state
+      //    update to 'resolved'. fund_action does NOT execute here per
+      //    §7.1 + §7.3 — funds stay locked through the appeal window.
+      //    Lazy-on-read finalize (`tryFinalizeIfWindowExpired`) handles
+      //    the resolved → final transition + fund_action execution
+      //    after the 24h appeal window expires without an appeal.
+      //    Federation appeals (commit 4b) handle the resolved → appealed
+      //    → final flow with fund_action at the appealed → final step.
       db.exec("BEGIN");
       try {
         db.prepare(
@@ -1005,12 +1110,11 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
           resolvedAt,
           disputeId,
         );
-        executeFundAction(db, dispute, resolutionFundAction, splitRatio);
         db.exec("COMMIT");
       } catch (err) {
         db.exec("ROLLBACK");
         throw new HTTPException(500, {
-          message: `Dispute resolution failed — funds not moved: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Dispute resolution persistence failed: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
 
@@ -1071,13 +1175,22 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       });
     }
 
-    const dispute = getDispute(db, disputeId);
+    let dispute = getDispute(db, disputeId);
     if (!dispute) throw new HTTPException(404, { message: "Dispute not found" });
+
+    // Lazy-on-read finalize — if the appeal window expired without an
+    // appeal, transition resolved → final BEFORE the appeal check below.
+    // This converts "appeal window expired" into the cleaner "state is
+    // final, can't appeal" error path. Idempotent.
+    dispute = tryFinalizeIfWindowExpired(db, dispute);
+
     if (dispute.state !== "resolved") {
       throw new HTTPException(400, { message: "Can only appeal a resolved dispute" });
     }
 
-    // Check appeal window (§8.5)
+    // Defense-in-depth: explicit window check in case lazy-finalize
+    // didn't run (e.g., missing resolution row). Should be unreachable
+    // post-finalize, but kept for explicit error message.
     const resolvedAt = dispute.resolved_at as number;
     if (Date.now() > resolvedAt + APPEAL_WINDOW_MS) {
       throw new HTTPException(400, { message: "Appeal window has expired" });
@@ -1132,7 +1245,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
   /** @spec motebit/dispute@1.0 */
   app.get("/api/v1/disputes/:disputeId", (c) => {
     const disputeId = c.req.param("disputeId");
-    const dispute = getDispute(db, disputeId);
+    let dispute = getDispute(db, disputeId);
     if (!dispute) throw new HTTPException(404, { message: "Dispute not found" });
 
     // Check for expired opened disputes (§3.2)
@@ -1147,18 +1260,11 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       dispute.expired_at = Date.now();
     }
 
-    // Check for resolved→final transition (§3.3: auto-final after appeal window)
-    if (
-      dispute.state === "resolved" &&
-      dispute.resolved_at != null &&
-      Date.now() > (dispute.resolved_at as number) + APPEAL_WINDOW_MS
-    ) {
-      db.prepare(
-        "UPDATE relay_disputes SET state = 'final', final_at = ? WHERE dispute_id = ?",
-      ).run(Date.now(), disputeId);
-      dispute.state = "final";
-      dispute.final_at = Date.now();
-    }
+    // Lazy-on-read finalize: §3.3 + §7.1 + §7.3 — if state=resolved AND
+    // appeal window expired AND no appeal filed, transition to final
+    // and execute fund_action atomically. Spec-correct timing: funds
+    // release on `final`, NOT on first `resolved`.
+    dispute = tryFinalizeIfWindowExpired(db, dispute);
 
     // Fetch evidence
     const evidence = db

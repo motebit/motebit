@@ -195,6 +195,14 @@ describe("Dispute Cycle E2E", () => {
     });
     expect(resolveRes.status).toBe(200);
 
+    // Phase 6.2 commit-4a: spec §7.1+§7.3 require funds locked through
+    // appeal window. Back-date resolved_at and trigger lazy-finalize
+    // via GET /:disputeId.
+    relay.moteDb.db
+      .prepare("UPDATE relay_disputes SET resolved_at = ? WHERE dispute_id = ?")
+      .run(Date.now() - 25 * 60 * 60 * 1000, disputeId);
+    await relay.app.request(`/api/v1/disputes/${disputeId}`, { headers: AUTH });
+
     // Delegator should have received refund
     const delegatorBal = (await (
       await relay.app.request(`/api/v1/agents/${delegator.motebitId}/balance`, { headers: AUTH })
@@ -345,6 +353,13 @@ describe("Dispute Cycle E2E", () => {
       }),
     });
     expect(resolveRes.status).toBe(200);
+
+    // Phase 6.2 commit-4a: spec §7.1+§7.3 require funds locked through
+    // appeal window. Back-date + lazy-finalize trigger.
+    relay.moteDb.db
+      .prepare("UPDATE relay_disputes SET resolved_at = ? WHERE dispute_id = ?")
+      .run(Date.now() - 25 * 60 * 60 * 1000, disputeId);
+    await relay.app.request(`/api/v1/disputes/${disputeId}`, { headers: AUTH });
 
     // Both parties should have settlement_credit transactions from the split
     const workerBal = (await (

@@ -806,6 +806,20 @@ describe("Dispute: fund execution integrity", () => {
     await relay.close();
   });
 
+  /**
+   * Phase 6.2 commit-4a: fund_action no longer fires on first /resolve;
+   * spec §7.1+§7.3 require funds to remain locked through the appeal
+   * window. Tests that depend on fund movement must back-date
+   * `resolved_at` to clear the 24h appeal window, then trigger the
+   * lazy-on-read finalize via GET /:disputeId.
+   */
+  async function simulateAppealWindowExpiry(disputeId: string): Promise<void> {
+    relay.moteDb.db
+      .prepare("UPDATE relay_disputes SET resolved_at = ? WHERE dispute_id = ?")
+      .run(Date.now() - 25 * 60 * 60 * 1000, disputeId);
+    await relay.app.request(`/api/v1/disputes/${disputeId}`, { headers: AUTH_HEADER });
+  }
+
   it("refund credits relay_accounts, not virtual_accounts", async () => {
     const openRes = await openDispute(relay, "alloc-fund", "del-fund", "wrk-fund", "task-fund");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
@@ -827,6 +841,10 @@ describe("Dispute: fund execution integrity", () => {
       }),
     });
     expect(resolveRes.status).toBe(200);
+
+    // §7.1 + §7.3: funds stay locked through appeal window. Simulate
+    // the 24h window expiring + trigger lazy-on-read finalize.
+    await simulateAppealWindowExpiry(dispute_id);
 
     // Verify relay_accounts balance increased
     const afterRow = relay.moteDb.db
@@ -861,6 +879,9 @@ describe("Dispute: fund execution integrity", () => {
     });
     expect(resolveRes.status).toBe(200);
 
+    // §7.1 + §7.3: simulate appeal-window expiry to release funds
+    await simulateAppealWindowExpiry(dispute_id);
+
     // Worker gets floor(100000 * 0.7) = 70000
     const workerTxn = relay.moteDb.db
       .prepare(
@@ -893,11 +914,91 @@ describe("Dispute: fund execution integrity", () => {
     });
     expect(resolveRes.status).toBe(200);
 
+    // §7.1 + §7.3: simulate appeal-window expiry to release funds
+    await simulateAppealWindowExpiry(dispute_id);
+
     const workerTxn = relay.moteDb.db
       .prepare(
         "SELECT amount FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit' AND reference_id = ?",
       )
       .get("wrk-fund", dispute_id) as { amount: number } | undefined;
     expect(workerTxn?.amount).toBe(100000);
+  });
+
+  it("§7.1 + §7.3: funds NOT moved on first /resolve (locked through appeal window)", async () => {
+    const openRes = await openDispute(relay, "alloc-fund", "del-fund", "wrk-fund", "task-fund");
+    const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+
+    const beforeRow = relay.moteDb.db
+      .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+      .get("del-fund") as { balance: number } | undefined;
+    const balanceBefore = beforeRow?.balance ?? 0;
+
+    const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "upheld",
+        rationale: "test",
+        fund_action: "refund_to_delegator",
+      }),
+    });
+    expect(resolveRes.status).toBe(200);
+
+    // Funds NOT moved yet — state is `resolved`, not `final`
+    const afterRow = relay.moteDb.db
+      .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+      .get("del-fund") as { balance: number } | undefined;
+    expect(afterRow?.balance ?? 0).toBe(balanceBefore);
+
+    // Dispute is in `resolved` state (not `final`)
+    const stateRow = relay.moteDb.db
+      .prepare("SELECT state FROM relay_disputes WHERE dispute_id = ?")
+      .get(dispute_id) as { state: string } | undefined;
+    expect(stateRow?.state).toBe("resolved");
+
+    // No settlement_credit txn yet
+    const txns = relay.moteDb.db
+      .prepare("SELECT COUNT(*) as n FROM relay_transactions WHERE reference_id = ?")
+      .get(dispute_id) as { n: number };
+    expect(txns.n).toBe(0);
+  });
+
+  it("§3.3 + §7.1: lazy-on-read finalize is idempotent (multiple GETs after window → one fund movement)", async () => {
+    const openRes = await openDispute(relay, "alloc-fund", "del-fund", "wrk-fund", "task-fund");
+    const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+
+    await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "upheld",
+        rationale: "test",
+        fund_action: "refund_to_delegator",
+      }),
+    });
+
+    // Back-date + trigger lazy-finalize 3 times
+    relay.moteDb.db
+      .prepare("UPDATE relay_disputes SET resolved_at = ? WHERE dispute_id = ?")
+      .run(Date.now() - 25 * 60 * 60 * 1000, dispute_id);
+    await relay.app.request(`/api/v1/disputes/${dispute_id}`, { headers: AUTH_HEADER });
+    await relay.app.request(`/api/v1/disputes/${dispute_id}`, { headers: AUTH_HEADER });
+    await relay.app.request(`/api/v1/disputes/${dispute_id}`, { headers: AUTH_HEADER });
+
+    // Exactly ONE settlement_credit txn (UPDATE WHERE state='resolved'
+    // guard prevents double-execution).
+    const txns = relay.moteDb.db
+      .prepare(
+        "SELECT COUNT(*) as n FROM relay_transactions WHERE reference_id = ? AND type = 'settlement_credit'",
+      )
+      .get(dispute_id) as { n: number };
+    expect(txns.n).toBe(1);
+
+    // State is `final`
+    const stateRow = relay.moteDb.db
+      .prepare("SELECT state FROM relay_disputes WHERE dispute_id = ?")
+      .get(dispute_id) as { state: string } | undefined;
+    expect(stateRow?.state).toBe("final");
   });
 });
