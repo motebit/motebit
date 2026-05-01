@@ -192,7 +192,7 @@ export async function verifyWitnessOmissionDispute(
   if (ctx.disputantPublicKey === null) {
     errors.push("disputant public key not resolvable");
   } else if (dispute.suite !== WITNESS_OMISSION_DISPUTE_SUITE) {
-    errors.push(`unexpected suite: ${dispute.suite}`);
+    errors.push(`unexpected suite: ${String(dispute.suite)}`);
   } else {
     const bytes = canonicalizeWitnessOmissionDispute(dispute);
     let sigBytes: Uint8Array;

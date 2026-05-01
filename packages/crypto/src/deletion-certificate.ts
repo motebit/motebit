@@ -720,7 +720,7 @@ export async function verifyRetentionManifest(
   const errors: string[] = [];
 
   if (manifest.spec !== "motebit/retention-manifest@1") {
-    errors.push(`unexpected spec: ${manifest.spec}`);
+    errors.push(`unexpected spec: ${String(manifest.spec)}`);
   }
   if (manifest.suite !== "motebit-jcs-ed25519-hex-v1") {
     errors.push(`unexpected suite: ${manifest.suite}`);
