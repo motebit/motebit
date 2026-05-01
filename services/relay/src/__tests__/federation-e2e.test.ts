@@ -315,7 +315,7 @@ describe("Federation E2E", () => {
         public_key: string;
         did: string;
       };
-      expect(body.spec).toBe("motebit/relay-federation@1.0");
+      expect(body.spec).toBe("motebit/relay-federation@1.1");
       expect(body.relay_motebit_id).toMatch(/^relay-/);
       expect(body.public_key).toHaveLength(64); // 32 bytes hex
       expect(body.did).toMatch(/^did:key:z/);

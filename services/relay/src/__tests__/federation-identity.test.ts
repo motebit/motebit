@@ -9,8 +9,11 @@ import {
   initRelayIdentity,
   bytesToHex,
   isEncryptedFormat,
+  RELAY_SPEC_VERSION,
 } from "../federation.js";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 describe("Relay Identity Encryption", () => {
   let db: DatabaseDriver;
@@ -101,5 +104,20 @@ describe("Relay Identity Encryption", () => {
     expect(id2.relayMotebitId).toBe(id1.relayMotebitId);
     expect(id2.publicKeyHex).toBe(id1.publicKeyHex);
     expect(bytesToHex(id2.privateKey)).toBe(bytesToHex(id1.privateKey));
+  });
+});
+
+describe("RELAY_SPEC_VERSION drift gate", () => {
+  // Locks the runtime constant to the H1 of spec/relay-federation-v1.md.
+  // Without this gate, bumping the spec doc + jsdoc @spec annotations leaves
+  // the wire-reported `spec` field silently behind — observed in the
+  // retention-policy phase 4b-3 arc, where 14 @spec annotations moved from
+  // @1.0 → @1.1 but the runtime constant didn't.
+  it("RELAY_SPEC_VERSION matches spec/relay-federation-v1.md H1", () => {
+    const specPath = resolve(__dirname, "../../../../spec/relay-federation-v1.md");
+    const specMd = readFileSync(specPath, "utf8");
+    const h1Match = specMd.match(/^# (motebit\/relay-federation@\d+\.\d+)/m);
+    expect(h1Match, `H1 not found in ${specPath}`).not.toBeNull();
+    expect(RELAY_SPEC_VERSION).toBe(h1Match![1]);
   });
 });

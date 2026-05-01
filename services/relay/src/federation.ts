@@ -35,6 +35,20 @@ import { persistWitnessOmissionDispute, resolveHorizonCertBySignature } from "./
 // dispatcher). The `suite` literal below is the stable contract between
 // services and the registry in @motebit/protocol.
 const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1" as const;
+
+/**
+ * Wire-reported relay-federation spec version. Single source of truth for the
+ * `spec` field in `/federation/v1/identity` and `spec_version` in peering
+ * payloads. MUST match the H1 of `spec/relay-federation-v1.md` — enforced by
+ * `RELAY_SPEC_VERSION matches spec doc H1` in `federation-e2e.test.ts`.
+ *
+ * When bumping the spec doc:
+ * 1. Update `spec/relay-federation-v1.md` H1 + `**Version:**` line
+ * 2. Update this constant
+ * 3. Update consumer assertions (`federation-e2e.test.ts`, `scripts/test-federation-live.mjs`)
+ * 4. Update `@spec` jsdoc annotations on each endpoint that changed
+ */
+export const RELAY_SPEC_VERSION = "motebit/relay-federation@1.1";
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -1018,8 +1032,6 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const match = spec.match(/@(\d+)\./);
     return match ? parseInt(match[1]!, 10) : null;
   }
-
-  const RELAY_SPEC_VERSION = "motebit/relay-federation@1.0";
 
   /**
    * Throw 403 if peer's protocol version is incompatible.

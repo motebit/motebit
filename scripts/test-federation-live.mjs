@@ -254,9 +254,13 @@ async function phase1() {
 
   test("Both identities follow spec format");
   if (identityA && identityB) {
+    // MIRROR: services/relay/src/federation.ts RELAY_SPEC_VERSION + spec/relay-federation-v1.md H1.
+    // When the spec doc is bumped, all three (constant + this assertion + spec doc) MUST move
+    // together — federation-e2e.test.ts has a defensive test that catches the constant↔doc
+    // drift, but this live-test assertion has no such backstop.
     const specOk =
-      identityA.spec === "motebit/relay-federation@1.0" &&
-      identityB.spec === "motebit/relay-federation@1.0";
+      identityA.spec === "motebit/relay-federation@1.1" &&
+      identityB.spec === "motebit/relay-federation@1.1";
     expect(specOk, `A.spec=${identityA.spec}, B.spec=${identityB.spec}`);
   } else {
     fail("cannot check — identity fetch failed");
