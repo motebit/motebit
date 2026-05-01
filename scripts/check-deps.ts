@@ -357,11 +357,28 @@ function extractImports(
   const results: Array<{ specifier: string; line: number; typeOnly: boolean }> = [];
   const lines = content.split("\n");
 
+  // Track multi-line `import type { ... } from "..."` blocks. The line
+  // carrying the `from` clause is what matches the @motebit/* regex,
+  // but the `import type` keyword sits on an earlier line for any
+  // import the prettier multi-line wrap touches. Single-pass state
+  // machine: enter `inTypeImportBlock` on a bare `import type {`, exit
+  // on the matching `}` line, mark every `from` match in between as
+  // type-only.
+  let inTypeImportBlock = false;
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Check for "import type" or "import { type ... } from" patterns
-    const isTypeImport = /^\s*import\s+type\s/.test(line);
+    // Single-line case: `import type { ... } from "..."` on one line.
+    const singleLineTypeImport = /^\s*import\s+type\s/.test(line);
+
+    // Multi-line entry: `import type {` with no closing brace on the
+    // same line (prettier wraps when the imported-symbol list is long).
+    if (!inTypeImportBlock && /^\s*import\s+type\s*\{/.test(line) && !line.includes("}")) {
+      inTypeImportBlock = true;
+    }
+
+    const isTypeImport = singleLineTypeImport || inTypeImportBlock;
 
     // Match: import ... from "@motebit/...", require("@motebit/..."), import("@motebit/...")
     const patterns = [
@@ -375,6 +392,13 @@ function extractImports(
       while ((match = pattern.exec(line)) !== null) {
         results.push({ specifier: match[1], line: i + 1, typeOnly: isTypeImport });
       }
+    }
+
+    // Multi-line exit: the closing `}` of an `import type { ... }` block
+    // (typically followed by ` from "..."` on the same line, but
+    // tolerate either form).
+    if (inTypeImportBlock && line.includes("}")) {
+      inTypeImportBlock = false;
     }
   }
   return results;

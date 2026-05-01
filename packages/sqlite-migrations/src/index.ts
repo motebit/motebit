@@ -1,5 +1,5 @@
 /**
- * Schema-version-tracked SQLite migrations for the three motebit SQLite
+ * Schema-version-tracked SQLite migrations for the runtime-side motebit
  * surfaces (mobile expo-sqlite, desktop Tauri-IPC rusqlite, persistence
  * better-sqlite3 / sql.js). One `Migration` shape, two runners — sync for
  * surfaces that hold a synchronous SQLite handle, async for surfaces that
@@ -8,6 +8,33 @@
  * The runner is structurally typed so each surface adapts its own driver
  * into the minimal shape the runner needs. No package depends on a specific
  * SQLite implementation; this package has zero monorepo deps.
+ *
+ * ## Scope: runtime-side, not relay
+ *
+ * Motebit has four SQLite surfaces in total. Three (the runtime-side
+ * trio above) are unified here: each registers `Migration` entries against
+ * its own per-surface registry and consumes the shared runner. They share
+ * `PRAGMA user_version` as the schema tracker, and the
+ * `check-sqlite-migration-runner` drift defense (#66) locks pragma writes
+ * to the canonical sites.
+ *
+ * The fourth surface — `services/relay/src/migrations.ts` — is
+ * deliberately out of scope. The relay's framework is a function-based
+ * registry with its own `relay_schema_migrations` tracking table (rows
+ * by `version` + `name` + `applied_at`); it doesn't write `PRAGMA
+ * user_version` and isn't subject to #66's gate. That's intentional, not
+ * a coverage gap: server-side / single-tenant / deploy-coordinated drift
+ * physics is fundamentally different from client-side / multi-deployment
+ * / version-skewed. The relay deploys atomically with code; runtime-side
+ * surfaces walk historical ladders on every install boot. One model
+ * absorbing both regimes would compromise both gates.
+ *
+ * If a future federation feature makes the separation untenable (a
+ * primitive both runtime and relay need to share), the merge path is
+ * additive: the relay registers a `Migration` shape variant here and
+ * `check-sqlite-migration-runner` extends to recognize the tracking
+ * table. Until then, four surfaces, three unified, one deliberately
+ * separate.
  */
 
 /**
