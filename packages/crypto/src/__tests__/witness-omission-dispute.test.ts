@@ -283,6 +283,193 @@ describe("verifyWitnessOmissionDispute — inclusion_proof evidence", () => {
 
 // ── 4. Positive: alternative-peering claim ───────────────────────────
 
+describe("verifyWitnessOmissionDispute — alternative_peering branch coverage", () => {
+  it("rejects an alternative_peering artifact missing required Heartbeat fields (shape probe)", async () => {
+    // Empty object as peering_artifact — fails the typeof shape check
+    // before any signature work happens.
+    const issuer = await makeKeyPair();
+    const disputant = await makeKeyPair();
+
+    const cert = await signHorizonCertAsIssuer(
+      {
+        ...baseHorizonBody("issuer-relay"),
+        federation_graph_anchor: EMPTY_FEDERATION_GRAPH_ANCHOR,
+      },
+      issuer.privateKey,
+    );
+
+    const dispute = await signWitnessOmissionDispute(
+      {
+        dispute_id: "dispute-shape-probe",
+        cert_issuer: "issuer-relay",
+        cert_signature: cert.signature,
+        disputant_motebit_id: "disputant-peer",
+        evidence: { kind: "alternative_peering", peering_artifact: {} },
+        filed_at: ISSUED_AT + 1000,
+      },
+      disputant.privateKey,
+    );
+
+    const result = await verifyWitnessOmissionDispute(dispute, {
+      cert,
+      issuerPublicKey: issuer.publicKey,
+      disputantPublicKey: disputant.publicKey,
+      now: ISSUED_AT + 1000,
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.steps.evidence_valid).toBe(false);
+    expect(result.errors.some((e) => e.includes("artifact unrecognized"))).toBe(true);
+  });
+
+  it("rejects a heartbeat whose relay_id doesn't match the cert's subject", async () => {
+    // Heartbeat artifact carries relay_id="other-relay" but cert was
+    // issued by "issuer-relay". The verifier must reject without
+    // falling through to freshness-window or signature verification.
+    const issuer = await makeKeyPair();
+    const disputant = await makeKeyPair();
+
+    const cert = await signHorizonCertAsIssuer(
+      {
+        ...baseHorizonBody("issuer-relay"),
+        federation_graph_anchor: EMPTY_FEDERATION_GRAPH_ANCHOR,
+      },
+      issuer.privateKey,
+    );
+
+    // Heartbeat from a DIFFERENT relay than the cert issuer.
+    const wrongRelayHeartbeat = await buildHeartbeatArtifact(
+      "other-relay", // ← mismatch
+      HORIZON_TS,
+      issuer.privateKey,
+    );
+
+    const dispute = await signWitnessOmissionDispute(
+      {
+        dispute_id: "dispute-relay-mismatch",
+        cert_issuer: "issuer-relay",
+        cert_signature: cert.signature,
+        disputant_motebit_id: "disputant-peer",
+        evidence: { kind: "alternative_peering", peering_artifact: wrongRelayHeartbeat },
+        filed_at: ISSUED_AT + 1000,
+      },
+      disputant.privateKey,
+    );
+
+    const result = await verifyWitnessOmissionDispute(dispute, {
+      cert,
+      issuerPublicKey: issuer.publicKey,
+      disputantPublicKey: disputant.publicKey,
+      now: ISSUED_AT + 1000,
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.steps.evidence_valid).toBe(false);
+    expect(result.errors.some((e) => e.includes("does not match cert issuer"))).toBe(true);
+  });
+
+  it("rejects a heartbeat whose timestamp is OUTSIDE the ±5min freshness window", async () => {
+    // Heartbeat timestamp 6 minutes (360s) before horizon_ts — beyond
+    // the HEARTBEAT_FRESHNESS_WINDOW_MS = 5 * 60 * 1000 floor. Verifier
+    // must reject without falling through to signature verification.
+    const issuer = await makeKeyPair();
+    const disputant = await makeKeyPair();
+
+    const cert = await signHorizonCertAsIssuer(
+      {
+        ...baseHorizonBody("issuer-relay"),
+        federation_graph_anchor: EMPTY_FEDERATION_GRAPH_ANCHOR,
+      },
+      issuer.privateKey,
+    );
+
+    const staleHeartbeat = await buildHeartbeatArtifact(
+      "issuer-relay",
+      HORIZON_TS - 6 * 60 * 1000, // 6 min before horizon — outside window
+      issuer.privateKey,
+    );
+
+    const dispute = await signWitnessOmissionDispute(
+      {
+        dispute_id: "dispute-stale-heartbeat",
+        cert_issuer: "issuer-relay",
+        cert_signature: cert.signature,
+        disputant_motebit_id: "disputant-peer",
+        evidence: { kind: "alternative_peering", peering_artifact: staleHeartbeat },
+        filed_at: ISSUED_AT + 1000,
+      },
+      disputant.privateKey,
+    );
+
+    const result = await verifyWitnessOmissionDispute(dispute, {
+      cert,
+      issuerPublicKey: issuer.publicKey,
+      disputantPublicKey: disputant.publicKey,
+      now: ISSUED_AT + 1000,
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.steps.evidence_valid).toBe(false);
+    expect(result.errors.some((e) => e.includes("outside ±"))).toBe(true);
+  });
+
+  it("rejects a heartbeat with a syntactically-shaped but cryptographically-invalid signature", async () => {
+    // Hand-built artifact with garbage in `signature` — passes the
+    // shape probe (relay_id, timestamp, signature all present and of
+    // the right primitive types), passes the relay_id ↔ cert.subject
+    // match, passes the freshness window, but fails signature
+    // verification downstream.
+    //
+    // Note: `hexToBytes` in @motebit/crypto/signing.ts doesn't throw
+    // on invalid hex (`parseInt("zz", 16)` silently returns NaN which
+    // gets stuffed into Uint8Array as 0); the try/catch around it in
+    // verifyAlternativePeeringArtifact is structurally dead code. The
+    // real failure mode is signature-doesn't-verify, which this test
+    // exercises.
+    const issuer = await makeKeyPair();
+    const disputant = await makeKeyPair();
+
+    const cert = await signHorizonCertAsIssuer(
+      {
+        ...baseHorizonBody("issuer-relay"),
+        federation_graph_anchor: EMPTY_FEDERATION_GRAPH_ANCHOR,
+      },
+      issuer.privateKey,
+    );
+
+    const malformedHeartbeat = {
+      relay_id: "issuer-relay",
+      timestamp: HORIZON_TS,
+      signature: "00".repeat(64), // 128 hex chars of zeros — decodes to all-zero sig
+    };
+
+    const dispute = await signWitnessOmissionDispute(
+      {
+        dispute_id: "dispute-bad-sig",
+        cert_issuer: "issuer-relay",
+        cert_signature: cert.signature,
+        disputant_motebit_id: "disputant-peer",
+        evidence: { kind: "alternative_peering", peering_artifact: malformedHeartbeat },
+        filed_at: ISSUED_AT + 1000,
+      },
+      disputant.privateKey,
+    );
+
+    const result = await verifyWitnessOmissionDispute(dispute, {
+      cert,
+      issuerPublicKey: issuer.publicKey,
+      disputantPublicKey: disputant.publicKey,
+      now: ISSUED_AT + 1000,
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.steps.evidence_valid).toBe(false);
+    expect(
+      result.errors.some((e) => e.includes("signature does not verify against cert issuer pubkey")),
+    ).toBe(true);
+  });
+});
+
 describe("verifyWitnessOmissionDispute — alternative_peering evidence", () => {
   it("admits a valid heartbeat artifact within ±5min of cert.horizon_ts", async () => {
     const issuer = await makeKeyPair();

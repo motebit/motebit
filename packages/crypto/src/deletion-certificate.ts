@@ -746,10 +746,12 @@ export async function verifyRetentionManifest(
       out[i] = parseInt(signature.slice(i * 2, i * 2 + 2), 16);
     }
     signatureBytes = out;
+    /* c8 ignore start -- defensive catch; the parseInt-based hex decode above doesn't throw on invalid input (parseInt returns NaN), so this catch is unreachable today. Keep for forward-compat: if a future hex-decode primitive (e.g. native Uint8Array.fromHex) throws, this branch ensures fail-closed verification rather than silently passing garbage bytes through to verifyBySuite. */
   } catch {
     errors.push("signature decode failed");
     return { valid: false, errors, manifest: null };
   }
+  /* c8 ignore stop */
 
   const ok = await verifyBySuite(
     "motebit-jcs-ed25519-hex-v1",

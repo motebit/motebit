@@ -329,12 +329,14 @@ async function verifyAlternativePeeringArtifact(
   }
 
   let sigBytes: Uint8Array;
+  /* c8 ignore start -- defensive catch; `hexToBytes` (signing.ts) uses parseInt which silently returns NaN for non-hex chars rather than throwing, so this catch is unreachable today. Keep for forward-compat: a future hex-decode primitive that throws (e.g. native Uint8Array.fromHex) would route through this branch and fail closed rather than passing garbage bytes through to verifyBySuite. */
   try {
     sigBytes = hexToBytes(signatureHex);
   } catch {
     errors.push("peering artifact signature is not valid hex");
     return false;
   }
+  /* c8 ignore stop */
 
   const payload = new TextEncoder().encode(`${relayId}|${timestamp}|${FEDERATION_HEARTBEAT_SUITE}`);
   const ok = await verifyBySuite(

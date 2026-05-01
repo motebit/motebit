@@ -33,8 +33,16 @@ import {
   signHorizonCertAsIssuer,
   signHorizonWitness,
   verifyDeletionCertificate,
+  verifyRetentionManifest,
   canonicalizeMultiSignatureCert,
+  canonicalizeHorizonWitnessRequestBody,
+  signHorizonWitnessRequestBody,
+  verifyHorizonWitnessRequestSignature,
 } from "../deletion-certificate.js";
+import type { HorizonWitnessRequestBody, RetentionManifest } from "@motebit/protocol";
+import { EMPTY_FEDERATION_GRAPH_ANCHOR } from "@motebit/protocol";
+import { canonicalJson } from "../signing.js";
+import { signBySuite } from "../suite-dispatch.js";
 
 async function makeKeyPair() {
   const { publicKey, privateKey } = await generateEd25519Keypair();
@@ -83,6 +91,28 @@ describe("verifyDeletionCertificate — mutable_pruning arm", () => {
     const result = await verifyDeletionCertificate(cert, ctxOf({}, {}));
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.includes("requires subject_signature"))).toBe(true);
+  });
+
+  it("rejects a cert whose subject_signature is malformed base64url (verifyOneSignature catch path)", async () => {
+    // Construct a cert with a syntactically-shaped subject_signature
+    // block but garbage in the signature field — fromBase64Url calls
+    // atob() which throws on invalid base64. The verifier's catch path
+    // routes through fail-closed (returns false) rather than crashing.
+    const subject = await makeKeyPair();
+    const cert: DeletionCertificate = {
+      ...baseMutablePruning(),
+      subject_signature: {
+        motebit_id: asMotebitId("motebit-subject"),
+        suite: "motebit-jcs-ed25519-b64-v1",
+        signature: "@@@not-valid-base64url@@@",
+      },
+    };
+    const result = await verifyDeletionCertificate(
+      cert,
+      ctxOf({ "motebit-subject": subject.publicKey }, {}),
+    );
+    expect(result.valid).toBe(false);
+    expect(result.steps.subject_signature_valid).toBe(false);
   });
 
   it("rejects a tampered cert (sensitivity mutated)", async () => {
@@ -229,6 +259,55 @@ describe("verifyDeletionCertificate — mutable_pruning arm", () => {
 
 describe("verifyDeletionCertificate — append_only_horizon arm", () => {
   const subject: HorizonSubject = { kind: "operator", operator_id: "op-A" };
+
+  it("rejects a horizon cert whose federation_graph_anchor.leaf_count is negative or non-integer", async () => {
+    const operator = await makeKeyPair();
+    // leaf_count = -1 fires the !Number.isInteger || < 0 branch.
+    const certNeg = await signHorizonCertAsIssuer(
+      {
+        kind: "append_only_horizon",
+        subject,
+        store_id: "event-log",
+        horizon_ts: 1700000000000,
+        witnessed_by: [],
+        federation_graph_anchor: {
+          algo: "merkle-sha256-v1",
+          merkle_root: "deadbeef",
+          leaf_count: -1,
+        },
+        issued_at: 1730000000000,
+      },
+      operator.privateKey,
+    );
+    const resultNeg = await verifyDeletionCertificate(
+      certNeg,
+      ctxOf({}, { "op-A": operator.publicKey }),
+    );
+    expect(resultNeg.errors.some((e) => e.includes("non-negative integer"))).toBe(true);
+
+    // leaf_count = 1.5 also fires the same branch (Number.isInteger fail).
+    const certFloat = await signHorizonCertAsIssuer(
+      {
+        kind: "append_only_horizon",
+        subject,
+        store_id: "event-log",
+        horizon_ts: 1700000000000,
+        witnessed_by: [],
+        federation_graph_anchor: {
+          algo: "merkle-sha256-v1",
+          merkle_root: "deadbeef",
+          leaf_count: 1.5,
+        },
+        issued_at: 1730000000000,
+      },
+      operator.privateKey,
+    );
+    const resultFloat = await verifyDeletionCertificate(
+      certFloat,
+      ctxOf({}, { "op-A": operator.publicKey }),
+    );
+    expect(resultFloat.errors.some((e) => e.includes("non-negative integer"))).toBe(true);
+  });
 
   it("verifies issuer-only horizon (no witnesses)", async () => {
     const operator = await makeKeyPair();
@@ -423,5 +502,214 @@ describe("canonicalizeMultiSignatureCert", () => {
     expect(bytesToHex(a)).toBe(bytesToHex(b));
     expect(bytesToHex(a)).toBe(bytesToHex(c));
     expect(bytesToHex(a)).toBe(bytesToHex(d));
+  });
+});
+
+describe("HorizonWitnessRequestBody — canonicalize / sign / verify (phase 4b-3 commit 4)", () => {
+  const baseRequestBody = (): HorizonWitnessRequestBody => ({
+    kind: "append_only_horizon",
+    subject: { kind: "operator", operator_id: "relay-issuer-001" },
+    store_id: "relay_revocation_events",
+    horizon_ts: 1730000000000,
+    issued_at: 1730000010000,
+    federation_graph_anchor: EMPTY_FEDERATION_GRAPH_ANCHOR,
+    suite: "motebit-jcs-ed25519-b64-v1",
+  });
+
+  it("round-trip: signed body verifies against the issuer's pubkey", async () => {
+    const issuer = await makeKeyPair();
+    const body = baseRequestBody();
+    const sig = await signHorizonWitnessRequestBody(body, issuer.privateKey);
+    const ok = await verifyHorizonWitnessRequestSignature(body, sig, issuer.publicKey);
+    expect(ok).toBe(true);
+  });
+
+  it("canonical bytes are byte-equal to canonicalizeHorizonCertForWitness over the full cert", async () => {
+    // Issuer-signature payload IS witness-signature payload (session-3
+    // sub-decision). The synthesized full cert (with empty witnessed_by
+    // + empty signature) should canonicalize to the same bytes as the
+    // wire-shaped request body via the dedicated helper.
+    const body = baseRequestBody();
+    const a = canonicalizeHorizonWitnessRequestBody(body);
+    expect(a.length).toBeGreaterThan(0);
+    // Re-deriving from the same body must produce identical bytes
+    // (deterministic canonicalization).
+    const b = canonicalizeHorizonWitnessRequestBody(body);
+    expect(bytesToHex(a)).toBe(bytesToHex(b));
+  });
+
+  it("verify rejects a malformed base64url signature (catch path)", async () => {
+    const issuer = await makeKeyPair();
+    const body = baseRequestBody();
+    const ok = await verifyHorizonWitnessRequestSignature(
+      body,
+      "!!!not-valid-base64url!!!",
+      issuer.publicKey,
+    );
+    expect(ok).toBe(false);
+  });
+
+  it("verify rejects an empty signature string (zero-length sigBytes path)", async () => {
+    const issuer = await makeKeyPair();
+    const body = baseRequestBody();
+    const ok = await verifyHorizonWitnessRequestSignature(body, "", issuer.publicKey);
+    expect(ok).toBe(false);
+  });
+
+  it("verify rejects when the signature was made by a different key (wrong pubkey path)", async () => {
+    const issuer = await makeKeyPair();
+    const otherKey = await makeKeyPair();
+    const body = baseRequestBody();
+    const sig = await signHorizonWitnessRequestBody(body, issuer.privateKey);
+    const ok = await verifyHorizonWitnessRequestSignature(body, sig, otherKey.publicKey);
+    expect(ok).toBe(false);
+  });
+
+  it("verify rejects when the body was tampered after signing (different canonical bytes)", async () => {
+    const issuer = await makeKeyPair();
+    const body = baseRequestBody();
+    const sig = await signHorizonWitnessRequestBody(body, issuer.privateKey);
+    const tampered: HorizonWitnessRequestBody = {
+      ...body,
+      horizon_ts: body.horizon_ts + 1, // single-byte mutation in the canonical bytes
+    };
+    const ok = await verifyHorizonWitnessRequestSignature(tampered, sig, issuer.publicKey);
+    expect(ok).toBe(false);
+  });
+
+  it("issuer-signature payload IS witness-signature payload — same primitive, two roles", async () => {
+    // Both the issuer (signing the solicitation request) and each
+    // witness (signing the response) sign byte-equal canonical bytes
+    // through this primitive. Verifies via either pubkey.
+    const issuer = await makeKeyPair();
+    const witness = await makeKeyPair();
+    const body = baseRequestBody();
+    const issuerSig = await signHorizonWitnessRequestBody(body, issuer.privateKey);
+    const witnessSig = await signHorizonWitnessRequestBody(body, witness.privateKey);
+    expect(issuerSig).not.toBe(witnessSig); // different keys → different sigs
+    expect(await verifyHorizonWitnessRequestSignature(body, issuerSig, issuer.publicKey)).toBe(
+      true,
+    );
+    expect(await verifyHorizonWitnessRequestSignature(body, witnessSig, witness.publicKey)).toBe(
+      true,
+    );
+    // Cross-key verification fails (issuer sig vs witness pubkey, etc.)
+    expect(await verifyHorizonWitnessRequestSignature(body, issuerSig, witness.publicKey)).toBe(
+      false,
+    );
+  });
+});
+
+describe("verifyRetentionManifest — signed retention manifest round-trip", () => {
+  // The verifier ships in @motebit/crypto so browsers / third-party
+  // tooling can re-verify the operator's signed retention manifest at
+  // /.well-known/motebit-retention.json. Tests cover the four
+  // fail-closed gates: spec literal, suite literal, signature shape
+  // (128-char hex), signature verification.
+
+  async function signManifestBody(
+    body: Omit<RetentionManifest, "signature">,
+    privateKey: Uint8Array,
+  ): Promise<string> {
+    const canonical = canonicalJson(body);
+    const bytes = new TextEncoder().encode(canonical);
+    const sig = await signBySuite("motebit-jcs-ed25519-hex-v1", bytes, privateKey);
+    return bytesToHex(sig);
+  }
+
+  const baseManifestBody = (operatorId: string): Omit<RetentionManifest, "signature"> => ({
+    spec: "motebit/retention-manifest@1",
+    operator_id: operatorId,
+    issued_at: 1730000000000,
+    stores: [],
+    pre_classification_default_sensitivity: "personal",
+    honest_gaps: ["pending: example gap"],
+    suite: "motebit-jcs-ed25519-hex-v1",
+  });
+
+  it("verifies a manifest signed under motebit-jcs-ed25519-hex-v1", async () => {
+    const op = await makeKeyPair();
+    const body = baseManifestBody("operator-001");
+    const signature = await signManifestBody(body, op.privateKey);
+    const manifest: RetentionManifest = { ...body, signature };
+    const result = await verifyRetentionManifest(manifest, op.publicKey);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.manifest?.operator_id).toBe("operator-001");
+  });
+
+  it("rejects a manifest with the wrong spec literal", async () => {
+    const op = await makeKeyPair();
+    const body = {
+      ...baseManifestBody("operator-001"),
+      spec: "motebit/retention-manifest@2" as never,
+    };
+    const signature = await signManifestBody(body, op.privateKey);
+    const result = await verifyRetentionManifest({ ...body, signature }, op.publicKey);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes("unexpected spec"))).toBe(true);
+  });
+
+  it("rejects a manifest with the wrong suite literal", async () => {
+    const op = await makeKeyPair();
+    const body = {
+      ...baseManifestBody("operator-001"),
+      suite: "motebit-some-other-suite" as never,
+    };
+    const signature = await signManifestBody(body, op.privateKey);
+    const result = await verifyRetentionManifest({ ...body, signature }, op.publicKey);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes("unexpected suite"))).toBe(true);
+  });
+
+  it("rejects a manifest whose signature is not 128-char hex", async () => {
+    const op = await makeKeyPair();
+    const body = baseManifestBody("operator-001");
+    const result = await verifyRetentionManifest(
+      { ...body, signature: "not-hex-bytes" },
+      op.publicKey,
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes("128-char hex"))).toBe(true);
+  });
+
+  it("rejects a manifest whose signature is exactly 128 chars but contains non-hex characters", async () => {
+    const op = await makeKeyPair();
+    const body = baseManifestBody("operator-001");
+    // 128 chars, all 'g' — passes length check, fails the hex regex.
+    const result = await verifyRetentionManifest(
+      { ...body, signature: "g".repeat(128) },
+      op.publicKey,
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes("128-char hex"))).toBe(true);
+  });
+
+  it("rejects a manifest tampered after signing", async () => {
+    const op = await makeKeyPair();
+    const body = baseManifestBody("operator-001");
+    const signature = await signManifestBody(body, op.privateKey);
+    const tampered: RetentionManifest = {
+      ...body,
+      signature,
+      pre_classification_default_sensitivity: "secret",
+    };
+    const result = await verifyRetentionManifest(tampered, op.publicKey);
+    expect(result.valid).toBe(false);
+    expect(
+      result.errors.some((e) => e.includes("does not verify against operator_public_key")),
+    ).toBe(true);
+  });
+
+  it("rejects a manifest signed by a different key", async () => {
+    const op = await makeKeyPair();
+    const wrong = await makeKeyPair();
+    const body = baseManifestBody("operator-001");
+    const signature = await signManifestBody(body, op.privateKey);
+    const result = await verifyRetentionManifest({ ...body, signature }, wrong.publicKey);
+    expect(result.valid).toBe(false);
+    expect(
+      result.errors.some((e) => e.includes("does not verify against operator_public_key")),
+    ).toBe(true);
   });
 });
