@@ -449,6 +449,163 @@ describe("Dispute: evidence + resolve", () => {
     expect(errPayload.error_code).toBe("insufficient_federation_peers");
   });
 
+  it("re-call after successful resolve returns cached resolution (idempotency: cached-path)", async () => {
+    // First call resolves the dispute; second call with different body
+    // SHOULD return the cached resolution, NOT re-resolve. This is the
+    // safety-net for crash-recovery and double-click scenarios.
+    const openRes = await openDispute(relay, "alloc-ev", "del-ev", "wrk-ev", "task-ev");
+    const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+
+    const first = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "upheld",
+        rationale: "first call",
+        fund_action: "release_to_worker",
+      }),
+    });
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as { resolution: string; resolved_at: number };
+    expect(firstBody.resolution).toBe("upheld");
+
+    // Second call with DIFFERENT body — cached path returns first's
+    // resolution, not the new one.
+    const second = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "overturned",
+        rationale: "second call (should be ignored)",
+        fund_action: "refund_to_delegator",
+      }),
+    });
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as { resolution: string; resolved_at: number };
+    expect(secondBody.resolution).toBe("upheld"); // first call's outcome, not second's
+    expect(secondBody.resolved_at).toBe(firstBody.resolved_at);
+
+    // Only one resolution row inserted (cached path skipped the second insert)
+    const count = relay.moteDb.db
+      .prepare("SELECT COUNT(*) as n FROM relay_dispute_resolutions WHERE dispute_id = ?")
+      .get(dispute_id) as { n: number };
+    expect(count.n).toBe(1);
+  });
+
+  it("concurrent /resolve calls collapse via per-dispute advisory lock — only one resolution row inserted", async () => {
+    // Fire two /resolve calls in parallel; the per-dispute advisory
+    // lock collapses them to one in-flight promise. Without the lock,
+    // two concurrent inserts would crash on the
+    // relay_dispute_resolutions.dispute_id UNIQUE constraint.
+    const openRes = await openDispute(relay, "alloc-ev", "del-ev", "wrk-ev", "task-ev");
+    const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+
+    const body = JSON.stringify({
+      resolution: "split",
+      rationale: "concurrent test",
+      fund_action: "split",
+    });
+    const headers = { "Content-Type": "application/json", ...AUTH_HEADER };
+    const [r1, r2] = await Promise.all([
+      relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+        method: "POST",
+        headers,
+        body,
+      }),
+      relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+        method: "POST",
+        headers,
+        body,
+      }),
+    ]);
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+
+    // Only one resolution row was inserted (lock collapsed; second
+    // call's insert would have crashed without the lock).
+    const count = relay.moteDb.db
+      .prepare("SELECT COUNT(*) as n FROM relay_dispute_resolutions WHERE dispute_id = ?")
+      .get(dispute_id) as { n: number };
+    expect(count.n).toBe(1);
+  });
+
+  it("federation crash-recovery: pre-existing votes for round 1 → aggregate without re-fanout", async () => {
+    // Simulate crash mid-orchestration: dispute is in 'arbitration' with
+    // ≥3 persisted votes but no resolution row yet. Re-call /resolve;
+    // recovery path detects existing votes and aggregates from them
+    // without fanning out (test relay has no peers, so a fresh fanout
+    // would 503 insufficient_federation_peers — successful recovery
+    // requires the aggregate-from-persisted path to fire).
+    const { generateKeypair, bytesToHex } = await import("@motebit/encryption");
+    const { signAdjudicatorVote } = await import("@motebit/crypto");
+    const relayMotebitId = relay.relayIdentity.relayMotebitId;
+    createAllocation(relay, "alloc-recovery", "task-recovery", "del-rec");
+    const dispute_id = nextDisputeId();
+    injectDispute(relay, {
+      dispute_id,
+      task_id: "task-recovery",
+      allocation_id: "alloc-recovery",
+      filed_by: "del-rec",
+      respondent: relayMotebitId, // relay is party → federation path
+    });
+    // Manually transition to 'arbitration' (simulating mid-orchestration crash)
+    relay.moteDb.db
+      .prepare("UPDATE relay_disputes SET state = 'arbitration' WHERE dispute_id = ?")
+      .run(dispute_id);
+    // Pre-insert 3 valid AdjudicatorVote rows (simulating crash AFTER
+    // votes were persisted but BEFORE the resolution insert)
+    const insertVote = relay.moteDb.db.prepare(
+      `INSERT INTO relay_dispute_votes (dispute_id, round, peer_id, vote, rationale, suite, signature, received_at)
+       VALUES (?, 1, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (let i = 0; i < 3; i++) {
+      const kp = await generateKeypair();
+      const peerId = `recovery-peer-${i}`;
+      const signed = await signAdjudicatorVote(
+        {
+          dispute_id,
+          round: 1,
+          peer_id: peerId,
+          vote: "overturned",
+          rationale: `recovery vote ${i}`,
+        },
+        kp.privateKey,
+      );
+      void bytesToHex; // imported for parity with other test patterns
+      insertVote.run(
+        dispute_id,
+        peerId,
+        signed.vote,
+        signed.rationale,
+        signed.suite,
+        signed.signature,
+        Date.now(),
+      );
+    }
+
+    // Now /resolve should aggregate from the persisted votes without
+    // re-fanning-out (no peers configured; a fresh orchestrator call
+    // would 503).
+    const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "upheld", // ignored; federation outcome computed from votes
+        rationale: "ignored",
+        fund_action: "release_to_worker",
+      }),
+    });
+    expect(resolveRes.status).toBe(200);
+    const body = (await resolveRes.json()) as {
+      resolution: string;
+      adjudicator_votes: Array<{ peer_id: string; vote: string }>;
+    };
+    // Federation aggregator computed: 3 overturned votes → resolution=overturned
+    expect(body.resolution).toBe("overturned");
+    expect(body.adjudicator_votes).toHaveLength(3);
+    expect(body.adjudicator_votes.every((v) => v.vote === "overturned")).toBe(true);
+  });
+
   it("resolution signature is verifiable with the relay's public key (single-relay path)", async () => {
     const { verifyDisputeResolution } = await import("@motebit/encryption");
     const { hexToBytes } = await import("@motebit/encryption");

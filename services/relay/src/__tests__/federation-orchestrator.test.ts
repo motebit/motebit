@@ -471,3 +471,116 @@ describe("orchestrateFederationResolution — defensive guards", () => {
     ).rejects.toThrow(/legacy_dispute_no_signed_body/);
   });
 });
+
+describe("orchestrateFederationResolution — additional gate-coverage", () => {
+  it("all 3 peers return 501 policy_not_configured → 0 valid votes → split fallback", async () => {
+    env = await setupOrchEnv(3);
+    const policies = new Map(env.peers.map((p) => [p.identity.relayMotebitId, { status: 501 }]));
+    const fetchImpl = makeFetchImpl(env.peers, policies);
+
+    const dispute = env.filePeerlessDispute("dispute-all-501");
+    const result = await orchestrateFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      1,
+      { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
+    );
+    expect(result.resolution).toBe("split");
+    expect(result.split_ratio).toBe(0.5);
+    expect(result.adjudicator_votes).toHaveLength(0);
+    expect(result.rationale).toMatch(/quorum not met/);
+  });
+
+  it("peer_id mismatch in response → that peer's vote not counted (impersonation defense)", async () => {
+    env = await setupOrchEnv(3);
+    // Peer 2 claims to be peer 0's id — leader's response-side check
+    // (vote.peer_id !== peer.peer_relay_id) rejects it.
+    const policies = new Map([
+      [env.peers[0]!.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }],
+      [env.peers[1]!.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }],
+      [
+        env.peers[2]!.identity.relayMotebitId,
+        {
+          vote: "upheld" as DisputeOutcome,
+          forcePeerId: env.peers[0]!.identity.relayMotebitId,
+        },
+      ],
+    ]);
+    const fetchImpl = makeFetchImpl(env.peers, policies);
+
+    const dispute = env.filePeerlessDispute("dispute-peer-id-mismatch");
+    const result = await orchestrateFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      1,
+      { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
+    );
+    expect(result.adjudicator_votes).toHaveLength(2);
+    expect(result.resolution).toBe("split"); // <3 valid → quorum failure
+  });
+
+  it("self-row in relay_peers is excluded from fan-out (§6.5 SQL self-exclusion)", async () => {
+    env = await setupOrchEnv(3);
+    // Inject a self-row corruption: leader's own id appears in
+    // relay_peers as if it were a peer. The orchestrator's
+    // `WHERE peer_relay_id != self` filter MUST exclude it.
+    env.db
+      .prepare(
+        `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, missed_heartbeats, agent_count, trust_score, peered_at, last_heartbeat_at)
+       VALUES (?, ?, ?, ?, 'active', 0, 0, 0.5, ?, ?)`,
+      )
+      .run(
+        env.leader.relayMotebitId, // SELF
+        env.leader.publicKeyHex,
+        "http://leader-self-row.test",
+        "leader-self",
+        Date.now(),
+        Date.now(),
+      );
+
+    const policies = new Map(
+      env.peers.map((p) => [p.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }]),
+    );
+    const fetchImpl = makeFetchImpl(env.peers, policies);
+
+    const dispute = env.filePeerlessDispute("dispute-self-exclusion");
+    const result = await orchestrateFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      1,
+      { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
+    );
+    // Only the 3 real peers voted; self-row was excluded at the SQL filter
+    // (otherwise we'd see 4 votes or a fetch error against the bogus
+    // self-row endpoint).
+    expect(result.adjudicator_votes).toHaveLength(3);
+    expect(result.adjudicator_votes.every((v) => v.peer_id !== env.leader.relayMotebitId)).toBe(
+      true,
+    );
+  });
+
+  it("orchestrator is idempotent on re-run — votes upsert via ON CONFLICT, aggregation deterministic", async () => {
+    env = await setupOrchEnv(3);
+    const policies = new Map(
+      env.peers.map((p) => [p.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }]),
+    );
+    const fetchImpl = makeFetchImpl(env.peers, policies);
+
+    const dispute = env.filePeerlessDispute("dispute-idempotent");
+    const r1 = await orchestrateFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      1,
+      { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
+    );
+    const r2 = await orchestrateFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      1,
+      { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
+    );
+    expect(r1.resolution).toBe(r2.resolution);
+    expect(r1.adjudicator_votes).toHaveLength(3);
+    expect(r2.adjudicator_votes).toHaveLength(3);
+    // ON CONFLICT(dispute_id, round, peer_id) DO UPDATE → still 3 rows
+    const persisted = env.db
+      .prepare("SELECT COUNT(*) as n FROM relay_dispute_votes WHERE dispute_id = ? AND round = ?")
+      .get(dispute.dispute_id, 1) as { n: number };
+    expect(persisted.n).toBe(3);
+  });
+});

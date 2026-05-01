@@ -171,6 +171,36 @@ export interface DisputeDeps {
   voteRequestTimeoutMs?: number;
 }
 
+// === §6.2 Concurrency + recovery state ===
+//
+// Per-dispute advisory lock. JS is single-threaded, but the orchestrator
+// awaits async I/O (peer fan-out), so two concurrent /resolve calls on
+// the same dispute would interleave between awaits. The lock collapses
+// concurrent calls to the same in-flight promise — second caller awaits
+// the first caller's result.
+//
+// Cross-process concurrency (e.g., multi-relay-process deployment) is
+// covered by the `relay_dispute_resolutions.dispute_id UNIQUE` constraint
+// at the DB level — that's the cross-process backstop. The advisory lock
+// is the in-process collapse, mirroring `advanceRelayHorizon` in
+// horizon.ts.
+const resolveLocks = new Map<string, Promise<ResolveData>>();
+
+/** Test-only: reset the in-process advisory lock map. */
+export function _resetResolveLocksForTests(): void {
+  resolveLocks.clear();
+}
+
+/** Internal: data returned by the lock-wrapped resolve flow. */
+interface ResolveData {
+  resolution: DisputeOutcome;
+  rationale: string;
+  fund_action: DisputeFundAction;
+  split_ratio: number;
+  adjudicator_votes: AdjudicatorVote[];
+  resolved_at: number;
+}
+
 // === §6.2 Federation Orchestrator ===
 //
 // Replaces the prior 409 self-adjudication guard with the federation
@@ -742,7 +772,28 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
   });
 
   // ── POST /api/v1/disputes/:disputeId/resolve (§6) ──
-  // Operator resolution (single-relay adjudication).
+  // Operator resolution (single-relay adjudication) OR federation
+  // adjudication entry point (§6.2).
+  //
+  // Concurrency + crash-recovery shape:
+  //
+  //   1. Cached-resolution check first. If a resolution row already
+  //      exists for this dispute, return it (re-call after successful
+  //      resolve is idempotent; UNIQUE constraint on resolutions blocks
+  //      duplicate inserts but the cached path returns the same answer).
+  //   2. Per-dispute advisory lock collapses concurrent /resolve calls
+  //      to one in-flight promise. Second caller awaits the first
+  //      caller's result.
+  //   3. State-machine path: evidence → arbitration before fan-out.
+  //      Crash between arbitration-transition and resolution-insert
+  //      leaves dispute in `arbitration`; re-resolve detects existing
+  //      votes (round-scoped) and either aggregates from them (≥
+  //      FEDERATION_QUORUM_MIN persisted votes) or completes the
+  //      fan-out. Mid-orchestration crash recovery without re-fanning-
+  //      out wasted bandwidth.
+  //   4. Final state transition `arbitration → resolved` + fund-action
+  //      stays in the existing BEGIN/COMMIT block — that's the cross-
+  //      process atomicity guarantee.
   /** @spec motebit/dispute@1.0 */
   app.post("/api/v1/disputes/:disputeId/resolve", async (c) => {
     const disputeId = c.req.param("disputeId");
@@ -755,147 +806,249 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
 
     const dispute = getDispute(db, disputeId);
     if (!dispute) throw new HTTPException(404, { message: "Dispute not found" });
+
+    // 1. Cached-resolution check — return existing resolution if present.
+    //    Handles re-call after successful resolve + the second-caller-on-
+    //    crash-recovery case (first caller completed; second caller sees
+    //    the persisted resolution).
+    const existing = db
+      .prepare(
+        "SELECT resolution, rationale, fund_action, split_ratio, adjudicator_votes, resolved_at FROM relay_dispute_resolutions WHERE dispute_id = ?",
+      )
+      .get(disputeId) as
+      | {
+          resolution: DisputeOutcome;
+          rationale: string;
+          fund_action: DisputeFundAction;
+          split_ratio: number;
+          adjudicator_votes: string;
+          resolved_at: number;
+        }
+      | undefined;
+    if (existing) {
+      return c.json({
+        ok: true,
+        dispute_id: disputeId,
+        state: "resolved" as DisputeState,
+        resolution: existing.resolution,
+        fund_action: existing.fund_action,
+        split_ratio: existing.split_ratio,
+        resolved_at: existing.resolved_at,
+        adjudicator_votes: JSON.parse(existing.adjudicator_votes) as AdjudicatorVote[],
+      });
+    }
+
     if (dispute.state !== "evidence" && dispute.state !== "arbitration") {
       throw new HTTPException(400, {
         message: `Cannot resolve in state: ${String(dispute.state)}`,
       });
     }
 
-    // §6.5 + §6.2: when the relay is a party to the dispute, single-relay
-    // adjudication is forbidden; route resolution through the federation
-    // orchestrator (replaces the prior 409 self-adjudication guard).
-    // The orchestrator pulls the dispute body + evidence, fans out to
-    // active peers, verifies + persists each AdjudicatorVote, aggregates
-    // by majority (ties → split per §6.4), and returns the federation-
-    // derived resolution shape. Body.{resolution, rationale, fund_action,
-    // split_ratio} are IGNORED on this path — the operator cannot
-    // participate in adjudication when their relay is a party.
+    // 2. Per-dispute advisory lock. Collapse concurrent calls.
+    const inFlight = resolveLocks.get(disputeId);
+    if (inFlight) {
+      const data = await inFlight;
+      return c.json({
+        ok: true,
+        dispute_id: disputeId,
+        state: "resolved" as DisputeState,
+        ...data,
+      });
+    }
+
     const isFederationPath =
       dispute.filed_by === relayIdentity.relayMotebitId ||
       dispute.respondent === relayIdentity.relayMotebitId;
 
-    let resolutionOutcome: DisputeOutcome;
-    let resolutionRationale: string;
-    let resolutionFundAction: DisputeFundAction;
-    let splitRatio: number;
-    let adjudicatorVotes: AdjudicatorVote[];
+    const resolvePromise = (async (): Promise<ResolveData> => {
+      let resolutionOutcome: DisputeOutcome;
+      let resolutionRationale: string;
+      let resolutionFundAction: DisputeFundAction;
+      let splitRatio: number;
+      let adjudicatorVotes: AdjudicatorVote[];
 
-    if (isFederationPath) {
-      // Round=1 for original adjudication. §8.3 appeals re-run the
-      // orchestrator with round=2 (commit 4).
-      const federationResult = await orchestrateFederationResolution(
+      if (isFederationPath) {
+        // 3. State-machine: evidence → arbitration before fan-out.
+        //    Idempotent: WHERE state = 'evidence' guards against
+        //    re-running the transition on recovery.
+        if (dispute.state === "evidence") {
+          db.prepare(
+            "UPDATE relay_disputes SET state = 'arbitration' WHERE dispute_id = ? AND state = 'evidence'",
+          ).run(disputeId);
+        }
+
+        // Recovery: check for persisted votes from a prior crashed
+        // orchestration. If we have ≥ quorum already, aggregate from
+        // them rather than re-fanning-out (saves bandwidth + preserves
+        // the votes peers signed pre-crash).
+        const round = 1;
+        const persistedVoteRows = db
+          .prepare(
+            "SELECT dispute_id, round, peer_id, vote, rationale, suite, signature FROM relay_dispute_votes WHERE dispute_id = ? AND round = ?",
+          )
+          .all(disputeId, round) as Array<{
+          dispute_id: string;
+          round: number;
+          peer_id: string;
+          vote: string;
+          rationale: string;
+          suite: string;
+          signature: string;
+        }>;
+
+        if (persistedVoteRows.length >= FEDERATION_QUORUM_MIN) {
+          // Recovered from mid-orchestration crash: aggregate from
+          // persisted votes (peers' signatures preserved verbatim).
+          logger.info("dispute.resolve.recovery_aggregation", {
+            disputeId,
+            round,
+            persistedVoteCount: persistedVoteRows.length,
+          });
+          const reconstructedVotes: AdjudicatorVote[] = persistedVoteRows.map((row) => ({
+            dispute_id: row.dispute_id,
+            round: row.round,
+            peer_id: row.peer_id,
+            vote: row.vote as DisputeOutcome,
+            rationale: row.rationale,
+            suite: row.suite as "motebit-jcs-ed25519-b64-v1",
+            signature: row.signature,
+          }));
+          const recovered = aggregateVotes(reconstructedVotes, persistedVoteRows.length);
+          resolutionOutcome = recovered.resolution;
+          resolutionRationale = recovered.rationale;
+          resolutionFundAction = recovered.fund_action;
+          splitRatio = recovered.split_ratio;
+          adjudicatorVotes = recovered.adjudicator_votes;
+        } else {
+          // Fresh fan-out (or partial recovery; orchestrator's ON
+          // CONFLICT DO UPDATE handles re-runs idempotently).
+          // Round=1 for original adjudication; §8.3 appeals re-run with
+          // round=2 (commit 4).
+          const federationResult = await orchestrateFederationResolution(
+            {
+              dispute_id: disputeId,
+              body_json: (dispute.body_json as string | null) ?? "",
+            },
+            round,
+            { db, relayIdentity, fetchImpl, voteRequestTimeoutMs },
+          );
+          resolutionOutcome = federationResult.resolution;
+          resolutionRationale = federationResult.rationale;
+          resolutionFundAction = federationResult.fund_action;
+          splitRatio = federationResult.split_ratio;
+          adjudicatorVotes = federationResult.adjudicator_votes;
+        }
+      } else {
+        // Single-relay adjudication: operator's body is the resolution.
+        // Rationale required (§6.5).
+        if (!body.rationale) {
+          throw new HTTPException(400, { message: "Rationale is required" });
+        }
+        resolutionOutcome = body.resolution;
+        resolutionRationale = body.rationale;
+        resolutionFundAction = body.fund_action;
+        splitRatio =
+          body.split_ratio ??
+          (body.resolution === "upheld" ? 0 : body.resolution === "overturned" ? 1 : 0.5);
+        adjudicatorVotes = [];
+      }
+
+      const resolvedAt = Date.now();
+
+      // Sign the resolution through `@motebit/encryption`'s signer.
+      const signedResolution = await signDisputeResolution(
         {
           dispute_id: disputeId,
-          body_json: (dispute.body_json as string | null) ?? "",
+          resolution: resolutionOutcome,
+          rationale: resolutionRationale,
+          fund_action: resolutionFundAction,
+          split_ratio: splitRatio,
+          adjudicator: relayIdentity.relayMotebitId,
+          adjudicator_votes: adjudicatorVotes,
+          resolved_at: resolvedAt,
         },
-        1,
-        { db, relayIdentity, fetchImpl, voteRequestTimeoutMs },
+        relayIdentity.privateKey,
       );
-      resolutionOutcome = federationResult.resolution;
-      resolutionRationale = federationResult.rationale;
-      resolutionFundAction = federationResult.fund_action;
-      splitRatio = federationResult.split_ratio;
-      adjudicatorVotes = federationResult.adjudicator_votes;
-    } else {
-      // Single-relay adjudication: operator's body is the resolution.
-      // Rationale required (§6.5).
-      if (!body.rationale) {
-        throw new HTTPException(400, { message: "Rationale is required" });
+      const signatureHex = signedResolution.signature;
+
+      const resolutionId = `res-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+      // 4. Atomic terminal transition: resolution insert + state update +
+      //    fund-action all in one txn. If anything fails, the dispute
+      //    stays in `arbitration` and a re-resolve recovers cleanly.
+      db.exec("BEGIN");
+      try {
+        db.prepare(
+          `INSERT INTO relay_dispute_resolutions
+             (resolution_id, dispute_id, resolution, rationale, fund_action, split_ratio, adjudicator, adjudicator_votes, resolved_at, signature)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          resolutionId,
+          disputeId,
+          resolutionOutcome,
+          resolutionRationale,
+          resolutionFundAction,
+          splitRatio,
+          relayIdentity.relayMotebitId,
+          JSON.stringify(adjudicatorVotes),
+          resolvedAt,
+          signatureHex,
+        );
+        db.prepare(
+          "UPDATE relay_disputes SET state = 'resolved', resolution = ?, rationale = ?, fund_action = ?, split_ratio = ?, adjudicator = ?, resolved_at = ? WHERE dispute_id = ?",
+        ).run(
+          resolutionOutcome,
+          resolutionRationale,
+          resolutionFundAction,
+          splitRatio,
+          relayIdentity.relayMotebitId,
+          resolvedAt,
+          disputeId,
+        );
+        executeFundAction(db, dispute, resolutionFundAction, splitRatio);
+        db.exec("COMMIT");
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw new HTTPException(500, {
+          message: `Dispute resolution failed — funds not moved: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
-      resolutionOutcome = body.resolution;
-      resolutionRationale = body.rationale;
-      resolutionFundAction = body.fund_action;
-      splitRatio =
-        body.split_ratio ??
-        (body.resolution === "upheld" ? 0 : body.resolution === "overturned" ? 1 : 0.5);
-      adjudicatorVotes = [];
-    }
 
-    const resolvedAt = Date.now();
+      logger.info("dispute.resolved", {
+        disputeId,
+        resolution: resolutionOutcome,
+        fundAction: resolutionFundAction,
+        splitRatio,
+        isFederation: isFederationPath,
+        voteCount: adjudicatorVotes.length,
+      });
 
-    // Sign the resolution through `@motebit/encryption`'s signer — the
-    // protocol-primitive-placement rule says the sign recipe lives in
-    // the package layer, not inline here. `adjudicator_votes` is empty
-    // for single-relay (§6.4) and populated for federation per §6.5.
-    const signedResolution = await signDisputeResolution(
-      {
-        dispute_id: disputeId,
+      return {
         resolution: resolutionOutcome,
         rationale: resolutionRationale,
         fund_action: resolutionFundAction,
         split_ratio: splitRatio,
-        adjudicator: relayIdentity.relayMotebitId,
         adjudicator_votes: adjudicatorVotes,
         resolved_at: resolvedAt,
-      },
-      relayIdentity.privateKey,
-    );
-    const signatureHex = signedResolution.signature;
+      };
+    })();
 
-    const resolutionId = `res-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-
-    db.prepare(
-      `INSERT INTO relay_dispute_resolutions
-       (resolution_id, dispute_id, resolution, rationale, fund_action, split_ratio, adjudicator, adjudicator_votes, resolved_at, signature)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      resolutionId,
-      disputeId,
-      resolutionOutcome,
-      resolutionRationale,
-      resolutionFundAction,
-      splitRatio,
-      relayIdentity.relayMotebitId,
-      JSON.stringify(adjudicatorVotes),
-      resolvedAt,
-      signatureHex,
-    );
-
-    // Atomic: state transition + fund movement in one transaction.
-    // If fund execution fails, the dispute must NOT be marked resolved.
-    db.exec("BEGIN");
+    resolveLocks.set(disputeId, resolvePromise);
     try {
-      db.prepare(
-        "UPDATE relay_disputes SET state = 'resolved', resolution = ?, rationale = ?, fund_action = ?, split_ratio = ?, adjudicator = ?, resolved_at = ? WHERE dispute_id = ?",
-      ).run(
-        resolutionOutcome,
-        resolutionRationale,
-        resolutionFundAction,
-        splitRatio,
-        relayIdentity.relayMotebitId,
-        resolvedAt,
-        disputeId,
-      );
-
-      // Execute fund action (§7.2) — must succeed or rollback
-      executeFundAction(db, dispute, resolutionFundAction, splitRatio);
-      db.exec("COMMIT");
-    } catch (err) {
-      db.exec("ROLLBACK");
-      throw new HTTPException(500, {
-        message: `Dispute resolution failed — funds not moved: ${err instanceof Error ? err.message : String(err)}`,
+      const data = await resolvePromise;
+      return c.json({
+        ok: true,
+        dispute_id: disputeId,
+        state: "resolved" as DisputeState,
+        resolution: data.resolution,
+        fund_action: data.fund_action,
+        split_ratio: data.split_ratio,
+        resolved_at: data.resolved_at,
+        adjudicator_votes: data.adjudicator_votes,
       });
+    } finally {
+      resolveLocks.delete(disputeId);
     }
-
-    logger.info("dispute.resolved", {
-      disputeId,
-      resolution: resolutionOutcome,
-      fundAction: resolutionFundAction,
-      splitRatio,
-      isFederation: isFederationPath,
-      voteCount: adjudicatorVotes.length,
-    });
-
-    return c.json({
-      ok: true,
-      dispute_id: disputeId,
-      state: "resolved" as DisputeState,
-      resolution: resolutionOutcome,
-      fund_action: resolutionFundAction,
-      split_ratio: splitRatio,
-      resolved_at: resolvedAt,
-      adjudicator_votes: adjudicatorVotes,
-    });
   });
 
   // ── POST /api/v1/disputes/:disputeId/appeal (§8) ──
