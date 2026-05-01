@@ -1,6 +1,6 @@
 # Federation E2E live test runbook
 
-The `scripts/test-federation-live.mjs` script exercises Phases 1-5 of `motebit/relay-federation@1.0` (Identity / Peering / Discovery / Heartbeat / Cleanup) against two real cross-cloud relays. This runbook documents how to run it and what a clean pass looks like.
+The `scripts/test-federation-live.mjs` script exercises Phases 1-5 of the `motebit/relay-federation@1.1` baseline (Identity / Peering / Discovery / Heartbeat / Cleanup — these were `@1.0`'s twelve routes; the spec bumped to `@1.1` in 2026-05-01 with two additive horizon endpoints, §15) against two real cross-cloud relays. This runbook documents how to run it and what a clean pass looks like. **Scope note:** the §15 horizon endpoints (`/horizon/witness`, `/horizon/dispute`) added in `@1.1` are NOT yet exercised by this script — extending coverage to §15 is tracked as a follow-up to the phase 4b-3 doctrine arc.
 
 ## When to run
 
@@ -42,7 +42,7 @@ A clean pass returns `20/20 PASSED`. Two tests are SKIP-by-design (the script us
 
 ## What it validates
 
-- **Phase 1 — Identity exchange (4 tests):** `GET /federation/v1/identity` on both relays returns `motebit/relay-federation@1.0`-spec-conformant payloads with distinct Ed25519 keys.
+- **Phase 1 — Identity exchange (4 tests):** `GET /federation/v1/identity` on both relays returns `motebit/relay-federation@1.1`-spec-conformant payloads with distinct Ed25519 keys (the route is unchanged from `@1.0`; minor-version bumps are additive — §3-14 stay byte-compatible).
 - **Phase 2 — Peering handshake (4 tests):** Synthetic peer A proposes to relay B; B challenges with a nonce; A signs `${relay_id}:${nonce}:${FEDERATION_SUITE}`; B verifies and activates the peer record. The `:${FEDERATION_SUITE}` suffix is critical — it binds the handshake to a specific cryptosuite (`motebit-concat-ed25519-hex-v1`) so a peer attesting under a different suite is rejected.
 - **Phase 3 — Federated discovery (4 tests):** Test agent registered on relay B is discoverable through `GET /api/v1/agents/discover` (local) and `POST /federation/v1/discover` (the cross-relay path).
 - **Phase 4 — Heartbeat (4 tests):** Heartbeat signs `${relay_id}|${timestamp}|${FEDERATION_SUITE}` (note the `|` separator — distinct from the peering `:` separator); relay verifies the signature, records the timestamp, and rejects payloads with wrong signatures or >5min clock drift.
