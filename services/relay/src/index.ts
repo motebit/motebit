@@ -91,6 +91,7 @@ import {
   startSettlementRetryLoop,
 } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
+import { startRevocationHorizonLoop } from "./horizon.js";
 import {
   getAgentAnchorBatch,
   getAgentSettlementProof,
@@ -212,6 +213,16 @@ export interface SyncRelayConfig {
     allowedPeers?: string[];
     /** Blocklist of relay IDs that cannot peer. Takes precedence over allowlist. */
     blockedPeers?: string[];
+    /**
+     * Per-request timeout for outbound `POST /federation/v1/horizon/witness`
+     * solicitations during a horizon advance (phase 4b-3). Default 10s.
+     */
+    witnessSolicitationTimeoutMs?: number;
+    /**
+     * Periodic interval for the revocation-events horizon advance loop.
+     * Default 1h. Operational tuning knob (not a doctrinal commitment).
+     */
+    revocationHorizonIntervalMs?: number;
   };
   /** Platform fee rate for settlement (0–1). Default: 0.05 (5%). Protocol supports any value. */
   platformFeeRate?: number;
@@ -1065,6 +1076,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     getEmergencyFreeze(),
   );
 
+  // Phase 4b-3 — periodic revocation-events horizon advance. Replaces
+  // the old startup-time `cleanupRevocationEvents` sync purge with a
+  // signed `append_only_horizon` cert (self-witnessed when no peers,
+  // co-witnessed via Path A fan-out otherwise). Default 1h cadence;
+  // override via `federationConfig.revocationHorizonIntervalMs`.
+  const revocationHorizonInterval = startRevocationHorizonLoop(
+    moteDb.db,
+    { relayIdentity, witnessSolicitationTimeoutMs: federationConfig?.witnessSolicitationTimeoutMs },
+    federationConfig?.revocationHorizonIntervalMs,
+    () => getEmergencyFreeze(),
+  );
+
   // Settlement retry loop callback touches taskQueue — stays in index.ts
   const settlementRetryInterval = startSettlementRetryLoop(
     moteDb.db,
@@ -1333,6 +1356,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(taskCleanupInterval);
     clearInterval(federationQueryPruneInterval);
     clearInterval(heartbeatInterval);
+    clearInterval(revocationHorizonInterval);
     clearInterval(settlementRetryInterval);
     clearInterval(batchAnchorInterval);
     clearInterval(agentAnchorInterval);

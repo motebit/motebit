@@ -18,6 +18,16 @@ import {
   bytesToHex,
   hexToBytes,
 } from "@motebit/encryption";
+import {
+  signHorizonWitnessRequestBody,
+  verifyHorizonWitnessRequestSignature,
+  verifyWitnessOmissionDispute,
+} from "@motebit/crypto";
+import {
+  WitnessOmissionDisputeSchema,
+  WitnessSolicitationRequestSchema,
+} from "@motebit/wire-schemas";
+import { persistWitnessOmissionDispute, resolveHorizonCertBySignature } from "./horizon.js";
 // Federation handshake and heartbeat messages sign under the
 // concat-ed25519-hex suite. The primitive call lives in
 // @motebit/crypto's suite-dispatch; this service reaches through
@@ -67,6 +77,21 @@ export interface FederationConfig {
   allowedPeers?: string[];
   /** Blocklist of relay IDs that cannot peer. Takes precedence over allowlist. */
   blockedPeers?: string[];
+  /**
+   * Per-request timeout for outbound `POST /federation/v1/horizon/witness`
+   * solicitations during a horizon advance (phase 4b-3). Default 10s
+   * (`DEFAULT_WITNESS_SOLICITATION_TIMEOUT_MS` in horizon.ts).
+   * Per-request timeout IS the overall solicitation deadline since the
+   * orchestrator uses `Promise.allSettled` over a parallel fan-out.
+   */
+  witnessSolicitationTimeoutMs?: number;
+  /**
+   * Periodic interval for the revocation-events horizon advance loop.
+   * Default 1h (`DEFAULT_REVOCATION_HORIZON_INTERVAL_MS` in horizon.ts).
+   * Operational tuning knob, not a doctrinal commitment — anywhere from
+   * minutes-to-hours is fine given the 7d TTL on revocation events.
+   */
+  revocationHorizonIntervalMs?: number;
 }
 
 export interface AgentInfo {
@@ -232,7 +257,14 @@ export function createFederationTables(db: DatabaseDriver): void {
 
 // === Revocation Event Helpers ===
 
-const REVOCATION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+/**
+ * Revocation-events retention TTL — 7 days. Phase 4b-3 promotes this
+ * from the implicit constant of `cleanupRevocationEvents` (removed) to
+ * the cutoff passed into `advanceRevocationHorizon` (horizon.ts), and
+ * to the declared `horizon_advance_period_days: 7` in commit 5's
+ * operator retention manifest projection.
+ */
+export const REVOCATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Module-level submitter for onchain revocation anchoring.
 // Set once at relay startup via setRevocationAnchorSubmitter().
@@ -330,12 +362,13 @@ export function getRevocationEventsSince(db: DatabaseDriver, sinceTs: number): R
     .all(sinceTs) as RevocationEvent[];
 }
 
-/** Clean up revocation events older than TTL (7 days). */
-export function cleanupRevocationEvents(db: DatabaseDriver): number {
-  const cutoff = Date.now() - REVOCATION_TTL_MS;
-  const result = db.prepare("DELETE FROM relay_revocation_events WHERE timestamp < ?").run(cutoff);
-  return (result as { changes: number }).changes;
-}
+// `cleanupRevocationEvents` was removed in phase 4b-3 (commit 4) — the
+// informal sync purge is replaced by `advanceRevocationHorizon` in
+// horizon.ts, which signs an `append_only_horizon` cert (self-witnessed
+// or co-witnessed via federation fan-out) and persists it before
+// truncating. The 7d TTL stays as `REVOCATION_TTL_MS` (above) and
+// surfaces as the declared `horizon_advance_period_days: 7` in commit
+// 5's manifest projection.
 
 /** Process incoming revocation events from a peer relay. */
 export async function processIncomingRevocations(
@@ -1272,6 +1305,189 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       timestamp: ourTimestamp,
       agent_count: localAgentCount,
       signature: bytesToHex(responseSig),
+    });
+  });
+
+  // Phase 4b-3 — federation co-witness solicitation. Issuer relay POSTs
+  // a `WitnessSolicitationRequest` carrying the unsigned cert body
+  // (sans `witnessed_by`, sans top-level signature) and an
+  // `issuer_signature` over `canonicalJson(cert_body)`. We verify the
+  // issuer signature, sign the same canonical bytes with our own
+  // federation key, and return a `WitnessSolicitationResponse`.
+  //
+  // Fail-closed gates (in order):
+  //   1. Schema validation via `WitnessSolicitationRequestSchema`.
+  //   2. Issuer must be a known peer in `relay_peers` (state IN active/suspended).
+  //   3. `issuer_id` must equal the id projected from `cert_body.subject`
+  //      (per session-3 sub-decision: subject↔issuer binding).
+  //   4. Issuer signature verifies under `motebit-jcs-ed25519-b64-v1`
+  //      against `canonicalJson(cert_body)`.
+  //
+  // The peer's signature commits to the body WITHOUT `witnessed_by[]`
+  // — witnesses are portable across compositions of the same body. The
+  // issuer's eventual final cert.signature binds the assembled witness
+  // array.
+  /**
+   * @experimental
+   * @since 2026-05-01
+   * @stabilizes_by 2026-06-15
+   * @replacement @spec motebit/relay-federation@1.1 (commit 6 spec bump)
+   * @reason Phase 4b-3 multi-commit ship: relay endpoints land in commit 4, spec 1.0 → 1.1 bump lands in commit 6 with full §15 wire-format. Routes are functional and tested; the spec write-up + version bump is the only remaining gate.
+   */
+  app.post("/federation/v1/horizon/witness", async (c) => {
+    const rawBody = (await c.req.json()) as unknown;
+    const parsed = WitnessSolicitationRequestSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      throw new HTTPException(400, {
+        message: `WitnessSolicitationRequest schema rejected: ${parsed.error.message}`,
+      });
+    }
+    const request = parsed.data;
+    checkPeerLimit(request.issuer_id);
+
+    const peer = db
+      .prepare(
+        "SELECT public_key FROM relay_peers WHERE peer_relay_id = ? AND state IN ('active', 'suspended')",
+      )
+      .get(request.issuer_id) as { public_key: string } | undefined;
+    if (peer === undefined) {
+      throw new HTTPException(403, {
+        message: "issuer is not a known active/suspended peer",
+      });
+    }
+
+    // Subject↔issuer binding (session-3 sub-decision: stops a relay
+    // from soliciting witnesses for a cert it doesn't own).
+    const subject = request.cert_body.subject;
+    const projectedSubjectId =
+      subject.kind === "motebit" ? (subject.motebit_id as string) : subject.operator_id;
+    if (projectedSubjectId !== request.issuer_id) {
+      throw new HTTPException(400, {
+        message: `issuer_id (${request.issuer_id}) does not match cert_body.subject (${projectedSubjectId})`,
+      });
+    }
+
+    const issuerPubKey = hexToBytes(peer.public_key);
+    const issuerSignatureValid = await verifyHorizonWitnessRequestSignature(
+      request.cert_body,
+      request.issuer_signature,
+      issuerPubKey,
+    );
+    if (!issuerSignatureValid) {
+      throw new HTTPException(403, {
+        message: "issuer_signature does not verify against issuer pubkey",
+      });
+    }
+
+    // All gates passed — sign as witness over the same canonical bytes
+    // the issuer signed (session-3 sub-decision: issuer-signature
+    // payload IS witness-signature payload). The same primitive
+    // produces both — drift-impossible.
+    const witnessSignature = await signHorizonWitnessRequestBody(
+      request.cert_body,
+      relayIdentity.privateKey,
+    );
+
+    logger.info("federation.horizon.witness.signed", {
+      issuerId: request.issuer_id,
+      storeId: request.cert_body.store_id,
+      horizonTs: request.cert_body.horizon_ts,
+    });
+
+    return c.json({
+      motebit_id: relayIdentity.relayMotebitId,
+      signature: witnessSignature,
+    });
+  });
+
+  // Phase 4b-3 — witness-omission dispute filing. Disputant peer POSTs
+  // a `WitnessOmissionDispute` claiming wrongful omission from a cert's
+  // `witnessed_by[]`. We resolve the cert from `relay_horizon_certs`
+  // by `cert_signature` (commit 4 scope: only disputes against THIS
+  // relay's own certs are handled — disputes against peer-issued certs
+  // would require federation forwarding, out of scope), hand to
+  // `verifyWitnessOmissionDispute` from `@motebit/crypto`, persist
+  // with state.
+  //
+  // Cert remains TERMINAL per retention-policy.md decision 5 — a
+  // sustained dispute is a reputation hit on the issuer, not a cert
+  // invalidation.
+  /**
+   * @experimental
+   * @since 2026-05-01
+   * @stabilizes_by 2026-06-15
+   * @replacement @spec motebit/relay-federation@1.1 (commit 6 spec bump)
+   * @reason Phase 4b-3 multi-commit ship: relay endpoints land in commit 4, spec 1.0 → 1.1 bump lands in commit 6 with full §15 wire-format + dispute-v1 §X integration. Routes are functional and tested; the spec write-up + version bump is the only remaining gate.
+   */
+  app.post("/federation/v1/horizon/dispute", async (c) => {
+    const rawBody = (await c.req.json()) as unknown;
+    const parsed = WitnessOmissionDisputeSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      throw new HTTPException(400, {
+        message: `WitnessOmissionDispute schema rejected: ${parsed.error.message}`,
+      });
+    }
+    const dispute = parsed.data;
+    const disputeJson = canonicalJson(dispute);
+
+    const cert = resolveHorizonCertBySignature(db, dispute.cert_signature);
+    if (cert === null) {
+      persistWitnessOmissionDispute(
+        db,
+        dispute,
+        disputeJson,
+        "rejected",
+        "cert_not_found_in_local_store",
+      );
+      throw new HTTPException(404, {
+        message: "cert referenced by dispute.cert_signature not found in local store",
+      });
+    }
+
+    // Disputant must be a known peer (we resolve their pubkey for
+    // dispute-signature verification).
+    const disputantRow = db
+      .prepare(
+        "SELECT public_key FROM relay_peers WHERE peer_relay_id = ? AND state IN ('active', 'suspended')",
+      )
+      .get(dispute.disputant_motebit_id) as { public_key: string } | undefined;
+    if (disputantRow === undefined) {
+      persistWitnessOmissionDispute(db, dispute, disputeJson, "rejected", "disputant_unknown_peer");
+      throw new HTTPException(403, {
+        message: "disputant_motebit_id is not a known active/suspended peer",
+      });
+    }
+
+    // Cert was issued by THIS relay (resolved from our local store), so
+    // the issuer pubkey is our own federation pubkey.
+    const result = await verifyWitnessOmissionDispute(dispute, {
+      cert,
+      issuerPublicKey: relayIdentity.publicKey,
+      disputantPublicKey: hexToBytes(disputantRow.public_key),
+      now: Date.now(),
+    });
+
+    if (!result.valid) {
+      persistWitnessOmissionDispute(db, dispute, disputeJson, "rejected", result.errors.join("; "));
+      throw new HTTPException(400, {
+        message: `dispute verification failed: ${result.errors.join("; ")}`,
+      });
+    }
+
+    persistWitnessOmissionDispute(db, dispute, disputeJson, "verified");
+    logger.info("federation.horizon.dispute.verified", {
+      disputeId: dispute.dispute_id,
+      certIssuer: dispute.cert_issuer,
+      certSignature: dispute.cert_signature.slice(0, 16),
+      disputantId: dispute.disputant_motebit_id,
+      evidenceKind: dispute.evidence.kind,
+    });
+
+    return c.json({
+      status: "verified",
+      dispute_id: dispute.dispute_id,
+      message:
+        "dispute verified and persisted; cert remains terminal per retention-policy.md decision 5",
     });
   });
 

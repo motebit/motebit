@@ -10,10 +10,12 @@ import {
   createFederationTables,
   insertRevocationEvent,
   getRevocationEventsSince,
-  cleanupRevocationEvents,
   processIncomingRevocations,
 } from "../federation.js";
 import type { RelayIdentity, RevocationEvent } from "../federation.js";
+import { advanceRevocationHorizon } from "../horizon.js";
+import { createPairingTables } from "../pairing.js";
+import { runMigrations, relayMigrations } from "../migrations.js";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, sign, bytesToHex } from "@motebit/encryption";
@@ -35,6 +37,12 @@ describe("Revocation Propagation", () => {
     const moteDb = await openMotebitDatabase(":memory:");
     db = moteDb.db;
     createFederationTables(db);
+    createPairingTables(db);
+    // Phase 4b-3 horizon-cert tables (v16) — `advanceRevocationHorizon`
+    // requires `relay_horizon_certs` to persist its signed cert before
+    // truncating. Run all migrations rather than partial-bootstrapping
+    // since the migration framework is the canonical setup path.
+    runMigrations(db, relayMigrations);
 
     // Create agent_registry and relay_revoked_credentials for processing tests
     db.exec(`
@@ -92,24 +100,35 @@ describe("Revocation Propagation", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("cleans up events older than 7 days", async () => {
-    // Insert an event, then backdate it
+  it("advances the revocation horizon — signed self-witnessed cert truncates >7d events", async () => {
+    // Phase 4b-3 — `cleanupRevocationEvents` is gone; the replacement
+    // is `advanceRevocationHorizon`, which signs an
+    // `append_only_horizon` cert (self-witnessed when no peers exist,
+    // as in this test setup) before truncating the prefix.
     await insertRevocationEvent(db, identity, "agent_revoked", "old-agent");
     const oldTimestamp = Date.now() - 8 * 24 * 60 * 60 * 1000; // 8 days ago
     db.prepare("UPDATE relay_revocation_events SET timestamp = ?").run(oldTimestamp);
 
-    const deleted = cleanupRevocationEvents(db);
-    expect(deleted).toBe(1);
+    const result = await advanceRevocationHorizon(db, { relayIdentity: identity });
+    expect(result.truncatedCount).toBe(1);
+    expect(result.selfWitnessed).toBe(true);
+    expect(result.cert.witnessed_by).toEqual([]);
+    expect(result.cert.federation_graph_anchor?.leaf_count).toBe(0);
     expect(getRevocationEventsSince(db, 0)).toHaveLength(0);
+    // Cert persisted in relay_horizon_certs for future audit / dispute lookup.
+    const persisted = db
+      .prepare("SELECT cert_signature, store_id FROM relay_horizon_certs WHERE store_id = ?")
+      .get("relay_revocation_events") as { cert_signature: string; store_id: string } | undefined;
+    expect(persisted?.cert_signature).toBe(result.cert.signature);
   });
 
   describe("processIncomingRevocations", () => {
     it("processes agent revocation with valid signature", async () => {
       const motebitId = "agent-to-revoke";
-      db.prepare("INSERT INTO agent_registry (motebit_id, public_key) VALUES (?, ?)").run(
-        motebitId,
-        "deadbeef",
-      );
+      const now = Date.now();
+      db.prepare(
+        "INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, registered_at, last_heartbeat, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(motebitId, "deadbeef", "http://test.local", now, now, now + 86_400_000);
 
       const timestamp = Date.now();
       const payload = `revocation:agent_revoked:${motebitId}:${timestamp}`;
@@ -136,10 +155,10 @@ describe("Revocation Propagation", () => {
 
     it("processes key rotation — updates public key", async () => {
       const motebitId = "agent-rotating";
-      db.prepare("INSERT INTO agent_registry (motebit_id, public_key) VALUES (?, ?)").run(
-        motebitId,
-        "oldkey",
-      );
+      const now = Date.now();
+      db.prepare(
+        "INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, registered_at, last_heartbeat, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(motebitId, "oldkey", "http://test.local", now, now, now + 86_400_000);
 
       const timestamp = Date.now();
       const payload = `revocation:key_rotated:${motebitId}:${timestamp}`;

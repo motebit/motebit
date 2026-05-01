@@ -29,6 +29,7 @@ import type {
   DeletionCertificate,
   DeletionReason,
   HorizonWitness,
+  HorizonWitnessRequestBody,
   SuiteId,
 } from "@motebit/protocol";
 
@@ -364,6 +365,86 @@ export async function signHorizonWitness(
     ...(inclusionProof !== undefined ? { inclusion_proof: inclusionProof } : {}),
   };
   return witness;
+}
+
+// ── Witness solicitation request body — issuer + peer-side primitives (4b-3) ──
+//
+// `HorizonWitnessRequestBody` is the cert body witnesses canonicalize
+// and sign. By construction it equals the `append_only_horizon` cert
+// minus `witnessed_by[]` and minus top-level `signature` — the same
+// projection `canonicalizeHorizonCertForWitness` produces. These three
+// helpers wrap that projection so call sites never re-derive the
+// canonical bytes by hand (rule: services consume primitives, never
+// inline `canonicalJson`).
+//
+// Both the issuer's `WitnessSolicitationRequest.issuer_signature` and
+// each peer's `WitnessSolicitationResponse.signature` are over THE
+// SAME bytes — `canonicalJson(cert_body)` under
+// `motebit-jcs-ed25519-b64-v1`. The peer's verify-issuer + sign-as-
+// witness paths share canonical-bytes derivation by design (session-3
+// sub-decision: issuer-signature payload IS witness-signature payload).
+
+/**
+ * Compute the canonical signing bytes for a `HorizonWitnessRequestBody`.
+ * Byte-equal to `canonicalizeHorizonCertForWitness` over the
+ * corresponding full cert (since the function strips
+ * `witnessed_by[]` + `signature`); exposed as a separate helper so
+ * call sites pass the wire-shaped request body directly without
+ * synthesizing a full cert.
+ */
+export function canonicalizeHorizonWitnessRequestBody(body: HorizonWitnessRequestBody): Uint8Array {
+  return canonicalizeHorizonCertForWitness({
+    ...body,
+    witnessed_by: [],
+    signature: "",
+  } as Extract<DeletionCertificate, { kind: "append_only_horizon" }>);
+}
+
+/**
+ * Sign a `HorizonWitnessRequestBody` — produces a base64url-encoded
+ * Ed25519 signature over the canonical bytes. Used by BOTH:
+ *
+ *   - the issuer, for `WitnessSolicitationRequest.issuer_signature`
+ *     (attests authenticity of the solicitation request before any
+ *     peer signs as witness),
+ *   - each peer witness, for `WitnessSolicitationResponse.signature`
+ *     (the per-witness signature copied verbatim into
+ *     `cert.witnessed_by[].signature`).
+ *
+ * Both roles sign byte-equal canonical bytes by design (session-3
+ * sub-decision: issuer-signature payload IS witness-signature payload).
+ * The peer's verify-issuer + sign-as-witness paths share canonical-bytes
+ * derivation through this primitive — drift-impossible.
+ */
+export async function signHorizonWitnessRequestBody(
+  body: HorizonWitnessRequestBody,
+  privateKey: Uint8Array,
+): Promise<string> {
+  const bytes = canonicalizeHorizonWitnessRequestBody(body);
+  const sig = await signBySuite(DELETION_CERTIFICATE_SUITE, bytes, privateKey);
+  return toBase64Url(sig);
+}
+
+/**
+ * Verify the issuer's `issuer_signature` on a
+ * `WitnessSolicitationRequest`. Peer-side fail-closed gate before the
+ * peer signs as a witness over the same bytes. Returns `false` on any
+ * malformed signature, suite mismatch, or hash failure — never throws.
+ */
+export async function verifyHorizonWitnessRequestSignature(
+  body: HorizonWitnessRequestBody,
+  signatureBase64Url: string,
+  issuerPublicKey: Uint8Array,
+): Promise<boolean> {
+  let sigBytes: Uint8Array;
+  try {
+    sigBytes = fromBase64Url(signatureBase64Url);
+  } catch {
+    return false;
+  }
+  if (sigBytes.length === 0) return false;
+  const bytes = canonicalizeHorizonWitnessRequestBody(body);
+  return verifyBySuite(DELETION_CERTIFICATE_SUITE, bytes, sigBytes, issuerPublicKey);
 }
 
 // ── Verifier ─────────────────────────────────────────────────────────

@@ -4,7 +4,6 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
-import { cleanupRevocationEvents } from "./federation.js";
 import { runMigrations, relayMigrations } from "./migrations.js";
 
 /**
@@ -24,8 +23,13 @@ export function createRelaySchema(db: DatabaseDriver): {
   // Purge expired blacklist entries
   db.prepare("DELETE FROM relay_token_blacklist WHERE expires_at < ?").run(Date.now());
 
-  // Purge revocation events older than 7 days
-  cleanupRevocationEvents(db);
+  // Revocation events: phase 4b-3 promotes the cleanup from a sync
+  // startup purge to a signed `append_only_horizon` cert via
+  // `advanceRevocationHorizon` in horizon.ts. Scheduled by
+  // `startRevocationHorizonLoop` in index.ts (1h default cadence) —
+  // not startup-bound, since the signed horizon advance fans out to
+  // federation peers and shouldn't burn retry budget on a cold start
+  // when peers may not have heartbeated yet.
 
   // --- Revocation callback helpers ---
 

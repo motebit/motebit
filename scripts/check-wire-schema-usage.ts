@@ -82,6 +82,20 @@ const REQUIRED_USAGE: ReadonlyArray<{
     schemas: ["DisputeRequestSchema", "DisputeEvidenceSchema", "DisputeAppealSchema"],
     note: "POST /allocations/:id/dispute + /:disputeId/evidence + /:disputeId/appeal — three client-signed wire artifacts (DisputeResolution is relay-constructed, not inbound)",
   },
+  // Phase 4b-3 — federation co-witness solicitation triangle. Three
+  // schemas, three handlers, three import lines — preserves the
+  // audience boundary the gate is designed to surface (session-3
+  // sub-decision: schemas split, not unified discriminated union).
+  {
+    file: "services/relay/src/federation.ts",
+    schemas: ["WitnessSolicitationRequestSchema", "WitnessOmissionDisputeSchema"],
+    note: "POST /federation/v1/horizon/witness (peer-side co-witness signing) + POST /federation/v1/horizon/dispute (witness-omission dispute filing)",
+  },
+  {
+    file: "services/relay/src/horizon.ts",
+    schemas: ["WitnessSolicitationResponseSchema"],
+    note: "fan-out client parsing peer responses to issuer-side witness solicitations during advanceRelayHorizon",
+  },
 ];
 
 // ── Waivers ────────────────────────────────────────────────────────────

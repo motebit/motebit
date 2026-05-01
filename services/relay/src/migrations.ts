@@ -722,4 +722,61 @@ export const relayMigrations: Migration[] = [
       );
     },
   },
+  {
+    version: 16,
+    name: "phase_4b3_horizon_certs_and_disputes",
+    up: (db) => {
+      // Phase 4b-3 — federation co-witness solicitation lands two relay-side
+      // tables. Both ship in one migration unit because they're feature-coupled:
+      // disputes reference certs (cert_signature is the cross-table pointer),
+      // both are required for the witness-omission accountability layer to
+      // function, both roll back together on failure. Splitting into v16+v17
+      // would only matter if there were a deployment scenario where the
+      // operator wants one without the other — there isn't (per session-3
+      // commit-4 design call).
+      //
+      // No existing-table modifications. The five operational ledgers
+      // (relay_execution_ledgers, relay_settlements,
+      // relay_credential_anchor_batches, relay_revocation_events,
+      // relay_disputes) already carry the timestamp columns the truncate
+      // adapters in services/relay/src/horizon.ts key off (created_at,
+      // settled_at, anchored_at, timestamp, COALESCE(final_at, expired_at)).
+      //
+      // See docs/doctrine/retention-policy.md decision 5 (cert terminality)
+      // and the 4b-3 sub-notes (Path A quorum, 24h dispute window, mandatory
+      // federation_graph_anchor from 4b-3+).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_horizon_certs (
+          cert_signature TEXT PRIMARY KEY,
+          store_id TEXT NOT NULL,
+          horizon_ts INTEGER NOT NULL,
+          issued_at INTEGER NOT NULL,
+          witness_count INTEGER NOT NULL,
+          cert_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+        );
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_horizon_certs_store ON relay_horizon_certs(store_id, horizon_ts DESC);",
+      );
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_witness_omission_disputes (
+          dispute_id TEXT PRIMARY KEY,
+          cert_issuer TEXT NOT NULL,
+          cert_signature TEXT NOT NULL,
+          disputant_motebit_id TEXT NOT NULL,
+          filed_at INTEGER NOT NULL,
+          dispute_json TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'opened',
+          verified_at INTEGER,
+          rejection_reason TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+        );
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_witness_omission_disputes_cert ON relay_witness_omission_disputes(cert_signature);",
+      );
+    },
+  },
 ];

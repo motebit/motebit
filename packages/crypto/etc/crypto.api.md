@@ -15,6 +15,7 @@ import type { DisputeRequest } from '@motebit/protocol';
 import type { DisputeResolution } from '@motebit/protocol';
 import type { HardwareAttestationClaim } from '@motebit/protocol';
 import type { HorizonWitness } from '@motebit/protocol';
+import type { HorizonWitnessRequestBody } from '@motebit/protocol';
 import type { RetentionManifest } from '@motebit/protocol';
 import type { SettlementRecord } from '@motebit/protocol';
 import type { SkillEnvelope } from '@motebit/protocol';
@@ -57,6 +58,9 @@ export function canonicalizeHorizonCert(cert: Extract<DeletionCertificate, {
 export function canonicalizeHorizonCertForWitness(cert: Extract<DeletionCertificate, {
     kind: "append_only_horizon";
 }>): Uint8Array;
+
+// @public
+export function canonicalizeHorizonWitnessRequestBody(body: HorizonWitnessRequestBody): Uint8Array;
 
 // @public
 export function canonicalizeMultiSignatureCert(cert: Extract<DeletionCertificate, {
@@ -982,6 +986,9 @@ export function signHorizonWitness(cert: Extract<DeletionCertificate, {
 }>, witnessMotebitId: string, privateKey: Uint8Array, inclusionProof?: HorizonWitness["inclusion_proof"]): Promise<HorizonWitness>;
 
 // @public
+export function signHorizonWitnessRequestBody(body: HorizonWitnessRequestBody, privateKey: Uint8Array): Promise<string>;
+
+// @public
 export function signKeySuccession(oldPrivateKey: Uint8Array, newPrivateKey: Uint8Array, newPublicKey: Uint8Array, oldPublicKey: Uint8Array, reason?: string): Promise<KeySuccessionRecord>;
 
 // @public
@@ -1266,6 +1273,9 @@ export function verifyGuardianRevocation(revocation: {
 
 // @public
 export function verifyHardwareAttestationClaim(claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, verifiers?: HardwareAttestationVerifiers, deviceCheckContext?: DeviceCheckVerifierContext): HardwareAttestationVerifyResult | Promise<HardwareAttestationVerifyResult>;
+
+// @public
+export function verifyHorizonWitnessRequestSignature(body: HorizonWitnessRequestBody, signatureBase64Url: string, issuerPublicKey: Uint8Array): Promise<boolean>;
 
 // @public @deprecated
 export function verifyIdentityFile(content: string): Promise<LegacyVerifyResult>;
