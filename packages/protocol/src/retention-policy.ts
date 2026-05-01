@@ -366,6 +366,80 @@ export type RetentionShapeDeclaration =
       readonly has_min_floor_resolver: boolean;
     };
 
+// ── Canonical runtime retention registry ─────────────────────────────
+//
+// The central registry of well-known runtime-side stores that hold
+// records subject to retention doctrine. Each entry pins one store to
+// its registered `RetentionShapeDeclaration` (the wire-format projection
+// without closures). The drift gate `check-retention-coverage` asserts
+// every store with a `sensitivity` field or settlement obligation
+// appears here, and that no entry registers a shape inconsistent with
+// the doctrine.
+//
+// Runtime-scoped: every entry below lives on the user's device, not in
+// the relay's deployment. The relay's retention manifest declares
+// `out_of_deployment:` for these stores by design — server-side
+// single-tenant deployments don't host them. Each per-motebit runtime
+// publishes its own retention manifest projecting over this registry.
+//
+// Adding a runtime-side store with sensitivity-classified records is an
+// additive entry here; the gate fires on omission. Removing a registered
+// shape requires a doctrine update — operators that have published a
+// manifest committing to that shape can't silently drop the
+// commitment.
+
+/**
+ * Stable string identifier for each canonical runtime store. The
+ * discriminator is interop law — verifiers and tooling cross-reference
+ * these exact strings with the manifest's `RetentionStoreDeclaration.store_id`.
+ */
+export type RuntimeStoreId = "memory" | "event_log" | "conversation_messages" | "tool_audit";
+
+/**
+ * Canonical registry: `RuntimeStoreId` → declared `RetentionShape`.
+ *
+ *   - `memory` registers under `mutable_pruning` per phase 3 — the
+ *     privacy-layer's `deleteMemory` constructs and signs the cert at
+ *     each erase call site.
+ *   - `event_log` registers under `append_only_horizon` per phase 4a —
+ *     `EventStore.advanceHorizon` signs the horizon cert and truncates.
+ *     `witness_required: false` is the no-peer-deployment derivation
+ *     per decision 9; the manifest layer overrides to `true` once the
+ *     operator appears in any peer's federation graph (phase 4b-3).
+ *   - `conversation_messages` and `tool_audit` register under
+ *     `consolidation_flush` per phase 5-ship — the consolidation cycle's
+ *     flush phase enforces, lazy-classifying on read per decision 6b.
+ *     Tool-audit's settlement-floor resolver per decision 3 is wired at
+ *     runtime; the manifest projection surfaces only its presence.
+ *
+ * Reference defaults below come from `REFERENCE_RETENTION_DAYS_BY_SENSITIVITY`;
+ * an alternative implementation MAY ship stricter ceilings and remain
+ * interop-compliant.
+ */
+export const RUNTIME_RETENTION_REGISTRY: Readonly<
+  Record<RuntimeStoreId, RetentionShapeDeclaration>
+> = Object.freeze({
+  memory: {
+    kind: "mutable_pruning",
+    max_retention_days_by_sensitivity: REFERENCE_RETENTION_DAYS_BY_SENSITIVITY,
+  },
+  event_log: {
+    kind: "append_only_horizon",
+    horizon_advance_period_days: 365,
+    witness_required: false,
+  },
+  conversation_messages: {
+    kind: "consolidation_flush",
+    flush_to: "expire",
+    has_min_floor_resolver: false,
+  },
+  tool_audit: {
+    kind: "consolidation_flush",
+    flush_to: "expire",
+    has_min_floor_resolver: true,
+  },
+});
+
 /**
  * Signed retention manifest published at
  * `/.well-known/motebit-retention.json`. Sibling to the operator

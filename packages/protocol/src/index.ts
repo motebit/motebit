@@ -2288,6 +2288,7 @@ export { SUITE_REGISTRY, ALL_SUITE_IDS, isSuiteId, getSuiteEntry } from "./crypt
 export {
   MAX_RETENTION_DAYS_BY_SENSITIVITY,
   REFERENCE_RETENTION_DAYS_BY_SENSITIVITY,
+  RUNTIME_RETENTION_REGISTRY,
 } from "./retention-policy.js";
 
 export type {
@@ -2296,6 +2297,7 @@ export type {
   RetentionShapeDeclaration,
   RetentionStoreDeclaration,
   RetentionManifest,
+  RuntimeStoreId,
   DeletionCertificate,
   DeletionReason,
   HorizonSubject,

@@ -466,6 +466,12 @@ const GATES: ReadonlyArray<Gate> = [
       "schema-version advancement (`PRAGMA user_version = N`) only happens through `runMigrations` / `runMigrationsAsync` in `@motebit/sqlite-migrations`, never inline at a call site (invariant #66, added 2026-04-30 closing the migration-ladder drift class — three SQLite surfaces (mobile expo-sqlite, desktop Tauri-IPC rusqlite, persistence better-sqlite3 / sql.js) had three independently-evolved ladders with three different version lines, three different error-swallow disciplines, and two of three had no transaction wrapping. The runner is the canonical source of truth; surfaces register `Migration` entries against per-surface registries and the runner advances the pragma. Three legitimate driver-internal pragma sites are allowlisted with reasons: the runner itself, the sql.js driver pragma() implementation, and the desktop async driver shim setUserVersion.",
     script: "check-sqlite-migration-runner",
   },
+  {
+    name: "check-retention-coverage",
+    defends:
+      "every runtime-side store with a `sensitivity` column or settlement obligation registers a `RetentionShape` in `RUNTIME_RETENTION_REGISTRY` (`packages/protocol/src/retention-policy.ts`), and every registered store has a matching at-rest schema in at least one runtime-side surface. Bidirectional drift check: stale-registry (registered store with no matching CREATE TABLE) and unregistered-table (CREATE TABLE with `sensitivity` column not in the registry) both fail (invariant #67, added 2026-04-30 closing the meta-version of the original CLAUDE.md gap — \"fail-closed privacy\" claimed retention enforcement existed; today the consolidation cycle's flush phase enforces, but a future schema adding `sensitivity TEXT` without registering would leak past the doctrinal ceiling because the cycle's flush phase doesn't see unregistered stores. Same enforcement pattern as `check-consolidation-primitives` (#34) and `check-suite-declared` (#10).",
+    script: "check-retention-coverage",
+  },
 ];
 
 interface Result {

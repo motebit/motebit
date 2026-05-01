@@ -2356,6 +2356,12 @@ export interface RouteScore {
     };
 }
 
+// @public
+export const RUNTIME_RETENTION_REGISTRY: Readonly<Record<RuntimeStoreId, RetentionShapeDeclaration>>;
+
+// @public
+export type RuntimeStoreId = "memory" | "event_log" | "conversation_messages" | "tool_audit";
+
 // @alpha
 export interface ScreenshotAction {
     // (undocumented)

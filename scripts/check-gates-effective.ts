@@ -1127,6 +1127,42 @@ export function __probeOnlyRegisterAdminUnauth(app: Hono): void {
         src.replace(/runtime\.setSessionSensitivity\b/g, "runtime._disabledSetSessionSensitivity"),
       ),
   },
+  {
+    script: "check-sqlite-migration-runner",
+    proves:
+      "flags an inline `PRAGMA user_version = N` write outside the canonical migration runner — the exact drift class the gate exists to prevent (independent inline ladders divergent from `@motebit/sqlite-migrations`)",
+    perturb: () =>
+      // Inject an inline pragma write into the runtime's SDK index — a
+      // file that today contains no migration code at all, so the
+      // injected line is unambiguously the violation. The gate scans
+      // packages/, apps/, services/ for `user_version = (digit|$|?|`)`
+      // outside the allowlisted runner / driver-internal sites; this
+      // injection should fire on the next scan. mutateFile restores
+      // byte-identical on cleanup.
+      mutateFile("packages/sdk/src/index.ts", (src) =>
+        src.replace(
+          /(\/\/ === Relation Types)/,
+          'const __probe_user_version = "PRAGMA user_version = 999";\nvoid __probe_user_version;\n\n$1',
+        ),
+      ),
+  },
+  {
+    script: "check-retention-coverage",
+    proves:
+      "flags a runtime-side CREATE TABLE with a `sensitivity` column whose table name is not in `RUNTIME_RETENTION_REGISTRY` — the unregistered-table drift class (a sensitivity-classified store the cycle's flush phase doesn't see, leaking past the doctrinal ceiling)",
+    perturb: () =>
+      // Inject a fake CREATE TABLE with a `sensitivity` column into the
+      // persistence at-rest schema. The table name `__probe_unregistered`
+      // doesn't appear in RUNTIME_RETENTION_REGISTRY or
+      // STORE_TABLE_ALIASES, so the gate's reverse drift check fires on
+      // the next scan. mutateFile restores byte-identical on cleanup.
+      mutateFile("packages/persistence/src/index.ts", (src) =>
+        src.replace(
+          /(CREATE TABLE IF NOT EXISTS conversation_messages \()/,
+          "CREATE TABLE IF NOT EXISTS __probe_unregistered (\n  id TEXT PRIMARY KEY,\n  sensitivity TEXT\n);\n\n$1",
+        ),
+      ),
+  },
 ];
 
 /**
