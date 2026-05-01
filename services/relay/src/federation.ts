@@ -1050,7 +1050,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 1: Identity ──
 
-  /** @spec motebit/relay-federation@1.0 */
+  /** @spec motebit/relay-federation@1.1 */
   app.get("/federation/v1/identity", (c) => {
     return c.json({
       spec: RELAY_SPEC_VERSION,
@@ -1062,7 +1062,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 2: Peering Protocol ──
 
-  /** @spec motebit/relay-federation@1.0 */
+  /** @spec motebit/relay-federation@1.1 */
   app.post("/federation/v1/peer/propose", async (c) => {
     const body = await c.req.json<{
       relay_id?: string;
@@ -1171,7 +1171,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.0 */
+  /** @spec motebit/relay-federation@1.1 */
   app.post("/federation/v1/peer/confirm", async (c) => {
     const body = await c.req.json<{ relay_id?: string; challenge_response?: string }>();
     const { relay_id, challenge_response } = body;
@@ -1214,7 +1214,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json({ status: "active", peered_at: now });
   });
 
-  /** @spec motebit/relay-federation@1.0 */
+  /** @spec motebit/relay-federation@1.1 */
   app.post("/federation/v1/peer/heartbeat", async (c) => {
     const body = await c.req.json<{
       relay_id?: string;
@@ -1327,13 +1327,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // — witnesses are portable across compositions of the same body. The
   // issuer's eventual final cert.signature binds the assembled witness
   // array.
-  /**
-   * @experimental
-   * @since 2026-05-01
-   * @stabilizes_by 2026-06-15
-   * @replacement @spec motebit/relay-federation@1.1 (commit 6 spec bump)
-   * @reason Phase 4b-3 multi-commit ship: relay endpoints land in commit 4, spec 1.0 → 1.1 bump lands in commit 6 with full §15 wire-format. Routes are functional and tested; the spec write-up + version bump is the only remaining gate.
-   */
+  /** @spec motebit/relay-federation@1.1 */
   app.post("/federation/v1/horizon/witness", async (c) => {
     const rawBody = (await c.req.json()) as unknown;
     const parsed = WitnessSolicitationRequestSchema.safeParse(rawBody);
@@ -1412,13 +1406,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // Cert remains TERMINAL per retention-policy.md decision 5 — a
   // sustained dispute is a reputation hit on the issuer, not a cert
   // invalidation.
-  /**
-   * @experimental
-   * @since 2026-05-01
-   * @stabilizes_by 2026-06-15
-   * @replacement @spec motebit/relay-federation@1.1 (commit 6 spec bump)
-   * @reason Phase 4b-3 multi-commit ship: relay endpoints land in commit 4, spec 1.0 → 1.1 bump lands in commit 6 with full §15 wire-format + dispute-v1 §X integration. Routes are functional and tested; the spec write-up + version bump is the only remaining gate.
-   */
+  /** @spec motebit/relay-federation@1.1 */
   app.post("/federation/v1/horizon/dispute", async (c) => {
     const rawBody = (await c.req.json()) as unknown;
     const parsed = WitnessOmissionDisputeSchema.safeParse(rawBody);
@@ -1491,7 +1479,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.0 */
+  /** @spec motebit/relay-federation@1.1 */
   app.post("/federation/v1/peer/remove", async (c) => {
     const body = await c.req.json<{ relay_id?: string; signature?: string }>();
     const { relay_id, signature: sig } = body;
@@ -1516,7 +1504,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json({ status: "removed" });
   });
 
-  /** @spec motebit/relay-federation@1.0 */
+  /** @spec motebit/relay-federation@1.1 */
   app.get("/federation/v1/peers", (c) => {
     const rows = db
       .prepare(
@@ -1542,7 +1530,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 3: Federated Discovery ──
 
-  /** @spec motebit/relay-federation@1.0 */
+  /** @spec motebit/relay-federation@1.1 */
   app.post("/federation/v1/discover", async (c) => {
     const body = await c.req.json<{
       query: { capability?: string; motebit_id?: string; limit?: number };
@@ -1669,7 +1657,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 4: Task Forwarding ──
 
-  /** @spec motebit/relay-federation@1.0 */
+  /** @spec motebit/relay-federation@1.1 */
   app.post("/federation/v1/task/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -1737,7 +1725,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     );
   });
 
-  /** @spec motebit/relay-federation@1.0 */
+  /** @spec motebit/relay-federation@1.1 */
   app.post("/federation/v1/task/result", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -1783,7 +1771,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement ──
 
-  /** @spec motebit/relay-federation@1.0 */
+  /** @spec motebit/relay-federation@1.1 */
   app.post("/federation/v1/settlement/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -1832,7 +1820,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.0 */
+  /** @spec motebit/relay-federation@1.1 */
   app.get("/federation/v1/settlements", (c) => {
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
     const rows = db
@@ -1843,7 +1831,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement Proof (§7.6.6) ──
 
-  /** @spec motebit/relay-federation@1.0 */
+  /** @spec motebit/relay-federation@1.1 */
   app.get("/federation/v1/settlement/proof", async (c) => {
     const settlementId = c.req.query("settlement_id");
     if (!settlementId) {

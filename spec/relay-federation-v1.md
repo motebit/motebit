@@ -1,10 +1,15 @@
-# motebit/relay-federation@1.0
+# motebit/relay-federation@1.1
 
 ## Relay Federation Specification
 
 **Status:** Stable
-**Version:** 1.0
-**Date:** 2026-03-24
+**Version:** 1.1
+**Date:** 2026-05-01
+
+**Version history:**
+
+- **1.1** (2026-05-01) — Additive: `/horizon/witness` + `/horizon/dispute` endpoints (§15) for federation co-witness solicitation on `append_only_horizon` retention certs (`docs/doctrine/retention-policy.md` decision 4 + 9). Extends the route table from twelve to fourteen entries. Backward-compatible — peers without §15 support continue to interoperate on §3–14; horizon-cert co-witnessing is opt-in (relays without peers self-witness).
+- **1.0** (2026-03-24) — Initial stable release. Peering handshake, heartbeat, federated discovery, cross-relay routing, settlement forwarding, Merkle anchor proofs.
 
 ---
 
@@ -587,7 +592,7 @@ All federation endpoints are under the `/federation/v1/` path prefix. All reques
 
 #### Routes (foundation law)
 
-The twelve routes below are the binding cross-relay contract. Renaming or relocating any of them is a wire break.
+The fourteen routes below are the binding cross-relay contract. Renaming or relocating any of them is a wire break.
 
 - `GET /federation/v1/identity` — return this relay's public identity.
 - `POST /federation/v1/peer/propose` — initiate peering handshake (step 1).
@@ -601,21 +606,25 @@ The twelve routes below are the binding cross-relay contract. Renaming or reloca
 - `POST /federation/v1/settlement/forward` — forward settlement to peer relay.
 - `GET /federation/v1/settlements` — list inbound forwarded settlements.
 - `GET /federation/v1/settlement/proof` — Merkle inclusion proof (§7.6.6).
+- `POST /federation/v1/horizon/witness` — co-witness a peer's `append_only_horizon` retention cert (§15.2). _Added in 1.1._
+- `POST /federation/v1/horizon/dispute` — file a `WitnessOmissionDispute` against a horizon cert (§15.3). _Added in 1.1._
 
 ### 10.1 — Endpoints
 
-| Method | Path                                | Description                           | Rate Limit      |
-| ------ | ----------------------------------- | ------------------------------------- | --------------- |
-| POST   | `/federation/v1/peer/propose`       | Initiate peering handshake (step 1).  | 30/min per peer |
-| POST   | `/federation/v1/peer/confirm`       | Complete peering handshake (step 3).  | 30/min per peer |
-| POST   | `/federation/v1/peer/heartbeat`     | Send heartbeat to peer.               | 30/min per peer |
-| POST   | `/federation/v1/peer/remove`        | Remove a peer relationship.           | 30/min per peer |
-| POST   | `/federation/v1/discover`           | Forward a discovery query.            | 30/min per peer |
-| POST   | `/federation/v1/task/forward`       | Forward a task to a peer relay.       | 30/min per peer |
-| POST   | `/federation/v1/task/result`        | Return a task result to origin relay. | 30/min per peer |
-| POST   | `/federation/v1/settlement/forward` | Forward settlement to peer relay.     | 30/min per peer |
-| GET    | `/federation/v1/settlement/proof`   | Merkle inclusion proof (§7.6.6).      | 30/min per peer |
-| GET    | `/federation/v1/identity`           | Return this relay's public identity.  | 30/min per peer |
+| Method | Path                                | Description                                                       | Rate Limit      | Since |
+| ------ | ----------------------------------- | ----------------------------------------------------------------- | --------------- | ----- |
+| POST   | `/federation/v1/peer/propose`       | Initiate peering handshake (step 1).                              | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/peer/confirm`       | Complete peering handshake (step 3).                              | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/peer/heartbeat`     | Send heartbeat to peer.                                           | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/peer/remove`        | Remove a peer relationship.                                       | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/discover`           | Forward a discovery query.                                        | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/task/forward`       | Forward a task to a peer relay.                                   | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/task/result`        | Return a task result to origin relay.                             | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/settlement/forward` | Forward settlement to peer relay.                                 | 30/min per peer | 1.0   |
+| GET    | `/federation/v1/settlement/proof`   | Merkle inclusion proof (§7.6.6).                                  | 30/min per peer | 1.0   |
+| GET    | `/federation/v1/identity`           | Return this relay's public identity.                              | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/horizon/witness`    | Co-witness a peer's `append_only_horizon` retention cert (§15.2). | 30/min per peer | 1.1   |
+| POST   | `/federation/v1/horizon/dispute`    | File a `WitnessOmissionDispute` against a horizon cert (§15.3).   | 30/min per peer | 1.1   |
 
 ### 10.2 — Authentication
 
@@ -767,11 +776,123 @@ Federated discovery responses include only the information necessary for routing
 
 ## 14. Versioning
 
-The `spec` identifier for this specification is `motebit/relay-federation@1.0`. Federation endpoints include the version in the URL path (`/federation/v1/`).
+The `spec` identifier for this specification is `motebit/relay-federation@1.1`. Federation endpoints include the version in the URL path (`/federation/v1/`).
 
-Future versions will use semantic versioning: `motebit/relay-federation@{major}.{minor}`. Minor versions add optional fields and are backward-compatible. Major versions may change the peering protocol, authentication scheme, or settlement mechanics and are not backward-compatible.
+Versions use semantic versioning: `motebit/relay-federation@{major}.{minor}`. Minor versions add optional fields and routes; existing endpoints stay byte-compatible. Major versions may change the peering protocol, authentication scheme, or settlement mechanics and are not backward-compatible.
 
-Relays SHOULD advertise their supported federation version in the `GET /federation/v1/identity` response. Peering between relays with incompatible major versions MUST be rejected during the handshake.
+Relays SHOULD advertise their supported federation version in the `GET /federation/v1/identity` response. Peering between relays with incompatible major versions MUST be rejected during the handshake. Minor-version drift is admitted: a 1.0 peer and a 1.1 peer MUST interoperate on §3–14; the 1.1 peer's §15 routes are unavailable when the other end is 1.0 (404), and a 1.0 peer never solicits witnesses or files witness-omission disputes (the cert it issues is structurally self-witnessed under decision 9 of `docs/doctrine/retention-policy.md`).
+
+---
+
+## 15. Horizon Co-Witness Solicitation
+
+_Added in 1.1._ Operationalizes Path A quorum from `docs/doctrine/retention-policy.md` decisions 4 + 9. When an operator advances the horizon on an `append_only_horizon` retention cert, federation peers co-witness the cert by signing the same canonical bytes as the issuer; a peer who believes they were wrongly omitted from `witnessed_by[]` files a `WitnessOmissionDispute` within 24 hours of the cert's `issued_at`.
+
+Wire-format protocol types live in `@motebit/protocol::{HorizonWitnessRequestBody, WitnessSolicitationRequest, WitnessSolicitationResponse, WitnessOmissionDispute}`; zod runtime schemas in `@motebit/wire-schemas`; emitted JSON Schemas at `spec/schemas/witness-{omission-dispute,solicitation-request,solicitation-response}-v1.json`. Verifier primitives in `@motebit/crypto::{verifyHorizonWitnessRequestSignature, verifyWitnessOmissionDispute}`.
+
+Cert remains TERMINAL per `docs/doctrine/retention-policy.md` decision 5 — a sustained dispute is a reputation hit on the issuer, not a cert invalidation. There is no signed-revocation path on horizon certs.
+
+### 15.1 — Solicitation Flow
+
+1. **Issuer** snapshots its federation peer set at `horizon_ts` (filter: `peered_at <= horizon_ts AND state IN ('active', 'suspended') AND last_heartbeat fresh within 5 min`). Mirrors the heartbeat suspension threshold (§3.2).
+2. **Issuer** computes the `federation_graph_anchor` — Merkle root over the peer set's hex-encoded Ed25519 public keys, lowercase, sorted ascending. Same algorithm as §7.6 (`merkle-sha256-v1`, binary tree with odd-leaf promotion). Empty peer set → `EMPTY_FEDERATION_GRAPH_ANCHOR` (`leaf_count: 0`, `merkle_root` = hex SHA-256 of zero bytes).
+3. **Issuer** constructs a `HorizonWitnessRequestBody` (the witness-canonicalization shape of the cert minus `witnessed_by[]` minus top-level `signature`), signs it under `motebit-jcs-ed25519-b64-v1` to produce the `issuer_signature`, and POSTs `WitnessSolicitationRequest` in parallel to every peer with a per-request timeout (default 10 seconds).
+4. **Each peer** parses the request, verifies the issuer is a known active/suspended peer, verifies `issuer_id` matches the id projected from `cert_body.subject`, verifies `issuer_signature` against `canonicalJson(cert_body)`, signs the same bytes with its own federation key, and returns `WitnessSolicitationResponse`.
+5. **Issuer** assembles the responses into `cert.witnessed_by[]`, signs the FINAL cert (which now includes the witness array), persists, and truncates the ledger prefix.
+6. **Quorum failure** (zero valid witnesses despite ≥1 peer) triggers a fresh attempt — re-snapshotted peer set, fresh `issued_at`, fresh signatures. Three attempts with 1s/3s/9s exponential backoff; sustained failure throws.
+
+The issuer's `issuer_signature` and each peer's response signature are over byte-equal canonical bytes by design — the verify-issuer + sign-as-witness paths share canonical-bytes derivation through one primitive (`canonicalizeHorizonWitnessRequestBody`), making issuer/witness-body divergence structurally impossible.
+
+### 15.2 — `POST /federation/v1/horizon/witness`
+
+**Request body — `WitnessSolicitationRequest`:**
+
+```text
+WitnessSolicitationRequest {
+  cert_body: HorizonWitnessRequestBody  // The cert body the witness will sign
+  issuer_id: string                     // MUST equal the id projected from cert_body.subject
+  issuer_signature: string              // Base64url Ed25519 over canonicalJson(cert_body)
+}
+
+HorizonWitnessRequestBody {
+  kind: "append_only_horizon"           // Discriminator
+  subject: HorizonSubject               // { kind: "motebit", motebit_id } | { kind: "operator", operator_id }
+  store_id: string                      // Stable identifier for the audit log within the operator's deployment
+  horizon_ts: number                    // Unix ms; entries with timestamp < horizon_ts will be unrecoverable
+  issued_at: number                     // Unix ms when the issuer signs; load-bearing for the 24h dispute window
+  federation_graph_anchor?: FederationGraphAnchor  // Mandatory from 1.1+ when peers exist
+  suite: SuiteId                        // "motebit-jcs-ed25519-b64-v1" today
+}
+
+FederationGraphAnchor {
+  algo: "merkle-sha256-v1"              // Closed registry; see §7.6
+  merkle_root: string                   // Hex-encoded SHA-256 root over canonical peer-set leaves
+  leaf_count: number                    // Number of peer pubkeys in the anchored set
+}
+```
+
+**Response body — `WitnessSolicitationResponse`:**
+
+```text
+WitnessSolicitationResponse {
+  motebit_id: string                    // The witnessing peer's motebit identity
+  signature: string                     // Base64url Ed25519 over canonicalJson(cert_body); SAME bytes the issuer signed
+  inclusion_proof?: MerkleInclusionProof  // Optional Merkle proof against cert_body.federation_graph_anchor.merkle_root
+}
+```
+
+**Fail-closed gates** (peer-side, in order):
+
+1. Schema validation via `WitnessSolicitationRequestSchema` — malformed bodies → 400.
+2. Issuer must be a known peer in `relay_peers` with `state IN ('active', 'suspended')` — unknown issuer → 403.
+3. `issuer_id` must equal `subject.motebit_id` (per-motebit) or `subject.operator_id` (operator-wide) — disagreement → 400. This binding stops a relay from soliciting witnesses for a cert it doesn't own.
+4. `issuer_signature` verifies under `motebit-jcs-ed25519-b64-v1` against `canonicalJson(cert_body)` using the issuer's federation pubkey — invalid → 403.
+
+The peer's `signature` does NOT cover `witnessed_by[]` — witnesses are portable across compositions of the same body. The issuer's eventual final cert.signature binds the assembled witness array; witness substitution / forgery fails at the issuer-signature step (§5.10 of `docs/doctrine/retention-policy.md`, decision 5).
+
+### 15.3 — `POST /federation/v1/horizon/dispute`
+
+**Request body — `WitnessOmissionDispute`:**
+
+```text
+WitnessOmissionDispute {
+  dispute_id: string                    // UUID v7, generated by disputant
+  cert_issuer: string                   // Operator id of the cert issuer
+  cert_signature: string                // Base64url signature of the disputed cert (opaque pointer)
+  disputant_motebit_id: string          // Disputant peer's motebit identity
+  evidence: WitnessOmissionEvidence     // Discriminated union — see below
+  filed_at: number                      // Unix ms; bounded to [cert.issued_at, cert.issued_at + 24h]
+  suite: SuiteId                        // "motebit-jcs-ed25519-b64-v1"
+  signature: string                     // Base64url Ed25519 by disputant over canonicalJson(dispute minus signature)
+}
+
+WitnessOmissionEvidence =
+  | { kind: "inclusion_proof"; leaf_hash: string; proof: MerkleInclusionProof }
+  | { kind: "alternative_peering"; peering_artifact: object }
+```
+
+**Two evidence shapes:**
+
+- **`inclusion_proof`** — disputant proves their peer pubkey is committed in `cert.federation_graph_anchor.merkle_root` via a Merkle inclusion proof; verifier reconstructs the root and asserts equality.
+- **`alternative_peering`** — disputant supplies a signed peering artifact from the cert issuer covering `cert.horizon_ts`; verifier dispatches on the artifact's self-described shape. Today the canonical shape is a federation Heartbeat (§3.2) — `{ relay_id, timestamp, signature }` under `motebit-concat-ed25519-hex-v1`, signing payload `${relay_id}|${timestamp}|${suite}`, freshness window ±5 min around `cert.horizon_ts` (mirrors the heartbeat suspension threshold). Future arms (e.g. `PeeringConfirm`) land as additive registry growth without a wire break — the dispatch is closed-but-additive.
+
+**Two clock gates** (verifier-side, both fail-closed):
+
+1. **Wall clock vs `cert.issued_at`** (load-bearing): receiver's `now <= cert.issued_at + 24h`. Beyond 24h, no dispute is admissible.
+2. **`filed_at` sanity bound**: `dispute.filed_at ∈ [cert.issued_at, cert.issued_at + 24h]`. Disputant-attested `filed_at` outside the window is rejected — disputant cannot widen the window via attested timestamp. The cert's `issued_at` is the authoritative clock; `filed_at` exists for audit display, not window derivation.
+
+**Verifier ladder** (in order; short-circuit on failure): window → cert binding (`cert_signature` and `cert_issuer` match the resolved cert) → disputant signature → evidence dispatch by `kind`. See `@motebit/crypto::verifyWitnessOmissionDispute`.
+
+**Dispute window:** 24 hours post-`cert.issued_at`. Inherits the convention from `spec/dispute-v1.md` §7.5 (24h dispute filing, 24h withdrawal hold, 24h appeal window).
+
+**Lifecycle integration:** witness-omission disputes flow through the existing `DisputeResolution` adjudication path in `spec/dispute-v1.md` (state machine: opened → evidence → arbitration → resolved → final). The same 24h/48h/72h ladder applies; same federation-quorum requirement when the issuer relay is the defendant.
+
+### 15.4 — Configuration
+
+| Setting                                      | Type   | Default | Description                                                                                                                                                                                      |
+| -------------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `federation.witness_solicitation_timeout_ms` | number | 10000   | Per-request timeout for outbound `/horizon/witness` solicitations. Per-request timeout IS the overall solicitation deadline (parallel `Promise.allSettled` fan-out), not per-attempt cumulative. |
+| `federation.revocation_horizon_interval_ms`  | number | 3600000 | Periodic interval (1h default) for the relay's `relay_revocation_events` horizon advance loop. Operational tuning knob, not a doctrinal commitment.                                              |
 
 ---
 
@@ -818,4 +939,4 @@ These are governance knobs for production deployments. The protocol mechanics (h
 
 ---
 
-_motebit/relay-federation@1.0 — Stable Specification, 2026._
+_motebit/relay-federation@1.1 — Stable Specification, 2026._

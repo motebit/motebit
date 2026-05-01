@@ -344,6 +344,30 @@ The five routes below are the binding cross-implementation contract for the disp
 - `POST /api/v1/disputes/:disputeId/appeal` — appeal a resolution (§8).
 - `GET /api/v1/disputes/:disputeId` — read dispute state.
 
+## 9.6 Witness-Omission Disputes (Retention Horizon Certs)
+
+A second dispute class shares the same lifecycle (opened → evidence → arbitration → resolved → final) and the same 24h / 48h / 72h window ladder, but covers a distinct subject: federation peers wrongly omitted from an `append_only_horizon` retention cert's `witnessed_by[]` (per `docs/doctrine/retention-policy.md` decisions 4 + 9, Path A quorum).
+
+The wire format and endpoint details are defined in `spec/relay-federation-v1.md` §15.3 (`POST /federation/v1/horizon/dispute`); the canonical type lives at `@motebit/protocol::WitnessOmissionDispute` (commit `374a9605`); the verifier ladder in `@motebit/crypto::verifyWitnessOmissionDispute` (commit `25ba9771`). This subsection records the integration points with the dispute lifecycle and the two divergences from the §4–8 conventions.
+
+**Filing party.** The disputant is a federation peer who claims they should have appeared in `cert.witnessed_by[]` but didn't. Distinct from §4.1 — there's no `task_id` or `allocation_id`; the dispute references a horizon cert by `cert_signature` (opaque pointer the relay resolves from its local `relay_horizon_certs` table at validation time).
+
+**Evidence shapes.** Discriminated union, exactly one shape per dispute:
+
+- **`inclusion_proof`** — disputant proves their peer pubkey is committed in `cert.federation_graph_anchor.merkle_root` via a Merkle inclusion proof. Verifier reconstructs the root and asserts equality. Uses the same `merkle-sha256-v1` algorithm as `credential-anchor-v1.md` §3 and `relay-federation-v1.md` §7.6.
+- **`alternative_peering`** — disputant supplies a signed peering artifact issued by the cert issuer covering `cert.horizon_ts`. Today the canonical shape is a federation Heartbeat (`relay-federation-v1.md` §3.2) under `motebit-concat-ed25519-hex-v1`, freshness window ±5 min around `cert.horizon_ts`. Future arms (e.g. PeeringConfirm) land as additive registry growth — the dispatch is closed-but-additive.
+
+**Two clock gates** (verifier-side, both fail-closed, divergence from §4.4 single-clock convention):
+
+1. **Wall clock vs `cert.issued_at`** (load-bearing): receiver's `now <= cert.issued_at + 24h`. Beyond 24h, no dispute is admissible.
+2. **`filed_at` sanity bound**: `dispute.filed_at ∈ [cert.issued_at, cert.issued_at + 24h]`. Disputant-attested `filed_at` outside the window is rejected.
+
+The two gates are the structural defense against a backdated `filed_at` widening the dispute window. The cert's `issued_at` is the authoritative clock (signed by the issuer, federation-witnessed); the disputant's `filed_at` exists for audit display, not window derivation. Disputant-attested timestamps cannot widen the 24h window.
+
+**Cert remains TERMINAL.** Per `docs/doctrine/retention-policy.md` decision 5, retention certs are terminal — there is no signed-revocation path. A sustained witness-omission dispute is a reputation hit on the issuer, not a cert invalidation. The dispute resolution still flows through §6 (Adjudication) — single-relay or federation per §6.1 / §6.2 — but `fund_action` is not applicable (no locked funds tied to a horizon cert). The resolution's information value is the rationale: an upheld dispute is durable evidence the issuer omitted a peer.
+
+**Lifecycle integration.** Witness-omission disputes use the same state machine as §3 — `opened → evidence → arbitration → resolved → final` — and the same 24h / 48h / 72h window ladder as §3.3 + §6.6 + §8.1. The dispute filing happens at `POST /federation/v1/horizon/dispute` rather than `POST /api/v1/allocations/:allocationId/dispute` because the dispute references a horizon cert, not a budget allocation.
+
 ## 10. Security Considerations
 
 **Evidence immutability.** All evidence artifacts are Ed25519-signed. Tampering invalidates the signature and the evidence is rejected. The dispute lifecycle itself is signed at every state transition.
@@ -358,14 +382,14 @@ The five routes below are the binding cross-implementation contract for the disp
 
 ## 11. Relationship to Other Specs
 
-| Spec                  | Relationship                                                                                                               |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| delegation@1.0        | Defines `BudgetAllocation` with `disputed` state (§6.1). This spec defines the lifecycle that enters and exits that state. |
-| execution-ledger@1.0  | `execution_receipt` and `execution_ledger` are primary evidence types (§5.1).                                              |
-| credential@1.0        | Credentials serve as evidence. Dispute outcomes may trigger credential revocation for serious violations.                  |
-| credential-anchor@1.0 | Onchain anchored credentials are tamper-proof evidence that survives relay censorship (§6.3).                              |
-| settlement@1.0        | Settlement proofs are evidence. Fund handling (§7) operates on amounts established by settlement.                          |
-| relay-federation@1.0  | Federation peers form the adjudication quorum for cross-relay and relay-as-defendant disputes (§6.2).                      |
-| market@1.0            | Virtual account balances are locked during dispute. Resolution credits/debits virtual accounts.                            |
-| identity@1.0          | All dispute messages are signed by the party's Ed25519 identity key.                                                       |
-| auth-token@1.0        | Dispute API endpoints require signed bearer tokens with appropriate audience binding.                                      |
+| Spec                  | Relationship                                                                                                                                                                                  |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| delegation@1.0        | Defines `BudgetAllocation` with `disputed` state (§6.1). This spec defines the lifecycle that enters and exits that state.                                                                    |
+| execution-ledger@1.0  | `execution_receipt` and `execution_ledger` are primary evidence types (§5.1).                                                                                                                 |
+| credential@1.0        | Credentials serve as evidence. Dispute outcomes may trigger credential revocation for serious violations.                                                                                     |
+| credential-anchor@1.0 | Onchain anchored credentials are tamper-proof evidence that survives relay censorship (§6.3).                                                                                                 |
+| settlement@1.0        | Settlement proofs are evidence. Fund handling (§7) operates on amounts established by settlement.                                                                                             |
+| relay-federation@1.1  | Federation peers form the adjudication quorum for cross-relay and relay-as-defendant disputes (§6.2). §15 defines the witness-solicitation + omission-dispute endpoints that §9.6 references. |
+| market@1.0            | Virtual account balances are locked during dispute. Resolution credits/debits virtual accounts.                                                                                               |
+| identity@1.0          | All dispute messages are signed by the party's Ed25519 identity key.                                                                                                                          |
+| auth-token@1.0        | Dispute API endpoints require signed bearer tokens with appropriate audience binding.                                                                                                         |
