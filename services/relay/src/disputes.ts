@@ -836,14 +836,36 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
 
     const dispute = getDispute(db, disputeId);
     if (!dispute) throw new HTTPException(404, { message: "Dispute not found" });
-    if (dispute.state !== "evidence" && dispute.state !== "opened") {
+    // Pre-`resolved`: §5.3 evidence window. Post-`resolved` (per §8.3 +
+    // §8.5): the original §5.3 evidence_deadline is long past, but new
+    // evidence may be submitted while the §8.5 appeal window (24h after
+    // `resolved_at`) is open. Once the dispute transitions to `appealed`,
+    // round-2 orchestration is in flight and the bundle freezes per §8.3.
+    if (
+      dispute.state !== "evidence" &&
+      dispute.state !== "opened" &&
+      dispute.state !== "resolved"
+    ) {
       throw new HTTPException(400, {
         message: `Cannot submit evidence in state: ${String(dispute.state)}`,
       });
     }
 
-    // Check evidence window (§5.3)
-    if (Date.now() > (dispute.evidence_deadline as number)) {
+    const now = Date.now();
+    if (dispute.state === "resolved") {
+      const resolvedAt = dispute.resolved_at as number | null;
+      if (resolvedAt == null) {
+        throw new HTTPException(500, {
+          message: "Dispute in resolved state without resolved_at — schema invariant violated",
+        });
+      }
+      if (now > resolvedAt + APPEAL_WINDOW_MS) {
+        throw new HTTPException(400, {
+          message: "Appeal window has closed; no further evidence",
+        });
+      }
+    } else if (now > (dispute.evidence_deadline as number)) {
+      // §5.3 evidence window
       throw new HTTPException(400, { message: "Evidence window has closed" });
     }
 
@@ -1302,16 +1324,15 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // Single-relay appeals stay in `appealed` for operator manual
     // review (existing behavior, unchanged).
     //
-    // Round-2 evidence union (v1 simplification): the orchestrator
-    // pulls all `relay_dispute_evidence` rows for the dispute. The
-    // existing /evidence endpoint accepts submissions only in
-    // {opened, evidence} states, so post-`resolved` evidence cannot
-    // currently be added — round-2 adjudicates on the original
-    // round-1 evidence + the appeal `reason` text. Per §8.4 spec,
-    // "new evidence may be submitted with the appeal" — extending
-    // /evidence to accept post-`resolved` submissions is a future
-    // arc tracked in the dispute_v1_fund_action_federation_parity
-    // sibling memo.
+    // Round-2 evidence union (§8.3 + §8.5): the orchestrator pulls
+    // all `relay_dispute_evidence` rows for the dispute (no round
+    // filter), so the round-2 vote-request bundle is automatically
+    // the union of round-1 + post-`resolved` evidence rows. The
+    // /evidence endpoint accepts submissions in {opened, evidence,
+    // resolved} states; post-`resolved` is bounded by the §8.5
+    // appeal window (24h after `resolved_at`). Once the dispute
+    // transitions to `appealed`, round-2 orchestration is in flight
+    // and the bundle freezes.
     const isFederationPath =
       dispute.filed_by === relayIdentity.relayMotebitId ||
       dispute.respondent === relayIdentity.relayMotebitId;

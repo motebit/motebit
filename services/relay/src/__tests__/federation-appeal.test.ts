@@ -17,11 +17,18 @@
  *   - federation-orchestrator.test.ts "round mismatch in response →
  *     vote dropped" test (commit 3)
  *
- * Round-2 evidence (v1 simplification): /evidence currently accepts
- * submissions only in {opened, evidence} states, so post-`resolved`
- * evidence cannot be added. Round-2 adjudicates on the original
- * round-1 evidence + the appeal `reason` text. Extending /evidence
- * to accept post-`resolved` submissions is a future arc.
+ * Round-2 evidence (§8.3 + §8.5): /evidence accepts submissions in
+ * {opened, evidence, resolved} states. Post-`resolved` submissions
+ * are bounded by the §8.5 appeal window (24h after `resolved_at`);
+ * once `appealed`, round-2 orchestration is in flight and the bundle
+ * freezes. Round-2 vote-requests carry the union of round-1 +
+ * post-`resolved` evidence — the orchestrator at line 529 reads
+ * `WHERE dispute_id = ?` with no round filter, so the union happens
+ * automatically once new rows land in the same table.
+ *
+ * The round-2-evidence-union test below exercises this path
+ * end-to-end (resolved → submit post-resolved evidence → file appeal
+ * → assert peer received union in VoteRequest.evidence_bundle).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SyncRelay } from "../index.js";
@@ -33,7 +40,14 @@ import {
   signDisputeAppeal,
 } from "@motebit/encryption";
 import { signAdjudicatorVote } from "@motebit/crypto";
-import type { DisputeOutcome, DisputeRequest, DisputeAppeal, VoteRequest } from "@motebit/protocol";
+import { signDisputeEvidence } from "@motebit/encryption";
+import type {
+  DisputeOutcome,
+  DisputeRequest,
+  DisputeAppeal,
+  DisputeEvidence,
+  VoteRequest,
+} from "@motebit/protocol";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 interface PeerSetup {
@@ -423,5 +437,244 @@ describe("Federation appeal: round-1 resolved → /appeal → round-2 → final"
       )
       .get("del-fa", disputeId) as { amount: number } | undefined;
     expect(delTxn?.amount).toBe(100000);
+  });
+});
+
+describe("Federation appeal: round-2 evidence union (§8.3 + §8.5)", () => {
+  it("post-resolved evidence accepted; round-2 VoteRequest carries union of round-1 + post-resolved bundles", async () => {
+    // Capture the first VoteRequest body per round so we can assert on
+    // round-2 evidence_bundle. The orchestrator sends the same bundle
+    // to every peer in a fan-out, so capturing the first is sufficient.
+    const voteRequestsByRound = new Map<number, VoteRequest>();
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const peer = peers.find((p) => url.startsWith(p.endpointUrl));
+      if (!peer) throw new Error(`unrouted url: ${url}`);
+      const body = JSON.parse(init!.body as string) as VoteRequest;
+      if (!voteRequestsByRound.has(body.round)) {
+        voteRequestsByRound.set(body.round, body);
+      }
+      const vote: DisputeOutcome = body.round === 1 ? "upheld" : "overturned";
+      const signed = await signAdjudicatorVote(
+        {
+          dispute_id: body.dispute_id,
+          round: body.round,
+          peer_id: peer.relayMotebitId,
+          vote,
+          rationale: `peer ${peer.relayMotebitId.slice(0, 8)} round ${body.round}`,
+        },
+        peer.privateKey,
+      );
+      return new Response(JSON.stringify(signed), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const relayMotebitId = relay.relayIdentity.relayMotebitId;
+    const allocId = "alloc-evid-union";
+    const taskId = "task-evid-union";
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, 100000, 'settled', ?)",
+      )
+      .run(allocId, taskId, "del-fa", Date.now());
+
+    const delPriv = agentKeys.get("del-fa")!.privateKey;
+    const disputeId = `dispute-evid-union-${crypto.randomUUID().slice(0, 8)}`;
+    const disputeReq: DisputeRequest = await signDisputeRequest(
+      {
+        dispute_id: disputeId,
+        task_id: taskId,
+        allocation_id: allocId,
+        filed_by: "del-fa",
+        respondent: relayMotebitId,
+        category: "quality",
+        description: "evidence union test",
+        evidence_refs: ["x"],
+        filed_at: Date.now(),
+      },
+      delPriv,
+    );
+    await relay.app.request(`/api/v1/allocations/${allocId}/dispute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(disputeReq),
+    });
+
+    // Round-1 evidence: submitted while in `evidence` state (§5.3).
+    const round1Evidence: DisputeEvidence = await signDisputeEvidence(
+      {
+        dispute_id: disputeId,
+        submitted_by: "del-fa",
+        evidence_type: "execution_receipt",
+        evidence_data: { round1: "claim" },
+        description: "round-1 evidence",
+        submitted_at: Date.now(),
+      },
+      delPriv,
+    );
+    const r1EvRes = await relay.app.request(`/api/v1/disputes/${disputeId}/evidence`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(round1Evidence),
+    });
+    expect(r1EvRes.status).toBe(200);
+
+    // Round-1 resolve → state becomes `resolved`, round-1 votes captured.
+    await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "upheld",
+        rationale: "ignored",
+        fund_action: "release_to_worker",
+      }),
+    });
+    const stateAfterResolve = relay.moteDb.db
+      .prepare("SELECT state FROM relay_disputes WHERE dispute_id = ?")
+      .get(disputeId) as { state: string };
+    expect(stateAfterResolve.state).toBe("resolved");
+
+    // Post-resolved evidence: the new path under test. Submitted while
+    // the dispute is in `resolved` state, before /appeal is filed.
+    const postResolvedEvidence: DisputeEvidence = await signDisputeEvidence(
+      {
+        dispute_id: disputeId,
+        submitted_by: "del-fa",
+        evidence_type: "credential",
+        evidence_data: { postResolved: "newClaim" },
+        description: "post-resolved evidence introduced with appeal",
+        submitted_at: Date.now(),
+      },
+      delPriv,
+    );
+    const r2EvRes = await relay.app.request(`/api/v1/disputes/${disputeId}/evidence`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(postResolvedEvidence),
+    });
+    expect(r2EvRes.status).toBe(200);
+
+    // File appeal → triggers round-2 orchestration. The orchestrator
+    // SELECTs all rows from relay_dispute_evidence WHERE dispute_id = ?
+    // (no round filter), so the bundle is the union automatically.
+    const appeal: DisputeAppeal = await signDisputeAppeal(
+      {
+        dispute_id: disputeId,
+        appealed_by: "del-fa",
+        reason: "round 1 missed the new evidence",
+        appealed_at: Date.now(),
+      },
+      delPriv,
+    );
+    const appealRes = await relay.app.request(`/api/v1/disputes/${disputeId}/appeal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(appeal),
+    });
+    expect(appealRes.status).toBe(200);
+
+    // Round-1 VoteRequest carried only round-1 evidence
+    const r1Body = voteRequestsByRound.get(1);
+    expect(r1Body).toBeDefined();
+    expect(r1Body!.evidence_bundle).toHaveLength(1);
+    expect(r1Body!.evidence_bundle[0].evidence_type).toBe("execution_receipt");
+
+    // Round-2 VoteRequest carried the union: round-1 + post-resolved
+    const r2Body = voteRequestsByRound.get(2);
+    expect(r2Body).toBeDefined();
+    expect(r2Body!.evidence_bundle).toHaveLength(2);
+    const types = r2Body!.evidence_bundle.map((e) => e.evidence_type).sort();
+    expect(types).toEqual(["credential", "execution_receipt"]);
+  });
+
+  it("post-`appealed` evidence rejected — bundle freezes once round-2 orchestration starts (§8.3)", async () => {
+    // Spec claim under test: "once a dispute transitions to `appealed`,
+    // round-2 orchestration is in flight and the evidence bundle
+    // freezes." Without this fence, a future regression that allowed
+    // post-appealed evidence wouldn't break any test — same shape as
+    // the round-1-replay test added in commit 4b for explicit named
+    // invariants.
+    stubPeerFetch(
+      peers,
+      new Map<number, DisputeOutcome>([
+        [1, "upheld"],
+        [2, "overturned"],
+      ]),
+    );
+    const relayMotebitId = relay.relayIdentity.relayMotebitId;
+    const allocId = "alloc-frozen";
+    const taskId = "task-frozen";
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, 100000, 'settled', ?)",
+      )
+      .run(allocId, taskId, "del-fa", Date.now());
+    const delPriv = agentKeys.get("del-fa")!.privateKey;
+    const disputeId = `dispute-frozen-${crypto.randomUUID().slice(0, 8)}`;
+    const disputeReq: DisputeRequest = await signDisputeRequest(
+      {
+        dispute_id: disputeId,
+        task_id: taskId,
+        allocation_id: allocId,
+        filed_by: "del-fa",
+        respondent: relayMotebitId,
+        category: "quality",
+        description: "frozen-bundle test",
+        evidence_refs: ["x"],
+        filed_at: Date.now(),
+      },
+      delPriv,
+    );
+    await relay.app.request(`/api/v1/allocations/${allocId}/dispute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(disputeReq),
+    });
+    await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "upheld",
+        rationale: "ignored",
+        fund_action: "release_to_worker",
+      }),
+    });
+    const appeal: DisputeAppeal = await signDisputeAppeal(
+      {
+        dispute_id: disputeId,
+        appealed_by: "del-fa",
+        reason: "appeal",
+        appealed_at: Date.now(),
+      },
+      delPriv,
+    );
+    const appealRes = await relay.app.request(`/api/v1/disputes/${disputeId}/appeal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(appeal),
+    });
+    expect(appealRes.status).toBe(200);
+    // After the round-2 orchestrator completes, the dispute is in
+    // `final` state. Any post-appeal evidence submission must be
+    // rejected with the standard state-gate error.
+    const lateEvidence: DisputeEvidence = await signDisputeEvidence(
+      {
+        dispute_id: disputeId,
+        submitted_by: "del-fa",
+        evidence_type: "execution_receipt",
+        evidence_data: { tooLate: true },
+        description: "post-appealed evidence — must reject",
+        submitted_at: Date.now(),
+      },
+      delPriv,
+    );
+    const lateRes = await relay.app.request(`/api/v1/disputes/${disputeId}/evidence`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(lateEvidence),
+    });
+    expect(lateRes.status).toBe(400);
   });
 });

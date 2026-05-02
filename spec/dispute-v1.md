@@ -307,7 +307,7 @@ Each adjudication round increments a counter: `round=1` for the original adjudic
 
 A vote-request with `round: 2` MUST carry the original round-1 evidence bundle plus any new evidence introduced with the appeal (§8.4 permits new evidence). The peer's vote callback receives the union and decides afresh.
 
-**Reference-implementation v1 simplification (non-normative).** The current `services/relay` implementation accepts evidence submissions only while the dispute is in `{opened, evidence}` state — post-`resolved` evidence cannot be added today. Round-2 vote-requests therefore carry only the original round-1 evidence bundle plus the appeal's `reason` text. Extending the `/evidence` endpoint to accept post-`resolved` submissions is a separate arc; the wire-format above remains the binding spec, and conformant implementations MAY accept post-`resolved` evidence whenever the operator surface supports it.
+The `/api/v1/disputes/:disputeId/evidence` endpoint accepts submissions while the dispute is in `{opened, evidence, resolved}` state. Post-`resolved` submissions are bounded by the §8.5 appeal window (24h after `resolved_at`); once a dispute transitions to `appealed`, round-2 orchestration is in flight and the evidence bundle freezes. The §5.5 per-party cap (10 submissions per dispute) applies cumulatively across rounds.
 
 ### 8.4 Foundation Law
 
