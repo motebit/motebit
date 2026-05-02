@@ -219,7 +219,28 @@ The reference relay writes a single `relay_disputes` row with JSON resolution da
 
 - Adjudication deadline: 72 hours from evidence window close.
 - Timeout without resolution defaults to `split` with `split_ratio: 0.5`.
+- **Deferred orchestration within the 72h window.** The orchestrator MAY make multiple fan-out attempts within the §6.6 adjudication window. Per-request timeouts (§16.3 default 10s) govern ONE attempt; the §6.6 72h window governs the orchestrator's overall deadline. Reference implementation persists per-(dispute, round) orchestration state and re-attempts on exponential backoff (10s × 2^attempt, capped at 30 minutes) until quorum is reached or the deadline elapses. Votes from prior attempts contribute to quorum on subsequent attempts — peers that responded once are not re-contacted; peers that failed are retried. A peer hiccup at any single attempt MUST NOT collapse the §6.6 window; the orchestrator MUST treat the per-request timeout and the 72h deadline as separate concerns.
 - **Minimum federation size for happy-path validation.** The "≥3-peer quorum" floor in §6.2 combined with the no-self-adjudication rule in §6.5 implies that a single-operator federation needs at least 4 relays for the orchestrator to ever validate the happy path: the leader is one, and three OTHER active peers are required to vote. A 3-relay triangle gives each leader only 2 others and always falls through to "insufficient federation peers." This is operator guidance, not a normative wire-format constraint — independent operators are encouraged to peer with each other to satisfy §6.2 with smaller individual fleets, since vote independence (the actual property §6.2 protects) is a multi-operator property regardless of single-operator fleet size.
+
+#### Client polling contract
+
+A relay MAY return `202 Accepted` from `POST /api/v1/disputes/:disputeId/resolve` when the federation orchestration is in flight (deferred). The body carries the orchestration state:
+
+```text
+{
+  "ok": false,
+  "dispute_id": "...",
+  "state": "arbitration",
+  "orchestration": {
+    "status": "in_progress",
+    "attempt_count": 2,
+    "next_attempt_at": 1700000020000,
+    "deadline_at": 1700259200000
+  }
+}
+```
+
+Clients SHOULD poll `POST /api/v1/disputes/:disputeId/resolve` (idempotent — repeated calls drive additional attempts) or `GET /api/v1/disputes/:disputeId` (read-only, returns cached resolution once finalized) until the resolution is available. The orchestrator's background worker drives retries independently of client polls — the dispute will eventually resolve (or §6.6 timeout-fallback) regardless of whether any client is actively polling.
 
 ## 7. Fund Handling
 

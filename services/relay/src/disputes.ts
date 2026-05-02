@@ -9,7 +9,7 @@
  *   GET  /api/v1/disputes/:disputeId                — query status
  *   GET  /api/v1/admin/disputes                     — admin panel view
  */
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import {
   canonicalJson,
@@ -41,6 +41,16 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity } from "./federation.js";
 import { creditAccount as creditAccountCanonical } from "./accounts.js";
 import { createLogger } from "./logger.js";
+import {
+  finalizeFederationResolution,
+  getDueOrchestrations,
+  initOrchestration,
+  markOrchestrationDone,
+  markOrchestrationTimedOut,
+  ORCHESTRATION_WORKER_INTERVAL_MS,
+  recordOrchestrationAttempt,
+  type OrchestrationRow,
+} from "./dispute-orchestration.js";
 
 const logger = createLogger({ service: "relay", module: "disputes" });
 
@@ -287,11 +297,47 @@ export interface DisputeDeps {
 // at the DB level — that's the cross-process backstop. The advisory lock
 // is the in-process collapse, mirroring `advanceRelayHorizon` in
 // horizon.ts.
-const resolveLocks = new Map<string, Promise<ResolveData>>();
+const resolveLocks = new Map<string, Promise<ResolveOutcome>>();
 
 /** Test-only: reset the in-process advisory lock map. */
 export function _resetResolveLocksForTests(): void {
   resolveLocks.clear();
+}
+
+/**
+ * Map a `ResolveOutcome` to the HTTP response. `resolved` returns 200
+ * with the full DisputeResolution shape; `deferred` returns 202 with
+ * the orchestration state so clients can poll. Single-shape mapping
+ * across the cached-resolution / in-flight-collapse / fresh-resolve
+ * paths so the response contract stays uniform.
+ */
+function outcomeToResponse(c: Context, disputeId: string, outcome: ResolveOutcome): Response {
+  if (outcome.kind === "deferred") {
+    return c.json(
+      {
+        ok: false,
+        dispute_id: disputeId,
+        state: "arbitration" as DisputeState,
+        orchestration: {
+          status: outcome.orchestration.status,
+          attempt_count: outcome.orchestration.attempt_count,
+          next_attempt_at: outcome.orchestration.next_attempt_at,
+          deadline_at: outcome.orchestration.deadline_at,
+        },
+      },
+      202,
+    );
+  }
+  return c.json({
+    ok: true,
+    dispute_id: disputeId,
+    state: "resolved" as DisputeState,
+    resolution: outcome.data.resolution,
+    fund_action: outcome.data.fund_action,
+    split_ratio: outcome.data.split_ratio,
+    resolved_at: outcome.data.resolved_at,
+    adjudicator_votes: outcome.data.adjudicator_votes,
+  });
 }
 
 /** Internal: data returned by the lock-wrapped resolve flow. */
@@ -304,17 +350,27 @@ interface ResolveData {
   resolved_at: number;
 }
 
+/**
+ * Discriminated union for the lock-wrapped resolve flow. Federation
+ * path may return `deferred` when quorum is not reached on the current
+ * attempt — caller surfaces 202 to client, /resolve poll later.
+ */
+type ResolveOutcome =
+  | { kind: "resolved"; data: ResolveData }
+  | { kind: "deferred"; orchestration: OrchestrationRow };
+
 // === §6.2 Federation Orchestrator ===
 //
 // Replaces the prior 409 self-adjudication guard with the federation
 // fan-out path described in `spec/relay-federation-v1.md` §16.1.
 //
-// Sync v1 trade: single Promise.allSettled fan-out collapses per-peer
-// fan-out timeout into the spec timeout — a peer hiccup at fan-out
-// time becomes a permanently-lost vote even though the §6.6 72h
-// adjudication window would technically permit retrying. Async
-// retry-within-72h is a future arc; see
-// memory/section_6_2_orchestrator_async_deferral.md.
+// One-shot fan-out cycle: for ONE attempt at a (dispute, round),
+// enumerate active peers, fan out to peers without persisted votes,
+// persist new valid votes, aggregate from union of (persisted + new).
+// The §6.6 72h adjudication deadline is governed at a higher level
+// by `attemptOrFinalizeFederationResolution` below — this function
+// is the per-attempt primitive both /resolve (sync first attempt) and
+// the deferred worker (subsequent attempts) consume.
 //
 // Fund-action mapping (`spec/dispute-v1.md` §7.2): the orchestrator emits
 // the granular `release_to_worker` / `refund_to_delegator` arms when the
@@ -538,6 +594,50 @@ export async function orchestrateFederationResolution(
     )
     .all(relayIdentity.relayMotebitId) as PeerRow[];
 
+  // 1a. Read persisted votes for this round as the baseline. Allows
+  //     deferred re-attempts to compose: the orchestrator only fans out
+  //     to peers that haven't voted yet, and aggregation reads from
+  //     the union of (prior persisted votes + this attempt's new votes).
+  //     Without this, attempt N+1 would aggregate ONLY the votes it just
+  //     collected, ignoring quorum-contributing votes from attempt N.
+  const persistedRows = db
+    .prepare(
+      `SELECT dispute_id, round, peer_id, vote, rationale, suite, signature
+       FROM relay_dispute_votes WHERE dispute_id = ? AND round = ?`,
+    )
+    .all(dispute.dispute_id, round) as Array<{
+    dispute_id: string;
+    round: number;
+    peer_id: string;
+    vote: string;
+    rationale: string;
+    suite: string;
+    signature: string;
+  }>;
+  const persistedVotes: AdjudicatorVote[] = persistedRows.map((r) => ({
+    dispute_id: r.dispute_id,
+    round: r.round,
+    peer_id: r.peer_id,
+    vote: r.vote as DisputeOutcome,
+    rationale: r.rationale,
+    suite: r.suite as "motebit-jcs-ed25519-b64-v1",
+    signature: r.signature,
+  }));
+  const votedPeerIds = new Set(persistedVotes.map((v) => v.peer_id));
+
+  // Quorum already met from prior attempts → recovery path. Skip
+  // fan-out (saves bandwidth + preserves the votes peers signed
+  // pre-crash / pre-deferral). Mirrors the prior /resolve recovery
+  // branch.
+  if (persistedVotes.length >= FEDERATION_QUORUM_MIN) {
+    logger.info("federation.orchestrator.recovery_aggregation", {
+      disputeId: dispute.dispute_id,
+      round,
+      persistedVoteCount: persistedVotes.length,
+    });
+    return aggregateVotes(persistedVotes, peers.length, dispute.filer_role);
+  }
+
   if (peers.length < FEDERATION_QUORUM_MIN) {
     throw new HTTPException(503, {
       message: JSON.stringify({
@@ -622,22 +722,30 @@ export async function orchestrateFederationResolution(
   // a different suite entirely.
   const signedRequest: VoteRequest = { ...requestBody, signature: toBase64Url(sigBytes) };
 
-  // 5. Parallel fan-out with per-request timeout (§16.3 default 10s)
+  // 5. Parallel fan-out — only to peers without a persisted vote for
+  //    this round. On the first attempt this is all peers; on deferred
+  //    re-attempts, only the peers that haven't voted yet are contacted.
+  //    Per-request timeout (§16.3 default 10s) governs ONE attempt; the
+  //    §6.6 72h adjudication window governs the deferred-orchestrator
+  //    deadline (separate concern).
+  const peersToContact = peers.filter((p) => !votedPeerIds.has(p.peer_relay_id));
   logger.info("federation.orchestrator.fanout_started", {
     disputeId: dispute.dispute_id,
     round,
     peerCount: peers.length,
+    contactingCount: peersToContact.length,
+    persistedVoteCount: persistedVotes.length,
     timeoutMs,
   });
   const settled = await Promise.allSettled(
-    peers.map((peer) =>
+    peersToContact.map((peer) =>
       fetchPeerVote(peer, signedRequest, fetchImpl, timeoutMs, dispute.dispute_id),
     ),
   );
-  const validVotes: AdjudicatorVote[] = [];
+  const newValidVotes: AdjudicatorVote[] = [];
   for (const result of settled) {
     if (result.status === "fulfilled" && result.value !== null) {
-      validVotes.push(result.value);
+      newValidVotes.push(result.value);
     }
   }
 
@@ -655,7 +763,7 @@ export async function orchestrateFederationResolution(
        received_at = excluded.received_at`,
   );
   const receivedAt = Date.now();
-  for (const vote of validVotes) {
+  for (const vote of newValidVotes) {
     insertVote.run(
       vote.dispute_id,
       vote.round,
@@ -668,19 +776,222 @@ export async function orchestrateFederationResolution(
     );
   }
 
-  // 7. Aggregate
-  const result = aggregateVotes(validVotes, peers.length, dispute.filer_role);
+  // 7. Aggregate from union of (persisted votes from prior attempts +
+  //    new votes from this attempt). Composes correctly across the
+  //    deferred-orchestrator's multiple attempts within the §6.6 window.
+  const allVotes = [...persistedVotes, ...newValidVotes];
+  const result = aggregateVotes(allVotes, peers.length, dispute.filer_role);
 
   logger.info("federation.orchestrator.aggregated", {
     disputeId: dispute.dispute_id,
     round,
     peerCount: peers.length,
-    validVoteCount: validVotes.length,
+    validVoteCount: allVotes.length,
+    newVoteCount: newValidVotes.length,
     resolution: result.resolution,
     splitRatio: result.split_ratio,
   });
 
   return result;
+}
+
+// === §6.2 Deferred orchestrator ===
+//
+// Wraps `orchestrateFederationResolution` with the orchestration-row
+// state machine (`relay_dispute_orchestrations`). Closes the v1 sync
+// trade-off: a single peer hiccup at fan-out time no longer becomes
+// a permanently-lost vote, because the §6.6 72h adjudication window is
+// now the orchestrator's actual attempt window — not the per-request
+// 10s timeout.
+//
+// Three terminal outcomes per attempt:
+//   - "ready"     — quorum reached on this attempt; finalize + return
+//   - "deferred"  — quorum NOT reached, deadline NOT elapsed; orchestration
+//                   row updated with next_attempt_at, caller returns 202
+//                   to client (or worker re-queues for next cycle)
+//   - "timed_out" — deadline elapsed; §6.6 fallback resolution applies
+//                   (fund_action: split, split_ratio: 0.5), finalize + return
+
+export type AttemptOutcome =
+  | { state: "ready"; result: FederationResolutionResult }
+  | { state: "deferred"; orchestration: OrchestrationRow }
+  | { state: "timed_out"; result: FederationResolutionResult };
+
+/**
+ * Run one orchestration attempt for (dispute, round). On the first
+ * attempt for a (dispute, round), inserts the orchestration row.
+ * On every attempt, calls the underlying sync orchestrator (one
+ * fan-out cycle) and decides ready / deferred / timed_out.
+ *
+ * The caller (the /resolve handler or the deferred worker) is responsible
+ * for the resolution-write — `finalizeFederationResolution` from
+ * `dispute-orchestration.ts` performs the atomic insert + state transition.
+ */
+export async function attemptOrFinalizeFederationResolution(
+  dispute: { dispute_id: string; body_json: string; filer_role: FilerRole | null },
+  round: number,
+  deps: {
+    db: DatabaseDriver;
+    relayIdentity: RelayIdentity;
+    fetchImpl?: typeof fetch;
+    voteRequestTimeoutMs?: number;
+    /** Test seam — defaults to Date.now(). */
+    nowMs?: () => number;
+  },
+): Promise<AttemptOutcome> {
+  const { db } = deps;
+  const now = deps.nowMs?.() ?? Date.now();
+
+  // Initialize orchestration row if absent (sets started_at + deadline).
+  initOrchestration(db, dispute.dispute_id, round, now);
+
+  // One fan-out attempt. Persists any new valid votes; aggregates from
+  // ALL persisted votes for this round (by virtue of orchestrateFederation-
+  // Resolution re-fetching peers + writing votes via UPSERT).
+  // (Persisted-vote aggregation pre-fan-out is already handled by the
+  // /resolve handler's recovery path; the deferred wrapper composes
+  // cleanly with that.)
+  const result = await orchestrateFederationResolution(dispute, round, deps);
+
+  // Record the attempt: bump count, set next_attempt_at per backoff.
+  const updated = recordOrchestrationAttempt(db, dispute.dispute_id, round, now);
+
+  if (result.adjudicator_votes.length >= FEDERATION_QUORUM_MIN) {
+    markOrchestrationDone(db, dispute.dispute_id, round);
+    return { state: "ready", result };
+  }
+  if (now >= updated.deadline_at) {
+    // §6.6 fallback: orchestrator already returns the split-with-0.5
+    // shape when valid count < QUORUM; we just commit to it as final.
+    markOrchestrationTimedOut(db, dispute.dispute_id, round);
+    logger.info("dispute.orchestration.timed_out", {
+      disputeId: dispute.dispute_id,
+      round,
+      attemptCount: updated.attempt_count,
+      validVoteCount: result.adjudicator_votes.length,
+    });
+    return { state: "timed_out", result };
+  }
+  logger.info("dispute.orchestration.deferred", {
+    disputeId: dispute.dispute_id,
+    round,
+    attemptCount: updated.attempt_count,
+    validVoteCount: result.adjudicator_votes.length,
+    nextAttemptAt: updated.next_attempt_at,
+  });
+  return { state: "deferred", orchestration: updated };
+}
+
+/**
+ * Background worker — runs ONE poll cycle. Picks up `in_progress`
+ * orchestration rows whose `next_attempt_at <= now`, runs an attempt
+ * for each, finalizes ready/timed_out outcomes via
+ * `finalizeFederationResolution`. Idempotent: rows finalized in a
+ * prior cycle don't re-appear (status flips to done/timed_out).
+ *
+ * Cross-process safety: bounded by DB UNIQUE constraints — concurrent
+ * workers across processes converge cleanly (one finalize wins, others
+ * no-op via constraint catch in `finalizeFederationResolution`).
+ */
+export async function runDeferredOrchestrationCycle(deps: {
+  db: DatabaseDriver;
+  relayIdentity: RelayIdentity;
+  fetchImpl?: typeof fetch;
+  voteRequestTimeoutMs?: number;
+  nowMs?: () => number;
+  limit?: number;
+}): Promise<{ processed: number; ready: number; deferred: number; timed_out: number }> {
+  const { db } = deps;
+  const now = deps.nowMs?.() ?? Date.now();
+  const due = getDueOrchestrations(db, now, deps.limit ?? 50);
+  let ready = 0;
+  let deferred = 0;
+  let timedOut = 0;
+
+  for (const item of due) {
+    const dispute = db
+      .prepare("SELECT dispute_id, body_json, filer_role FROM relay_disputes WHERE dispute_id = ?")
+      .get(item.dispute_id) as
+      | { dispute_id: string; body_json: string; filer_role: string | null }
+      | undefined;
+    if (!dispute) {
+      // Dispute row pruned (retention); the orphan orchestration row
+      // would block forever otherwise. Mark it timed_out so it stops
+      // re-queueing.
+      logger.warn("dispute.orchestration.orphan_dispute_row", { disputeId: item.dispute_id });
+      markOrchestrationTimedOut(db, item.dispute_id, item.round);
+      timedOut++;
+      continue;
+    }
+    try {
+      const outcome = await attemptOrFinalizeFederationResolution(
+        {
+          dispute_id: dispute.dispute_id,
+          body_json: dispute.body_json,
+          filer_role: (dispute.filer_role as FilerRole | null) ?? null,
+        },
+        item.round,
+        deps,
+      );
+      if (outcome.state === "ready" || outcome.state === "timed_out") {
+        await finalizeFederationResolution(
+          {
+            disputeId: item.dispute_id,
+            round: item.round,
+            resolution: outcome.result.resolution,
+            rationale: outcome.result.rationale,
+            fund_action: outcome.result.fund_action,
+            split_ratio: outcome.result.split_ratio,
+            adjudicator_votes: outcome.result.adjudicator_votes,
+            resolvedAt: now,
+          },
+          deps,
+        );
+        if (outcome.state === "ready") ready++;
+        else timedOut++;
+      } else {
+        deferred++;
+      }
+    } catch (err) {
+      // Per-attempt failure does NOT consume the deadline — leave the
+      // row in_progress so the next poll cycle retries. Log the error
+      // for operator visibility.
+      logger.warn("dispute.orchestration.attempt_failed", {
+        disputeId: item.dispute_id,
+        round: item.round,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return { processed: due.length, ready, deferred, timed_out: timedOut };
+}
+
+/**
+ * Start the periodic worker. Returns the interval handle so the relay's
+ * close path can clear it. Mirror of `startSweepLoop` /
+ * `startBatchWithdrawalLoop` shape in this service.
+ */
+export function startDeferredOrchestrationWorker(deps: {
+  db: DatabaseDriver;
+  relayIdentity: RelayIdentity;
+  fetchImpl?: typeof fetch;
+  voteRequestTimeoutMs?: number;
+  intervalMs?: number;
+}): ReturnType<typeof setInterval> {
+  const intervalMs = deps.intervalMs ?? ORCHESTRATION_WORKER_INTERVAL_MS;
+  const handle = setInterval(() => {
+    void runDeferredOrchestrationCycle(deps).catch((err) => {
+      logger.warn("dispute.orchestration.cycle_failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }, intervalMs);
+  // Don't keep the event loop alive solely for this timer — when the
+  // process is otherwise idle (e.g., post-WS-drain), let it exit.
+  // Mirrors the sweep / batch-withdrawal loop convention.
+  if (typeof handle.unref === "function") handle.unref();
+  return handle;
 }
 
 // === Route Registration ===
@@ -1066,20 +1377,15 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // 2. Per-dispute advisory lock. Collapse concurrent calls.
     const inFlight = resolveLocks.get(disputeId);
     if (inFlight) {
-      const data = await inFlight;
-      return c.json({
-        ok: true,
-        dispute_id: disputeId,
-        state: "resolved" as DisputeState,
-        ...data,
-      });
+      const outcome = await inFlight;
+      return outcomeToResponse(c, disputeId, outcome);
     }
 
     const isFederationPath =
       dispute.filed_by === relayIdentity.relayMotebitId ||
       dispute.respondent === relayIdentity.relayMotebitId;
 
-    const resolvePromise = (async (): Promise<ResolveData> => {
+    const resolvePromise = (async (): Promise<ResolveOutcome> => {
       let resolutionOutcome: DisputeOutcome;
       let resolutionRationale: string;
       let resolutionFundAction: DisputeFundAction;
@@ -1087,81 +1393,44 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       let adjudicatorVotes: AdjudicatorVote[];
 
       if (isFederationPath) {
-        // 3. State-machine: evidence → arbitration before fan-out.
-        //    Idempotent: WHERE state = 'evidence' guards against
-        //    re-running the transition on recovery.
+        // 3. State-machine: evidence → arbitration before the first
+        //    attempt. Idempotent: WHERE state = 'evidence' guards
+        //    against re-running the transition on a deferred re-poll.
         if (dispute.state === "evidence") {
           db.prepare(
             "UPDATE relay_disputes SET state = 'arbitration' WHERE dispute_id = ? AND state = 'evidence'",
           ).run(disputeId);
         }
 
-        // Recovery: check for persisted votes from a prior crashed
-        // orchestration. If we have ≥ quorum already, aggregate from
-        // them rather than re-fanning-out (saves bandwidth + preserves
-        // the votes peers signed pre-crash).
+        // Deferred orchestration (§6.6 retry-within-72h). One attempt
+        // per call: fan out to peers, persist any new valid votes,
+        // aggregate from ALL persisted votes for this round.
+        // Outcome:
+        //   ready     → quorum reached; finalize + return resolved
+        //   deferred  → quorum NOT reached, deadline NOT elapsed;
+        //               return 202 with orchestration state. The
+        //               background worker (or subsequent /resolve
+        //               polls) drives further attempts.
+        //   timed_out → 72h deadline elapsed; §6.6 fallback applies
+        //               (split with split_ratio 0.5), finalize as final.
         const round = 1;
-        const persistedVoteRows = db
-          .prepare(
-            "SELECT dispute_id, round, peer_id, vote, rationale, suite, signature FROM relay_dispute_votes WHERE dispute_id = ? AND round = ?",
-          )
-          .all(disputeId, round) as Array<{
-          dispute_id: string;
-          round: number;
-          peer_id: string;
-          vote: string;
-          rationale: string;
-          suite: string;
-          signature: string;
-        }>;
-
-        if (persistedVoteRows.length >= FEDERATION_QUORUM_MIN) {
-          // Recovered from mid-orchestration crash: aggregate from
-          // persisted votes (peers' signatures preserved verbatim).
-          logger.info("dispute.resolve.recovery_aggregation", {
-            disputeId,
-            round,
-            persistedVoteCount: persistedVoteRows.length,
-          });
-          const reconstructedVotes: AdjudicatorVote[] = persistedVoteRows.map((row) => ({
-            dispute_id: row.dispute_id,
-            round: row.round,
-            peer_id: row.peer_id,
-            vote: row.vote as DisputeOutcome,
-            rationale: row.rationale,
-            suite: row.suite as "motebit-jcs-ed25519-b64-v1",
-            signature: row.signature,
-          }));
-          const recovered = aggregateVotes(
-            reconstructedVotes,
-            persistedVoteRows.length,
-            (dispute.filer_role as FilerRole | null) ?? null,
-          );
-          resolutionOutcome = recovered.resolution;
-          resolutionRationale = recovered.rationale;
-          resolutionFundAction = recovered.fund_action;
-          splitRatio = recovered.split_ratio;
-          adjudicatorVotes = recovered.adjudicator_votes;
-        } else {
-          // Fresh fan-out (or partial recovery; orchestrator's ON
-          // CONFLICT DO UPDATE handles re-runs idempotently).
-          // Round=1 for original adjudication; §8.3 appeals re-run with
-          // round=2 (commit 4).
-          const federationResult = await orchestrateFederationResolution(
-            {
-              dispute_id: disputeId,
-              body_json: (dispute.body_json as string | null) ?? "",
-              filer_role: (dispute.filer_role as FilerRole | null) ?? null,
-            },
-            round,
-            { db, relayIdentity, fetchImpl, voteRequestTimeoutMs },
-          );
-          resolutionOutcome = federationResult.resolution;
-          resolutionRationale = federationResult.rationale;
-          resolutionFundAction = federationResult.fund_action;
-          splitRatio = federationResult.split_ratio;
-          adjudicatorVotes = federationResult.adjudicator_votes;
+        const attempt = await attemptOrFinalizeFederationResolution(
+          {
+            dispute_id: disputeId,
+            body_json: (dispute.body_json as string | null) ?? "",
+            filer_role: (dispute.filer_role as FilerRole | null) ?? null,
+          },
+          round,
+          { db, relayIdentity, fetchImpl, voteRequestTimeoutMs },
+        );
+        if (attempt.state === "deferred") {
+          return { kind: "deferred", orchestration: attempt.orchestration };
         }
+        resolutionOutcome = attempt.result.resolution;
+        resolutionRationale = attempt.result.rationale;
+        resolutionFundAction = attempt.result.fund_action;
+        splitRatio = attempt.result.split_ratio;
+        adjudicatorVotes = attempt.result.adjudicator_votes;
       } else {
         // Single-relay adjudication: operator's body is the resolution.
         // Rationale required (§6.5).
@@ -1179,65 +1448,29 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
 
       const resolvedAt = Date.now();
 
-      // Sign the resolution through `@motebit/encryption`'s signer.
-      const signedResolution = await signDisputeResolution(
-        {
-          dispute_id: disputeId,
-          resolution: resolutionOutcome,
-          rationale: resolutionRationale,
-          fund_action: resolutionFundAction,
-          split_ratio: splitRatio,
-          adjudicator: relayIdentity.relayMotebitId,
-          adjudicator_votes: adjudicatorVotes,
-          resolved_at: resolvedAt,
-        },
-        relayIdentity.privateKey,
-      );
-      const signatureHex = signedResolution.signature;
-
-      const resolutionId = `res-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-
-      // 4. Atomic resolution transition: resolution insert + state
-      //    update to 'resolved'. fund_action does NOT execute here per
-      //    §7.1 + §7.3 — funds stay locked through the appeal window.
-      //    Lazy-on-read finalize (`tryFinalizeIfWindowExpired`) handles
-      //    the resolved → final transition + fund_action execution
-      //    after the 24h appeal window expires without an appeal.
-      //    Federation appeals (commit 4b) handle the resolved → appealed
-      //    → final flow with fund_action at the appealed → final step.
-      db.exec("BEGIN");
+      // 4. Atomic resolution transition: sign + insert resolution row
+      //    + update dispute state. For round 1 the target state is
+      //    'resolved' (24h appeal window opens; fund_action executes
+      //    on the lazy 'final' transition). The federation path uses
+      //    the shared `finalizeFederationResolution` helper from
+      //    `dispute-orchestration.ts` so the worker can finalize through
+      //    the same code path. Single-relay disputes go through the
+      //    same helper for shape consistency.
       try {
-        db.prepare(
-          `INSERT INTO relay_dispute_resolutions
-             (resolution_id, dispute_id, round, resolution, rationale, fund_action, split_ratio, adjudicator, adjudicator_votes, resolved_at, signature)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          resolutionId,
-          disputeId,
-          1, // Round 1 = original adjudication; round 2 lands via /appeal
-          resolutionOutcome,
-          resolutionRationale,
-          resolutionFundAction,
-          splitRatio,
-          relayIdentity.relayMotebitId,
-          JSON.stringify(adjudicatorVotes),
-          resolvedAt,
-          signatureHex,
+        await finalizeFederationResolution(
+          {
+            disputeId,
+            round: 1,
+            resolution: resolutionOutcome,
+            rationale: resolutionRationale,
+            fund_action: resolutionFundAction,
+            split_ratio: splitRatio,
+            adjudicator_votes: adjudicatorVotes,
+            resolvedAt,
+          },
+          { db, relayIdentity },
         );
-        db.prepare(
-          "UPDATE relay_disputes SET state = 'resolved', resolution = ?, rationale = ?, fund_action = ?, split_ratio = ?, adjudicator = ?, resolved_at = ? WHERE dispute_id = ?",
-        ).run(
-          resolutionOutcome,
-          resolutionRationale,
-          resolutionFundAction,
-          splitRatio,
-          relayIdentity.relayMotebitId,
-          resolvedAt,
-          disputeId,
-        );
-        db.exec("COMMIT");
       } catch (err) {
-        db.exec("ROLLBACK");
         throw new HTTPException(500, {
           message: `Dispute resolution persistence failed: ${err instanceof Error ? err.message : String(err)}`,
         });
@@ -1253,28 +1486,22 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       });
 
       return {
-        resolution: resolutionOutcome,
-        rationale: resolutionRationale,
-        fund_action: resolutionFundAction,
-        split_ratio: splitRatio,
-        adjudicator_votes: adjudicatorVotes,
-        resolved_at: resolvedAt,
+        kind: "resolved",
+        data: {
+          resolution: resolutionOutcome,
+          rationale: resolutionRationale,
+          fund_action: resolutionFundAction,
+          split_ratio: splitRatio,
+          adjudicator_votes: adjudicatorVotes,
+          resolved_at: resolvedAt,
+        },
       };
     })();
 
     resolveLocks.set(disputeId, resolvePromise);
     try {
-      const data = await resolvePromise;
-      return c.json({
-        ok: true,
-        dispute_id: disputeId,
-        state: "resolved" as DisputeState,
-        resolution: data.resolution,
-        fund_action: data.fund_action,
-        split_ratio: data.split_ratio,
-        resolved_at: data.resolved_at,
-        adjudicator_votes: data.adjudicator_votes,
-      });
+      const outcome = await resolvePromise;
+      return outcomeToResponse(c, disputeId, outcome);
     } finally {
       resolveLocks.delete(disputeId);
     }

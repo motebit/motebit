@@ -1059,4 +1059,58 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 22,
+    name: "phase_6_2_dispute_orchestrations",
+    up: (db) => {
+      // §6.2 federation orchestrator async retry-within-72h. Pre-migration
+      // the orchestrator was synchronous: a single `Promise.allSettled`
+      // fan-out collapsed the per-peer fan-out timeout into the spec
+      // timeout — a peer hiccup at fan-out time became a permanently-lost
+      // vote even though the §6.6 72h adjudication window would technically
+      // permit retrying. memory/section_6_2_orchestrator_async_deferral
+      // documented the v1 trade-off; this migration lands the deferred
+      // path that closes the asymmetry between the orchestrator's
+      // attempt window and the spec's adjudication window.
+      //
+      // State machine per (dispute_id, round):
+      //   in_progress → done       (quorum reached; resolution persisted)
+      //   in_progress → timed_out  (72h deadline elapsed; §6.6 fallback)
+      //
+      // The orchestrator does ONE attempt at /resolve time (sync, current
+      // behavior preserved when quorum is reached). When quorum is not
+      // reached and the deadline hasn't elapsed, an `in_progress` row
+      // is upserted with `next_attempt_at` set per the exponential-
+      // backoff retry policy. A periodic worker
+      // (`startDeferredOrchestrationWorker`) polls this table and runs
+      // additional attempts until quorum or deadline. Restart-resumability
+      // is automatic — the table is the source of truth, the worker
+      // picks up `in_progress` rows on every poll regardless of process
+      // identity.
+      //
+      // Retention: rows are kept for the dispute's lifetime so post-mortem
+      // queries ("how many attempts did this dispute take? how late did
+      // the §6.6 fallback fire?") stay answerable. Pruning follows
+      // `relay_disputes` retention via the dispute_id FK — when a dispute
+      // row is deleted its orchestrations row is cascade-deleted by the
+      // truncateDisputesBeforeHorizon cleanup in horizon.ts.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_dispute_orchestrations (
+          dispute_id      TEXT NOT NULL,
+          round           INTEGER NOT NULL DEFAULT 1,
+          status          TEXT NOT NULL,
+          started_at      INTEGER NOT NULL,
+          last_attempt_at INTEGER NOT NULL,
+          next_attempt_at INTEGER,
+          attempt_count   INTEGER NOT NULL DEFAULT 0,
+          deadline_at     INTEGER NOT NULL,
+          PRIMARY KEY (dispute_id, round),
+          FOREIGN KEY (dispute_id) REFERENCES relay_disputes(dispute_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_dispute_orchestrations_due
+          ON relay_dispute_orchestrations(next_attempt_at)
+          WHERE status = 'in_progress';
+      `);
+    },
+  },
 ];

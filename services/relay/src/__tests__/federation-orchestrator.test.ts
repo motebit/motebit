@@ -783,3 +783,272 @@ describe("orchestrateFederationResolution — evidence_bundle envelope shape (§
     expect(verified).toBe(true);
   });
 });
+
+// === §6.2 Deferred orchestrator (retry-within-72h) ===
+//
+// Closes the v1 sync trade-off documented in
+// memory/section_6_2_orchestrator_async_deferral. The §6.6 72h
+// adjudication window is now the orchestrator's actual attempt window,
+// not the per-request 10s timeout. Tests cover the three terminal
+// outcomes (ready / deferred / timed_out), composition across attempts
+// (votes from prior attempts contribute to quorum), the worker poll
+// cycle, and restart-resumability.
+describe("attemptOrFinalizeFederationResolution — §6.2 deferred orchestrator", () => {
+  it("ready: 3-of-3 peers respond on first attempt → quorum reached", async () => {
+    env = await setupOrchEnv(3);
+    const policies = new Map(
+      env.peers.map((p) => [p.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }]),
+    );
+    const fetchImpl = makeFetchImpl(env.peers, policies);
+
+    const dispute = env.filePeerlessDispute("d-deferred-ready", "worker");
+    const { attemptOrFinalizeFederationResolution } = await import("../disputes.js");
+    const outcome = await attemptOrFinalizeFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: "worker" },
+      1,
+      { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
+    );
+    expect(outcome.state).toBe("ready");
+    if (outcome.state !== "ready") return;
+    expect(outcome.result.adjudicator_votes).toHaveLength(3);
+
+    // Orchestration row marked done; next_attempt_at cleared.
+    const orchRow = env.db
+      .prepare(
+        "SELECT status, next_attempt_at FROM relay_dispute_orchestrations WHERE dispute_id = ? AND round = 1",
+      )
+      .get(dispute.dispute_id) as { status: string; next_attempt_at: number | null };
+    expect(orchRow.status).toBe("done");
+    expect(orchRow.next_attempt_at).toBeNull();
+  });
+
+  it("deferred: 1-of-3 peers respond → orchestration in_progress with next_attempt_at set", async () => {
+    env = await setupOrchEnv(3);
+    const policies = new Map([
+      [env.peers[0]!.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }],
+      [env.peers[1]!.identity.relayMotebitId, { fetchError: "peer down" }],
+      [env.peers[2]!.identity.relayMotebitId, { fetchError: "peer down" }],
+    ]);
+    const fetchImpl = makeFetchImpl(env.peers, policies);
+
+    const dispute = env.filePeerlessDispute("d-deferred-defer", "delegator");
+    const now = 1_700_000_000_000;
+    const { attemptOrFinalizeFederationResolution } = await import("../disputes.js");
+    const outcome = await attemptOrFinalizeFederationResolution(
+      {
+        dispute_id: dispute.dispute_id,
+        body_json: JSON.stringify(dispute),
+        filer_role: "delegator",
+      },
+      1,
+      {
+        db: env.db,
+        relayIdentity: env.leader,
+        fetchImpl,
+        voteRequestTimeoutMs: 5000,
+        nowMs: () => now,
+      },
+    );
+    expect(outcome.state).toBe("deferred");
+    if (outcome.state !== "deferred") return;
+    expect(outcome.orchestration.status).toBe("in_progress");
+    expect(outcome.orchestration.attempt_count).toBe(1);
+    expect(outcome.orchestration.next_attempt_at).toBeGreaterThan(now);
+    expect(outcome.orchestration.deadline_at).toBe(now + 72 * 60 * 60 * 1000);
+
+    // The 1 valid vote was persisted to relay_dispute_votes — proves the
+    // partial-progress is durable across the deferred boundary.
+    const persisted = env.db
+      .prepare("SELECT peer_id FROM relay_dispute_votes WHERE dispute_id = ? AND round = 1")
+      .all(dispute.dispute_id) as Array<{ peer_id: string }>;
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]!.peer_id).toBe(env.peers[0]!.identity.relayMotebitId);
+  });
+
+  it("composition: deferred → re-attempt picks up new votes → quorum reached", async () => {
+    env = await setupOrchEnv(3);
+    // Attempt 1: only peer 0 responds.
+    const policies1 = new Map([
+      [env.peers[0]!.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }],
+      [env.peers[1]!.identity.relayMotebitId, { fetchError: "peer down" }],
+      [env.peers[2]!.identity.relayMotebitId, { fetchError: "peer down" }],
+    ]);
+    const fetchImpl1 = makeFetchImpl(env.peers, policies1);
+
+    const dispute = env.filePeerlessDispute("d-compose", "worker");
+    const { attemptOrFinalizeFederationResolution } = await import("../disputes.js");
+    const out1 = await attemptOrFinalizeFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: "worker" },
+      1,
+      { db: env.db, relayIdentity: env.leader, fetchImpl: fetchImpl1, voteRequestTimeoutMs: 5000 },
+    );
+    expect(out1.state).toBe("deferred");
+
+    // Attempt 2: peers 1 and 2 now respond. Peer 0 is NOT contacted again
+    // (votedPeerIds filter); attempt 2's union with attempt 1's persisted
+    // vote reaches quorum.
+    const policies2 = new Map([
+      [env.peers[0]!.identity.relayMotebitId, { fetchError: "should not be contacted" }],
+      [env.peers[1]!.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }],
+      [env.peers[2]!.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }],
+    ]);
+    const fetchImpl2 = makeFetchImpl(env.peers, policies2);
+    const out2 = await attemptOrFinalizeFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: "worker" },
+      1,
+      { db: env.db, relayIdentity: env.leader, fetchImpl: fetchImpl2, voteRequestTimeoutMs: 5000 },
+    );
+    expect(out2.state).toBe("ready");
+    if (out2.state !== "ready") return;
+    expect(out2.result.adjudicator_votes).toHaveLength(3);
+    expect(out2.result.resolution).toBe("upheld");
+    expect(out2.result.fund_action).toBe("release_to_worker"); // §7.2: upheld + worker
+  });
+
+  it("timed_out: deadline elapsed with sub-quorum votes → §6.6 fallback", async () => {
+    env = await setupOrchEnv(3);
+    const policies = new Map([
+      [env.peers[0]!.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }],
+      [env.peers[1]!.identity.relayMotebitId, { fetchError: "peer down" }],
+      [env.peers[2]!.identity.relayMotebitId, { fetchError: "peer down" }],
+    ]);
+    const fetchImpl = makeFetchImpl(env.peers, policies);
+
+    const dispute = env.filePeerlessDispute("d-timed-out", "worker");
+    const startTime = 1_700_000_000_000;
+    const afterDeadline = startTime + 72 * 60 * 60 * 1000 + 1000;
+    const { attemptOrFinalizeFederationResolution } = await import("../disputes.js");
+
+    // Attempt 1: starts the orchestration row at startTime.
+    await attemptOrFinalizeFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: "worker" },
+      1,
+      {
+        db: env.db,
+        relayIdentity: env.leader,
+        fetchImpl,
+        voteRequestTimeoutMs: 5000,
+        nowMs: () => startTime,
+      },
+    );
+
+    // Attempt 2 occurs after deadline — still sub-quorum → timed_out.
+    const out2 = await attemptOrFinalizeFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: "worker" },
+      1,
+      {
+        db: env.db,
+        relayIdentity: env.leader,
+        fetchImpl,
+        voteRequestTimeoutMs: 5000,
+        nowMs: () => afterDeadline,
+      },
+    );
+    expect(out2.state).toBe("timed_out");
+    if (out2.state !== "timed_out") return;
+    // §6.6 fallback: split with split_ratio 0.5 (legacy `split` action
+    // since outcome=split bypasses the per-role mapping).
+    expect(out2.result.resolution).toBe("split");
+    expect(out2.result.fund_action).toBe("split");
+    expect(out2.result.split_ratio).toBe(0.5);
+  });
+
+  it("worker cycle: picks up due in_progress rows + advances them", async () => {
+    env = await setupOrchEnv(3);
+    const policies = new Map([
+      [env.peers[0]!.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }],
+      [env.peers[1]!.identity.relayMotebitId, { fetchError: "peer down" }],
+      [env.peers[2]!.identity.relayMotebitId, { fetchError: "peer down" }],
+    ]);
+    const fetchImpl1 = makeFetchImpl(env.peers, policies);
+
+    const dispute = env.filePeerlessDispute("d-worker", "worker");
+    const startTime = 1_700_000_000_000;
+    const { attemptOrFinalizeFederationResolution, runDeferredOrchestrationCycle } =
+      await import("../disputes.js");
+
+    // First attempt defers.
+    await attemptOrFinalizeFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: "worker" },
+      1,
+      {
+        db: env.db,
+        relayIdentity: env.leader,
+        fetchImpl: fetchImpl1,
+        voteRequestTimeoutMs: 5000,
+        nowMs: () => startTime,
+      },
+    );
+
+    // Worker fires before next_attempt_at — no due rows.
+    const earlyResult = await runDeferredOrchestrationCycle({
+      db: env.db,
+      relayIdentity: env.leader,
+      fetchImpl: fetchImpl1,
+      nowMs: () => startTime + 1000, // < next_attempt_at (10s)
+    });
+    expect(earlyResult.processed).toBe(0);
+
+    // Worker fires after next_attempt_at — picks up the row.
+    // Other two peers now respond → quorum → finalized.
+    const policies2 = new Map([
+      [env.peers[0]!.identity.relayMotebitId, { fetchError: "already voted" }],
+      [env.peers[1]!.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }],
+      [env.peers[2]!.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }],
+    ]);
+    const fetchImpl2 = makeFetchImpl(env.peers, policies2);
+    const dueResult = await runDeferredOrchestrationCycle({
+      db: env.db,
+      relayIdentity: env.leader,
+      fetchImpl: fetchImpl2,
+      nowMs: () => startTime + 60_000, // past next_attempt_at
+    });
+    expect(dueResult.processed).toBe(1);
+    expect(dueResult.ready).toBe(1);
+
+    // Resolution row written by the worker's finalize call.
+    const resolution = env.db
+      .prepare("SELECT resolution, fund_action FROM relay_dispute_resolutions WHERE dispute_id = ?")
+      .get(dispute.dispute_id) as { resolution: string; fund_action: string };
+    expect(resolution.resolution).toBe("upheld");
+    expect(resolution.fund_action).toBe("release_to_worker");
+  });
+
+  it("restart-resumability: orchestration row pre-existing in DB → worker picks up", async () => {
+    env = await setupOrchEnv(3);
+    const policies = new Map(
+      env.peers.map((p) => [p.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }]),
+    );
+    const fetchImpl = makeFetchImpl(env.peers, policies);
+
+    // Simulate a relay restart: insert orchestration row with
+    // next_attempt_at in the past, no prior /resolve call from this
+    // process. Worker should pick it up on the next cycle.
+    const dispute = env.filePeerlessDispute("d-restart", "worker");
+    const startTime = 1_700_000_000_000;
+    env.db
+      .prepare(
+        `INSERT INTO relay_dispute_orchestrations
+           (dispute_id, round, status, started_at, last_attempt_at, next_attempt_at,
+            attempt_count, deadline_at)
+         VALUES (?, 1, 'in_progress', ?, ?, ?, 1, ?)`,
+      )
+      .run(
+        dispute.dispute_id,
+        startTime,
+        startTime,
+        startTime + 1000, // due
+        startTime + 72 * 60 * 60 * 1000,
+      );
+
+    const { runDeferredOrchestrationCycle } = await import("../disputes.js");
+    const result = await runDeferredOrchestrationCycle({
+      db: env.db,
+      relayIdentity: env.leader,
+      fetchImpl,
+      nowMs: () => startTime + 60_000,
+    });
+    expect(result.processed).toBe(1);
+    expect(result.ready).toBe(1);
+  });
+});

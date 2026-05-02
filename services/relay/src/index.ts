@@ -790,13 +790,25 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- Dispute routes (dispute-v1.md) ---
-  const { registerDisputeRoutes, createDisputeTables } = await import("./disputes.js");
+  const { registerDisputeRoutes, createDisputeTables, startDeferredOrchestrationWorker } =
+    await import("./disputes.js");
   createDisputeTables(moteDb.db);
   registerDisputeRoutes({
     db: moteDb.db,
     app,
     relayIdentity,
   });
+  // §6.2 deferred orchestrator worker — picks up `in_progress`
+  // orchestration rows whose next_attempt_at <= now, drives retries
+  // within the §6.6 72h adjudication window. Runs unconditionally
+  // (mirrors sweep / batch-withdrawals) — when there are no in-flight
+  // orchestrations, the cycle is a cheap SELECT against the indexed
+  // `next_attempt_at` filter.
+  const orchestrationWorkerInterval = startDeferredOrchestrationWorker({
+    db: moteDb.db,
+    relayIdentity,
+  });
+  logger.info("dispute_orchestration_worker.started");
 
   // --- Operator transparency routes (docs/doctrine/operator-transparency.md) ---
   // Stage 1.5: signed declaration at /.well-known/motebit-transparency.json,
@@ -1394,6 +1406,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (p2pVerifierInterval) clearInterval(p2pVerifierInterval);
     clearInterval(sweepInterval);
     clearInterval(batchWithdrawalInterval);
+    clearInterval(orchestrationWorkerInterval);
     receiptExchangeHub.close();
     moteDb.close();
   }
