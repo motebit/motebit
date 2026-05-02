@@ -1495,6 +1495,25 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     });
   });
 
+  // ── GET /api/v1/disputes/:disputeId/resolutions ──
+  // Audit history. Returns ALL signed resolution rows for the dispute
+  // (round-1 + round-2 if appealed) ordered by round ascending. Migration
+  // 19 added `UNIQUE(dispute_id, round)` so post-§8.3 appeals preserve
+  // round-1's signed verdict alongside round-2's. The singular endpoint
+  // above returns the latest only (ORDER BY round DESC LIMIT 1) to
+  // preserve its one-resolution wire-format contract; this endpoint
+  // exposes the full audit trail.
+  /** @spec motebit/dispute@1.0 */
+  app.get("/api/v1/disputes/:disputeId/resolutions", (c) => {
+    const disputeId = c.req.param("disputeId");
+    const dispute = getDispute(db, disputeId);
+    if (!dispute) throw new HTTPException(404, { message: "Dispute not found" });
+    const resolutions = db
+      .prepare("SELECT * FROM relay_dispute_resolutions WHERE dispute_id = ? ORDER BY round ASC")
+      .all(disputeId);
+    return c.json({ dispute_id: disputeId, resolutions });
+  });
+
   // ── GET /api/v1/admin/disputes ──
   // Admin panel view — all disputes with stats.
   /** @internal */

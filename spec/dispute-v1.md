@@ -346,13 +346,14 @@ Per-agent caps on active disputes prevent a single identity from flooding the sy
 
 #### Routes (foundation law)
 
-The five routes below are the binding cross-implementation contract for the dispute lifecycle. Renaming or relocating any of them is a wire break.
+The six routes below are the binding cross-implementation contract for the dispute lifecycle. Renaming or relocating any of them is a wire break.
 
 - `POST /api/v1/allocations/:allocationId/dispute` — file a dispute against a budget allocation (§4).
 - `POST /api/v1/disputes/:disputeId/evidence` — submit additional evidence to an open dispute (§5).
 - `POST /api/v1/disputes/:disputeId/resolve` — adjudicator submits resolution (§6).
 - `POST /api/v1/disputes/:disputeId/appeal` — appeal a resolution (§8).
-- `GET /api/v1/disputes/:disputeId` — read dispute state.
+- `GET /api/v1/disputes/:disputeId` — read dispute state, including the latest signed resolution (round 2 if appealed, else round 1).
+- `GET /api/v1/disputes/:disputeId/resolutions` — read all signed resolution rows for the dispute, ordered by round ascending. Round-1 + round-2 (after §8.3 appeal) coexist per migration 19's `UNIQUE(dispute_id, round)`. Audit-history surface; the singular endpoint preserves the one-resolution wire-format contract.
 
 ## 9.6 Witness-Omission Disputes (Retention Horizon Certs)
 

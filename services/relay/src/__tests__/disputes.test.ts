@@ -1002,3 +1002,140 @@ describe("Dispute: fund execution integrity", () => {
     expect(stateRow?.state).toBe("final");
   });
 });
+
+describe("Dispute: GET /api/v1/disputes/:disputeId/resolutions (audit history)", () => {
+  let relay: SyncRelay;
+
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
+    await registerAgent(relay, "del-ah");
+    await registerAgent(relay, "wrk-ah");
+  });
+
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  // Setup helper: insert a dispute row directly + optional resolution rows.
+  // Direct-INSERT keeps these tests focused on the read-and-order semantics
+  // of the audit-history endpoint; federation orchestration's row-
+  // persistence is already covered by federation-appeal.test.ts.
+  function seedDispute(disputeId: string): void {
+    createAllocation(relay, `alloc-${disputeId}`, `task-${disputeId}`, "del-ah");
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO relay_disputes (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline, body_json) VALUES (?, ?, ?, ?, ?, ?, ?, 'evidence', 100000, 0, ?, ?, '{}')",
+      )
+      .run(
+        disputeId,
+        `task-${disputeId}`,
+        `alloc-${disputeId}`,
+        "del-ah",
+        "wrk-ah",
+        "quality",
+        "audit-history test",
+        Date.now(),
+        Date.now() + 86_400_000,
+      );
+  }
+
+  function insertResolution(
+    disputeId: string,
+    round: number,
+    resolution: "upheld" | "overturned" | "split",
+    splitRatio: number,
+  ): void {
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO relay_dispute_resolutions (resolution_id, dispute_id, round, resolution, rationale, fund_action, split_ratio, adjudicator, adjudicator_votes, resolved_at, signature, is_appeal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        `res-${disputeId}-r${round}`,
+        disputeId,
+        round,
+        resolution,
+        `round ${round} verdict`,
+        "split",
+        splitRatio,
+        round === 1 ? "adj-r1" : "adj-r2",
+        "[]",
+        Date.now() + round * 1000,
+        `sig-${disputeId}-r${round}`,
+        round === 2 ? 1 : 0,
+      );
+  }
+
+  it("returns empty resolutions array when dispute exists but no resolution has been signed", async () => {
+    // Convention-correct: empty collection is success-with-zero-rows
+    // (200 + []), not 404. The dispute resource exists; only its
+    // resolutions are unmaterialized.
+    const dispute_id = "dispute-empty-res";
+    seedDispute(dispute_id);
+
+    const res = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolutions`, {
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      dispute_id: string;
+      resolutions: Array<unknown>;
+    };
+    expect(body.dispute_id).toBe(dispute_id);
+    expect(body.resolutions).toEqual([]);
+  });
+
+  it("returns array with one element when only round-1 has been resolved (most common operator-query case)", async () => {
+    // The state machine's normal `resolved` state. Without this test, a
+    // future regression that special-cased length=1 to collapse to a
+    // scalar would ship undetected.
+    const dispute_id = "dispute-r1-only";
+    seedDispute(dispute_id);
+    insertResolution(dispute_id, 1, "upheld", 1.0);
+
+    const res = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolutions`, {
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      dispute_id: string;
+      resolutions: Array<{ round: number; resolution: string; signature: string }>;
+    };
+    expect(body.resolutions).toHaveLength(1);
+    expect(body.resolutions[0]!.round).toBe(1);
+    expect(body.resolutions[0]!.resolution).toBe("upheld");
+    expect(body.resolutions[0]!.signature).toBe(`sig-${dispute_id}-r1`);
+  });
+
+  it("returns round-1 + round-2 resolutions in round-ascending order after §8.3 appeal", async () => {
+    // Migration 19's UNIQUE(dispute_id, round) lets both rows coexist.
+    // Audit-history's contract is the full ordered list, distinct from
+    // the singular endpoint's "latest only" wire-format.
+    const dispute_id = "dispute-both-rounds";
+    seedDispute(dispute_id);
+    insertResolution(dispute_id, 1, "upheld", 1.0);
+    insertResolution(dispute_id, 2, "overturned", 0.0);
+
+    const res = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolutions`, {
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      dispute_id: string;
+      resolutions: Array<{
+        round: number;
+        resolution: string;
+        split_ratio: number;
+        is_appeal: number;
+      }>;
+    };
+    expect(body.resolutions).toHaveLength(2);
+    expect(body.resolutions[0]!.round).toBe(1);
+    expect(body.resolutions[0]!.resolution).toBe("upheld");
+    expect(body.resolutions[0]!.split_ratio).toBe(1.0);
+    expect(body.resolutions[0]!.is_appeal).toBe(0);
+    expect(body.resolutions[1]!.round).toBe(2);
+    expect(body.resolutions[1]!.resolution).toBe("overturned");
+    expect(body.resolutions[1]!.split_ratio).toBe(0.0);
+    expect(body.resolutions[1]!.is_appeal).toBe(1);
+  });
+});
