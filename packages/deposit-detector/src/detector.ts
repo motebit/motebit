@@ -35,12 +35,23 @@ function decodeTransfer(log: EvmTransferLog): DecodedTransfer {
 /**
  * Run one detection cycle.
  *
- *  1. Get current block.
- *  2. Fetch Transfer logs from last cursor to current block.
+ *  1. Get current block; subtract `confirmations` to get the safe horizon.
+ *  2. Fetch Transfer logs from last cursor up to (and including) the safe horizon.
  *  3. Filter for transfers to known agent wallets.
  *  4. For each new (non-deduped) transfer, call `onDeposit`. The caller
  *     is responsible for the atomic dedup-record + credit-account write.
- *  5. Advance the cursor.
+ *  5. Advance the cursor — but never past the safe horizon, so a deeper
+ *     reorg cannot strand the cursor in a vanished branch.
+ *
+ * The confirmation horizon is the reorg-safety mechanism: a credit is only
+ * issued for a log buried at least `confirmations` blocks deep, and the
+ * cursor only advances over confirmed blocks. A reorg shallower than
+ * `confirmations` cannot roll back a credit because the credit hadn't
+ * happened yet at that depth. A reorg deeper than `confirmations` can in
+ * principle, but for L2s on Base / Optimism / Arbitrum the practical
+ * upper bound (block-checkpointing latency) is far below the depths a
+ * conservative payment service uses, so the residual risk is on the same
+ * order as L1 finality itself.
  *
  * Returns the number of `onDeposit` calls made in this cycle.
  */
@@ -52,6 +63,7 @@ export async function detectDeposits(config: DetectDepositsConfig): Promise<numb
     contractAddress,
     transferTopic,
     maxBlocksPerCycle,
+    confirmations,
     onDeposit,
     logger,
   } = config;
@@ -64,17 +76,24 @@ export async function detectDeposits(config: DetectDepositsConfig): Promise<numb
     return 0;
   }
 
+  // Step 1.5 — apply the confirmation horizon. Never scan past
+  // `currentBlock - confirmations`. Early-life chains where the head is
+  // shallower than the confirmation depth scan nothing this cycle.
+  const confirmationsBig = BigInt(confirmations);
+  if (currentBlock <= confirmationsBig) return 0;
+  const safeBlock = currentBlock - confirmationsBig;
+
   // Step 2 — compute the scan range from the stored cursor.
   const cursor = store.getCursor(chain);
-  // On first run, start from current block — don't scan history.
-  const lastBlock = cursor ?? currentBlock;
-  if (lastBlock >= currentBlock) return 0;
+  // On first run, start from the safe horizon — don't scan history.
+  const lastBlock = cursor ?? safeBlock;
+  if (lastBlock >= safeBlock) return 0;
 
   const fromBlock = lastBlock + BigInt(1);
   const toBlock =
-    currentBlock - fromBlock > BigInt(maxBlocksPerCycle)
+    safeBlock - fromBlock > BigInt(maxBlocksPerCycle)
       ? fromBlock + BigInt(maxBlocksPerCycle)
-      : currentBlock;
+      : safeBlock;
 
   // Step 3 — known wallets. If nothing to monitor, just advance the cursor.
   const wallets = store.getWallets();

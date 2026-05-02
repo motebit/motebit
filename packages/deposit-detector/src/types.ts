@@ -58,6 +58,23 @@ export interface DetectDepositsConfig {
   transferTopic: string;
   /** Cap scan range per cycle — prevents catch-up-from-genesis on first run. */
   maxBlocksPerCycle: number;
+  /**
+   * Number of block confirmations required before a deposit is credited.
+   * The cycle never crosses `currentBlock - confirmations` (the safe horizon),
+   * so a chain reorg shallower than `confirmations` cannot roll back a credit.
+   *
+   * Required, no default — every caller must declare a depth so the
+   * mainnet-vs-testnet asymmetry is explicit at the call site.
+   *
+   *  - Testnets: typically `0` or `1` (fast feedback, low value at risk).
+   *  - Base / Optimism / Arbitrum mainnet: 12 (~24-30s, the L2 standard).
+   *  - Ethereum mainnet: 12 (the historical default; 64 = `safe`-block depth).
+   *  - Polygon: 64 (deeper reorg windows).
+   *
+   * If you don't know what to pick, mirror Coinbase's published depth for
+   * the same chain — they've tuned it under real volume.
+   */
+  confirmations: number;
   /** Fired for each newly-detected deposit. */
   onDeposit: OnDeposit;
   /** Optional logger; defaults to silent. */

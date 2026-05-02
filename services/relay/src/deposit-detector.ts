@@ -55,6 +55,35 @@ const DEFAULT_RPC_URLS: Record<string, string> = {
   "eip155:42161": "https://arb1.arbitrum.io/rpc",
 };
 
+/**
+ * Confirmation depth per CAIP-2 chain ID — the number of blocks the deposit
+ * detector waits before crediting a `Transfer` log. The cycle never crosses
+ * `currentBlock - confirmations` (the safe horizon), so a chain reorg
+ * shallower than this depth cannot roll back a credit.
+ *
+ * Numbers mirror Coinbase's published deposit-confirmation schedule for the
+ * same chains — they've tuned these under real volume against real reorgs.
+ *
+ *  - Ethereum mainnet: 12 (~150s; the historical deposit standard).
+ *  - Base / Optimism / Arbitrum mainnet: 12 (~24-30s on the L2; the L2
+ *    reorg window is tied to L1 batch posting, so the L1-block-equivalent
+ *    is what matters in practice).
+ *  - Polygon mainnet: 64 (~135s; deeper reorg windows historically).
+ *  - Base Sepolia testnet: 1 (fast feedback in dev; testnet reorg risk is
+ *    bounded by low value).
+ *
+ * Adding a new chain to `USDC_CONTRACTS` must add a matching entry here.
+ * Drift gate `check-deposit-detector-confirmations` enforces the pin.
+ */
+const CONFIRMATIONS_BY_CHAIN: Record<string, number> = {
+  "eip155:1": 12,
+  "eip155:8453": 12,
+  "eip155:84532": 1,
+  "eip155:10": 12,
+  "eip155:137": 64,
+  "eip155:42161": 12,
+};
+
 /** USDC: 6 decimals onchain === 6 decimals micro-units. 1:1 mapping. */
 const USDC_ONCHAIN_TO_MICRO = 1;
 
@@ -174,7 +203,15 @@ export async function detectDeposits(config: {
   rpc: EvmRpcAdapter;
   contractAddress: string;
   maxBlocksPerCycle: number;
+  /** Optional override for tests; production path resolves from CONFIRMATIONS_BY_CHAIN. */
+  confirmations?: number;
 }): Promise<number> {
+  const confirmations = config.confirmations ?? CONFIRMATIONS_BY_CHAIN[config.chain];
+  if (confirmations === undefined) {
+    throw new Error(
+      `deposit-detector: no confirmation depth registered for chain "${config.chain}". Add an entry to CONFIRMATIONS_BY_CHAIN before scanning this chain.`,
+    );
+  }
   return pkgDetectDeposits({
     store: new SqliteDepositDetectorStore(config.db),
     rpc: config.rpc,
@@ -182,6 +219,7 @@ export async function detectDeposits(config: {
     contractAddress: config.contractAddress,
     transferTopic: TRANSFER_TOPIC,
     maxBlocksPerCycle: config.maxBlocksPerCycle,
+    confirmations,
     onDeposit: buildCreditOnDepositCallback(config.db),
     logger,
   });
@@ -219,13 +257,18 @@ export function startDepositDetector(
   const rpcUrls = { ...DEFAULT_RPC_URLS, ...config.rpcUrls };
   const rpcUrl = rpcUrls[config.chain];
   const contractAddress = USDC_CONTRACTS[config.chain];
+  const confirmations = CONFIRMATIONS_BY_CHAIN[config.chain];
   const intervalMs = config.intervalMs ?? 15_000;
   const maxBlocksPerCycle = config.maxBlocksPerCycle ?? 1000;
 
-  if (!contractAddress || (!config.rpc && !rpcUrl)) {
+  if (!contractAddress || (!config.rpc && !rpcUrl) || confirmations === undefined) {
     logger.warn("deposit-detector.disabled", {
       chain: config.chain,
-      reason: !contractAddress ? "no USDC contract" : "no RPC URL",
+      reason: !contractAddress
+        ? "no USDC contract"
+        : !rpcUrl
+          ? "no RPC URL"
+          : "no confirmation depth registered (add to CONFIRMATIONS_BY_CHAIN)",
     });
     // Return a no-op interval so `clearInterval` remains a safe call.
     return setInterval(() => {}, 2_147_483_647);
@@ -242,6 +285,7 @@ export function startDepositDetector(
     chain: config.chain,
     intervalMs,
     maxBlocksPerCycle,
+    confirmations,
   });
 
   const tick = async () => {
@@ -253,6 +297,7 @@ export function startDepositDetector(
         contractAddress,
         transferTopic: TRANSFER_TOPIC,
         maxBlocksPerCycle,
+        confirmations,
         onDeposit,
         logger,
       });

@@ -923,6 +923,20 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       ),
   },
   {
+    script: "check-deposit-detector-confirmations",
+    proves:
+      "flags a CAIP-2 chain in USDC_CONTRACTS that has no matching CONFIRMATIONS_BY_CHAIN entry — the silent-omission shape that disables the detector for the chain",
+    perturb: () =>
+      // Strip the eip155:8453 (Base mainnet) entry from CONFIRMATIONS_BY_CHAIN
+      // while leaving it in USDC_CONTRACTS. The gate must surface the parity
+      // mismatch — adding a chain to one map without the other is the
+      // canonical drift the gate exists to catch. mutateFile restores
+      // byte-identical on cleanup.
+      mutateFile("services/relay/src/deposit-detector.ts", (src) =>
+        src.replace(/^\s*"eip155:8453":\s*12,\n/m, ""),
+      ),
+  },
+  {
     script: "check-preset-imports",
     proves:
       "flags a surface-app declaration that shadows an @motebit/sdk canonical preset identifier (APPROVAL_PRESET_CONFIGS, COLOR_PRESETS, RISK_LABELS, …)",

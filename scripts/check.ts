@@ -251,6 +251,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-tsup-uses-emit-decl-only",
   },
   {
+    name: "check-deposit-detector-confirmations",
+    defends:
+      "every CAIP-2 chain id in `USDC_CONTRACTS` (services/relay/src/deposit-detector.ts) has a matching positive-integer entry in `CONFIRMATIONS_BY_CHAIN`. The deposit detector's `confirmations` parameter is the reorg-safety mechanism — the cycle never crosses `currentBlock - confirmations`, so a chain reorg shallower than this depth cannot roll back a credit. Adding a USDC chain without a confirmation depth disables the detector for that chain (short-circuits with `deposit-detector.disabled`); a non-positive value reintroduces the legacy 0-confirmation behavior the gate exists to retire. Invariant #72, added 2026-05-02 alongside the deposit-detector confirmation-horizon refactor that prepares x402 mainnet activation",
+    script: "check-deposit-detector-confirmations",
+  },
+  {
     name: "check-api-surface",
     defends:
       "@motebit/{protocol,crypto,sdk} public API must match committed baseline unless a `major` changeset is pending",

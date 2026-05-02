@@ -58,6 +58,7 @@ describe("detectDeposits — cursor behavior", () => {
       contractAddress: USDC,
       transferTopic: TRANSFER_TOPIC,
       maxBlocksPerCycle: 100,
+      confirmations: 0,
       onDeposit,
     });
 
@@ -82,6 +83,7 @@ describe("detectDeposits — cursor behavior", () => {
       contractAddress: USDC,
       transferTopic: TRANSFER_TOPIC,
       maxBlocksPerCycle: 1000,
+      confirmations: 0,
       onDeposit,
     });
 
@@ -103,6 +105,7 @@ describe("detectDeposits — cursor behavior", () => {
       contractAddress: USDC,
       transferTopic: TRANSFER_TOPIC,
       maxBlocksPerCycle: 1000,
+      confirmations: 0,
       onDeposit: vi.fn(),
     });
 
@@ -125,11 +128,120 @@ describe("detectDeposits — cursor behavior", () => {
       contractAddress: USDC,
       transferTopic: TRANSFER_TOPIC,
       maxBlocksPerCycle: 100,
+      confirmations: 0,
       onDeposit: vi.fn(),
     });
 
     expect(getTransferLogs).not.toHaveBeenCalled();
     expect(store.getCursor(CHAIN)).toBe(BigInt(600));
+  });
+});
+
+describe("detectDeposits — confirmation horizon (reorg safety)", () => {
+  it("never scans past currentBlock - confirmations", async () => {
+    const store = new InMemoryDepositDetectorStore({
+      wallets: [{ agentId: ALICE_ID, address: ALICE_WALLET }],
+      cursors: { [CHAIN]: BigInt(900) },
+    });
+    const getTransferLogs = vi.fn().mockResolvedValue([]);
+    // Head is at 1000; with 12 confirmations, the safe horizon is 988.
+    // The cursor at 900 means the scan range is 901 → 988, NOT 901 → 1000.
+    const rpc = mockRpc({ blockNumber: BigInt(1000), getTransferLogs });
+
+    await detectDeposits({
+      store,
+      rpc,
+      chain: CHAIN,
+      contractAddress: USDC,
+      transferTopic: TRANSFER_TOPIC,
+      maxBlocksPerCycle: 1000,
+      confirmations: 12,
+      onDeposit: vi.fn(),
+    });
+
+    expect(getTransferLogs).toHaveBeenCalledWith(
+      expect.objectContaining({ fromBlock: BigInt(901), toBlock: BigInt(988) }),
+    );
+    // Cursor advances only over confirmed blocks — never past the safe horizon.
+    expect(store.getCursor(CHAIN)).toBe(BigInt(988));
+  });
+
+  it("returns 0 credits when the cursor has already reached the safe horizon", async () => {
+    const store = new InMemoryDepositDetectorStore({
+      wallets: [{ agentId: ALICE_ID, address: ALICE_WALLET }],
+      cursors: { [CHAIN]: BigInt(988) },
+    });
+    const getTransferLogs = vi.fn();
+    const rpc = mockRpc({ blockNumber: BigInt(1000), getTransferLogs });
+
+    const credits = await detectDeposits({
+      store,
+      rpc,
+      chain: CHAIN,
+      contractAddress: USDC,
+      transferTopic: TRANSFER_TOPIC,
+      maxBlocksPerCycle: 1000,
+      confirmations: 12,
+      onDeposit: vi.fn(),
+    });
+
+    expect(credits).toBe(0);
+    expect(getTransferLogs).not.toHaveBeenCalled();
+    // Cursor unchanged — no new confirmed blocks since last scan.
+    expect(store.getCursor(CHAIN)).toBe(BigInt(988));
+  });
+
+  it("on first run starts from the safe horizon, not the chain head", async () => {
+    const store = new InMemoryDepositDetectorStore({
+      wallets: [{ agentId: ALICE_ID, address: ALICE_WALLET }],
+    });
+    const rpc = mockRpc({ blockNumber: BigInt(1000) });
+    const onDeposit = vi.fn();
+
+    const credits = await detectDeposits({
+      store,
+      rpc,
+      chain: CHAIN,
+      contractAddress: USDC,
+      transferTopic: TRANSFER_TOPIC,
+      maxBlocksPerCycle: 100,
+      confirmations: 12,
+      onDeposit,
+    });
+
+    // First-run + null cursor + non-zero confirmations: the cursor SHOULD
+    // be set to the safe horizon (988), not the head (1000) — otherwise
+    // the next cycle would scan blocks 989..(headThen-12) including
+    // blocks already at the head when this cycle ran (zero-confirmation
+    // window the gate exists to avoid).
+    expect(credits).toBe(0);
+    expect(onDeposit).not.toHaveBeenCalled();
+    // Cursor stays null — first-run + caught-up-to-horizon = no work.
+    expect(store.getCursor(CHAIN)).toBeNull();
+  });
+
+  it("returns 0 when the chain head is shallower than the confirmation depth", async () => {
+    // Brand-new chain where head < confirmations. Edge case for a fresh
+    // testnet or a forked chain in early life.
+    const store = new InMemoryDepositDetectorStore({
+      wallets: [{ agentId: ALICE_ID, address: ALICE_WALLET }],
+    });
+    const getTransferLogs = vi.fn();
+    const rpc = mockRpc({ blockNumber: BigInt(5), getTransferLogs });
+
+    const credits = await detectDeposits({
+      store,
+      rpc,
+      chain: CHAIN,
+      contractAddress: USDC,
+      transferTopic: TRANSFER_TOPIC,
+      maxBlocksPerCycle: 100,
+      confirmations: 12,
+      onDeposit: vi.fn(),
+    });
+
+    expect(credits).toBe(0);
+    expect(getTransferLogs).not.toHaveBeenCalled();
   });
 });
 
@@ -168,6 +280,7 @@ describe("detectDeposits — filtering and dedup", () => {
       contractAddress: USDC,
       transferTopic: TRANSFER_TOPIC,
       maxBlocksPerCycle: 100,
+      confirmations: 0,
       onDeposit,
     });
 
@@ -212,6 +325,7 @@ describe("detectDeposits — filtering and dedup", () => {
       contractAddress: USDC,
       transferTopic: TRANSFER_TOPIC,
       maxBlocksPerCycle: 100,
+      confirmations: 0,
       onDeposit,
     });
 
@@ -245,6 +359,7 @@ describe("detectDeposits — filtering and dedup", () => {
       contractAddress: USDC,
       transferTopic: TRANSFER_TOPIC,
       maxBlocksPerCycle: 100,
+      confirmations: 0,
       onDeposit,
     });
 
@@ -290,6 +405,7 @@ describe("detectDeposits — filtering and dedup", () => {
       contractAddress: USDC,
       transferTopic: TRANSFER_TOPIC,
       maxBlocksPerCycle: 100,
+      confirmations: 0,
       onDeposit,
     });
 
@@ -317,6 +433,7 @@ describe("detectDeposits — RPC failure handling", () => {
       contractAddress: USDC,
       transferTopic: TRANSFER_TOPIC,
       maxBlocksPerCycle: 100,
+      confirmations: 0,
       onDeposit: vi.fn(),
     });
 
@@ -341,6 +458,7 @@ describe("detectDeposits — RPC failure handling", () => {
       contractAddress: USDC,
       transferTopic: TRANSFER_TOPIC,
       maxBlocksPerCycle: 100,
+      confirmations: 0,
       onDeposit: vi.fn(),
     });
 
@@ -399,6 +517,7 @@ describe("detectDeposits — onDeposit failure", () => {
       contractAddress: USDC,
       transferTopic: TRANSFER_TOPIC,
       maxBlocksPerCycle: 100,
+      confirmations: 0,
       onDeposit,
       logger,
     });

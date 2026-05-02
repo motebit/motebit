@@ -51,6 +51,7 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/agility-as-role.md`](docs/doctrine/agility-as-role.md) — name the role in code/gates/types; treat the instance as a registry entry; migration is a registry append, not a wire-format break or codebase rewrite. Three instances: cryptosuite (`SuiteId`), license-floor ("permissive floor"), settlement-rail (`GuestRail`/`SovereignRail`)
 - [`docs/doctrine/security-boundaries.md`](docs/doctrine/security-boundaries.md) — sybil, injection, token binding
 - [`docs/doctrine/settlement-rails.md`](docs/doctrine/settlement-rails.md) — custody split, rails, withdrawals
+- [`docs/doctrine/treasury-custody.md`](docs/doctrine/treasury-custody.md) — receive-vs-outbound phase split for relay treasury; phase 1 = hardware wallet + confirmation horizon (no hot key), phase 2 = MPC / multi-sig / program-authority decision deferred until volume, partner, or protocol forces it
 - [`docs/doctrine/operator-transparency.md`](docs/doctrine/operator-transparency.md) — declared posture vs proven posture
 - [`docs/doctrine/self-attesting-system.md`](docs/doctrine/self-attesting-system.md) — every claim is user-verifiable
 - [`docs/doctrine/hardware-attestation.md`](docs/doctrine/hardware-attestation.md) — software identity is the floor; hardware attestation is additive scoring, never a gate; one canonical body format + one verifier (`@motebit/crypto`) + one `HardwareAttestationSemiring` across Apple SE / App Attest / TPM / Android Keystore / WebAuthn; new platform = one `platform` union entry

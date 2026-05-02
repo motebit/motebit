@@ -68,6 +68,7 @@
     "check-skill-cli-coverage": "npx tsx scripts/check-skill-cli-coverage.ts",
     "check-skill-script-uses-tool-approval": "npx tsx scripts/check-skill-script-uses-tool-approval.ts",
     "check-tsup-uses-emit-decl-only": "npx tsx scripts/check-tsup-uses-emit-decl-only.ts",
+    "check-deposit-detector-confirmations": "npx tsx scripts/check-deposit-detector-confirmations.ts",
     "check-trust-score-display": "npx tsx scripts/check-trust-score-display.ts",
     "check-sensitivity-routing": "npx tsx scripts/check-sensitivity-routing.ts",
     "check-sqlite-migration-runner": "npx tsx scripts/check-sqlite-migration-runner.ts",
