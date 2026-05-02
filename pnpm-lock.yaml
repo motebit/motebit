@@ -2317,6 +2317,9 @@ importers:
       '@motebit/settlement-rails':
         specifier: workspace:*
         version: link:../../packages/settlement-rails
+      '@motebit/treasury-reconciliation':
+        specifier: workspace:*
+        version: link:../../packages/treasury-reconciliation
       '@motebit/virtual-accounts':
         specifier: workspace:*
         version: link:../../packages/virtual-accounts

@@ -1113,4 +1113,45 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 23,
+    name: "treasury_reconciliations",
+    up: (db) => {
+      // Append-only audit log for the treasury reconciliation primitive
+      // (see services/relay/src/treasury-reconciliation.ts +
+      // packages/treasury-reconciliation/CLAUDE.md). Each row is a single
+      // run of the reconciliation cycle: one comparison between recorded
+      // platform-fee accumulation (SUM over relay_settlements.platform_fee
+      // for relay-mediated x402 settlements) and onchain treasury balance
+      // (eth_call balanceOf(treasuryAddress)). Drift is the difference;
+      // negative drift fires the alert path.
+      //
+      // Append-only: never mutated after insertion. Operator-transparency
+      // doctrine — the audit trail must be reproducible byte-for-byte
+      // for any reconciliation_id that appears in `/api/v1/admin/treasury-reconciliation`.
+      //
+      // Big integer columns (recorded_fee_sum_micro, observed_onchain_balance_micro,
+      // drift_micro) are stored as TEXT to preserve bigint semantics across
+      // the SQLite/JS boundary; consumers BigInt() the value on read.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_treasury_reconciliations (
+          reconciliation_id TEXT PRIMARY KEY,
+          run_at INTEGER NOT NULL,
+          chain TEXT NOT NULL,
+          treasury_address TEXT NOT NULL,
+          usdc_contract_address TEXT NOT NULL,
+          recorded_fee_sum_micro TEXT NOT NULL,
+          observed_onchain_balance_micro TEXT NOT NULL,
+          drift_micro TEXT NOT NULL,
+          consistent INTEGER NOT NULL,
+          confirmation_lag_buffer_ms INTEGER NOT NULL,
+          notes TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_treasury_recon_run_at
+          ON relay_treasury_reconciliations(run_at);
+        CREATE INDEX IF NOT EXISTS idx_treasury_recon_consistent
+          ON relay_treasury_reconciliations(consistent);
+      `);
+    },
+  },
 ];

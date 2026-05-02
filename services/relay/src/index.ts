@@ -73,7 +73,7 @@ import { IdentityManager } from "@motebit/core-identity";
 import { createMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
-import { parseBoolEnv, parseFloatEnv } from "./env.js";
+import { parseBoolEnv, parseFloatEnv, parseIntEnv } from "./env.js";
 import { createRelaySchema } from "./schema.js";
 import { createRelayConfigTable, loadFreezeState, persistFreeze } from "./freeze.js";
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
@@ -111,6 +111,11 @@ import {
 import { aggregateFees } from "./fees.js";
 import { aggregateHealthSummary } from "./health-summary.js";
 import { startDepositDetector } from "./deposit-detector.js";
+import {
+  startTreasuryReconciliationLoop,
+  getTreasuryReconciliationStats,
+  listTreasuryReconciliations,
+} from "./treasury-reconciliation.js";
 import { registerCredentialRoutes } from "./credentials.js";
 import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscriptions.js";
 import {
@@ -938,6 +943,26 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     });
   });
 
+  // Admin: treasury reconciliation overview (recent records + aggregated stats).
+  // The reconciliation loop runs only on mainnet (X402_TESTNET=false); on
+  // testnet this endpoint returns zero history with `loop_enabled=false`.
+  // Sibling-but-distinct from `/api/v1/admin/credential-anchoring` — the
+  // treasury observability primitive is documented in
+  // `packages/treasury-reconciliation/CLAUDE.md` Rule 1; the relay-side
+  // wiring lives in `services/relay/src/treasury-reconciliation.ts`.
+  /** @internal */
+  app.get("/api/v1/admin/treasury-reconciliation", (c) => {
+    const stats = getTreasuryReconciliationStats(moteDb.db);
+    const records = listTreasuryReconciliations(moteDb.db, 50);
+    return c.json({
+      stats,
+      records,
+      treasury_address: x402Config.payToAddress,
+      chain: x402Config.network,
+      loop_enabled: treasuryReconciliationInterval !== undefined,
+    });
+  });
+
   // Admin: byte-identical canonical JSON of a stored ExecutionReceipt.
   // Keyed by (motebitId, taskId) — matches the composite PK in
   // relay_receipts. Response body is the exact bytes canonicalJson
@@ -1289,6 +1314,49 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     chain: depositDetectorChain,
   });
 
+  // --- Treasury reconciliation (compares recorded x402 fees to onchain balance) ---
+  // Sibling-but-distinct from the deposit detector — see
+  // packages/treasury-reconciliation/CLAUDE.md Rule 1 for why these two
+  // observability primitives must NOT be unified. This loop is the
+  // operator-treasury observability hook for relay-mediated x402 fee
+  // accumulation; the deposit detector is for per-agent USDC funding.
+  //
+  // Loop runs only on mainnet (X402_TESTNET=false). On testnet the
+  // treasury balance is meaningless and reconciliation would be
+  // trivially consistent at 0 forever — gate skips with a clear log.
+  let treasuryReconciliationInterval: ReturnType<typeof setInterval> | undefined;
+  {
+    const { USDC_CONTRACTS, DEFAULT_RPC_URLS } = await import("./deposit-detector.js");
+    const usdcContractAddress = USDC_CONTRACTS[x402Config.network];
+    const rpcUrl = DEFAULT_RPC_URLS[x402Config.network];
+    if (x402Config.testnet === false && x402Config.payToAddress && usdcContractAddress && rpcUrl) {
+      const intervalMs = parseIntEnv("MOTEBIT_TREASURY_RECONCILIATION_INTERVAL_MS", 15 * 60_000);
+      const { HttpJsonRpcEvmAdapter } = await import("@motebit/evm-rpc");
+      const evmRpc = new HttpJsonRpcEvmAdapter({ rpcUrl });
+      treasuryReconciliationInterval = startTreasuryReconciliationLoop({
+        db: moteDb.db,
+        rpc: evmRpc,
+        chain: x402Config.network,
+        treasuryAddress: x402Config.payToAddress,
+        usdcContractAddress,
+        intervalMs,
+        isFrozen: () => getEmergencyFreeze(),
+      });
+    } else {
+      logger.info("treasury-reconciliation.disabled", {
+        reason:
+          x402Config.testnet !== false
+            ? "testnet mode (X402_TESTNET != false)"
+            : !x402Config.payToAddress
+              ? "X402_PAY_TO_ADDRESS not set"
+              : !usdcContractAddress
+                ? "no USDC contract registered for chain"
+                : "no RPC URL registered for chain",
+        chain: x402Config.network,
+      });
+    }
+  }
+
   // --- P2P payment verifier (async onchain verification of direct settlements) ---
   let p2pVerifierInterval: ReturnType<typeof setInterval> | undefined;
   if (solanaRpcUrl) {
@@ -1410,6 +1478,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(agentAnchorInterval);
     clearInterval(credentialAnchorInterval);
     clearInterval(depositDetectorInterval);
+    if (treasuryReconciliationInterval) clearInterval(treasuryReconciliationInterval);
     if (p2pVerifierInterval) clearInterval(p2pVerifierInterval);
     clearInterval(sweepInterval);
     clearInterval(batchWithdrawalInterval);

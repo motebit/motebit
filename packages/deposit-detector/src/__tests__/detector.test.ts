@@ -35,6 +35,7 @@ function mockRpc(overrides: {
     getBlockNumber:
       overrides.getBlockNumber ?? vi.fn().mockResolvedValue(overrides.blockNumber ?? BigInt(0)),
     getTransferLogs: overrides.getTransferLogs ?? vi.fn().mockResolvedValue(overrides.logs ?? []),
+    getBalance: vi.fn().mockResolvedValue(0n),
   };
 }
 

@@ -48,6 +48,7 @@ function mockAdapter(overrides: {
     getBlockNumber:
       overrides.getBlockNumber ?? vi.fn().mockResolvedValue(overrides.blockNumber ?? BigInt(0)),
     getTransferLogs: overrides.getTransferLogs ?? vi.fn().mockResolvedValue(overrides.logs ?? []),
+    getBalance: vi.fn().mockResolvedValue(0n),
   };
 }
 
@@ -269,6 +270,7 @@ describe("detectDeposits", () => {
     const rpc: EvmRpcAdapter = {
       getBlockNumber: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
       getTransferLogs: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+      getBalance: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
     };
 
     const credits = await detectDeposits({

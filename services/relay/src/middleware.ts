@@ -352,6 +352,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/admin/health", rl(expensiveLimiter));
   app.use("/api/v1/admin/transparency", rl(expensiveLimiter));
   app.use("/api/v1/admin/credential-anchoring", rl(expensiveLimiter));
+  app.use("/api/v1/admin/treasury-reconciliation", rl(expensiveLimiter));
   app.use("/api/v1/admin/receipts/*", rl(expensiveLimiter));
   app.use("/api/v1/admin/pending-withdrawals", rl(expensiveLimiter));
 
@@ -677,6 +678,7 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   app.use("/api/v1/admin/health", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/transparency", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/credential-anchoring", bearerAuth({ token: apiToken }));
+  app.use("/api/v1/admin/treasury-reconciliation", bearerAuth({ token: apiToken }));
   // Admin receipt audit — master token only; serves byte-identical
   // canonical JSON so an auditor can re-verify the signature offline.
   app.use("/api/v1/admin/receipts/*", bearerAuth({ token: apiToken }));

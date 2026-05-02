@@ -36,7 +36,7 @@ const logger = createLogger({ service: "deposit-detector" });
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
 /** Known USDC contract addresses by CAIP-2 chain ID. */
-const USDC_CONTRACTS: Record<string, string> = {
+export const USDC_CONTRACTS: Record<string, string> = {
   "eip155:1": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
   "eip155:8453": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   "eip155:84532": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
@@ -46,7 +46,7 @@ const USDC_CONTRACTS: Record<string, string> = {
 };
 
 /** Default public RPC endpoints by CAIP-2 chain ID. */
-const DEFAULT_RPC_URLS: Record<string, string> = {
+export const DEFAULT_RPC_URLS: Record<string, string> = {
   "eip155:1": "https://eth.llamarpc.com",
   "eip155:8453": "https://mainnet.base.org",
   "eip155:84532": "https://sepolia.base.org",
