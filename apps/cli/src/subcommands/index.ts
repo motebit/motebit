@@ -60,6 +60,7 @@ export {
   handleSkillsList,
   handleSkillsPublish,
   handleSkillsRemove,
+  handleSkillsRunScript,
   handleSkillsTrust,
   handleSkillsUntrust,
   handleSkillsVerify,

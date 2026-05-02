@@ -239,6 +239,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-admin-route-auth",
   },
   {
+    name: "check-skill-script-uses-tool-approval",
+    defends:
+      "every TS file that reads bytes from a skill's quarantined `scripts/` tree, imports `node:child_process`, and calls a spawn primitive (`spawn`/`spawnSync`/`execFile`/`execFileSync`) MUST also call `approvalStore.add(...)` to enroll the invocation in the canonical operator approval queue — same `SqliteApprovalStore` the existing `motebit approvals list/show/approve/deny` surface reads. A parallel approval surface for skill scripts fragments the operator audit trail and breaks fail-closed-at-the-capability-boundary; invariant #69, added 2026-05-02 alongside the skills phase 2 quarantine arc that wired `motebit skills run-script` to this gate",
+    script: "check-skill-script-uses-tool-approval",
+  },
+  {
     name: "check-api-surface",
     defends:
       "@motebit/{protocol,crypto,sdk} public API must match committed baseline unless a `major` changeset is pending",

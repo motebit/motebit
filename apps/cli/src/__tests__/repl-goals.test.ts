@@ -37,6 +37,7 @@ const stubConfig = {
   syncUrl: undefined,
   syncToken: undefined,
   operator: false,
+  autoApprove: false,
   allowedPaths: [],
   output: undefined,
   identity: undefined,

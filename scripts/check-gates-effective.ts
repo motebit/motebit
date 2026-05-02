@@ -865,6 +865,31 @@ export function __probeOnlyRegisterAdminUnauth(app: Hono): void {
       ),
   },
   {
+    script: "check-skill-script-uses-tool-approval",
+    proves:
+      "flags a TS file that reads bytes from a skill's quarantined `scripts/` tree, imports `node:child_process`, and calls a spawn primitive — but never calls `approvalStore.add(...)` to enroll the invocation in the canonical operator approval queue",
+    perturb: () =>
+      // Fixture: a packages/runtime src file that walks `record.files["scripts/X"]`
+      // bytes through `child_process.spawn(...)` without ever creating an
+      // approval-store row. This is the parallel-approval-surface anti-pattern
+      // the skills phase 2 quarantine memo names; the gate must catch it.
+      writeFixture(
+        `packages/runtime/src/${PROBE_PREFIX}skill_script_unapproved.ts`,
+        `import { spawn } from "node:child_process";
+
+interface ProbeRecord { files: Record<string, Uint8Array> }
+
+export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string): void {
+  const bytes = record.files["scripts/" + scriptName];
+  if (!bytes) return;
+  // Bypassing the canonical approval store entirely — this is the
+  // anti-pattern the gate exists to catch.
+  spawn("sh", ["-c", "cat", String(bytes.length)]);
+}
+`,
+      ),
+  },
+  {
     script: "check-preset-imports",
     proves:
       "flags a surface-app declaration that shadows an @motebit/sdk canonical preset identifier (APPROVAL_PRESET_CONFIGS, COLOR_PRESETS, RISK_LABELS, …)",

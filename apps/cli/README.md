@@ -103,6 +103,8 @@ motebit skills trust <name>               # Operator-attest an unsigned skill �
 motebit skills untrust <name>             # Revoke operator-attested trust
 motebit skills verify <name>              # Re-verify the envelope signature
 motebit skills remove <name>              # Delete + emit audit event
+motebit skills run-script <skill> <script> [args...]  # Phase 2 — gated script execution
+  --auto-approve                                      #   Skip the prompt (still records the audit row)
 ```
 
 Storage: `~/.motebit/skills/` — `installed.json` index plus per-skill

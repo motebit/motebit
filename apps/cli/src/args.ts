@@ -23,6 +23,7 @@ export interface CliConfig {
   syncUrl: string | undefined;
   syncToken: string | undefined;
   operator: boolean;
+  autoApprove: boolean;
   allowedPaths: string[];
   output: string | undefined;
   identity: string | undefined;
@@ -99,6 +100,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "sync-url": { type: "string" },
       "sync-token": { type: "string" },
       operator: { type: "boolean", default: false },
+      "auto-approve": { type: "boolean", default: false },
       "allowed-paths": { type: "string" },
       output: { type: "string", short: "o" },
       identity: { type: "string" },
@@ -198,6 +200,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     syncUrl: values["sync-url"],
     syncToken: values["sync-token"],
     operator: values.operator,
+    autoApprove: values["auto-approve"],
     allowedPaths,
     output: values.output,
     identity: values.identity,

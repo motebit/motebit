@@ -73,6 +73,11 @@
       "type": "string"
     },
     {
+      "name": "auto-approve",
+      "type": "boolean",
+      "default": false
+    },
+    {
       "name": "block-commands",
       "type": "string"
     },

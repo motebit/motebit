@@ -500,6 +500,227 @@ export async function handleSkillsUntrust(config: CliConfig): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// run-script — phase 2 quarantine + per-invocation operator-approval gate
+// ---------------------------------------------------------------------------
+//
+// Spec/skills-v1.md §10 + §13: scripts/ files are stored at install but
+// NEVER auto-executed; first execution requires per-script operator
+// approval (sibling pattern to the existing tool-approval flow). This
+// handler IS that gate for CLI-driven invocation. AI-callable script
+// execution (registering scripts as tools the AI loop can invoke) is a
+// phase 2.5 follow-on; both paths consume the same approval store.
+//
+// Per memory/skills_phase2_quarantine_approval_gate: invocations are
+// tool invocations from the gate's perspective. The approval row is
+// written to the canonical `approvalStore` (same SqliteApprovalStore
+// the existing /approvals CLI surface reads), with a `tool_name` of
+// `skill.script:<skill>/<script-path>`. RiskLevel.R3_EXECUTE is the
+// canonical level for "spawn an arbitrary script;" `--auto-approve`
+// short-circuits the prompt for scripted/CI use but STILL records the
+// approval row for audit.
+//
+// Drift gate `check-skill-script-uses-tool-approval` (#66) asserts that
+// no skill-script execution path bypasses this canonical entry point.
+
+export async function handleSkillsRunScript(config: CliConfig): Promise<void> {
+  const skillName = requirePositional(config, 2, "<skill-name>");
+  const scriptName = requirePositional(config, 3, "<script-name>");
+  const scriptArgs = config.positionals.slice(4);
+
+  const registry = buildRegistry();
+  const record = await registry.get(skillName);
+  if (!record) {
+    console.error(errorColor(`Skill not installed: ${skillName}`));
+    process.exit(1);
+  }
+
+  // Locate the script bytes in the skill's quarantined `scripts/` tree.
+  // The fs-adapter stores aux files keyed by their relative path inside
+  // the skill dir, so the lookup key is `scripts/<script-name>` —
+  // operators don't pass the `scripts/` prefix.
+  const scriptKey = `scripts/${scriptName}`;
+  const scriptBytes = record.files[scriptKey];
+  if (!scriptBytes) {
+    const available = Object.keys(record.files)
+      .filter((k) => k.startsWith("scripts/"))
+      .map((k) => k.slice("scripts/".length));
+    console.error(errorColor(`No script "${scriptName}" in skill "${skillName}".`));
+    if (available.length > 0) {
+      console.error(dim(`  Available scripts: ${available.join(", ")}`));
+    } else {
+      console.error(dim(`  Skill has no scripts/ directory.`));
+    }
+    process.exit(1);
+  }
+
+  // Compute the audit fields for the approval row. `tool_name` is the
+  // skill-script convention; `args_preview` shows what the operator is
+  // about to grant; `args_hash` lets the audit prove the args weren't
+  // mutated between approval and execution.
+  const argsForHash = JSON.stringify({ skill: skillName, script: scriptName, args: scriptArgs });
+  const argsHash = await sha256Hex(new TextEncoder().encode(argsForHash));
+  const argsPreview =
+    scriptArgs.length > 0
+      ? `${scriptName} ${scriptArgs.map((a) => JSON.stringify(a)).join(" ")}`
+      : scriptName;
+
+  // Open the moteDb to access approvalStore. CLI-direct invocation runs
+  // outside any goal context, so use a synthetic `cli:skill-script`
+  // goal_id — the existing schema allows arbitrary goal_id strings, and
+  // the synthetic value is what `motebit approvals show` will display.
+  const fullConfig = loadFullConfig();
+  const motebitId = fullConfig.motebit_id;
+  if (motebitId == null || motebitId === "") {
+    console.error(errorColor("No motebit identity found. Run `motebit` to bootstrap."));
+    process.exit(1);
+  }
+
+  const { openMotebitDatabase } = await import("@motebit/persistence");
+  const { getDbPath } = await import("../runtime-factory.js");
+  const moteDb = await openMotebitDatabase(getDbPath(config.dbPath));
+
+  const { RiskLevel } = await import("@motebit/sdk");
+  const approvalId = `appr-skill-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const now = Date.now();
+  const expiresAt = now + 10 * 60 * 1000; // 10-minute approval window for CLI prompts
+
+  moteDb.approvalStore.add({
+    approval_id: approvalId,
+    motebit_id: motebitId,
+    goal_id: "cli:skill-script",
+    tool_name: `skill.script:${skillName}/${scriptName}`,
+    args_preview: argsPreview,
+    args_hash: argsHash,
+    risk_level: RiskLevel.R3_EXECUTE,
+    status: "pending",
+    created_at: now,
+    expires_at: expiresAt,
+    resolved_at: null,
+    denied_reason: null,
+  });
+
+  // Auto-approve short-circuit: --auto-approve flag OR
+  // MOTEBIT_AUTO_APPROVE=1 (mirrors MOTEBIT_PASSPHRASE convention).
+  // Records the approval row pre-resolved so the audit trail stays
+  // consistent with operator-prompted runs.
+  const autoApprove = config.autoApprove === true || process.env["MOTEBIT_AUTO_APPROVE"] === "1";
+
+  let approved: boolean;
+  if (autoApprove) {
+    moteDb.approvalStore.resolve(approvalId, "approved");
+    approved = true;
+    console.log(dim(`  auto-approved (audit row ${approvalId.slice(0, 12)}…)`));
+  } else {
+    console.log();
+    console.log(`  ${bold("Skill script execution requested")}`);
+    console.log(`  Skill:        ${cyan(skillName)}`);
+    console.log(
+      `  Script:       ${cyan(scriptName)} ${dim(`(${String(scriptBytes.length)} bytes)`)}`,
+    );
+    console.log(`  Args:         ${scriptArgs.length > 0 ? scriptArgs.join(" ") : dim("(none)")}`);
+    console.log(`  Approval ID:  ${dim(approvalId)}`);
+    console.log();
+    const decision = await promptYesNo("  Approve execution? [y/N] ");
+    if (!decision) {
+      moteDb.approvalStore.resolve(approvalId, "denied", "operator declined at CLI prompt");
+      moteDb.close();
+      console.log(dim("  denied; not executed"));
+      process.exit(1);
+    }
+    moteDb.approvalStore.resolve(approvalId, "approved");
+    approved = true;
+  }
+
+  moteDb.close();
+  if (!approved) process.exit(1); // unreachable, but keeps TS happy
+
+  // Approved — execute the script in a temp dir. Detect interpreter via
+  // shebang first, then by extension; reject if neither resolves so we
+  // never spawn a "format I don't understand" with the operator's
+  // approval still attached to the audit row.
+  const { mkdtempSync, writeFileSync: writeBytes, chmodSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { spawnSync } = await import("node:child_process");
+
+  const tempDir = mkdtempSync(join(tmpdir(), "motebit-skill-script-"));
+  const tempPath = join(tempDir, scriptName);
+  try {
+    writeBytes(tempPath, Buffer.from(scriptBytes));
+    chmodSync(tempPath, 0o700);
+
+    const interpreter = detectInterpreter(scriptBytes, scriptName);
+    const spawnArgs = interpreter.useShebang ? scriptArgs : [tempPath, ...scriptArgs];
+    const command = interpreter.useShebang ? tempPath : interpreter.command;
+
+    const result = spawnSync(command, spawnArgs, {
+      stdio: "inherit",
+      env: process.env,
+    });
+    if (result.error) {
+      console.error(errorColor(`Failed to spawn script: ${result.error.message}`));
+      process.exit(1);
+    }
+    process.exit(result.status ?? 0);
+  } finally {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup; tempdir may be recovered by the OS
+    }
+  }
+}
+
+interface InterpreterChoice {
+  /** True when the file's own shebang determines the interpreter (run the file directly). */
+  useShebang: boolean;
+  /** Interpreter binary when not relying on shebang. */
+  command: string;
+}
+
+function detectInterpreter(bytes: Uint8Array, scriptName: string): InterpreterChoice {
+  // Shebang takes precedence on POSIX; chmod +x + spawn(file) lets the
+  // OS resolve. We avoid parsing the shebang ourselves and dispatching
+  // its target binary because the script may rely on `env` flags or
+  // PATH-relative interpreters the OS handles correctly.
+  if (bytes.length >= 2 && bytes[0] === 0x23 && bytes[1] === 0x21) {
+    return { useShebang: true, command: "" };
+  }
+  // Extension fallback for non-shebang scripts. Keep the table tight —
+  // anything outside this list is rejected so the audit row's
+  // approval doesn't grant execution of an opaque format.
+  const lower = scriptName.toLowerCase();
+  if (lower.endsWith(".js") || lower.endsWith(".mjs") || lower.endsWith(".cjs")) {
+    return { useShebang: false, command: "node" };
+  }
+  if (lower.endsWith(".py")) {
+    return { useShebang: false, command: "python3" };
+  }
+  if (lower.endsWith(".sh") || lower.endsWith(".bash")) {
+    return { useShebang: false, command: "bash" };
+  }
+  if (lower.endsWith(".rb")) {
+    return { useShebang: false, command: "ruby" };
+  }
+  console.error(
+    errorColor(
+      `Cannot detect interpreter for "${scriptName}": no shebang and unrecognized extension. Supported fallbacks: .js/.mjs/.cjs/.py/.sh/.bash/.rb.`,
+    ),
+  );
+  process.exit(1);
+}
+
+async function promptYesNo(question: string): Promise<boolean> {
+  return new Promise((resolveFn) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => {
+      rl.close();
+      const normalized = answer.trim().toLowerCase();
+      resolveFn(normalized === "y" || normalized === "yes");
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // publish — sign + submit to the relay-hosted registry
 // ---------------------------------------------------------------------------
 
