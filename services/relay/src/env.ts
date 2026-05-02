@@ -2,9 +2,10 @@
  * Environment variable parsing helpers.
  *
  * Rationale: previous relay boot code had two conflicting conventions for
- * boolean env vars — some used `process.env.FOO !== "false"` (opt-out,
- * default on), others used `process.env.FOO === "true"` (opt-in, default
- * off). Operators had to remember which variable had which convention.
+ * boolean env vars — some opted out (raw value compared against the
+ * literal `"false"`, default on), others opted in (raw value compared
+ * against `"true"`, default off). Operators had to remember which
+ * variable had which convention.
  *
  * These helpers centralize the parsing rules so every boolean env var
  * behaves the same way, and the default is explicit in the call site.
@@ -17,8 +18,8 @@
  * `"false" | "0" | "no" | "off"` as false. Any other value (including
  * unset) falls back to `defaultValue`.
  *
- * Prefer this over ad-hoc `process.env.FOO === "true"` / `!== "false"`
- * checks scattered in boot code.
+ * Prefer this over ad-hoc string comparisons against the raw env value
+ * (`=== "true"` / `!== "false"`) scattered across boot code.
  *
  * @example
  *   const deviceAuth = parseBoolEnv("MOTEBIT_ENABLE_DEVICE_AUTH", true);

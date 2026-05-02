@@ -151,7 +151,7 @@ const PROBES: ReadonlyArray<Probe> = [
   },
   {
     script: "check-deploy-parity",
-    proves: "flags an env var in .env.example that no source reads",
+    proves: "flags an env var in .env.example that no source reads (rule 3)",
     perturb: () =>
       mutateFile(
         "services/code-review/.env.example",
@@ -162,6 +162,24 @@ const PROBES: ReadonlyArray<Probe> = [
         // Distinctive middle-token for easy grep-and-grep-out if something
         // goes wrong.
         (src) => `${src}\nGATE_PROBE_UNUSED_VAR=never_read\n`,
+      ),
+  },
+  {
+    script: "check-deploy-parity",
+    proves:
+      "flags an env var read in service src that .env.example doesn't declare (rule 5 — the seed-coupling drift class)",
+    perturb: () =>
+      // Strip FEATURED_SKILL_SUBMITTERS from services/relay/.env.example.
+      // services/relay/src/index.ts reads `process.env.FEATURED_SKILL_SUBMITTERS`
+      // (the relay's skill-registry seed-coupling env var per memory
+      // `skills_registry_seed_coupling`); rule 5 requires the read be
+      // documented. Matches a multi-line block (header comment + blank
+      // line + var declaration) so cleanup is unambiguous.
+      mutateFile("services/relay/.env.example", (src) =>
+        src.replace(
+          /# COUPLED to the publishing identity[\s\S]*?FEATURED_SKILL_SUBMITTERS=\n?/,
+          "",
+        ),
       ),
   },
   {

@@ -1,7 +1,7 @@
 /**
  * Deployment parity check.
  *
- * Enforces four invariants across services that ship to production:
+ * Enforces five invariants across services that ship to production:
  *
  *   1. services/<svc>/fly.toml → .github/workflows/deploy-<app>.yml
  *      If a service declares a fly.toml with `app = "motebit-<name>"`, the
@@ -33,6 +33,15 @@
  *      back to sql.js: WAL becomes a no-op, writes become 1-second-debounced
  *      full-file rewrites, Litestream goes dark. Durability + perf regress
  *      invisibly. Any fly-deployed relay-shaped service consumes this.
+ *
+ *   5. Every env var read in service source must appear in .env.example
+ *      (symmetric inverse of rule 3). Catches the structural seed-coupling
+ *      class where a relay-side env var (e.g. `FEATURED_SKILL_SUBMITTERS`)
+ *      gates production behavior but operators have no in-repo signal that
+ *      it exists, so deployment-rotation goes silently out of sync with
+ *      whatever signing identity the published artifacts assume. Closes the
+ *      direction `check-deploy-parity` already enforces in rule 3 from the
+ *      other side: rule 3 catches stale-doc, rule 5 catches undocumented-read.
  *
  * Services without a fly.toml are not deployed and are skipped entirely
  * (e.g. services/proxy ships via Vercel edge — a different deploy
@@ -188,6 +197,21 @@ function main(): void {
         violations.push({
           service: svc,
           detail: `${relative(ROOT, envExample)} declares "${name}" but nothing in src reads process.env.${name} — stale doc`,
+        });
+      }
+    }
+
+    // Invariant 5: every env var read in src is declared in .env.example.
+    // Symmetric inverse of #3. Catches the seed-coupling class where a
+    // service reads an env var (e.g. `FEATURED_SKILL_SUBMITTERS`) that
+    // gates production behavior, but operators have no in-repo signal it
+    // exists. Deployment-time rotation silently desyncs from whatever
+    // signing identity / external state the published artifacts assume.
+    for (const name of read) {
+      if (!declared.has(name)) {
+        violations.push({
+          service: svc,
+          detail: `services/${svc}/src reads process.env.${name} but ${relative(ROOT, envExample)} doesn't declare it — operators won't know to set this when deploying or rotating; document the var with its rotation-coupling notes alongside the existing entries`,
         });
       }
     }
