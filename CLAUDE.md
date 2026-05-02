@@ -48,6 +48,7 @@ Per-directory doctrine loads lazily (every sub-`CLAUDE.md` must appear here; enf
 Cross-cutting doctrine (read on demand):
 
 - [`docs/doctrine/protocol-model.md`](docs/doctrine/protocol-model.md) — permissive-floor / BSL / accumulated-state, cryptosuite agility
+- [`docs/doctrine/agility-as-role.md`](docs/doctrine/agility-as-role.md) — name the role in code/gates/types; treat the instance as a registry entry; migration is a registry append, not a wire-format break or codebase rewrite. Three instances: cryptosuite (`SuiteId`), license-floor ("permissive floor"), settlement-rail (`GuestRail`/`SovereignRail`)
 - [`docs/doctrine/security-boundaries.md`](docs/doctrine/security-boundaries.md) — sybil, injection, token binding
 - [`docs/doctrine/settlement-rails.md`](docs/doctrine/settlement-rails.md) — custody split, rails, withdrawals
 - [`docs/doctrine/operator-transparency.md`](docs/doctrine/operator-transparency.md) — declared posture vs proven posture
