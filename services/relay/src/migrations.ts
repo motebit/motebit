@@ -949,4 +949,63 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 20,
+    name: "phase_6_2_dispute_evidence_envelope",
+    up: (db) => {
+      // Phase 6.2 — store the full DisputeEvidence envelope (signature
+      // + suite columns) so the §6.2 federation orchestrator can hand
+      // peers structurally-complete artifacts they can verify per §5.4
+      // ("evidence must be cryptographically verifiable; unsigned/
+      // tampered evidence is rejected").
+      //
+      // Pre-migration-20 the relay stored only the inner `evidence_data`
+      // field of DisputeEvidence; the orchestrator at disputes.ts §3
+      // SELECTed only that column and cast it as a full `DisputeEvidence`
+      // envelope. Every VoteRequest.evidence_bundle item shipped to peers
+      // was structurally invalid — missing signature, suite, evidence_type
+      // at the envelope level. The TypeScript cast hid the lie at the
+      // type-system layer; existing federation tests submit zero evidence
+      // so the bundle was always [], which let the defect ship undetected
+      // through §6.2 commit-1 through 5 + commit 4b.
+      //
+      // Caught by the post-shape-2 hygiene arc's item-2 round-2-evidence-
+      // union test. Same structural shape as migration 18 (DisputeRequest
+      // body_json) and commit 4b's resolution-row query-site sweep: spec
+      // claims a structurally-complete artifact, impl stores only a
+      // subset, type-system cast hides the lie. The discipline lesson:
+      // empty-collection cases are not coverage of collection-of-T's
+      // element-shape contract — tests MUST populate the collection with
+      // at least one element to verify T's shape.
+      //
+      // Defaults: NOT NULL DEFAULT '' mirrors migration 18 shape.
+      // Empty signature on legacy rows means peer adjudicators per
+      // §5.4 fail-closed (verifyDisputeEvidence rejects an empty
+      // signature) — the right behavior; we don't fake signatures.
+      // Production has zero pre-migration disputes per the staging
+      // context.
+      //
+      // Defensive shape (PRAGMA-checked, mirrors migration 18): the
+      // table is created by createDisputeTables in disputes.ts (NOT a
+      // migration), so on fresh installs migrations may run before the
+      // table exists. Skip the ALTER if absent (createDisputeTables now
+      // declares the columns inline) or if columns already exist.
+      const tableRows = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='relay_dispute_evidence'",
+        )
+        .all() as Array<{ name: string }>;
+      if (tableRows.length === 0) return;
+      const cols = db.prepare("PRAGMA table_info(relay_dispute_evidence)").all() as Array<{
+        name: string;
+      }>;
+      const colNames = new Set(cols.map((c) => c.name));
+      if (!colNames.has("signature")) {
+        db.exec(`ALTER TABLE relay_dispute_evidence ADD COLUMN signature TEXT NOT NULL DEFAULT ''`);
+      }
+      if (!colNames.has("suite")) {
+        db.exec(`ALTER TABLE relay_dispute_evidence ADD COLUMN suite TEXT NOT NULL DEFAULT ''`);
+      }
+    },
+  },
 ];

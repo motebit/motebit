@@ -28,7 +28,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair, bytesToHex } from "@motebit/encryption";
+import {
+  generateKeypair,
+  bytesToHex,
+  signDisputeEvidence,
+  verifyDisputeEvidence,
+} from "@motebit/encryption";
 import { signAdjudicatorVote } from "@motebit/crypto";
 import type { DisputeOutcome, DisputeRequest, VoteRequest } from "@motebit/protocol";
 import { createFederationTables, type RelayIdentity } from "../federation.js";
@@ -582,5 +587,106 @@ describe("orchestrateFederationResolution — additional gate-coverage", () => {
       .prepare("SELECT COUNT(*) as n FROM relay_dispute_votes WHERE dispute_id = ? AND round = ?")
       .get(dispute.dispute_id, 1) as { n: number };
     expect(persisted.n).toBe(3);
+  });
+});
+
+describe("orchestrateFederationResolution — evidence_bundle envelope shape (§5.4 + migration 20)", () => {
+  it("populated bundle: each item is a structurally-complete DisputeEvidence (signature + suite reconstructed from stored columns; peers can verify)", async () => {
+    // Spec contract: per §8.3 the peer's vote callback receives the
+    // evidence bundle and "decides afresh"; per §5.4 each item MUST
+    // be cryptographically verifiable. Pre-migration-20 the bundle
+    // items shipped by the orchestrator were inner-data-only — peers
+    // could not verify because envelope fields (signature, suite,
+    // evidence_type) were absent.
+    //
+    // Discipline lesson: empty-collection cases are not coverage of
+    // collection-of-T's element-shape contract. Existing federation
+    // tests submit zero evidence so the bundle is always [], which
+    // let the structural-shape lie ship undetected through commits
+    // 1 → 5 + commit 4b. Tests on collection-of-T fields MUST
+    // populate the collection with at least one element and assert
+    // on T's full shape — not just length / pass-through plumbing.
+    env = await setupOrchEnv(3);
+    const dispute = env.filePeerlessDispute("dispute-bundle-shape");
+
+    // Submit one evidence row through the same INSERT shape the
+    // /evidence handler uses (post-migration-20 columns).
+    const submitterKp = await generateKeypair();
+    const evidence = await signDisputeEvidence(
+      {
+        dispute_id: dispute.dispute_id,
+        submitted_by: dispute.filed_by,
+        evidence_type: "execution_receipt",
+        evidence_data: { receipt_hash: "abc123" },
+        description: "round-1 evidence — element-shape probe",
+        submitted_at: Date.now(),
+      },
+      submitterKp.privateKey,
+    );
+    env.db
+      .prepare(
+        "INSERT INTO relay_dispute_evidence (evidence_id, dispute_id, submitted_by, evidence_type, evidence_data, description, submitted_at, signature, suite) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "evi-shape-001",
+        evidence.dispute_id,
+        evidence.submitted_by,
+        evidence.evidence_type,
+        JSON.stringify(evidence.evidence_data),
+        evidence.description,
+        evidence.submitted_at,
+        evidence.signature,
+        evidence.suite,
+      );
+
+    // Capture the VoteRequest body the orchestrator sends to peers.
+    let capturedBody: VoteRequest | undefined;
+    const fetchImpl: typeof fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const peer = env.peers.find((p) => url.startsWith(p.endpointUrl));
+      if (!peer) throw new Error(`unrouted url: ${url}`);
+      const body = JSON.parse(init!.body as string) as VoteRequest;
+      if (capturedBody === undefined) capturedBody = body;
+      const signed = await signAdjudicatorVote(
+        {
+          dispute_id: body.dispute_id,
+          round: body.round,
+          peer_id: peer.identity.relayMotebitId,
+          vote: "upheld" as DisputeOutcome,
+          rationale: `peer ${peer.identity.relayMotebitId} upheld`,
+        },
+        peer.identity.privateKey,
+      );
+      return new Response(JSON.stringify(signed), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    await orchestrateFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      1,
+      { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
+    );
+
+    expect(capturedBody).toBeDefined();
+    expect(capturedBody!.evidence_bundle).toHaveLength(1);
+    const item = capturedBody!.evidence_bundle[0]!;
+
+    // Element-shape contract per §5.2 wire format
+    expect(item.dispute_id).toBe(evidence.dispute_id);
+    expect(item.submitted_by).toBe(evidence.submitted_by);
+    expect(item.evidence_type).toBe("execution_receipt");
+    expect(item.evidence_data).toEqual({ receipt_hash: "abc123" });
+    expect(item.description).toBe(evidence.description);
+    expect(item.submitted_at).toBe(evidence.submitted_at);
+    expect(item.suite).toBe(evidence.suite);
+    expect(item.signature).toBe(evidence.signature);
+
+    // §5.4 cryptographic-verifiability: a peer can re-verify the
+    // envelope using the submitter's public key. This is the
+    // load-bearing property the migration enables.
+    const verified = await verifyDisputeEvidence(item, submitterKp.publicKey);
+    expect(verified).toBe(true);
   });
 });

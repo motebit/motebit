@@ -118,6 +118,8 @@ export function createDisputeTables(db: DatabaseDriver): void {
       evidence_data     TEXT NOT NULL,
       description       TEXT NOT NULL,
       submitted_at      INTEGER NOT NULL,
+      signature         TEXT NOT NULL DEFAULT '',
+      suite             TEXT NOT NULL DEFAULT '',
       FOREIGN KEY (dispute_id) REFERENCES relay_disputes(dispute_id)
     );
     CREATE INDEX IF NOT EXISTS idx_dispute_evidence_dispute
@@ -526,13 +528,38 @@ export async function orchestrateFederationResolution(
     });
   }
 
-  // 3. Pull evidence_bundle from the relay_dispute_evidence table
+  // 3. Pull evidence_bundle from the relay_dispute_evidence table.
+  // Reconstruct the full DisputeEvidence envelope from stored columns
+  // (migration 20 added signature + suite so peers receive structurally-
+  // complete artifacts they can verify per §5.4 cryptographic-
+  // verifiability). Pre-migration-20 the orchestrator shipped only the
+  // inner `evidence_data` field cast as DisputeEvidence — peers got
+  // malformed bundles. See migration 20 jsdoc for the discipline lesson
+  // on why the defect went undetected.
   const evidenceRows = db
-    .prepare("SELECT evidence_data FROM relay_dispute_evidence WHERE dispute_id = ?")
-    .all(dispute.dispute_id) as Array<{ evidence_data: string }>;
-  const evidence_bundle: DisputeEvidence[] = evidenceRows.map(
-    (r) => JSON.parse(r.evidence_data) as DisputeEvidence,
-  );
+    .prepare(
+      "SELECT dispute_id, submitted_by, evidence_type, evidence_data, description, submitted_at, suite, signature FROM relay_dispute_evidence WHERE dispute_id = ?",
+    )
+    .all(dispute.dispute_id) as Array<{
+    dispute_id: string;
+    submitted_by: string;
+    evidence_type: string;
+    evidence_data: string;
+    description: string;
+    submitted_at: number;
+    suite: string;
+    signature: string;
+  }>;
+  const evidence_bundle: DisputeEvidence[] = evidenceRows.map((r) => ({
+    dispute_id: r.dispute_id,
+    submitted_by: r.submitted_by,
+    evidence_type: r.evidence_type as DisputeEvidence["evidence_type"],
+    evidence_data: JSON.parse(r.evidence_data) as Record<string, unknown>,
+    description: r.description,
+    submitted_at: r.submitted_at,
+    suite: r.suite as DisputeEvidence["suite"],
+    signature: r.signature,
+  }));
 
   // 4. Construct + sign the VoteRequest
   const requestBody: Omit<VoteRequest, "signature"> = {
@@ -858,7 +885,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     const evidenceId = `evi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
     db.prepare(
-      "INSERT INTO relay_dispute_evidence (evidence_id, dispute_id, submitted_by, evidence_type, evidence_data, description, submitted_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO relay_dispute_evidence (evidence_id, dispute_id, submitted_by, evidence_type, evidence_data, description, submitted_at, signature, suite) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ).run(
       evidenceId,
       disputeId,
@@ -867,6 +894,8 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       JSON.stringify(ev.evidence_data),
       ev.description,
       ev.submitted_at,
+      ev.signature,
+      ev.suite,
     );
 
     logger.info("dispute.evidence_submitted", {
