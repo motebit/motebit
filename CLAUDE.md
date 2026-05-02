@@ -16,7 +16,7 @@ MCP defines capability but not identity. A2A defines communication but has no tr
 
 ## Architecture
 
-pnpm monorepo, Turborepo, TypeScript. Node ≥ 20, pnpm 9.15. 49 packages on a 7-layer DAG enforced by `pnpm check-deps`. 5 surfaces + 5 supporting apps, 8 services, 23 open protocol specs.
+pnpm monorepo, Turborepo, TypeScript. Node ≥ 20, pnpm 9.15. 50 packages on a 7-layer DAG enforced by `pnpm check-deps`. 5 surfaces + 5 supporting apps, 8 services, 23 open protocol specs.
 
 Layout and per-package roles: [`README.md`](README.md), [`apps/docs/content/docs/operator/architecture.mdx`](apps/docs/content/docs/operator/architecture.mdx) (canonical; enforced by `check-docs-tree`).
 
@@ -35,6 +35,7 @@ Per-directory doctrine loads lazily (every sub-`CLAUDE.md` must appear here; enf
 - [`packages/circuit-breaker/CLAUDE.md`](packages/circuit-breaker/CLAUDE.md) — per-peer three-state engine, no I/O, injected clock
 - [`packages/evm-rpc/CLAUDE.md`](packages/evm-rpc/CLAUDE.md) — JSON-RPC behind a motebit-shaped interface; one error shape out
 - [`packages/deposit-detector/CLAUDE.md`](packages/deposit-detector/CLAUDE.md) — single `eth_getLogs` per cycle; dedup is the consumer's atomic write
+- [`packages/treasury-reconciliation/CLAUDE.md`](packages/treasury-reconciliation/CLAUDE.md) — operator-treasury observability for relay-mediated x402 fees; recorded-fee-sum vs onchain `balanceOf` comparison; sibling of deposit-detector but watches the operator's fee-collection address, never an agent wallet (must not unify)
 - [`packages/virtual-accounts/CLAUDE.md`](packages/virtual-accounts/CLAUDE.md) — per-motebit ledger in micro-units; atomic credit/debit
 - [`packages/settlement-rails/CLAUDE.md`](packages/settlement-rails/CLAUDE.md) — three guest rails + registry; custody split at the type level
 - [`packages/wallet-solana/CLAUDE.md`](packages/wallet-solana/CLAUDE.md) — sovereign rail, identity key = address

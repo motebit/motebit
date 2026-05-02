@@ -59,6 +59,7 @@ const LAYER: Record<string, number> = {
   "@motebit/evm-rpc": 1,
   "@motebit/virtual-accounts": 1,
   "@motebit/deposit-detector": 1,
+  "@motebit/treasury-reconciliation": 1,
   "@motebit/self-knowledge": 1,
   "@motebit/wire-schemas": 1,
 

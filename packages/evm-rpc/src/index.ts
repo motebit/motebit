@@ -47,14 +47,32 @@ export interface GetTransferLogsArgs {
   toAddressTopic?: string;
 }
 
+/** Arguments for {@link EvmRpcAdapter.getBalance}. */
+export interface GetBalanceArgs {
+  /** ERC-20 contract address (0x-prefixed). */
+  contractAddress: string;
+  /** Account address to query (0x-prefixed). */
+  accountAddress: string;
+}
+
 /**
- * Minimal EVM RPC surface the deposit detector consumes. Tests inject mocks.
+ * Minimal EVM RPC surface the deposit detector + treasury reconciliation consume.
+ * Tests inject mocks.
  */
 export interface EvmRpcAdapter {
   /** Current head block number. */
   getBlockNumber(): Promise<bigint>;
   /** Fetch ERC-20 Transfer-shaped logs in an inclusive block range. */
   getTransferLogs(args: GetTransferLogsArgs): Promise<EvmTransferLog[]>;
+  /**
+   * Query an ERC-20 `balanceOf(address)` via `eth_call`. Returns the raw
+   * uint256 as a `bigint` — token decimal conversion is the caller's job
+   * (rule 5: token decoding is not this package's concern).
+   *
+   * Used by treasury reconciliation to compare onchain balance against
+   * recorded fee accumulation. Stateless (single call per query, no cursor).
+   */
+  getBalance(args: GetBalanceArgs): Promise<bigint>;
 }
 
 // ── HTTP JSON-RPC implementation ─────────────────────────────────────────
@@ -100,6 +118,31 @@ export class HttpJsonRpcEvmAdapter implements EvmRpcAdapter {
     if (typeof result !== "string" || !result.startsWith("0x")) {
       throw new Error(`eth_blockNumber returned malformed result: ${String(result)}`);
     }
+    return BigInt(result);
+  }
+
+  async getBalance(args: GetBalanceArgs): Promise<bigint> {
+    // ERC-20 `balanceOf(address)` selector: keccak256("balanceOf(address)")[0:4]
+    // = 0x70a08231. Append the address as a 32-byte left-padded uint256.
+    const BALANCE_OF_SELECTOR = "0x70a08231";
+    if (!args.accountAddress.startsWith("0x") || args.accountAddress.length !== 42) {
+      throw new Error(
+        `eth_call balanceOf: malformed accountAddress "${args.accountAddress}" (want 0x-prefixed 20-byte hex)`,
+      );
+    }
+    const paddedAddress = args.accountAddress.slice(2).toLowerCase().padStart(64, "0");
+    const data = BALANCE_OF_SELECTOR + paddedAddress;
+
+    const result = await this.call<string>("eth_call", [
+      { to: args.contractAddress, data },
+      "latest",
+    ]);
+
+    if (typeof result !== "string" || !result.startsWith("0x")) {
+      throw new Error(`eth_call balanceOf returned malformed result: ${String(result)}`);
+    }
+    // `0x` alone (zero-length) means revert / no return data — treat as 0.
+    if (result === "0x") return 0n;
     return BigInt(result);
   }
 

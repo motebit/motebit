@@ -55,6 +55,7 @@
     "@motebit/summarize",
     "@motebit/sync-engine",
     "@motebit/tools",
+    "@motebit/treasury-reconciliation",
     "@motebit/virtual-accounts",
     "@motebit/voice",
     "@motebit/vscode",

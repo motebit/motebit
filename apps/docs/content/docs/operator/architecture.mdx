@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **49 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 23 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **50 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 23 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -66,6 +66,7 @@ motebit/
 │   ├── evm-rpc/               [L1]          EVM JSON-RPC boundary. `getBlockNumber` + `getTransferLogs` behind a motebit-shaped interface; injected fetch.
 │   ├── virtual-accounts/      [L1]          Per-motebit ledger: atomic credit/debit, withdrawal lifecycle, signed receipts. AccountStore inversion.
 │   ├── deposit-detector/      [L1]          EVM Transfer-event scanner. Injected EvmRpcAdapter + DepositDetectorStore + onDeposit callback.
+│   ├── treasury-reconciliation/ [L1]         Operator-treasury observability: recorded-fee-sum vs onchain `balanceOf`. Sibling of deposit-detector but watches the operator's x402 fee-collection address, never an agent wallet.
 │   ├── self-knowledge/        [L1]          Committed BM25 corpus over motebit's public docs. Interior tier of the answer engine.
 │   ├── skills/                [L2]          User-installable procedural-knowledge runtime — registry, selector, trust gate, fs adapter. agentskills.io-compatible with motebit-signed extensions.
 │   ├── wire-schemas/          [L1]          Zod schemas for wire-format types. Generates committed JSON Schema artifacts into `spec/schemas/` — the protocol-owned Apache-2.0 tree third parties implement against.

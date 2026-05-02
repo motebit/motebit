@@ -334,3 +334,138 @@ describe("HttpJsonRpcEvmAdapter response envelope", () => {
     expect(init.signal).toBeDefined();
   });
 });
+
+describe("HttpJsonRpcEvmAdapter.getBalance", () => {
+  // Canonical Base mainnet USDC contract.
+  const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const TREASURY = "0xee51c5a65c6Fa81c9CC85505884290e90C09D285";
+
+  it("encodes balanceOf(address) call data correctly", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      jsonResponse({
+        jsonrpc: "2.0",
+        id: 1,
+        result: "0x00000000000000000000000000000000000000000000000000000000003d8528", // 4_026_152 micro-USDC
+      }),
+    );
+    const adapter = new HttpJsonRpcEvmAdapter({
+      rpcUrl: "https://rpc.example",
+      fetch: fetchFn as unknown as typeof globalThis.fetch,
+    });
+
+    const balance = await adapter.getBalance({
+      contractAddress: USDC_BASE,
+      accountAddress: TREASURY,
+    });
+
+    expect(balance).toBe(BigInt(0x3d8528));
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchFn.mock.calls[0]![1]!.body as string) as {
+      method: string;
+      params: [{ to: string; data: string }, string];
+    };
+    expect(body.method).toBe("eth_call");
+    expect(body.params[0].to).toBe(USDC_BASE);
+    expect(body.params[1]).toBe("latest");
+    // Selector + 32-byte left-padded address (lowercased).
+    const expectedData = "0x70a08231" + TREASURY.slice(2).toLowerCase().padStart(64, "0");
+    expect(body.params[0].data).toBe(expectedData);
+  });
+
+  it("decodes hex uint256 to bigint", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      jsonResponse({
+        jsonrpc: "2.0",
+        id: 1,
+        // 1_000_000 micro-USDC = $1.00
+        result: "0x00000000000000000000000000000000000000000000000000000000000f4240",
+      }),
+    );
+    const adapter = new HttpJsonRpcEvmAdapter({
+      rpcUrl: "https://rpc.example",
+      fetch: fetchFn as unknown as typeof globalThis.fetch,
+    });
+
+    const balance = await adapter.getBalance({
+      contractAddress: USDC_BASE,
+      accountAddress: TREASURY,
+    });
+
+    expect(balance).toBe(1_000_000n);
+  });
+
+  it("treats `0x` (empty return data, e.g. revert) as 0", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ jsonrpc: "2.0", id: 1, result: "0x" }));
+    const adapter = new HttpJsonRpcEvmAdapter({
+      rpcUrl: "https://rpc.example",
+      fetch: fetchFn as unknown as typeof globalThis.fetch,
+    });
+
+    const balance = await adapter.getBalance({
+      contractAddress: USDC_BASE,
+      accountAddress: TREASURY,
+    });
+
+    expect(balance).toBe(0n);
+  });
+
+  it("rejects malformed account address", async () => {
+    const adapter = new HttpJsonRpcEvmAdapter({
+      rpcUrl: "https://rpc.example",
+      fetch: vi.fn() as unknown as typeof globalThis.fetch,
+    });
+
+    await expect(
+      adapter.getBalance({
+        contractAddress: USDC_BASE,
+        accountAddress: "not-an-address",
+      }),
+    ).rejects.toThrow(/malformed accountAddress/);
+  });
+
+  it("collapses RPC error to a single Error", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      jsonResponse({
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32000, message: "execution reverted" },
+      }),
+    );
+    const adapter = new HttpJsonRpcEvmAdapter({
+      rpcUrl: "https://rpc.example",
+      fetch: fetchFn as unknown as typeof globalThis.fetch,
+    });
+
+    await expect(
+      adapter.getBalance({ contractAddress: USDC_BASE, accountAddress: TREASURY }),
+    ).rejects.toThrow(/RPC eth_call error -32000/);
+  });
+
+  it("collapses non-2xx HTTP to a single Error", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(httpErrorResponse(503));
+    const adapter = new HttpJsonRpcEvmAdapter({
+      rpcUrl: "https://rpc.example",
+      fetch: fetchFn as unknown as typeof globalThis.fetch,
+    });
+
+    await expect(
+      adapter.getBalance({ contractAddress: USDC_BASE, accountAddress: TREASURY }),
+    ).rejects.toThrow(/RPC eth_call returned HTTP 503/);
+  });
+
+  it("rejects malformed (non-hex) result", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ jsonrpc: "2.0", id: 1, result: 12345 }));
+    const adapter = new HttpJsonRpcEvmAdapter({
+      rpcUrl: "https://rpc.example",
+      fetch: fetchFn as unknown as typeof globalThis.fetch,
+    });
+
+    await expect(
+      adapter.getBalance({ contractAddress: USDC_BASE, accountAddress: TREASURY }),
+    ).rejects.toThrow(/malformed result/);
+  });
+});
