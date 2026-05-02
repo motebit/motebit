@@ -123,7 +123,17 @@ The staging federation is a K4 mesh of four `motebit-sync-stg{,-b,-c,-d}` apps, 
 | C       | `https://motebit-sync-stg-c.fly.dev` | `services/relay/fly.staging-c.toml` | §6.2 mesh complement                 |
 | D       | `https://motebit-sync-stg-d.fly.dev` | `services/relay/fly.staging-d.toml` | §6.2 mesh complement                 |
 
-To re-establish the mesh from scratch (e.g., after destroying + recreating any apps): `node scripts/staging-federation-mesh.mjs`. Six pair handshakes (n choose 2 with n=4), per-pair failure isolation. Verify via `curl <relay>/federation/v1/peers | jq` — each relay should report 3 active OTHER peers (stg additionally shows prod).
+To re-establish the mesh from scratch (e.g., after destroying + recreating any apps):
+
+```bash
+motebit federation mesh \
+  https://motebit-sync-stg.fly.dev \
+  https://motebit-sync-stg-b.fly.dev \
+  https://motebit-sync-stg-c.fly.dev \
+  https://motebit-sync-stg-d.fly.dev
+```
+
+Six pair handshakes (n choose 2 with n=4), per-pair failure isolation. Verify via `curl <relay>/federation/v1/peers | jq` — each relay should report 3 active OTHER peers (stg additionally shows prod).
 
 Single-operator caveat: all four relays run in one fly account, so the mesh validates §6.2 orchestration code paths but not vote independence (vote independence is a multi-operator property — see `operator_transparency_stage_2_deferred`).
 
@@ -135,4 +145,4 @@ for app in motebit-sync-stg-b motebit-sync-stg-c motebit-sync-stg-d; do
 done
 ```
 
-Removes the §6.2 K4-mesh complement cleanly. The first peer (`motebit-sync-stg`) stays — it's federation-peered with prod and serves as the always-on cross-cloud probe. To rebuild after teardown: `fly deploy --config services/relay/fly.staging-{b,c,d}.toml --remote-only` for each, set the shared `MOTEBIT_API_TOKEN`, then re-run `node scripts/staging-federation-mesh.mjs`.
+Removes the §6.2 K4-mesh complement cleanly. The first peer (`motebit-sync-stg`) stays — it's federation-peered with prod and serves as the always-on cross-cloud probe. To rebuild after teardown: `fly deploy --config services/relay/fly.staging-{b,c,d}.toml --remote-only` for each, set the shared `MOTEBIT_API_TOKEN`, then re-run the `motebit federation mesh ...` command above.

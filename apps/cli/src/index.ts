@@ -64,6 +64,7 @@ import {
   handleFederationPeers,
   handleFederationPeer,
   handleFederationPeerRemove,
+  handleFederationMesh,
   handleBalance,
   handleFund,
   handleDelegate,
@@ -263,8 +264,12 @@ async function main(): Promise<void> {
       await handleFederationPeer(config);
     } else if (fedCmd === "peer-remove") {
       await handleFederationPeerRemove(config);
+    } else if (fedCmd === "mesh") {
+      await handleFederationMesh(config);
     } else {
-      console.error("Usage: motebit federation [status|peers|peer <url>|peer-remove <url>]");
+      console.error(
+        "Usage: motebit federation [status|peers|peer <url>|peer-remove <url>|mesh <url1> <url2> ...]",
+      );
       process.exit(1);
     }
     return;

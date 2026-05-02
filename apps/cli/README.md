@@ -83,6 +83,7 @@ motebit federation status            # Show relay identity
 motebit federation peers             # List active peers
 motebit federation peer <url>        # Peer with another relay
 motebit federation peer-remove <url> # Un-peer this relay from a remote peer
+motebit federation mesh <url1> <url2> ... # Pair-wise peer N relays
 ```
 
 ## Skills

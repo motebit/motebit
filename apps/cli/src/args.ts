@@ -402,6 +402,7 @@ Commands:
   federation peers            List active federation peers
   federation peer <url>       Peer with another relay (mutual handshake)
   federation peer-remove <url>  Un-peer this relay from a remote peer
+  federation mesh <url1> <url2> ...  Pair-wise peer N relays (n choose 2 handshakes)
   relay up                    Start a local sync relay (your own, on your machine)
     --port <n>                  HTTP port (default: 3000)
     --db-path <path>            SQLite path (default: ~/.motebit/relay/relay.db)

@@ -26,6 +26,7 @@ export { handleDiscover } from "./discover.js";
 export { handleDoctor } from "./doctor.js";
 export { handleExport } from "./export.js";
 export {
+  handleFederationMesh,
   handleFederationPeer,
   handleFederationPeerRemove,
   handleFederationPeers,
