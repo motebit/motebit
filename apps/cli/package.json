@@ -72,14 +72,14 @@
     "better-sqlite3": "^12.0.0",
     "hono": "^4.12.9",
     "sql.js": "^1.14.1",
-    "stripe": "^17.0.0",
+    "stripe": "^22.1.0",
     "viem": "^2.48.8",
     "vscode-jsonrpc": "^8.2.1",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12",
     "ws": "^8.20.0",
     "yaml": "^2.6.0",
-    "zod": "^3.25.0",
+    "zod": "^4.4.2",
     "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
