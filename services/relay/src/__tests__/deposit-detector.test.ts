@@ -141,17 +141,19 @@ describe("detectDeposits", () => {
     expect(log!.agent_id).toBe(agentId);
     expect(log!.amount).toBe("5000000");
 
-    // Verify block cursor advanced
+    // Verify block cursor advanced — to safe horizon, not chain head.
+    // Sepolia confirmation depth is 1, so cursor stops at head - 1.
     const cursor = relay.moteDb.db
       .prepare("SELECT last_block FROM relay_deposit_detector WHERE chain = ?")
       .get("eip155:84532") as { last_block: string };
-    expect(cursor.last_block).toBe("110");
+    expect(cursor.last_block).toBe("109");
 
     // Verify adapter was asked for the expected range / topic.
+    // Range stops at safe horizon (head - confirmations), not head.
     expect(rpc.getTransferLogs).toHaveBeenCalledWith(
       expect.objectContaining({
         fromBlock: BigInt(101),
-        toBlock: BigInt(110),
+        toBlock: BigInt(109),
         contractAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
         topic0: TRANSFER_TOPIC,
       }),
@@ -297,9 +299,11 @@ describe("detectDeposits", () => {
       maxBlocksPerCycle: 1000,
     });
 
+    // Cursor advances to the safe horizon (head - confirmations) even
+    // when no wallets exist; Sepolia depth is 1 so 200 - 1 = 199.
     const cursor = relay.moteDb.db
       .prepare("SELECT last_block FROM relay_deposit_detector WHERE chain = ?")
       .get("eip155:84532") as { last_block: string };
-    expect(cursor.last_block).toBe("200");
+    expect(cursor.last_block).toBe("199");
   });
 });
