@@ -31,7 +31,7 @@ Retention window: indefinite while motebit is active; expires per TTL after last
 
 ### Operational
 
-Tables: `relay_tasks`, `relay_allocations`, `relay_settlements`, `relay_settlement_proofs`, `relay_receipts`, `relay_pending_withdrawals`, `relay_credentials`, `relay_credential_anchor_batches`, `relay_revocation_events`, `relay_revoked_credentials`, `relay_disputes`, `relay_dispute_evidence`, `relay_dispute_resolutions`, `relay_peers`, `relay_federation_settlements`, `relay_execution_ledgers`, `relay_delegation_edges`, `relay_service_listings`, `relay_accounts`, `relay_subscriptions`, `relay_deposit_log`, `relay_refund_log`, `relay_accepted_migrations`.
+Tables: `relay_tasks`, `relay_allocations`, `relay_settlements`, `relay_settlement_proofs`, `relay_receipts`, `relay_pending_withdrawals`, `relay_credentials`, `relay_credential_anchor_batches`, `relay_revocation_events`, `relay_revoked_credentials`, `relay_disputes`, `relay_dispute_evidence`, `relay_dispute_resolutions`, `relay_peers`, `relay_federation_settlements`, `relay_execution_ledgers`, `relay_delegation_edges`, `relay_service_listings`, `relay_accounts`, `relay_subscriptions`, `relay_deposit_log`, `relay_refund_log`, `relay_accepted_migrations`, `relay_treasury_reconciliations`.
 
 Observable:
 - every delegation request and its routing decision
@@ -43,6 +43,7 @@ Observable:
 - every dispute, evidence submission, and resolution
 - every federation peer relationship
 - every onchain settlement proof attached
+- every treasury-reconciliation cycle on mainnet — the recorded x402 platform-fee sum, the onchain USDC balance at the operator's fee-collection address, the drift between them, and the consistent flag — append-only audit log
 
 Retention window: permanent ledger; required for audit, dispute, and settlement reconciliation.
 
@@ -106,6 +107,20 @@ client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and in
 - **Data shared**: payment payloads (amount, recipient address, tx hash)
 - **Jurisdiction**: varies by facilitator deployment
 - **DPA / terms**: https://x402.org
+
+### Coinbase Developer Platform (x402 production facilitator)
+
+- **Role**: Mainnet x402 facilitator — JWT-authed per-request settlement of relay-mediated x402 payments on Base mainnet (and other supported chains). Used only when X402_TESTNET=false and CDP_API_KEY_ID + CDP_API_KEY_SECRET are configured.
+- **Data shared**: payment authorization payloads, settlement requests (amount, recipient address, network), request-signing JWT bound to method+host+path
+- **Jurisdiction**: United States
+- **DPA / terms**: https://www.coinbase.com/legal/cloud/terms
+
+### EVM JSON-RPC provider (Base mainnet, Coinbase-operated public endpoint)
+
+- **Role**: Treasury reconciliation onchain reads — eth_call balanceOf(treasuryAddress) on the chain's USDC contract every 15 min when X402_TESTNET=false. No write path; observability only. The address is publicly observable onchain; the RPC reads no operator-private data.
+- **Data shared**: public treasury address, USDC contract address, block number
+- **Jurisdiction**: varies by RPC operator (default https://mainnet.base.org)
+- **DPA / terms**: configured via deposit-detector's DEFAULT_RPC_URLS map
 
 ### Solana RPC provider
 

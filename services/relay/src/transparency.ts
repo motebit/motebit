@@ -95,6 +95,7 @@ export const DECLARATION_CONTENT = {
         "relay_deposit_log",
         "relay_refund_log",
         "relay_accepted_migrations",
+        "relay_treasury_reconciliations",
       ],
       observable: [
         "every delegation request and its routing decision",
@@ -106,6 +107,7 @@ export const DECLARATION_CONTENT = {
         "every dispute, evidence submission, and resolution",
         "every federation peer relationship",
         "every onchain settlement proof attached",
+        "every treasury-reconciliation cycle on mainnet — the recorded x402 platform-fee sum, the onchain USDC balance at the operator's fee-collection address, the drift between them, and the consistent flag — append-only audit log",
       ],
       retention_window:
         "permanent ledger; required for audit, dispute, and settlement reconciliation",
@@ -170,6 +172,24 @@ export const DECLARATION_CONTENT = {
       data_shared: ["payment payloads (amount, recipient address, tx hash)"],
       jurisdiction: "varies by facilitator deployment",
       data_processing_terms: "https://x402.org",
+    },
+    {
+      name: "Coinbase Developer Platform (x402 production facilitator)",
+      role: "Mainnet x402 facilitator — JWT-authed per-request settlement of relay-mediated x402 payments on Base mainnet (and other supported chains). Used only when X402_TESTNET=false and CDP_API_KEY_ID + CDP_API_KEY_SECRET are configured.",
+      data_shared: [
+        "payment authorization payloads",
+        "settlement requests (amount, recipient address, network)",
+        "request-signing JWT bound to method+host+path",
+      ],
+      jurisdiction: "United States",
+      data_processing_terms: "https://www.coinbase.com/legal/cloud/terms",
+    },
+    {
+      name: "EVM JSON-RPC provider (Base mainnet, Coinbase-operated public endpoint)",
+      role: "Treasury reconciliation onchain reads — eth_call balanceOf(treasuryAddress) on the chain's USDC contract every 15 min when X402_TESTNET=false. No write path; observability only. The address is publicly observable onchain; the RPC reads no operator-private data.",
+      data_shared: ["public treasury address", "USDC contract address", "block number"],
+      jurisdiction: "varies by RPC operator (default https://mainnet.base.org)",
+      data_processing_terms: "configured via deposit-detector's DEFAULT_RPC_URLS map",
     },
     {
       name: "Solana RPC provider",

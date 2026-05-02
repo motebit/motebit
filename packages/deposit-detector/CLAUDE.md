@@ -2,6 +2,8 @@
 
 EVM `Transfer` event scanner → onDeposit callback. Polls a chain's log stream, filters for transfers to known wallets, dedups by `(txHash, logIndex)`, and invokes a consumer callback for each newly-detected deposit. The callback is responsible for the cross-table atomic write (credit virtual account + record dedup entry) — the package owns the scanning, filtering, and cursor logic; it never touches a DB.
 
+**Sibling primitive:** [`@motebit/treasury-reconciliation`](../treasury-reconciliation/CLAUDE.md) is the parallel-but-distinct observability primitive for the operator's x402 fee-collection address. Both are "internal-ledger ↔ onchain" reconciliation pipes, but they watch structurally different things: the deposit-detector watches per-agent USDC wallets (registered in `relay_agent_wallets`) and credits agent virtual accounts; treasury-reconciliation watches the operator's `X402_PAY_TO_ADDRESS` and audits fee-sum vs onchain. **They must NOT be unified** — see `@motebit/treasury-reconciliation` Rule 1 for the privilege-escalation + circular-fee structural risks that mixing them would create.
+
 Layer 1. BSL-1.1. Takes an injected `EvmRpcAdapter` (type-only dep on `@motebit/evm-rpc`), a `DepositDetectorStore` (DB inversion — cursor, wallets, dedup check), and an `onDeposit` callback. Demonstrates Layer-1 composition: the consumer wires the store to SQLite, the adapter to `HttpJsonRpcEvmAdapter`, and the callback to `@motebit/virtual-accounts`'s `AccountStore.credit`.
 
 ## Rules
