@@ -1,5 +1,238 @@
 # @motebit/protocol
 
+## 1.2.0
+
+### Minor Changes
+
+- c8c6312: Hardware-attestation badge ship 2 of 3 — surface the most-recent verified `HardwareAttestationClaim` per peer agent.
+
+  Adds an optional `hardware_attestation?: HardwareAttestationClaim` field to `AgentTrustRecord`. The field is **never persisted** on the `agent_trust` row — it's projected at read time from the latest peer-issued `AgentTrustCredential` carrying the claim. The credential is the authoritative source; caching the claim on the trust row would invite drift on revocation or re-attestation.
+
+  This closes the data-flow half of the doctrine breach documented in `docs/doctrine/self-attesting-system.md`: hardware attestation factors into peer ranking via `HardwareAttestationSemiring` (`packages/semiring/src/hardware-attestation.ts`) but was previously invisible in the Agents panel UI. Ship 1 (`756a38c3`) added the panels-controller types + helpers; this ship lights up runtime + relay forwarding; ship 3 will add per-surface badge rendering and the `check-trust-score-display` drift gate.
+
+  Backwards-compatible. Consumers that don't read the new field are unaffected. The field is optional and absent for peers with no peer-issued `AgentTrustCredential` carrying a `hardware_attestation` claim.
+
+- e1d86f2: Surface observed latency as a routing-input on `AgentTrustRecord`.
+
+  Adds an optional `latency_stats?: { avg_ms; p95_ms; sample_count }` field to `AgentTrustRecord`. The field is **never persisted** on the `agent_trust` row — it's projected at read time from the local `LatencyStatsStore` (or the relay's `relay_latency_stats` view). The store is the authoritative source; caching avg/p95 on the trust row would invite drift on every new delegation.
+
+  This closes the latency arm of the doctrine breach in `docs/doctrine/self-attesting-system.md`: latency factors into peer ranking via `agent-graph.ts`'s latency map (default 3000ms when stats are absent) but was previously invisible in the Agents-panel renderer. Sibling extension to the `hardware_attestation` field added in the HA badge ship — same shape, same projection-not-persistence pattern, same self-attesting-system doctrine.
+
+  Backwards-compatible. Consumers that don't read the new field are unaffected. The field is optional and absent for peers with zero samples in the store.
+
+  Field-name choice: `latency_stats` matches existing wire vocabulary (`task-routing.ts:387`, `listings.ts:180`) rather than introducing `latency_ms`. Object members (`avg_ms`, `p95_ms`, `sample_count`) match the `LatencyStatsStoreAdapter.getStats` return shape exactly.
+
+  Runtime projection (`@motebit/runtime`), relay enricher (`@motebit/relay`), and per-surface rendering (`@motebit/{desktop,web,mobile}`) ship in the sibling `latency-surface-ignored.md` changeset.
+
+- 44d25cd: Retention policy phase 4a + 4b-1 + 4b-2 — event-log horizon advance (per-motebit + operator-wide), signed `append_only_horizon` cert wiring, four production storage adapters implement `truncateBeforeHorizon`, and phase 3 regression fix.
+
+  `@motebit/protocol`: `EventStoreAdapter` gains an optional `truncateBeforeHorizon(motebitId, horizonTs)` method — whole-prefix retention truncation for `append_only_horizon`-shaped stores per `docs/doctrine/retention-policy.md` §"Decision 4". Distinct from the existing `compact` (state-snapshot, version-clock-keyed); `truncateBeforeHorizon` is the storage operation behind a horizon deletion certificate. Optional in phase 4a (local-only horizon advance ships first); phase 4b tightens to required when federation co-witness lands.
+
+  `@motebit/event-log`: new `EventStore.advanceHorizon(storeId, horizonTs, signer, options?)` — signs the cert via `signHorizonCertAsIssuer` first, then truncates. Order is load-bearing (sign-then-truncate) so no window exists where entries are gone but no cert attests it. Both subject kinds supported: per-motebit (signed by motebit identity key, truncates that motebit's slice) and operator-wide (signed by operator key, takes `motebitIdsForOperator: readonly string[]` and truncates each). Empty motebit set is permitted for no-tenant relays — the cert is still signed and represents the operator's commitment. Witness array stays empty until phase 4b-3 ships the federation co-witness solicitation; `witness_required` is derived as `false` for no-peer deployments per decision 9, which satisfies the verifier today.
+
+  Adapter tightening — every production `EventStoreAdapter` that physically owns bytes now implements `truncateBeforeHorizon`: `@motebit/persistence` (better-sqlite3), `@motebit/browser-persistence` (IndexedDB cursor scan), `apps/desktop/src/tauri-storage.ts` (Tauri SQL plugin), `apps/mobile/src/adapters/expo-sqlite.ts` (expo-sqlite). Sync-engine adapters (ws/http/encrypted) remain proxy-only and don't implement local truncation. The interface stays optional so non-storage adapters can compose without false implementation; `EventStore.advanceHorizon` throws if the bound adapter doesn't implement it.
+
+  Phase 3 regression fix: the consolidation cycle's retention-enforcement path now passes `self_enforcement` (subject's runtime drives policy, signed by motebit identity key) rather than `retention_enforcement` (which requires operator signature per decision 5's reason × signer table). Latent issue — no production consumer was running `verifyDeletionCertificate` against these certs yet, but the cert format was structurally invalid until this fix. Locked by the round-trip test in `@motebit/privacy-layer`. The doctrine table is updated to reflect that `self_enforcement` is admitted in every deployment mode, not sovereign-only.
+
+  Two storage-side cleanups landed alongside: `apps/desktop/src/memory-commands.ts`'s `deleteMemory` UI command now passes `user_request` (was passing the motebit id as the reason string, which normalized silently to `user_request` after phase 3 but obscured the intent). The `MemoryGraph.deleteMemory (tombstoning)` test was renamed and rewritten as `MemoryGraph.deleteMemory (erase)` to match decision 7's storage semantics.
+
+- 0233325: Retention policy phase 5-ship — conversations + tool-audit register under `consolidation_flush`.
+
+  `@motebit/protocol`: thread the `sensitivity` field through the conversation/tool-audit type contracts so the consolidation cycle's flush phase has the input it needs to compute the per-record retention floor. Five additive type changes:
+  - `ConversationStoreAdapter.appendMessage`'s `msg` shape gains `sensitivity?: SensitivityLevel`; `loadMessages`'s return-row shape mirrors. Two new optional methods — `enumerateForFlush(motebitId, beforeCreatedAt)` and `eraseMessage(messageId)` — wire the flush phase to per-row erase. Optional so non-storage adapters (e.g. desktop's IPC-cache renderer) can compose without false implementation; the flush phase is a no-op for adapters that omit them.
+  - `SyncConversationMessage` gains `sensitivity?: SensitivityLevelString`. Optional in v1: peers running pre-phase-5 builds drop the field on push, and the receiver lazy-classifies on flush per `docs/doctrine/retention-policy.md` §"Decision 6b" using the operator's `pre_classification_default_sensitivity`.
+  - `ToolAuditEntry` gains `sensitivity?: SensitivityLevel`. The flush phase computes `max(sensitivity_floor, obligation_floor)` per decision 3 — sensitivity is one input, obligation (settlement window, dispute window, regulatory floor) is the other. The obligation resolver lives at the runtime layer (`ConsolidationCycleDeps.toolAuditObligationFloorMs`) and defaults to 0 today.
+  - `AuditLogSink` gains optional `enumerateForFlush(beforeTimestamp)` and `erase(callId)` methods, sibling to the conversation-store additions. Same composition rule.
+  - `ConsolidationReceipt`'s `phases_run` / `phases_yielded` unions admit `"flush"`; the `summary` shape gains `flushed_conversations` and `flushed_tool_audits` counters. Adding a phase is a protocol-coordinated change; the cert format closes under additions.
+
+  Wire-format-compatible at the protocol surface — every new field is optional. Peers running pre-phase-5 builds continue to interoperate; the receiver lazy-classifies missing fields on flush.
+
+  The runtime flush phase, ConversationManager threading, three at-rest schemas, three migration registries (mobile v19 / persistence v34 / desktop v1), the relay manifest's `honest_gaps` three-category split, and the privacy-layer's `signFlushCert` primitive ship in the sibling `retention-policy-phase-5-ship-ignored.md`.
+
+- 79dd661: Retention policy phase 6b — `RUNTIME_RETENTION_REGISTRY` + `check-retention-coverage` hard drift gate.
+
+  `@motebit/protocol`: new `RUNTIME_RETENTION_REGISTRY` constant — the canonical registry of runtime-side stores subject to retention doctrine, mapping each `RuntimeStoreId` (`memory` | `event_log` | `conversation_messages` | `tool_audit`) to its registered `RetentionShapeDeclaration`. Per-motebit runtimes project this registry into their published retention manifests. The relay's deployment doesn't host these stores; its retention manifest declares `out_of_deployment:` for them by design (sibling boundary preserved).
+
+  New drift gate `scripts/check-retention-coverage.ts` (invariant #67, sibling enforcement pattern to `check-consolidation-primitives` and `check-suite-declared`). Bidirectional check across the runtime-side surfaces (`apps/mobile`, `apps/desktop`, `packages/persistence`, `packages/browser-persistence`):
+  - **Forward**: every entry in `RUNTIME_RETENTION_REGISTRY` has a matching `CREATE TABLE` in at least one runtime-side surface; `consolidation_flush`-shape entries also carry a `sensitivity` column (in the at-rest schema or via `ALTER TABLE ADD COLUMN` migration).
+  - **Reverse**: every `CREATE TABLE` with a `sensitivity` column maps to a registered store. A future schema adding `sensitivity TEXT` without registering would otherwise leak past the doctrinal ceiling because the consolidation cycle's flush phase doesn't see unregistered stores.
+
+  The doctrine reserved drift-defense slot #52 in phase 1; that slot was occupied during post-doctrine renumbering, so the gate landed at the next free invariant number (#67). Doctrine prose at `docs/doctrine/retention-policy.md` §"Drift defense" updated to reflect the durable assignment.
+
+  Closes the meta-version of the original CLAUDE.md gap that motivated the entire retention-policy arc — "fail-closed privacy" claimed retention enforcement existed; phases 2–5 built the enforcement; this gate makes the doctrinal claim self-attesting at CI time.
+
+- fe0996e: Retention policy phase 2 — protocol algebra + signed `DeletionCertificate` verifier dispatcher + retention manifest wire schema.
+
+  Lands the typed surface for `docs/doctrine/retention-policy.md`'s ten phase-1 decisions. New types in `@motebit/protocol`: `RetentionShape` and `DeletionCertificate` discriminated unions (three arms each — `mutable_pruning`, `append_only_horizon`, `consolidation_flush`); `RetentionManifest` for the operator-published, signed declaration; `MAX_RETENTION_DAYS_BY_SENSITIVITY` interop-law ceiling and `REFERENCE_RETENTION_DAYS_BY_SENSITIVITY` reference defaults; `FederationGraphAnchor` and `MerkleInclusionProof` reservations for phase 4's quorum mechanism; per-arm signature blocks (`SubjectSignature`, `OperatorSignature`, `DelegateSignature`, `GuardianSignature`) keyed by the action-class table from decision 5.
+
+  New verifier dispatcher in `@motebit/crypto`: `verifyDeletionCertificate(cert, ctx)` routes by `kind`, checks the reason × signer × mode table for admissible signer composition, then verifies every present signature through `verifyBySuite`. Per-arm sign helpers (`signCertAsSubject`, `signCertAsOperator`, `signCertAsDelegate`, `signCertAsGuardian`, `signHorizonCertAsIssuer`, `signHorizonWitness`) construct the canonical signing bytes once per arm. Multi-signature certs sign identical canonical bytes (cert minus all `*_signature` fields) — same shape as identity-v1 §3.8.1 dual-signature succession. Witnesses on `append_only_horizon` certs sign the body minus `witnessed_by`, so co-signing is asynchronous; the issuer's separate signature commits to the assembled witness array, catching forgery or substitution.
+
+  The legacy unsigned `DeletionCertificate` in `@motebit/encryption` is marked `@deprecated`; the new union is the replacement. Phase 3 wires memory's prune phase to the signed cert path; phase 4 lands the federation co-witness handshake; phase 5 registers conversations and tool-audit under `consolidation_flush`; phase 6 ships `/.well-known/motebit-retention.json` plus the `check-retention-coverage` drift gate.
+
+  Backwards-compatible at the protocol surface — purely additive type and schema growth. The `@motebit/encryption` deprecation is private-package signal only; concrete callers (privacy-layer, runtime consolidation cycle) migrate in phase 3.
+
+- 374a960: Retention phase 4b-3 commit 1 — protocol shape for federation co-witness solicitation.
+
+  Adds the type-level surface for Path A quorum's soft accountability layer on `append_only_horizon` retention certs.
+
+  `EMPTY_FEDERATION_GRAPH_ANCHOR` is the canonical self-witnessed encoding — `algo: "merkle-sha256-v1"`, `merkle_root` is the SHA-256 of zero bytes, `leaf_count: 0`. The verifier dispatch arm in `@motebit/crypto` (commit 2) admits this anchor with an empty `witnessed_by[]` so deployments without federation peers continue to issue valid horizon certs. The `federation_graph_anchor` field stays optional at the type level for pre-4b-3 grandfathering; verifier policy enforces presence-when-peered once relay-side machinery lands.
+
+  `WitnessOmissionDispute` is the dispute artifact a peer files within 24h of `cert.issued_at` when they believe `witnessed_by[]` wrongly omits them. Two evidence shapes: `inclusion_proof` (the disputant proves anchor membership via `MerkleInclusionProof` against the cert's published `merkle_root`) and `alternative_peering` (the disputant supplies a signed peering artifact from the cert issuer covering `horizon_ts`, claiming the anchor itself is incomplete). Evidence is a discriminated union — exactly one shape per dispute. The existing `DisputeResolution` adjudication path consumes both; certificates remain terminal per `retention-policy.md` decision 5, so a sustained dispute is a reputation hit on the issuer, not a cert invalidation.
+
+  Backwards-compatible. The new exports are additive; the change to `DeletionCertificate.append_only_horizon` only adds a JSDoc note next to the already-optional `federation_graph_anchor?` field. Sign + verify primitives, the 24h window constant, and the dispute test suite land in commit 2 (`@motebit/crypto`); zod + JSON schema emission lands in commit 3 (`@motebit/wire-schemas`).
+
+- a2ce037: Retention phase 4b-3 commit 3 — protocol shapes for the federation co-witness solicitation RPC, paired with zod + JSON Schema emission in the (private) `@motebit/wire-schemas` package.
+
+  Adds the type-level surface for the relay↔relay envelope that operationalizes Path A quorum:
+
+  `HorizonWitnessRequestBody` is the cert body witnesses canonicalize and sign. Mirrors the `append_only_horizon` arm of `DeletionCertificate` minus `witnessed_by[]` and minus the top-level `signature` field — exactly the shape `canonicalizeHorizonCertForWitness` in `@motebit/crypto/deletion-certificate.ts` produces at verification time. Witness signatures are portable across witness compositions of the same body; the issuer's eventual `cert.signature` is what binds the assembled `witnessed_by[]`.
+
+  `WitnessSolicitationRequest` is the issuer relay's outbound RPC body to a federation peer (`POST /federation/v1/horizon/witness`, lands in commit 4). Carries `cert_body`, the issuer's identifier, and the issuer's base64url Ed25519 signature over `canonicalJson(cert_body)`. The signature payload is byte-equal to what the witness will sign, so the peer's verify-the-issuer + sign-as-witness paths share canonical-bytes derivation.
+
+  `WitnessSolicitationResponse` is the peer's reply — structurally identical to a `cert.witnessed_by[]` entry (`motebit_id`, `signature`, optional `inclusion_proof`). Distinct named type from `HorizonWitness` for RPC-surface clarity; the issuer copies the response verbatim into the assembled cert before producing its final cert signature.
+
+  The zod schemas, JSON Schema artifacts (`spec/schemas/witness-{omission-dispute,solicitation-request,solicitation-response}-v1.json`), and drift gate (`drift.test.ts` extended with three new cases) all land in this commit. `@motebit/wire-schemas` is in the changeset-ignored list — the schemas ride this changeset for the protocol-side type additions only.
+
+  Backwards-compatible. All three exports are additive. The `WitnessOmissionDispute` schema lands here against the protocol type added in commit 1; verifier dispatching against it lives in `@motebit/crypto` from commit 2. Relay-side endpoints + horizon-advance flow lands in commit 4; spec bump (`relay-federation-v1` 1.0 → 1.1) lands in commit 6.
+
+- 4d05d70: Wire-format additions for §6.2 federation dispute orchestration (`relay-federation@1.2` §16, `dispute-v1` §6.4 + §6.5 + §8.3).
+
+  Two changes, both additive at the package level:
+
+  ```ts
+  // AdjudicatorVote — new field
+  interface AdjudicatorVote {
+    dispute_id: string;
+    round: number; // NEW — 1 for original, 2 for §8.3 appeal
+    peer_id: string;
+    vote: DisputeOutcome;
+    rationale: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    signature: string;
+  }
+
+  // VoteRequest — new type (leader-to-peer fan-out body for §16)
+  interface VoteRequest {
+    dispute_id: string;
+    round: number;
+    dispute_request: DisputeRequest;
+    evidence_bundle: DisputeEvidence[];
+    requester_id: string;
+    requested_at: number;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    signature: string;
+  }
+  ```
+
+  `AdjudicatorVote.round` is signature-bound per `dispute-v1.md` §6.5 + §8.3 — round-1 vote bytes do not satisfy round-2 binding even for the same evidence. Cross-round vote replay is cryptographically rejected, not enforced by leader bookkeeping. The §8.3 round-isolation property holds at the wire-format level.
+
+  `VoteRequest` carries the leader's signature over `canonicalJson(body minus signature)`, binding `dispute_id`, `round`, `requester_id`, and the evidence bundle.
+
+  Sibling consumers updated:
+  - `@motebit/wire-schemas` regenerated `adjudicator-vote-v1.json` + new `vote-request-v1.json`
+  - `@motebit/crypto`'s `signAdjudicatorVote` / `verifyAdjudicatorVote` already operate on `canonicalJson(body)`, so the new field is bound automatically without primitive changes — sibling test added (`verify-artifacts.test.ts`) for the round-binding invariant
+  - `services/relay/src/federation.ts` adds the `POST /federation/v1/disputes/:disputeId/vote-request` peer-side handler
+  - `dispute-v1.md` stays at @1.0 Draft per the convention (Draft accumulates additive normative changes without bump)
+  - `relay-federation-v1.md` H1 bumps 1.1 → 1.2 + new §16
+
+  No existing in-the-wild `AdjudicatorVote` consumer is broken by the new required `round` field — federation orchestration was 409-blocked under the §6.5 self-adjudication guard prior to this arc; the type existed but no one was producing or consuming the wire artifact. Minor bump rather than major reflects the empty-shipped-consumer-set + Draft-spec-status combination; if a downstream pinned to the pre-round shape, this would have been major.
+
+- 98c1273: Privacy doctrine — sensitivity-aware tool dispatch (v2 of sensitivity routing), protocol-surface half.
+
+  `ToolDefinition` gains `outbound?: boolean`. Independent of `riskHint` (which captures local risk: file overwrite, irreversible side effect); `outbound` captures the network axis. Default `false`/absent ≡ local — matches the pre-existing builtin set (`read_file`, `recall_memories`, `current_time`).
+
+  **The principle generalized.** "Medical/financial/secret never reach external AI" was originally framed around AI providers. The architectural framing is broader: the doctrine is about any byte-leaving-the-device boundary. AI provider calls (v1) and outbound tool calls (v2) are two instances of the same boundary; the gate predicate is shared. Future ships extending the same predicate to other outbound surfaces (e.g., relay-side delegation gating, direct webhook tools) compose cleanly — same flag, same gate, same error type.
+
+  Backwards-compatible. Tools that don't set `outbound` default to `false` (local). The runtime/tools/mcp-client consumer wiring ships in the sibling `sensitivity-routing-v2-tool-gate-ignored.md` changeset.
+
+- 2a48142: Skills v1 phase 3: per-skill audit entries in the execution ledger (spec/skills-v1.md §7.4).
+
+  Every skill the runtime's `SkillSelector` pulls into context now produces one `EventType.SkillLoaded` event-log entry, immediately after the selector returns and before the AI loop receives the system prompt. The audit trail lets a user prove later: _"the obsidian skill ran on date X with this exact signature value at session sensitivity Y."_
+
+  **`@motebit/protocol`** — adds the wire-format type and event:
+
+  ```text
+  SkillLoadPayload  { skill_id, skill_name, skill_version, skill_signature,
+                      provenance, score, run_id?, session_sensitivity }
+  EventType.SkillLoaded
+  ```
+
+  **`@motebit/sdk`** — extends `SkillInjection` with two audit-only fields the runtime threads into the ledger entry:
+
+  ```text
+  SkillInjection.score      BM25 relevance — surfaces selection rationale
+  SkillInjection.signature  Envelope signature.value — content-addressed pointer
+                            to the exact bytes loaded; empty for trusted_unsigned
+  ```
+
+  The AI loop's prompt builder ignores both fields (rendering stays unchanged). They ride only into the `SkillLoaded` event payload.
+
+  **`motebit`** (CLI) — runtime-factory's hook now passes `score` + `signature` through from the BSL `SkillSelector` result.
+
+  Best-effort emission: a failed `eventStore.append` is logged via `runtime._logger.warn("skill_load_event_append_failed", ...)` and the AI loop proceeds. Audit absence (skill loaded without matching event) is preferable to a turn blocked on a transient storage error.
+
+  Skill_signature audit utility: a stale ledger entry whose signature does not resolve in the current registry is itself a useful signal — the skill was re-signed (legitimate update) or removed (less common). Both provable from the audit trail without retaining the original bytes.
+
+  Wire-schema artifact: `spec/schemas/skill-load-payload-v1.json` ships under Apache-2.0 alongside the existing skills schemas.
+
+  4 new runtime tests cover: emit-with-payload, empty-selector, selector-throw (loop continues), no-hook-wired. 683/683 runtime, all 54 drift gates green.
+
+- cabf61d: Add `motebit/skills-registry@1.0` wire types — the relay-hosted index of submitted, signature-verified skill envelopes.
+
+  Five new exported types: `SkillRegistryEntry` (one row in the index), `SkillRegistrySubmitRequest` and `SkillRegistrySubmitResponse` (POST /api/v1/skills/submit), `SkillRegistryListing` (GET /api/v1/skills/discover, paginated), `SkillRegistryBundle` (GET /api/v1/skills/:submitter/:name/:version, full payload).
+
+  Spec: [`spec/skills-registry-v1.md`](https://raw.githubusercontent.com/motebit/motebit/main/spec/skills-registry-v1.md). The submitter component of every addressing tuple is canonical — derived from `envelope.signature.public_key` by the relay, never user-provided. Submission is permissive-by-signature; discovery is curated-by-default with full opt-in. The relay stores submitted bundles byte-identical so consumers re-verify offline against the embedded signature key — relay is a convenience surface, not a trust root.
+
+  Why this lands here, not in a new package: registry types are wire format, not runtime logic. They follow the same layering as `SkillEnvelope` and `SkillManifest` — protocol types in `@motebit/protocol`, zod schemas in `@motebit/wire-schemas`, runtime in `services/relay` and `apps/cli`. No new package boundaries.
+
+  Backwards-compatible. Pure additive change.
+
+- 9b4a296: Add agentskills.io-compatible procedural-knowledge runtime per `spec/skills-v1.md`.
+
+  Skills are user-installable markdown files containing procedural knowledge — when to use a tool, in what order, with what verifications. Open standard from Anthropic adopted across Claude Code, Codex, Cursor, GitHub Copilot. This release layers motebit-namespaced extensions on top of the standard frontmatter, ignored by non-motebit runtimes.
+
+  **`@motebit/protocol`** — adds wire types for the new skill artifacts:
+
+  ```text
+  SkillSensitivity            "none" | "personal" | "medical" | "financial" | "secret"
+  SkillPlatform               "macos" | "linux" | "windows" | "ios" | "android"
+  SkillSignature              { suite, public_key, value }
+  SkillHardwareAttestationGate { required?, minimum_score? }
+  SkillManifest               full parsed frontmatter
+  SkillEnvelope               content-addressed signed wrapper
+  SKILL_SENSITIVITY_TIERS, SKILL_AUTO_LOADABLE_TIERS, SKILL_PLATFORMS  frozen const arrays
+  ```
+
+  **`@motebit/crypto`** — adds offline-verifiable sign/verify pipeline using the `motebit-jcs-ed25519-b64-v1` suite (sibling to execution receipts, NOT W3C `eddsa-jcs-2022`):
+
+  ```text
+  canonicalizeSkillManifestBytes(manifest, body)  -> Uint8Array
+  canonicalizeSkillEnvelopeBytes(envelope)        -> Uint8Array
+  signSkillManifest / signSkillEnvelope
+  verifySkillManifest / verifySkillEnvelope (+ Detailed variants)
+  decodeSkillSignaturePublicKey(sig)              -> Uint8Array
+  SKILL_SIGNATURE_SUITE                           const
+  ```
+
+  **`motebit`** (CLI) — adds the user-facing surface:
+
+  ```text
+  motebit skills install <directory>
+  motebit skills list
+  motebit skills enable | disable <name>
+  motebit skills trust | untrust <name>
+  motebit skills verify <name>
+  motebit skills remove <name>
+  /skills                       (REPL slash — list with provenance badges)
+  /skill <name>                 (REPL slash — show full details)
+  ```
+
+  Install is permissive (filesystem record, sibling to `mcp_trusted_servers` add); auto-load is provenance-gated (the act layer). The selector filters by enabled+trusted+platform+sensitivity+hardware-attestation before BM25 ranking on description. Manual trust grants emit signed audit events to `~/.motebit/skills/audit.log` without manufacturing cryptographic provenance.
+
+  Two new drift gates land alongside: `check-skill-corpus` (every committed reference skill verifies offline against its committed signature) and `check-skill-cli-coverage` (every public `SkillRegistry` method has a `motebit skills <verb>` dispatch arm).
+
+  Phase 1 ships frontmatter + envelope + signature scheme + sensitivity tiers + trust gate + the eight subcommands + REPL slashes + drift gates + one signed dogfood reference (`skills/git-commit-motebit-style/`). Phase 2: `SkillSelector` wired into the runtime context-injection path, plus `scripts/` quarantine + per-script approval. Phase 3: signed `SkillLoadReceipt` in `execution-ledger-v1`. Phase 4: sibling-surface skill browsers + curated registry.
+
 ## 1.1.0
 
 ### Minor Changes

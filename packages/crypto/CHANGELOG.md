@@ -1,5 +1,189 @@
 # @motebit/crypto Changelog
 
+## 1.2.0
+
+### Minor Changes
+
+- 64bc630: `motebit-verify` now verifies skills end-to-end. Any agentskills.io-shaped skill — directory or single envelope JSON — runs through the same canonical verifier with no motebit setup required.
+
+  **Why this exists.** The CLI install path (`packages/skills/src/registry.ts`) has re-verified envelope signature + body/file hashes since skills v1 shipped, but a non-motebit user who downloaded a skill from anywhere had no one-command way to answer "is this signed AND do the bytes match what the publisher signed?" `motebit-verify` already covered identity / receipt / credential / presentation; this ship extends it to skills, the artifact type with the largest external ecosystem (agentskills.io / VoltAgent's awesome-skills / skillsmp.com / Cursor users).
+
+  **Three-package shape, all Apache-2.0:**
+
+  `@motebit/crypto` — adds `SkillVerifyResult` + `SkillFileVerifyResult` to the `VerifyResult` union, extends `ArtifactType` with `"skill"`, extends `detectArtifactType` to recognize the canonical `SkillEnvelope` shape (`spec_version` + `skill` + `manifest` + `body_hash` + `signature`), wires the unified `verify()` dispatcher to call the existing envelope-signature primitive. Bare-envelope verify returns `valid: false` with body/files steps unattempted — full verification needs on-disk bytes, and this layer is honest about what it checked.
+
+  `@motebit/verifier` — adds `verifySkillDirectory(path)` that reads `<dir>/skill-envelope.json`, `<dir>/SKILL.md`, and every entry in `envelope.files[]`, recomputes `sha256` against `envelope.body_hash` and per-file hashes, calls `verify()` for sig, composes the unified `SkillVerifyResult` with all three steps populated. `verifyFile(path)` now path-shape-dispatches: directory → skill walker; file → existing detector. `formatHuman` learns a `"skill"` arm.
+
+  `@motebit/verify` — adds `"skill"` to `EXPECT_VALUES` so `motebit-verify <skill-dir> --expect skill` honors the type pin; updates help text to document directory + envelope-JSON inputs.
+
+  **Result discipline.** `valid: true` iff envelope sig verifies AND body hash matches AND every declared file hash matches. Step-level details on the `steps` field distinguish the three failure modes:
+  - `steps.envelope: { valid, reason }` — `wrong_suite`, `bad_public_key`, `bad_signature_value`, `ed25519_mismatch`, or `ok`.
+  - `steps.body_hash: { valid, expected, actual } | null` — `null` when only sig was checked.
+  - `steps.files: SkillFileVerifyResult[]` — per-file `{ path, valid, expected, actual, reason: "ok" | "hash_mismatch" | "missing" }`.
+
+  `--json` already wired surfaces all three axes in structured form for CI pipelines and third-party verifiers.
+
+  **Faithful to the lineage.** `@motebit/crypto` (primitives, Apache-2.0 floor) → `@motebit/verifier` (file-I/O library, Apache-2.0) → `@motebit/verify` (binary aggregator, Apache-2.0). No new cryptographic logic in the binary; no new BSL-line concerns. The aggregator stays thin so an Apache-2.0-only audit pipeline composes the three packages without license friction.
+
+  Tests: 6 crypto-layer cases (skill detector + dispatch + tamper detection), 9 verifier-layer cases (directory walker happy path + 5 tamper modes + missing file + verifyFile dispatch + formatHuman). All passing.
+
+- fe0996e: Retention policy phase 2 — protocol algebra + signed `DeletionCertificate` verifier dispatcher + retention manifest wire schema.
+
+  Lands the typed surface for `docs/doctrine/retention-policy.md`'s ten phase-1 decisions. New types in `@motebit/protocol`: `RetentionShape` and `DeletionCertificate` discriminated unions (three arms each — `mutable_pruning`, `append_only_horizon`, `consolidation_flush`); `RetentionManifest` for the operator-published, signed declaration; `MAX_RETENTION_DAYS_BY_SENSITIVITY` interop-law ceiling and `REFERENCE_RETENTION_DAYS_BY_SENSITIVITY` reference defaults; `FederationGraphAnchor` and `MerkleInclusionProof` reservations for phase 4's quorum mechanism; per-arm signature blocks (`SubjectSignature`, `OperatorSignature`, `DelegateSignature`, `GuardianSignature`) keyed by the action-class table from decision 5.
+
+  New verifier dispatcher in `@motebit/crypto`: `verifyDeletionCertificate(cert, ctx)` routes by `kind`, checks the reason × signer × mode table for admissible signer composition, then verifies every present signature through `verifyBySuite`. Per-arm sign helpers (`signCertAsSubject`, `signCertAsOperator`, `signCertAsDelegate`, `signCertAsGuardian`, `signHorizonCertAsIssuer`, `signHorizonWitness`) construct the canonical signing bytes once per arm. Multi-signature certs sign identical canonical bytes (cert minus all `*_signature` fields) — same shape as identity-v1 §3.8.1 dual-signature succession. Witnesses on `append_only_horizon` certs sign the body minus `witnessed_by`, so co-signing is asynchronous; the issuer's separate signature commits to the assembled witness array, catching forgery or substitution.
+
+  The legacy unsigned `DeletionCertificate` in `@motebit/encryption` is marked `@deprecated`; the new union is the replacement. Phase 3 wires memory's prune phase to the signed cert path; phase 4 lands the federation co-witness handshake; phase 5 registers conversations and tool-audit under `consolidation_flush`; phase 6 ships `/.well-known/motebit-retention.json` plus the `check-retention-coverage` drift gate.
+
+  Backwards-compatible at the protocol surface — purely additive type and schema growth. The `@motebit/encryption` deprecation is private-package signal only; concrete callers (privacy-layer, runtime consolidation cycle) migrate in phase 3.
+
+- 25ba977: Retention phase 4b-3 commit 2 — sign + verify primitives for witness-omission disputes.
+
+  Adds the crypto-side machinery that consumes the protocol-layer types from commit 1.
+
+  `WITNESS_OMISSION_DISPUTE_WINDOW_MS` is the 24h filing window. `verifyWitnessOmissionDispute` enforces it via two fail-closed gates: receiver wall clock vs `cert.issued_at`, and a sanity check that `dispute.filed_at` falls within `[cert.issued_at, cert.issued_at + WINDOW_MS]` so a backdated `filed_at` cannot widen the window via disputant attestation. `cert.issued_at` is the authoritative clock; the disputant's attested timestamp exists for audit, not window-derivation.
+
+  `verifyDeletionCertificate`'s `append_only_horizon` arm now rejects certs where `federation_graph_anchor.leaf_count = 0` carries a `merkle_root` other than the empty-tree value (hex SHA-256 of zero bytes). A malicious issuer cannot mint a self-witnessed cert with arbitrary anchor bytes to dodge inclusion-proof scrutiny.
+
+  `signWitnessOmissionDispute` signs the dispute body under `motebit-jcs-ed25519-b64-v1` (matching the rest of the dispute family). `verifyWitnessOmissionDispute` runs a four-step ladder: (1) window check, (2) cert binding (`cert_signature` and `cert_issuer` match the resolved cert), (3) disputant Ed25519 signature, (4) evidence dispatch by `evidence.kind` — `inclusion_proof` re-runs `verifyMerkleInclusion` against `cert.federation_graph_anchor.merkle_root`, `alternative_peering` dispatches on the artifact's self-described shape (today: federation Heartbeat under `motebit-concat-ed25519-hex-v1`) and verifies its embedded signature plus a ±5min freshness window around `cert.horizon_ts` (mirrors the heartbeat suspension threshold in `services/relay/src/federation.ts`).
+
+  `verifyMerkleInclusion` is now a top-level export — extracted from `credential-anchor.ts` to a shared `merkle.ts` so both the credential-anchor verifier and the witness-omission verifier consume one primitive. Same algorithm (binary tree, odd-leaf promotion, no duplication), same fail-closed contract.
+
+  11 tests cover the locked scope: round-trip of empty-tree self-witnessed certs, round-trip of multi-witness certs, both positive evidence shapes, both negative window paths (wall-clock-expired and backdated `filed_at`), tampered disputant signature, malformed inclusion proof, inclusion-proof against a self-witnessed cert (rejected by design), and an alternative-peering artifact whose embedded signature was forged by an imposter (rejected — signature does not verify against cert issuer pubkey).
+
+  Backwards-compatible. The empty-anchor sanity check rejects certs that were already non-conforming (a `leaf_count=0` with arbitrary `merkle_root` had no legitimate consumer); existing self-witnessed certs without `federation_graph_anchor` are unaffected. Wire-schemas emission lands in commit 3 (`@motebit/wire-schemas`); relay-side endpoint + horizon-advance flow lands in commit 4.
+
+- 9e80887: Retention phase 4b-3 commit 4 — relay-side witness solicitation endpoints + horizon-advance flow.
+
+  Adds three additive primitives to `@motebit/crypto` consumed by `services/relay`'s new horizon-advance machinery:
+
+  `canonicalizeHorizonWitnessRequestBody(body)` — produces canonical signing bytes for the `HorizonWitnessRequestBody` wire shape. Byte-equal to `canonicalizeHorizonCertForWitness` over the corresponding full cert (since the latter strips `witnessed_by[]` + `signature`); exposed as a separate helper so call sites pass the wire-shaped request body directly without synthesizing a full cert.
+
+  `signHorizonWitnessRequestBody(body, privateKey)` — produces a base64url-encoded Ed25519 signature over the canonical bytes. Used by BOTH the issuer (for `WitnessSolicitationRequest.issuer_signature`) AND each peer witness (for `WitnessSolicitationResponse.signature`). Both roles sign byte-equal canonical bytes by design (session-3 sub-decision: issuer-signature payload IS witness-signature payload). The peer's verify-issuer + sign-as-witness paths share canonical-bytes derivation through this primitive — drift-impossible.
+
+  `verifyHorizonWitnessRequestSignature(body, signatureBase64Url, issuerPublicKey)` — peer-side fail-closed gate. Returns `false` on any malformed signature, suite mismatch, or hash failure — never throws. Same contract as `verifyBySuite`.
+
+  Why these land in `@motebit/crypto` rather than inline at the relay: the new wire shape `HorizonWitnessRequestBody` (commit 3) needed canonical-bytes machinery that didn't exist (`canonicalizeHorizonCertForWitness` operated on full certs, not the request body). Per relay rule 1 ("never inline protocol plumbing"), services consume primitives from the package layer. Adding the three primitives here is what the rule mandates, not creep around it.
+
+  Backwards-compatible. All three exports additive; no rename, no break.
+
+  The relay-side consumer (`services/relay/src/horizon.ts` orchestrator + two new federation endpoints + per-store ledger truncate adapters + revocation-events horizon loop replacing the old `cleanupRevocationEvents` informal-TTL purge) ships under `@motebit/relay` (in changeset-ignored list — private package).
+
+- 87e2f17: Promote `verifySkillBundle` to the canonical pure-function full-verify primitive in `@motebit/crypto`. Browser, Node-library, and CLI callers all converge on the same code path once they have `{ envelope, body: Uint8Array, files?: Record<path, Uint8Array> }`.
+
+  **Why this exists.** The `motebit-verify` ship gave Node consumers a universal verifier; the browser side (`motebit.com/skills`'s "verify locally" button) had a hand-rolled copy in `apps/web/src/skill-bundle-verifier.ts` that no external consumer could import. Third-party browsers (agentskills.io, registries, CI pipelines) couldn't run the same check. This ship promotes the primitive to the permissive-floor package so anyone composing `@motebit/crypto` gets the canonical verify with no inline reimplementation.
+
+  **Three-axis verify, one primitive:**
+
+  ```ts
+  import { verifySkillBundle } from "@motebit/crypto";
+
+  const result = await verifySkillBundle({
+    envelope: parsedEnvelope,
+    body: lfNormalizedSkillMdBytes,
+    files: { "scripts/run.sh": fileBytes }, // optional
+  });
+
+  // result.steps.envelope.{valid, reason}
+  // result.steps.body_hash.{valid, expected, actual} | null
+  // result.steps.files: per-path {valid, expected, actual, reason}
+  // result.valid iff every axis passed AND every declared file was provided
+  ```
+
+  **Refactors:**
+  - `@motebit/verifier`'s `verifySkillDirectory` now reads SKILL.md / skill-envelope.json / declared files from disk into the bundle shape and delegates to `verifySkillBundle`. Single source of verification semantics; the directory walker is purely an I/O shim. 15/15 directory tests pass unchanged after the refactor.
+  - `apps/web` deletes its hand-rolled `skill-bundle-verifier.ts` (164 lines) and the matching test (160 lines). `skills-panel.ts` decodes base64 → bytes → `verifySkillBundle` from `@motebit/encryption` (which re-exports the new primitive). Browser bundle now uses the same primitive as the CLI.
+
+  **Permissive-floor allowlist:** `verifySkillBundle` added to `PERMISSIVE_ALLOWED_FUNCTIONS` in `scripts/check-deps.ts` per the same pattern as the existing skill-sign / skill-verify entries. The function is pure (no I/O, no policy decisions, no accumulated state) — a third-party Apache-2.0 audit pipeline composing `@motebit/crypto` gets the canonical full-verify with no license friction.
+
+  **Single source of truth.** Same `SkillVerifyResult` shape across the CLI's `motebit-verify` JSON output, `@motebit/verifier`'s library API, the browser's local-verify button, and any third-party consumer. Same step semantics, same failure reasons, same JSON-serializable structure for CI pipelines.
+
+  Faithful to `services/relay/CLAUDE.md` rule 6 ("relay is a convenience layer, not a trust root") at the primitive level: any consumer with bundle bytes from any source — relay-served, tarball-extracted, peer-to-peer — verifies the same way. No per-surface forks.
+
+  Tests: 8 crypto-layer cases covering happy path + each tamper mode at the bundle-shape boundary, 15 verifier directory cases unchanged, web app loses its hand-rolled tests in favor of the upstream primitive's coverage. All passing. Coverage stays above thresholds (verifier 99.06% lines / 87.09% branches; crypto/web/encryption builds clean).
+
+- 9b4a296: Add agentskills.io-compatible procedural-knowledge runtime per `spec/skills-v1.md`.
+
+  Skills are user-installable markdown files containing procedural knowledge — when to use a tool, in what order, with what verifications. Open standard from Anthropic adopted across Claude Code, Codex, Cursor, GitHub Copilot. This release layers motebit-namespaced extensions on top of the standard frontmatter, ignored by non-motebit runtimes.
+
+  **`@motebit/protocol`** — adds wire types for the new skill artifacts:
+
+  ```text
+  SkillSensitivity            "none" | "personal" | "medical" | "financial" | "secret"
+  SkillPlatform               "macos" | "linux" | "windows" | "ios" | "android"
+  SkillSignature              { suite, public_key, value }
+  SkillHardwareAttestationGate { required?, minimum_score? }
+  SkillManifest               full parsed frontmatter
+  SkillEnvelope               content-addressed signed wrapper
+  SKILL_SENSITIVITY_TIERS, SKILL_AUTO_LOADABLE_TIERS, SKILL_PLATFORMS  frozen const arrays
+  ```
+
+  **`@motebit/crypto`** — adds offline-verifiable sign/verify pipeline using the `motebit-jcs-ed25519-b64-v1` suite (sibling to execution receipts, NOT W3C `eddsa-jcs-2022`):
+
+  ```text
+  canonicalizeSkillManifestBytes(manifest, body)  -> Uint8Array
+  canonicalizeSkillEnvelopeBytes(envelope)        -> Uint8Array
+  signSkillManifest / signSkillEnvelope
+  verifySkillManifest / verifySkillEnvelope (+ Detailed variants)
+  decodeSkillSignaturePublicKey(sig)              -> Uint8Array
+  SKILL_SIGNATURE_SUITE                           const
+  ```
+
+  **`motebit`** (CLI) — adds the user-facing surface:
+
+  ```text
+  motebit skills install <directory>
+  motebit skills list
+  motebit skills enable | disable <name>
+  motebit skills trust | untrust <name>
+  motebit skills verify <name>
+  motebit skills remove <name>
+  /skills                       (REPL slash — list with provenance badges)
+  /skill <name>                 (REPL slash — show full details)
+  ```
+
+  Install is permissive (filesystem record, sibling to `mcp_trusted_servers` add); auto-load is provenance-gated (the act layer). The selector filters by enabled+trusted+platform+sensitivity+hardware-attestation before BM25 ranking on description. Manual trust grants emit signed audit events to `~/.motebit/skills/audit.log` without manufacturing cryptographic provenance.
+
+  Two new drift gates land alongside: `check-skill-corpus` (every committed reference skill verifies offline against its committed signature) and `check-skill-cli-coverage` (every public `SkillRegistry` method has a `motebit skills <verb>` dispatch arm).
+
+  Phase 1 ships frontmatter + envelope + signature scheme + sensitivity tiers + trust gate + the eight subcommands + REPL slashes + drift gates + one signed dogfood reference (`skills/git-commit-motebit-style/`). Phase 2: `SkillSelector` wired into the runtime context-injection path, plus `scripts/` quarantine + per-script approval. Phase 3: signed `SkillLoadReceipt` in `execution-ledger-v1`. Phase 4: sibling-surface skill browsers + curated registry.
+
+### Patch Changes
+
+- 355b719: Coverage fix — add 20 tests covering previously-untested branches in `verifyDeletionCertificate`, `verifyRetentionManifest`, the three phase-4b-3 horizon-witness-request-body primitives (`canonicalizeHorizonWitnessRequestBody` / `signHorizonWitnessRequestBody` / `verifyHorizonWitnessRequestSignature`), and `verifyAlternativePeeringArtifact`. Plus `/* c8 ignore */` annotations on two structurally-dead-code defensive catches around `hexToBytes` / `parseInt`-based hex decode (these don't throw on invalid input — `parseInt("zz", 16)` silently returns NaN — so the catches are unreachable today; kept for forward-compat against future hex-decode primitives that might throw).
+
+  Coverage now passes all four thresholds: lines 90.22%, statements 90.22%, functions 96.81%, branches 86.23% (vs required 89/89/91/86).
+
+  Surfaced when CI failed on commit `8503e23a` with branch coverage 85.06% — the phase-4b-3 arc added enough new lines (`witness-omission-dispute.ts`, `merkle.ts`, three new horizon primitives) that previously-untested code in `verifyRetentionManifest` (untested in crypto's own suite, only via services/relay) tipped the percentage below threshold.
+
+  No behavior change. All additions are tests + ignore comments.
+
+  Per `feedback_coverage_thresholds` — never lower coverage thresholds, write tests to meet them.
+
+- 08592c0: Internal lint cleanup. Two error-path template literals in `verifyRetentionManifest` and `verifyWitnessOmissionDispute` were flagged by `@typescript-eslint/restrict-template-expressions` after the phase 4b-3 API surface additions tightened TypeScript's narrowing at the call sites — the spec/suite field narrows to `never` after the equality check fails, making the template literal stringification ambiguous. Wrapped both with explicit `String(...)` to satisfy the lint rule.
+
+  No behavior change. Template literals already perform `String()` coercion at runtime; the explicit wrap is a typing-clarity fix, not a semantics change.
+
+- 74042b2: Retention policy phase 3 — memory registers under `mutable_pruning`, tombstone→erase, signed deletion certs at the call site.
+
+  `@motebit/sdk`: `MemoryStorageAdapter` gains a required `eraseNode(nodeId)` method. Implementations physically remove the node row and every edge that references it; after `eraseNode(id)` resolves, `getNode(id)` returns `null` and `getEdges(id)` returns `[]`. The existing `tombstoneNode` method stays for soft-delete lifecycle paths (decay-pass / notability-pass) that intentionally do not issue a deletion cert. Required-not-optional addition because phase 3 ties the cert format's "bytes are unrecoverable" claim (decision 7) to the storage operation; admitting an adapter without `eraseNode` would silently weaken every cert it produces.
+
+  `@motebit/crypto`: the `self_enforcement` reason in `verifyDeletionCertificate`'s reason × signer × mode table is admitted in every deployment mode (sovereign / mediated / enterprise). The earlier sovereign-only restriction was over-tight — the subject's own runtime drives policy whether an operator exists or not, and only operator-driven enforcement is `retention_enforcement`. The doctrine table at `docs/doctrine/retention-policy.md` §"Decision 5" matches.
+
+  Both changes are caught by typecheck; downstream package implementations of `MemoryStorageAdapter` (browser-persistence, persistence/SQLite, desktop's tauri-storage, mobile's expo-sqlite, runtime's InMemoryMemoryStorage) all carry the new method.
+
+- 44d25cd: Retention policy phase 4a + 4b-1 + 4b-2 — event-log horizon advance (per-motebit + operator-wide), signed `append_only_horizon` cert wiring, four production storage adapters implement `truncateBeforeHorizon`, and phase 3 regression fix.
+
+  `@motebit/protocol`: `EventStoreAdapter` gains an optional `truncateBeforeHorizon(motebitId, horizonTs)` method — whole-prefix retention truncation for `append_only_horizon`-shaped stores per `docs/doctrine/retention-policy.md` §"Decision 4". Distinct from the existing `compact` (state-snapshot, version-clock-keyed); `truncateBeforeHorizon` is the storage operation behind a horizon deletion certificate. Optional in phase 4a (local-only horizon advance ships first); phase 4b tightens to required when federation co-witness lands.
+
+  `@motebit/event-log`: new `EventStore.advanceHorizon(storeId, horizonTs, signer, options?)` — signs the cert via `signHorizonCertAsIssuer` first, then truncates. Order is load-bearing (sign-then-truncate) so no window exists where entries are gone but no cert attests it. Both subject kinds supported: per-motebit (signed by motebit identity key, truncates that motebit's slice) and operator-wide (signed by operator key, takes `motebitIdsForOperator: readonly string[]` and truncates each). Empty motebit set is permitted for no-tenant relays — the cert is still signed and represents the operator's commitment. Witness array stays empty until phase 4b-3 ships the federation co-witness solicitation; `witness_required` is derived as `false` for no-peer deployments per decision 9, which satisfies the verifier today.
+
+  Adapter tightening — every production `EventStoreAdapter` that physically owns bytes now implements `truncateBeforeHorizon`: `@motebit/persistence` (better-sqlite3), `@motebit/browser-persistence` (IndexedDB cursor scan), `apps/desktop/src/tauri-storage.ts` (Tauri SQL plugin), `apps/mobile/src/adapters/expo-sqlite.ts` (expo-sqlite). Sync-engine adapters (ws/http/encrypted) remain proxy-only and don't implement local truncation. The interface stays optional so non-storage adapters can compose without false implementation; `EventStore.advanceHorizon` throws if the bound adapter doesn't implement it.
+
+  Phase 3 regression fix: the consolidation cycle's retention-enforcement path now passes `self_enforcement` (subject's runtime drives policy, signed by motebit identity key) rather than `retention_enforcement` (which requires operator signature per decision 5's reason × signer table). Latent issue — no production consumer was running `verifyDeletionCertificate` against these certs yet, but the cert format was structurally invalid until this fix. Locked by the round-trip test in `@motebit/privacy-layer`. The doctrine table is updated to reflect that `self_enforcement` is admitted in every deployment mode, not sovereign-only.
+
+  Two storage-side cleanups landed alongside: `apps/desktop/src/memory-commands.ts`'s `deleteMemory` UI command now passes `user_request` (was passing the motebit id as the reason string, which normalized silently to `user_request` after phase 3 but obscured the intent). The `MemoryGraph.deleteMemory (tombstoning)` test was renamed and rewritten as `MemoryGraph.deleteMemory (erase)` to match decision 7's storage semantics.
+
 ## 1.1.0
 
 ### Minor Changes
