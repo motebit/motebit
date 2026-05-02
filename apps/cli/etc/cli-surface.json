@@ -14,7 +14,9 @@
     "doctor": [],
     "export": [],
     "federation": [
+      "mesh",
       "peer",
+      "peer-remove",
       "peers",
       "status"
     ],

@@ -1,6 +1,5 @@
 ---
 "motebit": minor
-"@motebit/relay": minor
 ---
 
 `motebit federation peer-remove <peer-url>` — packaged un-peering primitive.
