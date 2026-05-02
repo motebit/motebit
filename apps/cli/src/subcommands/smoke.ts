@@ -24,6 +24,20 @@ import type { CliConfig } from "../args.js";
 import { fetchRelayJson, getRelayUrl } from "./_helpers.js";
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Stale threshold = 2× the loop's default 15-min cadence, generous enough
+ * to absorb a single missed tick without flagging a healthy loop. The same
+ * value drives the `motebit doctor` probe — both surfaces share this
+ * contract so an operator's mental model is "if the loop missed >2 ticks,
+ * something is wrong." Changing this number means updating both places +
+ * the doctrine in `docs/doctrine/treasury-custody.md` § Phase 1 step 7.
+ */
+export const SMOKE_STALE_THRESHOLD_MS = 30 * 60_000;
+
+// ---------------------------------------------------------------------------
 // Public entry point — branched dispatch
 // ---------------------------------------------------------------------------
 
@@ -130,11 +144,10 @@ export async function handleSmokeReconciliation(config: CliConfig): Promise<void
   const ageMin = Math.round(ageMs / 60_000);
 
   // 3. Stale cycle. Loop is enabled and HAS run before, but the most
-  //    recent run is older than 2× the default 15-min cadence. Loop
-  //    has likely stopped firing — silent failure mode that the loop
-  //    itself can't surface (a dead loop emits no logs).
-  const STALE_THRESHOLD_MS = 30 * 60_000;
-  if (ageMs > STALE_THRESHOLD_MS) {
+  //    recent run is older than the threshold. Loop has likely stopped
+  //    firing — silent failure mode that the loop itself can't surface
+  //    (a dead loop emits no logs).
+  if (ageMs > SMOKE_STALE_THRESHOLD_MS) {
     printReceipt({
       verdict: "stale",
       relay: relayUrl,

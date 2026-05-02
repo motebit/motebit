@@ -202,6 +202,29 @@ describe("handleSmokeReconciliation", () => {
     expect(errOutput).toContain("relay probe failed");
   });
 
+  it("non-2xx HTTP — wrong master token returns 401, surfaces status in error", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      text: () => Promise.resolve("Unauthorized"),
+    });
+    await expect(handleSmokeReconciliation(baseConfig)).rejects.toThrow("process.exit(1)");
+    const errOutput = errSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    expect(errOutput).toContain("relay probe failed");
+    expect(errOutput).toContain("401");
+  });
+
+  it("non-2xx HTTP — relay returns 500, surfaces status in error", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      text: () => Promise.resolve("internal server error"),
+    });
+    await expect(handleSmokeReconciliation(baseConfig)).rejects.toThrow("process.exit(1)");
+    const errOutput = errSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    expect(errOutput).toContain("500");
+  });
+
   it("response shape mismatch — older relay without the endpoint, fails with hint", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
