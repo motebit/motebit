@@ -92,6 +92,7 @@ export function createDisputeTables(db: DatabaseDriver): void {
       filed_at          INTEGER NOT NULL,
       evidence_deadline INTEGER NOT NULL,
       body_json         TEXT NOT NULL DEFAULT '',
+      filer_role        TEXT,
       resolution        TEXT,
       rationale         TEXT,
       fund_action       TEXT,
@@ -315,13 +316,11 @@ interface ResolveData {
 // retry-within-72h is a future arc; see
 // memory/section_6_2_orchestrator_async_deferral.md.
 //
-// Fund-action mapping: federation v1 always emits `fund_action: "split"`
-// with `split_ratio` encoding the verdict (1.0 upheld, 0.0 overturned,
-// 0.5 split). Verdict semantics live in `resolution`; financial
-// mechanics in `(fund_action, split_ratio)`. Granular release_to_worker
-// / refund_to_delegator parity is a future arc; see
-// memory/dispute_v1_fund_action_federation_parity_followup.md and
-// `spec/dispute-v1.md` §7.2.
+// Fund-action mapping (`spec/dispute-v1.md` §7.2): the orchestrator emits
+// the granular `release_to_worker` / `refund_to_delegator` arms when the
+// filer's role is captured (post-migration-21), and falls back to the
+// `split` shape with split_ratio encoding the verdict for legacy disputes
+// where filer_role is NULL. See `mapFundAction` below for the table.
 
 interface PeerRow {
   peer_relay_id: string;
@@ -424,6 +423,44 @@ async function fetchPeerVote(
   }
 }
 
+/** Filer role at filing time. NULL for pre-migration-21 disputes. */
+export type FilerRole = "worker" | "delegator";
+
+/**
+ * §7.2 fund_action mapping table:
+ *
+ *   upheld + worker        → release_to_worker
+ *   upheld + delegator     → refund_to_delegator
+ *   overturned + worker    → refund_to_delegator
+ *   overturned + delegator → release_to_worker
+ *   split                  → split (always)
+ *
+ * Legacy fallback (filer_role NULL): emit the v1 `split` shape with
+ * split_ratio encoding the verdict (1.0 upheld, 0.0 overturned, 0.5
+ * split). Audit reads of pre-migration-21 disputes stay coherent — the
+ * `resolution` field carries verdict semantics; `(fund_action, split_ratio)`
+ * carries financial mechanics; both shapes are mechanically equivalent
+ * in the locked-funds mover.
+ */
+function mapFundAction(
+  outcome: DisputeOutcome,
+  filerRole: FilerRole | null,
+): { fund_action: DisputeFundAction; split_ratio: number } {
+  if (outcome === "split") return { fund_action: "split", split_ratio: 0.5 };
+  if (filerRole === null) {
+    return { fund_action: "split", split_ratio: outcome === "upheld" ? 1.0 : 0.0 };
+  }
+  if (outcome === "upheld") {
+    return filerRole === "worker"
+      ? { fund_action: "release_to_worker", split_ratio: 1.0 }
+      : { fund_action: "refund_to_delegator", split_ratio: 0.0 };
+  }
+  // outcome === "overturned"
+  return filerRole === "worker"
+    ? { fund_action: "refund_to_delegator", split_ratio: 0.0 }
+    : { fund_action: "release_to_worker", split_ratio: 1.0 };
+}
+
 /**
  * Aggregate valid peer votes into a `FederationResolutionResult`.
  *
@@ -431,19 +468,21 @@ async function fetchPeerVote(
  * §6.6: If valid count < FEDERATION_QUORUM_MIN OR no majority, the
  *       resolution defaults to `split` with `split_ratio: 0.5` per the
  *       72h timeout convention.
- * §7.2: Federation v1 always emits `fund_action: "split"` with
- *       `split_ratio` encoding the verdict (1.0/0.0/0.5).
+ * §7.2: fund_action follows the `mapFundAction` table (granular arms
+ *       when filer_role is known; v1 `split` shape for legacy disputes).
  */
 function aggregateVotes(
   validVotes: AdjudicatorVote[],
   attemptedPeers: number,
+  filerRole: FilerRole | null,
 ): FederationResolutionResult {
   if (validVotes.length < FEDERATION_QUORUM_MIN) {
+    const mapped = mapFundAction("split", filerRole);
     return {
       resolution: "split",
       rationale: `federation quorum not met within 72h adjudication window (${validVotes.length} valid vote(s) of ${attemptedPeers} peer(s) attempted; minimum ${FEDERATION_QUORUM_MIN} required per §6.2 + §6.6)`,
-      fund_action: "split",
-      split_ratio: 0.5,
+      fund_action: mapped.fund_action,
+      split_ratio: mapped.split_ratio,
       adjudicator_votes: validVotes,
     };
   }
@@ -452,12 +491,12 @@ function aggregateVotes(
   const max = Math.max(counts.upheld, counts.overturned, counts.split);
   const winners = (Object.keys(counts) as DisputeOutcome[]).filter((k) => counts[k] === max);
   const resolution: DisputeOutcome = winners.length === 1 ? winners[0]! : "split";
-  const split_ratio = resolution === "upheld" ? 1.0 : resolution === "overturned" ? 0.0 : 0.5;
+  const mapped = mapFundAction(resolution, filerRole);
   return {
     resolution,
     rationale: `federation adjudication: ${counts.upheld} upheld, ${counts.overturned} overturned, ${counts.split} split (${validVotes.length} valid of ${attemptedPeers} attempted)`,
-    fund_action: "split",
-    split_ratio,
+    fund_action: mapped.fund_action,
+    split_ratio: mapped.split_ratio,
     adjudicator_votes: validVotes,
   };
 }
@@ -473,7 +512,7 @@ function aggregateVotes(
  * @spec motebit/dispute@1.0 §6.2 + §6.6 + §7.2
  */
 export async function orchestrateFederationResolution(
-  dispute: { dispute_id: string; body_json: string },
+  dispute: { dispute_id: string; body_json: string; filer_role: FilerRole | null },
   round: number,
   deps: {
     db: DatabaseDriver;
@@ -630,7 +669,7 @@ export async function orchestrateFederationResolution(
   }
 
   // 7. Aggregate
-  const result = aggregateVotes(validVotes, peers.length);
+  const result = aggregateVotes(validVotes, peers.length, dispute.filer_role);
 
   logger.info("federation.orchestrator.aggregated", {
     disputeId: dispute.dispute_id,
@@ -725,7 +764,10 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // For p2p tasks: no allocation exists, but a p2p settlement does.
     // Create a trust-layer dispute (amount_locked = 0, no fund movement).
     let isP2pDispute = false;
-    if (!allocation) {
+    let workerId: string;
+    if (allocation) {
+      workerId = allocation.motebit_id;
+    } else {
       const p2pSettlement = db
         .prepare(
           "SELECT settlement_id, task_id, motebit_id FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
@@ -738,7 +780,14 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
         throw new HTTPException(404, { message: "Allocation not found" });
       }
       isP2pDispute = true;
+      workerId = p2pSettlement.motebit_id;
     }
+    // Capture filer_role at filing time (when task / allocation / p2p
+    // settlement is definitely present) per the §7.2 retention-safety
+    // constraint — the row may be pruned before the orchestrator runs,
+    // and a federation resolution that depends on the task row at
+    // orchestration time becomes unresolvable post-pruning.
+    const filerRole: FilerRole = req.filed_by === workerId ? "worker" : "delegator";
 
     // Rate limit: max active disputes per agent (§9.2)
     const activeCount = db
@@ -766,8 +815,8 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
 
     db.prepare(
       `INSERT INTO relay_disputes
-       (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline, body_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'opened', ?, ?, ?, ?, ?)`,
+       (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline, body_json, filer_role)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'opened', ?, ?, ?, ?, ?, ?)`,
     ).run(
       req.dispute_id,
       req.task_id,
@@ -785,6 +834,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       // artifact to peers verbatim (spec §16.2). Mirrors the
       // relay_horizon_certs.cert_json convention from migration 16.
       JSON.stringify(req),
+      filerRole,
     );
 
     // Transition to evidence state immediately (dispute has initial evidence)
@@ -1082,7 +1132,11 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
             suite: row.suite as "motebit-jcs-ed25519-b64-v1",
             signature: row.signature,
           }));
-          const recovered = aggregateVotes(reconstructedVotes, persistedVoteRows.length);
+          const recovered = aggregateVotes(
+            reconstructedVotes,
+            persistedVoteRows.length,
+            (dispute.filer_role as FilerRole | null) ?? null,
+          );
           resolutionOutcome = recovered.resolution;
           resolutionRationale = recovered.rationale;
           resolutionFundAction = recovered.fund_action;
@@ -1097,6 +1151,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
             {
               dispute_id: disputeId,
               body_json: (dispute.body_json as string | null) ?? "",
+              filer_role: (dispute.filer_role as FilerRole | null) ?? null,
             },
             round,
             { db, relayIdentity, fetchImpl, voteRequestTimeoutMs },
@@ -1351,6 +1406,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       {
         dispute_id: disputeId,
         body_json: (dispute.body_json as string | null) ?? "",
+        filer_role: (dispute.filer_role as FilerRole | null) ?? null,
       },
       2,
       { db, relayIdentity, fetchImpl, voteRequestTimeoutMs },

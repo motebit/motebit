@@ -271,6 +271,46 @@ describe("Dispute: POST /api/v1/allocations/:allocationId/dispute", () => {
     const res = await openDispute(relay, "nonexistent-alloc", "delegator-1", "worker-1");
     expect(res.status).toBe(404);
   });
+
+  // §7.2 fund_action parity (migration 21): the filing endpoint captures
+  // filer_role at filing time so the federation orchestrator can emit the
+  // granular release_to_worker / refund_to_delegator arms. The role is
+  // derived from whether `filed_by` matches the allocation's `motebit_id`
+  // (the worker the allocation was opened against). Captured at filing
+  // time per the retention-safety constraint named in
+  // memory/dispute_v1_fund_action_federation_parity_followup — task rows
+  // can be pruned before the orchestrator runs.
+  it("captures filer_role=worker when filer matches the allocation's motebit_id", async () => {
+    // createAllocation third arg is the allocation's motebit_id (the
+    // worker). The "delegator-1" label here is the test fixture's name,
+    // but it's filling the worker slot in the allocation — so a dispute
+    // filed by delegator-1 against this allocation has filer_role=worker.
+    createAllocation(relay, "alloc-fr-w", "task-fr-w", "delegator-1");
+
+    const res = await openDispute(relay, "alloc-fr-w", "delegator-1", "worker-1", "task-fr-w");
+    expect(res.status).toBe(200);
+    const { dispute_id } = (await res.json()) as { dispute_id: string };
+
+    const row = relay.moteDb.db
+      .prepare("SELECT filer_role FROM relay_disputes WHERE dispute_id = ?")
+      .get(dispute_id) as { filer_role: string | null };
+    expect(row.filer_role).toBe("worker");
+  });
+
+  it("captures filer_role=delegator when filer does NOT match the allocation's motebit_id", async () => {
+    // Allocation's motebit_id is "worker-1" (the actual worker this time).
+    // Dispute filed by delegator-1 → filer is NOT the worker → delegator.
+    createAllocation(relay, "alloc-fr-d", "task-fr-d", "worker-1");
+
+    const res = await openDispute(relay, "alloc-fr-d", "delegator-1", "worker-1", "task-fr-d");
+    expect(res.status).toBe(200);
+    const { dispute_id } = (await res.json()) as { dispute_id: string };
+
+    const row = relay.moteDb.db
+      .prepare("SELECT filer_role FROM relay_disputes WHERE dispute_id = ?")
+      .get(dispute_id) as { filer_role: string | null };
+    expect(row.filer_role).toBe("delegator");
+  });
 });
 
 describe("Dispute: evidence + resolve", () => {

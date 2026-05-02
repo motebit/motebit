@@ -235,7 +235,17 @@ When a dispute is opened, the referenced `BudgetAllocation` transitions to `disp
 | `overturned` | Original settlement      | The pre-dispute settlement stands                                        |
 | `split`      | Divide by `split_ratio`  | Worker receives `locked * split_ratio`, delegator receives the remainder |
 
-**Federation-resolved disputes (§6.2 orchestrator) emit `fund_action: "split"` with `split_ratio` encoding the verdict** — `1.0` for upheld (worker gets all locked funds), `0.0` for overturned (delegator gets all), `0.5` for split. The mechanically-equivalent `release_to_worker` and `refund_to_delegator` arms are reserved for single-relay resolution paths where the operator has direct access to task role assignments (worker vs delegator). Verdict semantics live in `resolution`; financial mechanics in `(fund_action, split_ratio)` — querying "all upheld disputes" goes through `resolution`, not `fund_action`. Federation parity with the granular arms is a future arc; see `memory/dispute_v1_fund_action_federation_parity_followup.md`.
+**Fund action is derived from `(resolution, filer_role)` per the table below.** Filer role is captured at filing time (when the task / allocation / p2p settlement row is definitely present) — `worker` if `filed_by` matches the allocation's worker motebit_id, else `delegator`. Federation-resolved disputes (§6.2 orchestrator) and single-relay resolutions both flow through this table.
+
+| Resolution   | Filer role  | `fund_action`         | `split_ratio` | Effect                                  |
+| ------------ | ----------- | --------------------- | ------------- | --------------------------------------- |
+| `upheld`     | `worker`    | `release_to_worker`   | `1.0`         | Worker (filer) gets all locked funds    |
+| `upheld`     | `delegator` | `refund_to_delegator` | `0.0`         | Delegator (filer) gets all locked funds |
+| `overturned` | `worker`    | `refund_to_delegator` | `0.0`         | Delegator (counterparty) gets all       |
+| `overturned` | `delegator` | `release_to_worker`   | `1.0`         | Worker (counterparty) gets all          |
+| `split`      | _any_       | `split`               | `0.5`         | 50/50 division                          |
+
+**Legacy fallback** — disputes filed before the `filer_role` capture migration carry `filer_role: NULL` in storage. Federation-resolved disputes for these emit the uniform `split` shape with `split_ratio` encoding the verdict (`1.0`/`0.0`/`0.5`); the resolution is mechanically equivalent. Verdict semantics live in `resolution`; financial mechanics in `(fund_action, split_ratio)` — querying "all upheld disputes" goes through `resolution`, not `fund_action`.
 
 ### 7.3 Foundation Law
 

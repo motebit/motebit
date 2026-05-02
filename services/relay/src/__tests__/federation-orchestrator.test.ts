@@ -61,8 +61,16 @@ interface OrchTestEnv {
   db: DatabaseDriver;
   leader: RelayIdentity;
   peers: PeerSetup[];
-  /** Insert a dispute row (the leader is filed_by; respondent is some external motebit). */
-  filePeerlessDispute: (disputeId: string) => DisputeRequest;
+  /**
+   * Insert a dispute row (the leader is filed_by; respondent is some
+   * external motebit). Default `filer_role` is `null` to preserve the
+   * pre-migration-21 v1 `fund_action: split` shape; tests asserting on
+   * the §7.2 granular mapping pass `worker` or `delegator` explicitly.
+   */
+  filePeerlessDispute: (
+    disputeId: string,
+    filerRole?: "worker" | "delegator" | null,
+  ) => DisputeRequest;
 }
 
 async function setupOrchEnv(peerCount: number): Promise<OrchTestEnv> {
@@ -102,7 +110,10 @@ async function setupOrchEnv(peerCount: number): Promise<OrchTestEnv> {
     );
   }
 
-  function filePeerlessDispute(disputeId: string): DisputeRequest {
+  function filePeerlessDispute(
+    disputeId: string,
+    filerRole: "worker" | "delegator" | null = null,
+  ): DisputeRequest {
     const req: DisputeRequest = {
       dispute_id: disputeId,
       task_id: "task-test",
@@ -118,8 +129,8 @@ async function setupOrchEnv(peerCount: number): Promise<OrchTestEnv> {
     };
     db.prepare(
       `INSERT INTO relay_disputes
-       (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline, body_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'evidence', 0, 0, ?, ?, ?)`,
+       (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline, body_json, filer_role)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'evidence', 0, 0, ?, ?, ?, ?)`,
     ).run(
       req.dispute_id,
       req.task_id,
@@ -131,6 +142,7 @@ async function setupOrchEnv(peerCount: number): Promise<OrchTestEnv> {
       req.filed_at,
       req.filed_at + 86_400_000,
       JSON.stringify(req),
+      filerRole,
     );
     return req;
   }
@@ -221,7 +233,7 @@ describe("orchestrateFederationResolution — happy paths", () => {
 
     const dispute = env.filePeerlessDispute("dispute-happy-upheld");
     const result = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
@@ -252,7 +264,7 @@ describe("orchestrateFederationResolution — happy paths", () => {
 
     const dispute = env.filePeerlessDispute("dispute-majority");
     const result = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
@@ -271,13 +283,90 @@ describe("orchestrateFederationResolution — happy paths", () => {
 
     const dispute = env.filePeerlessDispute("dispute-overturned");
     const result = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
 
     expect(result.resolution).toBe("overturned");
     expect(result.split_ratio).toBe(0.0);
+  });
+});
+
+describe("orchestrateFederationResolution — §7.2 fund_action mapping", () => {
+  // §7.2 mapping table:
+  //   upheld + worker        → release_to_worker
+  //   upheld + delegator     → refund_to_delegator
+  //   overturned + worker    → refund_to_delegator
+  //   overturned + delegator → release_to_worker
+  //   split                  → split (always)
+  //
+  // Legacy disputes (filer_role NULL) fall back to the v1 `split` shape;
+  // the existing happy-path / tie / quorum-failure tests above cover that
+  // branch by passing `filer_role: null` to the orchestrator.
+  async function runWithFilerRole(
+    disputeId: string,
+    voteOutcome: DisputeOutcome,
+    filerRole: "worker" | "delegator",
+  ) {
+    env = await setupOrchEnv(3);
+    const policies = new Map(
+      env.peers.map((p) => [p.identity.relayMotebitId, { vote: voteOutcome }]),
+    );
+    const fetchImpl = makeFetchImpl(env.peers, policies);
+    const dispute = env.filePeerlessDispute(disputeId, filerRole);
+    return orchestrateFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: filerRole },
+      1,
+      { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
+    );
+  }
+
+  it("upheld + worker → release_to_worker", async () => {
+    const r = await runWithFilerRole("d-upheld-worker", "upheld", "worker");
+    expect(r.resolution).toBe("upheld");
+    expect(r.fund_action).toBe("release_to_worker");
+    expect(r.split_ratio).toBe(1.0);
+  });
+
+  it("upheld + delegator → refund_to_delegator", async () => {
+    const r = await runWithFilerRole("d-upheld-delegator", "upheld", "delegator");
+    expect(r.resolution).toBe("upheld");
+    expect(r.fund_action).toBe("refund_to_delegator");
+    expect(r.split_ratio).toBe(0.0);
+  });
+
+  it("overturned + worker → refund_to_delegator", async () => {
+    const r = await runWithFilerRole("d-overturned-worker", "overturned", "worker");
+    expect(r.resolution).toBe("overturned");
+    expect(r.fund_action).toBe("refund_to_delegator");
+    expect(r.split_ratio).toBe(0.0);
+  });
+
+  it("overturned + delegator → release_to_worker", async () => {
+    const r = await runWithFilerRole("d-overturned-delegator", "overturned", "delegator");
+    expect(r.resolution).toBe("overturned");
+    expect(r.fund_action).toBe("release_to_worker");
+    expect(r.split_ratio).toBe(1.0);
+  });
+
+  it("split + any filer_role → split (no granular mapping)", async () => {
+    env = await setupOrchEnv(3);
+    const policies = new Map([
+      [env.peers[0]!.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }],
+      [env.peers[1]!.identity.relayMotebitId, { vote: "overturned" as DisputeOutcome }],
+      [env.peers[2]!.identity.relayMotebitId, { vote: "split" as DisputeOutcome }],
+    ]);
+    const fetchImpl = makeFetchImpl(env.peers, policies);
+    const dispute = env.filePeerlessDispute("d-split-worker", "worker");
+    const r = await orchestrateFederationResolution(
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: "worker" },
+      1,
+      { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
+    );
+    expect(r.resolution).toBe("split");
+    expect(r.fund_action).toBe("split");
+    expect(r.split_ratio).toBe(0.5);
   });
 });
 
@@ -293,7 +382,7 @@ describe("orchestrateFederationResolution — §6.4 tie → split", () => {
 
     const dispute = env.filePeerlessDispute("dispute-tie");
     const result = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
@@ -311,7 +400,7 @@ describe("orchestrateFederationResolution — §6.6 quorum failure", () => {
     const dispute = env.filePeerlessDispute("dispute-no-peers");
     await expect(
       orchestrateFederationResolution(
-        { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+        { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
         1,
         { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
       ),
@@ -328,7 +417,7 @@ describe("orchestrateFederationResolution — §6.6 quorum failure", () => {
     const dispute = env.filePeerlessDispute("dispute-2-peers");
     await expect(
       orchestrateFederationResolution(
-        { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+        { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
         1,
         { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
       ),
@@ -346,7 +435,7 @@ describe("orchestrateFederationResolution — §6.6 quorum failure", () => {
 
     const dispute = env.filePeerlessDispute("dispute-1-timeout");
     const result = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
@@ -367,7 +456,7 @@ describe("orchestrateFederationResolution — §6.6 quorum failure", () => {
 
     const dispute = env.filePeerlessDispute("dispute-1-501");
     const result = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
@@ -388,7 +477,7 @@ describe("orchestrateFederationResolution — invalid peer responses are dropped
 
     const dispute = env.filePeerlessDispute("dispute-malformed");
     const result = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
@@ -410,7 +499,7 @@ describe("orchestrateFederationResolution — invalid peer responses are dropped
 
     const dispute = env.filePeerlessDispute("dispute-bad-sig");
     const result = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
@@ -428,7 +517,7 @@ describe("orchestrateFederationResolution — invalid peer responses are dropped
 
     const dispute = env.filePeerlessDispute("dispute-round-mismatch");
     const result = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
@@ -449,7 +538,7 @@ describe("orchestrateFederationResolution — invalid peer responses are dropped
 
     const dispute = env.filePeerlessDispute("dispute-id-mismatch");
     const result = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
@@ -467,12 +556,16 @@ describe("orchestrateFederationResolution — defensive guards", () => {
 
     const dispute = env.filePeerlessDispute("dispute-empty-body");
     await expect(
-      orchestrateFederationResolution({ dispute_id: dispute.dispute_id, body_json: "" }, 1, {
-        db: env.db,
-        relayIdentity: env.leader,
-        fetchImpl,
-        voteRequestTimeoutMs: 5000,
-      }),
+      orchestrateFederationResolution(
+        { dispute_id: dispute.dispute_id, body_json: "", filer_role: null },
+        1,
+        {
+          db: env.db,
+          relayIdentity: env.leader,
+          fetchImpl,
+          voteRequestTimeoutMs: 5000,
+        },
+      ),
     ).rejects.toThrow(/legacy_dispute_no_signed_body/);
   });
 });
@@ -485,7 +578,7 @@ describe("orchestrateFederationResolution — additional gate-coverage", () => {
 
     const dispute = env.filePeerlessDispute("dispute-all-501");
     const result = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
@@ -514,7 +607,7 @@ describe("orchestrateFederationResolution — additional gate-coverage", () => {
 
     const dispute = env.filePeerlessDispute("dispute-peer-id-mismatch");
     const result = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
@@ -548,7 +641,7 @@ describe("orchestrateFederationResolution — additional gate-coverage", () => {
 
     const dispute = env.filePeerlessDispute("dispute-self-exclusion");
     const result = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
@@ -570,12 +663,12 @@ describe("orchestrateFederationResolution — additional gate-coverage", () => {
 
     const dispute = env.filePeerlessDispute("dispute-idempotent");
     const r1 = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
     const r2 = await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );
@@ -664,7 +757,7 @@ describe("orchestrateFederationResolution — evidence_bundle envelope shape (§
     }) as unknown as typeof fetch;
 
     await orchestrateFederationResolution(
-      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute) },
+      { dispute_id: dispute.dispute_id, body_json: JSON.stringify(dispute), filer_role: null },
       1,
       { db: env.db, relayIdentity: env.leader, fetchImpl, voteRequestTimeoutMs: 5000 },
     );

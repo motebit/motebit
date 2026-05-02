@@ -1008,4 +1008,55 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 21,
+    name: "phase_6_2_dispute_filer_role",
+    up: (db) => {
+      // Federation `fund_action` parity (`spec/dispute-v1.md` §7.2): pre-
+      // migration the §6.2 federation orchestrator always emitted
+      // `fund_action: split` regardless of vote outcome, with `split_ratio`
+      // encoding the verdict (1.0 upheld, 0.0 overturned, 0.5 split).
+      // Granular `release_to_worker` / `refund_to_delegator` arms were
+      // reserved for single-relay paths where the operator has direct
+      // task-role access. This column captures the filer's role at filing
+      // time (when the task row is definitely present), letting the
+      // orchestrator emit the granular fund_action under the §7.2 mapping
+      // table:
+      //   upheld + worker        → release_to_worker
+      //   upheld + delegator     → refund_to_delegator
+      //   overturned + worker    → refund_to_delegator
+      //   overturned + delegator → release_to_worker
+      //   split                  → split (always)
+      //
+      // Captured at filing time (not derived at orchestration time) per
+      // the retention-safety constraint named in
+      // memory/dispute_v1_fund_action_federation_parity_followup: task
+      // rows can be pruned per `relay_disputes`-adjacent retention policies
+      // (90 days per the K4 manifest), so a federation resolution that
+      // depends on the task row at orchestration time becomes unresolvable
+      // post-pruning. A denormalized `filer_role` column captured at
+      // filing time is the right shape.
+      //
+      // Defensive shape (PRAGMA-checked, mirrors migration 18 + 20): the
+      // table is created by createDisputeTables in disputes.ts (NOT a
+      // migration), so on fresh installs migrations may run before the
+      // table exists. Skip the ALTER if absent (createDisputeTables now
+      // declares the column inline) or if the column already exists.
+      //
+      // Legacy disputes pre-migration: filer_role NULL — the orchestrator
+      // mapping function falls back to the v1 `fund_action: split`
+      // behavior so audit reads of pre-migration disputes stay coherent.
+      const tableRows = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='relay_disputes'")
+        .all() as Array<{ name: string }>;
+      if (tableRows.length === 0) return;
+      const cols = db.prepare("PRAGMA table_info(relay_disputes)").all() as Array<{
+        name: string;
+      }>;
+      const colNames = new Set(cols.map((c) => c.name));
+      if (!colNames.has("filer_role")) {
+        db.exec(`ALTER TABLE relay_disputes ADD COLUMN filer_role TEXT`);
+      }
+    },
+  },
 ];
