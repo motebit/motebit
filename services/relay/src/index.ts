@@ -397,10 +397,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   }
   if (x402Config?.payToAddress) {
     try {
-      const { HTTPFacilitatorClient } = await import("@x402/core/server");
-      const facilitatorClient = new HTTPFacilitatorClient({
-        url: x402Config.facilitatorUrl ?? "https://x402.org/facilitator",
-      });
+      // Single canonical adapter — chooses CDP vs default facilitator based on
+      // env shape, fail-fast on mainnet misconfiguration. See x402-facilitator.ts.
+      const { createX402FacilitatorClient } = await import("./x402-facilitator.js");
+      const facilitatorClient = (await createX402FacilitatorClient(
+        x402Config,
+      )) as ConstructorParameters<typeof X402SettlementRail>[0]["facilitatorClient"];
       railRegistry.register(
         new X402SettlementRail({
           facilitatorClient,
@@ -411,6 +413,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         }),
       );
     } catch (err) {
+      // Mainnet-credential-missing is fail-fast: refuse to boot rather than
+      // start in a half-mainnet state. Other errors (transient import failure
+      // in test environments without @x402/core) preserve the prior soft-warn.
+      const { X402ConfigError } = await import("./x402-facilitator.js");
+      if (err instanceof X402ConfigError) throw err;
       console.warn(
         "x402 settlement rail not registered:",
         err instanceof Error ? err.message : String(err),

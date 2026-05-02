@@ -42,10 +42,13 @@ Concrete shape, in order:
 
 1. **Confirmation horizon** in the deposit detector. Per [`packages/deposit-detector/CLAUDE.md`](../../packages/deposit-detector/CLAUDE.md) rule 6: `confirmations` is required, mainnet chains use 12 (Base / Optimism / Arbitrum / Ethereum) or 64 (Polygon), testnets use 1. The cycle never crosses the safe horizon. Drift gate `check-deposit-detector-confirmations` (`docs/drift-defenses.md` #72) enforces every USDC chain has a positive depth.
 2. **Hardware-wallet-generated receive address** as `X402_PAY_TO_ADDRESS`.
-3. **Mainnet env flip:** `X402_NETWORK=eip155:8453`, `X402_TESTNET=false`. Reversible — flip back to Sepolia anytime, no code changes.
-4. **Smoke transaction** ($1 USDC) from a test EOA to the new address; verify `deposit-detector.cycle creditsApplied=1` fires after `~confirmations × block_time` (~24-30s on Base).
+3. **CDP facilitator credentials.** The default `https://x402.org/facilitator` is Coinbase's free _testnet_ facilitator — Base Sepolia only, rejects mainnet networks at route-registration time with `Facilitator does not support scheme "exact" on network "..."`. Mainnet x402 settlement requires Coinbase's CDP facilitator at `https://api.cdp.coinbase.com/platform/v2/x402`, authenticated with JWT-per-request via API key + secret. Operator generates the credentials at `portal.cdp.coinbase.com → Payments → x402 → API Keys`, sets `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` as Fly secrets. The relay's `services/relay/src/x402-facilitator.ts` is the single canonical constructor — branches on env shape, fails fast with `X402ConfigError` if mainnet mode is requested without CDP credentials. Free tier: 1,000 transactions/month.
+4. **Mainnet env flip:** `X402_NETWORK=eip155:8453`, `X402_TESTNET=false`. Reversible — flip `X402_TESTNET=true` to fall back to Sepolia anytime, no code changes; the CDP credentials and mainnet address stay set, the relay just routes through testnet semantics.
+5. **Smoke transaction** ($1 USDC) from a test EOA to the new address; verify `deposit-detector.cycle creditsApplied=1` fires after `~confirmations × block_time` (~24-30s on Base) and no `x402.facilitator.init_failed` in the boot log.
 
 Operator-specific details (which hardware wallet, which Fly.io secrets, which exact address) live in the operator's private `docs/ops/SECRETS.md` (gitignored per the operator-transparency split). The doctrine here is shape-only.
+
+A note on what's NOT phase 1: the CDP facilitator is itself a relay-shaped guest service (Coinbase's, not motebit's). Using it does not weaken the protocol-vs-platform claim — the x402 _protocol_ is open and chain-agnostic; CDP is one of multiple compatible facilitator implementations (community + self-hosted alternatives exist). Phase 2 doesn't change the facilitator decision; phase 2 is the _outbound_ custody question (sweeping the treasury), independent of which facilitator handles inbound x402 settlements.
 
 ## Why naming the phases separately matters
 

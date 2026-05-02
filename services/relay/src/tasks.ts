@@ -1224,11 +1224,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     const { paymentMiddlewareFromHTTPServer, x402HTTPResourceServer, x402ResourceServer } =
       await import("@x402/hono");
     const { ExactEvmScheme } = await import("@x402/evm/exact/server");
-    const { HTTPFacilitatorClient } = await import("@x402/core/server");
-
-    const facilitatorClient = new HTTPFacilitatorClient({
-      url: x402Config.facilitatorUrl ?? "https://x402.org/facilitator",
-    });
+    // CDP-aware facilitator construction; throws X402ConfigError on mainnet
+    // misconfiguration so the route registration fails fast rather than
+    // silently leaving the x402 surface broken. See x402-facilitator.ts.
+    const { createX402FacilitatorClient } = await import("./x402-facilitator.js");
+    const facilitatorClient = (await createX402FacilitatorClient(
+      x402Config,
+    )) as ConstructorParameters<typeof x402ResourceServer>[0];
 
     const network = x402Config.network as `${string}:${string}`;
     const resourceServer = new x402ResourceServer(facilitatorClient).register(
