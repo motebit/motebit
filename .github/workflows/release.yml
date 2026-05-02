@@ -109,25 +109,34 @@ jobs:
             if (failed) process.exit(1);
           "
 
-      # Skip the changesets/action when no releases would actually happen.
-      # Every changeset that targets only `ignore`-listed (private)
-      # packages produces a `releases: []` status — `changesets/action`
-      # then force-pushes an empty diff to `changeset-release/main` and
-      # the PR-create step fails with `No commits between main and
-      # changeset-release/main`. The guard reads the JSON `releases`
-      # array directly, since `changeset status` exits 0 even when
-      # nothing bumps.
+      # Two states, one signal — distinguish them or the publish path silently skips:
+      #   (a) Empty `.changeset/` → post-Version-Packages-merge, publish mode.
+      #       changesets/action must run so it diffs package.json versions
+      #       against npm and publishes anything ahead.
+      #   (b) Non-empty `.changeset/` with `releases: []` → every queued
+      #       changeset targets an ignore-listed (private) package. The
+      #       action would push an empty diff to changeset-release/main
+      #       and fail PR-create with "No commits between main and
+      #       changeset-release/main". Skip.
+      # `pnpm changeset status` reports `releases: []` for BOTH states, so
+      # the file-count check has to come first.
       - name: Detect publishable releases
         id: pending
         run: |
-          pnpm changeset status --output=/tmp/cs-status.json
-          COUNT=$(jq '.releases | length' /tmp/cs-status.json)
-          echo "publishable=$COUNT" >> "$GITHUB_OUTPUT"
-          if [ "$COUNT" = "0" ]; then
-            echo "No publishable changesets pending — every queued changeset targets ignore-listed packages. Skipping the changesets/action step."
+          CS_FILES=$(find .changeset -maxdepth 1 -name "*.md" -not -name "README.md" 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$CS_FILES" = "0" ]; then
+            echo "publishable=publish-mode" >> "$GITHUB_OUTPUT"
+            echo "Empty .changeset/ — running changesets/action in publish mode (will diff package.json against npm)."
           else
-            echo "$COUNT publishable release(s) pending."
-            jq '.releases[] | "  - \(.name) → \(.type)"' /tmp/cs-status.json
+            pnpm changeset status --output=/tmp/cs-status.json
+            COUNT=$(jq '.releases | length' /tmp/cs-status.json)
+            echo "publishable=$COUNT" >> "$GITHUB_OUTPUT"
+            if [ "$COUNT" = "0" ]; then
+              echo "No publishable changesets pending — every queued changeset targets ignore-listed packages. Skipping the changesets/action step."
+            else
+              echo "$COUNT publishable release(s) pending."
+              jq '.releases[] | "  - \(.name) → \(.type)"' /tmp/cs-status.json
+            fi
           fi
 
       # When .changeset/ has pending changesets for non-ignored packages:
