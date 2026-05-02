@@ -1,6 +1,6 @@
 {
   "name": "motebit-monorepo",
-  "version": "0.1.0",
+  "version": "0.0.0-private",
   "private": true,
   "license": "BUSL-1.1",
   "description": "Cryptographic identity for AI agents",
