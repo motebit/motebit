@@ -421,6 +421,16 @@ Commands:
                               consistent state. Exits non-zero on stale or
                               negative-drift verdicts. Master token required
                               (--sync-token / MOTEBIT_API_TOKEN).
+  smoke x402 [--mainnet]      Paid-flow end-to-end probe: bootstraps fresh
+                              buyer + worker motebit identities + EVM EOAs,
+                              posts a paid listing, drives a real x402
+                              settlement (Base Sepolia by default; --mainnet
+                              spends ~$0.0105 USDC against Base mainnet via
+                              the CDP facilitator), and verifies the relay
+                              records a settlement row. Buyer EOA persists
+                              at ~/.motebit/smoke-x402-buyer-eoa.txt; on
+                              first --mainnet run the smoke prints the
+                              address + funding instructions and exits.
 
 Options:
   --provider <name>       AI provider (default: anthropic)

@@ -53,6 +53,7 @@ import {
   handleLsp,
   handleSchema,
   handleSmokeReconciliation,
+  handleSmokeX402,
   handleVerifyWire,
   isVerifyKind,
   handlePs,
@@ -292,8 +293,12 @@ async function main(): Promise<void> {
     const smokeCmd = config.positionals[1];
     if (smokeCmd === "reconciliation") {
       await handleSmokeReconciliation(config);
+    } else if (smokeCmd === "x402") {
+      await handleSmokeX402(config);
     } else {
-      console.error("Usage: motebit smoke reconciliation [--sync-token <master-token>]");
+      console.error(
+        "Usage: motebit smoke [reconciliation|x402] [--mainnet] [--sync-token <token>]",
+      );
       process.exit(1);
     }
     return;

@@ -54,6 +54,7 @@ export { handleRelayUp } from "./relay.js";
 export { handleRotate } from "./rotate.js";
 export { handleSchema } from "./schema.js";
 export { handleSmokeReconciliation } from "./smoke.js";
+export { handleSmokeX402 } from "./smoke-x402.js";
 export {
   handleSkillsDisable,
   handleSkillsEnable,

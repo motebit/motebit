@@ -306,6 +306,8 @@
     "identity.md",
     "motebit.db",
     "relay",
-    "relay/relay.db"
+    "relay/relay.db",
+    "smoke-x402-buyer-eoa.txt",
+    "smoke-x402-worker-eoa.txt"
   ]
 }
