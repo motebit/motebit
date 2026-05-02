@@ -3,7 +3,7 @@
   "version": "0.0.0-private",
   "private": true,
   "license": "BUSL-1.1",
-  "description": "Cryptographic identity for AI agents",
+  "description": "Protocol + runtime for sovereign AI agents",
   "homepage": "https://motebit.com",
   "repository": {
     "type": "git",
