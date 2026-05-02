@@ -245,6 +245,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-skill-script-uses-tool-approval",
   },
   {
+    name: "check-tsup-uses-emit-decl-only",
+    defends:
+      "every workspace package whose `scripts.build` invokes `tsup` MUST pin `emitDeclarationOnly: true` in its own `tsconfig.json` `compilerOptions`. `tsconfig.base.json` sets `composite: true` so any package's `tsc -b` walks references and emits per-source `.js` into referenced projects' `outDir` — clobbering tsup's bundle. Caught after `@motebit/crypto@1.2.0` shipped to npm 2026-05-02 with an 8.9 KB unbundled `dist/suite-dispatch.js` (expected ~100 KB tsup bundle); standalone `npm install` failed at import time on `@noble/ed25519`. Hot-fix `1.2.1` pinned the flag in `packages/crypto/tsconfig.json`. Invariant #70, added 2026-05-02",
+    script: "check-tsup-uses-emit-decl-only",
+  },
+  {
     name: "check-api-surface",
     defends:
       "@motebit/{protocol,crypto,sdk} public API must match committed baseline unless a `major` changeset is pending",

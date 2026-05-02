@@ -890,6 +890,21 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       ),
   },
   {
+    script: "check-tsup-uses-emit-decl-only",
+    proves:
+      "flags a workspace package whose `scripts.build` invokes tsup but whose own tsconfig.json does not pin `emitDeclarationOnly: true` — the exact shape that shipped a broken @motebit/crypto@1.2.0 to npm",
+    perturb: () =>
+      // Strip the `"emitDeclarationOnly": true,` line from packages/crypto/tsconfig.json
+      // (the canonical tsup user). The gate reads each tsup-using package's own
+      // tsconfig literally — extends chains aren't resolved — so removing the
+      // explicit pin must surface as a violation. The regex matches the line
+      // including its trailing comma + newline; mutateFile restores byte-identical
+      // on cleanup.
+      mutateFile("packages/crypto/tsconfig.json", (src) =>
+        src.replace(/\s+"emitDeclarationOnly":\s*true,?/, ""),
+      ),
+  },
+  {
     script: "check-preset-imports",
     proves:
       "flags a surface-app declaration that shadows an @motebit/sdk canonical preset identifier (APPROVAL_PRESET_CONFIGS, COLOR_PRESETS, RISK_LABELS, …)",
