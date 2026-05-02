@@ -494,6 +494,47 @@ describe("Federation E2E", () => {
       );
       expect(stillActive).toBeDefined();
     });
+
+    // Mirrors the `motebit federation peer-remove <url>` CLI flow:
+    //   1. Operator's relay (A) signs its own relay_id via the admin oracle.
+    //   2. CLI POSTs the signature to peer (B)'s /federation/v1/peer/remove.
+    // The two halves must compose end-to-end — that's what this test asserts,
+    // not just the oracle in isolation.
+    it("removes peering via admin signing oracle (CLI peer-remove flow)", async () => {
+      await establishPeering(relayA, relayB);
+
+      const sigRes = await relayA.app.request("/api/v1/admin/federation/peer-removal-signature", {
+        headers: AUTH_HEADER,
+      });
+      expect(sigRes.status).toBe(200);
+      const { relay_id, signature } = (await sigRes.json()) as {
+        relay_id: string;
+        signature: string;
+      };
+      expect(relay_id).toBe(relayA.relayIdentity.relayMotebitId);
+      expect(signature).toMatch(/^[0-9a-f]{128}$/); // Ed25519 = 64 bytes hex
+
+      const removeRes = await relayB.app.request("/federation/v1/peer/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ relay_id, signature }),
+      });
+      expect(removeRes.status).toBe(200);
+
+      const peersRes = await relayB.app.request("/federation/v1/peers", { headers: AUTH_HEADER });
+      const { peers } = (await peersRes.json()) as {
+        peers: Array<{ peer_relay_id: string; state: string }>;
+      };
+      const a = peers.find((p) => p.peer_relay_id === relay_id);
+      expect(a?.state).toBe("removed");
+    });
+
+    it("admin peer-removal-signature requires auth", async () => {
+      const res = await relayA.app.request("/api/v1/admin/federation/peer-removal-signature", {
+        headers: {},
+      });
+      expect(res.status).toBe(401);
+    });
   });
 
   // --- Phase 3: Federated Discovery ---

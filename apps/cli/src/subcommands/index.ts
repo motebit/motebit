@@ -27,6 +27,7 @@ export { handleDoctor } from "./doctor.js";
 export { handleExport } from "./export.js";
 export {
   handleFederationPeer,
+  handleFederationPeerRemove,
   handleFederationPeers,
   handleFederationStatus,
 } from "./federation.js";

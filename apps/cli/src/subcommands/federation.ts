@@ -207,3 +207,54 @@ export async function handleFederationPeer(config: CliConfig): Promise<void> {
 
   console.log(`\nPeered successfully. Both relays are now active peers.`);
 }
+
+/**
+ * `motebit federation peer-remove <peer-url>` — un-peer this relay from
+ * a remote peer. Sibling to `handleFederationPeer`.
+ *
+ * Two HTTP calls:
+ *   1. Admin-authed GET to OUR relay's signing oracle, which returns
+ *      this relay's signature over its own relay_motebit_id raw bytes.
+ *   2. Unauth'd POST to the PEER's /federation/v1/peer/remove with that
+ *      `{relay_id, signature}` — the signature itself is the auth.
+ *
+ * The split exists because the signing key lives on our relay (in its DB),
+ * not on the operator's CLI host. The admin gate sits on (1) only —
+ * (2)'s payload is what the protocol spec already defines.
+ */
+export async function handleFederationPeerRemove(config: CliConfig): Promise<void> {
+  const peerUrl = config.positionals[2];
+  if (!peerUrl) {
+    console.error("Usage: motebit federation peer-remove <relay-url>");
+    process.exit(1);
+  }
+  const relayUrl = getRelayUrl(config);
+  const peerEndpoint = peerUrl.replace(/\/+$/, "");
+
+  console.log(`Un-peering ${relayUrl} from ${peerEndpoint}\n`);
+
+  const headers = await getRelayAuthHeaders(config);
+  const sigRes = await fetchRelayJson(
+    `${relayUrl}/api/v1/admin/federation/peer-removal-signature`,
+    headers,
+  );
+  if (!sigRes.ok) {
+    console.error(`Failed to mint removal signature: ${sigRes.error}`);
+    process.exit(1);
+  }
+  const { relay_id, signature } = sigRes.data as { relay_id: string; signature: string };
+  console.log(`  Our relay: ${relay_id.slice(0, 16)}...`);
+
+  const removeRes = await fetch(`${peerEndpoint}/federation/v1/peer/remove`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ relay_id, signature }),
+  });
+  if (!removeRes.ok) {
+    const err = await removeRes.text();
+    console.error(`Peer rejected removal: ${err}`);
+    process.exit(1);
+  }
+  console.log(`  ✓ Removed from peer's table`);
+  console.log(`\nUn-peered. The peer no longer routes federation traffic to us.`);
+}

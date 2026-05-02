@@ -401,6 +401,7 @@ Commands:
   federation status           Show relay identity (motebit_id, DID, public key)
   federation peers            List active federation peers
   federation peer <url>       Peer with another relay (mutual handshake)
+  federation peer-remove <url>  Un-peer this relay from a remote peer
   relay up                    Start a local sync relay (your own, on your machine)
     --port <n>                  HTTP port (default: 3000)
     --db-path <path>            SQLite path (default: ~/.motebit/relay/relay.db)

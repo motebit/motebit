@@ -682,4 +682,8 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   app.use("/api/v1/admin/receipts/*", bearerAuth({ token: apiToken }));
   // Admin aggregated-withdrawal queue summary — master token only.
   app.use("/api/v1/admin/pending-withdrawals", bearerAuth({ token: apiToken }));
+  // Admin federation signing oracles (peer-removal-signature today; future
+  // siblings under the same namespace) — master token only. The signature
+  // shape is unauthenticated-replayable, so the oracle is admin-only.
+  app.use("/api/v1/admin/federation/*", bearerAuth({ token: apiToken }));
 }

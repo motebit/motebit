@@ -1743,6 +1743,32 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json({ status: "removed" });
   });
 
+  // Admin signing oracle for federation peer removal — consumed by
+  // `motebit federation peer-remove <peer-url>` (apps/cli).
+  //
+  // Returns this relay's signature over its own relay_motebit_id raw UTF-8
+  // bytes, the artifact a peer's POST /federation/v1/peer/remove requires
+  // (sibling to lines above — same encoding, same key).
+  //
+  // Behind master-token admin auth (services/relay/CLAUDE.md rule 5), NOT a
+  // public self-mode oracle. /peer/propose self-mode is safe because the
+  // existing handler already signs (relay_id, nonce) for any unauth'd caller
+  // — self-mode adds no new oracle. /peer/remove takes a signature over the
+  // BARE relay_id (no nonce, no suite-binding), so a public self-mode would
+  // create a replayable artifact: any HTTP caller could fetch this and POST
+  // it to every known peer, federation-DoS'ing the relay. Auth required.
+  /** @internal */
+  app.get("/api/v1/admin/federation/peer-removal-signature", async (c) => {
+    const sig = await sign(
+      new TextEncoder().encode(relayIdentity.relayMotebitId),
+      relayIdentity.privateKey,
+    );
+    return c.json({
+      relay_id: relayIdentity.relayMotebitId,
+      signature: bytesToHex(sig),
+    });
+  });
+
   /** @spec motebit/relay-federation@1.2 */
   app.get("/federation/v1/peers", (c) => {
     const rows = db
