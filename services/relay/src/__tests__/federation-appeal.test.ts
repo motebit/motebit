@@ -579,7 +579,7 @@ describe("Federation appeal: round-2 evidence union (§8.3 + §8.5)", () => {
     const r1Body = voteRequestsByRound.get(1);
     expect(r1Body).toBeDefined();
     expect(r1Body!.evidence_bundle).toHaveLength(1);
-    expect(r1Body!.evidence_bundle[0].evidence_type).toBe("execution_receipt");
+    expect(r1Body!.evidence_bundle[0]!.evidence_type).toBe("execution_receipt");
 
     // Round-2 VoteRequest carried the union: round-1 + post-resolved
     const r2Body = voteRequestsByRound.get(2);
