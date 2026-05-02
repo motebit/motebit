@@ -31,7 +31,9 @@ import type { AtomFixture } from "./fixtures/atom-service.js";
 
 const MOTEBIT_ID = "01961234-read-7abc-def0-000000000001";
 const DEVICE_ID = "read-url-e2e-device";
-const PORT = 39301;
+// Below Linux's default ephemeral range (32768–60999) so parallel turbo runs of
+// `port: 0` MCP-server tests cannot grab this port out from under us.
+const PORT = 19301;
 
 let atom: AtomFixture;
 let client: Client;
@@ -145,7 +147,7 @@ describe("read-url — signed receipt E2E (atom)", () => {
     const failingAtom = await startReadUrlAtom({
       motebitId: "01961234-read-7abc-def0-000000000002",
       deviceId: "read-url-fail-device",
-      port: 39302,
+      port: 19302,
       readUrlResponse: () => ({ ok: false, error: "fetch failed: ENOTFOUND" }),
     });
     try {

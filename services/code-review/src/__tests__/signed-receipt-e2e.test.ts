@@ -47,7 +47,9 @@ import type { AtomFixture } from "./fixtures/atom-service.js";
 
 const READ_URL_MOTEBIT_ID = "01961234-cr01-7abc-def0-000000000001";
 const READ_URL_DEVICE_ID = "read-url-cr-device";
-const READ_URL_PORT = 39401;
+// Below Linux's default ephemeral range (32768–60999) so parallel turbo runs of
+// `port: 0` MCP-server tests cannot grab this port out from under us.
+const READ_URL_PORT = 19401;
 
 const CR_MOTEBIT_ID = "01961234-cr02-7abc-def0-000000000002";
 const CR_DEVICE_ID = "code-review-service";

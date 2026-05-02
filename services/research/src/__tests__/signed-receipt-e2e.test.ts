@@ -42,11 +42,13 @@ import type { AtomFixture } from "./fixtures/atom-service.js";
 
 const WS_MOTEBIT_ID = "01961234-rs01-7abc-def0-000000000001";
 const WS_DEVICE_ID = "web-search-rs-device";
-const WS_PORT = 39501;
+// Below Linux's default ephemeral range (32768–60999) so parallel turbo runs of
+// `port: 0` MCP-server tests cannot grab these ports out from under us.
+const WS_PORT = 19501;
 
 const RU_MOTEBIT_ID = "01961234-rs02-7abc-def0-000000000002";
 const RU_DEVICE_ID = "read-url-rs-device";
-const RU_PORT = 39502;
+const RU_PORT = 19502;
 
 const RESEARCH_MOTEBIT_ID = "01961234-rs03-7abc-def0-000000000003";
 const RESEARCH_DEVICE_ID = "research-service";
