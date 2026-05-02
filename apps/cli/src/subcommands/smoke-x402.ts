@@ -177,7 +177,7 @@ export async function handleSmokeX402(config: CliConfig): Promise<void> {
   //    direct settlement-by-task endpoint, but the task GET surface
   //    transitions to status=Completed when settlement lands, which is
   //    the proxy signal.
-  await assertSettlementLanded(relayUrl, worker.motebitId, taskId, buyer.signedToken);
+  await assertSettlementLanded({ relayUrl, workerId: worker.motebitId, taskId, buyer });
 
   // 8. Exit with the next-cycle observation timestamp + the rerun hint
   //    so operators can validate the read side asynchronously via
@@ -189,8 +189,8 @@ export async function handleSmokeX402(config: CliConfig): Promise<void> {
   console.log(`  next reconciliation cycle observable at ${observableAt}`);
   console.log(`  rerun verification:  motebit smoke reconciliation`);
 
-  // Erase the buyer's signed token from memory; the EOA private key
-  // stays persisted on disk (intentional — reused across runs).
+  // Erase the in-memory Ed25519 private keys; the EVM EOA keys stay
+  // persisted on disk (intentional — reused across runs).
   secureErase(buyer.privateKey);
   secureErase(worker.privateKey);
 }
@@ -240,8 +240,6 @@ interface BootstrappedMotebit {
   deviceId: string;
   publicKey: Uint8Array;
   privateKey: Uint8Array;
-  /** Pre-minted signed token, audience varies per call site. */
-  signedToken: string;
 }
 
 async function bootstrapMotebitIdentity(relayUrl: string): Promise<BootstrappedMotebit> {
@@ -268,23 +266,17 @@ async function bootstrapMotebitIdentity(relayUrl: string): Promise<BootstrappedM
     throw new Error(`bootstrap failed (${String(res.status)}): ${text.slice(0, 200)}`);
   }
 
-  // Pre-mint a signed token for this motebit. Audience is set per-call;
-  // the smoke uses three audiences (market:listing for the listing post,
-  // task:submit for buyer's task POST, task:result for worker's receipt
-  // POST), so we mint per-use rather than caching one token.
-  const signedToken = await mintSignedToken({
-    motebitId,
-    deviceId,
-    privateKey: keypair.privateKey,
-    audience: "admin:query",
-  });
-
+  // Tokens are minted per-call site with the right audience: market:listing
+  // for listings, task:submit for buyer's task POST, task:result for worker's
+  // receipt POST, task:query for buyer's settlement polling. Audiences live
+  // in services/relay/src/auth.ts; an audience mismatch is a hard 401, not
+  // a quiet authorization downgrade — pre-minting one bootstrap-time token
+  // and reusing it across endpoints would silently break.
   return {
     motebitId,
     deviceId,
     publicKey: keypair.publicKey,
     privateKey: keypair.privateKey,
-    signedToken,
   };
 }
 
@@ -509,21 +501,33 @@ async function submitWorkerReceipt(args: {
 // Settlement verification
 // ---------------------------------------------------------------------------
 
-async function assertSettlementLanded(
-  relayUrl: string,
-  workerId: string,
-  taskId: string,
-  buyerToken: string,
-): Promise<void> {
+async function assertSettlementLanded(args: {
+  relayUrl: string;
+  workerId: string;
+  taskId: string;
+  buyer: BootstrappedMotebit;
+}): Promise<void> {
+  // Mint a fresh `task:query` token for the buyer — the GET task endpoint
+  // requires this specific audience (services/relay/src/tasks.ts:2147).
+  // Re-using a different-audience token would 401 every poll and produce
+  // a misleading "settlement did not land" error message.
+  const buyerToken = await mintSignedToken({
+    motebitId: args.buyer.motebitId,
+    deviceId: args.buyer.deviceId,
+    privateKey: args.buyer.privateKey,
+    audience: "task:query",
+  });
+
   // Poll the task GET surface — its status flips to Completed (and a
   // receipt body becomes visible) when settlement lands. 60-second
   // ceiling matches the relay's TASK_TTL_MS / 10 — enough for any
   // realistic Ed25519 verify + DB transaction round-trip.
   const deadline = Date.now() + 60_000;
   let lastStatus = "(unknown)";
+  let lastNonOk = "";
   while (Date.now() < deadline) {
     const res = await fetch(
-      `${relayUrl}/agent/${encodeURIComponent(workerId)}/task/${encodeURIComponent(taskId)}`,
+      `${args.relayUrl}/agent/${encodeURIComponent(args.workerId)}/task/${encodeURIComponent(args.taskId)}`,
       { headers: { Authorization: `Bearer ${buyerToken}` } },
     );
     if (res.ok) {
@@ -535,10 +539,15 @@ async function assertSettlementLanded(
       if (body.receipt && body.task?.status === "completed") {
         return;
       }
+    } else {
+      // Capture the last non-2xx body so the timeout error is honest about
+      // what actually went wrong — auth issues vs settlement-pipeline stalls
+      // need different remedies.
+      lastNonOk = `HTTP ${String(res.status)}: ${(await res.text()).slice(0, 200)}`;
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
   throw new Error(
-    `settlement did not land within 60s — last task.status=${lastStatus}. The receipt POST returned 200 but the relay's settlement pipeline did not transition the task to completed; check relay logs for receipt verification or settlement errors.`,
+    `settlement did not land within 60s — last task.status=${lastStatus}; ${lastNonOk ? `last_http=${lastNonOk}; ` : ""}the receipt POST returned 200 but the relay's settlement pipeline did not transition the task to completed; check relay logs for receipt verification or settlement errors.`,
   );
 }
