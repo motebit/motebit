@@ -266,6 +266,111 @@ export async function handleDoctor(): Promise<void> {
         });
       }
     }
+
+    // Treasury reconciliation loop liveness (operator-side; gracefully
+    // degrades for non-operators). Catches "loop quietly stopped firing" —
+    // the silent failure mode the loop itself can't surface, since a dead
+    // loop emits no logs. Read-only, no money cost.
+    //
+    // Probe runs whenever the relay is reachable; auth posture branches:
+    //  - master token present → real probe with healthy/stale/disabled detail
+    //  - no master token → "skipped — operator-only check" (informational)
+    //  - 404 → older relay without the endpoint
+    //
+    // Sibling-but-distinct primitive vs the deposit-detector — canonical
+    // doctrine in `packages/treasury-reconciliation/CLAUDE.md` Rule 1.
+    if (relayReachable) {
+      const masterToken = process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
+      const reqHeaders: Record<string, string> = {};
+      if (masterToken != null && masterToken !== "") {
+        reqHeaders["Authorization"] = `Bearer ${masterToken}`;
+      }
+      try {
+        const ac = new AbortController();
+        const t = probeTimeout(ac.signal, 5000);
+        const res = await fetch(
+          `${syncUrl.replace(/\/+$/, "")}/api/v1/admin/treasury-reconciliation`,
+          { signal: ac.signal, headers: reqHeaders },
+        );
+        clearTimeout(t);
+        if (res.status === 401) {
+          checks.push({
+            name: "Treasury reconciliation",
+            ok: true,
+            detail: "skipped — operator-only check (set MOTEBIT_API_TOKEN to enable)",
+          });
+        } else if (res.status === 404) {
+          checks.push({
+            name: "Treasury reconciliation",
+            ok: true,
+            detail: "endpoint not exposed (older relay)",
+          });
+        } else if (res.ok) {
+          const body = (await res.json()) as {
+            stats: {
+              total_runs: number;
+              last_run_at: number | null;
+              current_consistent: boolean | null;
+            };
+            loop_enabled: boolean;
+            chain: string;
+          };
+          if (!body.loop_enabled) {
+            checks.push({
+              name: "Treasury reconciliation",
+              ok: true,
+              detail: "loop disabled (testnet mode or X402_PAY_TO_ADDRESS unset)",
+            });
+          } else if (body.stats.last_run_at == null) {
+            checks.push({
+              name: "Treasury reconciliation",
+              ok: true,
+              detail: `loop enabled (${body.chain}), no cycles yet (recent boot)`,
+            });
+          } else {
+            const ageMs = Date.now() - body.stats.last_run_at;
+            // 2× default 15-min cadence — generous enough to absorb a
+            // single missed tick without flagging a healthy loop.
+            const STALE_THRESHOLD_MS = 30 * 60_000;
+            if (ageMs > STALE_THRESHOLD_MS) {
+              checks.push({
+                name: "Treasury reconciliation",
+                ok: false,
+                detail: `loop stale — last run ${Math.round(ageMs / 60_000)}m ago (expected within 30m)`,
+                remedy: "check relay logs for `treasury-reconciliation.cycle_uncaught`",
+              });
+            } else if (body.stats.current_consistent === false) {
+              checks.push({
+                name: "Treasury reconciliation",
+                ok: false,
+                detail: `negative drift on last cycle (${body.stats.total_runs} runs total)`,
+                remedy:
+                  "inspect via GET /api/v1/admin/treasury-reconciliation; manual sweeps cause known false positives",
+              });
+            } else {
+              checks.push({
+                name: "Treasury reconciliation",
+                ok: true,
+                detail: `healthy — last run ${Math.round(ageMs / 60_000)}m ago, ${body.stats.total_runs} runs total`,
+              });
+            }
+          }
+        } else {
+          checks.push({
+            name: "Treasury reconciliation",
+            ok: true,
+            detail: `relay returned HTTP ${res.status} (skipping)`,
+          });
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        checks.push({
+          name: "Treasury reconciliation",
+          ok: true,
+          detail: `probe failed: ${msg}`,
+        });
+      }
+    }
   }
 
   // Secure Enclave availability (hardware-attestation channel).
