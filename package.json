@@ -66,6 +66,7 @@
     "check-claude-md": "npx tsx scripts/check-claude-md.ts",
     "check-skill-corpus": "npx tsx scripts/check-skill-corpus.ts",
     "check-skill-cli-coverage": "npx tsx scripts/check-skill-cli-coverage.ts",
+    "check-skill-script-uses-tool-approval": "npx tsx scripts/check-skill-script-uses-tool-approval.ts",
     "check-trust-score-display": "npx tsx scripts/check-trust-score-display.ts",
     "check-sensitivity-routing": "npx tsx scripts/check-sensitivity-routing.ts",
     "check-sqlite-migration-runner": "npx tsx scripts/check-sqlite-migration-runner.ts",

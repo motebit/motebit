@@ -8,7 +8,7 @@ Every architectural drift this codebase has suffered has the same shape: the can
 4. **Add a defense** — CI gate, lint rule, or explicit doctrine principle in [CLAUDE.md](../CLAUDE.md).
 5. **Cross-reference the defense** from any affected package or service comment.
 
-68 invariants are enforced today. 59 run as hard CI gates via `pnpm check` (proven effective by `check-gates-effective`); one is advisory (`check-sibling-boundaries`, PR-diff scoped); eight are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions) or compound rules inside an existing gate.
+69 invariants are enforced today. 60 run as hard CI gates via `pnpm check` (proven effective by `check-gates-effective`); one is advisory (`check-sibling-boundaries`, PR-diff scoped); eight are build-time (TypeScript `satisfies`) or test-enforced (vitest assertions) or compound rules inside an existing gate.
 
 ## Inventory
 

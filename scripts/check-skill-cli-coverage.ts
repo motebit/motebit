@@ -47,8 +47,15 @@ const INTENTIONAL_NON_CLI_METHODS = new Set<string>(["get"]);
  *
  *   - `publish` — POSTs a signed envelope to the relay's
  *     /api/v1/skills/submit endpoint. The local SkillRegistry never sees it.
+ *   - `run-script` — phase 2 quarantine: spawns a script from the skill's
+ *     `scripts/` tree gated through the canonical operator approval queue
+ *     (`SqliteApprovalStore` from `@motebit/persistence`). The execution
+ *     primitive is the OS spawn, not a SkillRegistry method; the registry
+ *     only persists + serves the script bytes. See drift gate #69
+ *     `check-skill-script-uses-tool-approval` for the approval-gate
+ *     coverage check.
  */
-const INTENTIONAL_NON_REGISTRY_VERBS = new Set<string>(["publish"]);
+const INTENTIONAL_NON_REGISTRY_VERBS = new Set<string>(["publish", "run-script"]);
 
 /**
  * Map from registry method name → expected CLI subcommand verb. The default
