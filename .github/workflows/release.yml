@@ -109,34 +109,25 @@ jobs:
             if (failed) process.exit(1);
           "
 
-      # Two states, one signal — distinguish them or the publish path silently skips:
-      #   (a) Empty `.changeset/` → post-Version-Packages-merge, publish mode.
-      #       changesets/action must run so it diffs package.json versions
-      #       against npm and publishes anything ahead.
-      #   (b) Non-empty `.changeset/` with `releases: []` → every queued
-      #       changeset targets an ignore-listed (private) package. The
-      #       action would push an empty diff to changeset-release/main
-      #       and fail PR-create with "No commits between main and
-      #       changeset-release/main". Skip.
-      # `pnpm changeset status` reports `releases: []` for BOTH states, so
-      # the file-count check has to come first.
+      # Skip the changesets/action when no releases would actually happen.
+      # Every changeset that targets only `ignore`-listed (private)
+      # packages produces a `releases: []` status — `changesets/action`
+      # then force-pushes an empty diff to `changeset-release/main` and
+      # the PR-create step fails with `No commits between main and
+      # changeset-release/main`. The guard reads the JSON `releases`
+      # array directly, since `changeset status` exits 0 even when
+      # nothing bumps.
       - name: Detect publishable releases
         id: pending
         run: |
-          CS_FILES=$(find .changeset -maxdepth 1 -name "*.md" -not -name "README.md" 2>/dev/null | wc -l | tr -d ' ')
-          if [ "$CS_FILES" = "0" ]; then
-            echo "publishable=publish-mode" >> "$GITHUB_OUTPUT"
-            echo "Empty .changeset/ — running changesets/action in publish mode (will diff package.json against npm)."
+          pnpm changeset status --output=/tmp/cs-status.json
+          COUNT=$(jq '.releases | length' /tmp/cs-status.json)
+          echo "publishable=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$COUNT" = "0" ]; then
+            echo "No publishable changesets pending — every queued changeset targets ignore-listed packages. Skipping the changesets/action step."
           else
-            pnpm changeset status --output=/tmp/cs-status.json
-            COUNT=$(jq '.releases | length' /tmp/cs-status.json)
-            echo "publishable=$COUNT" >> "$GITHUB_OUTPUT"
-            if [ "$COUNT" = "0" ]; then
-              echo "No publishable changesets pending — every queued changeset targets ignore-listed packages. Skipping the changesets/action step."
-            else
-              echo "$COUNT publishable release(s) pending."
-              jq '.releases[] | "  - \(.name) → \(.type)"' /tmp/cs-status.json
-            fi
+            echo "$COUNT publishable release(s) pending."
+            jq '.releases[] | "  - \(.name) → \(.type)"' /tmp/cs-status.json
           fi
 
       # When .changeset/ has pending changesets for non-ignored packages:
@@ -156,8 +147,33 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
 
+      # Belt-and-suspenders publish — covers the structural gap where
+      # `.changeset/` accumulates ignore-listed-only changesets faster
+      # than non-ignored ones, so the guard skips the action even when
+      # main's package.json is ahead of npm (e.g., right after a Version
+      # Packages PR merge). `changeset publish` is idempotent: ships
+      # only packages whose package.json version exceeds npm's, no-ops
+      # when everything matches. Safe to always run after the action:
+      # if the action published, this is a no-op; if the action was
+      # skipped, this catches the actual publish.
+      - name: Direct publish (idempotent — covers all-ignored-changesets state)
+        id: direct_publish
+        run: |
+          set -euo pipefail
+          # Capture output so we can detect whether anything actually shipped.
+          OUTPUT=$(pnpm release 2>&1 | tee /dev/stderr)
+          if echo "$OUTPUT" | grep -qE "(New tag|Publishing)"; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing to publish — every workspace package.json matches npm."
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: true
+
       - name: Post-publish smoke test (registry propagation)
-        if: steps.changesets.outputs.published == 'true'
+        if: steps.changesets.outputs.published == 'true' || steps.direct_publish.outputs.published == 'true'
         env:
           MOTEBIT_PASSPHRASE: smoke-test-ci-passphrase
         run: |
