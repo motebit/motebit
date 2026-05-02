@@ -1,5 +1,18 @@
 # @motebit/verify
 
+## 1.2.1
+
+### Patch Changes
+
+- Updated dependencies [c29e767]
+  - @motebit/crypto@1.2.1
+  - @motebit/crypto-android-keystore@1.1.2
+  - @motebit/crypto-appattest@1.0.3
+  - @motebit/crypto-play-integrity@1.1.2
+  - @motebit/crypto-tpm@1.1.2
+  - @motebit/crypto-webauthn@1.0.3
+  - @motebit/verifier@1.1.1
+
 ## 1.2.0
 
 ### Minor Changes

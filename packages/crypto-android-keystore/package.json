@@ -1,6 +1,6 @@
 {
   "name": "@motebit/crypto-android-keystore",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Apache-2.0 verifier for Android Hardware-Backed Keystore Attestation hardware-attestation credentials — offline X.509 chain verification against pinned Google Hardware Attestation roots (RSA-4096 + ECDSA P-384), plus ASN.1 extraction of the KeyDescription extension. Plugs into @motebit/crypto's HardwareAttestationVerifiers dispatcher to validate Android device-attested motebit identities.",
   "type": "module",
   "main": "./dist/index.js",
