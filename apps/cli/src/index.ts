@@ -52,6 +52,7 @@ import {
   handleLogs,
   handleLsp,
   handleSchema,
+  handleSmokeReconciliation,
   handleVerifyWire,
   isVerifyKind,
   handlePs,
@@ -282,6 +283,17 @@ async function main(): Promise<void> {
       await handleRelayUp(config);
     } else {
       console.error("Usage: motebit relay up [--port|--db-path|--pay-to-address|...]");
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (subcommand === "smoke") {
+    const smokeCmd = config.positionals[1];
+    if (smokeCmd === "reconciliation") {
+      await handleSmokeReconciliation(config);
+    } else {
+      console.error("Usage: motebit smoke reconciliation [--sync-token <master-token>]");
       process.exit(1);
     }
     return;

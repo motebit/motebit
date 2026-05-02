@@ -53,6 +53,7 @@ export { handleRegister } from "./register.js";
 export { handleRelayUp } from "./relay.js";
 export { handleRotate } from "./rotate.js";
 export { handleSchema } from "./schema.js";
+export { handleSmokeReconciliation } from "./smoke.js";
 export {
   handleSkillsDisable,
   handleSkillsEnable,

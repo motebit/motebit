@@ -415,6 +415,12 @@ Commands:
     --federation-url <url>      Public URL for this relay — enables federation (default: off)
     --passphrase                Prompt for relay key encryption passphrase
                                 (or set MOTEBIT_RELAY_KEY_PASSPHRASE)
+  smoke reconciliation        Operator-side end-to-end probe: asserts the
+                              treasury reconciliation loop is enabled, fresh
+                              (last cycle within 30 min), and reporting
+                              consistent state. Exits non-zero on stale or
+                              negative-drift verdicts. Master token required
+                              (--sync-token / MOTEBIT_API_TOKEN).
 
 Options:
   --provider <name>       AI provider (default: anthropic)
