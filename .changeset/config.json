@@ -48,6 +48,7 @@
     "@motebit/self-knowledge",
     "@motebit/semiring",
     "@motebit/settlement-rails",
+    "@motebit/skills",
     "@motebit/spatial",
     "@motebit/sqlite-migrations",
     "@motebit/state-vector",
