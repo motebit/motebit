@@ -172,15 +172,23 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
 
-      - name: Post-publish smoke test (registry propagation)
+      # Poll npm until every publishable workspace package's package.json
+      # version is visible on the registry. Replaces a fixed `sleep 10`
+      # that lost the race twice during the v1.2 cut: smoke ran before
+      # npm's metadata index showed the just-published version, so
+      # `npx create-motebit@latest` → `npm install` resolved to the
+      # previous (broken) version of @motebit/crypto. Per-package poll
+      # for up to 90s; already-published packages return immediately.
+      - name: Wait for npm registry propagation
+        if: steps.changesets.outputs.published == 'true' || steps.direct_publish.outputs.published == 'true'
+        run: npx tsx scripts/wait-for-npm-propagation.ts
+
+      - name: Post-publish smoke test (scaffold + CLI exercise)
         if: steps.changesets.outputs.published == 'true' || steps.direct_publish.outputs.published == 'true'
         env:
           MOTEBIT_PASSPHRASE: smoke-test-ci-passphrase
         run: |
           set -euo pipefail
-
-          echo "Waiting for npm registry propagation..."
-          sleep 10
 
           # ── Default scaffold (identity-only) — exercises the published artifact ──
           SMOKE_DIR=$(mktemp -d)
