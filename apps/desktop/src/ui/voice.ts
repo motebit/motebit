@@ -3,6 +3,10 @@ import {
   WebSpeechTTSProvider,
   WebSpeechSTTProvider,
   ElevenLabsTTSProvider,
+  InworldTTSProvider,
+  DeepgramSpeakTTSProvider,
+  DeepgramSTTProvider,
+  InworldSTTProvider,
   FallbackTTSProvider,
   StreamingTTSQueue,
   computeSpeechEnergy,
@@ -12,11 +16,14 @@ import {
   waveformColorFromSoul,
   AMBIENT_EMA_TUNING,
 } from "@motebit/voice";
-import type { TTSProvider, WaveformState } from "@motebit/voice";
+import type { TTSProvider, STTProvider, WaveformState } from "@motebit/voice";
 import { stripTags } from "@motebit/ai-core";
 import type { InteriorColor, InvokeFn } from "../index";
-import { TauriTTSProvider } from "../tauri-tts";
-import { ELEVENLABS_API_KEY_SLOT } from "./keyring-keys";
+import {
+  ELEVENLABS_API_KEY_SLOT,
+  INWORLD_API_KEY_SLOT,
+  DEEPGRAM_API_KEY_SLOT,
+} from "./keyring-keys";
 import type { DesktopContext, MicState } from "../types";
 import { addMessage } from "./chat";
 
@@ -24,55 +31,118 @@ import { addMessage } from "./chat";
 
 const webSpeechTts = new WebSpeechTTSProvider(["Samantha", "Karen", "Daniel", "Alex"]);
 let ttsProvider: TTSProvider = webSpeechTts;
-const sttProvider = new WebSpeechSTTProvider();
 let ttsVoice = "alloy";
+
+// === STT Provider ===
+//
+// Mutable across sessions so the keyring rebuild can swap in a vendor-keyed
+// streaming provider (Inworld or Deepgram) when the user pastes a key. The
+// initial WebSpeech instance is the zero-key terminal fallback — always
+// reachable, doesn't need network, doesn't need permission to instantiate
+// (only when `start()` is called, at which point the browser asks).
+//
+// Cycle: voice mode start → spawnRecognition uses current sttProvider →
+// onResult fires → user clicks off → sttProvider.stop(). The `sttProvider`
+// reference is per-app-session (rebuilt only on settings save), not per
+// recognition cycle, so handlers wired during `startVoice()` survive
+// across the keeper's start/stop calls.
+
+let sttProvider: STTProvider = new WebSpeechSTTProvider();
 
 /**
  * Rebuild the active TTS chain. Synchronous to match the existing API, but
- * kicks off an async keyring read for the ElevenLabs BYOK key — the provider
- * reference is swapped in place once the key is known. Chain order:
+ * kicks off async keyring reads for each vendor key — the provider chain
+ * is swapped in place once the keys are known. Voice section's three
+ * majors plus the terminal WebSpeech fallback. Chain order matches web's
+ * exactly:
  *
- *   1. ElevenLabs (L0, direct API) — if `elevenlabs_api_key` is in keyring
- *   2. Tauri OpenAI TTS — if an `invoke` handle is available (desktop only)
- *   3. Web Speech — always present as the terminal fallback
+ *   1. ElevenLabs (L0, direct API)     — if `elevenlabs_api_key` set
+ *   2. Inworld (L0, direct API)         — if `inworld_api_key` set
+ *   3. Deepgram Speak (L0, direct API)  — if `deepgram_api_key` set
+ *   4. WebSpeech                        — zero-key terminal fallback.
  *
  * `FallbackTTSProvider` steps down the chain only on transport/API failures,
- * so users who set a quota-exhausted ElevenLabs key still get audio through
- * the OpenAI adapter rather than falling silent.
+ * so a quota-exhausted ElevenLabs key still lets audio flow through Inworld
+ * or Deepgram rather than falling silent.
  */
 function rebuildTtsProvider(invoke?: InvokeFn): void {
-  // Immediate (synchronous) chain — lands first so the caller has a working
-  // provider even if the keyring read is slow or fails.
-  const immediateChain: TTSProvider[] = [];
-  if (invoke) immediateChain.push(new TauriTTSProvider(invoke, { voice: ttsVoice }));
-  immediateChain.push(webSpeechTts);
-  ttsProvider =
-    immediateChain.length === 1 ? immediateChain[0]! : new FallbackTTSProvider(immediateChain);
+  // Immediate (synchronous) chain — WebSpeech only until the async keyring
+  // reads complete. The caller has a working provider even if keyring is
+  // slow.
+  ttsProvider = webSpeechTts;
 
   if (!invoke) return;
 
-  // Async swap-in of the full chain once the ElevenLabs key is known.
+  // Async swap-in of the full chain once all vendor keys are known. Read
+  // all three in parallel — they're independent, no need to serialize.
   void (async () => {
-    let elevenLabsKey: string | null = null;
-    try {
-      elevenLabsKey = await invoke<string | null>("keyring_get", {
-        key: ELEVENLABS_API_KEY_SLOT,
-      });
-    } catch {
-      // Keyring unavailable — fall through with the immediate chain.
-    }
-    if (elevenLabsKey == null || elevenLabsKey === "") return;
+    const safeGet = (slot: string): Promise<string | null> =>
+      invoke<string | null>("keyring_get", { key: slot }).catch(() => null);
 
-    // Desktop's `ttsVoice` preference uses OpenAI voice names — don't forward
-    // it to ElevenLabs (which would 404 on "alloy" / "nova"). The L0 provider
-    // defaults to "Rachel" internally. Passing a raw ElevenLabs voice_id is
-    // supported by the provider shape when the surface surfaces it later.
-    const chain: TTSProvider[] = [
-      new ElevenLabsTTSProvider({ apiKey: elevenLabsKey }),
-      new TauriTTSProvider(invoke, { voice: ttsVoice }),
-      webSpeechTts,
-    ];
-    ttsProvider = new FallbackTTSProvider(chain);
+    const [elevenLabsKey, inworldKey, deepgramKey] = await Promise.all([
+      safeGet(ELEVENLABS_API_KEY_SLOT),
+      safeGet(INWORLD_API_KEY_SLOT),
+      safeGet(DEEPGRAM_API_KEY_SLOT),
+    ]);
+
+    const chain: TTSProvider[] = [];
+    // Desktop's `ttsVoice` preference is the user's voice picker selection.
+    // Pass it through to providers; each rejects voice ids that don't match
+    // its space (provider falls through to the next on 4xx).
+    if (elevenLabsKey != null && elevenLabsKey !== "") {
+      chain.push(new ElevenLabsTTSProvider({ apiKey: elevenLabsKey, voice: ttsVoice }));
+    }
+    if (inworldKey != null && inworldKey !== "") {
+      chain.push(new InworldTTSProvider({ apiKey: inworldKey, voice: ttsVoice }));
+    }
+    if (deepgramKey != null && deepgramKey !== "") {
+      chain.push(new DeepgramSpeakTTSProvider({ apiKey: deepgramKey, voice: ttsVoice }));
+    }
+    chain.push(webSpeechTts);
+
+    ttsProvider = chain.length === 1 ? chain[0]! : new FallbackTTSProvider(chain);
+  })();
+}
+
+/**
+ * Rebuild the active STT provider from keyring. Mirrors the TTS rebuild's
+ * shape — async keyring reads, swap in place. Vendor-priority chain matches
+ * web's:
+ *
+ *   1. Inworld (multi-provider STT, real-time websocket, sub-200ms)
+ *   2. Deepgram (Nova streaming, lowest-latency specialist)
+ *   3. WebSpeech (browser built-in; zero-key terminal fallback)
+ *
+ * Only one provider is active at a time — STTProvider's lifecycle is
+ * stateful (mic stream, websocket) so a fallback chain doesn't fit the
+ * shape the way it does for TTS. If the keyed vendor's socket dies
+ * mid-session, the keeper respawns the same provider; vendor swap
+ * happens on the next settings-save rebuild.
+ */
+function rebuildSttProvider(invoke?: InvokeFn): void {
+  if (!invoke) {
+    sttProvider = new WebSpeechSTTProvider();
+    return;
+  }
+
+  void (async () => {
+    const safeGet = (slot: string): Promise<string | null> =>
+      invoke<string | null>("keyring_get", { key: slot }).catch(() => null);
+
+    const [inworldKey, deepgramKey] = await Promise.all([
+      safeGet(INWORLD_API_KEY_SLOT),
+      safeGet(DEEPGRAM_API_KEY_SLOT),
+    ]);
+
+    if (inworldKey != null && inworldKey !== "") {
+      sttProvider = new InworldSTTProvider({ apiKey: inworldKey });
+      return;
+    }
+    if (deepgramKey != null && deepgramKey !== "") {
+      sttProvider = new DeepgramSTTProvider({ apiKey: deepgramKey });
+      return;
+    }
+    sttProvider = new WebSpeechSTTProvider();
   })();
 }
 
@@ -145,6 +215,7 @@ export interface VoiceAPI {
   cancelTTS(): void;
   updateVoiceGlowColor(): void;
   rebuildTtsProvider(invoke?: InvokeFn): void;
+  rebuildSttProvider(invoke?: InvokeFn): void;
   sizeWaveformCanvas(): void;
   getVoiceAutoSend(): boolean;
   setVoiceAutoSend(v: boolean): void;
@@ -450,24 +521,16 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
 
       const config = ctx.getConfig();
       if (config?.isTauri !== true || config.invoke == null) {
-        addMessage("system", "Whisper transcription requires the desktop app (Tauri)");
+        addMessage("system", "Post-recording transcription requires the desktop app (Tauri)");
         finishVoiceTranscript("", toAmbient);
         return;
       }
 
-      let whisperApiKey: string | undefined;
-      try {
-        const keyVal = await config.invoke<string | null>("keyring_get", {
-          key: "whisper_api_key",
-        });
-        whisperApiKey = keyVal ?? undefined;
-      } catch {
-        // No key available
-      }
-
+      // Rust `transcribe_audio` tries macOS Speech Recognition first, then
+      // a local `whisper` binary if installed. No cloud-Whisper-via-OpenAI
+      // path — the OpenAI vendor exited the voice section entirely.
       const transcript = await config.invoke<string>("transcribe_audio", {
         audioBase64,
-        apiKey: whisperApiKey ?? null,
       });
 
       finishVoiceTranscript(transcript.trim(), toAmbient);
@@ -768,6 +831,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
     cancelTTS,
     updateVoiceGlowColor,
     rebuildTtsProvider,
+    rebuildSttProvider,
     sizeWaveformCanvas,
     getVoiceAutoSend() {
       return voiceAutoSend;

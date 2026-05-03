@@ -850,6 +850,17 @@
         outline: none;
         font-family: inherit;
       }
+      /* Custom chevron — keeps the select chrome consistent across Chromium
+         and WebKit engines. Same SVG used on desktop. */
+      #settings-modal select {
+        -webkit-appearance: none;
+        appearance: none;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+        background-repeat: no-repeat;
+        background-position: right 12px center;
+        background-size: 10px;
+        padding-right: 30px;
+      }
       #settings-modal select:focus,
       #settings-modal input:focus {
         border-color: var(--accent-border);
@@ -6510,28 +6521,6 @@
         </button>
         <button
           class="settings-tab"
-          data-tab="voice"
-          role="tab"
-          aria-selected="false"
-          aria-controls="pane-voice"
-          id="tab-voice"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-            <path d="M12 19v3" />
-          </svg>
-          Voice
-        </button>
-        <button
-          class="settings-tab"
           data-tab="governance"
           role="tab"
           aria-selected="false"
@@ -6755,12 +6744,23 @@
               <div id="byok-anthropic">
                 <div class="settings-field">
                   <label for="anthropic-api-key">API Key</label>
-                  <input
-                    id="anthropic-api-key"
-                    type="password"
-                    placeholder="sk-ant-..."
-                    autocomplete="off"
-                  />
+                  <div class="settings-key-row">
+                    <input
+                      id="anthropic-api-key"
+                      type="password"
+                      placeholder="sk-ant-..."
+                      autocomplete="off"
+                    />
+                    <button
+                      type="button"
+                      class="tts-key-reveal"
+                      data-target="anthropic-api-key"
+                      aria-label="Show key"
+                      aria-pressed="false"
+                    >
+                      Show
+                    </button>
+                  </div>
                 </div>
                 <div class="settings-field">
                   <label for="anthropic-model">Model</label>
@@ -6776,12 +6776,23 @@
               <div id="byok-openai" style="display: none">
                 <div class="settings-field">
                   <label for="openai-api-key">API Key</label>
-                  <input
-                    id="openai-api-key"
-                    type="password"
-                    placeholder="sk-..."
-                    autocomplete="off"
-                  />
+                  <div class="settings-key-row">
+                    <input
+                      id="openai-api-key"
+                      type="password"
+                      placeholder="sk-..."
+                      autocomplete="off"
+                    />
+                    <button
+                      type="button"
+                      class="tts-key-reveal"
+                      data-target="openai-api-key"
+                      aria-label="Show key"
+                      aria-pressed="false"
+                    >
+                      Show
+                    </button>
+                  </div>
                 </div>
                 <div class="settings-field">
                   <label for="openai-model">Model</label>
@@ -6797,12 +6808,23 @@
               <div id="byok-google" style="display: none">
                 <div class="settings-field">
                   <label for="google-api-key">API Key</label>
-                  <input
-                    id="google-api-key"
-                    type="password"
-                    placeholder="AIza..."
-                    autocomplete="off"
-                  />
+                  <div class="settings-key-row">
+                    <input
+                      id="google-api-key"
+                      type="password"
+                      placeholder="AIza..."
+                      autocomplete="off"
+                    />
+                    <button
+                      type="button"
+                      class="tts-key-reveal"
+                      data-target="google-api-key"
+                      aria-label="Show key"
+                      aria-pressed="false"
+                    >
+                      Show
+                    </button>
+                  </div>
                 </div>
                 <div class="settings-field">
                   <label for="google-model">Model</label>
@@ -6913,73 +6935,58 @@
           <!-- Response length removed: the creature reads the room.
              System prompt: "Match the energy of the user's message."
              If the user wants brevity, they say so — the creature remembers. -->
-          <!-- MCP Servers (HTTP only in browser) -->
+          <!-- MCP Servers (HTTP only in browser; stdio is desktop-only) -->
           <div class="settings-card">
             <div class="card-title">MCP Servers</div>
-            <div
-              class="mcp-hint"
-              style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px"
-            >
-              Connect to remote tools and agents via HTTP MCP.
-            </div>
             <div id="mcp-server-list" style="margin-bottom: 8px"></div>
-            <div class="mcp-add-form" style="display: flex; flex-direction: column; gap: 6px">
-              <div style="display: flex; gap: 6px">
-                <input
-                  id="mcp-add-name"
-                  type="text"
-                  placeholder="Name"
-                  style="
-                    flex: 1;
-                    font-size: 16px;
-                    padding: 5px 8px;
-                    border-radius: 6px;
-                    border: 1px solid var(--border-input);
-                    background: var(--bg-input);
-                    color: var(--text-input);
-                    outline: none;
-                  "
-                />
-                <input
-                  id="mcp-add-url"
-                  type="url"
-                  placeholder="https://..."
-                  style="
-                    flex: 2;
-                    font-size: 16px;
-                    padding: 5px 8px;
-                    border-radius: 6px;
-                    border: 1px solid var(--border-input);
-                    background: var(--bg-input);
-                    color: var(--text-input);
-                    outline: none;
-                  "
-                />
+            <button class="mcp-add-btn" id="mcp-add-toggle">+ Add Server</button>
+            <div id="mcp-add-form" style="display: none">
+              <div class="settings-field">
+                <label for="mcp-add-name">Name</label>
+                <input id="mcp-add-name" type="text" placeholder="e.g. linear" />
               </div>
-              <div style="display: flex; align-items: center; gap: 8px">
-                <label
-                  style="
-                    font-size: 11px;
-                    color: var(--text-muted);
-                    display: flex;
-                    align-items: center;
-                    gap: 4px;
-                    cursor: pointer;
-                  "
-                >
-                  <input id="mcp-add-motebit" type="checkbox" style="margin: 0" /> Motebit agent
-                </label>
+              <div class="settings-field">
+                <label for="mcp-add-url">URL</label>
+                <input id="mcp-add-url" type="text" placeholder="https://mcp.linear.app/mcp" />
+              </div>
+              <div class="settings-field">
+                <div class="toggle-row">
+                  <div>
+                    <div class="toggle-label">Trusted</div>
+                    <div class="toggle-desc">Auto-approve all tools from this server</div>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="mcp-add-trusted" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="settings-field">
+                <div class="toggle-row">
+                  <div>
+                    <div class="toggle-label">Motebit</div>
+                    <div class="toggle-desc">
+                      This server is a motebit — verify identity on connect
+                    </div>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="mcp-add-motebit" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+              </div>
+              <div style="display: flex; gap: 6px; margin-top: 10px">
+                <button class="settings-outline-btn" id="mcp-add-cancel" style="flex: 1">
+                  Cancel
+                </button>
                 <button
+                  class="settings-outline-btn"
                   id="mcp-add-btn"
                   style="
-                    margin-left: auto;
-                    font-size: 11px;
-                    padding: 4px 12px;
-                    border-radius: 6px;
-                    border: 1px solid var(--accent-border);
-                    background: var(--accent-bg);
-                    color: var(--accent);
-                    cursor: pointer;
+                    flex: 1;
+                    background: rgba(99, 102, 241, 0.15);
+                    border-color: rgba(99, 102, 241, 0.3);
+                    color: #818cf8;
                   "
                 >
                   Add
@@ -6987,17 +6994,14 @@
               </div>
             </div>
           </div>
-        </div>
-        <!-- Voice pane -->
-        <div class="settings-pane" id="pane-voice" role="tabpanel" aria-labelledby="tab-voice">
           <div class="settings-card">
-            <div class="card-title">TTS Provider Keys</div>
+            <div class="card-title">Voice</div>
             <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px">
               Keys stay on this device. With no key set, the creature speaks through your browser's
               built-in voice.
             </div>
             <div class="settings-field">
-              <label for="tts-elevenlabs-key">ElevenLabs API key</label>
+              <label for="tts-elevenlabs-key">ElevenLabs API Key</label>
               <div class="settings-key-row">
                 <input
                   id="tts-elevenlabs-key"
@@ -7015,47 +7019,89 @@
                   Show
                 </button>
               </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
+                Premium voice and transcription.
+              </div>
             </div>
-            <div class="settings-field">
-              <label for="tts-openai-key">OpenAI API key</label>
+            <div class="settings-field" style="margin-top: 10px">
+              <label for="tts-inworld-key">Inworld API Key</label>
               <div class="settings-key-row">
                 <input
-                  id="tts-openai-key"
+                  id="tts-inworld-key"
                   type="password"
-                  placeholder="sk-..."
+                  placeholder="..."
                   autocomplete="off"
                 />
                 <button
                   type="button"
                   class="tts-key-reveal"
-                  data-target="tts-openai-key"
+                  data-target="tts-inworld-key"
                   aria-label="Show key"
                   aria-pressed="false"
                 >
                   Show
                 </button>
               </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
+                Real-time voice and transcription.
+              </div>
             </div>
-          </div>
-          <div class="settings-card">
-            <div class="card-title">Voice</div>
-            <div class="settings-field">
+            <div class="settings-field" style="margin-top: 10px">
+              <label for="tts-deepgram-key">Deepgram API Key</label>
+              <div class="settings-key-row">
+                <input
+                  id="tts-deepgram-key"
+                  type="password"
+                  placeholder="..."
+                  autocomplete="off"
+                />
+                <button
+                  type="button"
+                  class="tts-key-reveal"
+                  data-target="tts-deepgram-key"
+                  aria-label="Show key"
+                  aria-pressed="false"
+                >
+                  Show
+                </button>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
+                Low-latency voice and transcription.
+              </div>
+            </div>
+            <div class="settings-field" style="margin-top: 10px">
               <label for="settings-tts-voice">TTS Voice</label>
               <select id="settings-tts-voice">
                 <option value="">Browser default</option>
               </select>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
+                Browser-default uses your OS voice. Add a key above for ElevenLabs, Inworld, or
+                Deepgram voices.
+              </div>
             </div>
-            <div class="settings-field">
-              <label class="checkbox-label">
-                <input type="checkbox" id="settings-voice-autosend" checked />
-                Auto-send on voice input
-              </label>
+            <div class="settings-field" style="margin-top: 10px">
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Auto-send</div>
+                  <div class="toggle-desc">Send transcript automatically when recording stops</div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="settings-voice-autosend" checked />
+                  <span class="slider"></span>
+                </label>
+              </div>
             </div>
-            <div class="settings-field">
-              <label class="checkbox-label">
-                <input type="checkbox" id="settings-voice-response" checked />
-                Voice responses (TTS)
-              </label>
+            <div class="settings-field" style="margin-top: 10px">
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Voice Response</div>
+                  <div class="toggle-desc">Speak agent responses aloud via TTS</div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="settings-voice-response" checked />
+                  <span class="slider"></span>
+                </label>
+              </div>
             </div>
           </div>
         </div>

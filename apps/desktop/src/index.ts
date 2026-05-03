@@ -134,7 +134,7 @@ export interface TauriCommands {
     command: string,
     cwd: string | null,
   ): Promise<{ stdout: string; stderr: string; exit_code: number }>;
-  transcribe_audio(audio_base64: string, api_key: string | null): Promise<string>;
+  transcribe_audio(audio_base64: string): Promise<string>;
 }
 
 // === Desktop AI Config ===
@@ -630,11 +630,12 @@ export class DesktopApp {
   }
 
   /**
-   * Detect a local Ollama instance. Never throws.
-   * Times out after 2 seconds.
+   * Detect a local Ollama instance. When `baseUrl` is supplied, probes
+   * only that URL; otherwise probes the canonical port list. Never throws.
+   * Times out after 2 seconds per probe.
    */
-  detectLocalInference(): ReturnType<typeof detectLocalInference> {
-    return detectLocalInference();
+  detectLocalInference(baseUrl?: string): ReturnType<typeof detectLocalInference> {
+    return detectLocalInference(baseUrl);
   }
 
   setModel(model: string): void {

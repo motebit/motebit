@@ -7,7 +7,7 @@ import { addMessage } from "./chat";
 import type { ColorPickerAPI } from "./color-picker";
 import type { VoiceAPI } from "./voice";
 import type { PairingAPI } from "./pairing";
-import { saveFocus, restoreFocus, focusFirst } from "./focus";
+import { saveFocus, restoreFocus } from "./focus";
 import {
   ANTHROPIC_MODELS,
   OPENAI_MODELS,
@@ -19,7 +19,13 @@ import {
   type GovernanceConfig,
   type AppearanceConfig,
 } from "@motebit/sdk";
-import { byokKeyringKey, WHISPER_API_KEY_SLOT, ELEVENLABS_API_KEY_SLOT } from "./keyring-keys";
+import {
+  byokKeyringKey,
+  ELEVENLABS_API_KEY_SLOT,
+  INWORLD_API_KEY_SLOT,
+  DEEPGRAM_API_KEY_SLOT,
+} from "./keyring-keys";
+import { ELEVENLABS_VOICES, DEEPGRAM_VOICES } from "@motebit/voice";
 
 // === DOM Refs ===
 
@@ -44,17 +50,14 @@ const modeSectionCloud = document.getElementById("mode-section-cloud") as HTMLDi
 const modeSectionByok = document.getElementById("mode-section-byok") as HTMLDivElement;
 const modeSectionOnDevice = document.getElementById("mode-section-on-device") as HTMLDivElement;
 const settingsCloudModel = document.getElementById("settings-cloud-model") as HTMLSelectElement;
-const settingsByokVendor = document.getElementById("settings-byok-vendor") as HTMLSelectElement;
-const settingsByokModel = document.getElementById("settings-byok-model") as HTMLSelectElement;
+const settingsByokModel = document.getElementById("settings-byok-model") as HTMLInputElement;
+const settingsByokModels = document.getElementById("settings-byok-models") as HTMLDataListElement;
 const settingsOnDeviceEndpoint = document.getElementById(
   "settings-ondevice-endpoint",
 ) as HTMLInputElement;
 const settingsOnDeviceModel = document.getElementById(
   "settings-ondevice-model",
 ) as HTMLSelectElement;
-const settingsOnDeviceModelCustom = document.getElementById(
-  "settings-ondevice-model-custom",
-) as HTMLInputElement;
 
 type ProviderMode = "motebit-cloud" | "byok" | "on-device";
 
@@ -87,17 +90,23 @@ const proactiveAnchor = document.getElementById(
   "settings-proactive-anchor",
 ) as HTMLInputElement | null;
 
-const settingsWhisperApiKey = document.getElementById(
-  "settings-whisper-apikey",
-) as HTMLInputElement;
-const settingsWhisperApiKeyToggle = document.getElementById(
-  "settings-whisper-apikey-toggle",
-) as HTMLButtonElement;
 const settingsElevenLabsApiKey = document.getElementById(
   "settings-elevenlabs-apikey",
 ) as HTMLInputElement;
 const settingsElevenLabsApiKeyToggle = document.getElementById(
   "settings-elevenlabs-apikey-toggle",
+) as HTMLButtonElement;
+const settingsInworldApiKey = document.getElementById(
+  "settings-inworld-apikey",
+) as HTMLInputElement;
+const settingsInworldApiKeyToggle = document.getElementById(
+  "settings-inworld-apikey-toggle",
+) as HTMLButtonElement;
+const settingsDeepgramApiKey = document.getElementById(
+  "settings-deepgram-apikey",
+) as HTMLInputElement;
+const settingsDeepgramApiKeyToggle = document.getElementById(
+  "settings-deepgram-apikey-toggle",
 ) as HTMLButtonElement;
 const settingsVoiceAutoSend = document.getElementById(
   "settings-voice-autosend",
@@ -131,8 +140,9 @@ const mcpPublicKeyInput = document.getElementById("mcp-publickey") as HTMLInputE
 // === Settings State ===
 
 let hasApiKeyInKeyring = false;
-let hasWhisperKeyInKeyring = false;
 let hasElevenLabsKeyInKeyring = false;
+let hasInworldKeyInKeyring = false;
+let hasDeepgramKeyInKeyring = false;
 let selectedApprovalPreset = "balanced";
 let mcpServersConfig: McpServerConfig[] = [];
 let discoveryCollisions: NameCollision[] = [];
@@ -162,10 +172,12 @@ export interface SettingsAPI {
   updateModelIndicator(): void;
   getHasApiKeyInKeyring(): boolean;
   setHasApiKeyInKeyring(v: boolean): void;
-  getHasWhisperKeyInKeyring(): boolean;
-  setHasWhisperKeyInKeyring(v: boolean): void;
   getHasElevenLabsKeyInKeyring(): boolean;
   setHasElevenLabsKeyInKeyring(v: boolean): void;
+  getHasInworldKeyInKeyring(): boolean;
+  setHasInworldKeyInKeyring(v: boolean): void;
+  getHasDeepgramKeyInKeyring(): boolean;
+  setHasDeepgramKeyInKeyring(v: boolean): void;
   getSelectedApprovalPreset(): string;
   setSelectedApprovalPreset(v: string): void;
   getMcpServersConfig(): McpServerConfig[];
@@ -201,7 +213,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     });
     if (tabName === "identity") populateIdentityTab();
     if (tabName === "governance") populateGovernanceTab();
-    if (tabName === "billing") populateBillingTab();
+    if (tabName === "intelligence") populateBillingTab();
   }
 
   document.querySelectorAll(".settings-tab").forEach((tab) => {
@@ -226,11 +238,8 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
               ? PROXY_MODELS
               : ANTHROPIC_MODELS;
 
-    // Show/hide API key field based on provider (hidden for local-server and proxy)
-    const apiKeyField = settingsApiKey.closest<HTMLElement>(".settings-field");
-    if (apiKeyField != null) {
-      apiKeyField.style.display = provider === "local-server" || provider === "proxy" ? "none" : "";
-    }
+    // (API key field visibility is governed by mode-section-byok's `.active`
+    // class — no per-provider inline display hack needed.)
 
     for (const model of models) {
       const opt = document.createElement("option");
@@ -246,16 +255,16 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       settingsModelSelect.appendChild(customOpt);
     }
 
-    // Pre-select current model
+    // Pre-select current model. The legacy `settings-model-custom` input
+    // stays hidden — it's a compat ref the save path reads from, never
+    // user-facing UI. The three-mode sections own all visible model entry.
     if (currentModel != null && currentModel !== "") {
       const hasModel = models.includes(currentModel);
       if (hasModel) {
         settingsModelSelect.value = currentModel;
-        settingsModelCustom.style.display = "none";
       } else if (provider === "local-server") {
         settingsModelSelect.value = "__custom__";
         settingsModelCustom.value = currentModel;
-        settingsModelCustom.style.display = "block";
       } else {
         // Anthropic with unknown model — add it as an option
         const opt = document.createElement("option");
@@ -263,10 +272,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         opt.textContent = currentModel;
         settingsModelSelect.insertBefore(opt, settingsModelSelect.firstChild);
         settingsModelSelect.value = currentModel;
-        settingsModelCustom.style.display = "none";
       }
-    } else {
-      settingsModelCustom.style.display = "none";
     }
 
     syncModelHiddenField();
@@ -281,11 +287,6 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   }
 
   settingsModelSelect.addEventListener("change", () => {
-    settingsModelCustom.style.display =
-      settingsModelSelect.value === "__custom__" ? "block" : "none";
-    if (settingsModelSelect.value === "__custom__") {
-      settingsModelCustom.focus();
-    }
     syncModelHiddenField();
   });
 
@@ -334,34 +335,149 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   ): void {
     const models: readonly string[] =
       vendor === "openai" ? OPENAI_MODELS : vendor === "google" ? GOOGLE_MODELS : ANTHROPIC_MODELS;
-    fillModelSelect(settingsByokModel, models, currentModel);
+    settingsByokModels.innerHTML = "";
+    for (const model of models) {
+      const opt = document.createElement("option");
+      opt.value = model;
+      settingsByokModels.appendChild(opt);
+    }
+    if (currentModel != null && currentModel !== "") {
+      settingsByokModel.value = currentModel;
+    }
   }
 
-  function populateOnDeviceModeModels(currentModel?: string): void {
+  const settingsOnDeviceStatus = document.getElementById(
+    "settings-ondevice-status",
+  ) as HTMLDivElement;
+
+  function setOnDeviceStatus(text: string, kind: "" | "connected" | "error" = ""): void {
+    settingsOnDeviceStatus.textContent = text;
+    settingsOnDeviceStatus.className = kind === "" ? "ollama-status" : `ollama-status ${kind}`;
+  }
+
+  function fillOnDeviceModelSelect(models: string[], currentModel?: string): void {
     settingsOnDeviceModel.innerHTML = "";
-    for (const model of LOCAL_SERVER_MODELS) {
+    if (models.length === 0) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "No models found";
+      settingsOnDeviceModel.appendChild(opt);
+      return;
+    }
+    for (const model of models) {
       const opt = document.createElement("option");
       opt.value = model;
       opt.textContent = model;
       settingsOnDeviceModel.appendChild(opt);
     }
-    const customOpt = document.createElement("option");
-    customOpt.value = "__custom__";
-    customOpt.textContent = "Custom...";
-    settingsOnDeviceModel.appendChild(customOpt);
-    if (currentModel != null && currentModel !== "") {
-      if (LOCAL_SERVER_MODELS.includes(currentModel)) {
-        settingsOnDeviceModel.value = currentModel;
-        settingsOnDeviceModelCustom.style.display = "none";
-      } else {
-        settingsOnDeviceModel.value = "__custom__";
-        settingsOnDeviceModelCustom.value = currentModel;
-        settingsOnDeviceModelCustom.style.display = "block";
-      }
-    } else {
-      settingsOnDeviceModelCustom.style.display = "none";
+    if (currentModel != null && currentModel !== "" && models.includes(currentModel)) {
+      settingsOnDeviceModel.value = currentModel;
     }
   }
+
+  /** Probe the configured endpoint (or the default port list if blank) and
+   * write the detected models into the Model select. Mirrors web's
+   * detectAndPopulateLocalServer. Never throws. */
+  async function detectAndPopulateOnDevice(currentModel?: string): Promise<void> {
+    setOnDeviceStatus("Detecting local servers...");
+    const endpoint = settingsOnDeviceEndpoint.value.trim();
+    const result = endpoint
+      ? await ctx.app.detectLocalInference(endpoint)
+      : await ctx.app.detectLocalInference();
+    if (!result.available) {
+      setOnDeviceStatus(
+        "No local server detected. Start Ollama, LM Studio, or llama.cpp on localhost.",
+        "error",
+      );
+      fillOnDeviceModelSelect([]);
+      return;
+    }
+    if (settingsOnDeviceEndpoint.value === "") {
+      // Prefer the friendlier `localhost` over `127.0.0.1` in the visible URL.
+      // Both resolve identically; `localhost` reads as the canonical default.
+      settingsOnDeviceEndpoint.value = result.url
+        .replace(/\/v1\/?$/, "")
+        .replace(/^http:\/\/127\.0\.0\.1/, "http://localhost");
+    }
+    const count = result.models.length;
+    const serverName = friendlyServerName(result.url);
+    setOnDeviceStatus(`${serverName} — ${count} model${count !== 1 ? "s" : ""}`, "connected");
+    fillOnDeviceModelSelect(result.models, currentModel ?? result.bestModel);
+  }
+
+  /** Best-effort server-type label from the detected base URL. Mirrors web's
+   * `friendlyServerName`; the canonical port carries the identity. */
+  function friendlyServerName(baseUrl: string): string {
+    if (baseUrl.includes(":11434")) return "Ollama";
+    if (baseUrl.includes(":1234")) return "LM Studio";
+    if (baseUrl.includes(":8080")) return "llama.cpp";
+    if (baseUrl.includes(":1337")) return "Jan";
+    return "Local server";
+  }
+
+  function populateOnDeviceModeModels(currentModel?: string): void {
+    void detectAndPopulateOnDevice(currentModel);
+  }
+
+  /** Re-populate the TTS Voice dropdown as a union of every voice the user
+   * can actually pick right now. Voice section's three majors —
+   * ElevenLabs / Inworld / Deepgram — each adds an optgroup when keyed,
+   * plus the browser-default terminal fallback. Mirrors web's pattern.
+   * Runtime fallback chain in `apps/desktop/src/ui/voice.ts` routes the
+   * call to whichever provider owns the chosen voice id. */
+  function populateTtsVoices(): void {
+    const elevenAvailable =
+      settingsElevenLabsApiKey.value.trim() !== "" || hasElevenLabsKeyInKeyring;
+    const inworldAvailable = settingsInworldApiKey.value.trim() !== "" || hasInworldKeyInKeyring;
+    const deepgramAvailable = settingsDeepgramApiKey.value.trim() !== "" || hasDeepgramKeyInKeyring;
+    const previous = settingsTtsVoice.value;
+
+    settingsTtsVoice.innerHTML = "";
+    const allValues: string[] = [];
+    const appendGroup = (label: string, voices: readonly string[]): void => {
+      if (voices.length === 0) return;
+      const group = document.createElement("optgroup");
+      group.label = label;
+      for (const name of voices) {
+        const el = document.createElement("option");
+        el.value = name;
+        el.textContent = name;
+        group.appendChild(el);
+        allValues.push(name);
+      }
+      settingsTtsVoice.appendChild(group);
+    };
+
+    if (elevenAvailable) appendGroup("ElevenLabs", Object.keys(ELEVENLABS_VOICES));
+    // Inworld doesn't publish a fixed voice catalog (voice cloning is core
+    // to their model). Surface the documented example "Dennis" for now;
+    // future work can extend to a vendor-specific voice listing UI.
+    if (inworldAvailable) appendGroup("Inworld", ["Dennis"]);
+    if (deepgramAvailable) appendGroup("Deepgram", DEEPGRAM_VOICES);
+
+    // Browser default is always available — `WebSpeechTTSProvider` sits at
+    // the bottom of the runtime TTS chain (apps/desktop/src/ui/voice.ts) and
+    // is plumbed into both the immediate chain and the post-keyring chain.
+    // No keys → falls through to Samantha/Karen/Daniel/Alex on macOS via
+    // `speechSynthesis`. Honest UI: surface this so users with no keys can
+    // pick voice and get audio out.
+    const browserGroup = document.createElement("optgroup");
+    browserGroup.label = "Browser";
+    const browserOpt = document.createElement("option");
+    browserOpt.value = "";
+    browserOpt.textContent = "Browser default";
+    browserGroup.appendChild(browserOpt);
+    settingsTtsVoice.appendChild(browserGroup);
+    allValues.push("");
+
+    if (allValues.includes(previous)) settingsTtsVoice.value = previous;
+    else settingsTtsVoice.value = allValues[0] ?? "";
+  }
+
+  // Re-populate as the user types into either key field — mirrors web.
+  settingsElevenLabsApiKey.addEventListener("input", populateTtsVoices);
+  settingsInworldApiKey.addEventListener("input", populateTtsVoices);
+  settingsDeepgramApiKey.addEventListener("input", populateTtsVoices);
 
   /** Show exactly one mode section and highlight its tab. */
   function switchProviderMode(mode: ProviderMode): void {
@@ -383,7 +499,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       // are visible even when the user hasn't configured anything yet.
       if (mode === "motebit-cloud" && settingsCloudModel.options.length === 0) {
         populateCloudModeModels();
-      } else if (mode === "byok" && settingsByokModel.options.length === 0) {
+      } else if (mode === "byok" && settingsByokModels.options.length === 0) {
         populateByokModeModels(activeByokVendor);
       } else if (mode === "on-device" && settingsOnDeviceModel.options.length === 0) {
         populateOnDeviceModeModels();
@@ -391,17 +507,27 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     });
   });
 
-  settingsByokVendor.addEventListener("change", () => {
-    activeByokVendor = settingsByokVendor.value as "anthropic" | "openai" | "google";
-    populateByokModeModels(activeByokVendor);
+  // BYOK vendor pill buttons — three top-level vendor choices (Anthropic /
+  // OpenAI / Google). Click swaps the active state and re-seeds the model
+  // datalist for the chosen vendor.
+  document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const vendor = btn.dataset.byok as "anthropic" | "openai" | "google" | undefined;
+      if (vendor == null) return;
+      activeByokVendor = vendor;
+      document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((b) => {
+        const isActive = b.dataset.byok === vendor;
+        b.classList.toggle("active", isActive);
+        b.style.background = isActive ? "var(--accent-bg)" : "transparent";
+        b.style.color = isActive ? "var(--text-heading)" : "var(--text-muted)";
+      });
+      populateByokModeModels(vendor);
+    });
   });
 
-  settingsOnDeviceModel.addEventListener("change", () => {
-    settingsOnDeviceModelCustom.style.display =
-      settingsOnDeviceModel.value === "__custom__" ? "block" : "none";
-    if (settingsOnDeviceModel.value === "__custom__") {
-      settingsOnDeviceModelCustom.focus();
-    }
+  // Re-probe the configured endpoint when the user edits the URL.
+  settingsOnDeviceEndpoint.addEventListener("change", () => {
+    void detectAndPopulateOnDevice();
   });
 
   /**
@@ -428,39 +554,16 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       case "byok":
         return settingsByokModel.value;
       case "on-device":
-        return settingsOnDeviceModel.value === "__custom__"
-          ? settingsOnDeviceModelCustom.value.trim()
-          : settingsOnDeviceModel.value;
+        return settingsOnDeviceModel.value;
     }
   }
 
-  // === Model Indicator + Provider Status ===
+  // === Model Indicator ===
 
   const modelIndicator = document.getElementById("model-indicator") as HTMLDivElement;
-  const providerStatusEl = document.getElementById("provider-status") as HTMLDivElement;
-  const providerDot = document.getElementById("provider-status-dot") as HTMLSpanElement;
-  const providerText = document.getElementById("provider-status-text") as HTMLSpanElement;
 
   function updateModelIndicator(): void {
-    const model = ctx.app.currentModel;
-    const provider = ctx.app.currentProvider;
-    modelIndicator.textContent = model ?? "";
-
-    // Update provider status in settings panel
-    providerDot.className = "provider-dot";
-    if (provider === "local-server" && model) {
-      providerStatusEl.style.display = "flex";
-      providerDot.classList.add("green");
-      providerText.textContent = `Local (${model})`;
-    } else if (provider === "anthropic" && model) {
-      providerStatusEl.style.display = "flex";
-      providerDot.classList.add("blue");
-      providerText.textContent = `Cloud (Anthropic: ${model})`;
-    } else {
-      providerStatusEl.style.display = "flex";
-      providerDot.classList.add("yellow");
-      providerText.textContent = "No provider configured";
-    }
+    modelIndicator.textContent = ctx.app.currentModel ?? "";
   }
 
   // === Approval Presets ===
@@ -1136,24 +1239,43 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   const TOPUP_AMOUNTS = [5, 10, 25];
 
   function populateBillingTab(): void {
+    const subscribedEl = document.getElementById(
+      "billing-subscribed-section",
+    ) as HTMLElement | null;
+    const unsubscribedEl = document.getElementById(
+      "billing-unsubscribed-section",
+    ) as HTMLElement | null;
     const balanceEl = document.getElementById("billing-balance");
-    const statusEl = document.getElementById("billing-status");
     const topupEl = document.getElementById("billing-topup");
     const topupBtnsEl = document.getElementById("billing-topup-buttons");
     const actionsEl = document.getElementById("billing-actions");
     const messageEl = document.getElementById("billing-message");
-    if (!balanceEl || !actionsEl) return;
+    const subscribeBtn = document.getElementById(
+      "billing-subscribe-btn",
+    ) as HTMLButtonElement | null;
+    if (!subscribedEl || !unsubscribedEl) return;
+
+    const showUnsubscribed = (): void => {
+      subscribedEl.style.display = "none";
+      unsubscribedEl.style.display = "";
+    };
+    const showSubscribed = (): void => {
+      subscribedEl.style.display = "";
+      unsubscribedEl.style.display = "none";
+    };
+
+    if (messageEl) messageEl.textContent = "";
 
     const syncUrl = ctx.app.getSyncUrl();
     const motebitId = ctx.app.motebitId;
     if (!syncUrl || !motebitId) {
-      balanceEl.textContent = "";
-      if (statusEl)
-        statusEl.textContent = "Connect to a relay in Identity settings to manage billing.";
+      showUnsubscribed();
       return;
     }
 
-    balanceEl.textContent = "Loading…";
+    if (subscribeBtn) {
+      subscribeBtn.onclick = () => void openDesktopCheckout(syncUrl, motebitId);
+    }
 
     void fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/status`)
       .then((res) => (res.ok ? res.json() : null))
@@ -1167,95 +1289,88 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
           } | null,
         ) => {
           if (!data) {
-            balanceEl.textContent = "";
-            if (statusEl) statusEl.textContent = "Could not reach relay";
+            showUnsubscribed();
+            if (messageEl) messageEl.textContent = "Could not reach relay";
             return;
           }
 
+          if (data.subscribed !== true) {
+            showUnsubscribed();
+            return;
+          }
+
+          showSubscribed();
           const balanceUsd = data.balance_usd ?? 0;
-          balanceEl.textContent = `$${balanceUsd.toFixed(2)} remaining`;
+          if (balanceEl) balanceEl.textContent = `$${balanceUsd.toFixed(2)} remaining`;
 
-          const isSubscribed = data.subscribed === true;
-
-          if (isSubscribed) {
-            // Show top-up when balance is low
-            if (topupEl && topupBtnsEl && balanceUsd < LOW_BALANCE_THRESHOLD) {
-              topupEl.style.display = "";
-              topupBtnsEl.innerHTML = "";
-              for (const amt of TOPUP_AMOUNTS) {
-                const btn = document.createElement("button");
-                btn.style.cssText =
-                  "padding:5px 14px;border:1px solid var(--border-light);border-radius:6px;background:transparent;color:var(--text-heading);font-size:12px;cursor:pointer;font-family:inherit;";
-                btn.textContent = `+$${amt}`;
-                btn.addEventListener("click", () => void openDesktopTopup(syncUrl, motebitId, amt));
-                topupBtnsEl.appendChild(btn);
-              }
-            } else if (topupEl) {
-              topupEl.style.display = "none";
+          // Top-up appears only when balance is low.
+          if (topupEl && topupBtnsEl && balanceUsd < LOW_BALANCE_THRESHOLD) {
+            topupEl.style.display = "";
+            topupBtnsEl.innerHTML = "";
+            for (const amt of TOPUP_AMOUNTS) {
+              const btn = document.createElement("button");
+              btn.style.cssText =
+                "padding:5px 14px;border:1px solid var(--border-light);border-radius:6px;background:transparent;color:var(--text-heading);font-size:12px;cursor:pointer;font-family:inherit;";
+              btn.textContent = `+$${amt}`;
+              btn.addEventListener("click", () => void openDesktopTopup(syncUrl, motebitId, amt));
+              topupBtnsEl.appendChild(btn);
             }
+          } else if (topupEl) {
+            topupEl.style.display = "none";
+          }
 
-            if (data.subscription_status === "cancelling") {
-              const until =
-                data.active_until != null
-                  ? ` on ${new Date(data.active_until).toLocaleDateString()}`
-                  : "";
-              if (statusEl)
-                statusEl.textContent = `Plan cancels${until}. Credits remain until used.`;
-              actionsEl.innerHTML =
-                '<button id="billing-resubscribe" style="padding:6px 20px;border:1px solid var(--text-heading);border-radius:6px;background:transparent;color:var(--text-heading);cursor:pointer;font-size:13px;font-family:inherit;">Resubscribe</button>';
-              document.getElementById("billing-resubscribe")?.addEventListener("click", () => {
-                void fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/resubscribe`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                }).then((res) => {
-                  if (res.ok) {
-                    addMessage("system", "Plan resumed");
-                    populateBillingTab();
-                  } else {
-                    if (messageEl) messageEl.textContent = "Failed to resume";
-                  }
-                });
-              });
-            } else {
-              if (statusEl) statusEl.textContent = "Motebit Cloud active";
-              actionsEl.innerHTML =
-                '<a href="#" id="billing-cancel" style="font-size:11px;color:var(--text-muted);opacity:0.5;text-decoration:none;cursor:pointer;">Cancel plan</a>';
-              document.getElementById("billing-cancel")?.addEventListener("click", (e) => {
-                e.preventDefault();
-                void fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/cancel`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                }).then((res) => {
-                  if (res.ok) {
-                    addMessage("system", "Plan cancelled — credits remain until used");
-                    populateBillingTab();
-                  } else {
-                    if (messageEl) messageEl.textContent = "Cancel failed";
-                  }
-                });
-              });
-            }
-          } else {
-            // Not subscribed
-            if (statusEl) statusEl.textContent = "";
-            if (topupEl) topupEl.style.display = "none";
+          if (!actionsEl) return;
+          if (data.subscription_status === "cancelling") {
+            const until =
+              data.active_until != null
+                ? ` on ${new Date(data.active_until).toLocaleDateString()}`
+                : "";
+            if (messageEl)
+              messageEl.textContent = `Plan cancels${until}. Credits remain until used.`;
             actionsEl.innerHTML =
-              '<button id="billing-subscribe" style="padding:10px 24px;border:1px solid var(--accent-border,rgba(120,100,255,0.3));border-radius:10px;background:var(--accent-bg,rgba(120,100,255,0.08));color:var(--text-heading);font-size:14px;cursor:pointer;font-family:inherit;">Subscribe — $20/mo</button>';
-            document.getElementById("billing-subscribe")?.addEventListener("click", () => {
-              void openDesktopCheckout(syncUrl, motebitId);
+              '<button id="billing-resubscribe" style="padding:6px 20px;border:1px solid var(--text-heading);border-radius:6px;background:transparent;color:var(--text-heading);cursor:pointer;font-size:13px;font-family:inherit;">Resubscribe</button>';
+            document.getElementById("billing-resubscribe")?.addEventListener("click", () => {
+              void fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/resubscribe`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+              }).then((res) => {
+                if (res.ok) {
+                  addMessage("system", "Plan resumed");
+                  populateBillingTab();
+                } else if (messageEl) {
+                  messageEl.textContent = "Failed to resume";
+                }
+              });
+            });
+          } else {
+            actionsEl.innerHTML =
+              '<a href="#" id="billing-cancel" style="font-size:11px;color:var(--text-muted);opacity:0.5;text-decoration:none;cursor:pointer;">Cancel plan</a>';
+            document.getElementById("billing-cancel")?.addEventListener("click", (e) => {
+              e.preventDefault();
+              void fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/cancel`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+              }).then((res) => {
+                if (res.ok) {
+                  addMessage("system", "Plan cancelled — credits remain until used");
+                  populateBillingTab();
+                } else if (messageEl) {
+                  messageEl.textContent = "Cancel failed";
+                }
+              });
             });
           }
         },
       )
       .catch(() => {
-        balanceEl.textContent = "";
-        if (statusEl) statusEl.textContent = "Could not reach relay";
+        showUnsubscribed();
+        if (messageEl) messageEl.textContent = "Could not reach relay";
       });
   }
 
   async function openDesktopCheckout(syncUrl: string, motebitId: string): Promise<void> {
     const messageEl = document.getElementById("billing-message");
-    const btn = document.getElementById("billing-subscribe") as HTMLButtonElement | null;
+    const btn = document.getElementById("billing-subscribe-btn") as HTMLButtonElement | null;
     if (btn) {
       btn.disabled = true;
       btn.textContent = "Opening checkout…";
@@ -1731,7 +1846,12 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     ) {
       activeByokVendor = activeProvider;
     }
-    settingsByokVendor.value = activeByokVendor;
+    document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((b) => {
+      const isActive = b.dataset.byok === activeByokVendor;
+      b.classList.toggle("active", isActive);
+      b.style.background = isActive ? "var(--accent-bg)" : "transparent";
+      b.style.color = isActive ? "var(--text-heading)" : "var(--text-muted)";
+    });
     populateByokModeModels(activeByokVendor, mode === "byok" ? currentModel : undefined);
 
     // On-Device section — endpoint pulls from config.localServerEndpoint
@@ -1749,16 +1869,21 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
     settingsOperatorMode.checked = ctx.app.isOperatorMode;
 
-    settingsWhisperApiKey.value = "";
-    settingsWhisperApiKey.type = "password";
-    settingsWhisperApiKeyToggle.textContent = "Show";
-    settingsWhisperApiKey.placeholder = hasWhisperKeyInKeyring ? "API key stored" : "sk-...";
     settingsElevenLabsApiKey.value = "";
     settingsElevenLabsApiKey.type = "password";
     settingsElevenLabsApiKeyToggle.textContent = "Show";
     settingsElevenLabsApiKey.placeholder = hasElevenLabsKeyInKeyring ? "API key stored" : "xi-...";
+    settingsInworldApiKey.value = "";
+    settingsInworldApiKey.type = "password";
+    settingsInworldApiKeyToggle.textContent = "Show";
+    settingsInworldApiKey.placeholder = hasInworldKeyInKeyring ? "API key stored" : "...";
+    settingsDeepgramApiKey.value = "";
+    settingsDeepgramApiKey.type = "password";
+    settingsDeepgramApiKeyToggle.textContent = "Show";
+    settingsDeepgramApiKey.placeholder = hasDeepgramKeyInKeyring ? "API key stored" : "...";
     settingsVoiceAutoSend.checked = voice.getVoiceAutoSend();
     settingsVoiceResponse.checked = voice.getVoiceResponseEnabled();
+    populateTtsVoices();
     settingsTtsVoice.value = voice.getTtsVoice();
 
     colorPicker.savePreviousState();
@@ -1788,9 +1913,6 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
     settingsBackdrop.classList.add("open");
     settingsModal.classList.add("open");
-
-    // Focus the first focusable element in the modal
-    requestAnimationFrame(() => focusFirst(settingsModal));
   }
 
   function openToTab(tabName: string): void {
@@ -1822,8 +1944,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const provider = derivedProvider;
     const model = derivedModel.trim() || undefined;
     const apiKey = settingsApiKey.value.trim() || undefined;
-    const whisperApiKey = settingsWhisperApiKey.value.trim() || undefined;
     const elevenLabsApiKey = settingsElevenLabsApiKey.value.trim() || undefined;
+    const inworldApiKey = settingsInworldApiKey.value.trim() || undefined;
+    const deepgramApiKey = settingsDeepgramApiKey.value.trim() || undefined;
     // v2-compatible Tauri detection — see apps/desktop/src/ui/config.ts
     const isTauri =
       typeof window !== "undefined" &&
@@ -1896,17 +2019,23 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         }
       }
 
-      if (whisperApiKey != null && whisperApiKey !== "") {
-        await invoke("keyring_set", { key: WHISPER_API_KEY_SLOT, value: whisperApiKey });
-        hasWhisperKeyInKeyring = true;
-      }
-
       if (elevenLabsApiKey != null && elevenLabsApiKey !== "") {
         await invoke("keyring_set", { key: ELEVENLABS_API_KEY_SLOT, value: elevenLabsApiKey });
         hasElevenLabsKeyInKeyring = true;
       }
 
+      if (inworldApiKey != null && inworldApiKey !== "") {
+        await invoke("keyring_set", { key: INWORLD_API_KEY_SLOT, value: inworldApiKey });
+        hasInworldKeyInKeyring = true;
+      }
+
+      if (deepgramApiKey != null && deepgramApiKey !== "") {
+        await invoke("keyring_set", { key: DEEPGRAM_API_KEY_SLOT, value: deepgramApiKey });
+        hasDeepgramKeyInKeyring = true;
+      }
+
       voice.rebuildTtsProvider(invoke as InvokeFn);
+      voice.rebuildSttProvider(invoke as InvokeFn);
     }
 
     // Operator mode is orthogonal to governance — it's a runtime-only
@@ -2141,15 +2270,6 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       settingsApiKeyToggle.textContent = "Show";
     }
   });
-  settingsWhisperApiKeyToggle.addEventListener("click", () => {
-    if (settingsWhisperApiKey.type === "password") {
-      settingsWhisperApiKey.type = "text";
-      settingsWhisperApiKeyToggle.textContent = "Hide";
-    } else {
-      settingsWhisperApiKey.type = "password";
-      settingsWhisperApiKeyToggle.textContent = "Show";
-    }
-  });
   settingsElevenLabsApiKeyToggle.addEventListener("click", () => {
     if (settingsElevenLabsApiKey.type === "password") {
       settingsElevenLabsApiKey.type = "text";
@@ -2157,6 +2277,24 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     } else {
       settingsElevenLabsApiKey.type = "password";
       settingsElevenLabsApiKeyToggle.textContent = "Show";
+    }
+  });
+  settingsInworldApiKeyToggle.addEventListener("click", () => {
+    if (settingsInworldApiKey.type === "password") {
+      settingsInworldApiKey.type = "text";
+      settingsInworldApiKeyToggle.textContent = "Hide";
+    } else {
+      settingsInworldApiKey.type = "password";
+      settingsInworldApiKeyToggle.textContent = "Show";
+    }
+  });
+  settingsDeepgramApiKeyToggle.addEventListener("click", () => {
+    if (settingsDeepgramApiKey.type === "password") {
+      settingsDeepgramApiKey.type = "text";
+      settingsDeepgramApiKeyToggle.textContent = "Hide";
+    } else {
+      settingsDeepgramApiKey.type = "password";
+      settingsDeepgramApiKeyToggle.textContent = "Show";
     }
   });
 
@@ -2171,17 +2309,23 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     setHasApiKeyInKeyring(v: boolean) {
       hasApiKeyInKeyring = v;
     },
-    getHasWhisperKeyInKeyring() {
-      return hasWhisperKeyInKeyring;
-    },
-    setHasWhisperKeyInKeyring(v: boolean) {
-      hasWhisperKeyInKeyring = v;
-    },
     getHasElevenLabsKeyInKeyring() {
       return hasElevenLabsKeyInKeyring;
     },
     setHasElevenLabsKeyInKeyring(v: boolean) {
       hasElevenLabsKeyInKeyring = v;
+    },
+    getHasInworldKeyInKeyring() {
+      return hasInworldKeyInKeyring;
+    },
+    setHasInworldKeyInKeyring(v: boolean) {
+      hasInworldKeyInKeyring = v;
+    },
+    getHasDeepgramKeyInKeyring() {
+      return hasDeepgramKeyInKeyring;
+    },
+    setHasDeepgramKeyInKeyring(v: boolean) {
+      hasDeepgramKeyInKeyring = v;
     },
     getSelectedApprovalPreset() {
       return selectedApprovalPreset;

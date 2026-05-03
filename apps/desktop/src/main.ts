@@ -35,8 +35,9 @@ import { initSettings } from "./ui/settings";
 import {
   byokKeyringKey,
   LEGACY_API_KEY_SLOT,
-  WHISPER_API_KEY_SLOT,
   ELEVENLABS_API_KEY_SLOT,
+  INWORLD_API_KEY_SLOT,
+  DEEPGRAM_API_KEY_SLOT,
 } from "./ui/keyring-keys";
 import { initSovereign } from "./ui/sovereign";
 import { initTheme } from "./ui/theme";
@@ -759,6 +760,7 @@ async function bootstrap(): Promise<void> {
     }
 
     voice.rebuildTtsProvider(invoke);
+    voice.rebuildSttProvider(invoke);
 
     // Check keyring for API key indicators. Uses the per-vendor slot for
     // the currently-active provider, falling back to the legacy single slot
@@ -777,16 +779,26 @@ async function bootstrap(): Promise<void> {
       /* Keyring unavailable */
     }
     try {
-      const whisperVal = await invoke<string | null>("keyring_get", { key: WHISPER_API_KEY_SLOT });
-      settings.setHasWhisperKeyInKeyring(whisperVal != null && whisperVal !== "");
-    } catch {
-      /* Keyring unavailable */
-    }
-    try {
       const elevenVal = await invoke<string | null>("keyring_get", {
         key: ELEVENLABS_API_KEY_SLOT,
       });
       settings.setHasElevenLabsKeyInKeyring(elevenVal != null && elevenVal !== "");
+    } catch {
+      /* Keyring unavailable */
+    }
+    try {
+      const inworldVal = await invoke<string | null>("keyring_get", {
+        key: INWORLD_API_KEY_SLOT,
+      });
+      settings.setHasInworldKeyInKeyring(inworldVal != null && inworldVal !== "");
+    } catch {
+      /* Keyring unavailable */
+    }
+    try {
+      const deepgramVal = await invoke<string | null>("keyring_get", {
+        key: DEEPGRAM_API_KEY_SLOT,
+      });
+      settings.setHasDeepgramKeyInKeyring(deepgramVal != null && deepgramVal !== "");
     } catch {
       /* Keyring unavailable */
     }

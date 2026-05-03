@@ -4,7 +4,9 @@ import {
   ANTHROPIC_API_KEY_SLOT,
   OPENAI_API_KEY_SLOT,
   GOOGLE_API_KEY_SLOT,
-  WHISPER_API_KEY_SLOT,
+  ELEVENLABS_API_KEY_SLOT,
+  INWORLD_API_KEY_SLOT,
+  DEEPGRAM_API_KEY_SLOT,
   SYNC_MASTER_TOKEN_SLOT,
   LEGACY_API_KEY_SLOT,
   byokKeyringKey,
@@ -16,7 +18,9 @@ describe("keyring-keys constants", () => {
     expect(ANTHROPIC_API_KEY_SLOT).toBe("anthropic_api_key");
     expect(OPENAI_API_KEY_SLOT).toBe("openai_api_key");
     expect(GOOGLE_API_KEY_SLOT).toBe("google_api_key");
-    expect(WHISPER_API_KEY_SLOT).toBe("whisper_api_key");
+    expect(ELEVENLABS_API_KEY_SLOT).toBe("elevenlabs_api_key");
+    expect(INWORLD_API_KEY_SLOT).toBe("inworld_api_key");
+    expect(DEEPGRAM_API_KEY_SLOT).toBe("deepgram_api_key");
     expect(SYNC_MASTER_TOKEN_SLOT).toBe("sync_master_token");
     expect(LEGACY_API_KEY_SLOT).toBe("api_key");
   });

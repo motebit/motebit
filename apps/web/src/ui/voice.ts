@@ -5,34 +5,45 @@ import type { STTProvider, WaveformState } from "@motebit/voice";
 import {
   WebSpeechSTTProvider,
   DeepgramSTTProvider,
+  InworldSTTProvider,
   createWaveformState,
   renderVoiceWaveform,
   waveformColorFromSoul,
 } from "@motebit/voice";
-import { getSTTKey } from "../storage";
+import { getVendorKey } from "../storage";
 
 // === STT Provider Selection ===
 //
 // The presence session delegates speech recognition to an STTProvider. The
-// choice is made once at module load from persisted BYOK keys:
+// choice is made fresh on each respawn cycle so newly-added keys take
+// effect without a page reload. Priority matches the voice section's
+// three majors:
 //
-//   - If `motebit-stt-key-deepgram` is set → DeepgramSTTProvider (websocket
-//     streaming, cross-browser, multi-language, robust to silence).
-//   - Otherwise → WebSpeechSTTProvider (browser built-in; default).
+//   1. Inworld   (multi-provider STT under one API, real-time websocket)
+//   2. Deepgram  (Nova-3 streaming, sub-200ms latency, lowest-latency
+//                 specialist)
+//   3. WebSpeech (browser built-in; zero-key terminal fallback)
 //
-// Swapping providers requires a page reload. A mid-session hot-swap would
-// need to tear down audio graphs and reconnect sockets while the keeper
-// held open, which adds complexity that this pass does not warrant —
-// settings UI (owned by another agent) can nudge users to reload.
+// The fallthrough chain is *try-first-keyed*, not *try-and-fallback-on-error*.
+// If a vendor's socket fails mid-session, the provider's onEnd fires and
+// the keeper respawns the same provider — that's the design. Switching
+// vendors mid-session would require tearing down audio graphs while the
+// keeper held open, which this pass does not implement.
 
 function createSTTProvider(): STTProvider {
-  const deepgramKey = (() => {
+  const safeGet = (vendor: "inworld" | "deepgram"): string | null => {
     try {
-      return getSTTKey("deepgram");
+      return getVendorKey(vendor);
     } catch {
       return null;
     }
-  })();
+  };
+
+  const inworldKey = safeGet("inworld");
+  if (inworldKey != null && inworldKey !== "") {
+    return new InworldSTTProvider({ apiKey: inworldKey });
+  }
+  const deepgramKey = safeGet("deepgram");
   if (deepgramKey != null && deepgramKey !== "") {
     return new DeepgramSTTProvider({ apiKey: deepgramKey });
   }
@@ -106,20 +117,19 @@ export function initVoice(
 
   // Gate the mic button on whether *any* STT path exists. For the default
   // WebSpeech provider that means the browser ships SpeechRecognition; for
-  // Deepgram that means a persisted API key. If neither condition holds,
-  // the button stays hidden.
+  // Inworld or Deepgram that means a persisted API key. If none of the
+  // three conditions holds, the button stays hidden.
   const hasWebSpeech =
     (typeof window !== "undefined" && "SpeechRecognition" in window) ||
     (typeof window !== "undefined" && "webkitSpeechRecognition" in window);
-  const hasDeepgramKey = (() => {
+  const hasVendorSttKey = (() => {
     try {
-      const key = getSTTKey("deepgram");
-      return key != null && key !== "";
+      return (getVendorKey("inworld") ?? "") !== "" || (getVendorKey("deepgram") ?? "") !== "";
     } catch {
       return false;
     }
   })();
-  if (!hasWebSpeech && !hasDeepgramKey) {
+  if (!hasWebSpeech && !hasVendorSttKey) {
     micBtn.style.display = "none";
     return { updateVoiceGlowColor() {}, setTtsSpeaking() {}, endSession() {} };
   }

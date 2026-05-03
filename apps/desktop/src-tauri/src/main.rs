@@ -23,7 +23,7 @@ struct AppState {
     db: Mutex<Connection>,
 }
 
-const SCHEMA: &str = "
+const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS events (
   event_id TEXT PRIMARY KEY,
   motebit_id TEXT NOT NULL,
@@ -248,7 +248,7 @@ CREATE TABLE IF NOT EXISTS agent_trust (
   PRIMARY KEY (motebit_id, remote_motebit_id)
 );
 CREATE INDEX IF NOT EXISTS idx_agent_trust_motebit ON agent_trust (motebit_id);
-";
+"#;
 
 fn json_to_sql_value(v: &JsonValue) -> SqlValue {
     match v {
@@ -644,7 +644,7 @@ fn shell_exec_tool(command: String, cwd: Option<String>) -> Result<ShellExecResu
 }
 
 #[tauri::command]
-fn transcribe_audio(audio_base64: String, api_key: Option<String>) -> Result<String, String> {
+fn transcribe_audio(audio_base64: String) -> Result<String, String> {
     use base64::Engine;
     use std::process::Command;
 
@@ -699,47 +699,8 @@ fn transcribe_audio(audio_base64: String, api_key: Option<String>) -> Result<Str
         }
     }
 
-    // Fall back to OpenAI Whisper API
-    if let Some(ref key) = api_key {
-        let output = Command::new("curl")
-            .args([
-                "-s",
-                "-X",
-                "POST",
-                "https://api.openai.com/v1/audio/transcriptions",
-                "-H",
-                &format!("Authorization: Bearer {}", key),
-                "-F",
-                &format!("file=@{}", temp_path),
-                "-F",
-                "model=whisper-1",
-                "-F",
-                "response_format=text",
-            ])
-            .output()
-            .map_err(|e| {
-                cleanup("");
-                format!("Failed to call Whisper API: {}", e)
-            })?;
-
-        cleanup("");
-
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !text.is_empty() {
-                return Ok(text);
-            }
-        }
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if !stderr.is_empty() {
-            return Err(format!("Whisper API error: {}", stderr));
-        }
-        return Err("Whisper API returned empty response".to_string());
-    }
-
     cleanup("");
-    Err("No transcription available. Grant macOS Speech Recognition permission (System Settings > Privacy & Security > Speech Recognition), install whisper locally (pip install openai-whisper), or add an OpenAI API key in Voice settings.".to_string())
+    Err("No transcription available. Grant macOS Speech Recognition permission (System Settings > Privacy & Security > Speech Recognition) or install whisper locally (pip install openai-whisper).".to_string())
 }
 
 // === Goal Commands (narrow IPC — no raw SQL from the webview) ===
@@ -919,89 +880,10 @@ async fn fetch_url(url: String) -> Result<FetchUrlResponse, String> {
     Ok(FetchUrlResponse { status, content_type, body })
 }
 
-// === TTS Command (OpenAI API key stays in keyring, never in webview) ===
-
-#[tauri::command]
-async fn tts_openai_speech(
-    text: String,
-    voice: Option<String>,
-    model: Option<String>,
-) -> Result<String, String> {
-    use base64::Engine;
-
-    // Read API key from keyring
-    let entry = keyring::Entry::new(KEYRING_SERVICE, "whisper_api_key")
-        .map_err(|e| e.to_string())?;
-    let api_key = match entry.get_password() {
-        Ok(val) => val,
-        Err(keyring::Error::NoEntry) => {
-            return Err("No OpenAI API key configured".to_string());
-        }
-        Err(e) => return Err(e.to_string()),
-    };
-
-    let voice_name = voice.unwrap_or_else(|| "alloy".to_string());
-    let model_name = model.unwrap_or_else(|| "tts-1".to_string());
-
-    // Split long text at sentence boundaries (4096 char limit per request)
-    let chunks = split_tts_text(&text, 4096);
-    let mut all_bytes: Vec<u8> = Vec::new();
-
-    let client = reqwest::Client::new();
-    for chunk in &chunks {
-        let body = serde_json::json!({
-            "model": model_name,
-            "input": chunk,
-            "voice": voice_name,
-            "response_format": "mp3"
-        });
-
-        let resp = client
-            .post("https://api.openai.com/v1/audio/speech")
-            .header("Authorization", format!("Bearer {}", api_key))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("TTS request failed: {}", e))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body_text = resp.text().await.unwrap_or_default();
-            return Err(format!("OpenAI TTS error ({}): {}", status, body_text));
-        }
-
-        let bytes = resp.bytes().await.map_err(|e| format!("Failed to read TTS response: {}", e))?;
-        all_bytes.extend_from_slice(&bytes);
-    }
-
-    Ok(base64::engine::general_purpose::STANDARD.encode(&all_bytes))
-}
-
-/// Split text at sentence boundaries for TTS chunking.
-fn split_tts_text(text: &str, max_len: usize) -> Vec<String> {
-    if text.len() <= max_len {
-        return vec![text.to_string()];
-    }
-    let mut chunks = Vec::new();
-    let mut remaining = text;
-    while !remaining.is_empty() {
-        if remaining.len() <= max_len {
-            chunks.push(remaining.to_string());
-            break;
-        }
-        // Find last sentence boundary within max_len
-        let search = &remaining[..max_len];
-        let split_at = search
-            .rfind(". ")
-            .or_else(|| search.rfind("! "))
-            .or_else(|| search.rfind("? "))
-            .map(|i| i + 2)
-            .unwrap_or(max_len);
-        chunks.push(remaining[..split_at].to_string());
-        remaining = &remaining[split_at..];
-    }
-    chunks
-}
+// (TTS via OpenAI was removed 2026-05-03 along with the rest of the
+// OpenAI-Voice path. Voice TTS now lives entirely in TS-side providers
+// — ElevenLabs / Inworld / Deepgram / WebSpeech — at
+// `apps/desktop/src/ui/voice.ts:rebuildTtsProvider`.)
 
 fn main() {
     let home = std::env::var("HOME")
@@ -1045,7 +927,6 @@ fn main() {
             goals_delete,
             goals_outcomes,
             fetch_url,
-            tts_openai_speech,
             computer_query_display,
             computer_execute,
             se_available,

@@ -265,10 +265,11 @@ describe("VoiceConfig persistence", () => {
   });
 });
 
-describe("TTS BYOK keys", () => {
+describe("Voice BYOK keys", () => {
   it("returns null when no key stored", () => {
     expect(getTTSKey("elevenlabs")).toBeNull();
-    expect(getTTSKey("openai")).toBeNull();
+    expect(getTTSKey("deepgram")).toBeNull();
+    expect(getTTSKey("inworld")).toBeNull();
   });
 
   it("round-trips ElevenLabs key", () => {
@@ -276,17 +277,19 @@ describe("TTS BYOK keys", () => {
     expect(getTTSKey("elevenlabs")).toBe("sk_11labs_abc");
   });
 
-  it("round-trips OpenAI key independently of ElevenLabs", () => {
+  it("round-trips each vendor key independently", () => {
     setTTSKey("elevenlabs", "sk_eleven");
-    setTTSKey("openai", "sk_openai");
+    setTTSKey("deepgram", "dg_token");
+    setTTSKey("inworld", "iw_key");
     expect(getTTSKey("elevenlabs")).toBe("sk_eleven");
-    expect(getTTSKey("openai")).toBe("sk_openai");
+    expect(getTTSKey("deepgram")).toBe("dg_token");
+    expect(getTTSKey("inworld")).toBe("iw_key");
   });
 
   it("empty string clears the stored key", () => {
-    setTTSKey("openai", "sk_openai");
-    setTTSKey("openai", "");
-    expect(getTTSKey("openai")).toBeNull();
+    setTTSKey("deepgram", "dg_token");
+    setTTSKey("deepgram", "");
+    expect(getTTSKey("deepgram")).toBeNull();
   });
 
   it("null clears the stored key", () => {

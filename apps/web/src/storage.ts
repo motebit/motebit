@@ -237,69 +237,101 @@ export function loadVoiceConfig(): VoiceConfig | null {
 
 // === TTS BYOK Keys ===
 //
-// Per-vendor TTS API keys. Kept separate from VoiceConfig because the canonical
-// VoiceConfig in @motebit/sdk crosses surfaces — secrets do not belong in its
-// type surface. Browser storage is the best we can do without OS keyring; the
-// secret never leaves this device.
+// Per-vendor voice API keys. Kept separate from VoiceConfig because the
+// canonical VoiceConfig in @motebit/sdk crosses surfaces — secrets do not
+// belong in its type surface. Browser storage is the best we can do without
+// OS keyring; the secret never leaves this device.
 //
-// Providers are string-keyed so new adapters can land without touching storage.
+// Voice section is dual-purpose by vendor: one ElevenLabs key powers TTS
+// (premium voices) AND Scribe STT, one Deepgram key powers Speak TTS AND
+// Nova streaming STT, one Inworld key powers Inworld TTS AND Inworld
+// streaming STT. Storage reflects this — keys are namespaced by vendor,
+// not by function.
+//
+// Storage namespace: `motebit-vendor-key-<vendor>`.
+//
+// Lazy migration: legacy keys lived under `motebit-tts-key-*` and
+// `motebit-stt-key-*`. On read, if the unified key is absent but a legacy
+// key exists, copy it to the unified slot and remove the legacy ones.
+// Invisible to the user; no startup hook required.
 
-export type TTSVendorKey = "elevenlabs" | "openai";
+/** Vendor identifiers for voice BYOK. Voice section's three majors. */
+export type VendorKey = "elevenlabs" | "deepgram" | "inworld";
 
-const TTS_KEY_PREFIX = "motebit-tts-key-";
+const VENDOR_KEY_PREFIX = "motebit-vendor-key-";
+const LEGACY_TTS_KEY_PREFIX = "motebit-tts-key-";
+const LEGACY_STT_KEY_PREFIX = "motebit-stt-key-";
 
+export function getVendorKey(vendor: VendorKey): string | null {
+  try {
+    const unified = localStorage.getItem(VENDOR_KEY_PREFIX + vendor);
+    if (unified != null && unified !== "") return unified;
+
+    // Lazy migration from legacy prefixes. Check TTS prefix first
+    // (ElevenLabs lived there), then STT prefix (Deepgram lived there).
+    const legacyTts = localStorage.getItem(LEGACY_TTS_KEY_PREFIX + vendor);
+    const legacyStt = localStorage.getItem(LEGACY_STT_KEY_PREFIX + vendor);
+    const migrated = legacyTts ?? legacyStt;
+    if (migrated != null && migrated !== "") {
+      localStorage.setItem(VENDOR_KEY_PREFIX + vendor, migrated);
+      // Remove legacy slots so we don't keep migrating on every read.
+      localStorage.removeItem(LEGACY_TTS_KEY_PREFIX + vendor);
+      localStorage.removeItem(LEGACY_STT_KEY_PREFIX + vendor);
+      return migrated;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function setVendorKey(vendor: VendorKey, key: string | null): void {
+  try {
+    if (key == null || key === "") {
+      localStorage.removeItem(VENDOR_KEY_PREFIX + vendor);
+      // Also clean up any legacy slots for the same vendor so the user's
+      // "I cleared this key" intent is total.
+      localStorage.removeItem(LEGACY_TTS_KEY_PREFIX + vendor);
+      localStorage.removeItem(LEGACY_STT_KEY_PREFIX + vendor);
+    } else {
+      localStorage.setItem(VENDOR_KEY_PREFIX + vendor, key);
+    }
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Legacy aliases — kept for callers that haven't migrated yet. Both read
+// from and write to the unified `getVendorKey` / `setVendorKey` so behavior
+// is consistent regardless of which API a caller uses. Will be removed
+// once all surfaces have migrated.
+// ---------------------------------------------------------------------------
+
+/** @deprecated Use `VendorKey` and `getVendorKey` / `setVendorKey`. */
+export type TTSVendorKey = VendorKey;
+
+/** @deprecated Use `getVendorKey`. */
 export function getTTSKey(vendor: TTSVendorKey): string | null {
-  try {
-    return localStorage.getItem(TTS_KEY_PREFIX + vendor);
-  } catch {
-    return null;
-  }
+  return getVendorKey(vendor);
 }
 
+/** @deprecated Use `setVendorKey`. */
 export function setTTSKey(vendor: TTSVendorKey, key: string | null): void {
-  try {
-    if (key == null || key === "") {
-      localStorage.removeItem(TTS_KEY_PREFIX + vendor);
-    } else {
-      localStorage.setItem(TTS_KEY_PREFIX + vendor, key);
-    }
-  } catch {
-    // localStorage unavailable
-  }
+  setVendorKey(vendor, key);
 }
 
-// === STT BYOK Keys ===
-//
-// Mirrors the TTS-key storage above: per-vendor STT API keys namespaced under
-// `motebit-stt-key-<vendor>`. Kept separate from VoiceConfig for the same
-// reason — secrets don't belong in a cross-surface type. A non-empty value
-// is the signal that the voice session should construct a provider-specific
-// adapter (e.g. DeepgramSTTProvider) in place of the default WebSpeech path.
-//
-// Provider swaps take effect on page reload; see voice.ts for the rationale.
+/** @deprecated Use `VendorKey` and `getVendorKey` / `setVendorKey`. */
+export type STTVendorKey = VendorKey;
 
-export type STTVendorKey = "deepgram";
-
-const STT_KEY_PREFIX = "motebit-stt-key-";
-
+/** @deprecated Use `getVendorKey`. */
 export function getSTTKey(vendor: STTVendorKey): string | null {
-  try {
-    return localStorage.getItem(STT_KEY_PREFIX + vendor);
-  } catch {
-    return null;
-  }
+  return getVendorKey(vendor);
 }
 
+/** @deprecated Use `setVendorKey`. */
 export function setSTTKey(vendor: STTVendorKey, key: string | null): void {
-  try {
-    if (key == null || key === "") {
-      localStorage.removeItem(STT_KEY_PREFIX + vendor);
-    } else {
-      localStorage.setItem(STT_KEY_PREFIX + vendor, key);
-    }
-  } catch {
-    // localStorage unavailable
-  }
+  setVendorKey(vendor, key);
 }
 
 // === Sovereignty Ceiling CTA ===

@@ -10,14 +10,14 @@ import {
   loadGovernanceConfig,
   saveVoiceConfig,
   loadVoiceConfig,
-  getTTSKey,
-  setTTSKey,
+  getVendorKey,
+  setVendorKey,
 } from "../storage";
 import { checkWebGPU, WebLLMProvider, DEFAULT_OLLAMA_URL } from "../providers";
 import { detectLocalInference, probeLocalModels, DEFAULT_LOCAL_ENDPOINTS } from "../bootstrap";
 import { setTTSVoice } from "./chat";
 import { rebuildTTSProvider } from "../main";
-import { ELEVENLABS_VOICES, TTS_VOICES } from "@motebit/voice";
+import { ELEVENLABS_VOICES, DEEPGRAM_VOICES } from "@motebit/voice";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { ColorPickerAPI } from "./color-picker";
 import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_GOOGLE_MODEL, isLocalServerUrl } from "@motebit/sdk";
@@ -39,11 +39,9 @@ const FALLBACK_MODELS: Record<
   Array<{ id: string; name: string }>
 > = {
   anthropic: [
-    { id: "claude-opus-4-6", name: "Claude Opus 4.6 — strongest reviews" },
+    { id: "claude-opus-4-6", name: "Claude Opus 4.6 — most capable" },
     { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6 — recommended" },
     { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5 — fastest" },
-    { id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-    { id: "claude-opus-4-5", name: "Claude Opus 4.5" },
   ],
   openai: [
     { id: "gpt-5", name: "GPT-5" },
@@ -189,7 +187,8 @@ const ttsVoiceSelect = document.getElementById("settings-tts-voice") as HTMLSele
 const voiceAutoSend = document.getElementById("settings-voice-autosend") as HTMLInputElement;
 const voiceResponse = document.getElementById("settings-voice-response") as HTMLInputElement;
 const ttsElevenlabsKey = document.getElementById("tts-elevenlabs-key") as HTMLInputElement | null;
-const ttsOpenaiKey = document.getElementById("tts-openai-key") as HTMLInputElement | null;
+const ttsDeepgramKey = document.getElementById("tts-deepgram-key") as HTMLInputElement | null;
+const ttsInworldKey = document.getElementById("tts-inworld-key") as HTMLInputElement | null;
 
 // === State ===
 
@@ -380,55 +379,78 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
   /**
    * Populate the TTS voice picker based on which BYOK keys are currently
-   * entered. The picker always reflects the *active* provider's voice space:
+   * entered. The picker always reflects the *active* provider's voice space.
+   * Voice section's three majors: ElevenLabs / Deepgram / Inworld. Each
+   * adds an optgroup to the picker when keyed; runtime's fallback chain
+   * routes the call to whichever provider owns the chosen voice id.
    *
    *   ElevenLabs keyed → curated `ELEVENLABS_VOICES` names
-   *   OpenAI keyed only → `TTS_VOICES`
-   *   Neither → a single "Browser default" option
+   *   Deepgram keyed   → `DEEPGRAM_VOICES` (Aura / Aura-2 voice ids)
+   *   Inworld keyed    → Inworld voice ids (e.g., "Dennis"; full list
+   *                      not enumerated here — Inworld supports voice
+   *                      cloning so the canonical set grows over time)
+   *   None             → a single "Browser default" option
    *
    * Re-runs on every key-field input so the menu tracks what the user is
    * currently typing without waiting for Save. Preserves the current
-   * selection if it still exists in the new option list, otherwise falls
-   * back to the stored `ttsVoice` or the first option.
+   * selection if it still exists in the new option list.
    */
   function populateTtsVoices(): void {
     const elevenKey = ttsElevenlabsKey?.value.trim() ?? "";
-    const openaiKey = ttsOpenaiKey?.value.trim() ?? "";
+    const deepgramKey = ttsDeepgramKey?.value.trim() ?? "";
+    const inworldKey = ttsInworldKey?.value.trim() ?? "";
     const previous = ttsVoiceSelect.value;
     const saved = loadVoiceConfig()?.ttsVoice ?? "";
 
     ttsVoiceSelect.innerHTML = "";
-    const options: Array<{ value: string; label: string }> = [];
+    const allValues: string[] = [];
 
-    if (elevenKey) {
-      // ElevenLabs takes priority — it's the top of the fallback chain.
-      for (const name of Object.keys(ELEVENLABS_VOICES)) {
-        options.push({ value: name, label: name });
+    // Union of every voice the user can actually pick right now, grouped by
+    // provider with <optgroup>. Multiple keys → multiple groups visible.
+    // Runtime's fallback chain (ElevenLabs → Inworld → Deepgram → browser)
+    // routes the call to the provider that owns the chosen voice id.
+    const appendGroup = (label: string, voices: readonly string[]): void => {
+      if (voices.length === 0) return;
+      const group = document.createElement("optgroup");
+      group.label = label;
+      for (const name of voices) {
+        const el = document.createElement("option");
+        el.value = name;
+        el.textContent = name;
+        group.appendChild(el);
+        allValues.push(name);
       }
-    } else if (openaiKey) {
-      for (const name of TTS_VOICES) {
-        options.push({ value: name, label: name });
-      }
-    } else {
-      options.push({ value: "", label: "Browser default" });
-    }
+      ttsVoiceSelect.appendChild(group);
+    };
 
-    for (const opt of options) {
-      const el = document.createElement("option");
-      el.value = opt.value;
-      el.textContent = opt.label;
-      ttsVoiceSelect.appendChild(el);
-    }
+    if (elevenKey) appendGroup("ElevenLabs", Object.keys(ELEVENLABS_VOICES));
+    // Inworld doesn't publish a fixed voice list (voice cloning supported);
+    // surface the documented example "Dennis" plus an empty default. Users
+    // can override via direct text entry on the Inworld voice config later.
+    if (inworldKey) appendGroup("Inworld", ["Dennis"]);
+    if (deepgramKey) appendGroup("Deepgram", DEEPGRAM_VOICES);
+
+    // Browser default is always available — it's the zero-key fallback.
+    const browserGroup = document.createElement("optgroup");
+    browserGroup.label = "Browser";
+    const browserOpt = document.createElement("option");
+    browserOpt.value = "";
+    browserOpt.textContent = "Browser default";
+    browserGroup.appendChild(browserOpt);
+    ttsVoiceSelect.appendChild(browserGroup);
+    allValues.push("");
 
     // Restore selection in priority order: live-edit value → stored config → first.
-    const candidates = [previous, saved].filter((v) => v !== "");
+    const candidates = [previous, saved].filter(
+      (v): v is string => v !== "" || allValues.includes(""),
+    );
     for (const candidate of candidates) {
-      if (options.some((o) => o.value === candidate)) {
+      if (allValues.includes(candidate)) {
         ttsVoiceSelect.value = candidate;
         return;
       }
     }
-    ttsVoiceSelect.value = options[0]!.value;
+    ttsVoiceSelect.value = allValues[0] ?? "";
   }
 
   /**
@@ -456,7 +478,8 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // depends on which keys are present. Debouncing not needed; the work is
   // <10 options and a few DOM nodes.
   ttsElevenlabsKey?.addEventListener("input", () => populateTtsVoices());
-  ttsOpenaiKey?.addEventListener("input", () => populateTtsVoices());
+  ttsDeepgramKey?.addEventListener("input", () => populateTtsVoices());
+  ttsInworldKey?.addEventListener("input", () => populateTtsVoices());
   wireKeyRevealButtons();
 
   function classifyDecision(decision: unknown): "allowed" | "denied" | "approval" {
@@ -902,8 +925,9 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     // this device; the inputs are the only UI path for entering them, so
     // this mirror-load is load-bearing — with no other surface, a blank
     // input would silently overwrite the stored key on Save.
-    if (ttsElevenlabsKey) ttsElevenlabsKey.value = getTTSKey("elevenlabs") ?? "";
-    if (ttsOpenaiKey) ttsOpenaiKey.value = getTTSKey("openai") ?? "";
+    if (ttsElevenlabsKey) ttsElevenlabsKey.value = getVendorKey("elevenlabs") ?? "";
+    if (ttsDeepgramKey) ttsDeepgramKey.value = getVendorKey("deepgram") ?? "";
+    if (ttsInworldKey) ttsInworldKey.value = getVendorKey("inworld") ?? "";
 
     // Populate TTS voices — must run *after* key fields are filled so the
     // picker reflects the active provider's voice space on open.
@@ -1175,10 +1199,13 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       anchorOnchain: govProactiveAnchor?.checked === true,
     });
 
-    // Persist BYOK TTS keys first so the rebuild below sees fresh values.
-    // Empty-string clears the slot (setTTSKey removes the localStorage entry).
-    if (ttsElevenlabsKey) setTTSKey("elevenlabs", ttsElevenlabsKey.value.trim());
-    if (ttsOpenaiKey) setTTSKey("openai", ttsOpenaiKey.value.trim());
+    // Persist BYOK voice keys first so the rebuild below sees fresh values.
+    // Empty-string clears the slot (setVendorKey removes the localStorage entry).
+    // Voice section is the three voice majors — keys are vendor-scoped and
+    // dual-purpose (TTS + STT) per vendor.
+    if (ttsElevenlabsKey) setVendorKey("elevenlabs", ttsElevenlabsKey.value.trim());
+    if (ttsDeepgramKey) setVendorKey("deepgram", ttsDeepgramKey.value.trim());
+    if (ttsInworldKey) setVendorKey("inworld", ttsInworldKey.value.trim());
 
     // Save voice config. `enabled` stays whatever the stored config said —
     // the web surface doesn't expose a master voice on/off toggle yet; when
@@ -1236,14 +1263,41 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // === MCP Server Management ===
 
   const mcpServerList = document.getElementById("mcp-server-list") as HTMLDivElement;
+  const mcpAddToggle = document.getElementById("mcp-add-toggle") as HTMLButtonElement;
+  const mcpAddForm = document.getElementById("mcp-add-form") as HTMLDivElement;
+  const mcpAddCancel = document.getElementById("mcp-add-cancel") as HTMLButtonElement;
   const mcpAddName = document.getElementById("mcp-add-name") as HTMLInputElement;
   const mcpAddUrl = document.getElementById("mcp-add-url") as HTMLInputElement;
+  const mcpAddTrusted = document.getElementById("mcp-add-trusted") as HTMLInputElement;
   const mcpAddMotebit = document.getElementById("mcp-add-motebit") as HTMLInputElement;
   const mcpAddBtn = document.getElementById("mcp-add-btn") as HTMLButtonElement;
+
+  // Toggle the form open/closed. Add Server stays anchored above the form
+  // — matches desktop, where the same affordance shows or hides the form.
+  function hideMcpForm(): void {
+    mcpAddForm.style.display = "none";
+    mcpAddName.value = "";
+    mcpAddUrl.value = "";
+    mcpAddTrusted.checked = false;
+    mcpAddMotebit.checked = false;
+  }
+  mcpAddToggle.addEventListener("click", () => {
+    const opening = mcpAddForm.style.display === "none";
+    mcpAddForm.style.display = opening ? "" : "none";
+    if (opening) mcpAddName.focus();
+  });
+  mcpAddCancel.addEventListener("click", hideMcpForm);
 
   function renderMcpServers(): void {
     const servers = ctx.app.getMcpServers();
     mcpServerList.innerHTML = "";
+    if (servers.length === 0) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "font-size:12px;color:rgba(255,255,255,0.3);padding:8px 0;";
+      empty.textContent = "No MCP servers configured";
+      mcpServerList.appendChild(empty);
+      return;
+    }
     for (const server of servers) {
       const item = document.createElement("div");
       item.className = "mcp-server-item";
@@ -1299,12 +1353,11 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         name,
         transport: "http",
         url,
+        trusted: mcpAddTrusted.checked,
         motebit: mcpAddMotebit.checked,
       })
       .then(() => {
-        mcpAddName.value = "";
-        mcpAddUrl.value = "";
-        mcpAddMotebit.checked = false;
+        hideMcpForm();
         renderMcpServers();
         ctx.showToast(`Connected to ${name}`);
       })

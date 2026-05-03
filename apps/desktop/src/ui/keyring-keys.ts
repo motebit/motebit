@@ -27,17 +27,21 @@ export const OPENAI_API_KEY_SLOT = "openai_api_key";
 export const GOOGLE_API_KEY_SLOT = "google_api_key";
 
 // === Voice ===
+//
+// Voice section is the three voice majors (ElevenLabs / Inworld / Deepgram).
+// Each vendor key is dual-purpose for that vendor's TTS + STT services.
+// The TTS chain ordering is ElevenLabs → Inworld → Deepgram → WebSpeech;
+// the STT chain on desktop adds vendor-keyed providers ahead of WebSpeech
+// when set.
 
-/** OpenAI Whisper API key for voice transcription. */
-export const WHISPER_API_KEY_SLOT = "whisper_api_key";
-
-/**
- * ElevenLabs API key for BYOK TTS. Stored under the same keyring namespace
- * as the other voice secrets so it inherits the same access pattern; when
- * set, the webview reads it at voice init and hands it to the L0
- * `ElevenLabsTTSProvider`, which sits at the head of the TTS chain.
- */
+/** ElevenLabs API key — powers ElevenLabs TTS voices and Scribe STT. */
 export const ELEVENLABS_API_KEY_SLOT = "elevenlabs_api_key";
+
+/** Inworld API key — powers Inworld TTS voices and Inworld streaming STT. */
+export const INWORLD_API_KEY_SLOT = "inworld_api_key";
+
+/** Deepgram API key — powers Deepgram Speak (Aura) TTS and Nova streaming STT. */
+export const DEEPGRAM_API_KEY_SLOT = "deepgram_api_key";
 
 // === Sync ===
 

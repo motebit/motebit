@@ -773,33 +773,74 @@
       /* Provider mode tabs — three modes (Motebit Cloud / API Key / On-Device) */
       .provider-mode-tabs {
         display: flex;
-        gap: 6px;
+        gap: 4px;
         margin-bottom: 12px;
+        background: var(--bg-card);
+        border-radius: 8px;
+        padding: 3px;
       }
       .provider-mode-tab {
         flex: 1;
-        padding: 8px 10px;
-        background: rgba(255, 255, 255, 0.02);
-        border: 1px solid var(--border-light);
-        border-radius: 8px;
+        padding: 6px 4px;
+        border: none;
+        border-radius: 6px;
+        background: none;
         color: var(--text-muted);
-        font-size: 12px;
+        font-size: 11px;
         cursor: pointer;
         font-family: inherit;
         transition:
-          color 0.15s,
           background 0.15s,
-          border-color 0.15s;
+          color 0.15s;
         text-align: center;
       }
       .provider-mode-tab:hover {
         color: var(--text-secondary);
-        background: rgba(255, 255, 255, 0.04);
       }
       .provider-mode-tab.active {
+        background: var(--bg-primary);
+        color: var(--accent-text);
+        box-shadow: 0 1px 3px var(--shadow-sm);
+      }
+      .tier-badge {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        padding: 3px 10px;
+        border-radius: 6px;
+      }
+      .tier-pro {
+        background: rgba(99, 102, 241, 0.15);
+        color: #818cf8;
+      }
+      .upgrade-btn {
+        font-size: 13px;
+        font-family: inherit;
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: 1px solid var(--accent-border, rgba(99, 102, 241, 0.3));
+        background: var(--accent-bg, rgba(99, 102, 241, 0.08));
         color: var(--text-heading);
-        background: rgba(99, 102, 241, 0.12);
-        border-color: rgba(99, 102, 241, 0.4);
+        cursor: pointer;
+        transition:
+          background 0.15s,
+          border-color 0.15s;
+      }
+      .upgrade-btn:hover {
+        background: var(--accent-bg-strong, rgba(99, 102, 241, 0.15));
+      }
+      .ollama-status {
+        font-size: 11px;
+        color: var(--text-faint);
+        margin-top: 6px;
+      }
+      .ollama-status.connected {
+        color: #4ade80;
+      }
+      .ollama-status.error {
+        color: #f87171;
       }
       .provider-mode-section {
         display: none;
@@ -841,37 +882,6 @@
         color: var(--text-muted);
       }
 
-      /* Provider status indicator */
-      .provider-status {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 12px;
-        color: var(--text-secondary);
-        margin-bottom: 10px;
-        padding: 6px 10px;
-        border-radius: 6px;
-        background: rgba(255, 255, 255, 0.03);
-      }
-      .provider-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        flex-shrink: 0;
-      }
-      .provider-dot.green {
-        background: #22c55e;
-        box-shadow: 0 0 4px rgba(34, 197, 94, 0.4);
-      }
-      .provider-dot.blue {
-        background: #6366f1;
-        box-shadow: 0 0 4px rgba(99, 102, 241, 0.4);
-      }
-      .provider-dot.yellow {
-        background: #eab308;
-        box-shadow: 0 0 4px rgba(234, 179, 8, 0.4);
-      }
-
       /* Form fields */
       .settings-field {
         display: flex;
@@ -900,6 +910,18 @@
         font-size: 13px;
         outline: none;
         font-family: inherit;
+      }
+      /* Replace WebKit's native double-arrow select chrome with a single
+         chevron-down. Same SVG used on web — keeps the two surfaces visually
+         aligned regardless of browser engine. */
+      #settings-modal select {
+        -webkit-appearance: none;
+        appearance: none;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+        background-repeat: no-repeat;
+        background-position: right 12px center;
+        background-size: 10px;
+        padding-right: 30px;
       }
       #settings-modal select:focus,
       #settings-modal input:focus {
@@ -5833,20 +5855,6 @@
           </svg>
           Identity
         </button>
-        <button
-          class="settings-tab"
-          data-tab="billing"
-          role="tab"
-          aria-selected="false"
-          aria-controls="pane-billing"
-          id="tab-billing"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
-            <line x1="1" y1="10" x2="23" y2="10" />
-          </svg>
-          Billing
-        </button>
       </div>
       <div class="settings-content">
         <!-- Appearance pane -->
@@ -5907,10 +5915,6 @@
         >
           <div class="settings-card">
             <div class="card-title">AI Provider</div>
-            <div id="provider-status" class="provider-status" style="display: none">
-              <span id="provider-status-dot" class="provider-dot"></span>
-              <span id="provider-status-text"></span>
-            </div>
             <!-- Three top-level modes. All modes are always accessible —
                BYOK is reachable to Motebit Cloud subscribers too.
                See feedback_sovereignty_orthogonal. -->
@@ -5928,40 +5932,132 @@
 
             <!-- Motebit Cloud mode — the product. Subscription-backed inference. -->
             <div class="provider-mode-section" id="mode-section-cloud">
-              <div class="settings-field">
-                <label for="settings-cloud-model">Model</label>
-                <select id="settings-cloud-model"></select>
+              <!-- Subscribed view -->
+              <div id="billing-subscribed-section" style="display: none">
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px">
+                  <span class="tier-badge tier-pro">Cloud</span>
+                  <span id="billing-balance" style="font-size: 13px; color: var(--text-muted)"
+                    >$0.00 remaining</span
+                  >
+                </div>
+                <div class="settings-field" style="margin-bottom: 10px">
+                  <label for="settings-cloud-model">Model</label>
+                  <select id="settings-cloud-model"></select>
+                </div>
+                <div id="billing-topup" style="display: none; margin-bottom: 10px">
+                  <div
+                    id="billing-topup-buttons"
+                    style="display: flex; gap: 8px"
+                  ></div>
+                </div>
+                <div id="billing-actions" style="text-align: right; padding-bottom: 4px"></div>
               </div>
+              <!-- Unsubscribed view -->
+              <div id="billing-unsubscribed-section">
+                <div class="settings-field" style="margin-bottom: 10px">
+                  <input
+                    type="text"
+                    value="Sonnet · Opus · Haiku · GPT-5.4 · GPT-5.4 mini · GPT-5.4 nano · Gemini Pro · Gemini Flash · Flash-Lite"
+                    readonly
+                    style="opacity: 0.5; cursor: default; font-size: 12px"
+                  />
+                </div>
+                <button id="billing-subscribe-btn" class="upgrade-btn" style="width: 100%">
+                  Subscribe — $20/mo
+                </button>
+              </div>
+              <div
+                id="billing-message"
+                style="font-size: 11px; color: var(--text-muted); text-align: center; margin-top: 8px"
+              ></div>
             </div>
 
             <!-- BYOK mode — user brings their own API key. -->
             <div class="provider-mode-section" id="mode-section-byok">
-              <div class="settings-field">
-                <label for="settings-byok-vendor">Vendor</label>
-                <select id="settings-byok-vendor">
-                  <option value="anthropic">Anthropic</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="google">Google</option>
-                </select>
-              </div>
-              <div class="settings-field">
-                <label for="settings-byok-model">Model</label>
-                <select id="settings-byok-model"></select>
+              <div class="settings-field" style="margin-bottom: 10px">
+                <label>Vendor</label>
+                <div style="display: flex; gap: 6px">
+                  <button
+                    class="byok-provider-btn active"
+                    data-byok="anthropic"
+                    type="button"
+                    style="
+                      flex: 1;
+                      padding: 6px;
+                      border: 1px solid var(--border-light);
+                      border-radius: 6px;
+                      background: var(--accent-bg);
+                      color: var(--text-heading);
+                      font-size: 12px;
+                      cursor: pointer;
+                      font-family: inherit;
+                    "
+                  >
+                    Anthropic
+                  </button>
+                  <button
+                    class="byok-provider-btn"
+                    data-byok="openai"
+                    type="button"
+                    style="
+                      flex: 1;
+                      padding: 6px;
+                      border: 1px solid var(--border-light);
+                      border-radius: 6px;
+                      background: transparent;
+                      color: var(--text-muted);
+                      font-size: 12px;
+                      cursor: pointer;
+                      font-family: inherit;
+                    "
+                  >
+                    OpenAI
+                  </button>
+                  <button
+                    class="byok-provider-btn"
+                    data-byok="google"
+                    type="button"
+                    style="
+                      flex: 1;
+                      padding: 6px;
+                      border: 1px solid var(--border-light);
+                      border-radius: 6px;
+                      background: transparent;
+                      color: var(--text-muted);
+                      font-size: 12px;
+                      cursor: pointer;
+                      font-family: inherit;
+                    "
+                  >
+                    Google
+                  </button>
+                </div>
               </div>
               <div class="settings-field">
                 <label for="settings-apikey">API Key</label>
                 <div class="settings-key-row">
-                  <input id="settings-apikey" type="password" placeholder="API key stored" />
+                  <input id="settings-apikey" type="password" placeholder="sk-ant-..." autocomplete="off" />
                   <button id="settings-apikey-toggle" type="button">Show</button>
                 </div>
               </div>
+              <div class="settings-field">
+                <label for="settings-byok-model">Model</label>
+                <input
+                  id="settings-byok-model"
+                  type="text"
+                  list="settings-byok-models"
+                  placeholder="claude-sonnet-4-6"
+                  autocomplete="off"
+                />
+                <datalist id="settings-byok-models"></datalist>
+              </div>
             </div>
 
-            <!-- On-Device mode — local inference via an Ollama server on
-               localhost or your LAN. -->
+            <!-- On-Device mode — local inference via an Ollama-compatible
+               server on localhost or your LAN. -->
             <div class="provider-mode-section" id="mode-section-on-device">
               <div class="settings-field">
-                <label for="settings-ondevice-endpoint">Server Endpoint</label>
+                <label for="settings-ondevice-endpoint">Endpoint</label>
                 <input
                   id="settings-ondevice-endpoint"
                   type="text"
@@ -5972,13 +6068,14 @@
               </div>
               <div class="settings-field">
                 <label for="settings-ondevice-model">Model</label>
-                <select id="settings-ondevice-model"></select>
-                <input
-                  id="settings-ondevice-model-custom"
-                  type="text"
-                  placeholder="Custom model name..."
-                  style="display: none; margin-top: 4px"
-                />
+                <select id="settings-ondevice-model">
+                  <option value="">Detecting...</option>
+                </select>
+              </div>
+              <div class="ollama-status" id="settings-ondevice-status"></div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px">
+                Auto-detects Ollama, LM Studio, llama.cpp, Jan, or any
+                OpenAI-compatible server.
               </div>
             </div>
 
@@ -6081,38 +6178,46 @@
           </div>
           <div class="settings-card">
             <div class="card-title">Voice</div>
-            <div class="settings-field">
-              <label for="settings-whisper-apikey">OpenAI API Key</label>
-              <div class="settings-key-row">
-                <input id="settings-whisper-apikey" type="password" placeholder="sk-..." />
-                <button id="settings-whisper-apikey-toggle" type="button">Show</button>
-              </div>
-              <div style="font-size: 11px; color: rgba(0, 0, 0, 0.35); margin-top: 4px">
-                Used for TTS voice and Whisper transcription
-              </div>
+            <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px">
+              Keys stay on this device. With no key set, the creature speaks through your operating
+              system's built-in voice.
             </div>
-            <div class="settings-field" style="margin-top: 10px">
+            <div class="settings-field">
               <label for="settings-elevenlabs-apikey">ElevenLabs API Key</label>
               <div class="settings-key-row">
                 <input id="settings-elevenlabs-apikey" type="password" placeholder="xi-..." />
                 <button id="settings-elevenlabs-apikey-toggle" type="button">Show</button>
               </div>
-              <div style="font-size: 11px; color: rgba(0, 0, 0, 0.35); margin-top: 4px">
-                Optional. When set, ElevenLabs is preferred over OpenAI for TTS.
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
+                Premium voice and transcription.
+              </div>
+            </div>
+            <div class="settings-field" style="margin-top: 10px">
+              <label for="settings-inworld-apikey">Inworld API Key</label>
+              <div class="settings-key-row">
+                <input id="settings-inworld-apikey" type="password" placeholder="..." />
+                <button id="settings-inworld-apikey-toggle" type="button">Show</button>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
+                Real-time voice and transcription.
+              </div>
+            </div>
+            <div class="settings-field" style="margin-top: 10px">
+              <label for="settings-deepgram-apikey">Deepgram API Key</label>
+              <div class="settings-key-row">
+                <input id="settings-deepgram-apikey" type="password" placeholder="..." />
+                <button id="settings-deepgram-apikey-toggle" type="button">Show</button>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
+                Low-latency voice and transcription.
               </div>
             </div>
             <div class="settings-field" style="margin-top: 10px">
               <label for="settings-tts-voice">TTS Voice</label>
-              <select id="settings-tts-voice">
-                <option value="alloy">Alloy</option>
-                <option value="echo">Echo</option>
-                <option value="fable">Fable</option>
-                <option value="onyx">Onyx</option>
-                <option value="nova">Nova</option>
-                <option value="shimmer">Shimmer</option>
-              </select>
-              <div style="font-size: 11px; color: rgba(0, 0, 0, 0.35); margin-top: 4px">
-                OpenAI TTS voice (requires API key above)
+              <select id="settings-tts-voice"></select>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
+                Browser-default uses your OS voice. Add a key above for ElevenLabs, Inworld, or
+                Deepgram voices.
               </div>
             </div>
             <div class="settings-field" style="margin-top: 10px">
@@ -6455,39 +6560,6 @@
             </div>
           </div>
           <div id="budget-list" style="max-height: 120px; overflow-y: auto"></div>
-        </div>
-        <!-- Billing pane -->
-        <div class="settings-pane" id="pane-billing" role="tabpanel" aria-labelledby="tab-billing">
-          <div class="settings-card">
-            <div class="card-title">Motebit Cloud</div>
-            <div
-              id="billing-balance"
-              style="font-size: 18px; font-weight: 600; text-align: center; margin: 12px 0"
-            ></div>
-            <div
-              id="billing-status"
-              style="
-                font-size: 12px;
-                color: var(--text-muted);
-                text-align: center;
-                margin-bottom: 12px;
-              "
-            ></div>
-            <div id="billing-topup" style="display: none; text-align: center; margin-bottom: 12px">
-              <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px">
-                Low balance — top up:
-              </div>
-              <div
-                id="billing-topup-buttons"
-                style="display: flex; gap: 8px; justify-content: center"
-              ></div>
-            </div>
-            <div id="billing-actions" style="text-align: center"></div>
-            <div
-              id="billing-message"
-              style="font-size: 11px; color: var(--text-muted); text-align: center; margin-top: 8px"
-            ></div>
-          </div>
         </div>
       </div>
       <div class="settings-footer">

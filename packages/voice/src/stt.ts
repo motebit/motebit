@@ -35,3 +35,23 @@ export interface STTProvider {
   /** Called when recognition ends. */
   onEnd: (() => void) | null;
 }
+
+/**
+ * Pluggable file-based audio transcriber.
+ *
+ * Distinct from `STTProvider` (streaming, mic-driven, lifecycle-shaped):
+ * a `FileTranscriber` takes a complete audio buffer and returns its
+ * transcript as plain text. Used as the post-recording fallback path
+ * when the streaming STTProvider can't capture audio (Web Speech denied,
+ * Firefox no-support, etc.) — the surface records to a Blob via
+ * MediaRecorder, then hands the Blob to whichever transcriber the
+ * runtime selects from the user's keyed vendors.
+ *
+ * Wraps `WhisperTranscriber`, `ScribeTranscriber`, and any future
+ * batch-shaped transcription endpoints (Inworld batch STT, etc.) under
+ * a single interface so the surface code doesn't need a vendor switch.
+ */
+export interface FileTranscriber {
+  /** Transcribe a complete audio buffer to plain text. */
+  transcribe(audio: Blob): Promise<string>;
+}

@@ -37,12 +37,13 @@ import {
 import {
   computeSpeechEnergy,
   ElevenLabsTTSProvider,
-  OpenAITTSProvider,
+  InworldTTSProvider,
+  DeepgramSpeakTTSProvider,
   WebSpeechTTSProvider,
   FallbackTTSProvider,
   type TTSProvider,
 } from "@motebit/voice";
-import { loadVoiceConfig, getTTSKey } from "./storage";
+import { loadVoiceConfig, getVendorKey } from "./storage";
 import { initGatedPanels } from "./ui/gated-panels";
 import { initSovereignPanels } from "./ui/sovereign-panels";
 import { initSkillsPanel } from "./ui/skills-panel";
@@ -117,21 +118,28 @@ const voiceAPI = initVoice(ctx, chatAPI, {
 const savedVoice = loadVoiceConfig();
 if (savedVoice?.ttsVoice) setTTSVoice(savedVoice.ttsVoice);
 
-// Build the TTS provider chain from stored BYOK keys. Priority is quality →
-// fallback: ElevenLabs (if keyed) → OpenAI (if keyed) → Web Speech (always).
-// Each fallback catches transport/API failures, not in-session errors — the
-// chain is defense in depth, not a live retry loop.
+// Build the TTS provider chain from stored BYOK keys. The voice section is
+// the three voice majors (ElevenLabs / Deepgram / Inworld) — OpenAI lives
+// in the LLM section only. Chain priority is quality + brand: ElevenLabs
+// (premium) → Inworld (#1-ranked + cheap-at-scale + real-time) → Deepgram
+// (real-time / low-latency) → Web Speech (zero-key terminal fallback).
+// Each fallback catches transport/API failures, not in-session errors —
+// the chain is defense in depth, not a live retry loop.
 export function rebuildTTSProvider(): void {
   const chain: TTSProvider[] = [];
-  const elevenKey = getTTSKey("elevenlabs");
-  const openaiKey = getTTSKey("openai");
+  const elevenKey = getVendorKey("elevenlabs");
+  const inworldKey = getVendorKey("inworld");
+  const deepgramKey = getVendorKey("deepgram");
   const preferredVoice = loadVoiceConfig()?.ttsVoice;
 
   if (elevenKey) {
     chain.push(new ElevenLabsTTSProvider({ apiKey: elevenKey, voice: preferredVoice }));
   }
-  if (openaiKey) {
-    chain.push(new OpenAITTSProvider({ apiKey: openaiKey, voice: preferredVoice }));
+  if (inworldKey) {
+    chain.push(new InworldTTSProvider({ apiKey: inworldKey, voice: preferredVoice }));
+  }
+  if (deepgramKey) {
+    chain.push(new DeepgramSpeakTTSProvider({ apiKey: deepgramKey, voice: preferredVoice }));
   }
   chain.push(new WebSpeechTTSProvider());
 
