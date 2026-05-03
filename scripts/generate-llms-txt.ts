@@ -91,7 +91,7 @@ const LLMS_FOOTER = `## Open specification
 - [\`@motebit/protocol\`](https://www.npmjs.com/package/@motebit/protocol) — types, semirings, routing primitives, crypto-suite registry. Apache-2.0.
 - [\`@motebit/sdk\`](https://www.npmjs.com/package/@motebit/sdk) — developer contract; stable types, adapter interfaces. Apache-2.0.
 - [\`@motebit/crypto\`](https://www.npmjs.com/package/@motebit/crypto) — sign and verify every motebit artifact. Cryptosuite-agile. Apache-2.0.
-- [\`@motebit/verifier\`](https://www.npmjs.com/package/@motebit/verifier), [\`@motebit/verify\`](https://www.npmjs.com/package/@motebit/verify), [\`@motebit/crypto-{appattest,android-keystore,tpm,webauthn}\`](https://www.npmjs.com/org/motebit) — verification libraries. Apache-2.0. (Plus deprecated [\`@motebit/crypto-play-integrity\`](https://www.npmjs.com/package/@motebit/crypto-play-integrity) for one minor cycle.)
+- [\`@motebit/verifier\`](https://www.npmjs.com/package/@motebit/verifier), [\`@motebit/verify\`](https://www.npmjs.com/package/@motebit/verify), [\`@motebit/crypto-{appattest,android-keystore,tpm,webauthn}\`](https://www.npmjs.com/org/motebit) — verification libraries. Apache-2.0.
 - [\`motebit\`](https://www.npmjs.com/package/motebit) — reference runtime and operator console. BSL-1.1, converging to Apache-2.0 four years after release.
 
 ## Optional

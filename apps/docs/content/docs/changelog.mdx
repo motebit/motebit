@@ -3,7 +3,7 @@ title: Changelog
 description: Where to find what changed across motebit's published packages.
 ---
 
-Motebit ships 12 packages to npm — 11 Apache-2.0 packages on the [public surface](/docs/concepts/public-surface) and 1 BSL-1.1 reference runtime. Each carries its own `CHANGELOG.md` written by [Changesets](https://github.com/changesets/changesets), so "what changed" lives next to the code that changed.
+Motebit ships 11 packages to npm — 10 Apache-2.0 packages on the [public surface](/docs/concepts/public-surface) and 1 BSL-1.1 reference runtime. Each carries its own `CHANGELOG.md` written by [Changesets](https://github.com/changesets/changesets), so "what changed" lives next to the code that changed.
 
 ## Authoritative sources
 
@@ -18,21 +18,20 @@ The doctrine is **one canonical source per synchronization invariant**. A root C
 
 ## Published packages
 
-The 11 Apache-2.0 packages on the permissive floor:
+The 10 Apache-2.0 packages on the permissive floor:
 
-| Package                                         | npm                                                                   | Changelog                                                                                               |
-| ----------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `@motebit/protocol`                             | [npm](https://www.npmjs.com/package/@motebit/protocol)                | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/protocol/CHANGELOG.md)                |
-| `@motebit/sdk`                                  | [npm](https://www.npmjs.com/package/@motebit/sdk)                     | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/sdk/CHANGELOG.md)                     |
-| `@motebit/crypto`                               | [npm](https://www.npmjs.com/package/@motebit/crypto)                  | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto/CHANGELOG.md)                  |
-| `@motebit/verifier`                             | [npm](https://www.npmjs.com/package/@motebit/verifier)                | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/verifier/CHANGELOG.md)                |
-| `@motebit/verify`                               | [npm](https://www.npmjs.com/package/@motebit/verify)                  | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/verify/CHANGELOG.md)                  |
-| `@motebit/crypto-appattest`                     | [npm](https://www.npmjs.com/package/@motebit/crypto-appattest)        | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-appattest/CHANGELOG.md)        |
-| `@motebit/crypto-android-keystore`              | [npm](https://www.npmjs.com/package/@motebit/crypto-android-keystore) | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-android-keystore/CHANGELOG.md) |
-| `@motebit/crypto-tpm`                           | [npm](https://www.npmjs.com/package/@motebit/crypto-tpm)              | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-tpm/CHANGELOG.md)              |
-| `@motebit/crypto-webauthn`                      | [npm](https://www.npmjs.com/package/@motebit/crypto-webauthn)         | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-webauthn/CHANGELOG.md)         |
-| `@motebit/crypto-play-integrity` _(deprecated)_ | [npm](https://www.npmjs.com/package/@motebit/crypto-play-integrity)   | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-play-integrity/CHANGELOG.md)   |
-| `create-motebit`                                | [npm](https://www.npmjs.com/package/create-motebit)                   | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/create-motebit/CHANGELOG.md)          |
+| Package                            | npm                                                                   | Changelog                                                                                               |
+| ---------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `@motebit/protocol`                | [npm](https://www.npmjs.com/package/@motebit/protocol)                | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/protocol/CHANGELOG.md)                |
+| `@motebit/sdk`                     | [npm](https://www.npmjs.com/package/@motebit/sdk)                     | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/sdk/CHANGELOG.md)                     |
+| `@motebit/crypto`                  | [npm](https://www.npmjs.com/package/@motebit/crypto)                  | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto/CHANGELOG.md)                  |
+| `@motebit/verifier`                | [npm](https://www.npmjs.com/package/@motebit/verifier)                | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/verifier/CHANGELOG.md)                |
+| `@motebit/verify`                  | [npm](https://www.npmjs.com/package/@motebit/verify)                  | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/verify/CHANGELOG.md)                  |
+| `@motebit/crypto-appattest`        | [npm](https://www.npmjs.com/package/@motebit/crypto-appattest)        | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-appattest/CHANGELOG.md)        |
+| `@motebit/crypto-android-keystore` | [npm](https://www.npmjs.com/package/@motebit/crypto-android-keystore) | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-android-keystore/CHANGELOG.md) |
+| `@motebit/crypto-tpm`              | [npm](https://www.npmjs.com/package/@motebit/crypto-tpm)              | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-tpm/CHANGELOG.md)              |
+| `@motebit/crypto-webauthn`         | [npm](https://www.npmjs.com/package/@motebit/crypto-webauthn)         | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-webauthn/CHANGELOG.md)         |
+| `create-motebit`                   | [npm](https://www.npmjs.com/package/create-motebit)                   | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/create-motebit/CHANGELOG.md)          |
 
 The BSL-1.1 reference runtime:
 
@@ -48,4 +47,4 @@ The 51 workspace-private packages (everything not in the table above) are pinned
 
 Each published package follows [semver 2.0.0](https://semver.org/). Breaking changes require a `major` changeset with a non-empty `## Migration` section per `check-changeset-discipline`. The Apache-2.0 packages use `check-api-surface` to enforce that the type-extracted baseline (`packages/<name>/etc/<name>.api.md`) cannot drift without an explicit major bump. The `motebit` CLI uses `check-cli-surface` against `apps/cli/etc/cli-surface.json` for the operator-facing surface (subcommands, flags, exit codes, paths).
 
-All 12 packages started at `1.0.0` in the coordinated initial release; each now versions independently on its own merit per [release-versioning doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/release-versioning.md). Current versions are on each package's npm page.
+All 11 packages started at `1.0.0` in the coordinated initial release; each now versions independently on its own merit per [release-versioning doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/release-versioning.md). Current versions are on each package's npm page.

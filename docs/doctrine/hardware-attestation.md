@@ -59,7 +59,7 @@ The rank is algebra, not policy-by-switch. `packages/semiring/src/hardware-attes
 | `platform: "software"` (explicit no-hardware)                                                                | 0.1                                        |
 | Absent claim                                                                                                 | 0.0 (semiring zero, annihilates under `⊗`) |
 
-Hardware platform coverage today: Apple Secure Enclave (desktop macOS + iOS Secure Enclave receipt), Apple App Attest (iOS, Apple-CA-signed chain), Android Hardware-Backed Keystore Attestation (Android, Google-CA-signed chain via `crypto-android-keystore` — the canonical Android sovereign-verifiable primitive), TPM 2.0 (Windows / Linux, endorsement-key chain against pinned vendor roots), W3C WebAuthn (browsers, FIDO-vendor batch root). Scoring is identical across every adapter — all collapse to the same `1.0 / 0.5 / 0.1 / 0.0` scalar under the bottleneck semiring. The scalar answers "hardware-backed?" yes/no; the platform identifier answers "which hardware?" for audit, not for rank. (Google Play Integrity carries the same `1.0` score for backward compatibility with existing claims, but the verifier is deprecated — see `crypto-play-integrity/CLAUDE.md` for the structural-mismatch explanation.)
+Hardware platform coverage today: Apple Secure Enclave (desktop macOS + iOS Secure Enclave receipt), Apple App Attest (iOS, Apple-CA-signed chain), Android Hardware-Backed Keystore Attestation (Android, Google-CA-signed chain via `crypto-android-keystore` — the canonical Android sovereign-verifiable primitive), TPM 2.0 (Windows / Linux, endorsement-key chain against pinned vendor roots), W3C WebAuthn (browsers, FIDO-vendor batch root). Scoring is identical across every adapter — all collapse to the same `1.0 / 0.5 / 0.1 / 0.0` scalar under the bottleneck semiring. The scalar answers "hardware-backed?" yes/no; the platform identifier answers "which hardware?" for audit, not for rank. (Google Play Integrity carries the same `1.0` score for backward compatibility with already-minted claims, but the verifier package was removed 2026-05-03 — see § "Three architectural categories" below for the structural-mismatch explanation.)
 
 Scalars not names: product-semiring composition with trust, cost, and latency stays pure arithmetic. `@motebit/market`'s `graph-routing.ts` lifts a market-local `productSemiring(TrustSemiring, HardwareAttestationSemiring)` over the routing graph — every edge carries a `(trust, hwScore)` tuple, `optimalPaths` bottlenecks HW scores across the whole path in one traversal, and the ranker folds the chain bottleneck into trust via `blendedTrust × (1 + chainHwScore × HARDWARE_ATTESTATION_BOOST)` at the scoring boundary. Single-hop candidates recover the prior scalar-at-terminal score; multi-hop chains through a `software` or absent intermediate now score at the weakest link. Swap the encoder for a different policy without touching the algebra.
 
@@ -101,9 +101,11 @@ Conflating it with categories 1 and 2 produced
 `@motebit/crypto-play-integrity@1.0.0` shipping with `GOOGLE_PLAY_INTEGRITY_JWKS = { keys: [] }`,
 because there was no Google JWKS to pin — Google designed the Play Integrity
 verification path to require either a network call to their API or a per-app
-secret. The package was deprecated 2026-04-26 in favour of
-`@motebit/crypto-android-keystore` (category 2 — Google's published
-Hardware Attestation roots, real device-attestation chain).
+secret. The package was deprecated 2026-04-26 and removed from the monorepo
+2026-05-03 in favour of `@motebit/crypto-android-keystore` (category 2 —
+Google's published Hardware Attestation roots, real device-attestation
+chain). The final published artifact is `@motebit/crypto-play-integrity@1.1.3`
+on npm with a registry-level deprecation pointing at the replacement.
 
 If a future motebit deployment wants Play Integrity-as-anti-fraud
 (`playProtectVerdict` and friends), it lands at the relay tier as an

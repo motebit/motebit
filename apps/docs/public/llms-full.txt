@@ -962,7 +962,7 @@ Source: https://docs.motebit.com/docs/concepts/public-surface
 
 > What motebit promises stability for, what it doesn't, and where the boundary is drawn.
 
-Motebit is a protocol-first project. The protocol specs are the canonical integration surface; the published npm packages are supported convenience surfaces over that protocol. 12 packages publish from this monorepo and version independently on their own merit; everything else in the monorepo is workspace-internal and carries no version surface to claim. This page names the boundary explicitly so a reader can tell, at a glance, what they can build against.
+Motebit is a protocol-first project. The protocol specs are the canonical integration surface; the published npm packages are supported convenience surfaces over that protocol. 11 packages publish from this monorepo and version independently on their own merit; everything else in the monorepo is workspace-internal and carries no version surface to claim. This page names the boundary explicitly so a reader can tell, at a glance, what they can build against.
 
 ## Three layers
 
@@ -976,7 +976,7 @@ The three-layer split is doctrine, not preference. It's what lets the protocol s
 
 ## What's published
 
-**11 Apache-2.0 packages — the permissive floor.** Anyone can implement against these in any language without permission. Each carries an explicit patent grant.
+**10 Apache-2.0 packages — the permissive floor.** Anyone can implement against these in any language without permission. Each carries an explicit patent grant.
 
 - [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — types, semirings, routing primitives, crypto-suite registry
 - [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract; stable types and adapter interfaces
@@ -5492,7 +5492,7 @@ Source: https://docs.motebit.com/docs/operator/architecture
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **50 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 23 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **49 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 23 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -5561,7 +5561,6 @@ motebit/
 │   │   # Layer 2 — Engines
 │   ├── crypto-appattest/         [L2 · Apache-2.0]    Apple App Attest chain verifier — pinned Apple root, deterministic from Apple's public spec.
 │   ├── crypto-android-keystore/  [L2 · Apache-2.0]    Android Hardware-Backed Keystore Attestation chain verifier — pinned Google attestation roots (RSA-4096 + ECDSA P-384). Canonical sovereign-verifiable Android primitive.
-│   ├── crypto-play-integrity/    [L2 · Apache-2.0]    DEPRECATED. Google Play Integrity JWT verifier — see `crypto-android-keystore`. Removed at 2.0.0.
 │   ├── crypto-tpm/               [L2 · Apache-2.0]    Windows / Linux TPM 2.0 EK chain verifier — pinned vendor roots (Infineon, Nuvoton, STMicro, Intel PTT).
 │   ├── crypto-webauthn/          [L2 · Apache-2.0]    WebAuthn platform-authenticator packed-attestation verifier — pinned FIDO root set (Apple, Yubico, Microsoft).
 │   ├── market/                [L2]          Budget, settlement, reputation, graph routing.
@@ -6695,7 +6694,7 @@ Source: https://docs.motebit.com/docs/changelog
 
 > Where to find what changed across motebit's published packages.
 
-Motebit ships 12 packages to npm — 11 Apache-2.0 packages on the [public surface](/docs/concepts/public-surface) and 1 BSL-1.1 reference runtime. Each carries its own `CHANGELOG.md` written by [Changesets](https://github.com/changesets/changesets), so "what changed" lives next to the code that changed.
+Motebit ships 11 packages to npm — 10 Apache-2.0 packages on the [public surface](/docs/concepts/public-surface) and 1 BSL-1.1 reference runtime. Each carries its own `CHANGELOG.md` written by [Changesets](https://github.com/changesets/changesets), so "what changed" lives next to the code that changed.
 
 ## Authoritative sources
 
@@ -6710,21 +6709,20 @@ The doctrine is **one canonical source per synchronization invariant**. A root C
 
 ## Published packages
 
-The 11 Apache-2.0 packages on the permissive floor:
+The 10 Apache-2.0 packages on the permissive floor:
 
-| Package                                         | npm                                                                   | Changelog                                                                                               |
-| ----------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `@motebit/protocol`                             | [npm](https://www.npmjs.com/package/@motebit/protocol)                | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/protocol/CHANGELOG.md)                |
-| `@motebit/sdk`                                  | [npm](https://www.npmjs.com/package/@motebit/sdk)                     | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/sdk/CHANGELOG.md)                     |
-| `@motebit/crypto`                               | [npm](https://www.npmjs.com/package/@motebit/crypto)                  | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto/CHANGELOG.md)                  |
-| `@motebit/verifier`                             | [npm](https://www.npmjs.com/package/@motebit/verifier)                | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/verifier/CHANGELOG.md)                |
-| `@motebit/verify`                               | [npm](https://www.npmjs.com/package/@motebit/verify)                  | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/verify/CHANGELOG.md)                  |
-| `@motebit/crypto-appattest`                     | [npm](https://www.npmjs.com/package/@motebit/crypto-appattest)        | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-appattest/CHANGELOG.md)        |
-| `@motebit/crypto-android-keystore`              | [npm](https://www.npmjs.com/package/@motebit/crypto-android-keystore) | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-android-keystore/CHANGELOG.md) |
-| `@motebit/crypto-tpm`                           | [npm](https://www.npmjs.com/package/@motebit/crypto-tpm)              | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-tpm/CHANGELOG.md)              |
-| `@motebit/crypto-webauthn`                      | [npm](https://www.npmjs.com/package/@motebit/crypto-webauthn)         | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-webauthn/CHANGELOG.md)         |
-| `@motebit/crypto-play-integrity` _(deprecated)_ | [npm](https://www.npmjs.com/package/@motebit/crypto-play-integrity)   | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-play-integrity/CHANGELOG.md)   |
-| `create-motebit`                                | [npm](https://www.npmjs.com/package/create-motebit)                   | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/create-motebit/CHANGELOG.md)          |
+| Package                            | npm                                                                   | Changelog                                                                                               |
+| ---------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `@motebit/protocol`                | [npm](https://www.npmjs.com/package/@motebit/protocol)                | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/protocol/CHANGELOG.md)                |
+| `@motebit/sdk`                     | [npm](https://www.npmjs.com/package/@motebit/sdk)                     | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/sdk/CHANGELOG.md)                     |
+| `@motebit/crypto`                  | [npm](https://www.npmjs.com/package/@motebit/crypto)                  | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto/CHANGELOG.md)                  |
+| `@motebit/verifier`                | [npm](https://www.npmjs.com/package/@motebit/verifier)                | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/verifier/CHANGELOG.md)                |
+| `@motebit/verify`                  | [npm](https://www.npmjs.com/package/@motebit/verify)                  | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/verify/CHANGELOG.md)                  |
+| `@motebit/crypto-appattest`        | [npm](https://www.npmjs.com/package/@motebit/crypto-appattest)        | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-appattest/CHANGELOG.md)        |
+| `@motebit/crypto-android-keystore` | [npm](https://www.npmjs.com/package/@motebit/crypto-android-keystore) | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-android-keystore/CHANGELOG.md) |
+| `@motebit/crypto-tpm`              | [npm](https://www.npmjs.com/package/@motebit/crypto-tpm)              | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-tpm/CHANGELOG.md)              |
+| `@motebit/crypto-webauthn`         | [npm](https://www.npmjs.com/package/@motebit/crypto-webauthn)         | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-webauthn/CHANGELOG.md)         |
+| `create-motebit`                   | [npm](https://www.npmjs.com/package/create-motebit)                   | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/create-motebit/CHANGELOG.md)          |
 
 The BSL-1.1 reference runtime:
 
@@ -6740,7 +6738,7 @@ The 51 workspace-private packages (everything not in the table above) are pinned
 
 Each published package follows [semver 2.0.0](https://semver.org/). Breaking changes require a `major` changeset with a non-empty `## Migration` section per `check-changeset-discipline`. The Apache-2.0 packages use `check-api-surface` to enforce that the type-extracted baseline (`packages/<name>/etc/<name>.api.md`) cannot drift without an explicit major bump. The `motebit` CLI uses `check-cli-surface` against `apps/cli/etc/cli-surface.json` for the operator-facing surface (subcommands, flags, exit codes, paths).
 
-All 12 packages started at `1.0.0` in the coordinated initial release; each now versions independently on its own merit per [release-versioning doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/release-versioning.md). Current versions are on each package's npm page.
+All 11 packages started at `1.0.0` in the coordinated initial release; each now versions independently on its own merit per [release-versioning doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/release-versioning.md). Current versions are on each package's npm page.
 
 ---
 

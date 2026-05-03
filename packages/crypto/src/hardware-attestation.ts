@@ -150,11 +150,11 @@ export interface DeviceCheckVerifierContext {
  *
  * `@motebit/crypto` stays permissive-floor-pure and dep-thin — it never imports a
  * platform adapter. Consumers (CLI, mobile, desktop, relay) wire the
- * leaf packages (`@motebit/crypto-appattest` for device_check;
- * future `@motebit/crypto-tpm`, `@motebit/crypto-play-integrity`) into
- * this object so that dispatch remains explicit, auditable, and
- * tree-shakable: a verifier that doesn't care about App Attest ships
- * zero App Attest code.
+ * leaf packages (`@motebit/crypto-appattest` for device_check,
+ * `@motebit/crypto-tpm`, `@motebit/crypto-android-keystore`,
+ * `@motebit/crypto-webauthn`) into this object so that dispatch remains
+ * explicit, auditable, and tree-shakable: a verifier that doesn't care
+ * about App Attest ships zero App Attest code.
  *
  * `deviceCheck` takes an optional third `context` argument carrying
  * the VC-subject fields that participate in the JCS body the Swift

@@ -34,7 +34,7 @@ pnpm run test
 
 ```
 apps/        10 surfaces and supporting apps (web, cli, desktop, mobile, spatial, inspector, operator, identity, docs, vscode)
-packages/    50 packages on a 7-layer DAG enforced by `pnpm check-deps`
+packages/    49 packages on a 7-layer DAG enforced by `pnpm check-deps`
 services/    8 backend services (1 relay + 2 molecules + 4 atoms + 1 glue)
 spec/        23 open specifications, each `motebit/<name>@1.0`
 ```
@@ -70,7 +70,7 @@ pnpm --filter <pkg> test    # Test a single package
 
 ### Changesets
 
-We use [Changesets](https://github.com/changesets/changesets) to manage versions and changelogs for published packages. If your PR affects any published package — the canonical list lives in `.changeset/config.json` (the `ignore` field inverts to the published set; today there are 12: 11 Apache-2.0 packages + the `motebit` BSL runtime) — add a changeset:
+We use [Changesets](https://github.com/changesets/changesets) to manage versions and changelogs for published packages. If your PR affects any published package — the canonical list lives in `.changeset/config.json` (the `ignore` field inverts to the published set; today there are 11: 10 Apache-2.0 packages + the `motebit` BSL runtime) — add a changeset:
 
 ```bash
 pnpm changeset
@@ -116,7 +116,7 @@ The CLA grants Motebit the rights needed to license contributions under our dual
 
 Inbound = outbound. Contributions are licensed under the same terms as the directory you are contributing to:
 
-- **Permissive floor** (`spec/`, `packages/protocol/`, `packages/sdk/`, `packages/crypto/`, `packages/verifier/`, `packages/verify/`, `packages/crypto-appattest/`, `packages/crypto-android-keystore/`, `packages/crypto-play-integrity/`, `packages/crypto-tpm/`, `packages/crypto-webauthn/`, `packages/create-motebit/`, `packages/github-action/`) -- **Apache-2.0** (explicit patent grant + litigation-termination clause)
+- **Permissive floor** (`spec/`, `packages/protocol/`, `packages/sdk/`, `packages/crypto/`, `packages/verifier/`, `packages/verify/`, `packages/crypto-appattest/`, `packages/crypto-android-keystore/`, `packages/crypto-tpm/`, `packages/crypto-webauthn/`, `packages/create-motebit/`, `packages/github-action/`) -- **Apache-2.0** (explicit patent grant + litigation-termination clause)
 - **Everything else** -- [BSL 1.1](LICENSE), source-available, converts to Apache-2.0 per-version after 4 years
 
 Both license families converge to Apache-2.0 at the Change Date — one license, one patent posture, one procurement decision in the end state.

@@ -63,7 +63,6 @@ to the Business Source License:
   packages/verify/                   @motebit/verify — motebit-verify CLI (bundles the canonical platform leaves)
   packages/crypto-appattest/         @motebit/crypto-appattest — Apple App Attest chain verifier
   packages/crypto-android-keystore/  @motebit/crypto-android-keystore — Android Hardware-Backed Keystore Attestation chain verifier
-  packages/crypto-play-integrity/    @motebit/crypto-play-integrity — Google Play Integrity JWT verifier
   packages/crypto-tpm/               @motebit/crypto-tpm — TPM 2.0 EK chain verifier
   packages/crypto-webauthn/          @motebit/crypto-webauthn — WebAuthn packed-attestation verifier
   packages/create-motebit/           create-motebit — identity scaffolding CLI

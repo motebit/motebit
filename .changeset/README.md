@@ -1,6 +1,6 @@
 # Changesets — authoring guide for motebit
 
-Motebit uses [Changesets](https://github.com/changesets/changesets) to manage versioning and changelogs for the 12 published packages:
+Motebit uses [Changesets](https://github.com/changesets/changesets) to manage versioning and changelogs for the 11 published packages:
 
 - `@motebit/protocol` — Apache-2.0, network protocol types
 - `@motebit/crypto` — Apache-2.0, sign and verify every Motebit artifact
@@ -11,15 +11,14 @@ Motebit uses [Changesets](https://github.com/changesets/changesets) to manage ve
 - `@motebit/crypto-android-keystore` — Apache-2.0, Android Hardware-Backed Keystore Attestation verifier
 - `@motebit/crypto-tpm` — Apache-2.0, TPM 2.0 EK chain verifier
 - `@motebit/crypto-webauthn` — Apache-2.0, WebAuthn packed-attestation verifier
-- `@motebit/crypto-play-integrity` — Apache-2.0, _(deprecated)_ Google Play Integrity JWT verifier
 - `create-motebit` — Apache-2.0, scaffolder (`npm create motebit`)
 - `motebit` — BSL-1.1, reference runtime and operator console
 
-The 12 packages **version independently on their own merit**. `.changeset/config.json` carries `"fixed": []`, `"linked": []`, and `"updateInternalDependencies": "patch"` — internal-dependency cascades patch-bump the consumer, but a major bump to (say) `@motebit/protocol` does not force a major on `@motebit/sdk` unless the SDK's own public surface actually broke. See [`docs/doctrine/release-versioning.md`](../docs/doctrine/release-versioning.md) for the rationale.
+The 11 packages **version independently on their own merit**. `.changeset/config.json` carries `"fixed": []`, `"linked": []`, and `"updateInternalDependencies": "patch"` — internal-dependency cascades patch-bump the consumer, but a major bump to (say) `@motebit/protocol` does not force a major on `@motebit/sdk` unless the SDK's own public surface actually broke. See [`docs/doctrine/release-versioning.md`](../docs/doctrine/release-versioning.md) for the rationale.
 
 ## When you need a changeset
 
-Any PR that changes files inside one of the 12 published-package directories — `packages/protocol`, `packages/crypto`, `packages/sdk`, `packages/verifier`, `packages/verify`, `packages/crypto-appattest`, `packages/crypto-android-keystore`, `packages/crypto-tpm`, `packages/crypto-webauthn`, `packages/crypto-play-integrity`, `packages/create-motebit`, or `apps/cli` (the `motebit` package) — that affects their published output **must** include a changeset. PRs that only touch tests, comments, or internal files below the `src/__tests__` layer do not.
+Any PR that changes files inside one of the 11 published-package directories — `packages/protocol`, `packages/crypto`, `packages/sdk`, `packages/verifier`, `packages/verify`, `packages/crypto-appattest`, `packages/crypto-android-keystore`, `packages/crypto-tpm`, `packages/crypto-webauthn`, `packages/create-motebit`, or `apps/cli` (the `motebit` package) — that affects their published output **must** include a changeset. PRs that only touch tests, comments, or internal files below the `src/__tests__` layer do not.
 
 If you're not sure, write one — a `patch` changeset for an internal change is harmless.
 
@@ -118,7 +117,7 @@ Reviewers see the exact API diff and the migration guide side-by-side. No silent
 
 ## Fallback
 
-If the Changesets workflow goes sideways (rare), `.github/workflows/publish.yml` is a manual fallback that publishes any of the 12 packages with npm provenance. Don't use it unless the Changesets-driven release has genuinely failed.
+If the Changesets workflow goes sideways (rare), `.github/workflows/publish.yml` is a manual fallback that publishes any of the 11 packages with npm provenance. Don't use it unless the Changesets-driven release has genuinely failed.
 
 ## References
 

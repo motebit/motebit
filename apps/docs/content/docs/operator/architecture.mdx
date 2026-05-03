@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **50 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 23 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **49 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 23 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -74,7 +74,6 @@ motebit/
 │   │   # Layer 2 — Engines
 │   ├── crypto-appattest/         [L2 · Apache-2.0]    Apple App Attest chain verifier — pinned Apple root, deterministic from Apple's public spec.
 │   ├── crypto-android-keystore/  [L2 · Apache-2.0]    Android Hardware-Backed Keystore Attestation chain verifier — pinned Google attestation roots (RSA-4096 + ECDSA P-384). Canonical sovereign-verifiable Android primitive.
-│   ├── crypto-play-integrity/    [L2 · Apache-2.0]    DEPRECATED. Google Play Integrity JWT verifier — see `crypto-android-keystore`. Removed at 2.0.0.
 │   ├── crypto-tpm/               [L2 · Apache-2.0]    Windows / Linux TPM 2.0 EK chain verifier — pinned vendor roots (Infineon, Nuvoton, STMicro, Intel PTT).
 │   ├── crypto-webauthn/          [L2 · Apache-2.0]    WebAuthn platform-authenticator packed-attestation verifier — pinned FIDO root set (Apple, Yubico, Microsoft).
 │   ├── market/                [L2]          Budget, settlement, reputation, graph routing.

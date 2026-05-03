@@ -66,7 +66,6 @@ const LAYER: Record<string, number> = {
   // Layer 2 — Engines (depend on Layer 0–1)
   "@motebit/crypto-android-keystore": 2,
   "@motebit/crypto-appattest": 2,
-  "@motebit/crypto-play-integrity": 2,
   "@motebit/crypto-tpm": 2,
   "@motebit/crypto-webauthn": 2,
   "@motebit/market": 2,
@@ -120,7 +119,6 @@ const PERMISSIVE_PACKAGES = new Set([
   "@motebit/verify",
   "@motebit/crypto-android-keystore",
   "@motebit/crypto-appattest",
-  "@motebit/crypto-play-integrity",
   "@motebit/crypto-tpm",
   "@motebit/crypto-webauthn",
 ]);
@@ -138,7 +136,6 @@ const PERMISSIVE_IMPORT_ALLOWED = new Set([
   "@motebit/verify",
   "@motebit/crypto-android-keystore",
   "@motebit/crypto-appattest",
-  "@motebit/crypto-play-integrity",
   "@motebit/crypto-tpm",
   "@motebit/crypto-webauthn",
 ]);
