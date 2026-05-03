@@ -22,7 +22,7 @@ The pinned root is not judgment — it is Apple's published App Attest root CA, 
 2. **The verifier never reaches the network.** Chain verification, clock checks, OID extraction, and CBOR parsing are all synchronous and local. Apple's own receipt-refresh server is out of scope for v1 — outer chain + nonce binding + bundle binding is enough for third-party self-verification of device-attested identity.
 3. **Failures are structured `{ valid: false, errors: [...] }` — never thrown.** Matches the `@motebit/crypto::HardwareAttestationVerifyResult` contract so callers pattern-match one shape across all platform adapters (SE, App Attest, Android Keystore, TPM, WebAuthn).
 4. **Dispatch is consumer-wired, not global.** Callers pass `deviceCheckVerifier` into `@motebit/crypto::verify` as `{ hardwareAttestation: { deviceCheck } }`. The permissive-floor package stays pure — no implicit side-effect registration, no global mutable state, no import-order dependency.
-5. **Sibling platform adapters follow this same shape.** `@motebit/crypto-android-keystore`, `@motebit/crypto-tpm`, `@motebit/crypto-webauthn` (plus the deprecated `@motebit/crypto-play-integrity` for one minor cycle) are metabolic leaves with their own pinned roots and their own dispatch arms. Adding a new platform is additive — a new leaf package plus a new `HardwareAttestationVerifiers.<platform>` optional field.
+5. **Sibling platform adapters follow this same shape.** `@motebit/crypto-android-keystore`, `@motebit/crypto-tpm`, `@motebit/crypto-webauthn` are metabolic leaves with their own pinned roots and their own dispatch arms. Adding a new platform is additive — a new leaf package plus a new `HardwareAttestationVerifiers.<platform>` optional field.
 
 ## Consumers
 

@@ -151,9 +151,9 @@ import type { SkillEnvelope } from "@motebit/protocol";
 import { verifySkillEnvelopeDetailed, decodeSkillSignaturePublicKey } from "./skills.js";
 import type { SkillVerifyReason } from "./skills.js";
 
-// Hardware-attestation verification (secure_enclave today; additive
-// platform adapters for tpm / play_integrity / device_check later via
-// optional-verifier injection — see `HardwareAttestationVerifiers`).
+// Hardware-attestation verification (secure_enclave handled in-package;
+// platform adapters for device_check / tpm / android_keystore / webauthn
+// inject via optional-verifier — see `HardwareAttestationVerifiers`).
 export {
   verifyHardwareAttestationClaim,
   canonicalSecureEnclaveBodyForTest,
@@ -303,11 +303,12 @@ export interface VerifyOptions {
   /**
    * Optional injection of platform-specific hardware-attestation
    * verifiers. Consumers that need `device_check` / `tpm` /
-   * `play_integrity` verification pass the corresponding leaf package's
-   * verifier function here (e.g. `deviceCheckVerifier(...)` from
-   * `@motebit/crypto-appattest`). Absence keeps the permissive-floor `@motebit/crypto`
-   * path pure: unknown platforms fail-closed with a named-missing-adapter
-   * error. See `hardware-attestation.ts::HardwareAttestationVerifiers`.
+   * `android_keystore` / `webauthn` verification pass the corresponding
+   * leaf package's verifier function here (e.g. `deviceCheckVerifier(...)`
+   * from `@motebit/crypto-appattest`). Absence keeps the permissive-floor
+   * `@motebit/crypto` path pure: unknown platforms fail-closed with a
+   * named-missing-adapter error. See
+   * `hardware-attestation.ts::HardwareAttestationVerifiers`.
    */
   hardwareAttestation?: HardwareAttestationVerifiers;
 }
