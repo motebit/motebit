@@ -55,7 +55,7 @@ export interface InworldTTSConfig {
   /** Voice id. Defaults to `"Dennis"` (Inworld's documented example voice). */
   voice?: string;
   /** Model id. Defaults to `"inworld-tts-1.5-max"` for quality-first. */
-  model?: InworldTTSModel | string;
+  model?: InworldTTSModel;
   /** API base URL. Defaults to `"https://api.inworld.ai"`. */
   baseUrl?: string;
   /**

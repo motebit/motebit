@@ -987,7 +987,6 @@ The three-layer split is doctrine, not preference. It's what lets the protocol s
 - [`@motebit/crypto-android-keystore`](https://www.npmjs.com/package/@motebit/crypto-android-keystore) — Android Hardware-Backed Keystore Attestation chain verifier (the canonical sovereign-verifiable Android primitive)
 - [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm) — Windows / Linux TPM 2.0 verifier
 - [`@motebit/crypto-webauthn`](https://www.npmjs.com/package/@motebit/crypto-webauthn) — WebAuthn packed-attestation verifier
-- [`@motebit/crypto-play-integrity`](https://www.npmjs.com/package/@motebit/crypto-play-integrity) — _(deprecated, removed at 2.0.0 — see `crypto-android-keystore`)_
 - [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed identity or runnable agent service
 
 **1 BSL-1.1 package — the reference runtime.** The `motebit` CLI bundle is the operator-facing product, source-available now and converging to Apache-2.0 four years after each version's release.
@@ -4334,7 +4333,7 @@ The other published packages expose narrow surfaces, documented in each package'
 - **`@motebit/verifier`** — the programmatic library you `import`. `verifyFile`, `verifyArtifact`, `formatHuman`. Use this in Node code.
 - **`@motebit/verify`** — the package that ships the `motebit-verify` CLI binary. Use this when you want a command-line verifier; install it globally or run it via `npx`.
 
-The other narrow-surface published packages: `@motebit/crypto-{appattest,android-keystore,tpm,webauthn,play-integrity}` (the five hardware-attestation leaves bundled by `@motebit/verify` — `crypto-play-integrity` is deprecated and removed at 2.0.0; `crypto-android-keystore` is the canonical sovereign-verifiable Android primitive), `create-motebit` (scaffold), and `motebit` (the BSL-1.1 reference runtime CLI).
+The other narrow-surface published packages: `@motebit/crypto-{appattest,android-keystore,tpm,webauthn}` (the four canonical hardware-attestation leaves bundled by `@motebit/verify`), `create-motebit` (scaffold), and `motebit` (the BSL-1.1 reference runtime CLI).
 
 > Workspace-private packages (`@motebit/runtime`, `@motebit/market`, `@motebit/semiring`, `@motebit/mcp-server`, and the rest of the interior machinery) are pinned to `0.0.0-private` and have no public API surface. See [Public surface](/docs/concepts/public-surface) for the full boundary doctrine. Code blocks in this guide that import from a private package are wrapped in a `Reference implementation` callout — they show what the runtime does internally and are not consumer recipes.
 
@@ -5660,12 +5659,11 @@ Ten packages sit on the permissive floor — Apache-2.0, with an explicit patent
 | `@motebit/crypto-android-keystore`              | How is an Android Keystore Attestation chain verified?             | L2    |
 | `@motebit/crypto-tpm`                           | How is a TPM 2.0 quote verified?                                   | L2    |
 | `@motebit/crypto-webauthn`                      | How is a WebAuthn packed attestation verified?                     | L2    |
-| `@motebit/crypto-play-integrity` _(deprecated)_ | How was a Google Play Integrity token verified?                    | L2    |
 | `@motebit/verifier`                             | How does a third party compose offline verification?               | L6    |
 | `@motebit/verify`                               | How does a one-install CLI verify any motebit artifact end-to-end? | L6    |
 | `create-motebit`                                | How does a third party scaffold against the protocol?              | L6    |
 
-The four canonical `crypto-*` platform leaves (`crypto-appattest`, `crypto-android-keystore`, `crypto-tpm`, `crypto-webauthn`) verify against each platform's published public trust anchor (Apple App Attest root, Google Hardware Attestation roots, TPM vendor roots, FIDO roots) — no motebit-specific judgment. The deprecated `crypto-play-integrity` ships alongside for one minor cycle for backward compat with already-minted credentials. `@motebit/verify` aggregates them with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) into one install, but the defaults are overridable flags, not proprietary judgment — the permissive-floor line stays at the aggregator. The BSL line holds at `motebit` (the operator console) and everything below it: daemon, MCP server, delegation routing, market integration, federation wiring — the actual reference-implementation judgment.
+The four canonical `crypto-*` platform leaves (`crypto-appattest`, `crypto-android-keystore`, `crypto-tpm`, `crypto-webauthn`) verify against each platform's published public trust anchor (Apple App Attest root, Google Hardware Attestation roots, TPM vendor roots, FIDO roots) — no motebit-specific judgment. `@motebit/verify` aggregates them with motebit-canonical defaults (bundle IDs, RP ID) into one install, but the defaults are overridable flags, not proprietary judgment — the permissive-floor line stays at the aggregator. The BSL line holds at `motebit` (the operator console) and everything below it: daemon, MCP server, delegation routing, market integration, federation wiring — the actual reference-implementation judgment.
 
 The remaining 34 packages are BSL-1.1 — the reference implementation that answers _how the system decides, adapts, routes, and governs_. Both license families converge to Apache-2.0 at each version's Change Date (four years after first public release), eliminating the two-license end state. See `LICENSING.md` for the full boundary test, convergence story, and commercial terms.
 
