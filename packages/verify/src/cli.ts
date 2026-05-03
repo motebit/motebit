@@ -5,10 +5,9 @@
  * Verifies identity files, execution receipts, credentials, and
  * presentations against their embedded signatures. When a credential
  * carries a `hardware_attestation` claim for `device_check` / `tpm` /
- * `android_keystore` / `webauthn` (plus the deprecated `play_integrity`
- * for backward compat with already-minted credentials), the bundled
- * platform adapters verify the chain, extension, package binding, and
- * identity binding end-to-end.
+ * `android_keystore` / `webauthn`, the bundled platform adapters
+ * verify the chain, extension, package binding, and identity binding
+ * end-to-end.
  *
  * ```
  *   motebit-verify <file>                 # auto-detect, print human
@@ -30,9 +29,8 @@
  *   2  usage / I/O error
  *
  * Network-free by design. Every adapter pins its own trust anchor
- * (Apple App Attest Root CA, FIDO roots, TPM vendor roots); Play
- * Integrity's JWKS is fail-closed by default until an operator lands
- * real bytes (see `@motebit/crypto-play-integrity`'s CLAUDE.md).
+ * (Apple App Attest Root CA, FIDO roots, TPM vendor roots, Google
+ * Hardware Attestation roots).
  *
  * Three-package lineage — mirrors how tools like `git` / `libgit2` or
  * `cargo` / `tokio` separate the verb-tool from the library layer:
@@ -66,7 +64,6 @@ interface ParsedArgs {
   readonly expectedType?: ArtifactType;
   readonly clockSkewSeconds?: number;
   readonly bundleId?: string;
-  readonly androidPackage?: string;
   readonly androidAttestationApplicationIdPath?: string;
   readonly rpId?: string;
   readonly usageError?: string;
@@ -78,7 +75,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let expectedType: ArtifactType | undefined;
   let clockSkewSeconds: number | undefined;
   let bundleId: string | undefined;
-  let androidPackage: string | undefined;
   let androidAttestationApplicationIdPath: string | undefined;
   let rpId: string | undefined;
   let help = false;
@@ -131,13 +127,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
         i += 2;
         break;
       }
-      case "--android-package": {
-        const value = argv[i + 1];
-        if (value === undefined) return usage("--android-package requires a value");
-        androidPackage = value;
-        i += 2;
-        break;
-      }
       case "--android-attestation-application-id": {
         // Path to a binary file containing the raw bytes of the leaf
         // cert's `attestationApplicationId` extension value. Operators
@@ -185,7 +174,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     ...(expectedType !== undefined && { expectedType }),
     ...(clockSkewSeconds !== undefined && { clockSkewSeconds }),
     ...(bundleId !== undefined && { bundleId }),
-    ...(androidPackage !== undefined && { androidPackage }),
     ...(androidAttestationApplicationIdPath !== undefined && {
       androidAttestationApplicationIdPath,
     }),
@@ -217,9 +205,6 @@ function renderHelp(): string {
     "  --clock-skew <seconds>    Allow N seconds of clock skew.",
     "  --bundle-id <id>          Override the expected iOS bundle ID for App Attest",
     "                            (default: com.motebit.mobile).",
-    "  --android-package <name>  Override the expected Android package name for",
-    "                            the deprecated Play Integrity adapter",
-    "                            (default: com.motebit.mobile).",
     "  --android-attestation-application-id <path>",
     "                            Path to a binary file containing the raw bytes",
     "                            of the leaf cert's `attestationApplicationId`",
@@ -248,11 +233,13 @@ function renderHelp(): string {
     "                     --android-attestation-application-id)",
     "  webauthn           WebAuthn packed attestation (pinned Apple / Yubico / Microsoft)",
     "",
-    "PLATFORMS WIRED (deprecated, removed at @motebit/crypto-play-integrity@2.0.0)",
-    "  play_integrity     Google Play Integrity (operator-supplied JWKS;",
-    "                     no global Google JWKS exists by Google's design.",
-    "                     See docs/doctrine/hardware-attestation.md § 'Three",
-    "                     architectural categories' for the structural reason.)",
+    "PLATFORMS REMOVED",
+    "  play_integrity     Google Play Integrity adapter was removed 2026-05-03.",
+    "                     Credentials carrying this platform now hit the canonical",
+    "                     dispatcher's fail-closed 'verifier not wired' branch.",
+    "                     Use @motebit/crypto-android-keystore instead — see",
+    "                     docs/doctrine/hardware-attestation.md § 'Three",
+    "                     architectural categories' for the structural reason.",
   ].join("\n");
 }
 
@@ -312,7 +299,6 @@ async function main(): Promise<number> {
 
   const hardwareAttestation = buildHardwareVerifiers({
     ...(args.bundleId !== undefined && { appAttestBundleId: args.bundleId }),
-    ...(args.androidPackage !== undefined && { playIntegrityPackageName: args.androidPackage }),
     ...(androidKeystoreExpectedAttestationApplicationId !== undefined && {
       androidKeystoreExpectedAttestationApplicationId,
     }),

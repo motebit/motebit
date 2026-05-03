@@ -9,9 +9,9 @@
  * "tpm" | "android_keystore" | "webauthn", ... }` verifies end-to-end
  * through this package instead of returning the permissive-floor
  * verifier's `adapter not yet shipped` sentinel. The deprecated
- * `play_integrity` arm is also wired during the
- * `@motebit/crypto-play-integrity@1.x` deprecation cycle for backward
- * compatibility with already-minted credentials.
+ * `play_integrity` adapter was removed 2026-05-03 — credentials
+ * carrying that platform hit the canonical dispatcher's fail-closed
+ * "verifier not wired" branch.
  *
  * Programmatic use:
  *

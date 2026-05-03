@@ -1,6 +1,6 @@
 # @motebit/verify
 
-The canonical `motebit-verify` command-line tool. A single binary that verifies any signed motebit artifact — identity files, execution receipts, credentials, presentations — including credentials carrying hardware-attestation claims under any of the four canonical sovereign-verifiable platforms (Apple App Attest, Android Hardware-Backed Keystore Attestation, TPM 2.0, WebAuthn) plus the deprecated Play Integrity adapter bundled for one minor cycle for backward compat with already-minted credentials.
+The canonical `motebit-verify` command-line tool. A single binary that verifies any signed motebit artifact — identity files, execution receipts, credentials, presentations — including credentials carrying hardware-attestation claims under any of the four canonical sovereign-verifiable platforms (Apple App Attest, Android Hardware-Backed Keystore Attestation, TPM 2.0, WebAuthn).
 
 Network-free. No relay contact, no external service, no cloud dependency. Every trust anchor is pinned in the installed package.
 
@@ -51,11 +51,10 @@ motebit-verify <file> --clock-skew 30     # allow N seconds of clock drift
 motebit-verify <file> \
   --bundle-id com.example.app \
   --android-attestation-application-id ./app-id.bin \
-  --android-package com.example.app \
   --rp-id example.com
 ```
 
-**Verifying `android_keystore` credentials requires `--android-attestation-application-id`.** The flag's value is a path to a binary file containing the raw bytes of the leaf cert's `attestationApplicationId` extension — operators capture this once at build time (deterministic from the registered Android package name + signing-cert SHA-256) and commit the file alongside other pinned config. Without the flag, the Android Keystore arm is intentionally unwired (passing a placeholder would false-reject every real claim); the dispatcher reports `"verifier not wired"`. The legacy `--android-package` flag still configures the deprecated Play Integrity adapter for backward-compat with already-minted credentials.
+**Verifying `android_keystore` credentials requires `--android-attestation-application-id`.** The flag's value is a path to a binary file containing the raw bytes of the leaf cert's `attestationApplicationId` extension — operators capture this once at build time (deterministic from the registered Android package name + signing-cert SHA-256) and commit the file alongside other pinned config. Without the flag, the Android Keystore arm is intentionally unwired (passing a placeholder would false-reject every real claim); the dispatcher reports `"verifier not wired"`.
 
 Exit codes:
 
