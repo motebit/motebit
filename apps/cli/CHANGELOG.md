@@ -1,5 +1,44 @@
 # motebit CLI Changelog
 
+## 1.3.0
+
+### Minor Changes
+
+- c332fce: `motebit smoke reconciliation` — operator-runnable end-to-end probe that asserts the treasury reconciliation loop is enabled, fresh (last cycle within 30 min), and reporting consistent state. Master token required; exits non-zero on `stale` or `drift` verdicts so it slots into CI / cron without ceremony.
+
+  Five terminal verdicts: `healthy`, `stale`, `drift`, `no_cycles_yet` (recent boot, no failure), `loop_disabled` (testnet relay or mainnet without `X402_PAY_TO_ADDRESS`, no failure). Canonical `verdict=...` output for grep.
+
+  Complements the free `Treasury reconciliation` probe in `motebit doctor` — same five branches, but `doctor` is read-only and degrades for non-operators while `smoke reconciliation` is hard-failing and operator-required. Sibling-but-distinct primitive vs the deposit-detector — canonical doctrine in `packages/treasury-reconciliation/CLAUDE.md` Rule 1.
+
+  The paid-flow companion (`motebit smoke x402` — buyer/worker settlement that gives reconciliation a non-zero `recorded_fee_sum_micro` to observe) is a future deliverable; this changeset ships the read-side validation that the paid flow's `--verify-reconciliation` step will eventually call.
+
+- b30cd40: `motebit smoke x402 [--mainnet]` — paid-flow end-to-end probe. Sibling of `motebit smoke reconciliation`: where reconciliation validates the read side (loop is observing correctly), this validates the write side (a real settlement actually flows through every layer).
+
+  In-process: bootstraps two fresh motebit identities (buyer + worker) + two fresh EVM EOAs (`viem`'s `generatePrivateKey()`), persists the EOAs to `~/.motebit/smoke-x402-{buyer,worker}-eoa.txt` (mode 0600), posts a paid listing with the worker's pay-to address, drives the buyer's task POST through `@x402/fetch` (the 402 → sign → resubmit dance handled by Coinbase's official x402 client), constructs a signed Ed25519 ExecutionReceipt via `signExecutionReceipt`, posts it to `/agent/:workerId/task/:taskId/result`, and polls the task surface until `status=completed` confirms the relay wrote a `relay_settlements` row.
+
+  Defaults to Base Sepolia (testnet, free, faucet-funded). `--mainnet` switches to Base mainnet via the relay's CDP facilitator and costs ~$0.0105 USDC per run; first-run mainnet exits cleanly with funding instructions for the auto-generated buyer EOA so operators don't half-spend against an unfunded address.
+
+  Adds `@x402/fetch` + `viem` direct deps; bumps `@x402/core`/`@x402/evm`/`@x402/hono` to ^2.11.0 to keep the version family aligned (prevents private-property-incompatibility errors between hoisted x402-core copies).
+
+  Pairs with `motebit smoke reconciliation` for full-loop validation: run x402 to drive a settlement, wait one reconciliation interval, run reconciliation to verify the cycle observed the new fee. The two together exercise the entire economic loop end-to-end on a live relay.
+
+### Patch Changes
+
+- 3e8fb9c: `motebit doctor` — new `Treasury reconciliation` probe surfaces relay-side reconciliation-loop liveness. Catches the silent failure mode where the loop has stopped firing (a dead loop emits no logs, so the loop itself can't surface the problem). Read-only, free, no money cost.
+
+  Operator-side concern, gracefully degrades for non-operators: with `MOTEBIT_API_TOKEN` set the probe reports healthy / stale / disabled / drift-detected; without a master token it reports `skipped — operator-only check`. Stale threshold is 30 min (2× the loop's default 15-min cadence).
+
+  Sibling-but-distinct primitive vs the deposit-detector — canonical doctrine in `packages/treasury-reconciliation/CLAUDE.md` Rule 1. The probe is the doctor-level partner to the runtime alert (`treasury.reconciliation.drift` structured log) and the admin endpoint (`GET /api/v1/admin/treasury-reconciliation`).
+
+- f8842ad: `motebit smoke reconciliation` review pass: extracted `SMOKE_STALE_THRESHOLD_MS` (= 30 min) to a top-level named constant since the same value is referenced by `motebit doctor` and named as a contract in `docs/doctrine/treasury-custody.md` § Phase 1 step 7. Added two tests for non-2xx HTTP responses (401 wrong token, 500 server error) — previously only the network-rejection path was tested. No functional change.
+- 4e4b758: `motebit smoke x402` principal-engineer review fix: the settlement-polling step at `assertSettlementLanded` was minting tokens with `aud: "admin:query"` (the bootstrap-time fallback) and re-using them for `GET /agent/:id/task/:taskId` polls. That endpoint requires `aud: "task:query"` (services/relay/src/tasks.ts:2147) — every poll would have 401-failed against a real relay and the smoke would have produced a misleading "settlement did not land within 60s" timeout instead of the audience-mismatch error.
+
+  Fixed by minting a fresh per-call-site token for each audience boundary instead of pre-minting and re-using a single bootstrap-time token. Removed the unused `signedToken` field from the internal `BootstrappedMotebit` shape, since per-audience minting is now uniform across listing/task-submit/task-result/task-query.
+
+  Also captures the last non-2xx HTTP body in the polling timeout error so future failures distinguish auth issues from settlement-pipeline stalls.
+
+  No surface-level CLI change; pure correctness fix on the wire-format contract with the relay.
+
 ## 1.2.0
 
 ### Minor Changes
