@@ -308,28 +308,61 @@ export function setVendorKey(vendor: VendorKey, key: string | null): void {
 // once all surfaces have migrated.
 // ---------------------------------------------------------------------------
 
-/** @deprecated Use `VendorKey` and `getVendorKey` / `setVendorKey`. */
+/**
+ * @deprecated Use `VendorKey` and `getVendorKey` / `setVendorKey`.
+ *
+ * Reason: the three-vendor BYOK refactor (ElevenLabs / Inworld / Deepgram)
+ * unified TTS and STT keys under one `VendorKey` namespace because vendor
+ * keys are dual-purpose — one ElevenLabs key powers both TTS and Scribe
+ * STT, one Deepgram key powers both Speak TTS and live STT. Splitting by
+ * direction created ghost duplicates and drift across surfaces.
+ */
 export type TTSVendorKey = VendorKey;
 
-/** @deprecated Use `getVendorKey`. */
+/**
+ * @deprecated Use `getVendorKey`.
+ *
+ * Reason: see `TTSVendorKey` above — TTS and STT share one vendor-key
+ * namespace post-refactor, so direction-tagged accessors are misleading.
+ */
 export function getTTSKey(vendor: TTSVendorKey): string | null {
   return getVendorKey(vendor);
 }
 
-/** @deprecated Use `setVendorKey`. */
+/**
+ * @deprecated Use `setVendorKey`.
+ *
+ * Reason: see `TTSVendorKey` above — direction-tagged accessor is a
+ * legacy shape from the OpenAI-TTS-only era.
+ */
 export function setTTSKey(vendor: TTSVendorKey, key: string | null): void {
   setVendorKey(vendor, key);
 }
 
-/** @deprecated Use `VendorKey` and `getVendorKey` / `setVendorKey`. */
+/**
+ * @deprecated Use `VendorKey` and `getVendorKey` / `setVendorKey`.
+ *
+ * Reason: see `TTSVendorKey` above — STT keys share the unified
+ * `VendorKey` namespace because every supported vendor is dual-purpose.
+ */
 export type STTVendorKey = VendorKey;
 
-/** @deprecated Use `getVendorKey`. */
+/**
+ * @deprecated Use `getVendorKey`.
+ *
+ * Reason: see `TTSVendorKey` above — direction-tagged accessor is a
+ * legacy shape from the Whisper-cloud-STT-only era.
+ */
 export function getSTTKey(vendor: STTVendorKey): string | null {
   return getVendorKey(vendor);
 }
 
-/** @deprecated Use `setVendorKey`. */
+/**
+ * @deprecated Use `setVendorKey`.
+ *
+ * Reason: see `TTSVendorKey` above — direction-tagged accessor is a
+ * legacy shape from the Whisper-cloud-STT-only era.
+ */
 export function setSTTKey(vendor: STTVendorKey, key: string | null): void {
   setVendorKey(vendor, key);
 }
