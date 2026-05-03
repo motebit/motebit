@@ -1,6 +1,6 @@
 {
   "name": "@motebit/verify",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "The canonical `motebit-verify` command-line tool — verifies any signed motebit artifact offline, with every hardware-attestation platform bundled (Apple App Attest, Android Hardware-Backed Keystore Attestation, TPM 2.0, WebAuthn). One install, no network, self-attesting. Replaces the deprecated @motebit/verify@0.x zero-dep library: library primitives now live in @motebit/crypto; file-reading + formatting helpers in @motebit/verifier; this package is the binary.",
   "type": "module",
   "main": "./dist/index.js",
