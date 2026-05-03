@@ -1239,12 +1239,8 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   const TOPUP_AMOUNTS = [5, 10, 25];
 
   function populateBillingTab(): void {
-    const subscribedEl = document.getElementById(
-      "billing-subscribed-section",
-    ) as HTMLElement | null;
-    const unsubscribedEl = document.getElementById(
-      "billing-unsubscribed-section",
-    ) as HTMLElement | null;
+    const subscribedEl = document.getElementById("billing-subscribed-section");
+    const unsubscribedEl = document.getElementById("billing-unsubscribed-section");
     const balanceEl = document.getElementById("billing-balance");
     const topupEl = document.getElementById("billing-topup");
     const topupBtnsEl = document.getElementById("billing-topup-buttons");
