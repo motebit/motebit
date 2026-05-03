@@ -49,5 +49,5 @@ Expected outcome: `valid: true` if device boot is verified + signing-cert matche
 
 - Bump `apps/mobile`'s app version + changelog note "Android mint path migrated to Hardware-Backed Keystore Attestation".
 - (Optional) Capture the round-trip's leaf cert + `attestationApplicationId` and add to `packages/crypto-android-keystore/src/__tests__/fixtures/` as a motebit-canonical real-device fixture (separate commit with privacy review).
-- Delete `apps/mobile/modules/expo-play-integrity/` — once round-trip succeeds the old module is unambiguously dead code. (Defer the delete + `pod install` until the next non-iOS-build commit window.)
+- ~~Delete `apps/mobile/modules/expo-play-integrity/`~~ — done 2026-05-03 alongside the npm-side `@motebit/crypto-play-integrity` package removal; module had zero imports across `apps/mobile/src/` so deletion was safe ahead of the device-day round-trip.
 - Bump `apps/mobile/package.json` minSdk to 24 if not already there (required for `setAttestationChallenge`).

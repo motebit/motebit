@@ -10,9 +10,9 @@
  * Sibling of `ExpoSecureEnclaveModule.ts` — same error taxonomy, same
  * atomic-mint contract, same dependency-injection shape for tests.
  *
- * Android: every call rejects with `not_supported`. Play Integrity
- * lands in a later pass as its own metabolic leaf
- * (`@motebit/crypto-play-integrity` + `expo-play-integrity`).
+ * Android: every call rejects with `not_supported`. The Android mint
+ * path lives in `ExpoAndroidKeystoreModule.ts` (canonical sovereign-
+ * verifiable Android primitive — Hardware-Backed Keystore Attestation).
  */
 
 import { requireNativeModule } from "expo";

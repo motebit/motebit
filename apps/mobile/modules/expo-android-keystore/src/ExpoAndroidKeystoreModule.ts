@@ -8,14 +8,14 @@
  *   - `androidKeystoreMint(args)`  → `AndroidKeystoreMintResult`, or
  *                                    throws a typed `AndroidKeystoreError`.
  *
- * Sibling of `ExpoAppAttestModule.ts` / `ExpoSecureEnclaveModule.ts` /
- * the deprecated `ExpoPlayIntegrityModule.ts` — same error taxonomy,
- * same atomic-mint contract, same dependency-injection shape for tests.
+ * Sibling of `ExpoAppAttestModule.ts` / `ExpoSecureEnclaveModule.ts` —
+ * same error taxonomy, same atomic-mint contract, same dependency-
+ * injection shape for tests.
  *
- * Replaces `ExpoPlayIntegrity` as the canonical Android mint path.
- * Play Integrity was structurally miscategorized as a sovereign-
- * verifiable leaf — see
- * `packages/crypto-play-integrity/CLAUDE.md` and
+ * Canonical Android mint path. The earlier `ExpoPlayIntegrityModule`
+ * was deleted 2026-05-03 (with its npm-side verifier
+ * `@motebit/crypto-play-integrity`) — Play Integrity was structurally
+ * miscategorized as a sovereign-verifiable leaf; see
  * `docs/doctrine/hardware-attestation.md` § "Three architectural
  * categories". Android Hardware-Backed Keystore Attestation is the
  * architecturally-correct primitive: device attestation chains
@@ -37,8 +37,7 @@ import type {
 /**
  * Typed error raised by `androidKeystoreMint`. `reason` is structured
  * so the mint path pattern-matches recovery instead of parsing opaque
- * messages — direct parallel to `AppAttestError` / `SecureEnclaveError`
- * / `PlayIntegrityError`.
+ * messages — direct parallel to `AppAttestError` / `SecureEnclaveError`.
  */
 export class AndroidKeystoreError extends Error {
   constructor(
@@ -74,7 +73,7 @@ const nativeModule = requireNativeModule<ExpoAndroidKeystoreModuleType>("ExpoAnd
 
 /**
  * Test-injection handle. Matches `NativeAppAttest` /
- * `NativeSecureEnclave` / `NativePlayIntegrity` — a plain object with
+ * `NativeSecureEnclave` — a plain object with
  * `androidKeystoreAvailable` and `androidKeystoreMint`. Tests pass a
  * fake; production uses the default-loaded Expo module.
  */

@@ -151,8 +151,8 @@ Live consumers today:
 - `packages/crypto-tpm/src/tpm-parse.ts` — minimal `TPMS_ATTEST` marshaling; hand-rolled over dep explosion.
 - `packages/crypto-webauthn/src/verify.ts` — browser-platform-authenticator packed-attestation verifier; pinned FIDO roots (Apple, Yubico, Microsoft) + self-attestation path.
 - `apps/mobile/modules/expo-app-attest/` — iOS native App Attest bridge.
-- `apps/mobile/modules/expo-play-integrity/` — Android native Play Integrity bridge.
-- `apps/mobile/src/mint-hardware-credential.ts` — mobile surface; per-OS cascade (App Attest → SE on iOS; Play Integrity on Android; software sentinel everywhere).
+- `apps/mobile/modules/expo-android-keystore/` — Android native Hardware-Backed Keystore Attestation bridge.
+- `apps/mobile/src/mint-hardware-credential.ts` — mobile surface; per-OS cascade (App Attest → SE on iOS; Android Keystore on Android; software sentinel everywhere).
 - `apps/web/src/mint-hardware-credential.ts` — Web surface; cascades WebAuthn → software via `navigator.credentials.create`.
 - `apps/desktop/src-tauri/src/secure_enclave.rs` — Rust SE bridge (macOS-gated).
 - `apps/desktop/src-tauri/src/tpm.rs` — Rust TPM bridge (Windows / Linux; `not_supported` pending `tss-esapi` link).

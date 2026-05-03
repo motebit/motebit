@@ -28,5 +28,5 @@ Two pinned roots cover the Feb–Apr 2026 RSA → ECDSA P-384 rotation Google an
 
 ## Consumers
 
-- `apps/mobile/src/mint-hardware-credential.ts` — Android surface; produces a `platform: "android_keystore"` claim via the on-device `KeyStore.getInstance("AndroidKeyStore")` flow + `setAttestationChallenge(SHA256(canonical body))`. (Pivot from the old `expo-play-integrity` mint pending — see `docs/doctrine/hardware-attestation.md` § "Three architectural categories" for the structural reason.)
+- `apps/mobile/src/mint-hardware-credential.ts` — Android surface; produces a `platform: "android_keystore"` claim via the on-device `KeyStore.getInstance("AndroidKeyStore")` flow + `setAttestationChallenge(SHA256(canonical body))`. The earlier `expo-play-integrity` mint module was deleted 2026-05-03 — see `docs/doctrine/hardware-attestation.md` § "Three architectural categories" for the structural reason.
 - Any verifier (CLI `motebit verify`, relay's VC verification, third-party tools) that wants to accept Android Keystore-attested credentials wires `androidKeystoreVerifier({ expectedAttestationApplicationId })` into `verify()`.

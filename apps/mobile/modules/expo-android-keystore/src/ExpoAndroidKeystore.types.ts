@@ -54,10 +54,9 @@ export interface ExpoAndroidKeystoreModuleEvents {
 
 /**
  * Native-module surface. Two commands — symmetric with
- * `ExpoPlayIntegrity` (deprecated) / `ExpoAppAttest` / `ExpoSecureEnclave`
- * so `mint-hardware-credential.ts` can cascade
- * `androidKeystore` (Android) / `appAttest` (iOS) / `secureEnclave`
- * (iOS fallback) / software with parallel error handling.
+ * `ExpoAppAttest` / `ExpoSecureEnclave` so `mint-hardware-credential.ts`
+ * can cascade `androidKeystore` (Android) / `appAttest` (iOS) /
+ * `secureEnclave` (iOS fallback) / software with parallel error handling.
  */
 export declare class ExpoAndroidKeystoreModuleType extends NativeModule<ExpoAndroidKeystoreModuleEvents> {
   /**
