@@ -2,12 +2,21 @@ import { describe, it, expect } from "vitest";
 import { buildHardwareVerifiers } from "../adapters";
 
 describe("buildHardwareVerifiers", () => {
-  it("wires the four canonical sovereign-verifiable arms by default (App Attest + TPM + WebAuthn + Play Integrity for backward compat)", () => {
+  it("wires the three canonical sovereign-verifiable arms by default (App Attest + TPM + WebAuthn)", () => {
     const v = buildHardwareVerifiers();
     expect(typeof v.deviceCheck).toBe("function");
     expect(typeof v.tpm).toBe("function");
-    expect(typeof v.playIntegrity).toBe("function");
     expect(typeof v.webauthn).toBe("function");
+  });
+
+  it("does NOT wire the playIntegrity arm — package was removed 2026-05-03", () => {
+    // @motebit/crypto-play-integrity was removed from the monorepo. Credentials
+    // carrying `platform: "play_integrity"` now hit the canonical dispatcher's
+    // fail-closed "verifier not wired" branch in @motebit/crypto. The protocol
+    // union still includes the value (no wire-format break), but no aggregator
+    // wires a verifier for it.
+    const v = buildHardwareVerifiers();
+    expect(v.playIntegrity).toBeUndefined();
   });
 
   it("does NOT wire the androidKeystore arm by default — operator must supply expectedAttestationApplicationId at deploy time", () => {
@@ -42,15 +51,12 @@ describe("buildHardwareVerifiers", () => {
   it("overrides accept per-platform config", () => {
     const v = buildHardwareVerifiers({
       appAttestBundleId: "com.example.app",
-      playIntegrityPackageName: "com.example.app",
-      playIntegrityRequiredDeviceIntegrity: "MEETS_BASIC_INTEGRITY",
       webauthnRpId: "example.com",
     });
     // Factories returned successfully; wiring works — the deeper per-
     // platform behavior is covered by each adapter's own test suite.
     expect(typeof v.deviceCheck).toBe("function");
     expect(typeof v.tpm).toBe("function");
-    expect(typeof v.playIntegrity).toBe("function");
     expect(typeof v.webauthn).toBe("function");
   });
 
@@ -63,16 +69,14 @@ describe("buildHardwareVerifiers", () => {
     expect(typeof v.webauthn).toBe("function");
   });
 
-  it("accepts the appAttestRootPem and playIntegrityPinnedJwks overrides", () => {
+  it("accepts the appAttestRootPem override", () => {
     const v = buildHardwareVerifiers({
       appAttestRootPem:
         "-----BEGIN CERTIFICATE-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8\n-----END CERTIFICATE-----",
-      playIntegrityPinnedJwks: { keys: [] },
     });
-    // Factories captured the overrides at wiring time without inspecting
+    // Factory captured the override at wiring time without inspecting
     // the bytes (chain validation runs at verify-call time).
     expect(typeof v.deviceCheck).toBe("function");
-    expect(typeof v.playIntegrity).toBe("function");
   });
 
   it("returns a verifier that fails-closed on an unknown platform", () => {

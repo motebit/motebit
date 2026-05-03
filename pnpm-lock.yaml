@@ -2024,9 +2024,6 @@ importers:
       '@motebit/crypto-appattest':
         specifier: workspace:*
         version: link:../crypto-appattest
-      '@motebit/crypto-play-integrity':
-        specifier: workspace:*
-        version: link:../crypto-play-integrity
       '@motebit/crypto-tpm':
         specifier: workspace:*
         version: link:../crypto-tpm

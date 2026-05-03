@@ -1,6 +1,6 @@
-# @motebit/crypto-play-integrity — DEPRECATED
+# @motebit/crypto-play-integrity — DEPRECATED & REMOVED
 
-> **Use [`@motebit/crypto-android-keystore`](https://www.npmjs.com/package/@motebit/crypto-android-keystore) instead** for canonical sovereign-verifiable Android hardware attestation. This package is scheduled for removal at `2.0.0`.
+> **This package is no longer maintained.** Use [`@motebit/crypto-android-keystore`](https://www.npmjs.com/package/@motebit/crypto-android-keystore) for canonical sovereign-verifiable Android hardware attestation. The source has been removed from the motebit monorepo; this published 1.1.3 is the final version. No further releases will ship.
 
 ```bash
 npm i @motebit/crypto-android-keystore

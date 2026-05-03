@@ -28,14 +28,14 @@ VALID (credential)
 
 Hardware-attestation channel covers every currently-shipped platform:
 
-| Platform                        | Adapter                            | Trust anchor                                                                                                                                         |
-| ------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `secure_enclave`                | `@motebit/crypto` (built-in)       | ECDSA-P256 signature; self-asserted SE public key                                                                                                    |
-| `device_check`                  | `@motebit/crypto-appattest`        | Pinned Apple App Attestation Root CA                                                                                                                 |
-| `tpm`                           | `@motebit/crypto-tpm`              | Pinned Infineon / Nuvoton / STMicro / Intel PTT vendor roots                                                                                         |
-| `android_keystore`              | `@motebit/crypto-android-keystore` | Pinned Google Hardware Attestation roots (RSA + ECDSA P-384)                                                                                         |
-| `webauthn`                      | `@motebit/crypto-webauthn`         | Pinned Apple / Yubico / Microsoft FIDO roots                                                                                                         |
-| `play_integrity` _(deprecated)_ | `@motebit/crypto-play-integrity`   | Operator-supplied JWKS (no global Google JWKS exists; bundled for one minor cycle for backward compat — see `docs/doctrine/hardware-attestation.md`) |
+| Platform                     | Adapter                            | Trust anchor                                                                                                                                                      |
+| ---------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `secure_enclave`             | `@motebit/crypto` (built-in)       | ECDSA-P256 signature; self-asserted SE public key                                                                                                                 |
+| `device_check`               | `@motebit/crypto-appattest`        | Pinned Apple App Attestation Root CA                                                                                                                              |
+| `tpm`                        | `@motebit/crypto-tpm`              | Pinned Infineon / Nuvoton / STMicro / Intel PTT vendor roots                                                                                                      |
+| `android_keystore`           | `@motebit/crypto-android-keystore` | Pinned Google Hardware Attestation roots (RSA + ECDSA P-384)                                                                                                      |
+| `webauthn`                   | `@motebit/crypto-webauthn`         | Pinned Apple / Yubico / Microsoft FIDO roots                                                                                                                      |
+| `play_integrity` _(removed)_ | _(no adapter wired)_               | Removed 2026-05-03. Credentials carrying this platform fail-closed. Use `@motebit/crypto-android-keystore` instead — see `docs/doctrine/hardware-attestation.md`. |
 
 Unknown platform → named error, fail-closed. Missing adapter context → named error, fail-closed. Never silent acceptance.
 
@@ -113,7 +113,7 @@ If you were on `@motebit/verify@^0.7.0`, migration depends on what you were usin
 - [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — Apache-2.0 library underneath this CLI (`verifyFile`, `verifyArtifact`, `formatHuman`)
 - [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — Apache-2.0 primitives (`verify`, `sign`, suite dispatch; zero monorepo deps)
 - [`@motebit/crypto-appattest`](https://www.npmjs.com/package/@motebit/crypto-appattest) — Apple App Attest adapter bundled into this CLI
-- [`@motebit/crypto-play-integrity`](https://www.npmjs.com/package/@motebit/crypto-play-integrity) — Google Play Integrity adapter bundled into this CLI
+- [`@motebit/crypto-android-keystore`](https://www.npmjs.com/package/@motebit/crypto-android-keystore) — Android Hardware-Backed Keystore Attestation adapter bundled into this CLI
 - [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm) — TPM 2.0 EK chain adapter bundled into this CLI
 - [`@motebit/crypto-webauthn`](https://www.npmjs.com/package/@motebit/crypto-webauthn) — WebAuthn packed-attestation adapter bundled into this CLI
 - [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console

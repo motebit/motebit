@@ -12,7 +12,6 @@
     { "path": "../crypto" },
     { "path": "../crypto-android-keystore" },
     { "path": "../crypto-appattest" },
-    { "path": "../crypto-play-integrity" },
     { "path": "../crypto-tpm" },
     { "path": "../crypto-webauthn" },
     { "path": "../verifier" }

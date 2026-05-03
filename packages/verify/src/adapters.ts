@@ -4,11 +4,9 @@
  * `@motebit/verifier` (Apache-2.0) accepts an optional
  * `HardwareAttestationVerifiers` record but wires none of the leaves
  * itself; that keeps it dep-thin. This Apache-2.0 aggregator imports
- * every leaf (`@motebit/crypto-appattest`,
+ * every canonical leaf (`@motebit/crypto-appattest`,
  * `@motebit/crypto-android-keystore`, `@motebit/crypto-tpm`,
- * `@motebit/crypto-webauthn`, plus the deprecated
- * `@motebit/crypto-play-integrity` for backward compatibility during
- * its 1.x deprecation cycle) and produces a single
+ * `@motebit/crypto-webauthn`) and produces a single
  * `HardwareAttestationVerifiers` object the CLI hands to `verifyFile`.
  * Any credential whose subject carries a hardware-attestation claim
  * for any of the canonical platforms now verifies end-to-end — chain
@@ -28,18 +26,17 @@
  * Operators verifying credentials from a different motebit deployment
  * can override any of these via the config parameter.
  *
- * Play Integrity (deprecated): wired for one minor cycle so
- * already-minted credentials carrying `platform: "play_integrity"`
- * continue to verify cleanly through the same CLI invocation. New
- * mobile builds emit `platform: "android_keystore"` instead — see
+ * Note: `@motebit/crypto-play-integrity` was deprecated 2026-04-26 and
+ * fully removed 2026-05-03. The structural reason — Google publishes no
+ * global Play Integrity JWKS, so the package can't satisfy motebit's
+ * third-party-verifiability invariant — is captured in
  * `docs/doctrine/hardware-attestation.md` § "Three architectural
- * categories".
+ * categories". Android attestation lives entirely on
+ * `@motebit/crypto-android-keystore` now.
  */
 import type { HardwareAttestationVerifiers } from "@motebit/crypto";
 import { androidKeystoreVerifier } from "@motebit/crypto-android-keystore";
 import { deviceCheckVerifier, APPLE_APPATTEST_ROOT_PEM } from "@motebit/crypto-appattest";
-// eslint-disable-next-line @typescript-eslint/no-deprecated -- consumed for one minor deprecation cycle so already-minted Play Integrity claims continue to verify; removed at @motebit/crypto-play-integrity@2.0.0.
-import { playIntegrityVerifier, type GoogleJwks } from "@motebit/crypto-play-integrity";
 import { tpmVerifier } from "@motebit/crypto-tpm";
 import { webauthnVerifier, DEFAULT_FIDO_ROOTS } from "@motebit/crypto-webauthn";
 
@@ -75,27 +72,6 @@ export interface HardwareVerifierBundleConfig {
    * covering both pre- and post-rotation device fleets).
    */
   readonly androidKeystoreRootPems?: ReadonlyArray<string>;
-  /**
-   * Google Play Integrity (DEPRECATED) — Android package name the
-   * attested app was built with. Defaults to `com.motebit.mobile`.
-   * Wired during the `@motebit/crypto-play-integrity@1.x`
-   * deprecation cycle so already-minted credentials continue to
-   * verify; new mobile builds emit `platform: "android_keystore"`.
-   */
-  readonly playIntegrityPackageName?: string;
-  /**
-   * Google Play Integrity (DEPRECATED) — override the pinned JWKS.
-   * Fail-closed by default — see the structural-mismatch note in
-   * `@motebit/crypto-play-integrity`'s CLAUDE.md (no global Google
-   * JWKS exists; this verifier is operator-key-mediated rather than
-   * sovereign-verifiable, which is why it's been deprecated).
-   */
-  readonly playIntegrityPinnedJwks?: GoogleJwks;
-  /**
-   * Google Play Integrity (DEPRECATED) — relax the device-integrity
-   * floor. Defaults to the strict `"MEETS_DEVICE_INTEGRITY"`.
-   */
-  readonly playIntegrityRequiredDeviceIntegrity?: string;
   /**
    * WebAuthn — Relying Party ID the credential was minted for.
    * Defaults to `motebit.com`.
@@ -144,7 +120,6 @@ export function buildHardwareVerifiers(
   config?: HardwareVerifierBundleConfig,
 ): HardwareAttestationVerifiers {
   const appAttestBundleId = config?.appAttestBundleId ?? DEFAULT_BUNDLE_ID;
-  const playIntegrityPackageName = config?.playIntegrityPackageName ?? DEFAULT_BUNDLE_ID;
   const webauthnRpId = config?.webauthnRpId ?? DEFAULT_WEBAUTHN_RP_ID;
 
   const verifiers: Mutable<HardwareAttestationVerifiers> = {
@@ -154,16 +129,6 @@ export function buildHardwareVerifiers(
     }),
     tpm: tpmVerifier({
       ...(config?.tpmRootPems !== undefined ? { rootPems: config.tpmRootPems } : {}),
-    }),
-    // eslint-disable-next-line @typescript-eslint/no-deprecated -- one-minor-cycle backward compat for already-minted Play Integrity credentials; removed at @motebit/crypto-play-integrity@2.0.0.
-    playIntegrity: playIntegrityVerifier({
-      expectedPackageName: playIntegrityPackageName,
-      ...(config?.playIntegrityPinnedJwks !== undefined
-        ? { pinnedJwks: config.playIntegrityPinnedJwks }
-        : {}),
-      ...(config?.playIntegrityRequiredDeviceIntegrity !== undefined
-        ? { requiredDeviceIntegrity: config.playIntegrityRequiredDeviceIntegrity }
-        : {}),
     }),
     webauthn: webauthnVerifier({
       expectedRpId: webauthnRpId,

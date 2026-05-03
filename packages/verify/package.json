@@ -65,7 +65,6 @@
     "@motebit/crypto": "workspace:*",
     "@motebit/crypto-android-keystore": "workspace:*",
     "@motebit/crypto-appattest": "workspace:*",
-    "@motebit/crypto-play-integrity": "workspace:*",
     "@motebit/crypto-tpm": "workspace:*",
     "@motebit/crypto-webauthn": "workspace:*",
     "@motebit/verifier": "workspace:*"
