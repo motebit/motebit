@@ -1,5 +1,14 @@
 # @motebit/verify
 
+## 1.2.2
+
+### Patch Changes
+
+- Updated dependencies [e0860a8]
+  - @motebit/crypto-appattest@1.0.4
+  - @motebit/crypto-tpm@1.1.3
+  - @motebit/crypto-webauthn@1.0.4
+
 ## 1.2.1
 
 ### Patch Changes
