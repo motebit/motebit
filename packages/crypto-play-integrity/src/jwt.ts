@@ -19,7 +19,6 @@
 
 import { p256 } from "@noble/curves/p256";
 import { sha256 } from "@noble/hashes/sha256";
-import { createVerify } from "node:crypto";
 
 import { fromBase64Url } from "@motebit/crypto";
 
@@ -192,7 +191,7 @@ export async function verifyJwtSignature(jwt: DecodedJwt, jwk: GoogleJwk): Promi
       // createVerify accepts it. Instead of hand-rolling the ASN.1
       // SubjectPublicKeyInfo, use the `jwk` KeyObject form Node supports
       // directly (Node ≥ 16 accepts raw JWK).
-      const { createPublicKey } = await import("node:crypto");
+      const { createPublicKey, createVerify } = await import("node:crypto");
       const keyObj = createPublicKey({ key: { kty: "RSA", n: jwk.n, e: jwk.e }, format: "jwk" });
       const verifier = createVerify("RSA-SHA256");
       verifier.update(jwt.signingInput);
