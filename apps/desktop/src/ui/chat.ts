@@ -855,6 +855,9 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
       case "memories":
         callbacks.openMemoryPanel();
         return;
+      case "skills":
+        document.dispatchEvent(new CustomEvent("motebit:open-skills"));
+        return;
       case "clear":
         ctx.app.startNewConversation();
         chatLog.innerHTML = "";
