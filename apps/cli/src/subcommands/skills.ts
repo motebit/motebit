@@ -26,10 +26,10 @@ import {
   SkillRegistry,
   parseSkillFile,
   serializeSkillFile,
+  type SkillAuditEvent,
   type SkillAuditSink,
   type SkillInstallSource,
   type SkillRecord,
-  type SkillTrustGrantEvent,
 } from "@motebit/skills";
 import { NodeFsSkillStorageAdapter, resolveDirectorySkillSource } from "@motebit/skills/node-fs";
 import {
@@ -103,7 +103,11 @@ function getAuditLogPath(): string {
 }
 
 function makeAuditSink(): SkillAuditSink {
-  return (event: SkillTrustGrantEvent) => {
+  // Accepts the discriminated `SkillAuditEvent` union — `skill_trust_grant`,
+  // `skill_trust_revoke`, `skill_remove`, and `skill_consent_granted`. The
+  // CLI is the canonical Node-side audit destination; consent events from
+  // hosts that route through the CLI's registry instance land here too.
+  return (event: SkillAuditEvent) => {
     const root = getSkillsRoot();
     if (!existsSync(root)) mkdirSync(root, { recursive: true });
     appendFileSync(getAuditLogPath(), JSON.stringify(event) + "\n", "utf-8");
