@@ -750,6 +750,15 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   // duplicate Identity-tab Credentials renderer was removed 2026-05-04
   // per the Settings vs Sovereign doctrine in CLAUDE.md.
 
+  // Skills panel — opens via custom event the skills.ts init listens
+  // for. Closes the Settings modal first so the panel isn't underneath
+  // the modal backdrop. Replaces the removed Skills HUD button as the
+  // canonical discoverability path for the Skills panel.
+  document.getElementById("settings-open-skills")?.addEventListener("click", () => {
+    close();
+    document.dispatchEvent(new CustomEvent("motebit:open-skills"));
+  });
+
   // Export button
   document.getElementById("settings-export")!.addEventListener("click", () => {
     void ctx.app.exportAllData().then((json) => {

@@ -288,7 +288,13 @@ export function initSkills(ctx: DesktopContext): SkillsAPI {
     void ctrl.selectSkill(null);
   });
 
-  document.getElementById("skills-btn")?.addEventListener("click", () => open());
+  // The HUD-button entry was removed 2026-05-04 — the canonical 3-1-3
+  // HUD doesn't include Skills. Settings → Intelligence "Skills" link
+  // is the discoverability path now; settings.ts dispatches
+  // `motebit:open-skills` when the user clicks it. Custom-event wiring
+  // avoids leaking the skills module through every consumer's import
+  // graph.
+  document.addEventListener("motebit:open-skills", () => open());
   document.getElementById("skills-close-btn")?.addEventListener("click", close);
   skillsBackdrop.addEventListener("click", close);
 

@@ -680,6 +680,15 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       });
   });
 
+  // Skills panel — opens via custom event the skills-panel module
+  // listens for. Settings closes first so the panel renders cleanly.
+  // Replaces a HUD button slot — the canonical 3-1-3 HUD doesn't
+  // include Skills; Settings → Intelligence is the discoverability path.
+  document.getElementById("settings-open-skills")?.addEventListener("click", () => {
+    close();
+    document.dispatchEvent(new CustomEvent("motebit:open-skills"));
+  });
+
   // Export Data button
   document.getElementById("settings-export-data")?.addEventListener("click", () => {
     void ctx.app.exportData().then((json) => {

@@ -127,6 +127,12 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
     }
   }
 
+  // Cross-surface event hook — Settings → Intelligence "Skills" link
+  // dispatches `motebit:open-skills` so it doesn't need to import the
+  // panel module. Desktop's apps/desktop/src/ui/skills.ts listens for
+  // the same event; both surfaces share the discoverability path.
+  document.addEventListener("motebit:open-skills", () => open());
+
   async function refresh(): Promise<void> {
     const url = new URL(`${resolveRelayUrl()}/api/v1/skills/discover`);
     if (includeUnfeatured.checked) {
