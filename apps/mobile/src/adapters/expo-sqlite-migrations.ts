@@ -360,4 +360,33 @@ export const MOBILE_MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX IF NOT EXISTS idx_skills_inserted ON skills (inserted_at)",
     ],
   },
+  {
+    version: 21,
+    description: "skill_audit table — durable trail for SkillAuditEvent",
+    statements: [
+      // Audit events emitted by `@motebit/skills`'s SkillRegistry
+      // (skill_trust_grant / skill_trust_revoke / skill_remove) and
+      // by `@motebit/panels`'s RegistryBackedSkillsPanelAdapter
+      // (skill_consent_granted on sensitive-tier installs). Sibling
+      // of the IDB `skill_audit` store on web — same append-only
+      // shape. The full event JSON is stored verbatim in `event_json`
+      // so future variants of the discriminated union don't require
+      // a column-add migration; the surface-level fields surface
+      // (skill_name, type, sensitivity) lift out of the JSON for
+      // index efficiency on common queries.
+      `CREATE TABLE IF NOT EXISTS skill_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL,
+        skill_name TEXT NOT NULL,
+        skill_version TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        sensitivity TEXT,
+        surface TEXT,
+        at TEXT NOT NULL,
+        event_json TEXT NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_skill_audit_skill ON skill_audit (skill_name, at)",
+      "CREATE INDEX IF NOT EXISTS idx_skill_audit_type ON skill_audit (type, at)",
+    ],
+  },
 ];

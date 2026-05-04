@@ -80,7 +80,7 @@ import {
   verify as verifyIdentityFile,
 } from "@motebit/identity-file";
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
-import type { ExpoStorageResult } from "./adapters/expo-sqlite";
+import type { ExpoSqliteSkillAuditSink, ExpoStorageResult } from "./adapters/expo-sqlite";
 import { SkillRegistry } from "@motebit/skills";
 import { WebViewGLAdapter } from "./adapters/webview-gl";
 import { ASYNC_STORAGE_KEYS, KEYRING_KEYS } from "./storage-keys";
@@ -1154,14 +1154,33 @@ export class MobileApp {
    * envelope-bytes verification in the same JS context as the panel
    * UI; sensitive-tier skills (medical/financial/secret) route
    * through the consent gate per `packages/skills/CLAUDE.md` rule 5.
+   *
+   * The audit sink is wired into the registry's `audit` option and
+   * also exposed via `getSkillAuditSink()` for the panel to wire into
+   * the adapter — single durable stream for both registry-emitted
+   * (trust/remove) and adapter-emitted (consent_granted) events.
    */
   getSkillRegistry(): SkillRegistry | null {
     if (this._skillRegistry !== undefined) return this._skillRegistry;
     if (this.storage === null) return null;
-    this._skillRegistry = new SkillRegistry(this.storage.skillStorage);
+    this._skillRegistry = new SkillRegistry(this.storage.skillStorage, {
+      audit: this.storage.skillAuditSink.record,
+    });
     return this._skillRegistry;
   }
   private _skillRegistry?: SkillRegistry | null;
+
+  /**
+   * The SQLite-backed skill audit sink. Null when storage hasn't
+   * bootstrapped — same lockstep as `getSkillRegistry()`. The panel
+   * passes `record` to the panels-side adapter so adapter-emitted
+   * consent grants land in the same `skill_audit` table as the
+   * registry's trust/remove events.
+   */
+  getSkillAuditSink(): ExpoSqliteSkillAuditSink | null {
+    if (this.storage === null) return null;
+    return this.storage.skillAuditSink;
+  }
 
   getRenderer(): WebViewGLAdapter {
     return this.renderer;

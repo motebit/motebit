@@ -138,6 +138,7 @@ export function SkillsPanel({ visible, app, onClose }: SkillsPanelProps): React.
       ctrlRef.current = null;
       return;
     }
+    const auditSink = app.getSkillAuditSink();
     const adapter = new RegistryBackedSkillsPanelAdapter(registry, {
       fetchBundle: async (url: string): Promise<SkillBundleShape> => {
         const resp = await fetch(url, { headers: { Accept: "application/json" } });
@@ -147,6 +148,11 @@ export function SkillsPanel({ visible, app, onClose }: SkillsPanelProps): React.
         return (await resp.json()) as SkillRegistryBundle;
       },
       requestInstallConsent: showConsentAlert,
+      // Same sink the registry holds — adapter-emitted
+      // skill_consent_granted lands in the same SQLite table as the
+      // registry-emitted trust/remove events.
+      audit: auditSink !== null ? auditSink.record : undefined,
+      surface: "mobile",
     });
     const ctrl = createSkillsController(adapter);
     ctrlRef.current = ctrl;

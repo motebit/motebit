@@ -239,6 +239,19 @@ CREATE TABLE IF NOT EXISTS skills (
   files_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_skills_inserted ON skills (inserted_at);
+CREATE TABLE IF NOT EXISTS skill_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  skill_version TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  sensitivity TEXT,
+  surface TEXT,
+  at TEXT NOT NULL,
+  event_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skill_audit_skill ON skill_audit (skill_name, at);
+CREATE INDEX IF NOT EXISTS idx_skill_audit_type ON skill_audit (type, at);
 `;
 
 // === Row Types ===
@@ -2332,6 +2345,88 @@ function filesFromJson(json: string): Record<string, Uint8Array> {
   return out;
 }
 
+// === Skill audit sink ===
+//
+// SQLite-backed `SkillAuditSink` for the durable trail of skill-related
+// operator acts: registry-emitted `skill_trust_grant` /
+// `skill_trust_revoke` / `skill_remove` and the panels-side adapter's
+// `skill_consent_granted` (sensitive-tier installs). Sibling of
+// `IdbSkillAuditSink` on web — same append-only shape, same
+// surface-agnostic event union from `@motebit/skills`.
+//
+// Stores the full event payload as JSON in `event_json` so future
+// variants of the discriminated union (e.g. skill_export, skill_revoke)
+// don't require a column-add migration. Common-query fields lift out
+// for index efficiency: skill_name + at + type indexed.
+
+import type { SkillAuditEvent } from "@motebit/skills";
+
+interface SkillAuditRow {
+  id: number;
+  type: string;
+  skill_name: string;
+  skill_version: string;
+  content_hash: string;
+  sensitivity: string | null;
+  surface: string | null;
+  at: string;
+  event_json: string;
+}
+
+export class ExpoSqliteSkillAuditSink {
+  constructor(private readonly db: SQLite.SQLiteDatabase) {}
+
+  /**
+   * Persist a single audit event. Bound as an arrow-function field so
+   * hosts pass it directly as `audit: sink.record` without `.bind`
+   * boilerplate. The registry's `audit` option and the panels-side
+   * adapter's `audit` option both accept the same `SkillAuditSink`
+   * shape, so the same reference flows into both.
+   */
+  record = (event: SkillAuditEvent): void => {
+    this.db.runSync(
+      `INSERT INTO skill_audit (type, skill_name, skill_version, content_hash, sensitivity, surface, at, event_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        event.type,
+        event.skill_name,
+        event.skill_version,
+        event.content_hash,
+        // Only `skill_consent_granted` carries sensitivity + surface;
+        // null for the trust/remove variants. Discriminated-union
+        // narrowing handles the access.
+        event.type === "skill_consent_granted" ? event.sensitivity : null,
+        event.type === "skill_consent_granted" ? event.surface : null,
+        event.at,
+        JSON.stringify(event),
+      ],
+    );
+  };
+
+  /** Most-recent-first across all entries. */
+  getAll(): SkillAuditEvent[] {
+    const rows = this.db.getAllSync<SkillAuditRow>("SELECT * FROM skill_audit ORDER BY at DESC");
+    return rows.map(rowToSkillAuditEvent);
+  }
+
+  /** Filter by skill name (e.g. "what acts targeted X?"). */
+  querySkill(skillName: string): SkillAuditEvent[] {
+    const rows = this.db.getAllSync<SkillAuditRow>(
+      "SELECT * FROM skill_audit WHERE skill_name = ? ORDER BY at DESC",
+      [skillName],
+    );
+    return rows.map(rowToSkillAuditEvent);
+  }
+}
+
+function rowToSkillAuditEvent(row: SkillAuditRow): SkillAuditEvent {
+  // Round-trip via event_json — the column-projected fields are for
+  // index efficiency, the JSON is the source of truth. Cast through
+  // unknown because parsed JSON is structurally-valid by construction
+  // (only this class writes the column) but TS can't infer that.
+  return JSON.parse(row.event_json) as SkillAuditEvent;
+}
+
 // === Factory ===
 
 export interface ExpoStorageResult extends StorageAdapters {
@@ -2355,6 +2450,14 @@ export interface ExpoStorageResult extends StorageAdapters {
    * and exposed via `MobileApp.getSkillRegistry()` for the panel.
    */
   skillStorage: ExpoSqliteSkillStorageAdapter;
+  /**
+   * Skill audit sink — durable trail for `SkillAuditEvent` (registry-
+   * emitted trust/remove + panels-adapter-emitted consent grants).
+   * Sibling of `IdbSkillAuditSink` on web. Both `MobileApp` and the
+   * panel wire `record` into the registry + adapter audit options so
+   * a single stream collects every operator act.
+   */
+  skillAuditSink: ExpoSqliteSkillAuditSink;
 }
 
 /**
@@ -2419,5 +2522,6 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
     approvalStore: new ExpoApprovalStore(db),
     toolAuditSink: new ExpoToolAuditSink(db),
     skillStorage: new ExpoSqliteSkillStorageAdapter(db),
+    skillAuditSink: new ExpoSqliteSkillAuditSink(db),
   };
 }

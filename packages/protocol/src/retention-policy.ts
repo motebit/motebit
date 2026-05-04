@@ -538,7 +538,12 @@ export type RetentionShapeDeclaration =
  * discriminator is interop law — verifiers and tooling cross-reference
  * these exact strings with the manifest's `RetentionStoreDeclaration.store_id`.
  */
-export type RuntimeStoreId = "memory" | "event_log" | "conversation_messages" | "tool_audit";
+export type RuntimeStoreId =
+  | "memory"
+  | "event_log"
+  | "conversation_messages"
+  | "tool_audit"
+  | "skill_audit";
 
 /**
  * Canonical registry: `RuntimeStoreId` → declared `RetentionShape`.
@@ -582,6 +587,17 @@ export const RUNTIME_RETENTION_REGISTRY: Readonly<
     kind: "consolidation_flush",
     flush_to: "expire",
     has_min_floor_resolver: true,
+  },
+  // `skill_audit` carries the same shape as `tool_audit` — append-only
+  // operator-act ledger with a `sensitivity` column on the
+  // `skill_consent_granted` variant. Registers under `consolidation_flush`
+  // so the consolidation cycle's flush phase respects sensitivity-tier
+  // retention ceilings. No min-floor resolver: skill audit doesn't
+  // gate settlement, so the per-tier horizon is the only ceiling.
+  skill_audit: {
+    kind: "consolidation_flush",
+    flush_to: "expire",
+    has_min_floor_resolver: false,
   },
 });
 

@@ -2381,7 +2381,7 @@ export interface RouteScore {
 export const RUNTIME_RETENTION_REGISTRY: Readonly<Record<RuntimeStoreId, RetentionShapeDeclaration>>;
 
 // @public
-export type RuntimeStoreId = "memory" | "event_log" | "conversation_messages" | "tool_audit";
+export type RuntimeStoreId = "memory" | "event_log" | "conversation_messages" | "tool_audit" | "skill_audit";
 
 // @alpha
 export interface ScreenshotAction {
