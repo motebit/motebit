@@ -1270,6 +1270,22 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
         src.replace(/new SkillRegistry\(/g, "/* probe */ Object.create(null) as SkillRegistry; (("),
       ),
   },
+  {
+    script: "check-package-browser-entry",
+    proves:
+      'flags a workspace package whose top-level `src/index.ts` re-exports a sibling that imports `node:*` at module top — the exact shape of the skills bug fixed in commit 18e978a0. Probe restores the pre-fix `export ... from "./fs-adapter.js"` line in `packages/skills/src/index.ts`, recreating the bomb the gate exists to prevent.',
+    perturb: () =>
+      mutateFile(
+        "packages/skills/src/index.ts",
+        (src) =>
+          // Append the pre-fix re-export at the end of the file. The
+          // gate inspects only `src/index.ts` directly; appending an
+          // `export ... from "./fs-adapter.js"` line is the minimal
+          // probe shape and matches the structural pattern the gate
+          // catches without needing to undo the comment block.
+          `${src}\nexport { NodeFsSkillStorageAdapter } from "./fs-adapter.js";\n`,
+      ),
+  },
 ];
 
 /**
