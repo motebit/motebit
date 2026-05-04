@@ -77,6 +77,7 @@ import {
   parse as parseIdentityFile,
   governanceToPolicyConfig,
   rotate as rotateIdentityFile,
+  verify as verifyIdentityFile,
 } from "@motebit/identity-file";
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
@@ -1915,6 +1916,21 @@ export class MobileApp {
     } finally {
       secureErase(privKeyBytes);
     }
+  }
+
+  /**
+   * Verify a motebit.md identity file's Ed25519 signature.
+   *
+   * Mirrors `WebApp.verifyMotebitMd` and
+   * `IdentityManager.verifyIdentityFile`. Browser-and-native-safe:
+   * @motebit/identity-file's verify chains through @motebit/crypto
+   * (zero node:* deps); the React Native bundle picks up the same
+   * implementation.
+   */
+  async verifyMotebitMd(content: string): Promise<{ valid: boolean; error?: string }> {
+    const result = await verifyIdentityFile(content, { expectedType: "identity" });
+    const error = result.errors?.[0]?.message;
+    return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
   }
 }
 

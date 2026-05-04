@@ -25,6 +25,7 @@ export interface IdentityTabProps {
   onRevealRecoverySeed?: () => Promise<string | null>;
   onExport: () => void;
   onExportIdentity?: () => void;
+  onVerifyIdentity?: () => void;
   onLinkDevice?: () => void;
   onClaimDevice?: () => void;
   onRotateKey?: () => void;
@@ -41,6 +42,7 @@ export function IdentityTab({
   onRevealRecoverySeed,
   onExport,
   onExportIdentity,
+  onVerifyIdentity,
   onLinkDevice,
   onClaimDevice,
   onRotateKey,
@@ -340,6 +342,16 @@ export function IdentityTab({
           activeOpacity={0.7}
         >
           <Text style={styles.exportText}>Export Identity</Text>
+        </TouchableOpacity>
+      )}
+
+      {onVerifyIdentity && (
+        <TouchableOpacity
+          style={styles.exportButton}
+          onPress={onVerifyIdentity}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.exportText}>Verify motebit.md…</Text>
         </TouchableOpacity>
       )}
 

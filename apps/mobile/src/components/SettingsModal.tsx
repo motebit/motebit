@@ -36,6 +36,7 @@ import {
 import * as SecureStore from "expo-secure-store";
 import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system/legacy";
+import * as DocumentPicker from "expo-document-picker";
 import type { MobileApp, MobileSettings, MobileAIConfig } from "../mobile-app";
 import { SECURE_STORE_KEYS } from "../storage-keys";
 import { APPROVAL_PRESET_CONFIGS } from "../mobile-app";
@@ -405,6 +406,29 @@ export function SettingsModal({
                   } catch (err: unknown) {
                     const msg = err instanceof Error ? err.message : String(err);
                     Alert.alert("Export Failed", msg);
+                  }
+                })();
+              }}
+              onVerifyIdentity={() => {
+                void (async () => {
+                  try {
+                    const result = await DocumentPicker.getDocumentAsync({
+                      type: ["text/markdown", "text/plain", "*/*"],
+                      copyToCacheDirectory: true,
+                      multiple: false,
+                    });
+                    if (result.canceled || result.assets.length === 0) return;
+                    const asset = result.assets[0]!;
+                    const content = await FileSystem.readAsStringAsync(asset.uri);
+                    const verdict = await app.verifyMotebitMd(content);
+                    if (verdict.valid) {
+                      Alert.alert("Valid", `${asset.name} signature verified.`);
+                    } else {
+                      Alert.alert("Invalid", verdict.error ?? "Signature check failed.");
+                    }
+                  } catch (err: unknown) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    Alert.alert("Verify Failed", msg);
                   }
                 })();
               }}
