@@ -53,6 +53,7 @@ import { SettingsModal, deriveInteriorColor } from "./components/SettingsModal";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { SovereignPanel } from "./components/SovereignPanel";
 import { AgentsPanel } from "./components/AgentsPanel";
+import { SkillsPanel } from "./components/SkillsPanel";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { VoiceIndicator } from "./components/VoiceIndicator";
 import { GoalsPanel } from "./components/GoalsPanel";
@@ -122,6 +123,7 @@ export default function App(): React.ReactElement {
   const [showGoalsPanel, setShowGoalsPanel] = useState(false);
   const [showCredentialsPanel, setShowCredentialsPanel] = useState(false);
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
+  const [showSkillsPanel, setShowSkillsPanel] = useState(false);
 
   // Pairing state + handlers live in ./use-pairing.ts — the hook is
   // called later in this component after initializeAI/subscribeToState
@@ -590,6 +592,7 @@ export default function App(): React.ReactElement {
         setShowMemoryPanel,
         setShowGoalsPanel,
         setShowSettings,
+        setShowSkillsPanel,
       });
     },
     [addSystemMessage, showToast],
@@ -1167,6 +1170,12 @@ export default function App(): React.ReactElement {
           visible={showAgentsPanel}
           app={app.current}
           onClose={() => setShowAgentsPanel(false)}
+        />
+
+        <SkillsPanel
+          visible={showSkillsPanel}
+          app={app.current}
+          onClose={() => setShowSkillsPanel(false)}
         />
 
         {/* Pairing Modal */}

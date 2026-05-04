@@ -2347,6 +2347,14 @@ export interface ExpoStorageResult extends StorageAdapters {
   credentialStore: ExpoCredentialStore;
   approvalStore: ExpoApprovalStore;
   toolAuditSink: ExpoToolAuditSink;
+  /**
+   * Skill storage — owns the SQLite-backed persistence the mobile
+   * `SkillRegistry` reads/writes through. Not part of the canonical
+   * `StorageAdapters` shape because skills aren't a Ring-2 privacy
+   * substrate; the registry is constructed from this in `mobile-app.ts`
+   * and exposed via `MobileApp.getSkillRegistry()` for the panel.
+   */
+  skillStorage: ExpoSqliteSkillStorageAdapter;
 }
 
 /**
@@ -2410,5 +2418,6 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
     credentialStore: new ExpoCredentialStore(db),
     approvalStore: new ExpoApprovalStore(db),
     toolAuditSink: new ExpoToolAuditSink(db),
+    skillStorage: new ExpoSqliteSkillStorageAdapter(db),
   };
 }

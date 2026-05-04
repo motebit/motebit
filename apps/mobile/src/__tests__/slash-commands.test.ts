@@ -111,6 +111,7 @@ function makeDeps(appOverrides?: Record<string, unknown>): SlashCommandDeps & {
     setShowMemoryPanel: vi.fn(),
     setShowGoalsPanel: vi.fn(),
     setShowSettings: vi.fn(),
+    setShowSkillsPanel: vi.fn(),
     _messages: messages,
     _toasts: toasts,
     _app: app,
@@ -144,6 +145,12 @@ describe("runSlashCommand navigation commands", () => {
     const deps = makeDeps();
     runSlashCommand("goals", "", deps);
     expect(deps.setShowGoalsPanel).toHaveBeenCalledWith(true);
+  });
+
+  it("/skills opens skills panel", () => {
+    const deps = makeDeps();
+    runSlashCommand("skills", "", deps);
+    expect(deps.setShowSkillsPanel).toHaveBeenCalledWith(true);
   });
 
   it("/new starts new conversation and clears messages", () => {

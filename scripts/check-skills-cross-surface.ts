@@ -67,12 +67,12 @@ const SURFACE_CHECKS: ReadonlyArray<SurfaceCheck> = [
   },
   {
     surface: "mobile",
-    file: "apps/mobile/src/adapters/expo-sqlite.ts",
+    file: "apps/mobile/src/mobile-app.ts",
     signatures: [
       {
         description:
-          "defines `ExpoSqliteSkillStorageAdapter` (storage primitive ships ahead of the mobile Skills UI)",
-        pattern: /class\s+ExpoSqliteSkillStorageAdapter\b/,
+          "constructs `new SkillRegistry(...)` over `ExpoSqliteSkillStorageAdapter` and exposes it via `getSkillRegistry()`",
+        pattern: /new\s+SkillRegistry\s*\(/,
       },
     ],
   },

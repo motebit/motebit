@@ -81,6 +81,7 @@ import {
 } from "@motebit/identity-file";
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
+import { SkillRegistry } from "@motebit/skills";
 import { WebViewGLAdapter } from "./adapters/webview-gl";
 import { ASYNC_STORAGE_KEYS, KEYRING_KEYS } from "./storage-keys";
 import { SecureStoreAdapter } from "./adapters/secure-store";
@@ -1140,6 +1141,27 @@ export class MobileApp {
   getRuntime(): MotebitRuntime | null {
     return this.runtime;
   }
+
+  /**
+   * SQLite-backed `SkillRegistry` for the Skills panel. Returns null
+   * if storage hasn't bootstrapped yet (the panel renders the
+   * "loading" empty state in that window). Cached after first call so
+   * the panel's controller subscribes to a stable instance.
+   *
+   * Same shape web ships (`apps/web/src/web-app.ts`) — both surfaces
+   * route the panel UI through `RegistryBackedSkillsPanelAdapter`
+   * from `@motebit/panels`. Privilege boundary: this runs install +
+   * envelope-bytes verification in the same JS context as the panel
+   * UI; sensitive-tier skills (medical/financial/secret) route
+   * through the consent gate per `packages/skills/CLAUDE.md` rule 5.
+   */
+  getSkillRegistry(): SkillRegistry | null {
+    if (this._skillRegistry !== undefined) return this._skillRegistry;
+    if (this.storage === null) return null;
+    this._skillRegistry = new SkillRegistry(this.storage.skillStorage);
+    return this._skillRegistry;
+  }
+  private _skillRegistry?: SkillRegistry | null;
 
   getRenderer(): WebViewGLAdapter {
     return this.renderer;
