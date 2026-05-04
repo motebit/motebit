@@ -288,7 +288,7 @@ export function IntelligenceTab({
 
   return (
     <View>
-      <Text style={styles.sectionTitle}>Provider</Text>
+      <Text style={styles.sectionTitle}>AI Provider</Text>
       {/* Three top-level modes, equal visual weight. BYOK is never hidden. */}
       <View style={styles.radioGroup}>
         <TouchableOpacity

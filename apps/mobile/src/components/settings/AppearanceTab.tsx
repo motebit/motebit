@@ -85,7 +85,7 @@ export function AppearanceTab({
         ))}
       </View>
 
-      <Text style={styles.sectionTitle}>Color Preset</Text>
+      <Text style={styles.sectionTitle}>Soul Color</Text>
       <View style={styles.presetGrid}>
         {presets.map((name) => (
           <TouchableOpacity
