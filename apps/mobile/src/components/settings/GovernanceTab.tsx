@@ -1,7 +1,10 @@
 /**
- * Governance tab — operator mode toggle + PIN, tool approval preset,
- * memory persistence threshold, reject-secrets switch, max tool calls
- * per turn.
+ * Governance tab — operator mode toggle + PIN, approval preset,
+ * memory governance (persistence threshold + secret detection), budget
+ * (max tool calls per turn), proactive interior toggles. Section
+ * taxonomy mirrors apps/desktop and apps/web governance panes —
+ * Operator Mode / Approval Preset / Memory Governance / Budget /
+ * Proactive Interior — so cross-surface alignment is preserved.
  *
  * PolicySummary lives in settings-shared.tsx because it's reusable
  * across tabs.
@@ -43,7 +46,7 @@ export function GovernanceTab({
         </TouchableOpacity>
       </View>
 
-      <Text style={styles.sectionTitle}>Tool Approval</Text>
+      <Text style={styles.sectionTitle}>Approval Preset</Text>
       <View style={styles.radioGroup}>
         {Object.entries(APPROVAL_PRESET_CONFIGS).map(([key, config]) => (
           <TouchableOpacity
@@ -63,9 +66,9 @@ export function GovernanceTab({
       </View>
       <PolicySummary preset={draft.approvalPreset} isOperatorMode={isOperatorMode} />
 
-      <Text style={styles.sectionTitle}>Memory</Text>
+      <Text style={styles.sectionTitle}>Memory Governance</Text>
       <View style={styles.fieldRow}>
-        <Text style={styles.fieldLabel}>Persistence threshold</Text>
+        <Text style={styles.fieldLabel}>Persistence Threshold</Text>
         <TextInput
           style={styles.numberField}
           value={String(draft.persistenceThreshold)}
@@ -79,7 +82,7 @@ export function GovernanceTab({
       </View>
 
       <View style={styles.switchRow}>
-        <Text style={styles.switchLabel}>Reject secrets</Text>
+        <Text style={styles.switchLabel}>Secret Detection</Text>
         <Switch
           value={draft.rejectSecrets}
           onValueChange={(v) => onUpdate({ rejectSecrets: v })}
@@ -88,8 +91,9 @@ export function GovernanceTab({
         />
       </View>
 
+      <Text style={styles.sectionTitle}>Budget</Text>
       <View style={styles.fieldRow}>
-        <Text style={styles.fieldLabel}>Max tool calls / turn</Text>
+        <Text style={styles.fieldLabel}>Max tool calls per turn</Text>
         <TextInput
           style={styles.numberField}
           value={String(draft.maxCallsPerTurn)}
