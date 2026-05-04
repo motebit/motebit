@@ -228,16 +228,60 @@ describe("SkillRegistry.install", () => {
     expect(result.name).toBe("example-skill");
   });
 
-  it("installs an unsigned skill (manifest has no motebit.signature) — install is permissive", async () => {
-    // The envelope IS signed (envelope schema requires signature), but the
-    // manifest itself has no `motebit.signature`. After install, the
-    // selector's provenance gate will reject it from auto-load until trust.
+  it("installs an unsigned skill (manifest has no motebit.signature) as `unsigned`", async () => {
+    // The envelope IS signed (envelope schema requires signature for
+    // distribution integrity), but the manifest itself has no
+    // `motebit.signature`. Per spec §7.1, this surfaces as `"unsigned"`
+    // provenance — install proceeds (permissive) but the selector's
+    // gate rejects auto-load until the operator manually promotes via
+    // `registry.trust()`. Pre-fix this collapsed to `"verified"`
+    // because deriveProvenance only checked envelope sig; closing
+    // that gap is what makes the trust-promotion path live.
     const { manifest, envelope, body } = await makeInstallableUnsignedSkill({});
     expect(manifest.motebit.signature).toBeUndefined();
     const result = await registry.install({ kind: "in_memory", manifest, envelope, body });
-    // The envelope signature verifies, so envelope-level provenance is "verified".
-    // The manifest-level absence of signature is what the selector treats as
-    // "untrusted" via the registry's `trusted` flag.
+    expect(result.provenance_status).toBe("unsigned");
+  });
+
+  it("install + trust promotes an unsigned skill to `trusted_unsigned`", async () => {
+    // The previously-unreachable path. Install an unsigned skill →
+    // `unsigned`. Operator runs `registry.trust(name)` → `index.trusted`
+    // flips to true. Subsequent `verify`/`list`/`get` calls report
+    // `trusted_unsigned`. Per spec §7.1 the qualifier `[unverified]`
+    // remains everywhere the skill surfaces — trust grants are audit
+    // events, not cryptographic provenance.
+    const { manifest, envelope, body } = await makeInstallableUnsignedSkill({});
+    await registry.install({ kind: "in_memory", manifest, envelope, body });
+    expect(await registry.verify(manifest.name)).toBe("unsigned");
+    await registry.trust(manifest.name, "test-operator");
+    expect(await registry.verify(manifest.name)).toBe("trusted_unsigned");
+    // List + get reflect the same state.
+    const list = await registry.list();
+    expect(list.find((r) => r.index.name === manifest.name)?.provenance_status).toBe(
+      "trusted_unsigned",
+    );
+    const got = await registry.get(manifest.name);
+    expect(got?.provenance_status).toBe("trusted_unsigned");
+  });
+
+  it("untrust reverts a trusted_unsigned skill back to unsigned", async () => {
+    const { manifest, envelope, body } = await makeInstallableUnsignedSkill({});
+    await registry.install({ kind: "in_memory", manifest, envelope, body });
+    await registry.trust(manifest.name);
+    expect(await registry.verify(manifest.name)).toBe("trusted_unsigned");
+    await registry.untrust(manifest.name);
+    expect(await registry.verify(manifest.name)).toBe("unsigned");
+  });
+
+  it("signed skill installs as `verified` (manifest sig present + verifies)", async () => {
+    // Counter-test: the verified path is unaffected by the unsigned-fix.
+    // Manifest has a valid motebit.signature → "verified" regardless of
+    // index.trusted (a trust grant on an already-verified skill is a
+    // no-op for the displayed status — derivedStatusForEntry's first
+    // branch matches before the trust check).
+    const { manifest, envelope, body } = await makeInstallableSignedSkill({});
+    expect(manifest.motebit.signature).toBeDefined();
+    const result = await registry.install({ kind: "in_memory", manifest, envelope, body });
     expect(result.provenance_status).toBe("verified");
   });
 
@@ -419,31 +463,45 @@ describe("SkillSelector", () => {
   });
 
   it("trust grant promotes an unsigned skill to selectable", async () => {
+    // Pre-fix this test had to acknowledge that the trust-grant path
+    // couldn't be exercised because deriveProvenance only checked the
+    // envelope sig, collapsing every install to "verified". With both
+    // signatures honored, the path is now real: install an unsigned
+    // manifest → "unsigned" → selector blocks → operator trusts →
+    // "trusted_unsigned" → selector permits.
     const adapter = new InMemorySkillStorageAdapter();
     const registry = new SkillRegistry(adapter);
     const { manifest, envelope, body } = await makeInstallableUnsignedSkill({});
     await registry.install({ kind: "in_memory", manifest, envelope, body });
-    // Before trust grant: the manifest itself has no motebit.signature.
-    // The provenance status derived from envelope verify is "verified" — but
-    // the registry still tracks `trusted: false`. To exercise the selector's
-    // provenance gate against truly-unsigned content, mark it as untrusted:
-    await registry.untrust(manifest.name);
 
-    // The selector's gate: the manifest.motebit.signature being absent makes
-    // the skill `unsigned` only when `derivedStatusForEntry` sees the
-    // envelope verify *fail*. Since the envelope verifies here, it shows as
-    // `verified`. To genuinely test trust-grant promotion, we'd need to
-    // round-trip through fs adapter where the manifest signature is what's
-    // checked at load time. For phase-1 in-memory tests, this is the
-    // smoke-level guarantee:
+    // Before trust grant: provenance is "unsigned" — the selector's
+    // provenance gate (per spec §7.1) blocks auto-load.
     const recordsBefore = await registry.list();
+    expect(recordsBefore[0]?.provenance_status).toBe("unsigned");
     const beforeResult = selector.select(recordsBefore, {
       turn: "example",
       sessionSensitivity: "none",
       hardwareAttestationScore: 1,
       platform: "macos",
     });
-    // Verified envelope → selectable regardless of trust flag at this layer.
-    expect(beforeResult.selected.length).toBeGreaterThanOrEqual(1);
+    expect(beforeResult.selected.length).toBe(0);
+    // The skill is in `filtered` with the untrusted reason recorded —
+    // selector tag for "manifest sig absent and operator hasn't promoted."
+    expect(
+      beforeResult.filtered.some((f) => f.name === manifest.name && f.reason === "untrusted"),
+    ).toBe(true);
+
+    // Operator promotes via trust(). Provenance flips to
+    // "trusted_unsigned"; selector now admits.
+    await registry.trust(manifest.name, "test-operator");
+    const recordsAfter = await registry.list();
+    expect(recordsAfter[0]?.provenance_status).toBe("trusted_unsigned");
+    const afterResult = selector.select(recordsAfter, {
+      turn: "example",
+      sessionSensitivity: "none",
+      hardwareAttestationScore: 1,
+      platform: "macos",
+    });
+    expect(afterResult.selected.length).toBeGreaterThanOrEqual(1);
   });
 });

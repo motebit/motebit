@@ -236,17 +236,125 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     expect(afterRemove.length).toBe(0);
   });
 
-  // Trust-path coverage is intentionally absent: `SkillRegistry`'s
-  // `derivedStatusForEntry` returns `"verified"` whenever the envelope
-  // verifies, regardless of `index.trusted`. The panel's Trust button
-  // only renders for non-verified rows, so a successfully-installed
-  // skill never surfaces the button — the `"unsigned"` provenance
-  // branch is unreachable through the public install path today. A
-  // future test belongs alongside whatever change makes the manifest-
-  // level `motebit.signature` a separate provenance axis from the
-  // envelope-level signature; the panel-level wiring is already
-  // covered structurally (the button render condition + click handler
-  // are exercised whenever the renderer iterates installed rows).
+  // -------------------------------------------------------------------------
+  // Trust path — manifest.motebit.signature is absent → "unsigned" → operator
+  // promotes via the panel's Trust button → "trusted_unsigned". Reachable
+  // now that `deriveProvenance` honors the manifest-vs-envelope signature
+  // distinction (previously this path collapsed to "verified" regardless
+  // of authorial provenance — see packages/skills/src/registry.ts).
+  // -------------------------------------------------------------------------
+
+  it("unsigned skill renders Trust button → click promotes to trusted_unsigned", async () => {
+    // buildBundle produces a manifest WITHOUT motebit.signature (the
+    // envelope itself is signed for distribution integrity per spec
+    // §5; the manifest's authorial signature is what's absent). Post-
+    // fix, this installs as "unsigned" instead of collapsing to
+    // "verified" — the Trust button renders for non-verified rows.
+    const { envelope, body } = await buildBundle("trust-path-skill", "none");
+    const dbName = `panel-trust-${crypto.randomUUID()}`;
+    const db = await openMotebitDB(dbName);
+    const registry = new SkillRegistry(new IdbSkillStorageAdapter(db));
+
+    const submitter = "did:key:zTestSubmitter";
+    const submittedAt = Date.now();
+    const listing: SkillRegistryListing = {
+      entries: [
+        {
+          submitter_motebit_id: submitter,
+          name: envelope.skill.name,
+          version: envelope.skill.version,
+          content_hash: envelope.skill.content_hash,
+          description: envelope.manifest.description,
+          sensitivity: "none",
+          platforms: envelope.manifest.platforms ?? ["macos"],
+          signature_public_key: envelope.signature.public_key,
+          submitted_at: submittedAt,
+          featured: true,
+        },
+      ],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    };
+    const bundle: SkillRegistryBundle = {
+      submitter_motebit_id: submitter,
+      envelope,
+      body: bytesToBase64(body),
+      files: {},
+      submitted_at: submittedAt,
+      featured: true,
+    };
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/api/v1/skills/discover")) {
+        return new Response(JSON.stringify(listing), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes(`/api/v1/skills/${encodeURIComponent(submitter)}/`)) {
+        return new Response(JSON.stringify(bundle), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const ctx: WebContext = {
+      app: {
+        getSkillRegistry: () => registry,
+        getSkillAuditSink: () => null,
+      } as unknown as WebApp,
+      getConfig: () => null,
+      setConfig: () => undefined,
+      addMessage: () => undefined,
+      showToast: () => undefined,
+      bootstrapProxy: () => Promise.resolve(false),
+    };
+    const api = initSkillsPanel(ctx);
+    api.open();
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Install via the per-row Install button (no consent prompt — none-tier).
+    const list = document.getElementById("skills-list") as HTMLDivElement;
+    list
+      .querySelector<HTMLButtonElement>('.skill-row-browse button[data-action="install"]')!
+      .click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Pre-fix this would have collapsed to "verified" and the trust
+    // button wouldn't render. Post-fix the unsigned manifest surfaces
+    // as "unsigned" and the button is present.
+    const installedFromIdb = await registry.list();
+    expect(installedFromIdb[0]!.provenance_status).toBe("unsigned");
+    const trustBtn = list.querySelector<HTMLButtonElement>(
+      '.skill-row-installed button[data-action="toggle-trusted"]',
+    );
+    expect(trustBtn).not.toBeNull();
+    expect(trustBtn?.textContent).toBe("Trust");
+
+    // Click Trust → operator-attested promotion. Provenance flips to
+    // trusted_unsigned (the [unverified] qualifier remains everywhere
+    // the skill surfaces per spec §7.1).
+    trustBtn!.click();
+    await new Promise((r) => setTimeout(r, 30));
+    const afterTrust = await registry.list();
+    expect(afterTrust[0]!.provenance_status).toBe("trusted_unsigned");
+    expect(afterTrust[0]!.index.trusted).toBe(true);
+
+    // Untrust button now renders in place of Trust.
+    const untrustBtn = list.querySelector<HTMLButtonElement>(
+      '.skill-row-installed button[data-action="toggle-trusted"]',
+    );
+    expect(untrustBtn?.textContent).toBe("Untrust");
+    untrustBtn!.click();
+    await new Promise((r) => setTimeout(r, 30));
+    const afterUntrust = await registry.list();
+    expect(afterUntrust[0]!.provenance_status).toBe("unsigned");
+    expect(afterUntrust[0]!.index.trusted).toBe(false);
+  });
 
   // -------------------------------------------------------------------------
   // Consent gate — sensitive-tier install on weak-isolation surface (web).

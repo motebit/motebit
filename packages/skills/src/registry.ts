@@ -13,9 +13,9 @@ import {
   decodeSkillSignaturePublicKey,
   hexToBytes,
   verifySkillEnvelope,
-  verifySkillEnvelopeDetailed,
+  verifySkillManifest,
 } from "@motebit/crypto";
-import type { SkillEnvelope, SkillSensitivity } from "@motebit/protocol";
+import type { SkillEnvelope, SkillManifest, SkillSensitivity } from "@motebit/protocol";
 
 import type {
   InstalledSkillIndexEntry,
@@ -175,10 +175,10 @@ export class SkillRegistry {
       );
     }
 
-    const provenance = await deriveProvenance(envelope);
+    const provenance = await deriveProvenance(envelope, manifest, body);
     if (provenance === "unverified") {
       throw new SkillInstallError(
-        `Signature verification failed for skill \`${manifest.name}\`. The signature block is present but verification failed; this is a hard reject (per spec §10). An unsigned skill (no signature block) installs permissively; a tampered signed skill does not.`,
+        `Signature verification failed for skill \`${manifest.name}\`. Either the envelope signature failed verification (distribution integrity), or the manifest's \`motebit.signature\` block is present but its verification failed (authorial provenance). This is a hard reject per spec §10. An unsigned skill (manifest \`motebit.signature\` absent) installs permissively as \`unsigned\`; a tampered signed skill does not.`,
         "verification_failed",
       );
     }
@@ -216,7 +216,12 @@ export class SkillRegistry {
         envelope: stored.envelope,
         body: stored.body,
         files: stored.files,
-        provenance_status: await derivedStatusForEntry(stored.envelope, stored.index),
+        provenance_status: await derivedStatusForEntry(
+          stored.envelope,
+          stored.manifest,
+          stored.body,
+          stored.index,
+        ),
       });
     }
     return records;
@@ -231,7 +236,12 @@ export class SkillRegistry {
       envelope: stored.envelope,
       body: stored.body,
       files: stored.files,
-      provenance_status: await derivedStatusForEntry(stored.envelope, stored.index),
+      provenance_status: await derivedStatusForEntry(
+        stored.envelope,
+        stored.manifest,
+        stored.body,
+        stored.index,
+      ),
     };
   }
 
@@ -287,11 +297,15 @@ export class SkillRegistry {
     });
   }
 
-  /** Re-verify the envelope signature against its embedded public key. */
+  /**
+   * Re-verify both signatures (envelope + manifest) and cross-reference
+   * the trust flag, returning the canonical four-state provenance status
+   * per spec §7.1. `"not_installed"` is the no-such-skill discriminator.
+   */
   async verify(name: string): Promise<SkillProvenanceStatus | "not_installed"> {
     const stored = await this.adapter.read(name);
     if (!stored) return "not_installed";
-    return derivedStatusForEntry(stored.envelope, stored.index);
+    return derivedStatusForEntry(stored.envelope, stored.manifest, stored.body, stored.index);
   }
 }
 
@@ -300,44 +314,87 @@ export class SkillRegistry {
 // ---------------------------------------------------------------------------
 
 /**
- * Derive the provenance status of a freshly-installed envelope. The
- * envelope's signature MUST verify against the embedded `public_key`; a
- * tampered envelope claiming a real signer is rejected here. An envelope
- * with no `signature` block is structurally invalid (the SkillSignature
- * type requires it) — that case never reaches this function.
+ * Derive the provenance status of a freshly-installed skill. Two signatures
+ * cooperate per `spec/skills-v1.md` §7.1; the registry checks both.
+ *
+ * **Envelope signature** — distribution integrity. Always required (the
+ * envelope schema mandates `signature`). MUST verify against its embedded
+ * public key; a tampered envelope claiming a real signer is rejected
+ * here, which the install pipeline turns into a hard `verification_failed`
+ * reject. The envelope answers "did the relay get the bytes the publisher
+ * sent?" — it does NOT establish authorial provenance, only chain-of-
+ * custody integrity.
+ *
+ * **Manifest signature** — authorial provenance. Optional per
+ * `manifest.motebit.signature`. The four-way state surfaced to the
+ * selector and to UIs:
+ *   - `"verified"` — manifest sig present AND verifies. Auto-loadable.
+ *   - `"unsigned"` — manifest sig absent. NEVER auto-loaded by the
+ *     selector; an operator MAY promote via `registry.trust(name)`,
+ *     which flips `index.trusted` and `derivedStatusForEntry` reports
+ *     `"trusted_unsigned"` thereafter.
+ *   - `"unverified"` — manifest sig present but verify failed. Hard-
+ *     reject at install (the install pipeline throws); never reaches
+ *     stored state, but the union arm is preserved for retroactive
+ *     queries against potentially-corrupted historical entries.
+ *
+ * Pre-fix this function checked only the envelope signature, so every
+ * successful install collapsed to `"verified"` regardless of authorial
+ * provenance — the `"unsigned"` and `"trusted_unsigned"` arms were dead
+ * code. Closing that gap is load-bearing for federation (peer-to-peer
+ * skill exchange must distinguish "this came from a trusted relay" from
+ * "the named author signed this"); for the marketplace (third-party
+ * authors with their own reputation); and for the consent gate's audit
+ * trail (recording approval against a misleading "verified" signal
+ * would be operator-transparency-violating).
  */
-async function deriveProvenance(envelope: SkillEnvelope): Promise<SkillProvenanceStatus> {
-  // The envelope schema requires `signature`. If we got here, signature is
-  // structurally present. Verify against its embedded public key.
-  const publicKey = decodeSkillSignaturePublicKey(envelope.signature);
-  const ok = await verifySkillEnvelope(envelope, publicKey);
-  if (ok) return "verified";
-
-  // Signature block present but verify failed. Caller treats this as
-  // hard-reject at install time. We return `unverified` so the install
-  // pipeline can throw with the right reason.
-  const detail = await verifySkillEnvelopeDetailed(envelope, publicKey);
-  if (detail.reason === "wrong_suite" || detail.reason === "ed25519_mismatch") {
+async function deriveProvenance(
+  envelope: SkillEnvelope,
+  manifest: SkillManifest,
+  body: Uint8Array,
+): Promise<SkillProvenanceStatus> {
+  // Envelope sig must verify (distribution integrity precondition).
+  // Caller wraps any failure as `verification_failed` install error.
+  const envelopeKey = decodeSkillSignaturePublicKey(envelope.signature);
+  if (!(await verifySkillEnvelope(envelope, envelopeKey))) {
     return "unverified";
   }
-  return "unverified";
+  // Manifest sig determines authorial provenance.
+  const manifestSig = manifest.motebit.signature;
+  if (manifestSig === undefined) return "unsigned";
+  const manifestKey = decodeSkillSignaturePublicKey(manifestSig);
+  return (await verifySkillManifest(manifest, body, manifestKey)) ? "verified" : "unverified";
 }
 
 /**
  * Status surfaced for a stored skill. Cross-references the registry's
- * `trusted` flag (operator promotion) with re-verification of the envelope.
+ * `index.trusted` flag (operator-attested promotion via `registry.trust()`)
+ * with the envelope+manifest verify pair.
+ *
+ * The four reachable terminal states (now that `deriveProvenance` honors
+ * both signatures):
+ *   - `"verified"` — manifest sig present + verifies. Auto-loadable.
+ *   - `"unverified"` — manifest sig present + fails. Should not appear
+ *     for installed skills (install rejects), but possible for
+ *     historical entries if the manifest mutated post-install.
+ *   - `"unsigned"` — manifest sig absent, operator hasn't promoted.
+ *     Selector blocks auto-load; trust button shown in panel UIs.
+ *   - `"trusted_unsigned"` — manifest sig absent BUT operator manually
+ *     attested via `registry.trust()`. Auto-loadable; surfaces always
+ *     display the `[unverified]` qualifier per spec §7.1 (trust grants
+ *     are audit events, not cryptographic provenance).
  */
 async function derivedStatusForEntry(
   envelope: SkillEnvelope,
+  manifest: SkillManifest,
+  body: Uint8Array,
   index: InstalledSkillIndexEntry,
 ): Promise<SkillProvenanceStatus> {
-  const baseline = await deriveProvenance(envelope);
+  const baseline = await deriveProvenance(envelope, manifest, body);
   if (baseline === "verified") return "verified";
   if (baseline === "unverified") return "unverified";
-  // baseline shouldn't be "unsigned" or "trusted_unsigned" here; deriveProvenance
-  // never returns those. Defensive default.
-  if (index.trusted) return "trusted_unsigned";
-  return "unsigned";
+  // baseline === "unsigned" — operator may have promoted via trust()
+  return index.trusted ? "trusted_unsigned" : "unsigned";
 }
 
 // ---------------------------------------------------------------------------
