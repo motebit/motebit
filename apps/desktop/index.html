@@ -5188,6 +5188,105 @@
         border: 1px solid rgba(240, 180, 41, 0.25);
         border-radius: 6px;
       }
+
+      /* Sensitive-tier install consent modal — dev-mode only.
+         Mirrors apps/web/index.html's modal styling for visual
+         continuity across the two surfaces that share the
+         RegistryBackedSkillsPanelAdapter and the consent prompt
+         (packages/skills/CLAUDE.md rule 5). */
+      #skills-consent-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.55);
+        z-index: 100;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.15s;
+      }
+      #skills-consent-backdrop.open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      #skills-consent-modal {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: min(420px, calc(100vw - 32px));
+        background: var(--bg-glass-strong);
+        border: 1px solid var(--border-light);
+        border-radius: 12px;
+        padding: 22px 22px 18px 22px;
+        z-index: 101;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.15s;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+      }
+      #skills-consent-modal.open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .skills-consent-title {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-muted);
+        margin-bottom: 14px;
+      }
+      .skills-consent-body {
+        font-size: 12px;
+        line-height: 1.55;
+        color: var(--text-primary);
+        margin-bottom: 18px;
+      }
+      .skills-consent-tier {
+        margin: 0 0 8px 0;
+        font-weight: 600;
+      }
+      .skills-consent-trade {
+        margin: 0 0 8px 0;
+        color: var(--text-secondary);
+      }
+      .skills-consent-desc {
+        margin: 0;
+        padding: 8px 10px;
+        border-radius: 6px;
+        background: var(--bg-card);
+        font-size: 11px;
+        color: var(--text-muted);
+      }
+      .skills-consent-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .skills-consent-cancel,
+      .skills-consent-approve {
+        padding: 6px 14px;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .skills-consent-cancel {
+        background: var(--bg-btn);
+        border: 1px solid var(--border-input);
+        color: var(--text-secondary);
+      }
+      .skills-consent-cancel:hover {
+        background: var(--bg-btn-hover);
+      }
+      .skills-consent-approve {
+        background: var(--accent);
+        border: 1px solid var(--accent);
+        color: #fff;
+      }
+      .skills-consent-approve:hover {
+        opacity: 0.9;
+      }
+
       #skills-detail-wrap {
         position: absolute;
         inset: 0;
@@ -5431,6 +5530,29 @@
         <div id="skills-detail-body"></div>
       </div>
     </div>
+
+    <!--
+      Skills consent modal — dev-mode sensitive-tier install gate per
+      packages/skills/CLAUDE.md rule 5. Dormant in production (Tauri
+      sidecar isolation makes the prompt unnecessary); fires only when
+      makeLazyAdapter resolves to RegistryBackedSkillsPanelAdapter
+      because Tauri is absent.
+    -->
+    <div id="skills-consent-backdrop"></div>
+    <div
+      id="skills-consent-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="skills-consent-title"
+    >
+      <div class="skills-consent-title" id="skills-consent-title">Install Sensitive Skill?</div>
+      <div class="skills-consent-body" id="skills-consent-body"></div>
+      <div class="skills-consent-actions">
+        <button class="skills-consent-cancel" id="skills-consent-cancel">Cancel</button>
+        <button class="skills-consent-approve" id="skills-consent-approve">Install</button>
+      </div>
+    </div>
+
     <button id="sovereign-btn" title="Credentials & Ledger" aria-label="Credentials and Ledger">
       <svg
         viewBox="0 0 24 24"

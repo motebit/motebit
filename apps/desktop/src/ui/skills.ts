@@ -1,5 +1,8 @@
 import {
   createSkillsController,
+  RegistryBackedSkillsPanelAdapter,
+  type RequestInstallConsentFn,
+  type SkillBundleShape,
   type SkillDetail,
   type SkillSummary,
   type SkillsPanelAdapter,
@@ -9,7 +12,6 @@ import { IdbSkillStorageAdapter, openMotebitDB } from "@motebit/browser-persiste
 import { SkillRegistry } from "@motebit/skills";
 
 import { TauriIpcSkillsPanelAdapter } from "../skills-ipc";
-import { InRendererSkillsPanelAdapter } from "../skills-registry-adapter";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 
@@ -273,7 +275,9 @@ export function initSkills(ctx: DesktopContext): SkillsAPI {
         ctx.showToast(`Installed ${result.name} v${result.version} (${result.provenance_status})`);
       } else {
         const err = ctrl.getState().error;
-        ctx.showToast(err !== null ? formatInstallError(err) : "Install failed");
+        const formatted = err !== null ? formatInstallError(err) : "Install failed";
+        // Empty = silent path (consent-declined modal closes silently).
+        if (formatted !== "") ctx.showToast(formatted);
       }
     } finally {
       skillsInstallBtn.disabled = false;
@@ -347,10 +351,24 @@ function makeLazyAdapter(ctx: DesktopContext): SkillsPanelAdapter {
       cached = new TauriIpcSkillsPanelAdapter(config.invoke);
       return cached;
     }
-    // Dev-mode fallback: IDB-backed registry in the renderer.
+    // Dev-mode fallback: IDB-backed registry in the renderer routed
+    // through the shared `RegistryBackedSkillsPanelAdapter` from
+    // @motebit/panels (same adapter web ships). Sensitive-tier skills
+    // route through `showConsentModal` per packages/skills/CLAUDE.md
+    // rule 5 — desktop's renderer in dev-mode collapses install +
+    // verification + fs-write into one process, same trade-off as web.
     const db = await openMotebitDB();
     const registry = new SkillRegistry(new IdbSkillStorageAdapter(db));
-    cached = new InRendererSkillsPanelAdapter(registry);
+    cached = new RegistryBackedSkillsPanelAdapter(registry, {
+      fetchBundle: async (url: string): Promise<SkillBundleShape> => {
+        const resp = await fetch(url, { headers: { Accept: "application/json" } });
+        if (!resp.ok) {
+          throw new Error(`Relay returned ${resp.status}: ${resp.statusText}`);
+        }
+        return (await resp.json()) as SkillBundleShape;
+      },
+      requestInstallConsent: showConsentModal,
+    });
     return cached;
   }
 
@@ -405,6 +423,85 @@ function renderDevModeBanner(ctx: DesktopContext): void {
   }
 }
 
+// ── Sensitive-tier install consent modal ─────────────────────────────
+//
+// Desktop's dev-mode fallback collapses install + verification into the
+// renderer (no Tauri sidecar boundary). Sensitive-tier skills
+// (medical/financial/secret) route through this consent prompt before
+// the registry's install path runs. Markup lives in apps/desktop/index.html;
+// this function shows it, attaches one-shot Approve/Cancel handlers,
+// and resolves a Promise<boolean> the adapter awaits. Decline is
+// silent (calm-software default).
+//
+// Production Tauri path (TauriIpcSkillsPanelAdapter) does NOT reach
+// here — sidecar isolation makes the prompt unnecessary on that path.
+
+function escapeHtml(s: string): string {
+  const div = document.createElement("div");
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+const showConsentModal: RequestInstallConsentFn = (request) =>
+  new Promise<boolean>((resolve) => {
+    const modal = document.getElementById("skills-consent-modal") as HTMLDivElement | null;
+    const backdrop = document.getElementById("skills-consent-backdrop") as HTMLDivElement | null;
+    const titleEl = document.getElementById("skills-consent-title") as HTMLDivElement | null;
+    const bodyEl = document.getElementById("skills-consent-body") as HTMLDivElement | null;
+    const approveBtn = document.getElementById(
+      "skills-consent-approve",
+    ) as HTMLButtonElement | null;
+    const cancelBtn = document.getElementById("skills-consent-cancel") as HTMLButtonElement | null;
+    if (
+      modal === null ||
+      backdrop === null ||
+      titleEl === null ||
+      bodyEl === null ||
+      approveBtn === null ||
+      cancelBtn === null
+    ) {
+      // Markup missing → fail-closed for sensitive skills.
+      resolve(false);
+      return;
+    }
+    titleEl.textContent = `Install ${request.skillName} v${request.skillVersion}?`;
+    bodyEl.innerHTML = `
+      <p class="skills-consent-tier">This skill declares it works with <strong>${escapeHtml(request.sensitivity)}</strong> data.</p>
+      <p class="skills-consent-trade">Dev-mode runs install and verification in the renderer — there is no Tauri sidecar isolation. The selector still blocks auto-load of <strong>${escapeHtml(request.sensitivity)}</strong>-tier skills against external AI providers; bytes will live in browser-private storage on this device.</p>
+      <p class="skills-consent-desc">${escapeHtml(request.description)}</p>
+    `;
+    modal.classList.add("open");
+    backdrop.classList.add("open");
+
+    const cleanup = (): void => {
+      modal.classList.remove("open");
+      backdrop.classList.remove("open");
+      approveBtn.removeEventListener("click", onApprove);
+      cancelBtn.removeEventListener("click", onCancel);
+      backdrop.removeEventListener("click", onCancel);
+      document.removeEventListener("keydown", onKeydown);
+    };
+    const onApprove = (): void => {
+      cleanup();
+      resolve(true);
+    };
+    const onCancel = (): void => {
+      cleanup();
+      resolve(false);
+    };
+    const onKeydown = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onCancel();
+      }
+    };
+    approveBtn.addEventListener("click", onApprove);
+    cancelBtn.addEventListener("click", onCancel);
+    backdrop.addEventListener("click", onCancel);
+    document.addEventListener("keydown", onKeydown);
+    cancelBtn.focus();
+  });
+
 function provenanceHover(status: string): string {
   switch (status) {
     case "verified":
@@ -452,6 +549,9 @@ function formatInstallError(error: string): string {
       return "SKILL.md and skill-envelope.json disagree";
     case "malformed_source":
       return `Could not read skill — ${message}`;
+    case "consent_declined":
+      // Silent path — modal close is the user-visible feedback.
+      return "";
     default:
       return message !== "" ? message : error;
   }
