@@ -15,6 +15,10 @@ export interface IdentityTabProps {
   publicKey: string;
   /** Sovereign wallet Solana address (from runtime.getSolanaAddress()). Null when no rail. */
   solanaAddress?: string | null;
+  /** Sync state — drives the SYNC badge. Mirrors desktop's
+   *  identity-sync-status. Caller passes mobileApp.syncStatus; React-side
+   *  re-renders happen when the parent re-renders with a new value. */
+  syncStatus?: "idle" | "syncing" | "error" | "offline";
   /** Reveal the 64-char hex private seed from secure-store. The caller wires
    *  this to MobileApp.revealRecoverySeed; the UI handles confirm + copy +
    *  auto-hide. */
@@ -32,6 +36,7 @@ export function IdentityTab({
   deviceId,
   publicKey,
   solanaAddress,
+  syncStatus,
   onRevealRecoverySeed,
   onExport,
   onExportIdentity,
@@ -186,6 +191,19 @@ export function IdentityTab({
         </Text>
       </TouchableOpacity>
 
+      <Text style={styles.sectionTitle}>Sync</Text>
+      <View style={styles.identityFieldRow}>
+        <Text style={styles.identityFieldValue}>
+          {syncStatus === "idle"
+            ? "Connected"
+            : syncStatus === "syncing"
+              ? "Syncing…"
+              : syncStatus === "error"
+                ? "Error"
+                : "Not connected"}
+        </Text>
+      </View>
+
       {solanaAddress ? (
         <>
           <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Sovereign Wallet</Text>
@@ -213,8 +231,9 @@ export function IdentityTab({
               paddingBottom: 8,
             }}
           >
-            Your Ed25519 public key is your Solana address. Live balance and auto-sweep readout live
-            in the Sovereign panel.
+            The address <Text style={{ fontStyle: "italic" }}>is</Text> your Ed25519 public key,
+            base58-encoded — one key, two uses, by mathematical coincidence. No relay, no custody,
+            no intermediary. See the Sovereign panel for live balance and funding.
           </Text>
         </>
       ) : null}
@@ -271,9 +290,9 @@ export function IdentityTab({
             }}
           >
             Anyone with this string can sign as your motebit forever and spend any SOL at your
-            sovereign address. Save it in 1Password (or similar). Never paste in chat, email, or
-            screenshots. Lose it without a paired device or guardian — the identity is gone, no
-            recovery path. Auto-hides after 60 seconds.
+            sovereign address. Save it in a password manager (1Password, Bitwarden, paper backup)
+            and never paste it in chat, email, or screenshots. Lose it without a paired device or
+            guardian — the identity is gone, no recovery path. Auto-hides after 60 seconds.
           </Text>
         </>
       ) : null}

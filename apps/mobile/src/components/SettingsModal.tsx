@@ -362,6 +362,7 @@ export function SettingsModal({
               deviceId={identity.deviceId}
               publicKey={identity.publicKey}
               solanaAddress={solanaAddress}
+              syncStatus={app.syncStatus}
               onRevealRecoverySeed={() => app.revealRecoverySeed()}
               onExport={() => {
                 void (async () => {
