@@ -55,6 +55,13 @@ function makeFakeRegistry(seed: SkillSensitivity = "none"): FakeRegistry {
     list: () => Promise.resolve([]),
     get: () => Promise.resolve(null),
     install(source, opts) {
+      // The adapter only ever calls install with `kind: "in_memory"` —
+      // the directory/git/url paths in `SkillInstallSource` are upstream
+      // resolution kinds the registry's fs-adapter handles, not the
+      // shape that crosses the registry's install boundary. Narrow.
+      if (source.kind !== "in_memory") {
+        return Promise.reject(new Error(`unexpected install kind in test: ${source.kind}`));
+      }
       installCalls.push({ name: source.manifest.name, sourceLabel: opts?.source_label });
       return Promise.resolve({
         name: source.manifest.name,
@@ -87,8 +94,15 @@ function makeFakeRegistry(seed: SkillSensitivity = "none"): FakeRegistry {
 }
 
 function makeBundle(sensitivity: SkillSensitivity, name = "fixture-skill"): SkillBundleShape {
+  // Adapter never inspects the envelope's signature or spec_version —
+  // they're forwarded verbatim into registry.install and the registry
+  // verifies them via @motebit/crypto. The test casts past the
+  // strict envelope shape because the fixture's only purpose is to
+  // exercise the consent-gate dispatch on `manifest.motebit.sensitivity`.
   return {
+    submitter_motebit_id: "did:key:zTestSubmitter",
     envelope: {
+      spec_version: "1.0",
       skill: { name, version: "1.0.0", content_hash: "0".repeat(64) },
       manifest: {
         name,
@@ -96,12 +110,21 @@ function makeBundle(sensitivity: SkillSensitivity, name = "fixture-skill"): Skil
         description: `Fixture skill (${sensitivity})`,
         platforms: ["macos", "linux"],
         metadata: { category: "test" },
-        motebit: { sensitivity },
+        motebit: { spec_version: "1.0", sensitivity },
+      },
+      body_hash: "0".repeat(64),
+      files: [],
+      signature: {
+        suite: "motebit-jcs-ed25519-b64-v1",
+        public_key: "0".repeat(64),
+        value: "fixture",
       },
     },
     body: btoa("# fixture body\n"),
     files: {},
-  };
+    submitted_at: 1_700_000_000_000,
+    featured: false,
+  } as SkillBundleShape;
 }
 
 // ---------------------------------------------------------------------------

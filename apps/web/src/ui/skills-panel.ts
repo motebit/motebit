@@ -25,13 +25,14 @@
 import {
   createSkillsController,
   filterSkillsView,
+  RegistryBackedSkillsPanelAdapter,
+  type RequestInstallConsentFn,
+  type SkillBundleShape,
   type SkillSummary,
   type SkillsController,
 } from "@motebit/panels";
 import type { SkillRegistryBundle, SkillRegistryEntry, SkillRegistryListing } from "@motebit/sdk";
 import { verifySkillBundle, type SkillVerifyResult } from "@motebit/encryption";
-
-import { RegistryBackedSkillsPanelAdapter } from "../skills-adapter";
 import type { WebContext } from "../types";
 import { DEFAULT_RELAY_URL, loadSyncUrl } from "../storage";
 
@@ -139,13 +140,14 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
     const registry = ctx.app.getSkillRegistry();
     if (registry === null) return null;
     const adapter = new RegistryBackedSkillsPanelAdapter(registry, {
-      fetchBundle: async (url: string) => {
+      fetchBundle: async (url: string): Promise<SkillBundleShape> => {
         const resp = await fetch(url, { headers: { Accept: "application/json" } });
         if (!resp.ok) {
           throw new Error(`Relay returned ${resp.status}: ${resp.statusText}`);
         }
         return (await resp.json()) as SkillRegistryBundle;
       },
+      requestInstallConsent: showConsentModal,
     });
     controller = createSkillsController(adapter);
     unsubscribe = controller.subscribe(() => {
@@ -426,7 +428,10 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
         ctx.showToast(`Installed ${result.name} v${result.version}`);
       } else {
         const err = ctrl.getState().error;
-        ctx.showToast(err !== null ? formatInstallError(err) : "Install failed");
+        const formatted = err !== null ? formatInstallError(err) : "Install failed";
+        // Empty string = silent path (e.g. user-declined consent — modal
+        // already closed, no toast needed per calm-software UI rule).
+        if (formatted !== "") ctx.showToast(formatted);
       }
     } finally {
       btn.disabled = false;
@@ -593,10 +598,91 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
         return "Skill exceeds size limit";
       case "manifest_envelope_mismatch":
         return "SKILL.md and skill-envelope.json disagree";
+      case "consent_declined":
+        // Silent path — the modal closed, the user saw the close.
+        // Returning an empty string suppresses the toast in the install
+        // handler. See SkillConsentDeclined in @motebit/panels.
+        return "";
       default:
         return message !== "" ? message : error;
     }
   }
+
+  // -------------------------------------------------------------------------
+  // Consent modal — sensitive-tier install (medical / financial / secret).
+  // The HTML markup lives in apps/web/index.html; this function shows
+  // the modal, attaches one-shot Approve/Cancel handlers, and resolves
+  // a Promise<boolean> the adapter awaits before calling registry.install.
+  // Returns false on backdrop click, ESC, or Cancel (calm-software default
+  // — when in doubt, abort, not install).
+  // -------------------------------------------------------------------------
+
+  const consentModal = document.getElementById("skills-consent-modal") as HTMLDivElement | null;
+  const consentBackdrop = document.getElementById(
+    "skills-consent-backdrop",
+  ) as HTMLDivElement | null;
+  const consentTitle = document.getElementById("skills-consent-title") as HTMLDivElement | null;
+  const consentBody = document.getElementById("skills-consent-body") as HTMLDivElement | null;
+  const consentApprove = document.getElementById(
+    "skills-consent-approve",
+  ) as HTMLButtonElement | null;
+  const consentCancel = document.getElementById(
+    "skills-consent-cancel",
+  ) as HTMLButtonElement | null;
+
+  const showConsentModal: RequestInstallConsentFn = (request) =>
+    new Promise<boolean>((resolve) => {
+      if (
+        consentModal === null ||
+        consentBackdrop === null ||
+        consentTitle === null ||
+        consentBody === null ||
+        consentApprove === null ||
+        consentCancel === null
+      ) {
+        // Markup missing — treat as decline (fail-closed for sensitive skills).
+        resolve(false);
+        return;
+      }
+      consentTitle.textContent = `Install ${request.skillName} v${request.skillVersion}?`;
+      consentBody.innerHTML = `
+        <p class="skills-consent-tier">This skill declares it works with <strong>${escapeHtml(request.sensitivity)}</strong> data.</p>
+        <p class="skills-consent-trade">On this surface, install and verification run in the same context as the panel UI — the browser sandbox is the only privilege boundary. The selector still blocks auto-load of <strong>${escapeHtml(request.sensitivity)}</strong>-tier skills against external AI providers, but the skill bytes will live in browser-private storage on this device.</p>
+        <p class="skills-consent-desc">${escapeHtml(request.description)}</p>
+      `;
+      consentModal.classList.add("open");
+      consentBackdrop.classList.add("open");
+
+      const cleanup = (): void => {
+        consentModal.classList.remove("open");
+        consentBackdrop.classList.remove("open");
+        consentApprove.removeEventListener("click", onApprove);
+        consentCancel.removeEventListener("click", onCancel);
+        consentBackdrop.removeEventListener("click", onCancel);
+        document.removeEventListener("keydown", onKeydown);
+      };
+      const onApprove = (): void => {
+        cleanup();
+        resolve(true);
+      };
+      const onCancel = (): void => {
+        cleanup();
+        resolve(false);
+      };
+      const onKeydown = (e: KeyboardEvent): void => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          onCancel();
+        }
+      };
+      consentApprove.addEventListener("click", onApprove);
+      consentCancel.addEventListener("click", onCancel);
+      consentBackdrop.addEventListener("click", onCancel);
+      document.addEventListener("keydown", onKeydown);
+      // Focus the cancel button by default — calm-software bias toward
+      // the safe action; user must take a positive step to install.
+      consentCancel.focus();
+    });
 
   // -------------------------------------------------------------------------
   // Listeners

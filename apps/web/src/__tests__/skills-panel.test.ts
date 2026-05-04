@@ -51,9 +51,19 @@ const PANEL_DOM = `
       <div id="skills-detail-body"></div>
     </div>
   </div>
+  <div id="skills-consent-backdrop"></div>
+  <div id="skills-consent-modal" role="dialog">
+    <div id="skills-consent-title"></div>
+    <div id="skills-consent-body"></div>
+    <button id="skills-consent-cancel">Cancel</button>
+    <button id="skills-consent-approve">Install</button>
+  </div>
 `;
 
-async function buildBundle(name = "panel-test-skill"): Promise<{
+async function buildBundle(
+  name = "panel-test-skill",
+  sensitivity: SkillManifest["motebit"]["sensitivity"] = "none",
+): Promise<{
   manifest: SkillManifest;
   envelope: SkillEnvelope;
   body: Uint8Array;
@@ -69,7 +79,7 @@ async function buildBundle(name = "panel-test-skill"): Promise<{
     metadata: { category: "test", tags: ["integration"] },
     motebit: {
       spec_version: "1.0",
-      sensitivity: "none",
+      sensitivity,
       hardware_attestation: { required: false, minimum_score: 0 },
     },
   };
@@ -233,4 +243,282 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
   // envelope-level signature; the panel-level wiring is already
   // covered structurally (the button render condition + click handler
   // are exercised whenever the renderer iterates installed rows).
+
+  // -------------------------------------------------------------------------
+  // Consent gate — sensitive-tier install on weak-isolation surface (web).
+  // The adapter calls `requestInstallConsent` after the bundle fetch but
+  // before `registry.install`; the panel's HTML modal collects the user's
+  // decision. Decline is the calm-software default (backdrop click, ESC,
+  // Cancel) — no toast, no install. Approve proceeds to install verbatim.
+  // -------------------------------------------------------------------------
+
+  it("medical-tier install opens consent modal and proceeds on approve", async () => {
+    const { envelope, body } = await buildBundle("consent-medical-skill", "medical");
+    const dbName = `panel-consent-${crypto.randomUUID()}`;
+    const db = await openMotebitDB(dbName);
+    const registry = new SkillRegistry(new IdbSkillStorageAdapter(db));
+
+    const submitter = "did:key:zTestSubmitter";
+    const submittedAt = Date.now();
+    const listing: SkillRegistryListing = {
+      entries: [
+        {
+          submitter_motebit_id: submitter,
+          name: envelope.skill.name,
+          version: envelope.skill.version,
+          content_hash: envelope.skill.content_hash,
+          description: envelope.manifest.description,
+          sensitivity: "medical",
+          platforms: envelope.manifest.platforms ?? ["macos"],
+          signature_public_key: envelope.signature.public_key,
+          submitted_at: submittedAt,
+          featured: true,
+        },
+      ],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    };
+    const bundle: SkillRegistryBundle = {
+      submitter_motebit_id: submitter,
+      envelope,
+      body: bytesToBase64(body),
+      files: {},
+      submitted_at: submittedAt,
+      featured: true,
+    };
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/api/v1/skills/discover")) {
+        return new Response(JSON.stringify(listing), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes(`/api/v1/skills/${encodeURIComponent(submitter)}/`)) {
+        return new Response(JSON.stringify(bundle), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const ctx: WebContext = {
+      app: { getSkillRegistry: () => registry } as unknown as WebApp,
+      getConfig: () => null,
+      setConfig: () => undefined,
+      addMessage: () => undefined,
+      showToast: () => undefined,
+      bootstrapProxy: () => Promise.resolve(false),
+    };
+    const api = initSkillsPanel(ctx);
+    api.open();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const list = document.getElementById("skills-list") as HTMLDivElement;
+    const installBtn = list.querySelector<HTMLButtonElement>(
+      '.skill-row-browse button[data-action="install"]',
+    );
+    expect(installBtn).not.toBeNull();
+    installBtn!.click();
+
+    // The adapter awaits requestInstallConsent before registry.install
+    // — the modal is now open and the install is pending. Allow the
+    // microtask queue to drain so the modal mounts.
+    await new Promise((r) => setTimeout(r, 30));
+    const modal = document.getElementById("skills-consent-modal");
+    expect(modal?.classList.contains("open")).toBe(true);
+    const title = document.getElementById("skills-consent-title");
+    expect(title?.textContent).toContain("consent-medical-skill");
+    const body_ = document.getElementById("skills-consent-body");
+    expect(body_?.innerHTML).toContain("medical");
+
+    // Approve → modal closes, registry.install proceeds, IDB has the skill.
+    const approveBtn = document.getElementById("skills-consent-approve") as HTMLButtonElement;
+    approveBtn.click();
+    await new Promise((r) => setTimeout(r, 80));
+
+    expect(modal?.classList.contains("open")).toBe(false);
+    const installed = await registry.list();
+    expect(installed.length).toBe(1);
+    expect(installed[0]!.manifest.motebit.sensitivity).toBe("medical");
+  });
+
+  it("medical-tier install cancels silently on decline", async () => {
+    const { envelope, body } = await buildBundle("consent-decline-skill", "financial");
+    const dbName = `panel-decline-${crypto.randomUUID()}`;
+    const db = await openMotebitDB(dbName);
+    const registry = new SkillRegistry(new IdbSkillStorageAdapter(db));
+
+    const submitter = "did:key:zTestSubmitter";
+    const submittedAt = Date.now();
+    const listing: SkillRegistryListing = {
+      entries: [
+        {
+          submitter_motebit_id: submitter,
+          name: envelope.skill.name,
+          version: envelope.skill.version,
+          content_hash: envelope.skill.content_hash,
+          description: envelope.manifest.description,
+          sensitivity: "financial",
+          platforms: envelope.manifest.platforms ?? ["macos"],
+          signature_public_key: envelope.signature.public_key,
+          submitted_at: submittedAt,
+          featured: true,
+        },
+      ],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    };
+    const bundle: SkillRegistryBundle = {
+      submitter_motebit_id: submitter,
+      envelope,
+      body: bytesToBase64(body),
+      files: {},
+      submitted_at: submittedAt,
+      featured: true,
+    };
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/api/v1/skills/discover")) {
+        return new Response(JSON.stringify(listing), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes(`/api/v1/skills/${encodeURIComponent(submitter)}/`)) {
+        return new Response(JSON.stringify(bundle), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const showToast = vi.fn();
+    const ctx: WebContext = {
+      app: { getSkillRegistry: () => registry } as unknown as WebApp,
+      getConfig: () => null,
+      setConfig: () => undefined,
+      addMessage: () => undefined,
+      showToast,
+      bootstrapProxy: () => Promise.resolve(false),
+    };
+    const api = initSkillsPanel(ctx);
+    api.open();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const list = document.getElementById("skills-list") as HTMLDivElement;
+    const installBtn = list.querySelector<HTMLButtonElement>(
+      '.skill-row-browse button[data-action="install"]',
+    );
+    installBtn!.click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const modal = document.getElementById("skills-consent-modal");
+    expect(modal?.classList.contains("open")).toBe(true);
+
+    const cancelBtn = document.getElementById("skills-consent-cancel") as HTMLButtonElement;
+    cancelBtn.click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(modal?.classList.contains("open")).toBe(false);
+    // Decline is silent — no toast (calm-software rule, modal close is the feedback).
+    const toastForDecline = showToast.mock.calls.find((call: unknown[]) => {
+      const first = call[0];
+      return typeof first === "string" && first.toLowerCase().includes("declin");
+    });
+    expect(toastForDecline).toBeUndefined();
+    // No install happened.
+    const installed = await registry.list();
+    expect(installed.length).toBe(0);
+  });
+
+  it("personal-tier install skips consent prompt entirely", async () => {
+    // Sensitivity below the consent threshold flows straight into install
+    // — important counter-test so the gate doesn't false-trigger on
+    // every install and slow the happy path.
+    const { envelope, body } = await buildBundle("consent-skip-skill", "personal");
+    const dbName = `panel-skip-${crypto.randomUUID()}`;
+    const db = await openMotebitDB(dbName);
+    const registry = new SkillRegistry(new IdbSkillStorageAdapter(db));
+
+    const submitter = "did:key:zTestSubmitter";
+    const submittedAt = Date.now();
+    const listing: SkillRegistryListing = {
+      entries: [
+        {
+          submitter_motebit_id: submitter,
+          name: envelope.skill.name,
+          version: envelope.skill.version,
+          content_hash: envelope.skill.content_hash,
+          description: envelope.manifest.description,
+          sensitivity: "personal",
+          platforms: envelope.manifest.platforms ?? ["macos"],
+          signature_public_key: envelope.signature.public_key,
+          submitted_at: submittedAt,
+          featured: true,
+        },
+      ],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    };
+    const bundle: SkillRegistryBundle = {
+      submitter_motebit_id: submitter,
+      envelope,
+      body: bytesToBase64(body),
+      files: {},
+      submitted_at: submittedAt,
+      featured: true,
+    };
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/api/v1/skills/discover")) {
+        return new Response(JSON.stringify(listing), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes(`/api/v1/skills/${encodeURIComponent(submitter)}/`)) {
+        return new Response(JSON.stringify(bundle), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const ctx: WebContext = {
+      app: { getSkillRegistry: () => registry } as unknown as WebApp,
+      getConfig: () => null,
+      setConfig: () => undefined,
+      addMessage: () => undefined,
+      showToast: () => undefined,
+      bootstrapProxy: () => Promise.resolve(false),
+    };
+    const api = initSkillsPanel(ctx);
+    api.open();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const list = document.getElementById("skills-list") as HTMLDivElement;
+    const installBtn = list.querySelector<HTMLButtonElement>(
+      '.skill-row-browse button[data-action="install"]',
+    );
+    installBtn!.click();
+    await new Promise((r) => setTimeout(r, 80));
+
+    // Modal must NOT have opened.
+    const modal = document.getElementById("skills-consent-modal");
+    expect(modal?.classList.contains("open")).toBe(false);
+    // Install proceeded.
+    const installed = await registry.list();
+    expect(installed.length).toBe(1);
+    expect(installed[0]!.manifest.motebit.sensitivity).toBe("personal");
+  });
 });
