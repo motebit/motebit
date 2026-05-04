@@ -88,6 +88,7 @@ interface SettingsModalProps {
   onClose: () => void;
   onRequestPin: (mode: "setup" | "verify" | "reset") => void;
   onLinkDevice?: () => void;
+  onClaimDevice?: () => void;
   customHue?: number;
   customSaturation?: number;
   onCustomColorChange?: (hue: number, saturation: number) => void;
@@ -105,6 +106,7 @@ export function SettingsModal({
   onClose,
   onRequestPin,
   onLinkDevice,
+  onClaimDevice,
   onCustomColorChange,
 }: SettingsModalProps): React.ReactElement {
   const styles = useSettingsStyles();
@@ -407,6 +409,7 @@ export function SettingsModal({
                 })();
               }}
               onLinkDevice={onLinkDevice}
+              onClaimDevice={onClaimDevice}
               onRotateKey={() => {
                 Alert.alert(
                   "Rotate Key",

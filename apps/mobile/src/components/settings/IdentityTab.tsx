@@ -26,6 +26,7 @@ export interface IdentityTabProps {
   onExport: () => void;
   onExportIdentity?: () => void;
   onLinkDevice?: () => void;
+  onClaimDevice?: () => void;
   onRotateKey?: () => void;
 }
 
@@ -41,6 +42,7 @@ export function IdentityTab({
   onExport,
   onExportIdentity,
   onLinkDevice,
+  onClaimDevice,
   onRotateKey,
 }: IdentityTabProps): React.ReactElement {
   const styles = useSettingsStyles();
@@ -310,6 +312,16 @@ export function IdentityTab({
           activeOpacity={0.7}
         >
           <Text style={styles.linkDeviceText}>Link Another Device</Text>
+        </TouchableOpacity>
+      )}
+
+      {onClaimDevice && (
+        <TouchableOpacity
+          style={styles.linkDeviceButton}
+          onPress={onClaimDevice}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.linkDeviceText}>Claim Device</Text>
         </TouchableOpacity>
       )}
 

@@ -797,6 +797,7 @@ export default function App(): React.ReactElement {
     setPairingCodeInput,
     setPairingSyncUrlInput,
     handleInitiatePairing,
+    handleClaimPairing,
     handleInitiateConnect,
     handlePairingClaimSubmit,
     handlePairingApprove,
@@ -1120,6 +1121,7 @@ export default function App(): React.ReactElement {
             customSaturation={settings.appearance.customSaturation ?? 0.7}
             onRequestPin={(mode) => void handleRequestPin(mode)}
             onLinkDevice={() => void handleInitiatePairing()}
+            onClaimDevice={() => void handleClaimPairing()}
           />
         )}
 

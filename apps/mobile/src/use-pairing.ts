@@ -82,6 +82,7 @@ export interface UsePairingResult {
 
   // Handlers
   handleInitiatePairing: () => void;
+  handleClaimPairing: () => void;
   handleInitiateConnect: () => Promise<void>;
   handlePairingClaimSubmit: () => Promise<void>;
   handlePairingApprove: () => Promise<void>;
@@ -136,6 +137,18 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
   // Device A: initiate from settings — show pairing modal with sync URL input
   const handleInitiatePairing = useCallback(() => {
     setPairingMode("initiate");
+    setPairingSyncUrlInput(defaultSyncUrlRef.current);
+    setPairingStatusText("");
+    setShowSettings(false);
+    setShowPairing(true);
+  }, [setShowSettings]);
+
+  // Device B: claim from settings — show pairing modal in claim mode so the
+  // user can paste the pairing code from the source device. Mirrors
+  // handleInitiatePairing in shape; the only differences are pairingMode +
+  // not pre-filling the sync URL (claim path reads it from the typed code).
+  const handleClaimPairing = useCallback(() => {
+    setPairingMode("claim");
     setPairingSyncUrlInput(defaultSyncUrlRef.current);
     setPairingStatusText("");
     setShowSettings(false);
@@ -302,6 +315,7 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
     setPairingCodeInput,
     setPairingSyncUrlInput,
     handleInitiatePairing,
+    handleClaimPairing,
     handleInitiateConnect,
     handlePairingClaimSubmit,
     handlePairingApprove,
