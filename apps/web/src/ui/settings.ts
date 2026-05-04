@@ -111,16 +111,17 @@ const connectPrompt = document.getElementById("connect-prompt") as HTMLDivElemen
 const modelIndicator = document.getElementById("model-indicator") as HTMLDivElement;
 
 // Identity fields
-const identityMotebitId = document.getElementById("identity-motebit-id") as HTMLDivElement;
-const identityDeviceId = document.getElementById("identity-device-id") as HTMLDivElement;
-const identityDid = document.getElementById("identity-did") as HTMLDivElement;
-const identityPublicKey = document.getElementById("identity-public-key") as HTMLDivElement;
+const identityMotebitId = document.getElementById("identity-motebit-id") as HTMLElement;
+const identityDeviceId = document.getElementById("identity-device-id") as HTMLElement;
+const identityDid = document.getElementById("identity-did") as HTMLElement;
+const identityPublicKey = document.getElementById("identity-public-key") as HTMLElement;
+const identitySyncStatus = document.getElementById("identity-sync-status");
 
 // Sovereign wallet address lives in Settings as part of identity (the address
 // *is* the Ed25519 public key, base58-encoded). Balance and funding live in
 // the Sovereign panel, where economic state belongs — doctrine split:
 // Settings = who you are; Sovereign panel = what you have, what's flowing.
-const walletSolanaAddress = document.getElementById("wallet-solana-address") as HTMLDivElement;
+const walletSolanaAddress = document.getElementById("wallet-solana-address") as HTMLElement;
 
 // Recovery seed reveal — sensitive action, gated behind explicit click +
 // auto-hide. The keystore is already encrypted at rest; this is the
@@ -589,8 +590,12 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   }
 
   function setupIdentityCopyHandlers(): void {
-    // Wallet address is click-to-copy like the identity fields, because the
-    // most common user action is "give this address to someone to fund me."
+    // Two parallel patterns:
+    //   1. Click anywhere on the identity-value span itself — legacy
+    //      click-to-copy (kept for backward muscle memory).
+    //   2. Explicit `.copy-btn[data-copy]` buttons next to each row —
+    //      mirrors desktop's pattern and is the more discoverable
+    //      affordance for new users.
     const clickable = [
       identityMotebitId,
       identityDeviceId,
@@ -608,9 +613,50 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         });
       });
     }
+    // Explicit Copy buttons (data-copy attribute identifies the target id).
+    document.querySelectorAll<HTMLButtonElement>(".copy-btn[data-copy]").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation(); // don't double-trigger the field click
+        const targetId = btn.dataset.copy;
+        if (targetId == null || targetId === "") return;
+        const target = document.getElementById(targetId);
+        if (target == null) return;
+        const text = target.textContent;
+        if (text == null || text === "" || text === "—") return;
+        void navigator.clipboard.writeText(text).then(() => {
+          const prev = btn.textContent;
+          btn.textContent = "Copied";
+          setTimeout(() => {
+            btn.textContent = prev;
+          }, 1200);
+        });
+      });
+    });
   }
 
   setupIdentityCopyHandlers();
+
+  // Sync-status badge — reflects ctx.app.syncStatus. The disconnected /
+  // connecting / connected classes drive the badge color from the
+  // .sync-badge CSS in index.html. Mirrors desktop's identity-sync-status
+  // wiring; web's status is "offline" when the relay is unreachable
+  // and the local-only path is still operating.
+  function updateSyncBadge(): void {
+    if (identitySyncStatus == null) return;
+    const status = ctx.app.syncStatus;
+    const labels: Record<typeof status, string> = {
+      offline: "Not connected",
+      connecting: "Connecting…",
+      connected: "Connected",
+      syncing: "Syncing…",
+      error: "Error",
+      disconnected: "Disconnected",
+    };
+    identitySyncStatus.textContent = labels[status] ?? "Not connected";
+    identitySyncStatus.className = `sync-badge ${status === "connected" || status === "syncing" ? "connected" : "disconnected"}`;
+  }
+  updateSyncBadge();
+  ctx.app.onSyncStatusChange(updateSyncBadge);
 
   // Funding lives in the Sovereign panel — see openSovereignFundingFlow in
   // ./wallet-balance.ts. Settings shows the address (identity); Sovereign
@@ -645,6 +691,53 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       a.click();
       URL.revokeObjectURL(url);
     });
+  });
+
+  // Export motebit.md — signed identity file. Same shape as desktop's
+  // settings-export-identity wiring; web triggers a browser download
+  // instead of routing through a Tauri save-file dialog.
+  document.getElementById("settings-export-identity")?.addEventListener("click", () => {
+    void ctx.app.exportMotebitMd().then((md) => {
+      if (md == null) {
+        ctx.showToast("Cannot export — identity not initialized");
+        return;
+      }
+      const blob = new Blob([md], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "motebit.md";
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  });
+
+  // Verify motebit.md — file picker → read selected .md → call verify
+  // through @motebit/identity-file (browser-safe, zero node:* deps).
+  document.getElementById("settings-verify-identity")?.addEventListener("click", () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".md,text/markdown,text/plain";
+    input.addEventListener("change", () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      void file.text().then(async (content) => {
+        const result = await ctx.app.verifyMotebitMd(content);
+        const el = document.getElementById("verify-result");
+        if (el == null) return;
+        el.style.display = "";
+        if (result.valid) {
+          el.style.background = "var(--accent-bg, rgba(110, 130, 240, 0.12))";
+          el.style.color = "var(--accent, #6e82f0)";
+          el.textContent = `✓ Valid — ${file.name}`;
+        } else {
+          el.style.background = "var(--status-warning-bg, rgba(240, 160, 48, 0.12))";
+          el.style.color = "var(--status-warning, #f0a030)";
+          el.textContent = `✗ Invalid — ${result.error ?? "signature check failed"}`;
+        }
+      });
+    });
+    input.click();
   });
 
   document.querySelectorAll(".settings-tab").forEach((tab) => {

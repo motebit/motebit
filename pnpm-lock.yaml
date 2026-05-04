@@ -836,6 +836,9 @@ importers:
       '@motebit/gradient':
         specifier: workspace:*
         version: link:../../packages/gradient
+      '@motebit/identity-file':
+        specifier: workspace:*
+        version: link:../../packages/identity-file
       '@motebit/mcp-client':
         specifier: workspace:*
         version: link:../../packages/mcp-client

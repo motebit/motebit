@@ -703,6 +703,81 @@ export class WebApp {
     this.renderer.setDarkEnvironment();
   }
 
+  // === Identity File (motebit.md) ===
+  //
+  // Generate a signed motebit.md identity file from the in-browser
+  // keypair + persisted governance config. Mirrors desktop's
+  // IdentityManager.exportIdentityFile but reads governance from
+  // localStorage (web) instead of Tauri config (desktop). Browser-safe:
+  // @motebit/identity-file's generate() chains through @motebit/encryption
+  // (zero node:* deps).
+
+  async exportMotebitMd(): Promise<string | null> {
+    if (!this._motebitId || !this._publicKeyHex) return null;
+    const privKeyHex = await this.keyStore.loadPrivateKey();
+    if (privKeyHex == null || privKeyHex === "") return null;
+
+    const { generate: generateIdentityFile } = await import("@motebit/identity-file");
+    const govModule = await import("./storage.js");
+    const govConfig = govModule.loadGovernanceConfig();
+
+    const RISK_NAMES = ["R0_READ", "R1_DRAFT", "R2_WRITE", "R3_EXECUTE", "R4_MONEY"];
+    const PRESET_GOV: Record<string, { require: number; deny: number }> = {
+      cautious: { require: 0, deny: 3 },
+      balanced: { require: 1, deny: 3 },
+      autonomous: { require: 3, deny: 4 },
+    };
+    const presetKey = govConfig?.approvalPreset ?? "balanced";
+    const presetGov = PRESET_GOV[presetKey] ?? PRESET_GOV.balanced!;
+    const governance = {
+      trust_mode: (presetKey === "autonomous" ? "full" : "guarded") as
+        | "full"
+        | "guarded"
+        | "minimal",
+      max_risk_auto: RISK_NAMES[presetGov.require]!,
+      require_approval_above: RISK_NAMES[presetGov.require]!,
+      deny_above: RISK_NAMES[presetGov.deny]!,
+      operator_mode: this.isOperatorMode,
+    };
+    const memory = {
+      confidence_threshold: govConfig?.persistenceThreshold ?? 0.5,
+      half_life_days: 7,
+      per_turn_limit: govConfig?.maxMemoriesPerTurn ?? 5,
+    };
+    const devices = [
+      {
+        device_id: this._deviceId,
+        name: "Web",
+        public_key: this._publicKeyHex,
+        registered_at: new Date().toISOString(),
+      },
+    ];
+
+    const privKeyBytes = hexToBytes(privKeyHex);
+    try {
+      return await generateIdentityFile(
+        {
+          motebitId: this._motebitId,
+          ownerId: this._motebitId,
+          publicKeyHex: this._publicKeyHex,
+          governance,
+          memory,
+          devices,
+        },
+        privKeyBytes,
+      );
+    } finally {
+      secureErase(privKeyBytes);
+    }
+  }
+
+  async verifyMotebitMd(content: string): Promise<{ valid: boolean; error?: string }> {
+    const { verify: verifyIdentity } = await import("@motebit/identity-file");
+    const result = await verifyIdentity(content, { expectedType: "identity" });
+    const error = result.errors?.[0]?.message;
+    return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
+  }
+
   // === Operator Mode ===
   //
   // PIN-protected escalation that allows high-risk tools (write, execute,

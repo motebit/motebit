@@ -7246,84 +7246,69 @@
           aria-labelledby="tab-identity"
         >
           <div class="settings-card">
-            <div class="card-title">Cryptographic Identity</div>
-            <div class="settings-field">
-              <label>Motebit ID</label>
-              <div class="identity-value" id="identity-motebit-id" title="Click to copy">—</div>
+            <div class="card-title">Motebit Identity</div>
+            <div class="identity-field">
+              <span class="identity-label">ID</span>
+              <span class="identity-value" id="identity-motebit-id">—</span>
+              <button class="copy-btn" data-copy="identity-motebit-id">Copy</button>
             </div>
-            <div class="settings-field">
-              <label>Device ID</label>
-              <div class="identity-value" id="identity-device-id" title="Click to copy">—</div>
+            <div class="identity-field">
+              <span class="identity-label">Device</span>
+              <span class="identity-value" id="identity-device-id">—</span>
+              <button class="copy-btn" data-copy="identity-device-id">Copy</button>
             </div>
-            <div class="settings-field">
-              <label>DID</label>
-              <div class="identity-value monospace" id="identity-did" title="Click to copy">—</div>
+            <div class="identity-field">
+              <span class="identity-label">DID</span>
+              <span class="identity-value" id="identity-did">—</span>
+              <button class="copy-btn" data-copy="identity-did">Copy</button>
             </div>
-            <div class="settings-field">
-              <label>Public Key</label>
-              <div class="identity-value monospace" id="identity-public-key" title="Click to copy">
-                —
-              </div>
+            <div class="identity-field">
+              <span class="identity-label">Key</span>
+              <span class="identity-value" id="identity-public-key">—</span>
+              <button class="copy-btn" data-copy="identity-public-key">Copy</button>
+            </div>
+            <div class="identity-field">
+              <span class="identity-label">Sync</span>
+              <span class="sync-badge disconnected" id="identity-sync-status">Not connected</span>
             </div>
             <div class="identity-note">
               Ed25519 keypair stored in encrypted IndexedDB. Private key never leaves this browser.
             </div>
           </div>
-          <div class="settings-card" style="margin-top: 12px">
+          <div class="settings-card" style="margin-top: 8px">
             <div class="card-title">Recovery Seed</div>
-            <div class="settings-field">
-              <label>Private seed (64 hex chars)</label>
-              <div
-                class="identity-value monospace"
+            <div class="identity-field">
+              <span class="identity-label">Seed</span>
+              <span
+                class="identity-value"
                 id="identity-recovery-seed"
                 data-state="hidden"
-                title="Reveal recovery seed"
+                >— hidden —</span
               >
-                — hidden —
-              </div>
-              <div style="display: flex; gap: 8px; margin-top: 6px">
-                <button id="reveal-recovery-seed" type="button" class="settings-button">
-                  Reveal seed
-                </button>
-                <button
-                  id="copy-recovery-seed"
-                  type="button"
-                  class="settings-button"
-                  style="display: none"
-                >
-                  Copy
-                </button>
-                <button
-                  id="hide-recovery-seed"
-                  type="button"
-                  class="settings-button"
-                  style="display: none"
-                >
-                  Hide
-                </button>
-              </div>
+              <button class="copy-btn" id="reveal-recovery-seed" type="button">Reveal</button>
+              <button class="copy-btn" id="copy-recovery-seed" type="button" style="display: none">
+                Copy
+              </button>
+              <button class="copy-btn" id="hide-recovery-seed" type="button" style="display: none">
+                Hide
+              </button>
             </div>
             <div class="identity-note">
               <strong
                 >Anyone with this string can sign as your motebit forever, and can spend any SOL at
-                the address above.</strong
+                the address below.</strong
               >
               Save it in a password manager (1Password, Bitwarden, paper backup) and never paste it
               in chat, email, or screenshots. Lose it without a paired device or guardian — the
               identity is gone, no recovery path. Auto-hides after 60 seconds.
             </div>
           </div>
-          <div class="settings-card" style="margin-top: 12px">
+          <div class="settings-card" style="margin-top: 8px">
             <div class="card-title">Sovereign Wallet</div>
-            <div class="settings-field">
-              <label>Solana Address</label>
-              <div
-                class="identity-value monospace"
-                id="wallet-solana-address"
-                title="Click to copy"
-              >
-                —
-              </div>
+            <div class="identity-field">
+              <span class="identity-label">Address</span>
+              <span class="identity-value" id="wallet-solana-address">—</span>
+              <button class="copy-btn" data-copy="wallet-solana-address">Copy</button>
             </div>
             <div class="identity-note">
               The address <em>is</em> your Ed25519 public key, base58-encoded — one key, two uses,
@@ -7333,14 +7318,22 @@
           </div>
           <div style="display: flex; gap: 8px; margin-top: 8px">
             <button class="settings-outline-btn" id="settings-link-device" style="flex: 1">
-              Link Device
+              Link Another Device
             </button>
             <button class="settings-outline-btn" id="settings-claim-device" style="flex: 1">
               Claim Device
             </button>
           </div>
           <div style="display: flex; gap: 8px; margin-top: 8px">
-            <button class="settings-outline-btn" id="settings-rotate-key" style="flex: 1">
+            <button
+              class="settings-outline-btn"
+              id="settings-rotate-key"
+              style="
+                flex: 1;
+                color: var(--status-warning, #f0a030);
+                border-color: var(--status-warning, #f0a030);
+              "
+            >
               Rotate Key
             </button>
           </div>
@@ -7357,6 +7350,25 @@
               >Documentation</a
             >
           </div>
+          <div class="card-title" style="margin-top: 12px">Identity File</div>
+          <div style="display: flex; gap: 8px">
+            <button class="settings-outline-btn" id="settings-export-identity" style="flex: 1">
+              Export motebit.md
+            </button>
+            <button class="settings-outline-btn" id="settings-verify-identity" style="flex: 1">
+              Verify…
+            </button>
+          </div>
+          <div
+            id="verify-result"
+            style="
+              display: none;
+              margin-top: 6px;
+              font-size: 11px;
+              padding: 6px 8px;
+              border-radius: 4px;
+            "
+          ></div>
         </div>
       </div>
       <div class="settings-footer">

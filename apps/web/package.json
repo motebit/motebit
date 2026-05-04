@@ -25,6 +25,7 @@
     "@motebit/encryption": "workspace:*",
     "@motebit/event-log": "workspace:*",
     "@motebit/gradient": "workspace:*",
+    "@motebit/identity-file": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
     "@motebit/memory-graph": "workspace:*",
     "@motebit/panels": "workspace:*",
