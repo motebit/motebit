@@ -31,21 +31,12 @@ import type { WebApp } from "../web-app";
 // borrow Node's webcrypto for `crypto.subtle.digest` calls inside
 // `@motebit/crypto` (which still routes SHA-256 through subtle).
 // Override sha512 in our externally-imported noble — applies to any
-// path inside this test that touches @noble/ed25519 directly.
+// path inside this test that touches @noble/ed25519 directly. The
+// matching `crypto.subtle.digest` coercion that lets `@motebit/crypto`'s
+// bundled noble copy reach `subtle.digest` lives in setup.ts so every
+// signing-test in this package shares it.
 ed.hashes.sha512 = (msg: Uint8Array) => sha512(msg);
 ed.hashes.sha512Async = async (msg: Uint8Array) => sha512(msg);
-// `@motebit/crypto/dist` bundles its own copy of noble; that copy's
-// `sha512Async` falls through to `crypto.subtle.digest("SHA-512", buf)`,
-// which Node's WebCrypto rejects when `buf` is the underlying-buffer
-// slice of a Uint8Array view. Wrap subtle.digest so any ArrayBuffer
-// input is coerced to a fresh Uint8Array — Node accepts that.
-const origDigest = crypto.subtle.digest.bind(crypto.subtle);
-(
-  crypto.subtle as unknown as { digest: (alg: string, data: BufferSource) => Promise<ArrayBuffer> }
-).digest = function digest(algorithm, data) {
-  const view = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
-  return origDigest(algorithm, view as BufferSource);
-};
 
 const PANEL_DOM = `
   <div id="skills-backdrop"></div>
@@ -62,7 +53,7 @@ const PANEL_DOM = `
   </div>
 `;
 
-async function buildBundle(): Promise<{
+async function buildBundle(name = "panel-test-skill"): Promise<{
   manifest: SkillManifest;
   envelope: SkillEnvelope;
   body: Uint8Array;
@@ -71,7 +62,7 @@ async function buildBundle(): Promise<{
   const publicKey = await ed.getPublicKeyAsync(privateKey);
   const body = new TextEncoder().encode("# integration\n\n## When to Use\n\nIn the test.\n");
   const manifest: SkillManifest = {
-    name: "panel-test-skill",
+    name,
     description: "Integration test fixture",
     version: "1.0.0",
     platforms: ["macos", "linux"],
@@ -230,4 +221,16 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     const afterRemove = await registry.list();
     expect(afterRemove.length).toBe(0);
   });
+
+  // Trust-path coverage is intentionally absent: `SkillRegistry`'s
+  // `derivedStatusForEntry` returns `"verified"` whenever the envelope
+  // verifies, regardless of `index.trusted`. The panel's Trust button
+  // only renders for non-verified rows, so a successfully-installed
+  // skill never surfaces the button — the `"unsigned"` provenance
+  // branch is unreachable through the public install path today. A
+  // future test belongs alongside whatever change makes the manifest-
+  // level `motebit.signature` a separate provenance axis from the
+  // envelope-level signature; the panel-level wiring is already
+  // covered structurally (the button render condition + click handler
+  // are exercised whenever the renderer iterates installed rows).
 });

@@ -496,6 +496,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every entry in the relay's `RETENTION_MANIFEST_CONTENT.stores[]` projection has a matching alias in `RELAY_STORE_TABLE_ALIASES` and a CREATE TABLE in `services/relay/src/`, and every alias has a matching manifest entry plus DDL. Sibling to #67 but scoped to relay-hosted operational ledgers (relay_execution_ledgers, relay_settlements, relay_credential_anchor_batches, relay_revocation_events, relay_disputes) rather than runtime-side stores (invariant #68, added 2026-05-01 with phase 4b-3 commit 5 — `RETENTION_MANIFEST_CONTENT.stores[]` graduated from empty to enumerating five operational ledgers under `append_only_horizon` once the federation co-witness handshake landed; bidirectional gate prevents the symmetric failure modes that #67 prevents on the runtime side: a manifest declaration of an enforcement that doesn't exist, or a future operational ledger that ships a CREATE TABLE without the corresponding manifest projection — operator's transparency claim \"every retention-obligated store is declared\" silently rotting either way).",
     script: "check-relay-retention-coverage",
   },
+  {
+    name: "check-skills-cross-surface",
+    defends:
+      "every shipping surface wires a `SkillRegistry` over its platform's storage adapter — web (`apps/web/src/web-app.ts` constructs `new SkillRegistry(...)` over `IdbSkillStorageAdapter`); desktop (`apps/desktop/src/ui/skills.ts` routes through `TauriIpcSkillsPanelAdapter` in production or `InRendererSkillsPanelAdapter` in dev-mode); mobile (`apps/mobile/src/adapters/expo-sqlite.ts` defines `ExpoSqliteSkillStorageAdapter`, ships ahead of the panel UI). Skills are permission-orthogonal procedural knowledge per `spec/skills-v1.md` §1 and belong on every surface; without this gate a surface could ship the panel UI but silently fail to wire the registry, rendering an empty list forever (invariant #71, added 2026-05-04 with the cross-surface skills landing — closes the gap that motivated `feedback_no_separate_pages` for the skills domain specifically: install + lifecycle has to work everywhere or it works nowhere). Tightens for mobile once the panel UI lands; the shipping-dormant adapter is the surface's commitment in the meantime.",
+    script: "check-skills-cross-surface",
+  },
 ];
 
 interface Result {

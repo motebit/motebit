@@ -1261,6 +1261,15 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
         ),
       ),
   },
+  {
+    script: "check-skills-cross-surface",
+    proves:
+      "flags a surface (web) that drops its `SkillRegistry` construction. The gate would let a future contributor delete the registry wiring while leaving the panel UI in place — silently rendering an empty panel forever. Probe rewrites `new SkillRegistry(` to a no-op token so the regex no longer matches, confirming the gate fires on the missing wiring.",
+    perturb: () =>
+      mutateFile("apps/web/src/web-app.ts", (src) =>
+        src.replace(/new SkillRegistry\(/g, "/* probe */ Object.create(null) as SkillRegistry; (("),
+      ),
+  },
 ];
 
 /**

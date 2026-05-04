@@ -265,6 +265,9 @@ importers:
       '@motebit/behavior-engine':
         specifier: workspace:*
         version: link:../../packages/behavior-engine
+      '@motebit/browser-persistence':
+        specifier: workspace:*
+        version: link:../../packages/browser-persistence
       '@motebit/core-identity':
         specifier: workspace:*
         version: link:../../packages/core-identity

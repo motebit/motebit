@@ -74,6 +74,7 @@
     "check-sqlite-migration-runner": "npx tsx scripts/check-sqlite-migration-runner.ts",
     "check-retention-coverage": "npx tsx scripts/check-retention-coverage.ts",
     "check-relay-retention-coverage": "npx tsx scripts/check-relay-retention-coverage.ts",
+    "check-skills-cross-surface": "npx tsx scripts/check-skills-cross-surface.ts",
     "check-readme-bin-claims": "npx tsx scripts/check-readme-bin-claims.ts",
     "check-docs-cli-claims": "npx tsx scripts/check-docs-cli-claims.ts",
     "check-docs-slash-claims": "npx tsx scripts/check-docs-slash-claims.ts",

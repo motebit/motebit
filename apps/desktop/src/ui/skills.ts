@@ -5,8 +5,11 @@ import {
   type SkillsPanelAdapter,
   type SkillsPanelState,
 } from "@motebit/panels";
+import { IdbSkillStorageAdapter, openMotebitDB } from "@motebit/browser-persistence";
+import { SkillRegistry } from "@motebit/skills";
 
 import { TauriIpcSkillsPanelAdapter } from "../skills-ipc";
+import { InRendererSkillsPanelAdapter } from "../skills-registry-adapter";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 
@@ -61,6 +64,19 @@ export function initSkills(ctx: DesktopContext): SkillsAPI {
   function open(): void {
     skillsPanel.classList.add("open");
     skillsBackdrop.classList.add("open");
+    renderDevModeBanner(ctx);
+    // Directory installs require the Tauri sidecar's host-fs access;
+    // in dev-mode (no Tauri) the path input is dead-on-arrival because
+    // the InRendererSkillsPanelAdapter only accepts `kind: "url"`. Hide
+    // the install bar entirely in dev mode — there is no `kind: "url"`
+    // browse UI on the desktop renderer, so the dev-mode panel is
+    // read-only-of-existing-installs by design (operator runs the
+    // production Tauri build to install). Keeps the UI honest about
+    // what the runtime can do.
+    const installBar = document.querySelector<HTMLDivElement>(".skills-install-bar");
+    if (installBar !== null) {
+      installBar.style.display = isTauriRuntime(ctx) ? "" : "none";
+    }
     void ctrl.refresh();
   }
 
@@ -303,27 +319,90 @@ export function initSkills(ctx: DesktopContext): SkillsAPI {
 
 // === Helpers ===
 
+/**
+ * Resolve to the right adapter at first use:
+ *
+ *   • Tauri available → `TauriIpcSkillsPanelAdapter` (production path).
+ *     Skills install through the Node sidecar; `~/.motebit/skills/`
+ *     owns the bytes; the webview never touches envelope material.
+ *   • Tauri absent (`vite dev` without the desktop shell) →
+ *     `InRendererSkillsPanelAdapter` over IDB-backed `SkillRegistry`.
+ *     Same shape web ships; install + verification run in this
+ *     renderer context, which is the structurally weaker isolation
+ *     boundary documented in `packages/skills/CLAUDE.md` rule 5.
+ *
+ * The fallback degrades the privilege boundary in dev mode only — the
+ * production Tauri path is unchanged. The status banner above the panel
+ * surfaces the trade-off so a developer is never confused about why
+ * dev-mode skills don't appear in `~/.motebit/skills/` (different
+ * storage namespace, by design).
+ */
 function makeLazyAdapter(ctx: DesktopContext): SkillsPanelAdapter {
-  function resolve(): SkillsPanelAdapter {
+  let cached: SkillsPanelAdapter | null = null;
+
+  async function resolve(): Promise<SkillsPanelAdapter> {
+    if (cached !== null) return cached;
     const config = ctx.getConfig();
-    if (config?.isTauri !== true || config.invoke == null) {
-      throw new Error(
-        "sidecar_unavailable: Skills require the Tauri desktop runtime — open Motebit from the desktop app.",
-      );
+    if (config?.isTauri === true && config.invoke != null) {
+      cached = new TauriIpcSkillsPanelAdapter(config.invoke);
+      return cached;
     }
-    return new TauriIpcSkillsPanelAdapter(config.invoke);
+    // Dev-mode fallback: IDB-backed registry in the renderer.
+    const db = await openMotebitDB();
+    const registry = new SkillRegistry(new IdbSkillStorageAdapter(db));
+    cached = new InRendererSkillsPanelAdapter(registry);
+    return cached;
   }
+
   return {
-    listSkills: () => resolve().listSkills(),
-    readSkillDetail: (name) => resolve().readSkillDetail(name),
-    installFromSource: (source) => resolve().installFromSource(source),
-    enableSkill: (name) => resolve().enableSkill(name),
-    disableSkill: (name) => resolve().disableSkill(name),
-    trustSkill: (name) => resolve().trustSkill(name),
-    untrustSkill: (name) => resolve().untrustSkill(name),
-    removeSkill: (name) => resolve().removeSkill(name),
-    verifySkill: (name) => resolve().verifySkill(name),
+    listSkills: async () => (await resolve()).listSkills(),
+    readSkillDetail: async (name) => (await resolve()).readSkillDetail(name),
+    installFromSource: async (source) => (await resolve()).installFromSource(source),
+    enableSkill: async (name) => (await resolve()).enableSkill(name),
+    disableSkill: async (name) => (await resolve()).disableSkill(name),
+    trustSkill: async (name) => (await resolve()).trustSkill(name),
+    untrustSkill: async (name) => (await resolve()).untrustSkill(name),
+    removeSkill: async (name) => (await resolve()).removeSkill(name),
+    verifySkill: async (name) => (await resolve()).verifySkill(name),
   };
+}
+
+/**
+ * True iff the desktop shell is the Tauri runtime. Used to surface the
+ * dev-mode banner (and only the dev-mode banner) at panel open. Reads
+ * the same config the lazy adapter routes on, so the banner and the
+ * adapter selection can never disagree.
+ */
+function isTauriRuntime(ctx: DesktopContext): boolean {
+  const config = ctx.getConfig();
+  return config?.isTauri === true && config.invoke != null;
+}
+
+const DEV_MODE_BANNER_ID = "skills-dev-mode-banner";
+
+/**
+ * Render (or remove) the dev-mode banner. Idempotent — called on every
+ * panel open. The banner sits above the toolbar so it's always visible,
+ * never below-the-fold. In production (Tauri running) the banner is
+ * removed if it was previously present (defense-in-depth — the Tauri
+ * runtime check could in principle change between opens).
+ */
+function renderDevModeBanner(ctx: DesktopContext): void {
+  const existing = document.getElementById(DEV_MODE_BANNER_ID);
+  if (isTauriRuntime(ctx)) {
+    existing?.remove();
+    return;
+  }
+  if (existing !== null) return;
+  const banner = document.createElement("div");
+  banner.id = DEV_MODE_BANNER_ID;
+  banner.className = "skills-dev-mode-banner";
+  banner.textContent =
+    "Dev mode — skills stored in browser-private storage (not synced to ~/.motebit/skills). Install via the production Tauri build.";
+  const panelHeader = document.querySelector("#skills-panel .skills-panel-header");
+  if (panelHeader !== null && panelHeader.parentElement !== null) {
+    panelHeader.parentElement.insertBefore(banner, panelHeader.nextSibling);
+  }
 }
 
 function provenanceHover(status: string): string {

@@ -120,6 +120,12 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
 
   // Browse-section state — discover endpoint + search query.
   let browseEntries: SkillRegistryEntry[] = [];
+  // Browse-side error message (relay unreachable, non-200, or malformed
+  // JSON). Cleared on successful refresh; surfaced as a "could not reach"
+  // line in the Browse section so a relay outage is never silent. The
+  // Installed section is independent — its errors flow through the
+  // controller's `state.error`.
+  let browseError: string | null = null;
   let searchQuery = "";
 
   // Installed-section controller — null until the registry is ready
@@ -198,19 +204,23 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
     let resp: Response;
     try {
       resp = await fetch(url.toString(), { headers: { Accept: "application/json" } });
-    } catch {
+    } catch (err: unknown) {
       browseEntries = [];
+      browseError = `Could not reach the relay (${resolveRelayUrl()}). ${err instanceof Error ? err.message : String(err)}`;
       return;
     }
     if (!resp.ok) {
       browseEntries = [];
+      browseError = `Relay returned ${resp.status}: ${resp.statusText}`;
       return;
     }
     try {
       const listing = (await resp.json()) as SkillRegistryListing;
       browseEntries = listing.entries;
-    } catch {
+      browseError = null;
+    } catch (err: unknown) {
       browseEntries = [];
+      browseError = `Relay returned non-JSON: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
 
@@ -246,13 +256,15 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
     sections.push(`
       <div class="skills-section-header">Browse</div>
       ${
-        filteredBrowse.length === 0
-          ? renderEmpty(
-              browseEntries.length === 0
-                ? "No published skills on this relay yet."
-                : "No browse results match your search.",
-            )
-          : `<div class="skills-browse-list">${filteredBrowse.map(renderBrowseRow).join("")}</div>`
+        browseError !== null
+          ? renderEmpty(escapeHtml(browseError))
+          : filteredBrowse.length === 0
+            ? renderEmpty(
+                browseEntries.length === 0
+                  ? "No published skills on this relay yet."
+                  : "No browse results match your search.",
+              )
+            : `<div class="skills-browse-list">${filteredBrowse.map(renderBrowseRow).join("")}</div>`
       }
     `);
 
@@ -620,8 +632,12 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
     }
   });
 
-  // Held in scope so `unsubscribe` is reachable for tests / hot-reload
-  // teardown if needed. Not currently called externally.
+  // The controller subscription lives for the lifetime of this panel
+  // (one per page load — bootstrap calls `initSkillsPanel` once). No
+  // teardown path is exposed because there's no consumer for one
+  // today; if the panel ever needs reinitialization (hot-reload, web
+  // worker swap, surface tear-down), expose `unsubscribe` on the
+  // returned API and call it before re-init.
   void unsubscribe;
 
   return { open, close, openIfRouted };
