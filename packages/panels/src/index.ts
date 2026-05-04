@@ -93,3 +93,14 @@ export {
   type SkillSensitivity,
   type SkillPlatform,
 } from "./skills/controller";
+
+export {
+  RegistryBackedSkillsPanelAdapter,
+  SkillConsentDeclined,
+  requiresInstallConsent,
+  type RegistryBackedSkillsPanelAdapterOptions,
+  type RequestInstallConsentFn,
+  type SkillBundleShape,
+  type SkillInstallConsentRequest,
+  type SkillRegistryShape,
+} from "./skills/registry-backed-adapter";

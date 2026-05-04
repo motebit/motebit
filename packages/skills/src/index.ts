@@ -33,6 +33,8 @@ export {
   SkillInstallError,
   type SkillRegistryOptions,
   type SkillTrustGrantEvent,
+  type SkillConsentGrantedEvent,
+  type SkillAuditEvent,
   type SkillAuditSink,
 } from "./registry.js";
 export { SkillSelector, type SkillSelectorResult } from "./selector.js";

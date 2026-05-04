@@ -15,7 +15,7 @@ import {
   verifySkillEnvelope,
   verifySkillEnvelopeDetailed,
 } from "@motebit/crypto";
-import type { SkillEnvelope } from "@motebit/protocol";
+import type { SkillEnvelope, SkillSensitivity } from "@motebit/protocol";
 
 import type {
   InstalledSkillIndexEntry,
@@ -41,9 +41,10 @@ export class SkillInstallError extends Error {
 }
 
 /**
- * Operator-attested trust grant audit event. Emitted by `registry.trust()`.
- * Per spec §7.1, this is NOT a cryptographic provenance act — it logs that
- * the operator manually attested to an unsigned skill at a point in time.
+ * Operator-attested trust grant audit event. Emitted by `registry.trust()`,
+ * `registry.untrust()`, and `registry.remove()`. Per spec §7.1, this is NOT
+ * a cryptographic provenance act — it logs that the operator manually
+ * attested to an unsigned skill at a point in time.
  */
 export interface SkillTrustGrantEvent {
   type: "skill_trust_grant" | "skill_trust_revoke" | "skill_remove";
@@ -56,7 +57,42 @@ export interface SkillTrustGrantEvent {
   operator?: string;
 }
 
-export type SkillAuditSink = (event: SkillTrustGrantEvent) => void | Promise<void>;
+/**
+ * User-explicit consent acknowledgment for installing a sensitive-tier skill
+ * on a weak-isolation surface (per `packages/skills/CLAUDE.md` rule 5). Per
+ * spec §1, skills do not grant capability — this event records that the user
+ * understood the install-time isolation trade-off, NOT that they granted the
+ * skill any new permission. Auto-load against external AI providers stays
+ * sensitivity-gated regardless (rule 2 + the runtime selector). The `surface`
+ * tag distinguishes the install context (`web` vs `desktop-dev` vs future
+ * `mobile`) so a downstream auditor can answer "did the user approve this on
+ * a particular surface?" without conflating contexts.
+ */
+export interface SkillConsentGrantedEvent {
+  type: "skill_consent_granted";
+  skill_name: string;
+  skill_version: string;
+  content_hash: string;
+  /** Sensitivity tier declared by the skill manifest. */
+  sensitivity: SkillSensitivity;
+  /** Surface identifier — `"web"`, `"desktop-dev"`, etc. */
+  surface: string;
+  /** ISO 8601 timestamp. */
+  at: string;
+  /** Optional operator identity. */
+  operator?: string;
+}
+
+/**
+ * Discriminated union of every audit event the registry emits. Existing
+ * consumers (e.g. CLI) typed against `SkillTrustGrantEvent` continue to work
+ * because their handler shape (`(event) => writeFileSync(... JSON.stringify(event))`)
+ * accepts any union member structurally; new consumers should type against
+ * `SkillAuditEvent` so a future event variant doesn't silently slip past.
+ */
+export type SkillAuditEvent = SkillTrustGrantEvent | SkillConsentGrantedEvent;
+
+export type SkillAuditSink = (event: SkillAuditEvent) => void | Promise<void>;
 
 export interface SkillRegistryOptions {
   /** Sink for audit events (`skill_trust_grant`, `skill_trust_revoke`, `skill_remove`). */
