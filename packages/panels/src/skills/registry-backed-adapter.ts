@@ -36,7 +36,7 @@ import type {
   SkillsPanelAdapter,
   SkillSensitivity,
 } from "./controller.js";
-import type { SkillRecord, SkillRegistry } from "@motebit/skills";
+import type { SkillAuditSink, SkillRecord, SkillRegistry } from "@motebit/skills";
 import type { SkillRegistryBundle } from "@motebit/protocol";
 
 /** Re-exported for hosts that want to type their `fetchBundle` callback. */
@@ -180,6 +180,28 @@ export interface RegistryBackedSkillsPanelAdapterOptions {
    * for strong-isolation surfaces where the platform is the boundary.
    */
   requestInstallConsent?: RequestInstallConsentFn;
+  /**
+   * Optional audit sink. The adapter emits a `skill_consent_granted`
+   * event into this sink immediately after a sensitive-tier install
+   * completes successfully (consent fired AND registry.install resolved).
+   * Hosts typically wire the same sink they hand to `SkillRegistry`'s
+   * `audit` option so registry-emitted events (`skill_trust_grant`,
+   * `skill_remove`) and the adapter-emitted consent grants land in one
+   * persistent store — a single audit stream per surface.
+   *
+   * Decline + non-sensitive installs do NOT emit. Decline closes the
+   * modal silently (calm-software discipline); non-sensitive installs
+   * are a normal user action with no acknowledgment to record.
+   */
+  audit?: SkillAuditSink;
+  /**
+   * Surface identifier used as the `surface` tag on emitted
+   * `skill_consent_granted` events. Hosts know their own context —
+   * `"web"`, `"desktop-dev"`, `"mobile"`. Defaults to `"unknown"` if
+   * the host omits it; a downstream auditor querying the log won't be
+   * able to disambiguate which surface fired the consent without it.
+   */
+  surface?: string;
 }
 
 export class RegistryBackedSkillsPanelAdapter implements SkillsPanelAdapter {
@@ -207,6 +229,7 @@ export class RegistryBackedSkillsPanelAdapter implements SkillsPanelAdapter {
     }
     const bundle = await this.options.fetchBundle(source.url);
     const sensitivity = bundle.envelope.manifest.motebit?.sensitivity ?? "none";
+    let consentFired = false;
     if (this.options.requestInstallConsent !== undefined && requiresInstallConsent(sensitivity)) {
       const approved = await this.options.requestInstallConsent({
         skillName: bundle.envelope.skill.name,
@@ -217,13 +240,14 @@ export class RegistryBackedSkillsPanelAdapter implements SkillsPanelAdapter {
       if (!approved) {
         throw new SkillConsentDeclined(bundle.envelope.skill.name);
       }
+      consentFired = true;
     }
     const body = base64ToBytes(bundle.body);
     const files: Record<string, Uint8Array> = {};
     for (const [path, b64] of Object.entries(bundle.files ?? {})) {
       files[path] = base64ToBytes(b64);
     }
-    return this.registry.install(
+    const result = await this.registry.install(
       {
         kind: "in_memory",
         manifest: bundle.envelope.manifest,
@@ -233,6 +257,35 @@ export class RegistryBackedSkillsPanelAdapter implements SkillsPanelAdapter {
       },
       { source_label: source.url },
     );
+    // Emit the consent-grant audit event AFTER registry.install resolves.
+    // Two reasons for ordering:
+    //   1. We don't want to record "user approved installing X" if the
+    //      install itself fails (size limit, manifest/envelope mismatch,
+    //      verification failure on a tampered envelope) — the user's
+    //      intent never landed.
+    //   2. If audit emission fails (sink rejects), we still let the
+    //      install succeed — losing an audit record is better than
+    //      losing the user's work after they explicitly approved.
+    //      Errors from the sink are caught + reported via console; the
+    //      durable trail is best-effort, not blocking.
+    if (consentFired && this.options.audit !== undefined) {
+      try {
+        await this.options.audit({
+          type: "skill_consent_granted",
+          skill_name: result.name,
+          skill_version: result.version,
+          content_hash: bundle.envelope.skill.content_hash,
+          sensitivity,
+          surface: this.options.surface ?? "unknown",
+          at: new Date().toISOString(),
+        });
+      } catch (err: unknown) {
+        // Audit-emit failure must not undo the install. Log + continue.
+        // eslint-disable-next-line no-console
+        console.warn("skill_consent_granted audit emit failed:", err);
+      }
+    }
+    return result;
   }
 
   async enableSkill(name: string): Promise<void> {

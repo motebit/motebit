@@ -20,6 +20,7 @@ import {
   type SkillRegistryShape,
 } from "../registry-backed-adapter.js";
 import type { SkillProvenanceStatus, SkillSensitivity } from "../controller.js";
+import type { SkillAuditEvent } from "@motebit/skills";
 
 // ---------------------------------------------------------------------------
 // Fixtures — minimal shapes satisfying SkillRegistryShape + SkillBundleShape.
@@ -239,6 +240,128 @@ describe("RegistryBackedSkillsPanelAdapter.installFromSource", () => {
     const adapter = new RegistryBackedSkillsPanelAdapter(registry, { fetchBundle });
     await adapter.installFromSource({ kind: "url", url: "test://decode" });
     expect(registry.installCalls[0]?.sourceLabel).toBe("test://decode");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit emission — `skill_consent_granted` after a sensitive-tier install
+// ---------------------------------------------------------------------------
+
+describe("RegistryBackedSkillsPanelAdapter audit emission", () => {
+  it("emits skill_consent_granted to the audit sink after a sensitive install resolves", async () => {
+    const registry = makeFakeRegistry();
+    const events: SkillAuditEvent[] = [];
+    const audit = vi.fn((event: SkillAuditEvent) => {
+      events.push(event);
+    });
+    const adapter = new RegistryBackedSkillsPanelAdapter(registry, {
+      fetchBundle: () => Promise.resolve(makeBundle("medical")),
+      requestInstallConsent: () => Promise.resolve(true),
+      audit,
+      surface: "test-surface",
+    });
+    await adapter.installFromSource({ kind: "url", url: "test://medical" });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "skill_consent_granted",
+      skill_name: "fixture-skill",
+      skill_version: "1.0.0",
+      content_hash: "0".repeat(64),
+      sensitivity: "medical",
+      surface: "test-surface",
+    });
+    expect(typeof events[0]!.at).toBe("string");
+    expect(new Date(events[0]!.at).getTime()).not.toBeNaN();
+  });
+
+  it("does NOT emit skill_consent_granted when sensitivity is below the consent threshold", async () => {
+    const registry = makeFakeRegistry();
+    const audit = vi.fn();
+    const adapter = new RegistryBackedSkillsPanelAdapter(registry, {
+      fetchBundle: () => Promise.resolve(makeBundle("personal")),
+      requestInstallConsent: () => Promise.resolve(true),
+      audit,
+      surface: "test-surface",
+    });
+    await adapter.installFromSource({ kind: "url", url: "test://personal" });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("does NOT emit skill_consent_granted when consent is declined", async () => {
+    // Decline path throws SkillConsentDeclined before install runs; no
+    // consent grant existed to record. Counter-test: a future change that
+    // accidentally emits on decline would create a false-positive trail.
+    const registry = makeFakeRegistry();
+    const audit = vi.fn();
+    const adapter = new RegistryBackedSkillsPanelAdapter(registry, {
+      fetchBundle: () => Promise.resolve(makeBundle("medical")),
+      requestInstallConsent: () => Promise.resolve(false),
+      audit,
+      surface: "test-surface",
+    });
+    await expect(
+      adapter.installFromSource({ kind: "url", url: "test://decline" }),
+    ).rejects.toBeInstanceOf(SkillConsentDeclined);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("tags the consent event with `surface: 'unknown'` when host omits the surface option", async () => {
+    const registry = makeFakeRegistry();
+    const events: SkillAuditEvent[] = [];
+    const adapter = new RegistryBackedSkillsPanelAdapter(registry, {
+      fetchBundle: () => Promise.resolve(makeBundle("financial")),
+      requestInstallConsent: () => Promise.resolve(true),
+      audit: (event) => {
+        events.push(event);
+      },
+    });
+    await adapter.installFromSource({ kind: "url", url: "test://no-surface" });
+    expect(events[0]).toMatchObject({ surface: "unknown" });
+  });
+
+  it("audit-sink failure does NOT block the install — install resolves regardless", async () => {
+    // Best-effort durability: losing an audit record is better than
+    // losing a user's explicit approval. The adapter logs + continues.
+    const registry = makeFakeRegistry();
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const adapter = new RegistryBackedSkillsPanelAdapter(registry, {
+      fetchBundle: () => Promise.resolve(makeBundle("medical")),
+      requestInstallConsent: () => Promise.resolve(true),
+      audit: () => Promise.reject(new Error("disk full")),
+      surface: "test-surface",
+    });
+    const result = await adapter.installFromSource({ kind: "url", url: "test://audit-fails" });
+    expect(result.name).toBe("fixture-skill");
+    expect(registry.installCalls).toHaveLength(1);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining("skill_consent_granted audit emit failed"),
+      expect.any(Error),
+    );
+    consoleSpy.mockRestore();
+  });
+
+  it("does NOT emit when registry.install fails — no false approval trail", async () => {
+    // Order matters: emit only after install resolves. If install
+    // fails (size limit, manifest mismatch, verification failure on a
+    // tampered envelope), the user's intent never landed, so no
+    // consent record should exist.
+    const events: SkillAuditEvent[] = [];
+    const failingRegistry: SkillRegistryShape = {
+      ...makeFakeRegistry(),
+      install: () => Promise.reject(new Error("size_limit_exceeded: too big")),
+    };
+    const adapter = new RegistryBackedSkillsPanelAdapter(failingRegistry, {
+      fetchBundle: () => Promise.resolve(makeBundle("secret")),
+      requestInstallConsent: () => Promise.resolve(true),
+      audit: (event) => {
+        events.push(event);
+      },
+      surface: "test-surface",
+    });
+    await expect(
+      adapter.installFromSource({ kind: "url", url: "test://install-fails" }),
+    ).rejects.toThrow(/size_limit_exceeded/);
+    expect(events).toHaveLength(0);
   });
 });
 
