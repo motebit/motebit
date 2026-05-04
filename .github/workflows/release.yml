@@ -109,58 +109,79 @@ jobs:
             if (failed) process.exit(1);
           "
 
-      # Skip the changesets/action when no releases would actually happen.
-      # Every changeset that targets only `ignore`-listed (private)
-      # packages produces a `releases: []` status — `changesets/action`
-      # then force-pushes an empty diff to `changeset-release/main` and
-      # the PR-create step fails with `No commits between main and
-      # changeset-release/main`. The guard reads the JSON `releases`
-      # array directly, since `changeset status` exits 0 even when
-      # nothing bumps.
+      # Determine whether the changesets/action can safely run.
+      # Three states matter:
+      #   1. Pending non-ignore-listed changesets → action runs in
+      #      VERSION mode, creates/updates "Version Packages" PR.
+      #   2. No `.changeset/*.md` files at all (post-merge state) →
+      #      action runs in PUBLISH mode, ships any workspace package
+      #      whose package.json version exceeds npm's, AND pushes git
+      #      tags + creates GitHub releases.
+      #   3. Pending changesets but ALL target ignore-listed packages →
+      #      `changeset status` returns `releases: []` and the action
+      #      then force-pushes an empty diff to `changeset-release/main`,
+      #      hitting "No commits between main and changeset-release/main".
+      #      This is the buggy short-circuit we have to skip.
+      #
+      # Earlier this guard checked `releases.length > 0`, which conflated
+      # state 2 with state 3 — every post-merge run that should have
+      # auto-tagged + auto-released was silently routed to the
+      # belt-and-suspenders direct-publish step instead, which only
+      # publishes to npm and never pushes tags. Fix: distinguish state 2
+      # from state 3 by counting both pending changeset files AND the
+      # action's reported releases.
       - name: Detect publishable releases
         id: pending
         run: |
           pnpm changeset status --output=/tmp/cs-status.json
-          COUNT=$(jq '.releases | length' /tmp/cs-status.json)
-          echo "publishable=$COUNT" >> "$GITHUB_OUTPUT"
-          if [ "$COUNT" = "0" ]; then
-            echo "No publishable changesets pending — every queued changeset targets ignore-listed packages. Skipping the changesets/action step."
+          RELEASES=$(jq '.releases | length' /tmp/cs-status.json)
+          PENDING_FILES=$(find .changeset -maxdepth 1 -name '*.md' -not -name 'README.md' 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$RELEASES" -gt 0 ]; then
+            STATE="version-mode"
+            echo "$RELEASES publishable release(s) pending — action will run in version mode."
+            jq -r '.releases[] | "  - \(.name) → \(.type)"' /tmp/cs-status.json
+          elif [ "$PENDING_FILES" = "0" ]; then
+            STATE="publish-mode"
+            echo "No pending changeset files — action will run in publish mode (will ship + tag + release any workspace package ahead of npm)."
           else
-            echo "$COUNT publishable release(s) pending."
-            jq '.releases[] | "  - \(.name) → \(.type)"' /tmp/cs-status.json
+            STATE="skip"
+            echo "$PENDING_FILES pending changeset file(s) but every release targets an ignore-listed package — skipping action to avoid the empty-diff force-push bug."
           fi
+          echo "state=$STATE" >> "$GITHUB_OUTPUT"
 
-      # When .changeset/ has pending changesets for non-ignored packages:
-      # creates/updates a "Version Packages" PR. When that PR is merged
-      # (no changesets left): publishes to npm + creates GitHub releases.
-      - name: Create release PR or publish
+      # State 1 (pending non-ignored changesets): version mode → updates
+      # the "Version Packages" PR.
+      # State 2 (no pending changesets, post-merge): publish mode → ships
+      # to npm, pushes git tags, creates GitHub releases via the
+      # GITHUB_TOKEN-authorized release-creation step the action does
+      # internally.
+      # State 3 (all-ignored): skipped — direct-publish handles it
+      # below as a no-op (workspace versions match npm).
+      - name: Create release PR or publish (with tags + GitHub releases)
         id: changesets
-        if: steps.pending.outputs.publishable != '0'
+        if: steps.pending.outputs.state != 'skip'
         uses: changesets/action@6a0a831ff30acef54f2c6aa1cbbc1096b066edaf # v1
         with:
           version: pnpm version-packages
           publish: pnpm release
           title: "Version Packages"
           commit: "Version Packages"
+          createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
 
-      # Belt-and-suspenders publish — covers the structural gap where
-      # `.changeset/` accumulates ignore-listed-only changesets faster
-      # than non-ignored ones, so the guard skips the action even when
-      # main's package.json is ahead of npm (e.g., right after a Version
-      # Packages PR merge). `changeset publish` is idempotent: ships
-      # only packages whose package.json version exceeds npm's, no-ops
-      # when everything matches. Safe to always run after the action:
-      # if the action published, this is a no-op; if the action was
-      # skipped, this catches the actual publish.
-      - name: Direct publish (idempotent — covers all-ignored-changesets state)
+      # Belt-and-suspenders publish — only runs when the action was
+      # skipped (state 3: all-ignored changesets accumulating). In
+      # states 1 and 2 the action above already handles publish; this
+      # step would be a no-op anyway, but skipping it explicitly avoids
+      # any chance of the action and this step racing on tag creation.
+      - name: Direct publish (idempotent — only fires in all-ignored state)
         id: direct_publish
+        if: steps.pending.outputs.state == 'skip'
         run: |
           set -euo pipefail
-          # Capture output so we can detect whether anything actually shipped.
           OUTPUT=$(pnpm release 2>&1 | tee /dev/stderr)
           if echo "$OUTPUT" | grep -qE "(New tag|Publishing)"; then
             echo "published=true" >> "$GITHUB_OUTPUT"
