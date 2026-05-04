@@ -56,6 +56,7 @@ export { handleSchema } from "./schema.js";
 export { handleSmokeReconciliation } from "./smoke.js";
 export { handleSmokeX402 } from "./smoke-x402.js";
 export {
+  handleSkillsAudit,
   handleSkillsDisable,
   handleSkillsEnable,
   handleSkillsInstall,

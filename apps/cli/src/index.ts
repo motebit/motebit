@@ -76,6 +76,7 @@ import {
   handleWithdraw,
   handleWallet,
   handleSkillsInstall,
+  handleSkillsAudit,
   handleSkillsList,
   handleSkillsEnable,
   handleSkillsDisable,
@@ -377,9 +378,11 @@ async function main(): Promise<void> {
       await handleSkillsPublish(config);
     } else if (skillsCmd === "run-script") {
       await handleSkillsRunScript(config);
+    } else if (skillsCmd === "audit") {
+      handleSkillsAudit(config);
     } else {
       console.error(
-        "Usage: motebit skills [list|install <dir|did:key:…/name@version>|publish <dir>|enable <name>|disable <name>|remove <name>|verify <name>|trust <name>|untrust <name>|run-script <skill> <script> [args...]]",
+        "Usage: motebit skills [list|install <dir|did:key:…/name@version>|publish <dir>|enable <name>|disable <name>|remove <name>|verify <name>|trust <name>|untrust <name>|audit [skill-name] [--type=…] [--limit=N] [--json]|run-script <skill> <script> [args...]]",
       );
       process.exit(1);
     }

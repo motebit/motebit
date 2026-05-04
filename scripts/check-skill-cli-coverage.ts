@@ -54,8 +54,17 @@ const INTENTIONAL_NON_CLI_METHODS = new Set<string>(["get"]);
  *     only persists + serves the script bytes. See drift gate #69
  *     `check-skill-script-uses-tool-approval` for the approval-gate
  *     coverage check.
+ *   - `audit` — reads the durable audit trail
+ *     (`~/.motebit/skills/audit.log`) emitted as a side effect of
+ *     `registry.trust/untrust/remove` and `RegistryBackedSkillsPanelAdapter`'s
+ *     consent-grant emission. The verb projects an existing on-disk
+ *     stream rather than calling a registry method; the persistence
+ *     primitive is the SkillAuditSink wired into the registry's `audit`
+ *     option, not a method on `SkillRegistry` itself. First read-side
+ *     consumer of the durable trail shipped 2026-05-04 alongside the
+ *     consent-audit arc.
  */
-const INTENTIONAL_NON_REGISTRY_VERBS = new Set<string>(["publish", "run-script"]);
+const INTENTIONAL_NON_REGISTRY_VERBS = new Set<string>(["publish", "run-script", "audit"]);
 
 /**
  * Map from registry method name → expected CLI subcommand verb. The default

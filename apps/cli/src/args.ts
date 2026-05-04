@@ -69,6 +69,8 @@ export interface CliConfig {
   tail?: boolean;
   /** `motebit logs` — max number of outcomes to show. */
   limit?: number;
+  /** `motebit skills audit` — filter by event type. */
+  eventType?: string;
   /** `motebit migrate` — forfeit remaining relay balance instead of withdrawing. */
   waive?: boolean;
   /** `motebit relay up` — HTTP port the relay binds to (default 3000). */
@@ -144,6 +146,11 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "facilitator-url": { type: "string" },
       "federation-url": { type: "string" },
       passphrase: { type: "boolean", default: false },
+      // `motebit skills audit` — filter by event type
+      // (skill_trust_grant / skill_trust_revoke / skill_remove /
+      // skill_consent_granted). String type so we can keep the union
+      // in TS without parseArgs caring; the handler validates.
+      "event-type": { type: "string" },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -243,6 +250,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     force: values.force,
     tail: values.tail,
     limit: values.limit != null ? parseInt(values.limit, 10) : undefined,
+    eventType: values["event-type"],
     waive: values.waive,
     port: values.port,
     payToAddress: values["pay-to-address"],

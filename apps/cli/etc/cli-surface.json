@@ -109,6 +109,10 @@
       "default": false
     },
     {
+      "name": "event-type",
+      "type": "string"
+    },
+    {
       "name": "every",
       "type": "string"
     },

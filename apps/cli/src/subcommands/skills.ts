@@ -503,6 +503,150 @@ export async function handleSkillsUntrust(config: CliConfig): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// audit — read the skill audit log, the durable trail of operator acts
+// ---------------------------------------------------------------------------
+//
+// The CLI persists every `skill_trust_grant` / `skill_trust_revoke` /
+// `skill_remove` event from `registry.trust/untrust/remove` and every
+// `skill_consent_granted` event from sensitive-tier installs (when the
+// CLI ever wires consent — today consent fires only on web/desktop-dev/
+// mobile through `RegistryBackedSkillsPanelAdapter`, but the CLI's audit
+// sink accepts the broader union for forward-compat). One event per line
+// in `~/.motebit/skills/audit.log`, written via JSON.stringify.
+//
+// Read-side first consumer of the durable trail. Closes the doctrine
+// gap: every claim user-verifiable per `docs/doctrine/self-attesting-
+// system.md` — without this command, the only way to answer "did I
+// approve installing this medical skill?" was to cat the audit.log and
+// grep, which isn't a calm-software answer. This command answers it
+// in 80 LOC.
+
+interface AuditFilters {
+  skillName?: string;
+  type?: SkillAuditEvent["type"];
+  limit: number;
+  json: boolean;
+}
+
+const KNOWN_AUDIT_TYPES: ReadonlySet<SkillAuditEvent["type"]> = new Set([
+  "skill_trust_grant",
+  "skill_trust_revoke",
+  "skill_remove",
+  "skill_consent_granted",
+]);
+
+function parseAuditFilters(config: CliConfig): AuditFilters {
+  const positional = config.positionals[2];
+  const skillName =
+    positional !== undefined && !positional.startsWith("--") ? positional : undefined;
+  const eventType = config.eventType;
+  const type =
+    eventType !== undefined && KNOWN_AUDIT_TYPES.has(eventType as SkillAuditEvent["type"])
+      ? (eventType as SkillAuditEvent["type"])
+      : undefined;
+  const limit = config.limit !== undefined && config.limit > 0 ? config.limit : 50;
+  return { skillName, type, limit, json: config.json };
+}
+
+function readAuditEvents(): SkillAuditEvent[] {
+  const path = getAuditLogPath();
+  if (!existsSync(path)) return [];
+  const text = readFileSync(path, "utf-8");
+  const events: SkillAuditEvent[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    try {
+      events.push(JSON.parse(trimmed) as SkillAuditEvent);
+    } catch {
+      // Malformed line — skip rather than crash the audit view. A
+      // future rotation/compaction pass might surface counts of
+      // unparseable lines as a separate warning.
+    }
+  }
+  return events;
+}
+
+function eventTimestamp(event: SkillAuditEvent): number {
+  const t = Date.parse(event.at);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function formatAuditTypeLabel(type: SkillAuditEvent["type"]): string {
+  switch (type) {
+    case "skill_trust_grant":
+      return success("trust grant");
+    case "skill_trust_revoke":
+      return warn("trust revoke");
+    case "skill_remove":
+      return errorColor("remove");
+    case "skill_consent_granted":
+      return cyan("consent granted");
+  }
+}
+
+export function handleSkillsAudit(config: CliConfig): void {
+  const filters = parseAuditFilters(config);
+  let events = readAuditEvents();
+  if (filters.skillName !== undefined) {
+    events = events.filter((e) => e.skill_name === filters.skillName);
+  }
+  if (filters.type !== undefined) {
+    events = events.filter((e) => e.type === filters.type);
+  }
+  // Most-recent-first — matches the panels-side `getAll()` convention
+  // on web (IDB) and mobile (SQLite). A future audit-trail UI surface
+  // reads the same ordering across surfaces.
+  events.sort((a, b) => eventTimestamp(b) - eventTimestamp(a));
+  events = events.slice(0, filters.limit);
+
+  if (filters.json) {
+    for (const event of events) {
+      console.log(JSON.stringify(event));
+    }
+    return;
+  }
+
+  if (events.length === 0) {
+    console.log();
+    if (filters.skillName !== undefined) {
+      console.log(dim(`  No audit events for skill "${filters.skillName}".`));
+    } else {
+      console.log(dim("  No audit events recorded."));
+      console.log(dim(`  Log file: ${getAuditLogPath()}`));
+    }
+    console.log();
+    return;
+  }
+
+  console.log();
+  console.log(
+    `  ${bold("Skill audit log")} ${dim(`(${events.length} most recent of ${readAuditEvents().length})`)}`,
+  );
+  console.log();
+  for (const event of events) {
+    const at = new Date(event.at)
+      .toISOString()
+      .replace("T", " ")
+      .replace(/\.\d+Z$/, "Z");
+    const operator = event.operator ?? "—";
+    const label = formatAuditTypeLabel(event.type);
+    console.log(
+      `  ${dim(at)}  ${label.padEnd(28, " ")}  ${bold(event.skill_name)} v${event.skill_version}`,
+    );
+    if (event.type === "skill_consent_granted") {
+      console.log(
+        `  ${dim("                          ")}    ${dim(`sensitivity: ${event.sensitivity}, surface: ${event.surface}`)}`,
+      );
+    }
+    console.log(`  ${dim("                          ")}    ${dim(`operator: ${operator}`)}`);
+  }
+  console.log();
+  console.log(dim(`  Log file: ${getAuditLogPath()}`));
+  console.log();
+}
+
+// ---------------------------------------------------------------------------
 // run-script — phase 2 quarantine + per-invocation operator-approval gate
 // ---------------------------------------------------------------------------
 //
