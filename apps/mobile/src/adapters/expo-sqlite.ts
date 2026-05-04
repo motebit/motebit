@@ -58,6 +58,7 @@ import type {
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import type { ConversationSyncStoreAdapter } from "@motebit/sync-engine";
 import type { PlanStoreAdapter } from "@motebit/planner";
+import type { SkillStorageAdapter, StoredSkill, InstalledSkillIndexEntry } from "@motebit/skills";
 
 // === Schema (identical to packages/persistence) ===
 
@@ -228,6 +229,16 @@ CREATE TABLE IF NOT EXISTS agent_trust (
   PRIMARY KEY (motebit_id, remote_motebit_id)
 );
 CREATE INDEX IF NOT EXISTS idx_agent_trust_motebit ON agent_trust (motebit_id);
+CREATE TABLE IF NOT EXISTS skills (
+  name TEXT PRIMARY KEY,
+  inserted_at INTEGER NOT NULL,
+  index_json TEXT NOT NULL,
+  manifest_json TEXT NOT NULL,
+  envelope_json TEXT NOT NULL,
+  body BLOB NOT NULL,
+  files_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skills_inserted ON skills (inserted_at);
 `;
 
 // === Row Types ===
@@ -2185,6 +2196,140 @@ export class ExpoToolAuditSink implements AuditLogSink {
     );
     return rows.map(rowToToolAudit);
   }
+}
+
+// ===========================================================================
+// Skills — installed procedural-knowledge bundles per spec/skills-v1.md.
+// ===========================================================================
+
+interface SkillRow {
+  name: string;
+  inserted_at: number;
+  index_json: string;
+  manifest_json: string;
+  envelope_json: string;
+  body: Uint8Array;
+  files_json: string;
+}
+
+/**
+ * Expo-SQLite-backed `SkillStorageAdapter`. Mirrors the IDB-backed
+ * adapter on web (`packages/browser-persistence/src/idb-skills.ts`) and
+ * the Node-fs adapter on desktop sidecar (`@motebit/skills/fs`). Same
+ * wire shape (`StoredSkill`), different storage namespace.
+ *
+ * Body bytes are stored in a native BLOB column; per-file payloads are
+ * base64-encoded inside `files_json` so the JSON column carries the
+ * full `Record<string, Uint8Array>` map without needing a sibling
+ * blob-per-file table. Insertion order is preserved via `inserted_at`
+ * for `list()` stability — matches the fs adapter's
+ * `installed.json` array semantics and the IDB adapter's `insertedAt`
+ * field.
+ *
+ * Privilege boundary: this adapter runs in the same React Native
+ * runtime as the panel UI. No sidecar isolation analogue exists in
+ * Expo. See `packages/skills/CLAUDE.md` rule 5 for the per-surface
+ * isolation contract.
+ */
+export class ExpoSqliteSkillStorageAdapter implements SkillStorageAdapter {
+  constructor(private db: SQLite.SQLiteDatabase) {}
+
+  async list(): Promise<InstalledSkillIndexEntry[]> {
+    const rows = this.db.getAllSync<{ index_json: string; inserted_at: number }>(
+      "SELECT index_json, inserted_at FROM skills ORDER BY inserted_at ASC",
+    );
+    return rows.map((r) => JSON.parse(r.index_json) as InstalledSkillIndexEntry);
+  }
+
+  async read(name: string): Promise<StoredSkill | null> {
+    const row = this.db.getFirstSync<SkillRow>("SELECT * FROM skills WHERE name = ?", [name]);
+    if (!row) return null;
+    return {
+      index: JSON.parse(row.index_json) as InstalledSkillIndexEntry,
+      manifest: JSON.parse(row.manifest_json) as StoredSkill["manifest"],
+      envelope: JSON.parse(row.envelope_json) as StoredSkill["envelope"],
+      body: new Uint8Array(row.body),
+      files: filesFromJson(row.files_json),
+    };
+  }
+
+  async write(skill: StoredSkill): Promise<void> {
+    // Preserve original inserted_at on overwrite so list ordering is
+    // stable when a caller --force-reinstalls. Same semantics as the
+    // fs adapter (installed.json array position) and the IDB adapter.
+    const existing = this.db.getFirstSync<{ inserted_at: number }>(
+      "SELECT inserted_at FROM skills WHERE name = ?",
+      [skill.index.name],
+    );
+    const insertedAt = existing?.inserted_at ?? Date.now();
+    this.db.runSync(
+      `INSERT OR REPLACE INTO skills
+        (name, inserted_at, index_json, manifest_json, envelope_json, body, files_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        skill.index.name,
+        insertedAt,
+        JSON.stringify(skill.index),
+        JSON.stringify(skill.manifest),
+        JSON.stringify(skill.envelope),
+        skill.body,
+        filesToJson(skill.files),
+      ],
+    );
+  }
+
+  async remove(name: string): Promise<void> {
+    this.db.runSync("DELETE FROM skills WHERE name = ?", [name]);
+  }
+
+  async setEnabled(name: string, enabled: boolean): Promise<void> {
+    await this.patchIndex(name, (idx) => ({ ...idx, enabled }));
+  }
+
+  async setTrusted(name: string, trusted: boolean): Promise<void> {
+    await this.patchIndex(name, (idx) => ({ ...idx, trusted }));
+  }
+
+  /** Read-modify-write of just the index_json column — leaves the bytes
+   *  (body, envelope, manifest, files) untouched on enable/trust toggles.
+   *  Single transaction; no partial state. */
+  private async patchIndex(
+    name: string,
+    update: (existing: InstalledSkillIndexEntry) => InstalledSkillIndexEntry,
+  ): Promise<void> {
+    const row = this.db.getFirstSync<{ index_json: string }>(
+      "SELECT index_json FROM skills WHERE name = ?",
+      [name],
+    );
+    if (!row) return;
+    const next = update(JSON.parse(row.index_json) as InstalledSkillIndexEntry);
+    this.db.runSync("UPDATE skills SET index_json = ? WHERE name = ?", [
+      JSON.stringify(next),
+      name,
+    ]);
+  }
+}
+
+function filesToJson(files: Record<string, Uint8Array>): string {
+  const out: Record<string, string> = {};
+  for (const [key, bytes] of Object.entries(files)) {
+    let bin = "";
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
+    out[key] = btoa(bin);
+  }
+  return JSON.stringify(out);
+}
+
+function filesFromJson(json: string): Record<string, Uint8Array> {
+  const parsed = JSON.parse(json) as Record<string, string>;
+  const out: Record<string, Uint8Array> = {};
+  for (const [key, b64] of Object.entries(parsed)) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    out[key] = bytes;
+  }
+  return out;
 }
 
 // === Factory ===

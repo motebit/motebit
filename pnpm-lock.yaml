@@ -577,6 +577,9 @@ importers:
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
+      '@motebit/skills':
+        specifier: workspace:*
+        version: link:../../packages/skills
       '@motebit/sqlite-migrations':
         specifier: workspace:*
         version: link:../../packages/sqlite-migrations
@@ -989,9 +992,15 @@ importers:
       '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../privacy-layer
+      '@motebit/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@motebit/skills':
+        specifier: workspace:*
+        version: link:../skills
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

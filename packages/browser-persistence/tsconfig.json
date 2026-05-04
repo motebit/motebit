@@ -22,7 +22,13 @@
       "path": "../privacy-layer"
     },
     {
+      "path": "../protocol"
+    },
+    {
       "path": "../sdk"
+    },
+    {
+      "path": "../skills"
     }
   ]
 }

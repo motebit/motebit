@@ -20,7 +20,9 @@
     "@motebit/memory-graph": "workspace:*",
     "@motebit/core-identity": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
-    "@motebit/planner": "workspace:*"
+    "@motebit/planner": "workspace:*",
+    "@motebit/protocol": "workspace:*",
+    "@motebit/skills": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

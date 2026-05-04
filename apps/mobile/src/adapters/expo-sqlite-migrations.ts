@@ -336,4 +336,28 @@ export const MOBILE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE tool_audit ADD COLUMN sensitivity TEXT",
     ],
   },
+  {
+    version: 20,
+    description: "skills table — installed procedural-knowledge bundles",
+    statements: [
+      // SkillStorageAdapter contract from `@motebit/skills/storage`.
+      // Mirrors the IDB row shape on web (`packages/browser-persistence/
+      // src/idb-skills.ts`) — single table keyed by `name`, JSON-encoded
+      // index/manifest/envelope/files columns, raw BLOB for the SKILL.md
+      // body. Insertion ordering preserved via inserted_at for list()
+      // stability. No sibling table needed in persistence registry —
+      // desktop persists skills to `~/.motebit/skills/` on disk via the
+      // Node-fs adapter (different storage namespace, same wire shape).
+      `CREATE TABLE IF NOT EXISTS skills (
+        name TEXT PRIMARY KEY,
+        inserted_at INTEGER NOT NULL,
+        index_json TEXT NOT NULL,
+        manifest_json TEXT NOT NULL,
+        envelope_json TEXT NOT NULL,
+        body BLOB NOT NULL,
+        files_json TEXT NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_skills_inserted ON skills (inserted_at)",
+    ],
+  },
 ];

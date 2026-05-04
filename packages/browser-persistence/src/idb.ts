@@ -5,7 +5,7 @@
  * memory edges, identities, devices, and audit log.
  */
 
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 
 export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -136,6 +136,16 @@ export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
         const creds = db.createObjectStore("issued_credentials", { keyPath: "credential_id" });
         creds.createIndex("subject", "subject_motebit_id");
         creds.createIndex("type", "credential_type");
+      }
+
+      // Skills — installed procedural-knowledge bundles per
+      // `spec/skills-v1.md`. The IDB row holds the bytes the desktop
+      // sidecar otherwise stores at `~/.motebit/skills/<name>/`. Schema
+      // mirrors the StoredSkill shape from `@motebit/skills/storage`.
+      // Single store keyed by `name`. Insertion order is preserved for
+      // `list()` to match the fs adapter's `installed.json` semantics.
+      if (!db.objectStoreNames.contains("skills")) {
+        db.createObjectStore("skills", { keyPath: "name" });
       }
     };
 
