@@ -37,6 +37,7 @@ export { IdbCredentialStore } from "./credential-store.js";
 export { IdbApprovalStore } from "./approval-store.js";
 export { IdbToolAuditSink } from "./tool-audit-store.js";
 export { IdbSkillStorageAdapter } from "./idb-skills.js";
+export { IdbSkillAuditSink } from "./idb-skill-audit.js";
 export type { StateSnapshotAdapter } from "./state-snapshot.js";
 
 export async function createBrowserStorage(): Promise<StorageAdapters> {

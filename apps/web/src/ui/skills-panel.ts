@@ -139,6 +139,7 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
     if (controller !== null) return controller;
     const registry = ctx.app.getSkillRegistry();
     if (registry === null) return null;
+    const auditSink = ctx.app.getSkillAuditSink();
     const adapter = new RegistryBackedSkillsPanelAdapter(registry, {
       fetchBundle: async (url: string): Promise<SkillBundleShape> => {
         const resp = await fetch(url, { headers: { Accept: "application/json" } });
@@ -148,6 +149,11 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
         return (await resp.json()) as SkillRegistryBundle;
       },
       requestInstallConsent: showConsentModal,
+      // Same sink the registry's audit option holds — adapter-emitted
+      // `skill_consent_granted` and registry-emitted `skill_trust_grant`
+      // / `skill_remove` flow into one durable stream.
+      audit: auditSink !== null ? auditSink.record : undefined,
+      surface: "web",
     });
     controller = createSkillsController(adapter);
     unsubscribe = controller.subscribe(() => {

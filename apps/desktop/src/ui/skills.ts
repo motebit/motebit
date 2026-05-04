@@ -8,7 +8,11 @@ import {
   type SkillsPanelAdapter,
   type SkillsPanelState,
 } from "@motebit/panels";
-import { IdbSkillStorageAdapter, openMotebitDB } from "@motebit/browser-persistence";
+import {
+  IdbSkillAuditSink,
+  IdbSkillStorageAdapter,
+  openMotebitDB,
+} from "@motebit/browser-persistence";
 import { SkillRegistry } from "@motebit/skills";
 
 import { TauriIpcSkillsPanelAdapter } from "../skills-ipc";
@@ -357,8 +361,17 @@ function makeLazyAdapter(ctx: DesktopContext): SkillsPanelAdapter {
     // route through `showConsentModal` per packages/skills/CLAUDE.md
     // rule 5 — desktop's renderer in dev-mode collapses install +
     // verification + fs-write into one process, same trade-off as web.
+    // Audit events (registry-emitted trust/remove + adapter-emitted
+    // consent grants) flow through `IdbSkillAuditSink` into the
+    // shared IDB `skill_audit` store — durable trail for the dev-mode
+    // path. Production Tauri sidecar has its own audit dispatch
+    // through the registry's audit option (see src-tauri/sidecar/skills.js).
     const db = await openMotebitDB();
-    const registry = new SkillRegistry(new IdbSkillStorageAdapter(db));
+    const auditSink = new IdbSkillAuditSink(db);
+    await auditSink.preload();
+    const registry = new SkillRegistry(new IdbSkillStorageAdapter(db), {
+      audit: auditSink.record,
+    });
     cached = new RegistryBackedSkillsPanelAdapter(registry, {
       fetchBundle: async (url: string): Promise<SkillBundleShape> => {
         const resp = await fetch(url, { headers: { Accept: "application/json" } });
@@ -368,6 +381,8 @@ function makeLazyAdapter(ctx: DesktopContext): SkillsPanelAdapter {
         return (await resp.json()) as SkillBundleShape;
       },
       requestInstallConsent: showConsentModal,
+      audit: auditSink.record,
+      surface: "desktop-dev",
     });
     return cached;
   }

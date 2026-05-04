@@ -19,7 +19,11 @@ import type { SkillEnvelope, SkillManifest } from "@motebit/protocol";
 import type { SkillRegistryListing, SkillRegistryBundle } from "@motebit/sdk";
 import { canonicalJson, hash, signSkillEnvelope } from "@motebit/crypto";
 import { SkillRegistry } from "@motebit/skills";
-import { IdbSkillStorageAdapter, openMotebitDB } from "@motebit/browser-persistence";
+import {
+  IdbSkillAuditSink,
+  IdbSkillStorageAdapter,
+  openMotebitDB,
+} from "@motebit/browser-persistence";
 
 import { initSkillsPanel } from "../ui/skills-panel";
 import type { WebContext } from "../types";
@@ -172,7 +176,7 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     globalThis.fetch = fetchStub as unknown as typeof fetch;
 
     const ctx: WebContext = {
-      app: { getSkillRegistry: () => registry } as unknown as WebApp,
+      app: { getSkillRegistry: () => registry, getSkillAuditSink: () => null } as unknown as WebApp,
       getConfig: () => null,
       setConfig: () => undefined,
       addMessage: () => undefined,
@@ -306,7 +310,7 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     }) as unknown as typeof fetch;
 
     const ctx: WebContext = {
-      app: { getSkillRegistry: () => registry } as unknown as WebApp,
+      app: { getSkillRegistry: () => registry, getSkillAuditSink: () => null } as unknown as WebApp,
       getConfig: () => null,
       setConfig: () => undefined,
       addMessage: () => undefined,
@@ -401,7 +405,7 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
 
     const showToast = vi.fn();
     const ctx: WebContext = {
-      app: { getSkillRegistry: () => registry } as unknown as WebApp,
+      app: { getSkillRegistry: () => registry, getSkillAuditSink: () => null } as unknown as WebApp,
       getConfig: () => null,
       setConfig: () => undefined,
       addMessage: () => undefined,
@@ -495,7 +499,7 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     }) as unknown as typeof fetch;
 
     const ctx: WebContext = {
-      app: { getSkillRegistry: () => registry } as unknown as WebApp,
+      app: { getSkillRegistry: () => registry, getSkillAuditSink: () => null } as unknown as WebApp,
       getConfig: () => null,
       setConfig: () => undefined,
       addMessage: () => undefined,
@@ -520,5 +524,121 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     const installed = await registry.list();
     expect(installed.length).toBe(1);
     expect(installed[0]!.manifest.motebit.sensitivity).toBe("personal");
+  });
+
+  // -------------------------------------------------------------------------
+  // Durable consent audit — `skill_consent_granted` event lands in the
+  // IDB audit sink after a sensitive-tier install completes. Closes the
+  // gap shipped by the consent-gate arc: the prompt fired but no
+  // surface persisted the approval. Now web does.
+  // -------------------------------------------------------------------------
+
+  it("medical-tier install persists skill_consent_granted to the IDB audit sink", async () => {
+    const { envelope, body } = await buildBundle("audit-medical-skill", "medical");
+    const dbName = `panel-audit-${crypto.randomUUID()}`;
+    const db = await openMotebitDB(dbName);
+    const auditSink = new IdbSkillAuditSink(db);
+    const registry = new SkillRegistry(new IdbSkillStorageAdapter(db), {
+      audit: auditSink.record,
+    });
+
+    const submitter = "did:key:zTestSubmitter";
+    const submittedAt = Date.now();
+    const listing: SkillRegistryListing = {
+      entries: [
+        {
+          submitter_motebit_id: submitter,
+          name: envelope.skill.name,
+          version: envelope.skill.version,
+          content_hash: envelope.skill.content_hash,
+          description: envelope.manifest.description,
+          sensitivity: "medical",
+          platforms: envelope.manifest.platforms ?? ["macos"],
+          signature_public_key: envelope.signature.public_key,
+          submitted_at: submittedAt,
+          featured: true,
+        },
+      ],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    };
+    const bundle: SkillRegistryBundle = {
+      submitter_motebit_id: submitter,
+      envelope,
+      body: bytesToBase64(body),
+      files: {},
+      submitted_at: submittedAt,
+      featured: true,
+    };
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/api/v1/skills/discover")) {
+        return new Response(JSON.stringify(listing), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes(`/api/v1/skills/${encodeURIComponent(submitter)}/`)) {
+        return new Response(JSON.stringify(bundle), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const ctx: WebContext = {
+      app: {
+        getSkillRegistry: () => registry,
+        getSkillAuditSink: () => auditSink,
+      } as unknown as WebApp,
+      getConfig: () => null,
+      setConfig: () => undefined,
+      addMessage: () => undefined,
+      showToast: () => undefined,
+      bootstrapProxy: () => Promise.resolve(false),
+    };
+    const api = initSkillsPanel(ctx);
+    api.open();
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Click Install on the browse row → consent modal opens → approve.
+    const list = document.getElementById("skills-list") as HTMLDivElement;
+    const installBtn = list.querySelector<HTMLButtonElement>(
+      '.skill-row-browse button[data-action="install"]',
+    );
+    installBtn!.click();
+    await new Promise((r) => setTimeout(r, 30));
+    const approveBtn = document.getElementById("skills-consent-approve") as HTMLButtonElement;
+    approveBtn.click();
+    await new Promise((r) => setTimeout(r, 80));
+
+    // Install completed.
+    const installed = await registry.list();
+    expect(installed.length).toBe(1);
+
+    // Audit sink got the consent event with the right tags.
+    const auditEvents = auditSink.getAll();
+    const consentEvents = auditEvents.filter((e) => e.type === "skill_consent_granted");
+    expect(consentEvents).toHaveLength(1);
+    const event = consentEvents[0]!;
+    expect(event).toMatchObject({
+      type: "skill_consent_granted",
+      skill_name: "audit-medical-skill",
+      sensitivity: "medical",
+      surface: "web",
+    });
+    expect(typeof event.at).toBe("string");
+
+    // Verify durability — open a fresh sink against the same DB and
+    // call preload(). The event must be there.
+    const db2 = await openMotebitDB(dbName);
+    const sink2 = new IdbSkillAuditSink(db2);
+    await sink2.preload();
+    const persisted = sink2.getAll().filter((e) => e.type === "skill_consent_granted");
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.skill_name).toBe("audit-medical-skill");
   });
 });

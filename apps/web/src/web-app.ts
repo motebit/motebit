@@ -32,6 +32,7 @@ import {
   IdbPlanSyncStore,
   IdbGradientStore,
   IdbSkillStorageAdapter,
+  IdbSkillAuditSink,
   openMotebitDB,
 } from "@motebit/browser-persistence";
 import { SkillRegistry } from "@motebit/skills";
@@ -163,6 +164,13 @@ export class WebApp {
   // mobile; weaker than desktop's Tauri sidecar. See
   // packages/skills/CLAUDE.md rule 5.
   private _skillRegistry: SkillRegistry | null = null;
+  // Skill audit sink — durable persistence for `skill_trust_grant`,
+  // `skill_remove`, and `skill_consent_granted` events. Wired into
+  // both the registry's `audit` option and the panels-side adapter's
+  // `audit` option so registry-emitted and adapter-emitted events
+  // land in one stream. Closes the consent-gate arc's runtime gap:
+  // the protocol type existed but no surface persisted it.
+  private _skillAuditSink: IdbSkillAuditSink | null = null;
   private cuesTickInterval: ReturnType<typeof setInterval> | null = null;
   private housekeepingInterval: ReturnType<typeof setInterval> | null = null;
   private idleCues: BehaviorCues = {
@@ -255,16 +263,26 @@ export class WebApp {
     this._publicKeyHex = result.publicKeyHex;
     this._localEventStore = storage.eventStore;
 
-    // Skills registry — opens its own handle on the shared `motebit` IDB
-    // database (IDB allows multiple connections to the same db). Stays
-    // null on IDB-open failure; getSkillRegistry() returns null and the
-    // panel displays the typed-error path. See `IdbSkillStorageAdapter`
-    // for the privilege-boundary doctrine.
+    // Skills registry + audit sink — both share the same IDB handle.
+    // The audit sink wires into the registry's `audit` option AND will
+    // be passed to the panels-side `RegistryBackedSkillsPanelAdapter`
+    // (the panel constructs the adapter with `audit: sink.record` so
+    // both registry-emitted events and adapter-emitted consent grants
+    // land in one stream). Stays null on IDB-open failure;
+    // getSkillRegistry() returns null and the panel displays the
+    // typed-error path. See `IdbSkillStorageAdapter` for the
+    // privilege-boundary doctrine + `IdbSkillAuditSink` for the audit
+    // shape.
     try {
       const skillsDb = await openMotebitDB();
-      this._skillRegistry = new SkillRegistry(new IdbSkillStorageAdapter(skillsDb));
+      this._skillAuditSink = new IdbSkillAuditSink(skillsDb);
+      await this._skillAuditSink.preload();
+      this._skillRegistry = new SkillRegistry(new IdbSkillStorageAdapter(skillsDb), {
+        audit: this._skillAuditSink.record,
+      });
     } catch {
       this._skillRegistry = null;
+      this._skillAuditSink = null;
     }
 
     // Tier 1 → Tier 2 migration: re-associate existing IDB conversations
@@ -1061,6 +1079,17 @@ export class WebApp {
    */
   getSkillRegistry(): SkillRegistry | null {
     return this._skillRegistry;
+  }
+
+  /**
+   * The IDB-backed skill audit sink. Null in lockstep with
+   * `getSkillRegistry()` — same IDB handle, same failure mode. The
+   * panel passes this to its `RegistryBackedSkillsPanelAdapter` so
+   * the adapter-emitted `skill_consent_granted` events land in the
+   * same stream as the registry-emitted trust/remove events.
+   */
+  getSkillAuditSink(): IdbSkillAuditSink | null {
+    return this._skillAuditSink;
   }
 
   /**

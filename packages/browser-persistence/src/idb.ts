@@ -5,7 +5,7 @@
  * memory edges, identities, devices, and audit log.
  */
 
-const DB_VERSION = 7;
+const DB_VERSION = 8;
 
 export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -146,6 +146,21 @@ export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
       // `list()` to match the fs adapter's `installed.json` semantics.
       if (!db.objectStoreNames.contains("skills")) {
         db.createObjectStore("skills", { keyPath: "name" });
+      }
+
+      // Skill audit log — append-only stream of `SkillAuditEvent` per
+      // `@motebit/skills`. Holds `skill_trust_grant` / `skill_remove` /
+      // `skill_consent_granted` entries emitted by the registry and the
+      // panels-side `RegistryBackedSkillsPanelAdapter`. Auto-increment
+      // `audit_id` keypath; index by skill_name + at for retrospective
+      // queries ("did the user approve installing X on this surface?").
+      // Sibling of the existing `tool_audit` store — same append-only
+      // shape, separate domain.
+      if (!db.objectStoreNames.contains("skill_audit")) {
+        const skillAudit = db.createObjectStore("skill_audit", { autoIncrement: true });
+        skillAudit.createIndex("skill_name", "skill_name");
+        skillAudit.createIndex("at", "at");
+        skillAudit.createIndex("type", "type");
       }
     };
 
