@@ -21,7 +21,8 @@ import { type CliConfig, COMMANDS } from "./args.js";
 import type { FullConfig } from "./config.js";
 import { CONFIG_DIR, saveFullConfig } from "./config.js";
 import { join } from "node:path";
-import { NodeFsSkillStorageAdapter, SkillRegistry, type SkillRecord } from "@motebit/skills";
+import { SkillRegistry, type SkillRecord } from "@motebit/skills";
+import { NodeFsSkillStorageAdapter } from "@motebit/skills/node-fs";
 import { formatMs, formatTimeAgo } from "./utils.js";
 import { green, yellow, red, dim, cyan, command, success, warn } from "./colors.js";
 import {

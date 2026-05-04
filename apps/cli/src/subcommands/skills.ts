@@ -22,17 +22,16 @@ import { isAbsolute, join, resolve } from "node:path";
 import * as readline from "node:readline";
 
 import {
-  NodeFsSkillStorageAdapter,
   SkillInstallError,
   SkillRegistry,
   parseSkillFile,
-  resolveDirectorySkillSource,
   serializeSkillFile,
   type SkillAuditSink,
   type SkillInstallSource,
   type SkillRecord,
   type SkillTrustGrantEvent,
 } from "@motebit/skills";
+import { NodeFsSkillStorageAdapter, resolveDirectorySkillSource } from "@motebit/skills/node-fs";
 import {
   canonicalJson,
   decodeSkillSignaturePublicKey,

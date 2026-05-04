@@ -41,11 +41,12 @@ export {
   type StoredSkill,
   InMemorySkillStorageAdapter,
 } from "./storage.js";
-export {
-  NodeFsSkillStorageAdapter,
-  resolveDirectorySkillSource,
-  type NodeFsSkillStorageAdapterOptions,
-} from "./fs-adapter.js";
+// Node-only adapters are NOT re-exported from the top-level entry —
+// they import `node:fs` eagerly and would crash any browser-side
+// consumer that just wants `SkillRegistry` or `SkillSelector` (vite
+// dev-mode evaluates ES modules eagerly; tree-shaking only helps
+// production builds). Import them from `@motebit/skills/node-fs`
+// in CLI / desktop-sidecar / any other Node context.
 export type {
   InstalledSkillIndexEntry,
   SkillRecord,

@@ -26,12 +26,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
-import {
-  NodeFsSkillStorageAdapter,
-  SkillRegistry,
-  SkillInstallError,
-  resolveDirectorySkillSource,
-} from "@motebit/skills";
+import { SkillRegistry, SkillInstallError } from "@motebit/skills";
+import { NodeFsSkillStorageAdapter, resolveDirectorySkillSource } from "@motebit/skills/node-fs";
 
 const SKILLS_ROOT = join(homedir(), ".motebit", "skills");
 

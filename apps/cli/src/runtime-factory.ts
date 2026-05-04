@@ -23,7 +23,8 @@ import {
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
 } from "@motebit/sync-engine";
-import { NodeFsSkillStorageAdapter, SkillRegistry, SkillSelector } from "@motebit/skills";
+import { SkillRegistry, SkillSelector } from "@motebit/skills";
+import { NodeFsSkillStorageAdapter } from "@motebit/skills/node-fs";
 import type { SkillSelectorHook } from "@motebit/sdk";
 import type { ConversationSyncStoreAdapter, PlanSyncStoreAdapter } from "@motebit/sync-engine";
 import type {
