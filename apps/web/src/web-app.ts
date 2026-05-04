@@ -31,7 +31,10 @@ import {
   IdbPlanStore,
   IdbPlanSyncStore,
   IdbGradientStore,
+  IdbSkillStorageAdapter,
+  openMotebitDB,
 } from "@motebit/browser-persistence";
+import { SkillRegistry } from "@motebit/skills";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import { McpClientAdapter, AdvisoryManifestVerifier } from "@motebit/mcp-client";
@@ -152,6 +155,14 @@ export class WebApp {
   private _mcpServers: McpServerConfig[] = [];
   private _convStore: IdbConversationStore | null = null;
   private _conversationSyncEngine: ConversationSyncEngine | null = null;
+  // Skills registry — IDB-backed so install/list/enable/trust/remove all
+  // work without a Node sidecar. Constructed in bootstrap() once IDB is
+  // open. Privilege boundary: install + envelope-bytes verification run
+  // in this same renderer context, not in an isolated sidecar process —
+  // the browser sandbox is the only boundary on web. Same trade-off as
+  // mobile; weaker than desktop's Tauri sidecar. See
+  // packages/skills/CLAUDE.md rule 5.
+  private _skillRegistry: SkillRegistry | null = null;
   private cuesTickInterval: ReturnType<typeof setInterval> | null = null;
   private housekeepingInterval: ReturnType<typeof setInterval> | null = null;
   private idleCues: BehaviorCues = {
@@ -243,6 +254,18 @@ export class WebApp {
     this._deviceId = result.deviceId;
     this._publicKeyHex = result.publicKeyHex;
     this._localEventStore = storage.eventStore;
+
+    // Skills registry — opens its own handle on the shared `motebit` IDB
+    // database (IDB allows multiple connections to the same db). Stays
+    // null on IDB-open failure; getSkillRegistry() returns null and the
+    // panel displays the typed-error path. See `IdbSkillStorageAdapter`
+    // for the privilege-boundary doctrine.
+    try {
+      const skillsDb = await openMotebitDB();
+      this._skillRegistry = new SkillRegistry(new IdbSkillStorageAdapter(skillsDb));
+    } catch {
+      this._skillRegistry = null;
+    }
 
     // Tier 1 → Tier 2 migration: re-associate existing IDB conversations
     await this.migrateTier1Identity(storage);
@@ -1028,6 +1051,16 @@ export class WebApp {
 
   getRuntime(): MotebitRuntime | null {
     return this.runtime;
+  }
+
+  /**
+   * The IDB-backed skills registry. Null until bootstrap() finishes (or
+   * if the IDB open failed). The panel UI calls this and renders an
+   * "unavailable" state when null — same shape as desktop's
+   * `sidecar_unavailable` typed failure path.
+   */
+  getSkillRegistry(): SkillRegistry | null {
+    return this._skillRegistry;
   }
 
   /**
