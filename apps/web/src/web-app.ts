@@ -703,6 +703,35 @@ export class WebApp {
     this.renderer.setDarkEnvironment();
   }
 
+  // === Operator Mode ===
+  //
+  // PIN-protected escalation that allows high-risk tools (write, execute,
+  // payments). The runtime wires the LocalStorageKeyringAdapter as its
+  // PIN store; the operator.ts API in @motebit/runtime handles
+  // PBKDF2-hashed PIN persistence + lockout-after-failed-attempts.
+
+  get isOperatorMode(): boolean {
+    return this.runtime?.isOperatorMode ?? false;
+  }
+
+  async setOperatorMode(
+    enabled: boolean,
+    pin?: string,
+  ): Promise<{ success: boolean; needsSetup?: boolean; error?: string; lockedUntil?: number }> {
+    if (!this.runtime) return { success: false, error: "Runtime not ready" };
+    return this.runtime.setOperatorMode(enabled, pin);
+  }
+
+  async setupOperatorPin(pin: string): Promise<void> {
+    if (!this.runtime) throw new Error("Runtime not ready");
+    return this.runtime.setupOperatorPin(pin);
+  }
+
+  async resetOperatorPin(): Promise<void> {
+    if (!this.runtime) throw new Error("Runtime not ready");
+    return this.runtime.resetOperatorPin();
+  }
+
   // === Conversation ===
 
   get activeConversationId(): string | null {

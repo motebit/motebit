@@ -1,6 +1,6 @@
 import type { WebContext } from "../types";
 import type { ProviderConfig, GovernanceConfig, VoiceConfig, AppearanceConfig } from "../storage";
-import { APPROVAL_PRESET_CONFIGS, DEFAULT_GOVERNANCE_CONFIG, RISK_LABELS } from "@motebit/sdk";
+import { APPROVAL_PRESET_CONFIGS, DEFAULT_GOVERNANCE_CONFIG } from "@motebit/sdk";
 import {
   saveProviderConfig,
   saveSoulColor,
@@ -169,18 +169,32 @@ const maxTokensSelect = document.getElementById("max-tokens-select") as HTMLSele
 const approvalPresets = document.querySelectorAll<HTMLInputElement>(
   'input[name="approval-preset"]',
 );
+const presetGroup = document.getElementById("approval-preset-group");
+const settingsOperatorMode = document.getElementById(
+  "settings-operator-mode",
+) as HTMLInputElement | null;
+const settingsResetPin = document.getElementById("settings-reset-pin") as HTMLButtonElement | null;
 const govPersistenceThreshold = document.getElementById(
   "gov-persistence-threshold",
 ) as HTMLInputElement;
 const govPersistenceValue = document.getElementById("gov-persistence-value") as HTMLSpanElement;
 const govRejectSecrets = document.getElementById("gov-reject-secrets") as HTMLInputElement;
-const govMaxCalls = document.getElementById("gov-max-calls") as HTMLSelectElement;
+const govMaxCalls = document.getElementById("gov-max-calls") as HTMLInputElement;
 const govProactiveEnabled = document.getElementById(
   "gov-proactive-enabled",
 ) as HTMLInputElement | null;
 const govProactiveAnchor = document.getElementById(
   "gov-proactive-anchor",
 ) as HTMLInputElement | null;
+
+// PIN dialog elements (operator-mode escalation)
+const pinBackdrop = document.getElementById("pin-backdrop");
+const pinTitle = document.getElementById("pin-title") as HTMLDivElement | null;
+const pinInput = document.getElementById("pin-input") as HTMLInputElement | null;
+const pinConfirmInput = document.getElementById("pin-confirm-input") as HTMLInputElement | null;
+const pinHint = document.getElementById("pin-hint") as HTMLDivElement | null;
+const pinConfirmText = document.getElementById("pin-confirm-text") as HTMLDivElement | null;
+const pinError = document.getElementById("pin-error") as HTMLDivElement | null;
 
 // Voice elements
 const ttsVoiceSelect = document.getElementById("settings-tts-voice") as HTMLSelectElement;
@@ -211,30 +225,29 @@ export interface SettingsDeps {
   colorPicker: ColorPickerAPI;
 }
 
-const policySummary = document.getElementById("governance-policy-summary") as HTMLDivElement;
-
-function updatePolicySummary(presetName: string): void {
-  const preset = APPROVAL_PRESET_CONFIGS[presetName] ?? APPROVAL_PRESET_CONFIGS.balanced!;
-  const autoAllow =
-    preset.requireApprovalAbove === 0
-      ? "Nothing — all tools require approval"
-      : `Up to ${RISK_LABELS[preset.requireApprovalAbove - 1] ?? `R${preset.requireApprovalAbove - 1}`}`;
-  const requireApproval = `${RISK_LABELS[preset.requireApprovalAbove] ?? `R${preset.requireApprovalAbove}`} and above`;
-  const deny = `Above ${RISK_LABELS[preset.denyAbove - 1] ?? `R${preset.denyAbove - 1}`}`;
-  policySummary.innerHTML =
-    `<strong>Active policy:</strong><br>` +
-    `Auto-allow: ${autoAllow}<br>` +
-    `Require approval: ${requireApproval}<br>` +
-    `Deny: ${deny}<br>` +
-    `Operator mode: off`;
+// Card-click selection — sync `.selected` highlight with the underlying
+// radio. Mirrors desktop's `selectApprovalPreset` so the visual state
+// matches the input state regardless of which one the user interacted with.
+function selectApprovalPreset(preset: string): void {
+  approvalPresets.forEach((radio) => {
+    const checked = radio.value === preset;
+    radio.checked = checked;
+    const label = radio.closest<HTMLElement>(".preset-option");
+    if (label != null) label.classList.toggle("selected", checked);
+  });
 }
 
+// Operator-mode toggle's checked state is the source of truth at save
+// time. Keeping the runtime in sync — `runtime.setOperatorMode(true, pin?)`
+// is the gate that requires PIN; this function only writes the
+// non-operator-mode policy fields, so flipping the preset never bypasses
+// the PIN check.
 function applyGovernanceToRuntime(ctx: WebContext, gov: GovernanceConfig): void {
   const runtime = ctx.app.getRuntime();
   if (!runtime) return;
   const preset = APPROVAL_PRESET_CONFIGS[gov.approvalPreset] ?? APPROVAL_PRESET_CONFIGS.balanced!;
   runtime.updatePolicyConfig({
-    operatorMode: false,
+    operatorMode: ctx.app.isOperatorMode,
     maxRiskLevel: preset.maxRiskLevel,
     requireApprovalAbove: preset.requireApprovalAbove,
     denyAbove: preset.denyAbove,
@@ -881,11 +894,167 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // Re-detect when base URL changes
   ollamaBaseUrl.addEventListener("change", () => void reprobeCustomEndpoint());
 
-  // Governance: live-update persistence threshold display
+  // Governance: live-update persistence threshold display. Input is 0–1
+  // (step 0.05) directly, matching desktop's range — no /100 conversion.
   govPersistenceThreshold.addEventListener("input", () => {
-    govPersistenceValue.textContent = (parseInt(govPersistenceThreshold.value, 10) / 100).toFixed(
-      2,
-    );
+    govPersistenceValue.textContent = parseFloat(govPersistenceThreshold.value).toFixed(2);
+  });
+
+  // Card-click selection — clicking anywhere on the .preset-option card
+  // updates the radio + the highlight. Native click on the radio also
+  // fires this branch via the `<label>` wrapper, so this is the single
+  // reconciliation point for both interaction surfaces.
+  if (presetGroup != null) {
+    presetGroup.addEventListener("click", (event) => {
+      const target = event.target as HTMLElement;
+      const card = target.closest<HTMLElement>(".preset-option");
+      if (card == null) return;
+      const preset = card.dataset.preset;
+      if (preset != null && preset !== "") selectApprovalPreset(preset);
+    });
+  }
+
+  // Operator-mode toggle: probe runtime.setOperatorMode(true) — if PIN is
+  // already valid (post-cooldown), this succeeds silently; otherwise the
+  // probe returns needsSetup or invalid-pin, and we surface the right
+  // dialog mode. Disabling never requires a PIN (safe direction). Mirrors
+  // desktop's wiring at apps/desktop/src/ui/settings.ts ~2239.
+  if (settingsOperatorMode != null) {
+    settingsOperatorMode.addEventListener("change", () => {
+      if (settingsOperatorMode.checked && !ctx.app.isOperatorMode) {
+        void ctx.app.setOperatorMode(true).then((result) => {
+          if (!result.success) {
+            showPinDialog(result.needsSetup === true ? "setup" : "verify");
+          }
+        });
+      } else if (!settingsOperatorMode.checked && ctx.app.isOperatorMode) {
+        void ctx.app.setOperatorMode(false);
+      }
+    });
+  }
+
+  if (settingsResetPin != null) {
+    settingsResetPin.addEventListener("click", () => {
+      showPinDialog("reset");
+    });
+  }
+
+  // PIN dialog wiring — same shape as desktop. CSS lives in index.html;
+  // the markup is the small modal block right after the settings dialog.
+  let pinMode: "setup" | "verify" | "reset" = "verify";
+
+  function showPinDialog(mode: "setup" | "verify" | "reset"): void {
+    if (
+      pinBackdrop == null ||
+      pinTitle == null ||
+      pinInput == null ||
+      pinConfirmInput == null ||
+      pinHint == null ||
+      pinConfirmText == null ||
+      pinError == null
+    )
+      return;
+    pinMode = mode;
+    pinInput.value = "";
+    pinConfirmInput.value = "";
+    pinError.textContent = "";
+    pinConfirmText.style.display = "none";
+    pinConfirmText.textContent = "";
+    pinHint.style.display = mode === "reset" ? "none" : "block";
+    if (mode === "setup") {
+      pinTitle.textContent = "Set Operator PIN";
+      pinInput.style.display = "block";
+      pinConfirmInput.style.display = "block";
+      (document.getElementById("pin-submit") as HTMLButtonElement).textContent = "OK";
+    } else if (mode === "reset") {
+      pinTitle.textContent = "Reset Operator PIN?";
+      pinInput.style.display = "none";
+      pinConfirmInput.style.display = "none";
+      pinConfirmText.style.display = "block";
+      pinConfirmText.textContent = "This will clear your PIN and disable operator mode.";
+      (document.getElementById("pin-submit") as HTMLButtonElement).textContent = "Reset";
+    } else {
+      pinTitle.textContent = "Enter Operator PIN";
+      pinInput.style.display = "block";
+      pinConfirmInput.style.display = "none";
+      (document.getElementById("pin-submit") as HTMLButtonElement).textContent = "OK";
+    }
+    pinBackdrop.classList.add("open");
+    if (mode !== "reset") {
+      requestAnimationFrame(() => pinInput.focus());
+    }
+  }
+
+  function closePinDialog(): void {
+    if (pinBackdrop == null || pinInput == null || pinConfirmInput == null || pinError == null)
+      return;
+    pinBackdrop.classList.remove("open");
+    pinInput.value = "";
+    pinConfirmInput.value = "";
+    pinError.textContent = "";
+    // Reconcile toggle to actual state — covers cancel-mid-setup case.
+    if (settingsOperatorMode != null) {
+      settingsOperatorMode.checked = ctx.app.isOperatorMode;
+    }
+  }
+
+  async function handlePinSubmit(): Promise<void> {
+    if (pinBackdrop == null || pinInput == null || pinConfirmInput == null || pinError == null)
+      return;
+    pinError.textContent = "";
+
+    if (pinMode === "reset") {
+      try {
+        await ctx.app.resetOperatorPin();
+      } catch (err: unknown) {
+        pinError.textContent = err instanceof Error ? err.message : String(err);
+        return;
+      }
+      pinBackdrop.classList.remove("open");
+      if (settingsOperatorMode != null) settingsOperatorMode.checked = false;
+      return;
+    }
+
+    const pin = pinInput.value.trim();
+    if (!/^\d{4,6}$/.test(pin)) {
+      pinError.textContent = "PIN must be 4-6 digits";
+      return;
+    }
+
+    if (pinMode === "setup") {
+      const confirm = pinConfirmInput.value.trim();
+      if (pin !== confirm) {
+        pinError.textContent = "PINs do not match";
+        return;
+      }
+      try {
+        await ctx.app.setupOperatorPin(pin);
+      } catch (err: unknown) {
+        pinError.textContent = err instanceof Error ? err.message : String(err);
+        return;
+      }
+    }
+
+    const result = await ctx.app.setOperatorMode(true, pin);
+    if (!result.success) {
+      pinError.textContent =
+        result.error != null && result.error !== ""
+          ? result.error
+          : "Failed to enable operator mode";
+      return;
+    }
+    pinBackdrop.classList.remove("open");
+  }
+
+  document.getElementById("pin-cancel")?.addEventListener("click", closePinDialog);
+  document.getElementById("pin-submit")?.addEventListener("click", () => {
+    void handlePinSubmit();
+  });
+  pinInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") void handlePinSubmit();
+  });
+  pinConfirmInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") void handlePinSubmit();
   });
 
   // === Open / Close ===
@@ -899,11 +1068,11 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
     // Pre-fill governance config
     const govConfig = loadGovernanceConfig();
+    const activePreset = govConfig?.approvalPreset ?? "balanced";
+    selectApprovalPreset(activePreset);
     if (govConfig) {
-      approvalPresets.forEach((radio) => {
-        radio.checked = radio.value === govConfig.approvalPreset;
-      });
-      govPersistenceThreshold.value = String(Math.round(govConfig.persistenceThreshold * 100));
+      // Range input is 0–1 directly (step 0.05) — no /100 conversion.
+      govPersistenceThreshold.value = String(govConfig.persistenceThreshold);
       govPersistenceValue.textContent = govConfig.persistenceThreshold.toFixed(2);
       govRejectSecrets.checked = govConfig.rejectSecrets;
       govMaxCalls.value = String(govConfig.maxCallsPerTurn);
@@ -912,14 +1081,11 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const proactiveConfig = loadProactiveConfig();
     if (govProactiveEnabled != null) govProactiveEnabled.checked = proactiveConfig.enabled;
     if (govProactiveAnchor != null) govProactiveAnchor.checked = proactiveConfig.anchorOnchain;
-    // Show active policy summary and update on preset change
-    const activePreset = govConfig?.approvalPreset ?? "balanced";
-    updatePolicySummary(activePreset);
-    approvalPresets.forEach((radio) => {
-      radio.addEventListener("change", () => {
-        if (radio.checked) updatePolicySummary(radio.value);
-      });
-    });
+    // Operator-mode toggle reflects runtime state. The policy gate is the
+    // source of truth; the toggle is a view onto it.
+    if (settingsOperatorMode != null) {
+      settingsOperatorMode.checked = ctx.app.isOperatorMode;
+    }
 
     // Pre-fill BYOK TTS key inputs from local storage. Keys never leave
     // this device; the inputs are the only UI path for entering them, so
@@ -1180,7 +1346,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const prevGov = loadGovernanceConfig();
     const govCfg: GovernanceConfig = {
       approvalPreset: selectedPreset as GovernanceConfig["approvalPreset"],
-      persistenceThreshold: parseInt(govPersistenceThreshold.value, 10) / 100,
+      persistenceThreshold: parseFloat(govPersistenceThreshold.value),
       rejectSecrets: govRejectSecrets.checked,
       maxCallsPerTurn: parseInt(govMaxCalls.value, 10) || 10,
       // Web UI doesn't expose a max-memories slider yet; preserve whatever

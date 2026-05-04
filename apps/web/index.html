@@ -7113,103 +7113,120 @@
           aria-labelledby="tab-governance"
         >
           <div class="settings-card">
-            <div class="card-title">Approval Policy</div>
-            <div class="settings-field">
-              <label>Tool approval threshold</label>
-              <div class="approval-presets" id="approval-presets">
-                <label class="radio-label"
-                  ><input type="radio" name="approval-preset" value="cautious" /> Cautious
-                  <span class="radio-hint">Approve everything above read</span></label
-                >
-                <label class="radio-label"
-                  ><input type="radio" name="approval-preset" value="balanced" checked /> Balanced
-                  <span class="radio-hint">Auto-allow reads &amp; drafts</span></label
-                >
-                <label class="radio-label"
-                  ><input type="radio" name="approval-preset" value="autonomous" /> Autonomous
-                  <span class="radio-hint">Auto-allow up to writes</span></label
-                >
+            <div class="card-title">Operator Mode</div>
+            <div class="toggle-row">
+              <div>
+                <div class="toggle-label">Operator Mode</div>
+                <div class="toggle-desc">Allow high-risk tools (write, execute, payments)</div>
               </div>
-              <div
-                id="governance-policy-summary"
-                style="
-                  margin-top: 10px;
-                  padding: 10px 12px;
-                  border-radius: 8px;
-                  background: var(--bg-input, #f5f5f5);
-                  font-size: 11px;
-                  line-height: 1.6;
-                  color: var(--text-muted, #888);
-                "
-              ></div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settings-operator-mode" />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div style="margin-top: 8px">
+              <button class="settings-link-btn" id="settings-reset-pin">Reset PIN</button>
+            </div>
+          </div>
+          <div class="settings-card">
+            <div class="card-title">Approval Preset</div>
+            <div class="preset-group" id="approval-preset-group">
+              <label class="preset-option" data-preset="cautious">
+                <input type="radio" name="approval-preset" value="cautious" />
+                <div>
+                  <div class="preset-name">Cautious</div>
+                  <div class="preset-desc">Auto reads, approve writes/exec, deny payments</div>
+                </div>
+              </label>
+              <label class="preset-option selected" data-preset="balanced">
+                <input type="radio" name="approval-preset" value="balanced" checked />
+                <div>
+                  <div class="preset-name">Balanced</div>
+                  <div class="preset-desc">
+                    Auto reads+drafts, approve writes/exec, deny payments
+                  </div>
+                </div>
+              </label>
+              <label class="preset-option" data-preset="autonomous">
+                <input type="radio" name="approval-preset" value="autonomous" />
+                <div>
+                  <div class="preset-name">Autonomous</div>
+                  <div class="preset-desc">Auto-allow most, approve payments only</div>
+                </div>
+              </label>
             </div>
           </div>
           <div class="settings-card">
             <div class="card-title">Memory Governance</div>
             <div class="settings-field">
-              <label for="gov-persistence-threshold">Persistence threshold</label>
-              <div style="display: flex; align-items: center; gap: 8px">
+              <label>Persistence Threshold</label>
+              <div class="range-row">
                 <input
                   type="range"
                   id="gov-persistence-threshold"
                   min="0"
-                  max="100"
-                  value="50"
-                  style="flex: 1"
+                  max="1"
+                  step="0.05"
+                  value="0.5"
                 />
-                <span
-                  id="gov-persistence-value"
-                  style="
-                    font-size: 11px;
-                    color: var(--text-faint);
-                    min-width: 32px;
-                    text-align: right;
-                  "
-                  >0.50</span
-                >
+                <span class="range-value" id="gov-persistence-value">0.50</span>
               </div>
             </div>
-            <div class="settings-field">
-              <label class="checkbox-label">
-                <input type="checkbox" id="gov-reject-secrets" checked />
-                Reject secrets (API keys, passwords, tokens)
-              </label>
+            <div class="settings-field" style="margin-top: 10px">
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Secret Detection</div>
+                  <div class="toggle-desc">
+                    Reject memories containing API keys, passwords, tokens
+                  </div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="gov-reject-secrets" checked />
+                  <span class="slider"></span>
+                </label>
+              </div>
             </div>
           </div>
           <div class="settings-card">
             <div class="card-title">Budget</div>
             <div class="settings-field">
               <label for="gov-max-calls">Max tool calls per turn</label>
-              <select id="gov-max-calls">
-                <option value="5">5</option>
-                <option value="10" selected>10</option>
-                <option value="20">20</option>
-                <option value="50">50</option>
-              </select>
+              <input id="gov-max-calls" type="number" min="1" max="50" value="10" />
             </div>
           </div>
           <div class="settings-card">
             <div class="card-title">Proactive Interior</div>
             <div class="settings-field">
-              <label class="checkbox-label">
-                <input type="checkbox" id="gov-proactive-enabled" />
-                Memory consolidation while idle
-              </label>
-              <div class="settings-help">
-                Runs the four-phase consolidation cycle during quiet windows (orient → gather →
-                consolidate → prune). Signed receipts are local until anchored. Default off —
-                sovereign fail-closed. Reload after toggling so the runtime picks up the new config.
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Memory consolidation while idle</div>
+                  <div class="toggle-desc">
+                    Runs the four-phase consolidation cycle during quiet windows (orient → gather →
+                    consolidate → prune). Signed receipts of the cycle's structural counts land in
+                    the memory panel. Default off — sovereign fail-closed.
+                  </div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="gov-proactive-enabled" />
+                  <span class="slider"></span>
+                </label>
               </div>
             </div>
-            <div class="settings-field">
-              <label class="checkbox-label">
-                <input type="checkbox" id="gov-proactive-anchor" />
-                Publish consolidation proofs onchain
-              </label>
-              <div class="settings-help">
-                Anchors batches of receipts to Solana as Merkle memos (~$0.001 per batch, 8 receipts
-                per batch). Requires consolidation above AND a signing identity. The motebit's
-                Solana address is its identity public key; it pays its own fees. Default off.
+            <div class="settings-field" style="margin-top: 10px">
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Publish consolidation proofs onchain</div>
+                  <div class="toggle-desc">
+                    Anchors batches of signed receipts to Solana as Merkle memos (~$0.001 per batch,
+                    8 receipts per batch). Requires consolidation above AND an identity with
+                    signing keys. The motebit's Solana address is its identity public key; it pays
+                    its own fees. Default off.
+                  </div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="gov-proactive-anchor" />
+                  <span class="slider"></span>
+                </label>
               </div>
             </div>
           </div>
@@ -7345,6 +7362,42 @@
       <div class="settings-footer">
         <button class="cancel-btn" id="settings-cancel">Cancel</button>
         <button class="save-btn" id="settings-save">Save</button>
+      </div>
+    </div>
+
+    <!-- PIN dialog — operator-mode escalation. CSS lives in the
+         #pin-backdrop / #pin-dialog block above; markup mirrors desktop's
+         pattern so showPinDialog() / handlePinSubmit() in settings.ts can
+         use the same DOM ids. -->
+    <div id="pin-backdrop">
+      <div id="pin-dialog" role="dialog" aria-modal="true" aria-label="Operator PIN">
+        <div id="pin-title">Enter PIN</div>
+        <input
+          id="pin-input"
+          type="password"
+          maxlength="6"
+          placeholder="PIN"
+          inputmode="numeric"
+          pattern="\d*"
+        />
+        <input
+          id="pin-confirm-input"
+          type="password"
+          maxlength="6"
+          placeholder="Confirm PIN"
+          inputmode="numeric"
+          pattern="\d*"
+        />
+        <div id="pin-hint">4–6 digits</div>
+        <div
+          id="pin-confirm-text"
+          style="display: none; font-size: 13px; color: var(--text-muted); text-align: center"
+        ></div>
+        <div id="pin-error"></div>
+        <div class="pin-actions">
+          <button id="pin-cancel">Cancel</button>
+          <button id="pin-submit">OK</button>
+        </div>
       </div>
     </div>
 
