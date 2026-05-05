@@ -52,6 +52,7 @@ export default defineMotebitTest({
     "src/ui/memory.ts",
     "src/ui/pairing.ts",
     "src/ui/settings.ts",
+    "src/ui/skills.ts",
     "src/ui/sovereign.ts",
     "src/ui/theme.ts",
     "src/ui/voice.ts",
