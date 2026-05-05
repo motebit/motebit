@@ -715,6 +715,46 @@ describe("verify — JSON string dispatch", () => {
     expect(result.valid).toBe(true);
   });
 
+  it("dispatches as receipt even when the signature happens to contain ---", async () => {
+    // Regression for the CI-flake class where base64url-encoded ed25519
+    // signatures occasionally contain `---` (statistical, ~0.03%).
+    // Pre-fix the dispatcher's substring check ran before JSON.parse, so
+    // a stringified JSON receipt was misclassified as an identity file
+    // any time its signature happened to include three consecutive `-`.
+    // Post-fix JSON-parse is structural and runs first; this test drives
+    // a hand-crafted signature literal with `---` to make the regression
+    // deterministic.
+    const kp = await makeKeypair();
+    const receiptBody = {
+      task_id: "task-dash",
+      motebit_id: "01234567-89ab-cdef-0123-456789abcdef",
+      public_key: kp.publicKeyHex,
+      device_id: "dev-002",
+      submitted_at: 1000000,
+      completed_at: 1001000,
+      status: "completed",
+      result: "ok",
+      tools_used: [],
+      memories_formed: 0,
+      prompt_hash: "abc",
+      result_hash: "def",
+      suite: "motebit-jcs-ed25519-b64-v1",
+    };
+    // Signature is structurally invalid (won't pass verifyReceipt's
+    // signature check) — but the dispatch decision (type === "receipt")
+    // resolves on `task_id` + `motebit_id` + `signature` + `prompt_hash`
+    // shape, BEFORE crypto verification. The flake we're catching is
+    // mis-dispatch, not mis-verification.
+    const receipt = { ...receiptBody, signature: "AAA---BBB---CCC" };
+
+    const result = await verify(JSON.stringify(receipt));
+    expect(result.type).toBe("receipt");
+    // valid is `false` (bad signature) — what matters is the dispatcher
+    // routed to the receipt verifier, not silently treated the JSON as
+    // an identity file (which would set type === "identity").
+    expect(result.valid).toBe(false);
+  });
+
   it("returns error for receipt-shaped string with invalid JSON", async () => {
     // This is tricky — detectArtifactType tries JSON.parse. If it fails,
     // it returns null (not a receipt). We need something that detects as receipt

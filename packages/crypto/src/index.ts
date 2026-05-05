@@ -622,17 +622,24 @@ const SIG_SUFFIX = " -->";
 // ===========================================================================
 
 function detectArtifactType(artifact: unknown): ArtifactType | null {
-  // String → identity file (YAML frontmatter) or JSON
+  // String → JSON artifact OR YAML-frontmatter identity file. The
+  // identity-file format is YAML frontmatter wrapped in `---` delimiters
+  // and is structurally never JSON-parseable, so JSON-parse first; only
+  // fall back to identity-file detection if the parse fails. Earlier
+  // logic checked `artifact.includes("---")` before parsing, which
+  // misclassified ~0.03% of JSON-stringified receipts as identity files
+  // because base64url-encoded ed25519 signatures contain `---` at that
+  // rate (alphabet `A-Za-z0-9-_`). Statistical CI flake; the fix is
+  // structural — JSON shape is the unambiguous signal.
   if (typeof artifact === "string") {
-    // Any string containing frontmatter delimiters is an identity file attempt
-    if (artifact.includes("---")) {
-      return "identity";
-    }
-    // Try parsing as JSON
     try {
       const parsed = JSON.parse(artifact) as unknown;
       return detectArtifactType(parsed);
     } catch {
+      // Not JSON — could still be a YAML-frontmatter identity file.
+      if (artifact.includes("---")) {
+        return "identity";
+      }
       return null;
     }
   }
