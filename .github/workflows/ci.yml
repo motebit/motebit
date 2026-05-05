@@ -137,7 +137,13 @@ jobs:
   e2e:
     needs: check
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Playwright Chromium download (~150 MB) + artifact download + 14 tests
+    # have historically run in 2m56s–3m21s, leaving only ~1.5m of headroom
+    # under the prior 5m ceiling. Run 25372469696 hit 5m6s during cleanup
+    # despite all 14 tests passing in 2.0m — the variance is normal CI
+    # behavior, not a test regression. 10m matches the build job's safety
+    # margin and absorbs runner-side fluctuation without masking real hangs.
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
