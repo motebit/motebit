@@ -173,6 +173,15 @@ rebuildTTSProvider();
   requestAnimationFrame(syncTTS);
 }
 
+// motebit-computer is gated as @experimental on web — see web-app.ts
+// for the bridge gate. The /computer slash command and Option+C
+// shortcut also no-op when the flag is off, so a user can't toggle
+// a half-functional surface into view. Memory:
+// motebit_computer_experimental_gate.md.
+const slabExperimentalEnabled =
+  (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_EXPERIMENTAL_SLAB ===
+  "true";
+
 const slashCommands = initSlashCommands(ctx, {
   openSettings: () => settings.open(),
   openConversations: () => conversations.open(),
@@ -180,7 +189,8 @@ const slashCommands = initSlashCommands(ctx, {
   openMemory: (auditNodeIds) => gatedPanels.openMemory(auditNodeIds),
   openGoals: () => gatedPanels.openGoals(),
   openAgents: () => gatedPanels.openAgents(),
-  toggleSlab: () => app.getRenderer().toggleSlabVisible?.() ?? false,
+  toggleSlab: () =>
+    slabExperimentalEnabled ? (app.getRenderer().toggleSlabVisible?.() ?? false) : false,
   newConversation: () => {
     app.resetConversation();
     const chatLog = document.getElementById("chat-log") as HTMLDivElement;
@@ -241,8 +251,10 @@ document.addEventListener("keydown", (e) => {
   }
   // Motebit Computer toggle: Option+C (Alt+C). `e.code === "KeyC"`
   // avoids the macOS `Option+C → ç` remap that would silently break
-  // matching on `e.key`.
-  if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyC") {
+  // matching on `e.key`. Gated behind VITE_EXPERIMENTAL_SLAB — when
+  // off, the keystroke is a no-op so the broken toggle can't surface
+  // a half-functional plane.
+  if (slabExperimentalEnabled && e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyC") {
     e.preventDefault();
     app.getRenderer().toggleSlabVisible?.();
   }
