@@ -15,6 +15,32 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as ed from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha512";
 
+// Assertion-driven polling. The install/toggle/remove paths are fire-and-
+// forget click handlers — the test has no direct handle on the in-flight
+// promise — so we poll the post-condition until it holds. Locally these
+// settle in <10ms; the GitHub Linux runner has hit 50ms+, so a fixed
+// delay flakes. Polling caps at 2000ms which is well above any real run
+// (the whole skills-panel suite ran 921ms locally, 2896ms on CI) and
+// fails the assertion verbatim if the condition never becomes true.
+async function waitFor(
+  check: () => void | Promise<void>,
+  timeoutMs = 2000,
+  intervalMs = 10,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastErr: unknown;
+  while (Date.now() < deadline) {
+    try {
+      await check();
+      return;
+    } catch (err: unknown) {
+      lastErr = err;
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 import type { SkillEnvelope, SkillManifest } from "@motebit/protocol";
 import type { SkillRegistryListing, SkillRegistryBundle } from "@motebit/sdk";
 import { canonicalJson, hash, signSkillEnvelope } from "@motebit/crypto";
@@ -188,10 +214,10 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     api.open();
 
     // Wait for refresh: discover fetch + registry.list both settle.
-    await new Promise((r) => setTimeout(r, 30));
-
     const list = document.getElementById("skills-list") as HTMLDivElement;
-    expect(list.querySelectorAll(".skill-row-browse").length).toBe(1);
+    await waitFor(() => {
+      expect(list.querySelectorAll(".skill-row-browse").length).toBe(1);
+    });
     expect(list.querySelectorAll(".skill-row-installed").length).toBe(0);
 
     // Install via the per-row Install button.
@@ -200,10 +226,11 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     );
     expect(installBtn).not.toBeNull();
     installBtn!.click();
-    await new Promise((r) => setTimeout(r, 50));
 
     // Installed list now has the skill, controller's enabled flag = true.
-    expect(list.querySelectorAll(".skill-row-installed").length).toBe(1);
+    await waitFor(() => {
+      expect(list.querySelectorAll(".skill-row-installed").length).toBe(1);
+    });
     const installedFromIdb = await registry.list();
     expect(installedFromIdb.length).toBe(1);
     expect(installedFromIdb[0]!.index.enabled).toBe(true);
@@ -214,9 +241,10 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     );
     expect(disableBtn?.textContent).toBe("Disable");
     disableBtn!.click();
-    await new Promise((r) => setTimeout(r, 30));
-    const afterToggle = await registry.list();
-    expect(afterToggle[0]!.index.enabled).toBe(false);
+    await waitFor(async () => {
+      const after = await registry.list();
+      expect(after[0]!.index.enabled).toBe(false);
+    });
 
     // Reopen the registry from a separate IDB handle — state persists.
     const db2 = await openMotebitDB(dbName);
@@ -231,9 +259,10 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     );
     expect(removeBtn).not.toBeNull();
     removeBtn!.click();
-    await new Promise((r) => setTimeout(r, 30));
-    const afterRemove = await registry.list();
-    expect(afterRemove.length).toBe(0);
+    await waitFor(async () => {
+      const afterRemove = await registry.list();
+      expect(afterRemove.length).toBe(0);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -315,14 +344,18 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     };
     const api = initSkillsPanel(ctx);
     api.open();
-    await new Promise((r) => setTimeout(r, 30));
+    const list = document.getElementById("skills-list") as HTMLDivElement;
+    await waitFor(() => {
+      expect(list.querySelectorAll(".skill-row-browse").length).toBe(1);
+    });
 
     // Install via the per-row Install button (no consent prompt — none-tier).
-    const list = document.getElementById("skills-list") as HTMLDivElement;
     list
       .querySelector<HTMLButtonElement>('.skill-row-browse button[data-action="install"]')!
       .click();
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => {
+      expect(list.querySelectorAll(".skill-row-installed").length).toBe(1);
+    });
 
     // Pre-fix this would have collapsed to "verified" and the trust
     // button wouldn't render. Post-fix the unsigned manifest surfaces
@@ -337,9 +370,17 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
 
     // Click Trust → operator-attested promotion. Provenance flips to
     // trusted_unsigned (the [unverified] qualifier remains everywhere
-    // the skill surfaces per spec §7.1).
+    // the skill surfaces per spec §7.1). Poll on the rendered button
+    // text so we wait for both the registry write and the controller's
+    // subscribe-driven re-render — registry.list() resolving alone
+    // races the renderAll() callback.
     trustBtn!.click();
-    await new Promise((r) => setTimeout(r, 30));
+    await waitFor(() => {
+      const btn = list.querySelector<HTMLButtonElement>(
+        '.skill-row-installed button[data-action="toggle-trusted"]',
+      );
+      expect(btn?.textContent).toBe("Untrust");
+    });
     const afterTrust = await registry.list();
     expect(afterTrust[0]!.provenance_status).toBe("trusted_unsigned");
     expect(afterTrust[0]!.index.trusted).toBe(true);
@@ -350,7 +391,12 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     );
     expect(untrustBtn?.textContent).toBe("Untrust");
     untrustBtn!.click();
-    await new Promise((r) => setTimeout(r, 30));
+    await waitFor(() => {
+      const btn = list.querySelector<HTMLButtonElement>(
+        '.skill-row-installed button[data-action="toggle-trusted"]',
+      );
+      expect(btn?.textContent).toBe("Trust");
+    });
     const afterUntrust = await registry.list();
     expect(afterUntrust[0]!.provenance_status).toBe("unsigned");
     expect(afterUntrust[0]!.index.trusted).toBe(false);
@@ -427,9 +473,11 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     };
     const api = initSkillsPanel(ctx);
     api.open();
-    await new Promise((r) => setTimeout(r, 30));
-
     const list = document.getElementById("skills-list") as HTMLDivElement;
+    await waitFor(() => {
+      expect(list.querySelectorAll(".skill-row-browse").length).toBe(1);
+    });
+
     const installBtn = list.querySelector<HTMLButtonElement>(
       '.skill-row-browse button[data-action="install"]',
     );
@@ -437,11 +485,11 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     installBtn!.click();
 
     // The adapter awaits requestInstallConsent before registry.install
-    // — the modal is now open and the install is pending. Allow the
-    // microtask queue to drain so the modal mounts.
-    await new Promise((r) => setTimeout(r, 30));
+    // — the modal is now open and the install is pending.
     const modal = document.getElementById("skills-consent-modal");
-    expect(modal?.classList.contains("open")).toBe(true);
+    await waitFor(() => {
+      expect(modal?.classList.contains("open")).toBe(true);
+    });
     const title = document.getElementById("skills-consent-title");
     expect(title?.textContent).toContain("consent-medical-skill");
     const body_ = document.getElementById("skills-consent-body");
@@ -450,12 +498,12 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     // Approve → modal closes, registry.install proceeds, IDB has the skill.
     const approveBtn = document.getElementById("skills-consent-approve") as HTMLButtonElement;
     approveBtn.click();
-    await new Promise((r) => setTimeout(r, 80));
-
-    expect(modal?.classList.contains("open")).toBe(false);
-    const installed = await registry.list();
-    expect(installed.length).toBe(1);
-    expect(installed[0]!.manifest.motebit.sensitivity).toBe("medical");
+    await waitFor(async () => {
+      expect(modal?.classList.contains("open")).toBe(false);
+      const installed = await registry.list();
+      expect(installed.length).toBe(1);
+      expect(installed[0]!.manifest.motebit.sensitivity).toBe("medical");
+    });
   });
 
   it("medical-tier install cancels silently on decline", async () => {
@@ -522,23 +570,26 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     };
     const api = initSkillsPanel(ctx);
     api.open();
-    await new Promise((r) => setTimeout(r, 30));
-
     const list = document.getElementById("skills-list") as HTMLDivElement;
+    await waitFor(() => {
+      expect(list.querySelectorAll(".skill-row-browse").length).toBe(1);
+    });
+
     const installBtn = list.querySelector<HTMLButtonElement>(
       '.skill-row-browse button[data-action="install"]',
     );
     installBtn!.click();
-    await new Promise((r) => setTimeout(r, 30));
 
     const modal = document.getElementById("skills-consent-modal");
-    expect(modal?.classList.contains("open")).toBe(true);
+    await waitFor(() => {
+      expect(modal?.classList.contains("open")).toBe(true);
+    });
 
     const cancelBtn = document.getElementById("skills-consent-cancel") as HTMLButtonElement;
     cancelBtn.click();
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(modal?.classList.contains("open")).toBe(false);
+    await waitFor(() => {
+      expect(modal?.classList.contains("open")).toBe(false);
+    });
     // Decline is silent — no toast (calm-software rule, modal close is the feedback).
     const toastForDecline = showToast.mock.calls.find((call: unknown[]) => {
       const first = call[0];
@@ -616,19 +667,23 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     };
     const api = initSkillsPanel(ctx);
     api.open();
-    await new Promise((r) => setTimeout(r, 30));
-
     const list = document.getElementById("skills-list") as HTMLDivElement;
+    await waitFor(() => {
+      expect(list.querySelectorAll(".skill-row-browse").length).toBe(1);
+    });
+
     const installBtn = list.querySelector<HTMLButtonElement>(
       '.skill-row-browse button[data-action="install"]',
     );
     installBtn!.click();
-    await new Promise((r) => setTimeout(r, 80));
+    // Personal-tier flows straight into install — wait for the row to
+    // appear, then verify the modal never opened.
+    await waitFor(() => {
+      expect(list.querySelectorAll(".skill-row-installed").length).toBe(1);
+    });
 
-    // Modal must NOT have opened.
     const modal = document.getElementById("skills-consent-modal");
     expect(modal?.classList.contains("open")).toBe(false);
-    // Install proceeded.
     const installed = await registry.list();
     expect(installed.length).toBe(1);
     expect(installed[0]!.manifest.motebit.sensitivity).toBe("personal");
@@ -710,22 +765,26 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     };
     const api = initSkillsPanel(ctx);
     api.open();
-    await new Promise((r) => setTimeout(r, 30));
+    const list = document.getElementById("skills-list") as HTMLDivElement;
+    await waitFor(() => {
+      expect(list.querySelectorAll(".skill-row-browse").length).toBe(1);
+    });
 
     // Click Install on the browse row → consent modal opens → approve.
-    const list = document.getElementById("skills-list") as HTMLDivElement;
     const installBtn = list.querySelector<HTMLButtonElement>(
       '.skill-row-browse button[data-action="install"]',
     );
     installBtn!.click();
-    await new Promise((r) => setTimeout(r, 30));
+    const modal = document.getElementById("skills-consent-modal");
+    await waitFor(() => {
+      expect(modal?.classList.contains("open")).toBe(true);
+    });
     const approveBtn = document.getElementById("skills-consent-approve") as HTMLButtonElement;
     approveBtn.click();
-    await new Promise((r) => setTimeout(r, 80));
-
-    // Install completed.
-    const installed = await registry.list();
-    expect(installed.length).toBe(1);
+    await waitFor(async () => {
+      const installed = await registry.list();
+      expect(installed.length).toBe(1);
+    });
 
     // Audit sink got the consent event with the right tags.
     const auditEvents = auditSink.getAll();
