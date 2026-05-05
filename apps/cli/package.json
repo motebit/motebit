@@ -69,7 +69,7 @@
     "@x402/evm": "^2.11.0",
     "@x402/fetch": "^2.11.0",
     "@x402/hono": "^2.11.0",
-    "better-sqlite3": "^12.0.0",
+    "better-sqlite3": "^12.9.0",
     "hono": "^4.12.9",
     "sql.js": "^1.14.1",
     "stripe": "^17.0.0",
@@ -78,7 +78,7 @@
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12",
     "ws": "^8.20.0",
-    "yaml": "^2.6.0",
+    "yaml": "^2.8.4",
     "zod": "^3.25.0",
     "zod-to-json-schema": "^3.25.2"
   },

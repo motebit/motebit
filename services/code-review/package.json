@@ -17,7 +17,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.52.0",
+    "@anthropic-ai/sdk": "^0.94.0",
     "@motebit/mcp-client": "workspace:^",
     "@motebit/molecule-runner": "workspace:*",
     "@motebit/sdk": "workspace:*",
