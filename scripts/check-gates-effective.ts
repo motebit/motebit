@@ -150,6 +150,27 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-deletion-routes-through-privacy",
+    proves:
+      "flags a UI memory-delete that bypasses the privacy layer's signed-cert path (sovereignty doctrine + retention-policy decision 5)",
+    perturb: () =>
+      writeFixture(
+        `apps/web/src/ui/${PROBE_PREFIX}delete_bypass.ts`,
+        // The gate forbids `<receiver>.memory.deleteMemory(` outside the
+        // canonical implementation sites. Every user-driven memory delete
+        // must exit through `runtime.privacy.deleteMemory(nodeId, "user_request")`
+        // so the action is signed (mutable_pruning cert), audited, and
+        // event-logged with `DeleteRequested`.
+        [
+          `declare const runtime: { memory: { deleteMemory: (id: string) => Promise<void> } };`,
+          `export async function onClick(nodeId: string): Promise<void> {`,
+          `  await runtime.memory.deleteMemory(nodeId);`,
+          `}`,
+          ``,
+        ].join("\n"),
+      ),
+  },
+  {
     script: "check-deploy-parity",
     proves: "flags an env var in .env.example that no source reads (rule 3)",
     perturb: () =>
