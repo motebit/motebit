@@ -147,7 +147,14 @@ describe("memory-commands.deleteMemory", () => {
     expect(result).toMatchObject({ cert_id: "c1" });
   });
 
-  it("falls back to direct delete if privacy fails", async () => {
+  it("propagates privacy-layer failure rather than silently bypassing", async () => {
+    // Pre-fix the desktop helper fell back to `runtime.memory.deleteMemory`
+    // when the privacy layer threw, producing an unsigned, unaudited
+    // erase. That bypass contradicted retention-policy.md decision 5
+    // (every user_request requires a subject_signature), so the
+    // fallback was removed: signing failure surfaces to the user as
+    // "delete failed, retry" rather than producing a privacy-quiet
+    // erasure. See `scripts/check-deletion-routes-through-privacy.ts`.
     const runtime = makeRuntime({
       privacy: {
         deleteMemory: vi.fn(async () => {
@@ -155,9 +162,8 @@ describe("memory-commands.deleteMemory", () => {
         }),
       },
     });
-    const result = await deleteMemory(runtime, "n1");
-    expect(runtime.memory.deleteMemory).toHaveBeenCalledWith("n1");
-    expect(result).toBeNull();
+    await expect(deleteMemory(runtime, "n1")).rejects.toThrow(/no privacy layer/);
+    expect(runtime.memory.deleteMemory).not.toHaveBeenCalled();
   });
 });
 

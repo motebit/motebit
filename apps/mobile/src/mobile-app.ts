@@ -46,6 +46,7 @@ import {
   type UnifiedProviderConfig,
   type VoiceConfig,
   type AppearanceConfig,
+  type DeletionCertificate,
 } from "@motebit/sdk";
 import { createSignedToken, secureErase, bytesToHex } from "@motebit/encryption";
 import {
@@ -1581,10 +1582,16 @@ export class MobileApp {
     }
   }
 
-  /** Soft-delete a memory with audit trail. */
-  async deleteMemory(nodeId: string): Promise<void> {
-    if (!this.runtime) return;
-    await this.runtime.memory.deleteMemory(nodeId);
+  /**
+   * Erase a memory through the privacy-layer choke point. Signs a
+   * `mutable_pruning` deletion certificate, audits the action, and
+   * lands a `DeleteRequested` event on the append-only log — same
+   * sovereignty contract every surface honors. Returns the cert so
+   * the panel can surface "deleted (signed receipt)" to the user.
+   */
+  async deleteMemory(nodeId: string): Promise<DeletionCertificate | null> {
+    if (!this.runtime) return null;
+    return await this.runtime.privacy.deleteMemory(nodeId, "user_request");
   }
 
   /** Compute effective confidence after half-life decay. */

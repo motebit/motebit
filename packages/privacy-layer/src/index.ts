@@ -1,4 +1,10 @@
-import type { MemoryNode, AuditRecord, ExportManifest, MotebitIdentity } from "@motebit/sdk";
+import type {
+  MemoryNode,
+  AuditRecord,
+  ExportManifest,
+  MotebitIdentity,
+  ConversationStoreAdapter,
+} from "@motebit/sdk";
 import { EventType, SensitivityLevel } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, MemoryStorageAdapter } from "@motebit/memory-graph";
@@ -184,10 +190,11 @@ function normalizeDeletionReason(deletedBy: string): DeletionReason {
 export class DeleteManager {
   constructor(
     private memoryGraph: MemoryGraph,
-    _eventStore: EventStore,
+    private eventStore: EventStore,
     private auditLog: AuditLogAdapter,
     private motebitId: string,
     private signer: DeletionCertSigner,
+    private conversationStore: ConversationStoreAdapter | null = null,
   ) {}
 
   /**
@@ -195,12 +202,27 @@ export class DeleteManager {
    * certificate. Decision 7: the underlying storage operation is
    * physical erase, not tombstone. Decision 5: the cert is signed by
    * the subject motebit's identity key.
+   *
+   * Order: emit `DeleteRequested` (intent) → sign cert (completion
+   * receipt) → erase bytes → audit. The intent event is the user-
+   * facing audit row "I asked"; the cert is the cryptographic receipt
+   * "it was done." Both axes survive memory erasure because they live
+   * in `append_only_horizon` space.
    */
   async deleteMemory(nodeId: string, deletedBy: string): Promise<DeletionCertificate> {
     const node = await this.memoryGraph.getNode(nodeId);
     const sensitivity = node?.sensitivity ?? SensitivityLevel.None;
     const reason = normalizeDeletionReason(deletedBy);
     const deletedAt = Date.now();
+
+    await this.eventStore.appendWithClock({
+      event_id: crypto.randomUUID(),
+      motebit_id: this.motebitId,
+      timestamp: deletedAt,
+      event_type: EventType.DeleteRequested,
+      payload: { target_type: "memory", target_id: nodeId, reason, sensitivity },
+      tombstoned: false,
+    });
 
     const certBody: Extract<DeletionCertificate, { kind: "mutable_pruning" }> = {
       kind: "mutable_pruning",
@@ -237,6 +259,89 @@ export class DeleteManager {
     });
 
     return cert;
+  }
+
+  /**
+   * Erase a whole conversation and every message it contains, signing
+   * one `consolidation_flush` certificate per message. Sibling to
+   * `deleteMemory` for the conversation surface — both routes go
+   * through the privacy layer so user-driven deletion is signed,
+   * audited, and event-logged on every surface.
+   *
+   * Per docs/doctrine/retention-policy.md §"Consolidation flush", each
+   * message is an independent record with its own sensitivity tier;
+   * the cert format is per-record, not per-conversation. We emit one
+   * `DeleteRequested` event for the conversation (the intent), then
+   * sign + erase per message, then drop the conversation row, then
+   * record a single `delete_conversation` audit summary.
+   *
+   * Sign-then-erase ordering is deliberate: if signing fails midway
+   * the already-erased messages stay erased and the partial cert
+   * array is returned, but the surface treats any throw as "delete
+   * failed, retry" — this is the same fail-soft per-record posture
+   * the auto-flush phase uses (`consolidation-cycle.ts:574-588`).
+   */
+  async deleteConversation(
+    conversationId: string,
+    deletedBy: string,
+  ): Promise<DeletionCertificate[]> {
+    if (this.conversationStore === null) {
+      throw new Error("DeleteManager: conversation store not configured");
+    }
+    const reason = normalizeDeletionReason(deletedBy);
+    const requestedAt = Date.now();
+
+    await this.eventStore.appendWithClock({
+      event_id: crypto.randomUUID(),
+      motebit_id: this.motebitId,
+      timestamp: requestedAt,
+      event_type: EventType.DeleteRequested,
+      payload: { target_type: "conversation", target_id: conversationId, reason },
+      tombstoned: false,
+    });
+
+    const messages = this.conversationStore.loadMessages(conversationId);
+    const certs: DeletionCertificate[] = [];
+
+    for (const msg of messages) {
+      // Lazy classify per decision 6b: pre-classification rows default
+      // to `personal`. The user-driven path uses the user's `reason`
+      // verbatim — `retention_enforcement_post_classification` is the
+      // auto-flush cohort discriminator, not the user-driven one.
+      const sensitivity = msg.sensitivity ?? SensitivityLevel.Personal;
+      const cert = await this.flushRecord({
+        targetKind: "conversation_message",
+        targetId: msg.messageId,
+        sensitivity,
+        reason:
+          reason === "user_request" || reason === "self_enforcement" ? reason : "user_request",
+      });
+      certs.push(cert);
+      if (this.conversationStore.eraseMessage) {
+        this.conversationStore.eraseMessage(msg.messageId);
+      }
+    }
+
+    // Storage-level erase of the conversation row. The per-message
+    // erase above handles message rows; this clears the parent.
+    this.conversationStore.deleteConversation(conversationId);
+
+    await this.auditLog.record({
+      audit_id: crypto.randomUUID(),
+      motebit_id: this.motebitId,
+      timestamp: requestedAt,
+      action: "delete_conversation",
+      target_type: "conversation",
+      target_id: conversationId,
+      details: {
+        deleted_by: deletedBy,
+        reason,
+        message_count: messages.length,
+        cert_count: certs.length,
+      },
+    });
+
+    return certs;
   }
 
   /**
@@ -391,10 +496,18 @@ export class PrivacyLayer {
     auditLog: AuditLogAdapter,
     motebitId: string,
     signer: DeletionCertSigner,
+    conversationStore: ConversationStoreAdapter | null = null,
   ) {
     this.inspector = new MemoryInspector(storage, auditLog, motebitId);
     this.sensitivityManager = new SensitivityManager(storage, auditLog, motebitId);
-    this.deleteManager = new DeleteManager(memoryGraph, eventStore, auditLog, motebitId, signer);
+    this.deleteManager = new DeleteManager(
+      memoryGraph,
+      eventStore,
+      auditLog,
+      motebitId,
+      signer,
+      conversationStore,
+    );
     this.exportManager = new ExportManager(memoryGraph, eventStore, auditLog, motebitId);
   }
 
@@ -430,6 +543,23 @@ export class PrivacyLayer {
   async deleteMemory(nodeId: string, deletedBy: string): Promise<DeletionCertificate> {
     try {
       return await this.deleteManager.deleteMemory(nodeId, deletedBy);
+    } catch (error) {
+      throw new Error("Privacy layer: access denied (fail-closed)", { cause: error });
+    }
+  }
+
+  /**
+   * Erase a whole conversation through the same choke point as memory
+   * deletion. Returns one `consolidation_flush` cert per message; the
+   * facade preserves the fail-closed posture used by every other
+   * privacy-layer operation.
+   */
+  async deleteConversation(
+    conversationId: string,
+    deletedBy: string,
+  ): Promise<DeletionCertificate[]> {
+    try {
+      return await this.deleteManager.deleteConversation(conversationId, deletedBy);
     } catch (error) {
       throw new Error("Privacy layer: access denied (fail-closed)", { cause: error });
     }

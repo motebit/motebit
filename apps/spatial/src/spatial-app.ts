@@ -818,8 +818,10 @@ export class SpatialApp {
     return this.runtime?.listConversations() ?? [];
   }
 
-  deleteConversation(id: string): void {
-    this.runtime?.deleteConversation(id);
+  async deleteConversation(id: string): Promise<void> {
+    // Routes through the runtime's privacy-layer choke point —
+    // signs flush certs per message, audits, lands DeleteRequested.
+    await this.runtime?.deleteConversation(id);
   }
 
   async summarize(): Promise<string | null> {
@@ -830,9 +832,17 @@ export class SpatialApp {
     await this.runtime?.consolidationCycle();
   }
 
-  /** Delete a memory node by ID. */
+  /**
+   * Delete a memory node by ID. Routes through the runtime's privacy-
+   * layer choke point — signed mutable_pruning cert, audit, and
+   * DeleteRequested event. The cert is dropped on the floor by this
+   * surface (spatial doesn't render receipts as panels per its
+   * doctrine); the audit + cert still land durably for any other
+   * surface that queries them.
+   */
   async deleteMemory(nodeId: string): Promise<void> {
-    await this.runtime?.memory.deleteMemory(nodeId);
+    if (!this.runtime) return;
+    await this.runtime.privacy.deleteMemory(nodeId, "user_request");
   }
 
   /** Audit memory integrity — find phantoms, conflicts, near-death nodes. */
@@ -932,7 +942,7 @@ export class SpatialApp {
         this.loadConversationById(id);
       },
       deleteConversation: (id) => {
-        this.deleteConversation(id);
+        void this.deleteConversation(id);
       },
       executeGoal: (goalId, prompt) => this.executeGoal(goalId, prompt),
     });

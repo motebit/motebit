@@ -141,11 +141,15 @@ export class ConversationManager {
     this.currentId = conversationId;
   }
 
+  /**
+   * Reset in-memory state when a conversation is erased. The runtime's
+   * `deleteConversation` routes the durable side through the privacy
+   * layer (signed `consolidation_flush` cert per message + audit +
+   * `DeleteRequested` event) and then calls this to clear the active
+   * history if the user just deleted the conversation they were
+   * looking at. Storage is no longer this method's job.
+   */
   delete(conversationId: string): void {
-    const { store } = this.deps;
-    if (!store) return;
-    store.deleteConversation(conversationId);
-    // If we just deleted the active conversation, reset
     if (this.currentId === conversationId) {
       this.history = [];
       this.currentId = null;

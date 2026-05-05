@@ -204,6 +204,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-affordance-routing",
   },
   {
+    name: "check-deletion-routes-through-privacy",
+    defends:
+      "every user-driven memory or conversation delete exits through the privacy-layer choke point (`runtime.privacy.delete{Memory,Conversation}`) so the action is signed (mutable_pruning / consolidation_flush cert), audited, and event-logged with `DeleteRequested` — locks the asymmetry where web/mobile bypassed the privacy layer pre-fix (sovereignty doctrine + retention-policy.md decision 5)",
+    script: "check-deletion-routes-through-privacy",
+  },
+  {
     name: "check-deploy-parity",
     defends: "fly.toml ↔ deploy workflow ↔ .env.example ↔ source env reads",
     script: "check-deploy-parity",

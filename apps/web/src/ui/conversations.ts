@@ -88,13 +88,18 @@ export function initConversations(
       deleteBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         if (deleteBtn.classList.contains("confirming")) {
-          // Second tap — delete
+          // Second tap — delete. The privacy-layer choke point signs
+          // a flush cert per message and lands a DeleteRequested event
+          // before erasing; we kick off the async path and refresh the
+          // list once it resolves so the UI never shows a half-deleted
+          // conversation.
           if (confirmTimer != null) clearTimeout(confirmTimer);
-          ctx.app.deleteConversation(entry.conversationId);
-          if (entry.conversationId === activeId) {
-            callbacks.onLoad();
-          }
-          populateList();
+          void ctx.app.deleteConversation(entry.conversationId).then(() => {
+            if (entry.conversationId === activeId) {
+              callbacks.onLoad();
+            }
+            populateList();
+          });
         } else {
           // First tap — ask for confirmation
           deleteBtn.classList.add("confirming");

@@ -266,6 +266,191 @@ describe("PrivacyLayer", () => {
       expect(result.valid).toBe(true);
       expect(result.steps.subject_signature_valid).toBe(true);
     });
+
+    it("emits a DeleteRequested event before erasing the memory", async () => {
+      const node = await memoryGraph.formMemory(
+        { content: "audited", confidence: 0.9, sensitivity: SensitivityLevel.Personal },
+        [1, 0],
+      );
+      await privacyLayer.deleteMemory(node.node_id, "user_request");
+
+      const events = await eventStore.query({ motebit_id: MOTEBIT_ID });
+      const deleteRequested = events.filter((e) => e.event_type === EventType.DeleteRequested);
+      expect(deleteRequested).toHaveLength(1);
+      const payload = deleteRequested[0]!.payload as Record<string, unknown>;
+      expect(payload.target_type).toBe("memory");
+      expect(payload.target_id).toBe(node.node_id);
+      expect(payload.reason).toBe("user_request");
+    });
+  });
+
+  describe("deleteConversation", () => {
+    // Minimal in-memory ConversationStoreAdapter — covers exactly the
+    // methods deleteConversation reads + writes. Avoids pulling
+    // browser-persistence into the privacy-layer test surface.
+    function makeConversationStore(): {
+      adapter: import("@motebit/sdk").ConversationStoreAdapter;
+      raw: {
+        messages: Map<
+          string,
+          Array<{ messageId: string; sensitivity?: SensitivityLevel; createdAt: number }>
+        >;
+        conversations: Set<string>;
+        erased: string[];
+      };
+    } {
+      const messages = new Map<
+        string,
+        Array<{ messageId: string; sensitivity?: SensitivityLevel; createdAt: number }>
+      >();
+      const conversations = new Set<string>();
+      const erased: string[] = [];
+      const adapter: import("@motebit/sdk").ConversationStoreAdapter = {
+        createConversation: () => {
+          const id = crypto.randomUUID();
+          conversations.add(id);
+          messages.set(id, []);
+          return id;
+        },
+        appendMessage: (conversationId, _motebitId, msg) => {
+          const list = messages.get(conversationId) ?? [];
+          list.push({
+            messageId: crypto.randomUUID(),
+            sensitivity: msg.sensitivity,
+            createdAt: Date.now(),
+          });
+          messages.set(conversationId, list);
+          conversations.add(conversationId);
+        },
+        loadMessages: (conversationId) => {
+          const list = messages.get(conversationId) ?? [];
+          return list.map((m) => ({
+            messageId: m.messageId,
+            conversationId,
+            motebitId: MOTEBIT_ID,
+            role: "user",
+            content: "",
+            toolCalls: null,
+            toolCallId: null,
+            createdAt: m.createdAt,
+            tokenEstimate: 0,
+            sensitivity: m.sensitivity,
+          }));
+        },
+        getActiveConversation: () => null,
+        updateSummary: () => undefined,
+        updateTitle: () => undefined,
+        listConversations: () => [],
+        deleteConversation: (conversationId) => {
+          conversations.delete(conversationId);
+          messages.delete(conversationId);
+        },
+        eraseMessage: (messageId) => {
+          erased.push(messageId);
+        },
+      };
+      return { adapter, raw: { messages, conversations, erased } };
+    }
+
+    it("signs one consolidation_flush cert per message and erases each", async () => {
+      const { adapter, raw } = makeConversationStore();
+      const layer = new PrivacyLayer(
+        storage,
+        memoryGraph,
+        eventStore,
+        auditLog,
+        MOTEBIT_ID,
+        TEST_SIGNER,
+        adapter,
+      );
+      const cid = adapter.createConversation(MOTEBIT_ID);
+      adapter.appendMessage(cid, MOTEBIT_ID, { role: "user", content: "hi" });
+      adapter.appendMessage(cid, MOTEBIT_ID, {
+        role: "assistant",
+        content: "hello",
+        sensitivity: SensitivityLevel.Personal,
+      });
+      adapter.appendMessage(cid, MOTEBIT_ID, { role: "user", content: "bye" });
+
+      const certs = await layer.deleteConversation(cid, "user_request");
+
+      expect(certs).toHaveLength(3);
+      for (const cert of certs) {
+        expect(cert.kind).toBe("consolidation_flush");
+        if (cert.kind !== "consolidation_flush") continue;
+        expect(cert.reason).toBe("user_request");
+        expect(cert.flushed_to).toBe("expire");
+        expect(cert.subject_signature?.signature.length).toBeGreaterThan(0);
+      }
+      // All three messages erased.
+      expect(raw.erased).toHaveLength(3);
+      // Conversation row dropped.
+      expect(raw.conversations.has(cid)).toBe(false);
+    });
+
+    it("emits a DeleteRequested event for the conversation and a delete_conversation audit", async () => {
+      const { adapter } = makeConversationStore();
+      const layer = new PrivacyLayer(
+        storage,
+        memoryGraph,
+        eventStore,
+        auditLog,
+        MOTEBIT_ID,
+        TEST_SIGNER,
+        adapter,
+      );
+      const cid = adapter.createConversation(MOTEBIT_ID);
+      adapter.appendMessage(cid, MOTEBIT_ID, { role: "user", content: "x" });
+      await layer.deleteConversation(cid, "user_request");
+
+      const events = await eventStore.query({ motebit_id: MOTEBIT_ID });
+      const intent = events.filter(
+        (e) =>
+          e.event_type === EventType.DeleteRequested &&
+          (e.payload as Record<string, unknown>).target_type === "conversation",
+      );
+      expect(intent).toHaveLength(1);
+
+      const audits = await auditLog.query(MOTEBIT_ID);
+      expect(audits.some((a) => a.action === "delete_conversation" && a.target_id === cid)).toBe(
+        true,
+      );
+    });
+
+    it("throws fail-closed when no conversation store is configured", async () => {
+      // Layer without a conversation store — the choke-point still
+      // refuses rather than silently no-op.
+      const noStoreLayer = new PrivacyLayer(
+        storage,
+        memoryGraph,
+        eventStore,
+        auditLog,
+        MOTEBIT_ID,
+        TEST_SIGNER,
+      );
+      await expect(noStoreLayer.deleteConversation("c1", "user_request")).rejects.toThrow(
+        /Privacy layer: access denied/,
+      );
+    });
+
+    it("lazy-classifies pre-classification messages at SensitivityLevel.Personal", async () => {
+      const { adapter } = makeConversationStore();
+      const layer = new PrivacyLayer(
+        storage,
+        memoryGraph,
+        eventStore,
+        auditLog,
+        MOTEBIT_ID,
+        TEST_SIGNER,
+        adapter,
+      );
+      const cid = adapter.createConversation(MOTEBIT_ID);
+      // No `sensitivity` field — pre-decision-6b row.
+      adapter.appendMessage(cid, MOTEBIT_ID, { role: "user", content: "legacy" });
+      const [cert] = await layer.deleteConversation(cid, "user_request");
+      if (cert?.kind !== "consolidation_flush") throw new Error("wrong cert kind");
+      expect(cert.sensitivity).toBe(SensitivityLevel.Personal);
+    });
   });
 
   describe("exportAll", () => {

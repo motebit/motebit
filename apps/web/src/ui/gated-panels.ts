@@ -105,11 +105,11 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     deleteMemory: async (nodeId) => {
       const runtime = ctx.app.getRuntime();
       if (!runtime) return null;
-      await runtime.memory.deleteMemory(nodeId);
-      // Web's runtime.memory doesn't surface the certificate today — the
-      // tombstone hash lives in the event log. Returning null is correct
-      // until the runtime plumbs it up.
-      return null;
+      // Route through the privacy-layer choke point so user-driven
+      // deletion is signed (mutable_pruning cert), audited, and lands
+      // a `DeleteRequested` event on the append-only log — the same
+      // sovereignty contract every surface honors.
+      return await runtime.privacy.deleteMemory(nodeId, "user_request");
     },
     pinMemory: async () => {
       // Web doesn't expose pin today. No-op keeps the interface satisfied.

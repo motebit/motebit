@@ -47,6 +47,7 @@
     "check-service-primitives": "npx tsx scripts/check-service-primitives.ts",
     "check-app-primitives": "npx tsx scripts/check-app-primitives.ts",
     "check-affordance-routing": "npx tsx scripts/check-affordance-routing.ts",
+    "check-deletion-routes-through-privacy": "npx tsx scripts/check-deletion-routes-through-privacy.ts",
     "check-deploy-parity": "npx tsx scripts/check-deploy-parity.ts",
     "check-gates-effective": "npx tsx scripts/check-gates-effective.ts",
     "check-api-surface": "npx tsx scripts/check-api-surface.ts",

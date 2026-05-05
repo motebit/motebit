@@ -77,7 +77,12 @@ export async function cmdForget(runtime: MotebitRuntime, keyword?: string): Prom
   const match = active.find((n) => n.content.toLowerCase().includes(k));
   if (!match) return { summary: `No memory matching "${keyword.trim()}".` };
 
-  await runtime.memory.deleteMemory(match.node_id);
+  // /forget is user-driven (the slash command was typed by the
+  // motebit's owner). Route through the privacy layer choke point so
+  // the deletion is signed (mutable_pruning cert) and lands a
+  // DeleteRequested event on the append-only log — same contract
+  // every UI memory-delete affordance honors post-fix.
+  await runtime.privacy.deleteMemory(match.node_id, "user_request");
   const snippet = match.content.slice(0, 60);
   return {
     summary: `Forgot: ${snippet}${match.content.length > 60 ? "..." : ""}`,

@@ -219,6 +219,18 @@ describe("executeCommand", () => {
           }),
           deleteMemory: vi.fn(),
         },
+        // /forget routes through the privacy layer choke point — the
+        // mock returns a stub mutable_pruning cert so cmdForget's
+        // signed-delete path resolves cleanly.
+        privacy: {
+          deleteMemory: vi.fn(async (nodeId: string) => ({
+            kind: "mutable_pruning",
+            target_id: nodeId,
+            sensitivity: "none",
+            reason: "user_request",
+            deleted_at: Date.now(),
+          })),
+        },
       });
 
     it("memories: returns active count and top content", async () => {

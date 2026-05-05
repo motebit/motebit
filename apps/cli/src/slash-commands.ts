@@ -446,8 +446,14 @@ export async function handleSlashCommand(
         break;
       }
       try {
-        await runtime.memory.deleteMemory(args);
-        console.log(`Deleted memory: ${args}`);
+        // Privacy-layer choke point — signs a mutable_pruning cert,
+        // audits, lands DeleteRequested on the event log. Same path
+        // every other surface uses for user-driven memory deletion.
+        const cert = await runtime.privacy.deleteMemory(args, "user_request");
+        const sig = cert.kind === "mutable_pruning" ? cert.subject_signature?.signature : null;
+        console.log(
+          `Deleted memory: ${args}${sig !== null && sig !== undefined ? ` (signed)` : ""}`,
+        );
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`Failed to delete memory: ${message}`);

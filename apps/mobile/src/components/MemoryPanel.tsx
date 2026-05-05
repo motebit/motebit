@@ -38,11 +38,9 @@ function createMobileMemoryAdapter(app: MobileApp): MemoryFetchAdapter {
   return {
     listMemories: () => app.listMemories(),
     deleteMemory: async (nodeId) => {
-      // Mobile's app.deleteMemory currently returns void; the panel
-      // surfaces "deleted" silently, so `null` is correct — the runtime
-      // produces a certificate, we just don't plumb it back today.
-      await app.deleteMemory(nodeId);
-      return null;
+      // Privacy-layer choke point — returns the signed mutable_pruning
+      // cert so `lastDeletionCert` can render the receipt in the panel.
+      return await app.deleteMemory(nodeId);
     },
     // Mobile doesn't expose pin today; no-op keeps the interface satisfied.
     pinMemory: async () => {},

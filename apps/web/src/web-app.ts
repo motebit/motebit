@@ -883,8 +883,12 @@ export class WebApp {
     return this.runtime.getConversationHistory();
   }
 
-  deleteConversation(id: string): void {
-    this.runtime?.deleteConversation(id);
+  async deleteConversation(id: string): Promise<void> {
+    // Privacy-layer choke point: signed flush certs per message, one
+    // DeleteRequested event, then in-memory state cleanup. Returns
+    // void to the caller — the panel doesn't currently surface the
+    // certs, but they're persisted in the audit log.
+    await this.runtime?.deleteConversation(id);
   }
 
   listConversations(): Array<{

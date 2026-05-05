@@ -68,25 +68,20 @@ export async function formMemoryDirect(
 }
 
 /**
- * Soft-delete a memory with audit trail. Tries the privacy layer first
- * (which signs a deletion certificate); falls back to direct memory
- * deletion if the privacy layer is unavailable or throws. Returns the
- * deletion certificate when one was issued, `null` otherwise.
+ * Erase a memory through the privacy-layer choke point. Decision 5:
+ * subject signature required for `user_request`. Returns the signed
+ * `mutable_pruning` certificate; throws on signing failure rather
+ * than falling back to unsigned deletion — the bypass would
+ * structurally weaken the doctrine's privacy claim, and the failure
+ * is informative (the UI shows "delete failed, retry") rather than
+ * silently producing an unaudited erasure.
  */
 export async function deleteMemory(
   runtime: MotebitRuntime | null,
   nodeId: string,
 ): Promise<DeletionCertificate | null> {
   if (!runtime) return null;
-  try {
-    // `user_request` reason — UI invocation by the motebit's owner.
-    // Decision 5: subject_signature required, operator co-signature optional.
-    return await runtime.privacy.deleteMemory(nodeId, "user_request");
-  } catch {
-    // Fall back to direct deletion if privacy layer fails
-    await runtime.memory.deleteMemory(nodeId);
-    return null;
-  }
+  return await runtime.privacy.deleteMemory(nodeId, "user_request");
 }
 
 /**

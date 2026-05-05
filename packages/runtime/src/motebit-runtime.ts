@@ -25,6 +25,7 @@ import type {
   KeyringAdapter,
   IntentOrigin,
   MotebitId,
+  DeletionCertificate,
 } from "@motebit/sdk";
 import { signToolInvocationReceipt, hashToolPayload } from "@motebit/crypto";
 import { EventType, AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
@@ -547,6 +548,14 @@ export class MotebitRuntime {
       motebitId: this.motebitId as MotebitId,
       privateKey: this._signingKeys?.privateKey ?? new Uint8Array(32),
     };
+    // Read the conversation-store adapter before constructing the
+    // privacy layer — `deleteConversation` is the choke point for
+    // user-driven conversation erasure (signed flush certs per
+    // message + audit + DeleteRequested event), and it needs the
+    // store handle. The conversation manager (constructed below)
+    // reads the same handle for in-memory state management; the
+    // privacy layer owns durability.
+    this.conversationStore = adapters.storage.conversationStore ?? null;
     this.privacy = new PrivacyLayer(
       adapters.storage.memoryStorage,
       this.memory,
@@ -554,6 +563,7 @@ export class MotebitRuntime {
       adapters.storage.auditLog,
       this.motebitId,
       deletionSigner,
+      this.conversationStore,
     );
     this.sync = new SyncEngine(adapters.storage.eventStore, this.motebitId);
 
@@ -575,8 +585,10 @@ export class MotebitRuntime {
       }
     }
 
-    // Conversation lifecycle
-    this.conversationStore = adapters.storage.conversationStore ?? null;
+    // Conversation lifecycle. `this.conversationStore` was already
+    // read above so the privacy layer could take ownership of the
+    // delete-conversation choke point; the manager reads the same
+    // handle for in-memory history management.
     this.conversation = new ConversationManager({
       motebitId: this.motebitId,
       maxHistory: config.maxConversationHistory ?? 40,
@@ -1823,9 +1835,22 @@ export class MotebitRuntime {
     this.conversation.load(conversationId);
   }
 
-  /** Delete a conversation and its messages. */
-  deleteConversation(conversationId: string): void {
+  /**
+   * Delete a conversation and its messages. Routes through the privacy
+   * layer's choke point: each message receives a signed
+   * `consolidation_flush` certificate, the conversation row is erased,
+   * and a `DeleteRequested` event lands on the append-only log.
+   *
+   * Returns the per-message certificates so the caller can render the
+   * "deleted (N receipts)" affordance and surface them in the audit
+   * panel. Conversation manager's in-memory history is reset only
+   * after the privacy-layer call resolves — failed deletion leaves
+   * the user looking at the same conversation, which is the honest UX.
+   */
+  async deleteConversation(conversationId: string): Promise<DeletionCertificate[]> {
+    const certs = await this.privacy.deleteConversation(conversationId, "user_request");
     this.conversation.delete(conversationId);
+    return certs;
   }
 
   /**
