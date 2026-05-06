@@ -302,6 +302,149 @@ export type SlabItemPhase =
   | "dissolving"
   | "gone";
 
+// === Embodiment Mode Contract ============================================
+//
+// The mode-contract invariant: every `EmbodimentMode` declares six
+// invariants (driver / observer / source / consent / sensitivity /
+// lifecycle defaults). Doctrine: `docs/doctrine/motebit-computer.md`
+// §"Mode contract — six declarations per mode."
+//
+// `EMBODIMENT_MODE_CONTRACTS` below is the typed encoding of that
+// doctrine — `satisfies Record<EmbodimentMode, EmbodimentModeContract>`
+// enforces total coverage at compile time. Adding a new mode to
+// `EmbodimentMode` without a contract entry, or removing a field from
+// the contract, fails to typecheck. Same enforceability shape as the
+// `SuiteId` / `GuestRail` / `SovereignRail` agility-as-role pattern:
+// name the role, the field set is closed, instances slot in.
+
+/** Who initiates the action this mode represents. */
+export type EmbodimentDriver = "motebit" | "user" | "peer" | "self";
+
+/** Who watches the mode's surface. */
+export type EmbodimentObserver = "motebit" | "user" | "self";
+
+/** The source surface category — what's being driven or observed. */
+export type EmbodimentSourceCategory =
+  | "interior" // mind — memory, reasoning, internal state
+  | "sandboxed-tool" // tool_result — cleaned output from a tool call
+  | "isolated-browser" // virtual_browser — viewport motebit drives
+  | "user-source" // shared_gaze — browser tab / desktop / editor / file / video / call
+  | "real-os" // desktop_drive — the user's actual OS
+  | "peer-receipt"; // peer_viewport — signed delegation receipt from a federated peer
+
+/**
+ * When the consent (or proof) boundary fires for this mode. peer_viewport
+ * has no live consent re-fire — the receipt's signature IS the proof.
+ */
+export type EmbodimentConsentBoundary =
+  | "always-permitted" // mind (interior; no external gate)
+  | "per-action" // tool_result, desktop_drive (PolicyGate per call / classifier per action)
+  | "per-source" // shared_gaze (re-fires on source change)
+  | "session-scoped" // virtual_browser (one consent for the session)
+  | "signed-delegation"; // peer_viewport (the receipt is the proof)
+
+/**
+ * Sensitivity routing posture. Bounds which `SensitivityLevel` tiers
+ * (none / personal / medical / financial / secret) the mode admits.
+ */
+export type EmbodimentSensitivityRouting =
+  | "all-tiers" // mind (interior is sovereign-tier by definition); desktop_drive (classifier gates within)
+  | "tier-bounded-by-tool" // tool_result (per-tool's declared tier)
+  | "tier-bounded-by-source"; // virtual_browser, shared_gaze, peer_viewport (bounded by what's navigated to / observed / federated)
+
+/**
+ * Six declarations every embodiment mode must answer. Doctrine:
+ * motebit-computer.md §"Mode contract." Naming each field as a typed
+ * field — not free-form prose — turns the spectrum into an
+ * enforceable contract: a future mode addition that doesn't answer
+ * each field fails to compile.
+ *
+ * The four agency-and-governance fields (driver, observer, source,
+ * consent) are the reviewer-suggested base; the two motebit-specific
+ * fields (sensitivity, lifecycleDefaults) come from existing
+ * invariants — `SovereignTierRequiredError` enforces sensitivity
+ * routing across modes; the slab's mode × end-state matrix names
+ * lifecycle defaults per mode.
+ */
+export interface EmbodimentModeContract {
+  readonly driver: EmbodimentDriver;
+  readonly observer: EmbodimentObserver;
+  readonly source: EmbodimentSourceCategory;
+  readonly consent: EmbodimentConsentBoundary;
+  readonly sensitivity: EmbodimentSensitivityRouting;
+  /**
+   * Lifecycle phases this mode admits as defaults. Values constrained
+   * to `SlabItemPhase` — every entry is a valid phase, enforced at
+   * compile time. Doctrine: motebit-computer.md §"Mode × end state
+   * matrix" names the typical phases per mode; this is the
+   * compile-time encoding.
+   */
+  readonly lifecycleDefaults: ReadonlyArray<SlabItemPhase>;
+}
+
+/**
+ * Total contract for every `EmbodimentMode`. The
+ * `satisfies Record<EmbodimentMode, EmbodimentModeContract>` clause
+ * enforces total coverage — a new mode without a contract entry, or
+ * a contract entry without all six fields, fails to typecheck.
+ *
+ * This is the canonical authority for any consumer (slab controller,
+ * tool-policy registry, future drift gates) reasoning about what a
+ * mode permits. The doctrine prose in motebit-computer.md is the
+ * human-readable rendering of this constant; if the two diverge,
+ * this constant is correct and the prose drifts.
+ */
+export const EMBODIMENT_MODE_CONTRACTS = {
+  mind: {
+    driver: "self",
+    observer: "self",
+    source: "interior",
+    consent: "always-permitted",
+    sensitivity: "all-tiers",
+    lifecycleDefaults: ["dissolving", "resting", "detached"],
+  },
+  tool_result: {
+    driver: "motebit",
+    observer: "user",
+    source: "sandboxed-tool",
+    consent: "per-action",
+    sensitivity: "tier-bounded-by-tool",
+    lifecycleDefaults: ["resting", "dissolving"],
+  },
+  virtual_browser: {
+    driver: "motebit",
+    observer: "user",
+    source: "isolated-browser",
+    consent: "session-scoped",
+    sensitivity: "tier-bounded-by-source",
+    lifecycleDefaults: ["resting", "detached"],
+  },
+  shared_gaze: {
+    driver: "user",
+    observer: "motebit",
+    source: "user-source",
+    consent: "per-source",
+    sensitivity: "tier-bounded-by-source",
+    lifecycleDefaults: ["resting", "detached", "dissolving"],
+  },
+  desktop_drive: {
+    driver: "motebit",
+    observer: "user",
+    source: "real-os",
+    consent: "per-action",
+    sensitivity: "all-tiers",
+    lifecycleDefaults: ["resting", "detached"],
+  },
+  peer_viewport: {
+    driver: "peer",
+    observer: "motebit",
+    source: "peer-receipt",
+    consent: "signed-delegation",
+    sensitivity: "tier-bounded-by-source",
+    lifecycleDefaults: ["resting", "detached"],
+  },
+} as const satisfies Record<EmbodimentMode, EmbodimentModeContract>;
+
 /**
  * Specification for a slab item. The host-element pattern mirrors
  * `ArtifactSpec` (surface-native HTMLElement held by the caller, slab

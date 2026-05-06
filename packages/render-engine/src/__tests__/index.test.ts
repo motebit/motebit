@@ -4,10 +4,12 @@ import {
   CANONICAL_GEOMETRY,
   CANONICAL_MATERIAL,
   CANONICAL_LIGHTING,
+  EMBODIMENT_MODE_CONTRACTS,
   smoothDelta,
   ThreeJSAdapter,
   SpatialAdapter,
 } from "../index";
+import type { EmbodimentMode, SlabItemPhase } from "../index";
 
 // ---------------------------------------------------------------------------
 // CANONICAL_SPEC values
@@ -189,5 +191,115 @@ describe("SpatialAdapter", () => {
     });
     adapter.resize(1920, 1080);
     adapter.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EMBODIMENT_MODE_CONTRACTS — six declarations per mode, compile-time enforced
+// ---------------------------------------------------------------------------
+//
+// The `satisfies Record<EmbodimentMode, EmbodimentModeContract>` clause on
+// `EMBODIMENT_MODE_CONTRACTS` enforces total coverage and field shape at
+// compile time — these runtime tests are defensive backups + regression
+// pins for the architecturally-distinctive declarations a future refactor
+// might silently flatten. Doctrine: docs/doctrine/motebit-computer.md
+// §"Mode contract — six declarations per mode."
+
+describe("EMBODIMENT_MODE_CONTRACTS — total coverage + invariants", () => {
+  const ALL_MODES: readonly EmbodimentMode[] = [
+    "mind",
+    "tool_result",
+    "virtual_browser",
+    "shared_gaze",
+    "desktop_drive",
+    "peer_viewport",
+  ];
+
+  it("declares a contract for every EmbodimentMode (no silent gaps)", () => {
+    for (const mode of ALL_MODES) {
+      const contract = EMBODIMENT_MODE_CONTRACTS[mode];
+      expect(contract, `missing contract for mode "${mode}"`).toBeDefined();
+      expect(contract.driver).toBeDefined();
+      expect(contract.observer).toBeDefined();
+      expect(contract.source).toBeDefined();
+      expect(contract.consent).toBeDefined();
+      expect(contract.sensitivity).toBeDefined();
+      expect(contract.lifecycleDefaults.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("shared_gaze inverts the agency direction (user drives, motebit observes)", () => {
+    // Doctrine: motebit-computer.md §"Mode contract." This is the
+    // architecturally distinctive direction-flip — same source can be
+    // virtual_browser (motebit drives) or shared_gaze (user drives).
+    // A future contract refactor that flattens this loses the whole
+    // reason shared_gaze deserves its own mode.
+    const c = EMBODIMENT_MODE_CONTRACTS.shared_gaze;
+    expect(c.driver).toBe("user");
+    expect(c.observer).toBe("motebit");
+    expect(c.consent).toBe("per-source");
+  });
+
+  it("peer_viewport is signed-delegation, not live consent", () => {
+    // Doctrine: motebit-computer.md §"Failure modes specific to modes,"
+    // peer_viewport-rendered-as-live-perception. peer_viewport and
+    // shared_gaze share an agency direction (motebit watches) but are
+    // epistemically opposite — peer_viewport's proof is the receipt
+    // signature; shared_gaze's "proof" is just that the user pointed
+    // motebit at a source. Conflating them loses the cryptographic
+    // distinction across federation hops.
+    const c = EMBODIMENT_MODE_CONTRACTS.peer_viewport;
+    expect(c.driver).toBe("peer");
+    expect(c.observer).toBe("motebit");
+    expect(c.consent).toBe("signed-delegation");
+    expect(c.source).toBe("peer-receipt");
+  });
+
+  it("desktop_drive admits all sensitivity tiers (classifier gates within, not at boundary)", () => {
+    // motebit-computer.md says secret/financial typing fires
+    // require_approval via classifyComputerAction. The mode itself
+    // doesn't tier-bound; the per-action classifier does. A
+    // tier-bounding refactor here would silently disable
+    // desktop_drive for entire workflows where the user wants full
+    // control.
+    const c = EMBODIMENT_MODE_CONTRACTS.desktop_drive;
+    expect(c.driver).toBe("motebit");
+    expect(c.consent).toBe("per-action");
+    expect(c.sensitivity).toBe("all-tiers");
+  });
+
+  it("mind is interior-only and always permitted", () => {
+    // mind is the only mode with no external gate — the interior is
+    // sovereign-tier by definition. A refactor that adds external
+    // consent to mind breaks the separation between interior cohesion
+    // and surface tension (DROPLET.md / LIQUESCENTIA.md derivation).
+    const c = EMBODIMENT_MODE_CONTRACTS.mind;
+    expect(c.driver).toBe("self");
+    expect(c.observer).toBe("self");
+    expect(c.source).toBe("interior");
+    expect(c.consent).toBe("always-permitted");
+  });
+
+  it("every lifecycleDefaults entry is a valid SlabItemPhase", () => {
+    // Compile-time enforced via ReadonlyArray<SlabItemPhase> on the
+    // contract; this runtime check is a defensive regression pin in
+    // case a future contributor widens the type.
+    const validPhases: readonly SlabItemPhase[] = [
+      "emerging",
+      "active",
+      "resting",
+      "pinching",
+      "detached",
+      "dissolving",
+      "gone",
+    ];
+    for (const mode of ALL_MODES) {
+      const phases = EMBODIMENT_MODE_CONTRACTS[mode].lifecycleDefaults;
+      for (const phase of phases) {
+        expect(validPhases, `mode "${mode}" has invalid lifecycle phase "${phase}"`).toContain(
+          phase,
+        );
+      }
+    }
   });
 });
