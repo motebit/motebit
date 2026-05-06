@@ -121,6 +121,12 @@ export interface EnvironmentPreset {
   coolTint?: [number, number, number];
 }
 
+// Liquescentia §V.1 — Spectral gradient. The medium carries a chromatic
+// field (cool zenith, warm horizon) that makes the glass droplet legible.
+// Glass in spectrally uniform light is invisible; the gradient is what
+// the prism needs to disperse. Each preset below is one instance of
+// Liquescentia's chromatic structure, not arbitrary aesthetics.
+// Doctrine: docs/doctrine/liquescentia-as-substrate.md §V.1.
 export const ENV_DEFAULT: EnvironmentPreset = {
   zenith: [0.15, 0.25, 0.55],
   horizon: [0.7, 0.5, 0.4],
@@ -465,6 +471,10 @@ export function animateCreature(
   // ω² = n(n-1)(n+2)σ/ρR³ → ~0.3 Hz for borosilicate glass at body scale.
   // The eigenfrequency is physical, not a design choice. Processing state modulates
   // amplitude, not frequency — a hotter droplet oscillates more, not faster.
+  // Liquescentia §V.2 (quiescence): the medium is nearly still; the body's
+  // breath is the eigenmode evaluated in that quiescent regime. The slab
+  // inherits the same rhythm at 30% amplitude — one body, one medium, one
+  // rhythm. Doctrine: docs/doctrine/liquescentia-as-substrate.md §V.2.
   const BREATHE_FREQ = 0.3;
   const breatheAmplitude = (0.012 + cues.glow_intensity * 0.008) * audioBreathScale;
   const breatheRaw = Math.sin(t * BREATHE_FREQ * Math.PI * 2);

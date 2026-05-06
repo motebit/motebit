@@ -83,24 +83,11 @@ On desktop / web, Liquescentia is synthetic in a fixed-viewport scene — the sa
 
 On AR glasses, **the user's real world becomes Liquescentia**. The natural lighting around the user, the actual environment colors, the physical space's spectral character — these become the medium the glass refracts. The motebit doesn't refract a synthesized sky; it refracts your room.
 
-This is already crystallized in code. `packages/render-engine/src/adapter.ts:370`:
+The architecture has named this endgame in `packages/render-engine/src/adapter.ts`'s `WebXRThreeJSAdapter` header comment: _"the real world IS Liquescentia. The camera feed provides the chromatic spectrum that the glass refracts."_
 
-```text
-// AR passthrough — no simulated sky.
-// The real world IS Liquescentia. The camera feed provides the chromatic
-// spectrum that the glass refracts. ENV_LIGHT is the fallback when XR
-// light estimation is unavailable.
-```
+**Current state, named honestly.** The `WebXRThreeJSAdapter` does **not** yet consume XR light estimation. It uses `ENV_LIGHT` unconditionally as the synthetic chromatic gradient — both today's behavior and the eventual fallback. Promoting to real-world spectrum (via `XRSession.requestLightProbe()` / `WebXRManager.getEstimatedLight()`) is endgame work blocked on a real-device test surface (Meta Orion / Apple Vision Pro AR mode / a Quest passthrough rig). Implementing it without test hardware would ship doctrine prose, not real behavior — and motebit's discipline is to ship correctness, not aspiration. The code's comment now names the gap; the doctrine here pins what closing it requires.
 
-`packages/render-engine/src/adapter.ts:412`:
-
-```text
-// No background — AR passthrough. The real world IS Liquescentia.
-```
-
-The `WebXRThreeJSAdapter` literally drops the synthetic environment when XR light estimation is available, letting reality become the medium. This is not a configuration option; it is the doctrinally-correct expression of Liquescentia on glasses — the deepest coherence in motebit's stack.
-
-Glass refracting actual world spectrum is what glass is for. Every other surface is preparation; on AR glasses, the medium becomes literal, and the motebit reaches its full physics.
+Glass refracting actual world spectrum is what glass is for. Every other surface is preparation; on AR glasses, the medium becomes literal — and when a real-device test surface arrives, the adapter promotes from `ENV_LIGHT` to estimated light, the gap closes, and the motebit reaches its full physics.
 
 ## What this means operationally
 

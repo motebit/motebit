@@ -94,6 +94,12 @@ const SLAB_HEIGHT = SLAB_WIDTH / GOLDEN_RATIO;
  * breathing amplitude — felt as belonging to the same body, without
  * mimicking. Same 0.3 Hz frequency; inherited from `t` so the phases
  * stay perfectly synchronized (both read the same animation time).
+ *
+ * The frequency itself comes from the Rayleigh eigenmode equation
+ * `ω² = n(n-1)(n+2)σ/ρR³` evaluated in Liquescentia's quiescent regime
+ * (`creature.ts:474`). The slab does not redefine it — it inherits.
+ * One body, one medium, one rhythm. Doctrine:
+ * docs/doctrine/liquescentia-as-substrate.md §V.2 (quiescence).
  */
 const SLAB_BREATHE_AMPLITUDE_FACTOR = 0.3;
 

@@ -8,6 +8,14 @@ import type {
 } from "@motebit/sdk";
 
 // === Canonical Render Spec ===
+//
+// These constants are the body's substance and the medium's optics in
+// code form. Doctrine: docs/doctrine/liquescentia-as-substrate.md §V.3
+// "Luminous density" — IOR + transmission + attenuation make the
+// medium's filtered light visible through the glass. CANONICAL_MATERIAL
+// is the canonical home for those constants; departing from them needs
+// physical justification (a coupling argument from the same physics
+// that produced them), not aesthetic preference.
 
 export const CANONICAL_GEOMETRY: GeometrySpec = {
   form: "droplet",
@@ -16,9 +24,9 @@ export const CANONICAL_GEOMETRY: GeometrySpec = {
 };
 
 export const CANONICAL_MATERIAL: MaterialSpec = {
-  ior: 1.22, // Rendering IOR — enough refraction to lens the environment
+  ior: 1.22, // Rendering IOR — enough refraction to lens the environment (Liquescentia §V.3)
   subsurface: 0.05,
-  roughness: 0.0, // Surface tension smooths to perfection at this scale
+  roughness: 0.0, // Surface tension smooths to perfection at this scale (DROPLET §III)
   clearcoat: 0.4,
   surface_noise_amplitude: 0.002,
   base_color: [1.0, 1.0, 1.0],

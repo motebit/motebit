@@ -367,9 +367,21 @@ export class SpatialAdapter implements RenderAdapter {
 
 // === WebXR Three.js Adapter ===
 // The glass creature in physical space. AR passthrough — no simulated sky.
-// The real world IS Liquescentia. The camera feed provides the chromatic spectrum
-// that the glass refracts. ENV_LIGHT is the fallback when XR light estimation
-// is unavailable.
+//
+// Doctrinal endgame: the real world IS Liquescentia. The camera feed
+// provides the chromatic spectrum that the glass refracts; reality
+// becomes the medium. See docs/doctrine/liquescentia-as-substrate.md
+// §"The AR glasses coherence — the medium becomes literal."
+//
+// Current state, named honestly: the adapter does not yet consume
+// XR light estimation (`XRSession.requestLightProbe()` /
+// `WebXRManager.getEstimatedLight()`). It uses ENV_LIGHT
+// unconditionally — synthetic chromatic gradient as both today's
+// behavior and the eventual fallback. Promoting to real-world
+// spectrum is endgame work blocked on a real-device test surface
+// (Meta Orion / Apple Vision Pro AR mode / a Quest passthrough rig);
+// implementing without test hardware would ship doctrine prose, not
+// real behavior.
 
 export class WebXRThreeJSAdapter implements RenderAdapter {
   private spec: RenderSpec = CANONICAL_SPEC;
@@ -409,9 +421,13 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
 
     this.scene = new THREE.Scene();
-    // No background — AR passthrough. The real world IS Liquescentia.
+    // No background — AR passthrough. The real world IS Liquescentia
+    // (doctrinal endgame; see file header). The synthetic envMap below
+    // is what ships today; XR light estimation is the future direction.
 
-    // Fallback environment map for glass refraction.
+    // Synthetic environment map for glass refraction. ENV_LIGHT today;
+    // promote to `xr.getEstimatedLight()` when a real-device test
+    // surface is available (see file header for the rationale).
     this.envMap = createEnvironmentMap(this.renderer, ENV_LIGHT);
     this.scene.environment = this.envMap;
 
