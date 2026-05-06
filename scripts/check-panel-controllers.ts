@@ -140,6 +140,20 @@ const PANEL_FAMILIES: ReadonlyArray<PanelFamily> = [
     namePattern: /activity|retention/i,
     signatures: ["motebit-retention.json", "motebit-transparency.json"],
   },
+  {
+    name: "self-test",
+    // Adversarial-onboarding probe. Third leg of the sovereignty-
+    // visible trifecta — `cmdSelfTest` from @motebit/runtime is the
+    // canonical sybil-defense + audience-binding probe. Every surface
+    // that exposes a "run security self-test" button MUST go through
+    // the controller (which catches throws + projects discrete
+    // status), not call cmdSelfTest inline. The probe submits a real
+    // task to the live relay; bypassing the controller risks per-
+    // surface divergence on result rendering, error handling, and
+    // concurrent-click semantics.
+    namePattern: /activity|self-test/i,
+    signatures: ["runSelfTestNow(", "cmdSelfTest("],
+  },
 ];
 
 /**

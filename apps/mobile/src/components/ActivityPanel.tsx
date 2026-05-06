@@ -12,6 +12,8 @@ import {
 import {
   createActivityController,
   createRetentionController,
+  createSelfTestController,
+  selfTestBadgeLabel,
   summarizeRetentionCeilings,
   type ActivityFetchAdapter,
   type ActivityState,
@@ -20,6 +22,8 @@ import {
   type RetentionFetchAdapter,
   type RetentionState,
   type RetentionManifest,
+  type SelfTestFetchAdapter,
+  type SelfTestState,
   type TransparencyManifestSummary,
 } from "@motebit/panels";
 import { EventType } from "@motebit/sdk";
@@ -184,6 +188,7 @@ export function ActivityPanel({ visible, app, onClose }: ActivityPanelProps): Re
 
   const activityRef = useRef<ReturnType<typeof createActivityController> | null>(null);
   const retentionRef = useRef<ReturnType<typeof createRetentionController> | null>(null);
+  const selfTestRef = useRef<ReturnType<typeof createSelfTestController> | null>(null);
 
   const [state, setState] = useState<ActivityState>(() => ({
     events: [],
@@ -199,6 +204,14 @@ export function ActivityPanel({ visible, app, onClose }: ActivityPanelProps): Re
     errors: [],
     fetchedAt: null,
   }));
+  const [selfTest, setSelfTest] = useState<SelfTestState>(() => ({
+    status: "idle",
+    summary: "",
+    hint: null,
+    httpStatus: null,
+    taskId: null,
+    lastRunAt: null,
+  }));
 
   useEffect(() => {
     const ctrl = createActivityController(createMobileActivityAdapter(app));
@@ -207,13 +220,35 @@ export function ActivityPanel({ visible, app, onClose }: ActivityPanelProps): Re
     const rctrl = createRetentionController(createMobileRetentionAdapter(app));
     retentionRef.current = rctrl;
     const runsub = rctrl.subscribe(setRetention);
+    // Self-test controller — third leg of the sovereignty-visible
+    // trifecta. The user clicks the button to fire `cmdSelfTest`
+    // through the live relay; result lands in the badge below the
+    // retention block.
+    const stAdapter: SelfTestFetchAdapter = {
+      runSelfTest: async () => {
+        const r = await app.runSelfTestNow();
+        return {
+          status: r.status,
+          summary: r.summary,
+          hint: r.hint,
+          httpStatus: r.httpStatus,
+          taskId: r.taskId,
+        };
+      },
+    };
+    const stCtrl = createSelfTestController(stAdapter);
+    selfTestRef.current = stCtrl;
+    const stUnsub = stCtrl.subscribe(setSelfTest);
     return () => {
       unsubscribe();
       runsub();
+      stUnsub();
       ctrl.dispose();
       rctrl.dispose();
+      stCtrl.dispose();
       activityRef.current = null;
       retentionRef.current = null;
+      selfTestRef.current = null;
     };
   }, [app]);
 
@@ -221,6 +256,8 @@ export function ActivityPanel({ visible, app, onClose }: ActivityPanelProps): Re
     if (!visible) return;
     void activityRef.current?.refresh();
     void retentionRef.current?.refresh();
+    // Self-test does NOT auto-run on open — it submits a task to the
+    // live relay; the user clicks the button when they want to verify.
   }, [visible]);
 
   const filtered = activityRef.current?.filteredView() ?? state.events;
@@ -288,6 +325,46 @@ export function ActivityPanel({ visible, app, onClose }: ActivityPanelProps): Re
           ) : null}
           {retention.errors.length > 0 && retention.verification !== "verified" ? (
             <Text style={styles.retentionError}>{retention.errors[0]}</Text>
+          ) : null}
+
+          <View style={styles.selfTestRow}>
+            <TouchableOpacity
+              style={[
+                styles.selfTestBtn,
+                selfTest.status === "running" && styles.selfTestBtnDisabled,
+              ]}
+              onPress={() => void selfTestRef.current?.run()}
+              disabled={selfTest.status === "running"}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.selfTestBtnText}>Run security self-test</Text>
+            </TouchableOpacity>
+            <View
+              style={[
+                styles.retentionStatus,
+                selfTest.status === "passed" && styles.retentionStatusVerified,
+                (selfTest.status === "failed" ||
+                  selfTest.status === "task_failed" ||
+                  selfTest.status === "timeout") &&
+                  styles.retentionStatusInvalid,
+              ]}
+            >
+              <Text
+                style={
+                  selfTest.status === "passed" ||
+                  selfTest.status === "failed" ||
+                  selfTest.status === "task_failed" ||
+                  selfTest.status === "timeout"
+                    ? styles.retentionStatusTextActive
+                    : styles.retentionStatusText
+                }
+              >
+                {selfTestBadgeLabel(selfTest.status)}
+              </Text>
+            </View>
+          </View>
+          {selfTest.status !== "idle" && selfTest.status !== "passed" && selfTest.summary !== "" ? (
+            <Text style={styles.retentionError}>{selfTest.summary}</Text>
           ) : null}
         </View>
 
@@ -435,6 +512,25 @@ function createStyles(c: ThemeColors) {
     },
     retentionDays: { color: c.textSecondary, fontSize: 10, fontVariant: ["tabular-nums"] },
     retentionError: { color: c.textMuted, fontSize: 10, marginTop: 6 },
+    selfTestRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      marginTop: 8,
+      paddingTop: 8,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.borderLight,
+    },
+    selfTestBtn: {
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 6,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.borderLight,
+      backgroundColor: c.inputBg,
+    },
+    selfTestBtnDisabled: { opacity: 0.5 },
+    selfTestBtnText: { color: c.textPrimary, fontSize: 11 },
     searchBar: { paddingHorizontal: 16, paddingVertical: 10 },
     searchInput: {
       backgroundColor: c.inputBg,

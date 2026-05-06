@@ -20,6 +20,8 @@
 import {
   createActivityController,
   createRetentionController,
+  createSelfTestController,
+  selfTestBadgeLabel,
   summarizeRetentionCeilings,
   type ActivityController,
   type ActivityEvent,
@@ -28,6 +30,8 @@ import {
   type RetentionController,
   type RetentionFetchAdapter,
   type RetentionManifest,
+  type SelfTestController,
+  type SelfTestFetchAdapter,
   type TransparencyManifestSummary,
 } from "@motebit/panels";
 import { EventType } from "@motebit/sdk";
@@ -143,6 +147,32 @@ export function initActivityPanel(ctx: WebContext): ActivityPanelAPI {
 
   let controller: ActivityController | null = null;
   let retentionCtrl: RetentionController | null = null;
+  let selfTestCtrl: SelfTestController | null = null;
+
+  function attachSelfTestController(): SelfTestController {
+    if (selfTestCtrl !== null) return selfTestCtrl;
+    const adapter: SelfTestFetchAdapter = {
+      runSelfTest: async () => {
+        // Surfaces wire to the WebApp's `runSelfTestNow` — same
+        // cmdSelfTest probe the bootstrap path uses, just on demand.
+        // The controller catches throws and projects them as `failed`,
+        // so the adapter can surface relay errors without try/catch.
+        const result = await ctx.app.runSelfTestNow();
+        return {
+          status: result.status,
+          summary: result.summary,
+          hint: result.hint,
+          httpStatus: result.httpStatus,
+          taskId: result.taskId,
+        };
+      },
+    };
+    selfTestCtrl = createSelfTestController(adapter);
+    selfTestCtrl.subscribe(() => {
+      renderRetention();
+    });
+    return selfTestCtrl;
+  }
 
   function attachRetentionController(): RetentionController {
     if (retentionCtrl !== null) return retentionCtrl;
@@ -296,7 +326,42 @@ export function initActivityPanel(ctx: WebContext): ActivityPanelAPI {
     if (s.errors.length > 0 && s.verification !== "verified") {
       errorBlock = `<div class="activity-retention-error">${escapeHtml(s.errors[0]!)}</div>`;
     }
-    retentionBlock!.innerHTML = header + table + errorBlock;
+
+    // Third leg of the sovereignty-visible trifecta: protocol still
+    // works. Adversarial-onboarding probe per CLAUDE.md — submits a
+    // self-delegation task through the live relay and asserts the
+    // sybil-defense + audience-binding boundary holds. Inline below
+    // the operator's retention promise; the user clicks once and
+    // sees a green/red receipt.
+    const stState = selfTestCtrl?.getState() ?? null;
+    const stStatusClass =
+      stState === null ? "idle" : stState.status === "running" ? "loading" : stState.status;
+    const stLabel = stState === null ? "not run" : selfTestBadgeLabel(stState.status);
+    const stRunDisabled = stState !== null && stState.status === "running" ? " disabled" : "";
+    const stHint =
+      stState !== null &&
+      stState.status !== "passed" &&
+      stState.status !== "idle" &&
+      stState.summary !== ""
+        ? `<div class="activity-retention-error">${escapeHtml(stState.summary)}</div>`
+        : "";
+    const selfTestBlock = `
+      <div class="activity-self-test">
+        <button id="activity-self-test-btn" class="activity-self-test-btn"${stRunDisabled}>Run security self-test</button>
+        <span class="activity-retention-status activity-retention-status-${escapeHtml(stStatusClass)}">${escapeHtml(stLabel)}</span>
+      </div>
+      ${stHint}
+    `;
+
+    retentionBlock!.innerHTML = header + table + errorBlock + selfTestBlock;
+
+    // Re-bind the button click after innerHTML rewrite.
+    const btn = document.getElementById("activity-self-test-btn") as HTMLButtonElement | null;
+    if (btn !== null) {
+      btn.addEventListener("click", () => {
+        void attachSelfTestController().run();
+      });
+    }
   }
 
   function renderFilterBar(): void {
@@ -382,6 +447,11 @@ export function initActivityPanel(ctx: WebContext): ActivityPanelAPI {
     // refresh on every open so a stale verified-at timestamp becomes
     // visible if the manifest rotates between sessions.
     void attachRetentionController().refresh();
+    // Self-test controller attaches lazy — we don't auto-run on open
+    // (the probe submits a task through the live relay; firing it on
+    // every panel open would be noisy + waste relay budget). The
+    // user clicks the button when they want to verify.
+    attachSelfTestController();
     renderAll();
     renderRetention();
   }

@@ -12,6 +12,7 @@ import {
   resolveProactiveAnchor,
   bindSlabControllerToRenderer,
   createRelayCapabilitiesFetcher,
+  cmdSelfTest,
 } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
@@ -509,6 +510,68 @@ export class DesktopApp {
 
   createSyncToken(privateKeyHex: string, aud: string = "sync"): Promise<string> {
     return this.identity.createSyncToken(privateKeyHex, aud);
+  }
+
+  /**
+   * On-demand security self-test. Sibling to the bootstrap-path probe
+   * in `sync-controller.ts:runOnboardingSelfTest`, callable by the
+   * Activity panel's "Run security self-test" button. Returns the
+   * structured result the cross-surface controller projects into the
+   * passed/failed/timeout badge — same `cmdSelfTest` adversarial
+   * probe production agents run, just on demand.
+   */
+  async runSelfTestNow(): Promise<{
+    status: "passed" | "failed" | "task_failed" | "timeout" | "skipped";
+    summary: string;
+    hint?: string;
+    httpStatus?: number;
+    taskId?: string;
+  }> {
+    if (this.runtime === null) {
+      return { status: "skipped", summary: "Self-test skipped — runtime not ready." };
+    }
+    const syncUrl = this.getSyncUrl();
+    if (syncUrl === null || syncUrl === "") {
+      return { status: "skipped", summary: "Self-test skipped — no relay configured." };
+    }
+    let invoke: InvokeFn;
+    try {
+      const mod = await import("@tauri-apps/api/core");
+      invoke = mod.invoke as InvokeFn;
+    } catch {
+      return {
+        status: "skipped",
+        summary: "Self-test skipped — Tauri invoke unavailable (non-Tauri context).",
+      };
+    }
+    const keypair = await this.getDeviceKeypair(invoke);
+    if (keypair === null) {
+      return { status: "skipped", summary: "Self-test skipped — no device keypair." };
+    }
+    const token = await this.createSyncToken(keypair.privateKey, "task:submit");
+    if (token === null || token === "") {
+      return { status: "skipped", summary: "Self-test skipped — no auth token." };
+    }
+    const result = await cmdSelfTest(this.runtime, {
+      relay: { relayUrl: syncUrl, authToken: token, motebitId: this.motebitId },
+      mintToken: async (audience: string) => this.createSyncToken(keypair.privateKey, audience),
+      timeoutMs: 30_000,
+    });
+    const data = result.data as
+      | {
+          status?: "passed" | "failed" | "task_failed" | "timeout" | "skipped";
+          hint?: string;
+          httpStatus?: number;
+          taskId?: string;
+        }
+      | undefined;
+    return {
+      status: data?.status ?? "failed",
+      summary: result.summary,
+      hint: data?.hint,
+      httpStatus: data?.httpStatus,
+      taskId: data?.taskId,
+    };
   }
 
   // === Renderer lifecycle ===

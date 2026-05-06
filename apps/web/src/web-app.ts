@@ -1813,6 +1813,54 @@ export class WebApp {
     }
   }
 
+  /**
+   * On-demand security self-test. Sibling to `runOnboardingSelfTest` but
+   * triggered by the user's Activity panel button, not bootstrap. Returns
+   * the structured result the cross-surface controller projects into the
+   * "passed/failed/timeout" badge — no flag flipping, no console-only
+   * pathway. The retention manifest + activity log + this probe make
+   * the sovereignty-visible trifecta complete on the surface.
+   */
+  async runSelfTestNow(): Promise<{
+    status: "passed" | "failed" | "task_failed" | "timeout" | "skipped";
+    summary: string;
+    hint?: string;
+    httpStatus?: number;
+    taskId?: string;
+  }> {
+    if (this.runtime === null) {
+      return { status: "skipped", summary: "Self-test skipped — runtime not ready." };
+    }
+    const relayUrl = loadSyncUrl();
+    if (relayUrl === null || relayUrl === "") {
+      return { status: "skipped", summary: "Self-test skipped — no relay configured." };
+    }
+    const token = await this.createSyncToken("task:submit");
+    if (token === null) {
+      return { status: "skipped", summary: "Self-test skipped — no auth token." };
+    }
+    const result = await cmdSelfTest(this.runtime, {
+      relay: { relayUrl, authToken: token, motebitId: this._motebitId },
+      mintToken: async (audience: string) => (await this.createSyncToken(audience)) ?? "",
+      timeoutMs: 30_000,
+    });
+    const data = result.data as
+      | {
+          status?: "passed" | "failed" | "task_failed" | "timeout" | "skipped";
+          hint?: string;
+          httpStatus?: number;
+          taskId?: string;
+        }
+      | undefined;
+    return {
+      status: data?.status ?? "failed",
+      summary: result.summary,
+      hint: data?.hint,
+      httpStatus: data?.httpStatus,
+      taskId: data?.taskId,
+    };
+  }
+
   async startServing(): Promise<{ ok: boolean; error?: string }> {
     if (!this.runtime || !this._servingSyncUrl) {
       return { ok: false, error: "Sync not connected" };

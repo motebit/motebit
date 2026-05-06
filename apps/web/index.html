@@ -6257,6 +6257,31 @@
         font-size: 10px;
         color: var(--text-muted);
       }
+      .activity-self-test {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid var(--border-light);
+      }
+      .activity-self-test-btn {
+        padding: 4px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border-input);
+        background: var(--bg-card);
+        color: var(--text-primary);
+        font-size: 11px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .activity-self-test-btn:hover:not(:disabled) {
+        background: var(--bg-btn);
+      }
+      .activity-self-test-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
 
       /* "verify locally" — re-run envelope + body/file hash checks in
          the browser, fulfilling the relay-as-convenience-not-trust-root

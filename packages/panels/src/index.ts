@@ -78,6 +78,17 @@ export {
 } from "./retention/controller";
 
 export {
+  createSelfTestController,
+  selfTestBadgeLabel,
+  type SelfTestController,
+  type SelfTestFetchAdapter,
+  type SelfTestState,
+  type SelfTestStatus,
+  type SelfTestRunStatus,
+  type SelfTestResult,
+} from "./self-test/controller";
+
+export {
   createGoalsController,
   type GoalsController,
   type GoalsFetchAdapter,
