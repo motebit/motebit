@@ -19,14 +19,38 @@
 
 import {
   createActivityController,
+  createRetentionController,
+  summarizeRetentionCeilings,
   type ActivityController,
   type ActivityEvent,
   type ActivityKind,
   type ActivityFetchAdapter,
+  type RetentionController,
+  type RetentionFetchAdapter,
+  type RetentionManifest,
+  type TransparencyManifestSummary,
 } from "@motebit/panels";
 import { EventType } from "@motebit/sdk";
+import { verifyRetentionManifest } from "@motebit/encryption";
 
 import type { WebContext } from "../types";
+import { loadSyncUrl } from "../storage";
+
+const DEFAULT_RELAY_URL = "https://relay.motebit.com";
+
+function resolveRelayUrl(): string {
+  const configured = loadSyncUrl();
+  return (configured ?? DEFAULT_RELAY_URL).replace(/\/$/, "");
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const len = hex.length / 2;
+  const out = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
 
 const ACTIVITY_ROUTE_PREFIX = "/activity";
 
@@ -96,6 +120,7 @@ export function initActivityPanel(ctx: WebContext): ActivityPanelAPI {
   const searchInput = document.getElementById("activity-search") as HTMLInputElement | null;
   const closeBtn = document.getElementById("activity-close-btn") as HTMLButtonElement | null;
   const countBadge = document.getElementById("activity-count") as HTMLSpanElement | null;
+  const retentionBlock = document.getElementById("activity-retention") as HTMLDivElement | null;
 
   if (
     panel === null ||
@@ -104,7 +129,8 @@ export function initActivityPanel(ctx: WebContext): ActivityPanelAPI {
     filterBar === null ||
     searchInput === null ||
     closeBtn === null ||
-    countBadge === null
+    countBadge === null ||
+    retentionBlock === null
   ) {
     // Panel HTML missing — surface didn't include the markup. Return a
     // no-op API so the caller still has the same shape.
@@ -116,6 +142,60 @@ export function initActivityPanel(ctx: WebContext): ActivityPanelAPI {
   }
 
   let controller: ActivityController | null = null;
+  let retentionCtrl: RetentionController | null = null;
+
+  function attachRetentionController(): RetentionController {
+    if (retentionCtrl !== null) return retentionCtrl;
+    const adapter: RetentionFetchAdapter = {
+      // Two-fetch coordination: transparency manifest first (carries
+      // the operator pubkey), then retention manifest (signed by it).
+      // Matches the doctrine pair in operator-transparency.md +
+      // retention-policy.md §"Self-attesting transparency".
+      fetchTransparency: async (): Promise<TransparencyManifestSummary | null> => {
+        const url = `${resolveRelayUrl()}/.well-known/motebit-transparency.json`;
+        try {
+          const resp = await fetch(url, { headers: { Accept: "application/json" } });
+          if (!resp.ok) return null;
+          const body = (await resp.json()) as {
+            relay_id?: string;
+            relay_public_key?: string;
+          };
+          if (typeof body.relay_id !== "string" || typeof body.relay_public_key !== "string") {
+            return null;
+          }
+          return { relay_id: body.relay_id, relay_public_key: body.relay_public_key };
+        } catch {
+          return null;
+        }
+      },
+      fetchRetentionManifest: async (): Promise<RetentionManifest | null> => {
+        const url = `${resolveRelayUrl()}/.well-known/motebit-retention.json`;
+        try {
+          const resp = await fetch(url, { headers: { Accept: "application/json" } });
+          if (!resp.ok) return null;
+          return (await resp.json()) as RetentionManifest;
+        } catch {
+          return null;
+        }
+      },
+      verifyManifest: async (manifest, operatorPublicKeyHex) => {
+        // verifyRetentionManifest validates spec + suite + signature
+        // against the canonicalJson(body). The operator's public key
+        // is hex-encoded in the transparency manifest.
+        const keyBytes = hexToBytes(operatorPublicKeyHex);
+        const result = await verifyRetentionManifest(
+          manifest as Parameters<typeof verifyRetentionManifest>[0],
+          keyBytes,
+        );
+        return { valid: result.valid, errors: result.errors };
+      },
+    };
+    retentionCtrl = createRetentionController(adapter);
+    retentionCtrl.subscribe(() => {
+      renderRetention();
+    });
+    return retentionCtrl;
+  }
 
   function tryAttachController(): ActivityController | null {
     if (controller !== null) return controller;
@@ -175,6 +255,48 @@ export function initActivityPanel(ctx: WebContext): ActivityPanelAPI {
       renderAll();
     });
     return controller;
+  }
+
+  function renderRetention(): void {
+    const ctrl = retentionCtrl;
+    if (ctrl === null) {
+      retentionBlock!.innerHTML = `<div class="activity-retention-empty">Operator retention status loading…</div>`;
+      return;
+    }
+    const s = ctrl.getState();
+    const operator = s.operatorId ?? "operator";
+    const statusClass = `activity-retention-status-${s.verification}`;
+    const statusLabel: Record<typeof s.verification, string> = {
+      idle: "—",
+      loading: "checking",
+      verified: "verified",
+      invalid: "invalid",
+      unreachable: "unreachable",
+    };
+    const header = `
+      <div class="activity-retention-header">
+        <span class="activity-retention-operator">${escapeHtml(operator)}</span>
+        <span class="activity-retention-status ${statusClass}">${escapeHtml(statusLabel[s.verification])}</span>
+      </div>
+    `;
+    let table = "";
+    if (s.manifest !== null) {
+      const summary = summarizeRetentionCeilings(s.manifest);
+      if (summary.length > 0) {
+        const rows = summary.map(
+          (e) => `
+            <span class="activity-retention-tier">${escapeHtml(e.sensitivity)}</span>
+            <span class="activity-retention-days">${e.days === null ? "no expiry" : `${e.days}d`}</span>
+          `,
+        );
+        table = `<div class="activity-retention-table">${rows.join("")}</div>`;
+      }
+    }
+    let errorBlock = "";
+    if (s.errors.length > 0 && s.verification !== "verified") {
+      errorBlock = `<div class="activity-retention-error">${escapeHtml(s.errors[0]!)}</div>`;
+    }
+    retentionBlock!.innerHTML = header + table + errorBlock;
   }
 
   function renderFilterBar(): void {
@@ -255,7 +377,13 @@ export function initActivityPanel(ctx: WebContext): ActivityPanelAPI {
     }
     const ctrl = tryAttachController();
     if (ctrl !== null) void ctrl.refresh();
+    // Retention summary is independent of the runtime — fetches the
+    // operator's signed manifest pair and verifies in the browser. We
+    // refresh on every open so a stale verified-at timestamp becomes
+    // visible if the manifest rotates between sessions.
+    void attachRetentionController().refresh();
     renderAll();
+    renderRetention();
   }
 
   function close(): void {

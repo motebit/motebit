@@ -6190,6 +6190,74 @@
         color: var(--text-ghost);
       }
 
+      /* Operator retention summary (Activity panel header) */
+      .activity-retention {
+        padding: 10px 12px;
+        margin: 8px 8px 0;
+        border-radius: 8px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-light);
+        font-size: 11px;
+        flex-shrink: 0;
+      }
+      .activity-retention-empty {
+        color: var(--text-ghost);
+        text-align: center;
+        font-size: 10px;
+      }
+      .activity-retention-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 6px;
+        flex-wrap: wrap;
+      }
+      .activity-retention-operator {
+        font-weight: 500;
+        color: var(--text-primary);
+      }
+      .activity-retention-status {
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        padding: 1px 6px;
+        border-radius: 3px;
+      }
+      .activity-retention-status-verified {
+        background: var(--accent);
+        color: #fff;
+      }
+      .activity-retention-status-invalid {
+        background: #c0392b;
+        color: #fff;
+      }
+      .activity-retention-status-unreachable,
+      .activity-retention-status-loading {
+        background: var(--bg-btn);
+        color: var(--text-muted);
+      }
+      .activity-retention-table {
+        display: grid;
+        grid-template-columns: auto auto;
+        gap: 2px 12px;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 10px;
+        color: var(--text-secondary);
+      }
+      .activity-retention-tier {
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--text-muted);
+      }
+      .activity-retention-days {
+        text-align: right;
+      }
+      .activity-retention-error {
+        margin-top: 6px;
+        font-size: 10px;
+        color: var(--text-muted);
+      }
+
       /* "verify locally" — re-run envelope + body/file hash checks in
          the browser, fulfilling the relay-as-convenience-not-trust-root
          doctrine on the public skills surface. */
@@ -6622,6 +6690,15 @@
         >
         <button class="activity-panel-close" id="activity-close-btn">&times;</button>
       </div>
+      <!--
+        Operator retention summary — verified read of
+        /.well-known/motebit-retention.json. The block above the
+        filter bar shows what the operator promised (signed
+        cryptographic claim re-checked in the browser, not relay
+        trust); the list below shows what the motebit did within
+        those bounds. Together they're the sovereignty-visible pair.
+      -->
+      <div id="activity-retention" class="activity-retention"></div>
       <div class="activity-toolbar">
         <input
           id="activity-search"

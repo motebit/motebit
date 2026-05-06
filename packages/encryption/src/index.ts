@@ -129,6 +129,13 @@ export {
   type SkillBundleInput,
   type SkillVerifyResult,
   type SkillFileVerifyResult,
+  // Retention manifest re-verifier — browser-side check of the
+  // operator's signed `/.well-known/motebit-retention.json` against
+  // the operator pubkey (resolved from the transparency manifest).
+  // Same posture as `verifySkillBundle`: pure, browser-safe, lets
+  // surfaces re-check operator claims without trusting the relay.
+  verifyRetentionManifest,
+  type RetentionManifestVerifyResult,
 } from "@motebit/crypto";
 
 // ── Re-export credential signing from @motebit/crypto ───────────────

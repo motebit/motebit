@@ -66,6 +66,18 @@ export {
 } from "./activity/controller";
 
 export {
+  createRetentionController,
+  summarizeRetentionCeilings,
+  type RetentionController,
+  type RetentionFetchAdapter,
+  type RetentionState,
+  type RetentionVerification,
+  type RetentionManifest,
+  type RetentionStoreDeclaration,
+  type TransparencyManifestSummary,
+} from "./retention/controller";
+
+export {
   createGoalsController,
   type GoalsController,
   type GoalsFetchAdapter,
