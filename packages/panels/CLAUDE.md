@@ -1,6 +1,6 @@
 # @motebit/panels
 
-Surface-agnostic controllers for every cross-surface panel: Sovereign (credentials, execution ledger, budget, succession), Agents (trust + reputation + capability roster), Memory (graph nodes + decay + audit), Goals (declared outcomes + scheduled fires), and Skills (installed agentskills.io-compatible procedural knowledge per spec/skills-v1.md). State derivation, adapter I/O, and action handlers live here. Rendering — DOM for desktop/web, React Native for mobile — stays at the surface.
+Surface-agnostic controllers for every cross-surface panel: Sovereign (credentials, execution ledger, budget, succession), Agents (trust + reputation + capability roster), Memory (graph nodes + decay + audit), Goals (declared outcomes + scheduled fires), Skills (installed agentskills.io-compatible procedural knowledge per spec/skills-v1.md), and Activity (the unified audit-log + event-log timeline that makes user-driven sovereignty visible — every signed deletion, consent, export, and intent event the privacy layer recorded). State derivation, adapter I/O, and action handlers live here. Rendering — DOM for desktop/web, React Native for mobile — stays at the surface.
 
 Layer 5. BSL-1.1. Zero internal deps: the adapter inverts the dependency on `@motebit/runtime` so surfaces compose both without the package pulling runtime into its layer.
 

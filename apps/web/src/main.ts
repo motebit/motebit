@@ -47,6 +47,7 @@ import { loadVoiceConfig, getVendorKey } from "./storage";
 import { initGatedPanels } from "./ui/gated-panels";
 import { initSovereignPanels } from "./ui/sovereign-panels";
 import { initSkillsPanel } from "./ui/skills-panel";
+import { initActivityPanel } from "./ui/activity-panel";
 import { initTheme } from "./ui/theme";
 import { initSlashCommands } from "./ui/slash-commands";
 import { initKeyboard, openShortcutDialog } from "./ui/keyboard";
@@ -214,10 +215,12 @@ initKeyboard({
 const gatedPanels = initGatedPanels(ctx);
 const sovereignPanels = initSovereignPanels(ctx);
 const skillsPanel = initSkillsPanel(ctx);
-// URL-driven entry: visiting /skills auto-opens the panel. The panel
-// closes by popping the route back to /, so the back button does the
-// expected thing.
+const activityPanel = initActivityPanel(ctx);
+// URL-driven entry: visiting /skills or /activity auto-opens the
+// panel. The panel closes by popping the route back to /, so the
+// back button does the expected thing.
 skillsPanel.openIfRouted();
+activityPanel.openIfRouted();
 
 // === Theme ===
 
@@ -234,10 +237,13 @@ const memoryPanel = document.getElementById("memory-panel") as HTMLDivElement;
 const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
 const sovereignPanel = document.getElementById("sovereign-panel") as HTMLDivElement;
 const skillsPanelEl = document.getElementById("skills-panel") as HTMLDivElement;
+const activityPanelEl = document.getElementById("activity-panel") as HTMLDivElement;
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    if (skillsPanelEl.classList.contains("open")) {
+    if (activityPanelEl.classList.contains("open")) {
+      activityPanel.close();
+    } else if (skillsPanelEl.classList.contains("open")) {
       skillsPanel.close();
     } else if (sovereignPanel.classList.contains("open")) {
       sovereignPanels.close();

@@ -68,6 +68,10 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "conversations", description: "Browse conversations" },
   { name: "memories", description: "Browse memories" },
   { name: "skills", description: "Browse and install skills" },
+  {
+    name: "activity",
+    description: "View signed deletions, consents, and other audit-grade events",
+  },
   { name: "goals", description: "Browse goals" },
   { name: "goal", description: "Quick-add a goal" },
   { name: "computer", description: "Motebit Computer — reveal or hide the slab" },
@@ -215,6 +219,10 @@ export function initSlashCommands(
       case "skills":
         chatInput.value = "";
         document.dispatchEvent(new CustomEvent("motebit:open-skills"));
+        return;
+      case "activity":
+        chatInput.value = "";
+        document.dispatchEvent(new CustomEvent("motebit:open-activity"));
         return;
       case "goals":
       case "goal":

@@ -53,6 +53,19 @@ export {
 } from "./memory/controller";
 
 export {
+  createActivityController,
+  filterActivityView,
+  type ActivityController,
+  type ActivityControllerOptions,
+  type ActivityFetchAdapter,
+  type ActivityState,
+  type ActivityEvent,
+  type ActivityKind,
+  type ActivityAuditRecord,
+  type ActivityEventRecord,
+} from "./activity/controller";
+
+export {
   createGoalsController,
   type GoalsController,
   type GoalsFetchAdapter,
