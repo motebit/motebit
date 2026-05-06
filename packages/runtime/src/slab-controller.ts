@@ -57,7 +57,19 @@
  */
 
 import type { EmbodimentMode, SlabItemKind, SlabItemPhase } from "@motebit/render-engine";
-import { defaultEmbodimentMode } from "@motebit/render-engine";
+import { defaultEmbodimentMode, EMBODIMENT_MODE_CONTRACTS } from "@motebit/render-engine";
+
+/**
+ * Phases the contract validator inspects. Only terminal-shape transitions
+ * are checked against `EMBODIMENT_MODE_CONTRACTS[mode].lifecycleDefaults`;
+ * intermediate phases (`emerging`, `active`, `pinching`, `gone`) are
+ * lifecycle bookkeeping and not in any contract default.
+ */
+const TERMINAL_PHASES_FOR_CONTRACT: ReadonlySet<SlabItemPhase> = new Set<SlabItemPhase>([
+  "dissolving",
+  "resting",
+  "detached",
+]);
 
 /**
  * Ambient state of the slab plane itself, independent of individual
@@ -396,9 +408,49 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
 
   // ── Phase transition helpers ──────────────────────────────────────
 
+  /**
+   * Anomaly detector — warn when an item transitions to a terminal
+   * phase that isn't in the mode's `lifecycleDefaults` per
+   * `EMBODIMENT_MODE_CONTRACTS`. Doctrine: motebit-computer.md §"Mode
+   * contract — six declarations per mode."
+   *
+   * The contract's `lifecycleDefaults` names *typical* end states per
+   * mode, not exclusive ones — the doctrine's mode × end-state matrix
+   * is orthogonal, so any cell is technically reachable. But anomalous
+   * transitions (a `peer_viewport` item dissolving — typically signed
+   * delegations finish in flight then settle as receipts; a
+   * `virtual_browser` dissolving without a failed-session pathway)
+   * are worth surfacing as warnings even when legal: a future
+   * contributor sees the warning and decides whether the consumer is
+   * buggy or the contract needs widening.
+   *
+   * Fail-soft (warn, don't throw). Validation here is hygiene, not
+   * sovereignty/security — those are enforced upstream by the policy
+   * gate and the runtime's sensitivity routing. Throwing in the slab
+   * controller would propagate to surfaces and degrade UX for what
+   * is, by doctrine, a legal-but-unusual transition.
+   */
+  const checkContractAnomaly = (item: SlabItem, phase: SlabItemPhase): void => {
+    if (!TERMINAL_PHASES_FOR_CONTRACT.has(phase)) return;
+    const contract = EMBODIMENT_MODE_CONTRACTS[item.mode];
+    const allowed = contract.lifecycleDefaults;
+    if ((allowed as readonly SlabItemPhase[]).includes(phase)) return;
+    warn(
+      `slab: item "${item.id}" mode="${item.mode}" transitioned to phase="${phase}" outside the mode's contract lifecycleDefaults; possible consumer bug or contract-widening candidate`,
+      {
+        itemId: item.id,
+        mode: item.mode,
+        phase,
+        kind: item.kind,
+        allowedDefaults: [...allowed],
+      },
+    );
+  };
+
   const updatePhase = (id: string, phase: SlabItemPhase, payload?: unknown): boolean => {
     const current = items.get(id);
     if (!current) return false;
+    checkContractAnomaly(current, phase);
     const next: SlabItem = {
       ...current,
       phase,
