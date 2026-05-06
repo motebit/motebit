@@ -65,13 +65,19 @@ In code: `@motebit/policy`'s ordinal-band `PolicyGate` IS the information-side s
 
 This is why Liquescentia is the system-holder, not just a backdrop: the medium's properties define the interface's physics, and the interface's physics determines what the motebit can receive and transmit. The policy gate isn't a feature — it's surface tension manifested in the information dimension.
 
-### 5. Persistence → identity + memory
+### 5. Persistence → identity + memory + dissolution spectrum
 
 The medium persists. Liquescentia is not a session; it is the standing condition that exists whether or not any particular droplet is present (`LIQUESCENTIA.md` §V.5).
 
-In code: identity (`@motebit/core-identity`'s Ed25519 keypair, generated locally, stored in OS keyring, never garbage-collected on session end) and memory (`@motebit/memory-graph`'s decay + consolidation cycle, never wiped) are the persistence property. A motebit forms in Liquescentia, persists as long as its internal cohesion exceeds the dissolution pressure, may dissipate — but the medium remains. New droplets may form. The medium does not remember individual droplets; it maintains the conditions that permit them.
+In code, persistence has two faces:
 
-This is why "the model is replaceable; the accumulated interior is the asset" ([`CONSTITUTION.md`](../../CONSTITUTION.md) §"What compounds"). The medium guarantees the conditions; the body accumulates within those conditions.
+**Identity-side cohesion.** `@motebit/core-identity`'s Ed25519 keypair (generated locally, stored in OS keyring, never garbage-collected on session end) is the body's irreducible binding force. As long as the keypair persists, the motebit _is_.
+
+**Dissolution spectrum.** The medium reclaims state at multiple rates simultaneously — memory recency, trust score, credential validity, retention horizon, audit capacity. Each axis has its own decay constant, code home, and form (exponential / cliff / capacity). The aggregate determines whether the body's internal cohesion exceeds the medium's claim. See [`dissolution-spectrum.md`](dissolution-spectrum.md) for the five axes, their constants, and the three structural forms — co-derived with [`retention-policy.md`](retention-policy.md)'s three retention shapes.
+
+A motebit forms in Liquescentia, persists as long as its internal cohesion exceeds the spectrum's aggregate dissolution pressure, may dissipate — but the medium remains. New droplets may form. The medium does not remember individual droplets; it maintains the conditions that permit them.
+
+This is why "the model is replaceable; the accumulated interior is the asset" ([`CONSTITUTION.md`](../../CONSTITUTION.md) §"What compounds"). The medium guarantees the conditions; the body accumulates within those conditions; the _consolidation cycle_ (see [`proactive-interior.md`](proactive-interior.md)) is the active mechanism that pumps against dissolution on the memory axis.
 
 ## The AR glasses coherence — the medium becomes literal
 

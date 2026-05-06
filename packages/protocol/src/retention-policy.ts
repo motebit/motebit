@@ -38,6 +38,13 @@ export type RetentionCeilingDays = number;
  *
  * Federation peers compare retention claims against these values. An
  * operator manifest declaring retention beyond a ceiling is non-conforming.
+ *
+ * Retention dissolution axis of Liquescentia's persistence property —
+ * see `docs/doctrine/dissolution-spectrum.md` §4. Form: hard cliff per
+ * sensitivity tier; sensitivity acts as the permeability gradient (higher
+ * sensitivity → higher dissolution pressure → shorter persistence). This
+ * is the only dissolution axis that interop law constrains across
+ * implementations.
  */
 export const MAX_RETENTION_DAYS_BY_SENSITIVITY: Readonly<{
   none: RetentionCeilingDays;

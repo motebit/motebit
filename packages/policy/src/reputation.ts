@@ -21,6 +21,11 @@ import type { AgentTrustRecord } from "@motebit/protocol";
 
 const MS_PER_DAY = 86_400_000;
 const VOLUME_SATURATION = 50;
+// Trust dissolution axis of Liquescentia's persistence property — see
+// docs/doctrine/dissolution-spectrum.md §2. Form: exponential decay
+// (mathematically `exp(-days/τ_T)`, equivalent to a base-2 half-life of
+// τ_T·ln(2) ≈ 62.4 days). Constant chosen so occasional collaborators
+// don't fall out of trust over a quarter; abandoned relationships do.
 const RECENCY_HALF_LIFE_DAYS = 90;
 
 export function computeReputationScore(record: AgentTrustRecord, now?: number): number {

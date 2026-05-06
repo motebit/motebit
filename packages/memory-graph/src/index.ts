@@ -77,11 +77,15 @@ export interface ScoringConfig {
   overFetchRatio: number;
 }
 
+// `recencyHalfLife` is the memory dissolution axis of Liquescentia's
+// persistence property — see docs/doctrine/dissolution-spectrum.md §1.
+// Form: exponential decay; constant: 24h. Departing from this value
+// needs a physical/operational justification, not aesthetic preference.
 const DEFAULT_SCORING_CONFIG: ScoringConfig = {
   similarityWeight: 0.5,
   confidenceWeight: 0.3,
   recencyWeight: 0.2,
-  recencyHalfLife: 24 * 60 * 60 * 1000, // 24 hours
+  recencyHalfLife: 24 * 60 * 60 * 1000, // 24 hours — Liquescentia §V.5 (memory dissolution)
   overFetchRatio: 5,
 };
 

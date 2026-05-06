@@ -11,6 +11,13 @@ import type { ToolAuditEntry, PolicyDecision, InjectionWarning } from "@motebit/
 export type { AuditStatsSince, AuditLogSink } from "@motebit/protocol";
 import type { AuditStatsSince, AuditLogSink } from "@motebit/protocol";
 
+// Audit dissolution axis of Liquescentia's persistence property — see
+// docs/doctrine/dissolution-spectrum.md §5. Form: capacity-based FIFO
+// (not time-based); a busy motebit can churn through the buffer in
+// days. The hash-chained `AuditChainStore` (audit-chain.ts) is the
+// future-direction replacement; that path replaces capacity-FIFO with
+// merkle-anchored durable persistence. See project memory
+// `audit_chain_signing_endgame` for the wiring trigger.
 const DEFAULT_MAX_ENTRIES = 10_000;
 
 export class InMemoryAuditSink implements AuditLogSink {
