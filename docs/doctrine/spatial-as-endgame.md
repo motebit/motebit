@@ -109,6 +109,7 @@ This positioning is what makes motebit a **sovereign extension of the user's lif
 - **[surface-determinism.md](surface-determinism.md)** — explicit affordances route through `invokeCapability`. On glasses, voice + gaze + gesture are the input set; surface-determinism is enforced the same way (typed capability, never a constructed prompt).
 - **[the-stack-one-layer-up.md](the-stack-one-layer-up.md)** — the convergence claim. On glasses, the **OS** is the layer one up; motebit is the agent layer that mediates. Apple/Meta provide the spatial primitives; motebit provides identity, memory, governance, trust.
 - **[hardware-attestation.md](hardware-attestation.md)** — software identity is the floor; hardware attestation is additive scoring. On glasses, the device's secure element attests the agent's key — the user knows the motebit they're seeing is theirs.
+- **[liquescentia-as-substrate.md](liquescentia-as-substrate.md)** — the deepest coherence of this doctrine. On AR glasses, the user's real world _becomes_ Liquescentia (the medium that makes the glass droplet legible). The synthetic chromatic gradient (`ENV_LIGHT`) is fallback; reality is the goal. `WebXRThreeJSAdapter` already drops the synthetic env when XR light estimation is available — code crystallized this before the doctrine named it.
 
 ## The one-line summary
 

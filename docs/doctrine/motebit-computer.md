@@ -331,5 +331,6 @@ One type surface, one event stream, multiple renderers — following the existin
 - [`panels-pattern.md`](panels-pattern.md) — the cross-surface controller shape the slab extends to scene primitives.
 - [`surface-determinism.md`](surface-determinism.md) — affordances that trigger slab work must be deterministic.
 - [`spatial-as-endgame.md`](spatial-as-endgame.md) — the slab in spatial is a **held-tablet the motebit presents to you**, anchored to its gesture, not a free-floating panel. Spatial is the prototype of the AR-glasses companion; the slab's Ring 1 contract / Ring 3 renderer split is what lets the same lifecycle types serve both desktop/web (Three.js plane) and glasses (held-tablet WebXR).
+- [`liquescentia-as-substrate.md`](liquescentia-as-substrate.md) — the slab inherits the medium's rhythm. Sympathetic breathing at 30% creature amplitude (`SLAB_BREATHE_AMPLITUDE_FACTOR = 0.3`) is the same 0.3 Hz Rayleigh oscillation derived from the body's eigenmode equation evaluated in Liquescentia's quiescent regime. One body, one medium, one rhythm.
 - [`DROPLET.md`](../../DROPLET.md) — the physics the slab inherits (Rayleigh–Plateau, surface tension, eigenmode breathing).
 - [`THE_ACTOR_PRINCIPLE.md`](../../THE_ACTOR_PRINCIPLE.md) — agents-to-agents shape that shows on the slab as delegation traffic.
