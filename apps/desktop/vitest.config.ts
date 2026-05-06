@@ -34,6 +34,7 @@ export default defineMotebitTest({
     // plus @tauri-apps/api shims across 5,000+ lines of UI glue. The
     // three pure ones (slash-commands.ts, keyring-keys.ts, audit-utils.ts)
     // are tested directly; everything else is platform surface.
+    "src/ui/activity.ts",
     "src/ui/agents.ts",
     "src/ui/chat.ts",
     // slab-items.ts is a ~1700-line DOM rendering module: iframes,
