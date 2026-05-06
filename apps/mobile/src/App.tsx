@@ -54,6 +54,7 @@ import { MemoryPanel } from "./components/MemoryPanel";
 import { SovereignPanel } from "./components/SovereignPanel";
 import { AgentsPanel } from "./components/AgentsPanel";
 import { SkillsPanel } from "./components/SkillsPanel";
+import { ActivityPanel } from "./components/ActivityPanel";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { VoiceIndicator } from "./components/VoiceIndicator";
 import { GoalsPanel } from "./components/GoalsPanel";
@@ -124,6 +125,7 @@ export default function App(): React.ReactElement {
   const [showCredentialsPanel, setShowCredentialsPanel] = useState(false);
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
   const [showSkillsPanel, setShowSkillsPanel] = useState(false);
+  const [showActivityPanel, setShowActivityPanel] = useState(false);
 
   // Pairing state + handlers live in ./use-pairing.ts — the hook is
   // called later in this component after initializeAI/subscribeToState
@@ -593,6 +595,7 @@ export default function App(): React.ReactElement {
         setShowGoalsPanel,
         setShowSettings,
         setShowSkillsPanel,
+        setShowActivityPanel,
       });
     },
     [addSystemMessage, showToast],
@@ -1143,6 +1146,12 @@ export default function App(): React.ReactElement {
           visible={showMemoryPanel}
           app={app.current}
           onClose={() => setShowMemoryPanel(false)}
+        />
+
+        <ActivityPanel
+          visible={showActivityPanel}
+          app={app.current}
+          onClose={() => setShowActivityPanel(false)}
         />
 
         <ConversationPanel

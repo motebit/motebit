@@ -28,6 +28,7 @@ import { initConversations } from "./ui/conversations";
 import { initAgents } from "./ui/agents";
 import { initGoals } from "./ui/goals";
 import { initMemory } from "./ui/memory";
+import { initActivity } from "./ui/activity";
 import { initPairing } from "./ui/pairing";
 import { initSkills } from "./ui/skills";
 import { initVoice } from "./ui/voice";
@@ -78,6 +79,7 @@ const agents = initAgents(ctx);
 const conversations = initConversations(ctx);
 const goals = initGoals(ctx);
 const memory = initMemory(ctx);
+const activity = initActivity(ctx);
 const pairing = initPairing(ctx);
 const skills = initSkills(ctx);
 const sovereign = initSovereign(ctx);
@@ -165,6 +167,8 @@ document.addEventListener("keydown", (e) => {
       memory.close();
     } else if (skillsPanel.classList.contains("open")) {
       skills.close();
+    } else if (activity.isOpen()) {
+      activity.close();
     } else if (conversationsPanel.classList.contains("open")) {
       conversations.close();
     } else if (settingsModal.classList.contains("open")) {

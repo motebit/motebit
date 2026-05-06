@@ -29,4 +29,4 @@ The controller owns fetch orchestration, parallel coordination, deduplication, r
 - `apps/web` — follow-up migration.
 - `apps/mobile` — follow-up migration.
 
-Drift gate `check-panel-controllers` is deferred until the second consumer lands (a one-consumer gate is theatre). When web or mobile migrates, add the gate: any surface that defines its own sovereign fetch path for credentials/ledger/budget/succession must route through `@motebit/panels`, not re-implement.
+Drift gate `check-panel-controllers` enforces the cross-surface contract for every registered panel family — sovereign, agents, memory, goals, skills, **activity** + **retention** (the sovereignty-visible pair shipped 2026-05-06: signed-action timeline + browser-verified operator retention manifest). Any file under `apps/<app>/src/{ui,components}/` whose name matches a family pattern AND hits the family's I/O signatures (relay endpoints, runtime accessors) must import from `@motebit/panels`. Surfaces that ship the panel UI but bypass the controller silently drift the per-family contract; the gate catches that in CI rather than at user encounter.

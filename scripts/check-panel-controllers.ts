@@ -112,6 +112,34 @@ const PANEL_FAMILIES: ReadonlyArray<PanelFamily> = [
       "goalStore.removeGoal",
     ],
   },
+  {
+    name: "activity",
+    // Activity panel files name their render module
+    // `activity-panel.ts` (web) / `activity.ts` (desktop) /
+    // `ActivityPanel.tsx` (mobile). Sovereignty-visible read view —
+    // the audit-log + event-log merge controller MUST come from
+    // `@motebit/panels` so every surface renders the same row shape.
+    namePattern: /activity/i,
+    signatures: [
+      // Hitting these runtime accessors directly (instead of routing
+      // through the controller's adapter) reopens the per-surface
+      // drift window — web renders memory deletes, desktop renders
+      // tool audits, mobile renders neither, etc.
+      "runtime.auditLog.query",
+      "runtime.events.query",
+    ],
+  },
+  {
+    name: "retention",
+    // Retention manifest re-verifier shares the activity panel's
+    // render file on every surface (operator promise above the
+    // signed-action timeline). The controller is the only sanctioned
+    // way to fetch + verify the operator's
+    // `/.well-known/motebit-retention.json` — surfaces hitting that
+    // endpoint inline reopen the per-surface verify-path drift.
+    namePattern: /activity|retention/i,
+    signatures: ["motebit-retention.json", "motebit-transparency.json"],
+  },
 ];
 
 /**

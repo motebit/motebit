@@ -112,6 +112,7 @@ function makeDeps(appOverrides?: Record<string, unknown>): SlashCommandDeps & {
     setShowGoalsPanel: vi.fn(),
     setShowSettings: vi.fn(),
     setShowSkillsPanel: vi.fn(),
+    setShowActivityPanel: vi.fn(),
     _messages: messages,
     _toasts: toasts,
     _app: app,

@@ -21,6 +21,10 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "model", description: "Show or switch AI model", hasArgs: true, argHint: "<name>" },
   { name: "memories", description: "Browse memories" },
   { name: "skills", description: "Browse and install skills" },
+  {
+    name: "activity",
+    description: "View signed deletions, consents, and other audit-grade events",
+  },
   { name: "state", description: "Show current state vector" },
   { name: "forget", description: "Delete a memory by ID", hasArgs: true, argHint: "<nodeId>" },
   { name: "export", description: "Export all data as JSON" },

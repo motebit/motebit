@@ -858,6 +858,9 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
       case "skills":
         document.dispatchEvent(new CustomEvent("motebit:open-skills"));
         return;
+      case "activity":
+        document.dispatchEvent(new CustomEvent("motebit:open-activity"));
+        return;
       case "clear":
         ctx.app.startNewConversation();
         chatLog.innerHTML = "";
