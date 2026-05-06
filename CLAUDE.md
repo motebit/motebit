@@ -43,7 +43,7 @@ Per-directory doctrine loads lazily (every sub-`CLAUDE.md` must appear here; enf
 - [`packages/mcp-client/CLAUDE.md`](packages/mcp-client/CLAUDE.md) — `CredentialSource`, `ServerVerifier`, OAuth
 - [`packages/panels/CLAUDE.md`](packages/panels/CLAUDE.md) — surface-agnostic panel controllers; state+actions here, render per surface
 - [`services/relay/CLAUDE.md`](services/relay/CLAUDE.md) — the relay
-- [`apps/spatial/CLAUDE.md`](apps/spatial/CLAUDE.md) — no panels
+- [`apps/spatial/CLAUDE.md`](apps/spatial/CLAUDE.md) — proto AR-glasses companion; five primitives (creature, satellite, environment, attractor, presentation), never disconnected window-manager panels
 
 Cross-cutting doctrine (read on demand):
 
