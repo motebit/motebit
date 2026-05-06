@@ -980,9 +980,17 @@ function createContainerElement(): HTMLDivElement {
   el.style.boxSizing = "border-box";
   el.style.display = "block";
   el.style.overflow = "hidden";
-  // Stage accepts pointer events so its primary child can be
-  // interacted with (iframe navigation, text selection, etc.).
-  el.style.pointerEvents = "auto";
+  // `pointer-events: none` on the stage so its 480×300 dead space —
+  // when the plane is visible but empty, or in the transparent margins
+  // around a mounted item — passes pointer events through to the
+  // canvas's OrbitControls underneath. CSS descendant override means
+  // mounted items (which receive `pointer-events: auto` in addItem,
+  // line ~377) still capture events on their own bounding boxes; only
+  // the unoccupied stage area becomes click-through. Without this,
+  // any pointer in the slab's region was stolen from the creature's
+  // rotate/zoom controls — the bug the user noticed as "clicks don't
+  // register near the slab."
+  el.style.pointerEvents = "none";
   return el;
 }
 
