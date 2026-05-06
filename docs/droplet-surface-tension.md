@@ -322,11 +322,11 @@ The custody split, the receipt, and the fee are the same single artifact — the
 
 ---
 
-# 7. Execution Receipts and the Audit Chain: Two Sibling Artifacts
+# 7. Execution Receipts and the Audit Chain: Three Sibling Artifacts
 
 An autonomous or semi-autonomous agent should not merely act. It should produce evidence of action.
 
-The reference implementation produces **two sibling artifacts** that together answer the accountability question. They are independently verifiable.
+The reference implementation produces **three sibling artifacts** that together answer the accountability question. The two receipt artifacts are signed; the audit-chain artifact is hash-chained. They are independently verifiable, each at the granularity its consumer needs.
 
 ## 7.1 ExecutionReceipt — what happened
 
@@ -380,36 +380,32 @@ type ToolInvocationReceipt = {
 
 ## 7.3 AuditChain — under what policy
 
-Policy decisions are signed into a separate hash-chained log. Each entry binds to the previous one, so tampering anywhere breaks the chain.
+Policy decisions land in a separate **hash-chained** log. Each entry references the previous entry's hash; a verifier holding the chain can recompute hashes and detect any deletion, reordering, or rewrite.
 
 ```ts
 // Schematic; canonical type at packages/policy/src/audit-chain.ts (AuditEntry).
 type AuditEntry = {
   entry_id: string;
   timestamp: number;
-  event_type: "policy_decision" | "tool_invoked" | "approval_requested" | "...";
+  event_type: string; // "policy_decision" | "tool_invoked" | "approval_requested" | …
   actor_id: string;
-  data: {
-    tool: string;
-    decision: PolicyDecision; // allow / ask / deny + reason
-    policy_version: string;
-    risk: RiskLevel;
-    data_class: DataClass;
-  };
-  prev_hash: string; // hash-chained
-  signature: string;
+  data: Record<string, unknown>; // tool, decision, policy_version, risk, data_class, …
+  previous_hash: string; // "genesis" for the first entry
+  hash: string; // SHA-256(previous_hash + canonical(entry data))
 };
 ```
 
-## 7.4 Why two artifacts
+**Current state, named honestly.** The reference implementation today routes `PolicyGate` decisions through an in-memory `AuditLogger` (`packages/policy/src/audit.ts`) — useful for debugging, observability, and replay within a process, but neither hash-chained nor signed. The hash-chained `AuditChainStore` above is a primitive available to surfaces that need durable tamper-evidence; wiring `PolicyGate` to write through it (and binding entries to the runtime's Ed25519 identity key) is the architectural endgame consistent with motebit's _proof composability_ principle. Until that wiring lands, §13.4's tamper-evidence claim applies to chains stored via `AuditChainStore`, not to the in-memory logger.
 
-A single artifact would force every verifier to load both raw I/O and policy snapshot at once. By splitting:
+## 7.4 Why three artifacts
+
+A single artifact would force every verifier to load raw I/O, per-call hashes, and policy snapshot at once. By splitting:
 
 - **Per-call verifiers** (the slab UI showing live tool calls, third parties auditing one tool's output) need only the `ToolInvocationReceipt` and the signer's public key.
 - **Policy auditors** (compliance, post-mortem, dispute resolution) follow the `AuditChain` independently.
 - **Task verifiers** (relay settlement, downstream agents accepting a delegation result) check the `ExecutionReceipt` and walk `delegation_receipts` recursively.
 
-All three are bound by the same Ed25519 identity key. None requires a network round-trip beyond holding the public key. The receipt is the bridge between autonomy and accountability; the audit chain is the bridge between autonomy and policy.
+The two receipt artifacts (`ExecutionReceipt`, `ToolInvocationReceipt`) are bound by the same Ed25519 identity key — verifiable with just the signer's public key, no network round-trip. The audit chain is bound by hash continuity, not signature, today; future work named in §7.3 closes that gap. The receipts are the bridge between autonomy and accountability; the audit chain is the bridge between autonomy and policy.
 
 ---
 
@@ -661,9 +657,9 @@ The Motebit model exposes evaluable claims.
 
 ## 13.4 Audit-chain integrity
 
-**Claim:** Policy decisions are tamper-evident.
+**Claim:** Policy decisions stored via `AuditChainStore` are tamper-evident against any local rewrite.
 
-**Metric:** A randomly modified `AuditEntry` breaks the hash chain in 100% of cases; a passing chain implies no entry was deleted, reordered, or rewritten.
+**Metric:** A randomly modified `AuditEntry` breaks the hash chain in 100% of cases; a passing chain (verified against a known-good starting hash) implies no entry between that anchor and the head was deleted, reordered, or rewritten. A chain without an external anchor remains rewriteable wholesale; pinning a recent root externally (or rolling future entries into a signed envelope) is the architectural endgame named in §7.3.
 
 ## 13.5 Trust accumulation
 
@@ -701,7 +697,7 @@ Surface tension prevents the model from directly executing sensitive operations 
 
 ## 14.3 Non-repudiation failure
 
-Signed receipts and the hash-chained audit log make it possible to prove which agent identity authorized or executed an action, under what policy snapshot, with what tools.
+Signed receipts (`ExecutionReceipt`, `ToolInvocationReceipt`) make it possible to prove which agent identity executed an action, with what tools, on whose explicit behalf (`invocation_origin`). The hash-chained audit log lets a verifier holding the chain detect any local rewrite, reorder, or omission of the policy decisions that authorized those actions. Binding those decisions to the same Ed25519 identity key — closing the gap so policy-side non-repudiation matches receipt-side non-repudiation — is the architectural endgame named in §7.3.
 
 ## 14.4 Trust spoofing
 
