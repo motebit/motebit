@@ -452,30 +452,13 @@ export class WebApp {
     // Three.js slab plane via the four RenderAdapter methods. Per-
     // kind renderers in ./ui/slab-items.ts stay out of this file.
     // Doctrine: docs/doctrine/motebit-computer.md.
-    //
-    // Gated behind VITE_EXPERIMENTAL_SLAB — default off in production.
-    // motebit-computer is structurally @experimental: known issues with
-    // unprompted plane visibility on chat input, broken /computer
-    // toggle dismissal, and blank-plane leaks (see memory:
-    // motebit_computer_experimental_gate.md). The runtime's slab
-    // controller still runs — items get tracked in state — but no DOM
-    // mounts onto the plane until the flag is on. setSlabVisible(false)
-    // is also enforced once at init so any latent visibility from
-    // earlier renderer state is reset.
-    const slabEnabled =
-      (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_EXPERIMENTAL_SLAB ===
-      "true";
-    if (slabEnabled) {
-      this.slabBridgeUnsub = bindSlabControllerToRenderer({
-        controller: this.runtime.slab,
-        renderer: this.renderer,
-        renderItem: renderSlabItem,
-        updateItem: updateSlabItem,
-        renderDetachArtifact: renderSlabDetachArtifact,
-      });
-    } else {
-      this.renderer.setSlabVisible?.(false);
-    }
+    this.slabBridgeUnsub = bindSlabControllerToRenderer({
+      controller: this.runtime.slab,
+      renderer: this.renderer,
+      renderItem: renderSlabItem,
+      updateItem: updateSlabItem,
+      renderDetachArtifact: renderSlabDetachArtifact,
+    });
 
     // Register web-safe tools
     this.registerWebTools();

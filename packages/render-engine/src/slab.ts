@@ -115,6 +115,17 @@ interface ManagedSlabItem {
   /** Subscribers to phase transitions. */
   phaseListeners: Set<(phase: SlabItemPhase) => void>;
   /**
+   * `true` when the item declared `dataset.slabHidden === "true"` at
+   * `addItem` time — mind-mode items (stream tokens, embeddings,
+   * memory surfacing) render in chat / creature animations rather
+   * than on the plane. Tracked here so `update()` can exclude these
+   * items from the active count: a phantom mind item must not bring
+   * the plane visible. Doctrine: motebit-computer.md §"Ambient
+   * states" — work *visible on the plane* brings the plane; an
+   * invisible-by-design item is not work the plane should display.
+   */
+  slabHidden: boolean;
+  /**
    * When detaching, the artifact spec the caller wants the detached
    * item to become. Renderer calls the embedded `__detach` function
    * at the right moment in the pinch animation.
@@ -388,6 +399,7 @@ export class SlabManager {
       phase: "emerging",
       phaseTime: 0,
       phaseListeners: new Set(),
+      slabHidden,
     };
     this.items.set(spec.id, managed);
 
@@ -459,9 +471,14 @@ export class SlabManager {
     // flat when no item is pinching. See `applyPinchDisplacement`.
     this.applyPinchDisplacement();
 
-    // Ambient: count non-terminal items; fade the plane accordingly
+    // Ambient: count non-terminal *visible* items; fade the plane
+    // accordingly. Hidden mind-mode items (stream tokens, embeddings,
+    // memory surfacing) are tracked for handle / lifecycle contracts
+    // but do not occupy the plane — they must not bring it visible
+    // either, or every chat turn raises a phantom blank plane.
     const active = [...this.items.values()].filter(
-      (i) => i.phase !== "dissolving" && i.phase !== "detached" && i.phase !== "gone",
+      (i) =>
+        !i.slabHidden && i.phase !== "dissolving" && i.phase !== "detached" && i.phase !== "gone",
     ).length;
 
     // Doctrine (motebit-computer.md §"Ambient states"): the slab is

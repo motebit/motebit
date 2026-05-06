@@ -42,6 +42,18 @@ function fakeElement() {
   return { style: {} as Record<string, string>, appendChild: () => {} } as unknown as HTMLElement;
 }
 
+// Mind-mode hidden element — surface renderers tag mind-mode items
+// (stream tokens, embeddings, memory surfacing) with
+// dataset.slabHidden = "true" so they render off-plane. The slab
+// manager must not count these toward the active-plane decision.
+function fakeHiddenElement() {
+  return {
+    style: {} as Record<string, string>,
+    appendChild: () => {},
+    dataset: { slabHidden: "true" },
+  } as unknown as HTMLElement;
+}
+
 function fakeContainer(): HTMLElement {
   return {
     appendChild: () => {},
@@ -213,6 +225,41 @@ describe("SlabManager — plane visibility + ambient", () => {
     expect(planeMesh.visible).toBe(true);
     const material = planeMesh.material as THREE.MeshPhysicalMaterial;
     expect(material.opacity).toBeGreaterThan(0);
+  });
+
+  it("hidden mind-mode items do not bring the plane visible", () => {
+    // Doctrine (motebit-computer.md §"Ambient states" + §"Embodiment
+    // modes"): mind-mode items (stream tokens, embeddings, memory
+    // surfacing) render off-plane. They are still tracked by the
+    // controller so handles / lifecycle contracts hold, but they must
+    // not raise the plane — otherwise every chat turn opens a phantom
+    // blank plane (the regression that gated the web slab as
+    // @experimental on 2026-05-04).
+    const mgr = makeManager();
+    mgr.addItem({ id: "stream-1", kind: "stream", element: fakeHiddenElement() });
+    for (let i = 0; i < 30; i++) mgr.update(i * 0.1, 0.1);
+    const group = mgr.getGroup();
+    const planeMesh = group.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
+    expect(planeMesh.visible).toBe(false);
+    const material = planeMesh.material as THREE.MeshPhysicalMaterial;
+    expect(material.opacity).toBe(0);
+  });
+
+  it("toggleUserVisible(false) dismisses the plane while a hidden mind item is open", () => {
+    // Symptom of the same root cause: with the bug, a phantom mind
+    // item's active count keeps the plane forced-visible regardless
+    // of the user's hold, so /computer toggle off appears broken.
+    // The fix in §active-count restores honest dismissal — the plane
+    // fades when no *visible* item demands it.
+    const mgr = makeManager();
+    mgr.setUserVisible(true);
+    mgr.addItem({ id: "stream-1", kind: "stream", element: fakeHiddenElement() });
+    for (let i = 0; i < 10; i++) mgr.update(i * 0.1, 0.1);
+    mgr.setUserVisible(false);
+    for (let i = 0; i < 50; i++) mgr.update(1 + i * 0.1, 0.1);
+    const group = mgr.getGroup();
+    const planeMesh = group.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
+    expect(planeMesh.visible).toBe(false);
   });
 
   it("plane auto-hides after the last item ends (no user hold)", async () => {
