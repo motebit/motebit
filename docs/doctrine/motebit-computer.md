@@ -149,6 +149,36 @@ This is the load-bearing distinction from the market. Operator picks one cell (v
 
 Every slab item carries a mode. Most tool calls default to `tool_result`; memory surfacing defaults to `mind`; delegation to `peer_viewport`. The runtime can override per item (e.g., a `read_url` that ships with a real embedded page upgrades from `tool_result` to `virtual_browser`).
 
+### Mode contract — six declarations per mode
+
+Every embodiment mode declares six invariants. Naming them explicitly turns the spectrum from prose into an enforceable contract: a future mode addition (or refinement) must answer each field, and a drift gate over slab mode tagging can assert consumers honor the declared boundaries. Same shape as the [`agility-as-role`](agility-as-role.md) pattern — name the role, the field set is closed, instances slot in.
+
+The first four (driver / observer / source / consent-or-proof) are the **agency-and-governance** declarations: _who drives, who observes, what's the source, what gates entry._ The remaining two — sensitivity routing and lifecycle defaults — come from existing motebit invariants: medical / financial / secret content never reaches external AI in any mode (`SovereignTierRequiredError` in the runtime), and every slab item declares its `dissolve` / `rest` / `detach` defaults (the matrix below).
+
+**Agency** — who drives, who watches, what surface is in scope:
+
+| Mode                | Driver                              | Observer                         | Source                                                               |
+| ------------------- | ----------------------------------- | -------------------------------- | -------------------------------------------------------------------- |
+| **mind**            | motebit (self)                      | motebit (self)                   | interior — memory, reasoning, state                                  |
+| **tool_result**     | motebit (via AI loop or capability) | user                             | sandboxed tool call output                                           |
+| **virtual_browser** | motebit                             | user                             | isolated browser viewport                                            |
+| **shared_gaze**     | user                                | motebit                          | user-selected (browser tab / desktop / editor / file / video / call) |
+| **desktop_drive**   | motebit                             | user                             | real OS / desktop                                                    |
+| **peer_viewport**   | peer agent                          | motebit (and user, transitively) | peer's federated work — a signed delegation receipt                  |
+
+**Governance + lifecycle** — what gates entry, which sensitivity tiers are admissible, how items end:
+
+| Mode                | Consent / proof boundary                                                                  | Sensitivity routing                                                                                                         | Lifecycle defaults                                                    |
+| ------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| **mind**            | always permitted (interior)                                                               | all tiers — the interior is sovereign-tier by definition                                                                    | dissolve (memory that fades) → detach (formed / promoted memory)      |
+| **tool_result**     | turn-scoped; per-tool `PolicyGate`                                                        | tier-bounded by tool + session sensitivity                                                                                  | rest (default) → dissolve (ephemeral plumbing)                        |
+| **virtual_browser** | session-scoped consent + per-action policy                                                | bounded by what motebit navigates to within the session                                                                     | rest (in-flight) → detach (captured page artifact)                    |
+| **shared_gaze**     | per-source consent (re-fires on source change)                                            | IN-direction routing — observed sensitive content inherits the dissolution pressure of actively-stored content of that tier | rest (source the user is on) → detach (snapshot) → dissolve (glanced) |
+| **desktop_drive**   | explicit grant + per-action approval (`classifyComputerAction` gates sensitive typing)    | all tiers; secret / financial typing fires `require_approval`                                                               | rest (sequence in view) → detach (completed workflow receipt)         |
+| **peer_viewport**   | signed delegation + trust graph (the receipt **is** the proof — no live consent re-fires) | bounded by the federation peer's policy + composed trust score                                                              | rest (delegation in flight) → detach (signed `ExecutionReceipt`)      |
+
+The six declarations together answer: _Can this mode exist for this turn? At this sensitivity? With what kind of evidence? Ending in what state?_ A new embodiment-mode addition fails review if any of the six is unanswered.
+
 ### Mode × end state matrix
 
 Modes and end states are **orthogonal**. Any mode can land in any end state. Sensible defaults:
@@ -180,6 +210,7 @@ Governance gates live in the runtime, not the renderer. The slab renders the _co
 - **Mode without governance.** Adding `desktop_drive` or `virtual_browser` without the grant/revoke gate. High-agency modes without explicit consent break supervised agency.
 - **Mode mixed into kind.** Don't rename `fetch` to `virtual_browser_fetch`. Kind is the fine-grained shape of the content; mode is the coarse-grained embodiment category. A `fetch` kind can be `tool_result` mode today and `virtual_browser` mode tomorrow without a protocol break.
 - **Governance as chrome.** Don't show granted modes as a settings panel bolted to the slab's edge. Mode visibility emerges from the surface (a meniscus marker, a plane-color wash) — same doctrine as other affordances.
+- **`peer_viewport` rendered as live perception.** `peer_viewport` and `shared_gaze` share an agency direction — motebit watches, doesn't drive — but they are epistemically opposite. `shared_gaze` is **live perception** of a user-driven source (no signature; the proof is just that the user pointed motebit at it). `peer_viewport` is **verifiable evidence** of a peer's completed work (the delegation receipt is the proof; the trust semiring composes it). Rendering peer_viewport as if it were live observation (a moving viewport, a streaming feed, a "watching" halo) loses the cryptographic distinction. peer_viewport should render as **signed evidence shape** — a sealed satellite, a verified scroll, an artifact whose hue tracks chain-verification state — not as a live camera.
 
 ### Why this completes the doctrine
 
