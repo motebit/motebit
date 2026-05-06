@@ -129,6 +129,12 @@ const BOUNDARY_GROUPS: BoundaryGroup[] = [
       "apps/web/src/scene/credential-satellites.ts",
     ],
   },
+  {
+    name: "slab_renderers",
+    description:
+      "Per-kind HTML slab-item renderers shared across web + desktop. The two files are byte-identical except for the surface name in the header comment; the file's own JSDoc declares 'two copies is the pre-extraction threshold' and 'changes here MUST be mirrored to the desktop sibling.' When a third HTML surface (mobile WebView) lands the trio extracts to a shared @motebit/panels-style render package per the panels-pattern doctrine; until then, this advisory keeps the mirror honest.",
+    files: ["apps/web/src/ui/slab-items.ts", "apps/desktop/src/ui/slab-items.ts"],
+  },
 ];
 
 // ── Main ──────────────────────────────────────────────────────────────

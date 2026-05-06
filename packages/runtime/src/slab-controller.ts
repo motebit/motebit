@@ -115,15 +115,21 @@ export type DetachDecision =
 export type DetachPolicy = (item: SlabItem, outcome: SlabItemOutcome) => DetachDecision;
 
 /**
- * Default detach policy. Errs on dissolution — an item that doesn't
- * explicitly declare itself artifact-worthy at end-time dissolves back
- * into the slab rather than spawning a graduated scene object. This
- * matches the "calm software" rule: a tool-call log that the turn used
- * and moved on from should not leave an artifact behind.
+ * Default detach policy — chooses **dissolve vs detach** for items
+ * the call site has already routed through `endItem` rather than
+ * `restItem`. Most tool calls land in `rest` first (the workstation's
+ * dominant state per motebit-computer.md §"Three end states"); this
+ * policy only runs after the call site has explicitly chosen `end`,
+ * meaning the item is *not* working material the user should keep.
+ *
+ * Errs on dissolution. An item that doesn't explicitly declare itself
+ * artifact-worthy via `outcome.detachAs` dissolves back into the slab
+ * rather than spawning a graduated scene object — failed runs,
+ * interrupts, and ephemeral plumbing all end this way.
  *
  * Callers that know their output is durable pass `detachAs` in the
- * outcome; those take precedence over this policy. Surfaces that want
- * different default behavior inject their own policy via deps.
+ * outcome; that takes precedence. Surfaces wanting different default
+ * behavior inject their own policy via deps.
  */
 export const defaultDetachPolicy: DetachPolicy = (_item, outcome) => {
   if (outcome.kind === "completed" && outcome.detachAs) {

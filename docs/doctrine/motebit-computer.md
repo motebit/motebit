@@ -72,7 +72,7 @@ What the motebit is — or has been — _thinking_. Internal reorganization made
 
 ### Rings-aware duplication — when chat _may_ echo the slab
 
-The slab is a **Ring 3 capability** (3D creature / scene; requires WebGL, an on-screen creature, and a wide-enough viewport). Chat is **Ring 1** (identical everywhere; text always available). A rule that says "one surface per act" would sound clean but silently regresses accessibility whenever Ring 3 isn't available — screen-reader users, voice-first users, headless browsers, and narrow viewports would lose all signal that a tool ran.
+The slab's **renderer** is a Ring 3 capability (3D creature / scene; requires WebGL, an on-screen creature, and a wide-enough viewport). Chat is **Ring 1** (identical everywhere; text always available). A rule that says "one surface per act" would sound clean but silently regresses accessibility whenever Ring 3 isn't available — screen-reader users, voice-first users, headless browsers, and narrow viewports would lose all signal that a tool ran.
 
 Rule of thumb:
 
@@ -291,18 +291,17 @@ User-held visibility is a hold, not a kill switch. When there are items, the pla
 - **Uncoordinated emergence.** The slab's emergence and the first item's emergence fighting for the user's attention. Sequence: slab emerges, pauses briefly (~150ms), first item pops. Never concurrent.
 - **CSS-transform detachment.** A `translate3d` sliding an item off the slab while the slab surface stays rigid. That's not physics, that's animation. The slab must dimple, bead, release.
 - **Idle-state chatter.** Skeleton loaders, "thinking…" text, or persistent progress bars in idle. Kill on sight.
-- **Per-surface divergence.** Three surfaces shipping three slabs whose detachment physics subtly differ. The slab is a Ring-1 capability (identical everywhere) per the capability-rings doctrine; all three surfaces render the same types and obey the same physics.
+- **Per-surface divergence.** Three surfaces shipping three slabs whose detachment physics subtly differ. The slab's _contract_ is Ring 1 (controller, lifecycle types, embodiment-mode semantics — identical everywhere); the slab's _renderer_ is Ring 3 (requires WebGL). Surfaces with the renderer must obey the same physics; surfaces without it (Ring-3-unavailable) fall back to the Ring-1 chat echo, never to a divergent slab. Per-surface divergence at the contract level is the failure mode this gate names.
 
 ## Architectural shape
 
 The slab is a cross-surface scene primitive. The same shape applies to every layer:
 
-- **`@motebit/protocol` (Layer 0, MIT).** Declares the types: item kinds, lifecycle phases (including the detach-pinch transition as a typed phase, not a private animation detail), the protocol contract any third-party motebit implementer must honor. Pure types; no implementation.
-- **`@motebit/render-engine` (Layer 2, BSL).** Declares the `SlabRenderer` adapter interface alongside the existing `RenderAdapter`. Exposes `addSlabItem(spec) → handle`, `detachSlabItemAsArtifact(id, artifactSpec)`, `dissolveSlabItem(id)`. Concrete Three.js / WebGL / Canvas implementations live per-surface.
-- **`@motebit/runtime` (Layer 4, BSL).** Emits slab events as a stream: the runtime's internal LLM turn, tool calls, plan steps translate to `slab.itemOpened` / `slab.itemUpdated` / `slab.itemDetached` / `slab.itemDissolved`. Surfaces subscribe. This makes the slab driveable by the same event source that drives the rest of the live state.
-- **Per-surface renderers (Layer 5).** Each surface wires a `SlabRenderer` implementation to its scene graph. The web/desktop/spatial versions use Three.js; mobile uses WebView or a stand-in. All honor the same phase transitions and the same material.
+- **`@motebit/render-engine` (Layer 2, BSL) — types + adapter + renderer.** Declares the slab type surface (`SlabItemKind`, `SlabItemPhase` with the detach-pinch transition as a typed phase, `EmbodimentMode`, `SlabItemSpec`, `SlabItemHandle`) alongside the `RenderAdapter` slab methods (`addSlabItem`, `dissolveSlabItem`, `detachSlabItemAsArtifact`, `clearSlabItems`, `setSlabVisible`, `toggleSlabVisible`) and the concrete Three.js `SlabManager`. **Future direction:** split the protocol-shape members (`SlabItemKind`, `SlabItemPhase`, `EmbodimentMode`) up to `@motebit/protocol` (Layer 0, Apache-2.0) so third-party motebit implementers can target them without depending on the renderer; deferred until the contract has at least one external consumer.
+- **`@motebit/runtime` (Layer 4, BSL) — controller + bridge.** `SlabController` translates the runtime's LLM turn, tool calls, plan steps, delegations into `openItem` / `updateItem` / `restItem` / `endItem` / `dismissItem`. Surfaces subscribe via `bindSlabControllerToRenderer`. Same event source that drives the rest of the live state.
+- **Per-surface renderers (Layer 5) — wiring.** Each surface wires a `RenderAdapter` slab implementation to its scene graph. Web + desktop today use Three.js with byte-identical per-kind HTML renderers in `slab-items.ts`. Spatial (held-tablet in WebXR) and mobile (WebView-hosted) follow. All honor the same phase transitions and the same material.
 
-One type surface, one event stream, three renderers — following the existing panels-pattern shape ([`panels-pattern.md`](panels-pattern.md)) extended to scene primitives.
+One type surface, one event stream, multiple renderers — following the existing panels-pattern shape ([`panels-pattern.md`](panels-pattern.md)) extended to scene primitives. **Contract is Ring 1; renderer is Ring 3** (see "Rings-aware duplication" + the per-surface-divergence failure mode).
 
 ## Relationship to other scene primitives
 
