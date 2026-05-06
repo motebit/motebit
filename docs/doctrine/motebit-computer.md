@@ -1,17 +1,21 @@
 # Motebit Computer — the slab
 
-A motebit is a droplet under surface tension. Inside the droplet, a mind — it _perceives, acts, and reflects_. Motebits travel the web, drive the desktop, delegate to peers across a global network of agents. All of that work is experience the motebit is living through. Chat is the second-person surface where you _speak to_ the motebit. The Motebit Computer is the first-person surface where you _see through its eye, watch its hand move, and glimpse its mind reorganize_. Not a log. Not a sidebar. The motebit's experience, rendered in its own frame, while it lives.
+A motebit is a droplet under surface tension. Inside the droplet, a mind — it perceives, acts, and reflects. Motebits travel the web, drive the desktop, delegate to peers. The Motebit Computer is the **workstation where that work rests** — a liquid-glass plane beside the creature, holding pages the motebit has read, terminals it is using, responses it has streamed, delegations in flight, peer replies returning with signed receipts. The work stays available to consult until the user dismisses it or the session ends.
 
-This doctrine pins what the slab is, what renders on it, how items leave it, and what it looks like when nothing is happening. Every future renderer and controller binds to this shape.
+While work is in motion, the plane shows it live — tokens accreting, pages loading, terminals scrolling. But motion is the brief window. The dominant state of the slab is **rest**: work that has finished but stays as material the user (and the motebit) may still need. A workstation's natural state is work piling up, being consulted, being dismissed when done — not auto-dissolving seconds after arriving.
+
+Chat is the second-person surface where you _speak to_ the motebit. The Motebit Computer is the **first-person surface — the agent's own frame**. First-person here doesn't mean watching live (AI is faster than human perception, most of the time); it means inhabiting the agent's view of the work it has been doing. The agent's eye, hand, and mind, made into a workstation you can see and touch.
+
+This doctrine pins what the slab is, what renders on it, how items leave it (dissolve / rest / detach), and what it looks like when nothing is happening. Every future renderer and controller binds to this shape.
 
 ## What it is
 
-The slab is the motebit's **perceptual field rendered as a liquid-glass plane** floating to the right of the motebit in the spatial scene. Sibling to: **constellation** (clusters of related records), **artifact** (detached, persistent outputs), **chat bubble** (ephemeral conversational messages). It is not a panel, not a window, not a HUD. It has a meniscus, not a frame; no titlebar, no close button, no scrollbar chrome.
+The slab is the motebit's **workstation, rendered as a liquid-glass plane** floating to the right of the motebit in the spatial scene. Sibling to: **constellation** (clusters of related records), **artifact** (detached, persistent outputs), **chat bubble** (ephemeral conversational messages). It is not a panel, not a window, not a HUD. It has a meniscus, not a frame; no titlebar, no close button, no scrollbar chrome.
 
-What appears on the slab is what the motebit is **seeing, doing, and attending to** — in its own first-person frame. The motebit doesn't describe the page it's fetching; the page _appears_ on the slab as the motebit reads it. The motebit doesn't narrate its shell command; the terminal _scrolls_ on the slab as the command runs. The motebit doesn't report a memory-recall tool call; memory _surfaces_ on the slab as it becomes relevant.
+What appears on the slab is what the motebit is — or has been — **seeing, doing, and attending to**, in its own first-person frame. The motebit doesn't describe the page it's fetching; the page _appears_ on the slab as the motebit reads it, and rests there for as long as the motebit is still using it. The motebit doesn't narrate its shell command; the terminal _scrolls_ on the slab as the command runs, then sits with its output. The motebit doesn't report a memory-recall tool call; memory _surfaces_ on the slab as it becomes relevant. Most items rest after their active phase ends; ephemeral plumbing dissolves; durable outputs detach into the scene.
 
 - **Chat is second-person** — you ↔ motebit, words exchanged.
-- **Slab is first-person** — you watching through the motebit's eye, at what it lives.
+- **Slab is first-person** — the agent's frame, where the work it has been doing lives in the modality it belongs to.
 
 In the records-vs-acts categorization ([`records-vs-acts.md`](records-vs-acts.md)), the slab is the canonical surface for acts. But acts are not _events_ — they are lived experiences, rendered in the perceptual modality they belong to. A web fetch is not "fetch status"; it is a page being seen. A delegation is not "task_request dispatched"; it is a bead leaving the slab toward a peer and returning with a signed receipt.
 
@@ -19,7 +23,7 @@ In the records-vs-acts categorization ([`records-vs-acts.md`](records-vs-acts.md
 
 Three structural gaps the slab closes:
 
-1. **No first-person surface.** Every AI UI — chat bubble, panel, sidebar, HUD, status board — is a third-person or second-person view. There was no surface where the user can see the _motebit's own perceptual field_ as it lives. A motebit that browses the web, drives the desktop, and delegates to peers needs a surface where those experiences are what you see, not summaries of them. The slab is that surface.
+1. **No first-person workstation.** Every AI UI — chat bubble, panel, sidebar, HUD, status board — is a third-person or second-person view. There was no surface where the user can see the _agent's own working space_ — pages it has read, terminals it is using, responses it has streamed — at human reading pace, in the modality the work belongs to. A motebit that browses the web, drives the desktop, and delegates to peers needs a surface where those experiences are what you see (not summaries of them), and where the resulting working material stays accessible. The slab is that surface.
 
 2. **The spatial-canvas thesis ("objects materialize in scene, not chat") needs somewhere to materialize into before they detach.** An artifact that springs from nothing is magical; an artifact that _beads off_ a working surface is physical. The slab is the working surface.
 
@@ -31,7 +35,7 @@ What appears on the slab is organized into three organs of the motebit's experie
 
 ### Eye — perception
 
-What the motebit is _seeing_ right now. The first-person visual field.
+What the motebit is — or has been — _seeing_. The first-person visual field; active fetches streaming, read pages resting.
 
 - **Web pages** the motebit is reading render on the slab — the actual page content (or a faithful preview of it), not a URL string. If the motebit fetches a URL, the page _appears_ as it loads.
 - **Search results** appear as the motebit reads them; each result is rendered as the motebit's eye moves through it.
@@ -41,7 +45,7 @@ What the motebit is _seeing_ right now. The first-person visual field.
 
 ### Hand — action
 
-What the motebit is _doing_ right now. Work in motion, not work being labeled.
+What the motebit is — or has been — _doing_. Work in motion, then work in place — not work being labeled.
 
 - **Shell / terminal output** scrolls on the slab as commands run.
 - **Forms filling** — fields populate as the motebit completes them.
@@ -51,7 +55,7 @@ What the motebit is _doing_ right now. Work in motion, not work being labeled.
 
 ### Mind — reflection
 
-What the motebit is _thinking_ right now. Internal reorganization made visible.
+What the motebit is — or has been — _thinking_. Internal reorganization made visible.
 
 - **Streaming tokens** of its current response — before crystallization into a chat bubble.
 - **Memory surfacing** — nodes rise into attention as they become relevant to the current task; drift back down as they fall away.
