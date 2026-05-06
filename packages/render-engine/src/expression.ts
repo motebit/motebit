@@ -2,20 +2,25 @@
  * SpatialExpression — the discriminated type every structured-data module
  * with a scene representation declares itself as.
  *
- * The four shapes — satellite, creature, environment, attractor — come
- * from the vision documents (`vision_spatial_canvas.md`,
- * `vision_interactive_artifacts.md`, `vision_endgame_interface.md`):
+ * Five canonical shapes — satellite, creature, environment, attractor,
+ * presentation — pinned by `docs/doctrine/spatial-as-endgame.md`:
  *
- *   - satellite:   orbits the creature (credentials, tools, active tasks)
- *   - creature:    another motebit as a sibling creature in the scene
- *                  (federated agents, collaborators)
- *   - environment: ambient scene state (memory density, trust climate)
- *   - attractor:   a spatial focus the creature moves toward (goals,
- *                  pending approvals, calls for attention)
+ *   - satellite:    orbits the creature (credentials, tools, active tasks)
+ *   - creature:     another motebit as a sibling creature in the scene
+ *                   (federated agents, collaborators)
+ *   - environment:  ambient scene state (memory density, trust climate)
+ *   - attractor:    a spatial focus the creature moves toward (goals,
+ *                   pending approvals, calls for attention)
+ *   - presentation: surfaces the motebit shows you (pages, terminals,
+ *                   tools, the slab) — anchored to the motebit's gesture,
+ *                   receding when work ends. The bridge primitive between
+ *                   the motebit and the spatial OS (Apple visionOS, Meta
+ *                   Horizon OS, future glasses OS).
  *
  * These types live in @motebit/render-engine so any surface with a 3D
- * scene — web, spatial, a future mobile-AR — can consume them.
- * The doctrine enforcement ("spatial rejects panels") lives in
+ * scene — web, spatial, a future mobile-AR / glasses — can consume them.
+ * The doctrine enforcement ("no disconnected window-manager panels;
+ * surfaces emerge from the motebit's gesture") lives in
  * apps/spatial/__tests__/spatial-expression.neg.test.ts; the types
  * themselves are neutral.
  */
@@ -67,17 +72,66 @@ export interface AttractorExpression {
 }
 
 /**
+ * One thing the motebit is currently presenting — a page being read, a
+ * terminal that's running, a tool result being shown, a slab item lifted
+ * for the user. Mirrors `SlabItem` (see `./spec.ts`) at the type level:
+ * the slab is the canonical presentation surface, so a presentation in
+ * spatial reuses the slab's closed vocabulary of kinds and lifecycle
+ * phases. Future kinds added to the slab join presentation
+ * automatically.
+ *
+ * Doctrine: motebit-anchored. The renderer positions the surface
+ * relative to the creature's gesture (a held-tablet, a brought-into-
+ * view artifact); free-floating positions disconnected from the
+ * creature are the failure mode the original "no panels" rule was
+ * tracking and remain forbidden by `spatial-expression.neg.test.ts`.
+ */
+export interface PresentationItem {
+  /** Stable id (matches `SlabItem.id` when bridged from the runtime's slab controller). */
+  readonly id: string;
+  /** Short label for accessibility / Ring-1 chat fallback. */
+  readonly label: string;
+  /**
+   * What kind of content is being presented. Closed vocabulary,
+   * inherited from `SlabItemKind` so the slab and presentation can
+   * share lifecycle types — the slab is the proto presentation
+   * surface and the held-tablet on glasses is its spatial form.
+   */
+  readonly contentKind: import("./spec.js").SlabItemKind;
+  /**
+   * Lifecycle phase, inherited from `SlabItemPhase`. The renderer
+   * chooses the spatial gesture for each phase: emerging plane vs
+   * held-tablet reach-into-view; pinching vs orbiting bead.
+   */
+  readonly phase: import("./spec.js").SlabItemPhase;
+}
+
+export interface PresentationExpression {
+  readonly kind: "presentation";
+  /**
+   * Items currently being presented by the motebit. A scene-level
+   * snapshot; the renderer diffs against its prior state to choose
+   * emerge / update / dismiss animations.
+   */
+  readonly items: readonly PresentationItem[];
+}
+
+/**
  * The canonical union. Every structured-data module with a scene
  * representation MUST produce one of these shapes. apps/spatial enforces
- * "no panels" at compile time via `spatial-expression.neg.test.ts` —
- * widening this union to include `"panel"` or any other non-member
- * fails that negative proof.
+ * "no disconnected window-manager panels" at compile time via
+ * `spatial-expression.neg.test.ts` — widening this union to include
+ * `"panel"`, `"list"`, `"card"`, or any other non-member fails that
+ * negative proof. `presentation` is admitted because it is anchored to
+ * the motebit's gesture (the calm-AR rule, see
+ * `docs/doctrine/spatial-as-endgame.md`).
  */
 export type SpatialExpression =
   | SatelliteExpression
   | CreatureExpression
   | EnvironmentExpression
-  | AttractorExpression;
+  | AttractorExpression
+  | PresentationExpression;
 
 export type SpatialKind = SpatialExpression["kind"];
 

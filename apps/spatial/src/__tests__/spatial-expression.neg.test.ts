@@ -2,11 +2,20 @@
  * Negative-proof test for the SpatialExpression category-3 boundary.
  *
  * The @ts-expect-error assertions below are the mechanical enforcement of
- * "Spatial rejects the panel metaphor" (CLAUDE.md). If someone widens
+ * the calm-AR rule pinned in `docs/doctrine/spatial-as-endgame.md`:
+ * "No disconnected window-manager panels; surfaces emerge from the
+ * motebit's gesture and recede when work ends." If someone widens
  * `SpatialKind` to include "panel", "list", "card", or any other
- * rectangular-surface metaphor, the @ts-expect-error directive fires
- * (because the error it expected is gone) and this file stops compiling
- * — the build fails for every contributor, including CI.
+ * rectangular-surface metaphor disconnected from the motebit's gesture,
+ * the @ts-expect-error directive fires (because the error it expected is
+ * gone) and this file stops compiling — the build fails for every
+ * contributor, including CI.
+ *
+ * The five canonical primitives — creature, satellite, environment,
+ * attractor, presentation — cover the doctrine's full vocabulary.
+ * `presentation` was added 2026-05-06 alongside the AR-glasses-companion
+ * thesis: it is the bridge primitive between the motebit and the spatial
+ * OS, anchored to the creature's gesture (not free-floating chrome).
  *
  * Mirrors the pattern in services/relay/src/__tests__/custody-boundary.test.ts
  * for the GuestRail / SovereignRail split. The enforcement lives in the
@@ -30,14 +39,22 @@ import {
 } from "@motebit/render-engine";
 
 describe("SpatialKind is the closed vocabulary", () => {
-  it("accepts the four canonical kinds at the type level", () => {
-    const kinds: SpatialKind[] = ["satellite", "creature", "environment", "attractor"];
-    expect(kinds.length).toBe(4);
+  it("accepts the five canonical kinds at the type level", () => {
+    const kinds: SpatialKind[] = [
+      "satellite",
+      "creature",
+      "environment",
+      "attractor",
+      "presentation",
+    ];
+    expect(kinds.length).toBe(5);
   });
 
-  it("rejects 'panel' at compile time (category-3 enforcement)", () => {
-    // @ts-expect-error — "panel" is not a SpatialKind. Doctrine: spatial
-    // rejects the panel metaphor; widening this union is the anti-pattern.
+  it("rejects 'panel' at compile time (calm-AR enforcement)", () => {
+    // @ts-expect-error — "panel" is not a SpatialKind. Doctrine
+    // (spatial-as-endgame.md): disconnected window-manager panels are
+    // the anti-pattern; motebit-anchored surfaces are the
+    // `presentation` primitive instead.
     const _panel: SpatialKind = "panel";
     void _panel;
     expect(true).toBe(true); // compile-only assertion; see file header
@@ -45,7 +62,8 @@ describe("SpatialKind is the closed vocabulary", () => {
 
   it("rejects 'list' at compile time", () => {
     // @ts-expect-error — "list" is not a SpatialKind. Lists belong as
-    // satellites (orbiting objects), not as flat rectangles.
+    // satellites (orbiting objects) or presentations (motebit-anchored
+    // surfaces), not as flat rectangles in user-space.
     const _list: SpatialKind = "list";
     void _list;
     expect(true).toBe(true);
@@ -66,6 +84,20 @@ describe("registerSpatialDataModule constrains kind at the call site", () => {
       name: "neg-test-valid",
     });
     expect(m.kind).toBe("satellite");
+  });
+
+  it("accepts a valid presentation module", () => {
+    // Doctrine: spatial-as-endgame.md — `presentation` is the fifth
+    // canonical primitive. The motebit shows you a held-tablet, a page,
+    // a terminal; the surface is anchored to the creature's gesture and
+    // recedes when work ends. Disconnected free-floating panels remain
+    // forbidden by the @ts-expect-error block above; presentations are
+    // not panels because they're motebit-anchored, lifecycle-bounded.
+    const m: SpatialDataModule<"presentation"> = registerSpatialDataModule({
+      kind: "presentation",
+      name: "neg-test-presentation",
+    });
+    expect(m.kind).toBe("presentation");
   });
 
   it("rejects a 'panel' module at compile time", () => {
