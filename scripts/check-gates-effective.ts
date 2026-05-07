@@ -1307,6 +1307,15 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
           `${src}\nexport { NodeFsSkillStorageAdapter } from "./fs-adapter.js";\n`,
       ),
   },
+  {
+    script: "check-mode-contract-readers",
+    proves:
+      "flags a contract field whose sole runtime reader disappears. `lifecycleDefaults` is the one EmbodimentModeContract field with a real reader today (the SlabController anomaly check at slab-controller.ts:436); the other five fields sit on the ALLOWLIST. Stripping the reader by renaming `contract.lifecycleDefaults` → `contract._disabledLifecycleDefaults` makes lifecycleDefaults unreaderable AND not allowlisted, firing the gate's `missing-reader` arm. The symmetric `stale-allowlist` arm (an allowlisted field that gains a reader) is exercised by the gate's own development tests; one perturbation per gate is the registry convention.",
+    perturb: () =>
+      mutateFile("packages/runtime/src/slab-controller.ts", (src) =>
+        src.replace(/contract\.lifecycleDefaults\b/g, "contract._disabledLifecycleDefaults"),
+      ),
+  },
 ];
 
 /**
