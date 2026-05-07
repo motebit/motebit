@@ -64,6 +64,63 @@ vi.mock("@motebit/render-engine", () => {
         return "tool_result";
     }
   }
+  // Mode-contract typed const — `SlabController.checkContractAnomaly`
+  // looks this up on every terminal-phase transition. The mock must
+  // export it (or the lookup fails with "EMBODIMENT_MODE_CONTRACTS
+  // is undefined" once the controller exercises a rest/dissolve/
+  // detach). Mirror the canonical const from
+  // `packages/render-engine/src/spec.ts`; if the canonical value
+  // changes, this mock must move with it (sibling discipline).
+  const EMBODIMENT_MODE_CONTRACTS = {
+    mind: {
+      driver: "self",
+      observer: "self",
+      source: "interior",
+      consent: "always-permitted",
+      sensitivity: "all-tiers",
+      lifecycleDefaults: ["dissolving", "resting", "detached"],
+    },
+    tool_result: {
+      driver: "motebit",
+      observer: "user",
+      source: "sandboxed-tool",
+      consent: "per-action",
+      sensitivity: "tier-bounded-by-tool",
+      lifecycleDefaults: ["resting", "dissolving"],
+    },
+    virtual_browser: {
+      driver: "motebit",
+      observer: "user",
+      source: "isolated-browser",
+      consent: "session-scoped",
+      sensitivity: "tier-bounded-by-source",
+      lifecycleDefaults: ["resting", "detached"],
+    },
+    shared_gaze: {
+      driver: "user",
+      observer: "motebit",
+      source: "user-source",
+      consent: "per-source",
+      sensitivity: "tier-bounded-by-source",
+      lifecycleDefaults: ["resting", "detached", "dissolving"],
+    },
+    desktop_drive: {
+      driver: "motebit",
+      observer: "user",
+      source: "real-os",
+      consent: "per-action",
+      sensitivity: "all-tiers",
+      lifecycleDefaults: ["resting", "detached"],
+    },
+    peer_viewport: {
+      driver: "peer",
+      observer: "motebit",
+      source: "peer-receipt",
+      consent: "signed-delegation",
+      sensitivity: "tier-bounded-by-source",
+      lifecycleDefaults: ["resting", "detached"],
+    },
+  } as const;
   return {
     ThreeJSAdapter: MockThreeJSAdapter,
     NullRenderAdapter: MockThreeJSAdapter,
@@ -74,6 +131,7 @@ vi.mock("@motebit/render-engine", () => {
     // getCreatureGroup() returns null).
     mountCredentialSatellites: () => null,
     defaultEmbodimentMode,
+    EMBODIMENT_MODE_CONTRACTS,
   };
 });
 
