@@ -37,7 +37,12 @@
  * semilattice). Calling it a semiring would be a category error.
  */
 
-import { SensitivityLevel } from "./index.js";
+// Type-only import: `index.ts` re-exports from this file, so a value
+// import would create an init-order cycle in the bundled dist. The
+// enum's runtime values are the same string literals used as keys
+// below — verified by `check-sensitivity-routing` and the protocol
+// tests under `__tests__/sensitivity.test.ts`.
+import type { SensitivityLevel } from "./index.js";
 
 /**
  * Ordinal rank for `SensitivityLevel`: `none(0) < personal(1) <
@@ -46,13 +51,17 @@ import { SensitivityLevel } from "./index.js";
  * decisions from this rank, not from local enum-equality chains
  * (`x === Medical || x === Financial || x === Secret`), so a future
  * tier insertion remains a one-file change at the protocol layer.
+ *
+ * Keys are the enum's string values (not enum members) to avoid the
+ * init-order cycle described above. The `Record<SensitivityLevel,
+ * number>` type still binds the keys to the enum at the type layer.
  */
 const SENSITIVITY_RANK: Readonly<Record<SensitivityLevel, number>> = Object.freeze({
-  [SensitivityLevel.None]: 0,
-  [SensitivityLevel.Personal]: 1,
-  [SensitivityLevel.Medical]: 2,
-  [SensitivityLevel.Financial]: 3,
-  [SensitivityLevel.Secret]: 4,
+  none: 0,
+  personal: 1,
+  medical: 2,
+  financial: 3,
+  secret: 4,
 });
 
 /**
