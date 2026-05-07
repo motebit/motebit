@@ -95,10 +95,21 @@ export type DropPayloadKind = "url" | "text" | "image" | "file" | "artifact";
  *     dropping a reference into the user's physical workspace is the
  *     natural gesture.
  *
- * Field is optional; absent ≡ `slab`. Surfaces only set non-default
- * targets once they implement BOTH the gesture vocabulary that makes
- * the target unambiguous (3D pick on the user's hand path) AND the
- * per-target governance UX that makes elevation safe.
+ * Field is optional; absent ≡ `slab`. Surfaces may set non-default
+ * targets once they implement BOTH the gesture detection (e.g.,
+ * Three.js raycast pick on 2D web; 3D hand-path pick on spatial)
+ * AND the per-target governance UX that makes elevation safe.
+ *
+ * **Dimensionality is not the gate; governance is.** A 2D web surface
+ * CAN distinguish the three targets via raycast at drop time
+ * (creature mesh hit / slab plane hit / no hit ≡ ambient). What
+ * actually defers `creature` and `ambient` is the per-target
+ * governance UX (creature: confirmation modal + chosen mutation
+ * semantic; ambient: workspace-scoped consultable store +
+ * retrieval-shaped API). Until those exist, `MotebitRuntime.feedPerception`
+ * fails closed on non-slab targets — surfaces that send `creature` or
+ * `ambient` payloads receive a clear error naming the missing
+ * consumer.
  */
 export type DropTarget = "slab" | "creature" | "ambient";
 

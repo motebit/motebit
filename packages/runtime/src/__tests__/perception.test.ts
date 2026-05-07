@@ -15,7 +15,12 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
+import {
+  MotebitRuntime,
+  NullRenderer,
+  createInMemoryStorage,
+  DropTargetGovernanceRequiredError,
+} from "../index";
 import type { DropPayload, UserActionAttestation } from "@motebit/sdk";
 import { resolveDropTarget } from "@motebit/sdk";
 
@@ -146,6 +151,91 @@ describe("registerDropHandler — within-kind extension", () => {
     };
     await r.feedPerception(payload);
     expect(fileHandler).toHaveBeenCalledWith(payload);
+  });
+});
+
+describe("feedPerception — non-slab targets fail closed", () => {
+  // Doctrine — motebit-computer.md §"Three drop targets, three
+  // governance scopes": each target carries different persistence
+  // and governance. Until the per-target governance UX ships
+  // (creature confirmation modal + chosen mutation semantic; ambient
+  // consultable-context store + retrieval API), feedPerception
+  // throws DropTargetGovernanceRequiredError naming the missing
+  // consumer. Dimensionality is not the gate; governance is.
+
+  it("rejects target=creature with DropTargetGovernanceRequiredError", async () => {
+    const r = makeRuntime();
+    await expect(
+      r.feedPerception({
+        kind: "url",
+        url: "https://example.com",
+        target: "creature",
+        attestation: baseAttestation,
+      }),
+    ).rejects.toBeInstanceOf(DropTargetGovernanceRequiredError);
+  });
+
+  it("rejects target=ambient with DropTargetGovernanceRequiredError", async () => {
+    const r = makeRuntime();
+    await expect(
+      r.feedPerception({
+        kind: "text",
+        text: "background context",
+        target: "ambient",
+        attestation: baseAttestation,
+      }),
+    ).rejects.toBeInstanceOf(DropTargetGovernanceRequiredError);
+  });
+
+  it("error carries the target field for surface-side branching", async () => {
+    const r = makeRuntime();
+    try {
+      await r.feedPerception({
+        kind: "url",
+        url: "https://example.com",
+        target: "creature",
+        attestation: baseAttestation,
+      });
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(DropTargetGovernanceRequiredError);
+      const e = err as DropTargetGovernanceRequiredError;
+      expect(e.target).toBe("creature");
+      expect(e.code).toBe("DROP_TARGET_GOVERNANCE_REQUIRED");
+    }
+  });
+
+  it("explicit target=slab still dispatches normally (subscriber sees fetch item)", async () => {
+    const r = makeRuntime();
+    const subscriber = vi.fn();
+    r.slab.subscribe(subscriber);
+    await r.feedPerception({
+      kind: "url",
+      url: "https://example.com",
+      target: "slab",
+      attestation: baseAttestation,
+    });
+    const fetchItems = subscriber.mock.calls.flatMap((c) => {
+      const state = c[0] as { items: Map<string, { kind: string }> };
+      return Array.from(state.items.values()).filter((i) => i.kind === "fetch");
+    });
+    expect(fetchItems.length).toBeGreaterThan(0);
+  });
+
+  it("absent target (defaults to slab) still dispatches normally", async () => {
+    const r = makeRuntime();
+    const subscriber = vi.fn();
+    r.slab.subscribe(subscriber);
+    await r.feedPerception({
+      kind: "url",
+      url: "https://example.com",
+      attestation: baseAttestation,
+    });
+    const fetchItems = subscriber.mock.calls.flatMap((c) => {
+      const state = c[0] as { items: Map<string, { kind: string }> };
+      return Array.from(state.items.values()).filter((i) => i.kind === "fetch");
+    });
+    expect(fetchItems.length).toBeGreaterThan(0);
   });
 });
 

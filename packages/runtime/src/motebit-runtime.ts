@@ -30,6 +30,7 @@ import type {
 import { signToolInvocationReceipt, hashToolPayload } from "@motebit/crypto";
 import { EventType, AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
 import type { ProviderMode, DropPayload, DropPayloadKind } from "@motebit/sdk";
+import { resolveDropTarget } from "@motebit/sdk";
 
 /**
  * Thrown by the runtime's sensitivity gate when an AI call would
@@ -55,6 +56,44 @@ export class SovereignTierRequiredError extends Error {
       `Session sensitivity "${sessionSensitivity}" requires sovereign (on-device) provider; current provider is "${providerMode}". Switch to an on-device provider or de-escalate session sensitivity to continue.`,
     );
     this.name = "SovereignTierRequiredError";
+  }
+}
+
+/**
+ * Thrown by `MotebitRuntime.feedPerception` when a `DropPayload` sets
+ * `target` to `creature` or `ambient` before the per-target
+ * governance UX has shipped.
+ *
+ * Doctrine — `motebit-computer.md` §"Three drop targets, three
+ * governance scopes": each target carries different persistence and
+ * governance, and shipping the gesture without the governance is the
+ * silent-persistent-mutation failure mode the substrate exists to
+ * prevent. Dimensionality is not the gate (a 2D scene can detect
+ * the gesture via raycast pick); per-target governance UX is.
+ *
+ *   - `creature` needs a confirmation modal and a chosen mutation
+ *     semantic (likely "stage as memory candidate awaiting next
+ *     consolidation cycle"). Implementing creature-drop with
+ *     slab-drop's governance posture is forbidden.
+ *
+ *   - `ambient` needs the workspace-scoped consultable-context store
+ *     plus a retrieval-shaped API the motebit reaches into when a
+ *     turn calls for it. Genuinely new infrastructure, not just UX.
+ *     Ambient invariant: consultable, not automatic prompt context.
+ *
+ * The `code` field is the stable contract surfaces match against;
+ * the `message` carries the human-readable form. Same fail-closed
+ * pattern as `SovereignTierRequiredError`.
+ */
+export class DropTargetGovernanceRequiredError extends Error {
+  readonly code = "DROP_TARGET_GOVERNANCE_REQUIRED" as const;
+  constructor(readonly target: "creature" | "ambient") {
+    super(
+      target === "creature"
+        ? `Drop target "creature" requires per-target governance UX (confirmation modal + chosen mutation semantic such as "stage as memory candidate") which has not yet shipped. Use "slab" (the v1 default) or omit the target field. See docs/doctrine/motebit-computer.md §"Three drop targets, three governance scopes."`
+        : `Drop target "ambient" requires the workspace-scoped consultable-context store + retrieval-shaped API which has not yet shipped. Use "slab" (the v1 default) or omit the target field. Ambient invariant: consultable context, not automatic prompt context. See docs/doctrine/motebit-computer.md §"Three drop targets, three governance scopes."`,
+    );
+    this.name = "DropTargetGovernanceRequiredError";
   }
 }
 import { EventStore } from "@motebit/event-log";
@@ -2820,8 +2859,25 @@ export class MotebitRuntime {
    * default handlers exist for `url`, `text`, `image`. `file` and
    * `artifact` are allowlisted-deferred — registering a handler is
    * opt-in until v1.1.
+   *
+   * **Non-slab targets fail closed.** A 2D surface CAN detect
+   * `creature` and `ambient` targets via raycast pick at drop time,
+   * but the per-target governance UX (creature confirmation modal +
+   * chosen mutation semantic; ambient consultable-context store) has
+   * not yet shipped. Until it does, payloads with `target: "creature"`
+   * or `target: "ambient"` throw `DropTargetGovernanceRequiredError`
+   * naming the missing consumer. Same pattern as
+   * `SovereignTierRequiredError`: typed input, fail-closed default,
+   * clear error pointing at the deferred infrastructure.
    */
   feedPerception(payload: DropPayload): Promise<void> {
+    const target = resolveDropTarget(payload);
+    if (target !== "slab") {
+      // Synchronous throw is wrapped in a rejected Promise so the
+      // call signature stays uniformly Promise<void> — surfaces don't
+      // branch sync/async on the gate.
+      return Promise.reject(new DropTargetGovernanceRequiredError(target));
+    }
     return this.dropDispatcher.dispatch(payload);
   }
 
