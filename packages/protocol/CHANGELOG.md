@@ -1,5 +1,194 @@
 # @motebit/protocol
 
+## 1.3.0
+
+### Minor Changes
+
+- b7f79b2: Drag-drop perception substrate — protocol-layer types for the gesture the slab doctrine has named since landing.
+
+  ```ts
+  export type DropPayloadKind = "url" | "text" | "image" | "file" | "artifact";
+
+  export type DropTarget = "slab" | "creature" | "ambient";
+
+  export type DropPayload =
+    | {
+        kind: "url";
+        url: string;
+        sourceFrame?: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      }
+    | {
+        kind: "text";
+        text: string;
+        mimeType?: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      }
+    | {
+        kind: "image";
+        bytes: Uint8Array;
+        mimeType: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      }
+    | {
+        kind: "file";
+        bytes: Uint8Array;
+        filename: string;
+        mimeType: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      }
+    | {
+        kind: "artifact";
+        receiptHash: string;
+        payloadJson: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      };
+
+  export interface UserActionAttestation {
+    readonly kind: "user-drag";
+    readonly timestamp: number;
+    readonly surface: "web" | "desktop" | "mobile" | "spatial" | "cli";
+    readonly contentHashSha256?: string;
+  }
+
+  export function resolveDropTarget(payload: DropPayload): DropTarget;
+  ```
+
+  Two-level pattern, same shape as `SuiteId` / `GuestRail` / `ToolMode` (the agility-as-role pattern in `docs/doctrine/agility-as-role.md`). Categorical drop kinds are closed at the protocol layer — adding a kind is a protocol bump (additive, registry append). Per-kind handlers are runtime-extensible via `MotebitRuntime.registerDropHandler(kind, handler)`; v1 default handlers stage slab items for `url`, `text`, `image` in **`shared_gaze` mode** — the user is the driver, motebit is the observer, source is `user-source`, consent fires per-source. (`mind` would be a category error: `mind` is interior cognition, not user-fed external material.) The doctrine's three drop targets (`slab` / `creature` / `ambient`) carry as an optional hint defaulting to `slab`; spatial Phase 1B unlocks the other two without a wire-format change.
+
+  `UserActionAttestation` is **attestation of intentional delivery, not content authenticity.** The user's gesture proves they meant to deliver the payload — it does NOT prove the payload is authentic, unforged, or what it claims to be. A user can drag a forged PDF; the gesture still attests only that delivery was intentional. Authenticity comes from separate provenance — a source URL the runtime fetched, a cryptographic signature on the bytes, an `ExecutionReceipt`, or a content hash a trusted source previously published. Audit prose must keep the two distinct.
+
+  The three `DropTarget` values are **not equivalent drop zones with different visual effects.** They carry meaningfully different persistence and governance: `slab` is turn/session-scoped perception, `creature` is identity-adjacent state mutation requiring explicit confirmation / signed user intent, `ambient` is workspace-scoped reference with source-consent + expiration. v1 surfaces only ever set `slab`; `creature` and `ambient` unlock together with the per-target governance UX in spatial Phase 1B (never separately).
+
+  **Ambient invariant: consultable context, not automatic prompt context.** The motebit can reach for an ambient drop when a turn calls for it (retrieval-shaped), but the drop itself does NOT auto-fill the prompt at the next AI call. Future implementations will be tempted to dump ambient bytes into every turn's context pack; this invariant exists to prevent that failure mode.
+
+  **Dimensionality is not the gate; governance is.** A 2D web surface CAN distinguish the three targets via raycast pick at drop time (creature mesh hit, slab plane hit, no hit ≡ ambient). The actual gate is the per-target governance UX (creature confirmation modal + chosen mutation semantic; ambient consultable-context store + retrieval API). Until those exist, `MotebitRuntime.feedPerception` fails closed on non-slab targets with `DropTargetGovernanceRequiredError` (re-exported from `@motebit/runtime`) — same fail-closed pattern as `SovereignTierRequiredError`. The error names the missing consumer so a future implementer can wire it up by replacing the rejection with the governance-aware handler.
+
+  Drop-out provenance — when a motebit-produced artifact leaves the slab toward another destination — uses `ExecutionReceipt` (already in the protocol). This release covers the in-direction substrate.
+
+  Drift gate `check-drop-handlers` (#77) enforces both arms: every `DropPayloadKind` has a registered handler or an explicit allowlist entry, AND every per-surface drop handler routes through `runtime.feedPerception` (never constructs a prompt and calls `sendMessage` — the prompt-backdoor failure mode named in `motebit-computer.md` §"Failure modes specific to supervised agency").
+
+  Doctrine: `motebit-computer.md` §"Perception input — drop kinds and handlers" + `liquescentia-as-substrate.md` §"Cohesive permeability" (the membrane physics every drop crosses under conditions).
+
+- c243dd2: Sensitivity-gate audit event — turns the shipped fail-closed gate from invisible-but-correct into observable-and-provable.
+
+  ```ts
+  enum EventType {
+    // ...
+    SensitivityGateFired = "sensitivity_gate_fired",
+  }
+
+  type SensitivityGateEntry =
+    | "sendMessage"
+    | "sendMessageStreaming"
+    | "generateActivation"
+    | "generateCompletion"
+    | "outbound_tool";
+
+  type SensitivityElevationSource = "session" | "slab_item";
+
+  interface SensitivityGateFiredPayload {
+    readonly entry: SensitivityGateEntry;
+    readonly session_sensitivity: SensitivityLevel;
+    readonly effective_sensitivity: SensitivityLevel;
+    readonly provider_mode: "on-device" | "motebit-cloud" | "byok" | "unset";
+    readonly elevated_by?: {
+      readonly via: SensitivityElevationSource;
+      readonly slab_item_id?: string;
+    };
+    readonly tool_name?: string;
+  }
+  ```
+
+  Every `assertSensitivityPermitsAiCall` block now emits a structured `SensitivityGateFired` event to the EventStore BEFORE throwing `SovereignTierRequiredError`. The four shipped egress closures (session-elevated state, drops, tool outputs, memory writes) all leave inspectable evidence. Audit consumers query via `events.query({ event_types: [EventType.SensitivityGateFired] })` for the trail of every blocked egress crossing.
+
+  **Strictly metadata.** Payload contains entry name, session/effective tier, provider mode, elevation attribution (with content-free slab item ID for forensic correlation), and tool name when applicable. NEVER raw drop content, tool result bytes, slab item payloads, or prompt strings. Logging the payload that triggered the block would itself be a leak surface — same kind of leak the gate exists to prevent. Field naming choice (`elevated_by.via` rather than `source`) avoids false-positives in `check-mode-contract-readers` (#76) where the destructure-detection regex can't distinguish object-literal write from contract-field read.
+
+  Companion change: `MotebitRuntime.assertSensitivityPermitsAiCall` promoted from `private` to public. The gate predicate is motebit's named primitive for sensitivity-tier-vs-provider routing — the mechanism every commit in the four-egress-shape arc is built around. Surfaces, tests, and audit tooling now have a typed entry point. Internal sites (sendMessage, sendMessageStreaming, generateActivation, generateCompletion, the outbound-tool wrap) call the same method — the public promotion adds no new code path, it just names what was already the architectural seam.
+
+  Doctrine: `motebit-computer.md` §"Mode contract — six declarations per mode." Closes the audit-trail pivot named after the four-egress-shape arc.
+
+- 7b87916: Sensitivity ladder algebra graduates to the protocol layer.
+
+  `rankSensitivity`, `maxSensitivity`, and `sensitivityPermits` are now
+  exported from `@motebit/protocol` (and re-exported through `@motebit/sdk`
+  via the existing `export *`). Pure deterministic math over the closed
+  `SensitivityLevel` enum — qualifies as a permissive-floor primitive
+  per `packages/protocol/CLAUDE.md` rule 1 ("deterministic math").
+
+  ```text
+  rankSensitivity(level): number               // None=0 .. Secret=4
+  maxSensitivity(a, b):   SensitivityLevel     // join-semilattice composition
+  sensitivityPermits(upper, candidate): bool   // candidate <= upper
+  ```
+
+  The ladder is interop law. Every motebit implementation must agree on
+  which tier dominates which, or the cross-implementation gate isn't
+  interoperable: device A persisting a turn at "secret" must mean the
+  same thing to device B's session-tier filter. Hosting the math at the
+  protocol layer makes the ordering a one-file change at the canonical
+  source rather than four duplicated copies that drift independently.
+
+  Graduation history: `rankSensitivity` had three local copies as of
+  2026-05-07 (runtime/motebit-runtime.ts, runtime/conversation.ts,
+  ai-core/loop.ts) plus a fourth-shaped table (`LEVEL_RANK` +
+  `higherLevel` in policy-invariants/computer-sensitivity.ts). The
+  ai-core copy's JSDoc explicitly named the trigger: "if a third reader
+  appears, the helper graduates." Past trigger.
+
+  Three runtime/ai-core copies are removed and the consumers now import
+  from `@motebit/sdk`. policy-invariants's local `LEVEL_RANK` table is
+  left in place because it operates on a separate string-literal
+  `SensitivityLevel` type for computer-use sensitivity classification —
+  cross-package type unification is a separate concern and not load-
+  bearing for the gate-composition arc.
+
+  Math properties verified by 13 new protocol-package tests:
+
+  ```text
+  rankSensitivity:    strictly monotonic; every adjacent pair differs by 1
+  maxSensitivity:     None is identity; idempotent; commutative; associative
+  sensitivityPermits: dual of maxSensitivity (max(upper, c) === upper iff
+                      sensitivityPermits(upper, c)); reflexive
+  ```
+
+  `@motebit/sdk` is patch because it picks up the new exports through
+  `export * from "@motebit/protocol"` without changing its own surface
+  intentionally.
+
+  Added to `PERMISSIVE_ALLOWED_FUNCTIONS` in `scripts/check-deps.ts`
+  with a load-bearing review note tying the entries to the graduation
+  trigger and the interop-law justification.
+
+- f78a82a: Add `"skill_audit"` to `RuntimeStoreId` and register a `consolidation_flush` retention shape for it in `RUNTIME_RETENTION_REGISTRY`. Mirrors the existing `tool_audit` registration — append-only operator-act ledger with a `sensitivity` column on the `skill_consent_granted` variant; the consolidation cycle's flush phase respects sensitivity-tier retention ceilings. No min-floor resolver because skill audit doesn't gate settlement.
+
+  The new store ships with the durable consent-audit arc on web (`packages/browser-persistence/src/idb-skill-audit.ts`) and mobile (`apps/mobile/src/adapters/expo-sqlite.ts` — `ExpoSqliteSkillAuditSink` over the `skill_audit` SQLite table). Closes the consent-gate arc's runtime gap: `SkillConsentGrantedEvent` now lands in a registered, retention-aware durable store instead of the protocol-only type slot it occupied before.
+
+### Patch Changes
+
+- b0f38a8: Break init-order cycle in `sensitivity.ts` so the bundled dist boots.
+
+  Switched the `SensitivityLevel` import to `import type` and replaced
+  enum-member computed keys (`[SensitivityLevel.None]`) with the
+  string-literal keys the enum's runtime values evaluate to (`none`).
+
+  The bundled tsup output evaluates modules in linear order — `sensitivity.ts`
+  initializes its `SENSITIVITY_RANK` record before `index.ts` assigns the
+  enum's runtime values, so `[SensitivityLevel.None]: 0` crashed on first
+  access ("Cannot read properties of undefined (reading 'None')"). vitest
+  masked this with live TS bindings; the dist-smoke gate caught it on the
+  companion minor's push attempt.
+
+  No public-API change: the `Record<SensitivityLevel, number>` type still
+  binds keys to the enum at the type layer, so a future tier rename
+  remains a single-file edit at the enum site. Pairs with the same-PR
+  `feat(protocol): sensitivity ladder algebra` minor.
+
 ## 1.2.0
 
 ### Minor Changes

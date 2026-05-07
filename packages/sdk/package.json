@@ -1,6 +1,6 @@
 {
   "name": "@motebit/sdk",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Developer contract for building Motebit-powered agents, services, and integrations — stable types, adapter interfaces, governance config. Re-exports @motebit/protocol.",
   "type": "module",
   "main": "./dist/index.js",
