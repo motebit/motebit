@@ -1284,10 +1284,14 @@ export class MotebitRuntime {
             provenance: skill.provenance,
             score: skill.score,
             ...(runId != null ? { run_id: runId } : {}),
-            // Sensitivity tier the runtime resolved against. Future:
-            // pull from a session-tier register on the runtime when
-            // sensitivity-elevation lands. CLI defaults to "none".
-            session_sensitivity: "none" as const,
+            // Sensitivity tier the runtime resolved against at load
+            // time. Reads the live session-tier register so audit
+            // entries reflect what was actually in force when the
+            // skill body crossed into the system context — a stale
+            // `"none"` here would mask elevation events from the
+            // audit trail. The wire schema is the closed enum
+            // `SkillSensitivity`, identical to `SensitivityLevel`.
+            session_sensitivity: this._sessionSensitivity,
           },
           tombstoned: false,
         });
@@ -1779,6 +1783,17 @@ export class MotebitRuntime {
    * classification, summarization) that should not appear in the chat.
    */
   async generateCompletion(prompt: string, taskType?: TaskType): Promise<string> {
+    // Privacy doctrine gate. Housekeeping completions (title generation,
+    // summarization, classification) feed user-authored text directly
+    // through the AI provider — same egress shape as a turn, no
+    // memory-retrieval pre-filter to lean on. The carve-out the
+    // consolidation provider enjoys (memories already filtered through
+    // CONTEXT_SAFE_SENSITIVITY at retrieval) does NOT apply here.
+    // Fail-closed before any bytes leave the device. See
+    // `assertSensitivityPermitsAiCall` and the
+    // `check-sensitivity-routing` drift gate.
+    this.assertSensitivityPermitsAiCall();
+
     if (!this.provider) throw new Error("No AI provider configured");
 
     const contextPack = {

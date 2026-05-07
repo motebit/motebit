@@ -15,19 +15,24 @@
  * to Anthropic / OpenAI / Google via BYOK.
  *
  * The fix shape (this gate's invariant): every runtime method that
- * invokes `runTurn` or `runTurnStreaming` MUST call
- * `assertSensitivityPermitsAiCall()` somewhere earlier in the same
- * method body. The assertion is the canonical sensitivity-vs-provider
- * gate; it throws `SovereignTierRequiredError` before any provider
- * call when session is medical/financial/secret AND provider is not
- * sovereign.
+ * invokes the AI provider — via the turn-level orchestrators
+ * (`runTurn`, `runTurnStreaming`) OR a direct `provider.generate*`
+ * call (housekeeping completions: title generation, summarization,
+ * classification) — MUST call `assertSensitivityPermitsAiCall()`
+ * somewhere earlier in the same method body. The assertion is the
+ * canonical sensitivity-vs-provider gate; it throws
+ * `SovereignTierRequiredError` before any provider call when session
+ * is medical/financial/secret AND provider is not sovereign.
  *
  * ── Rule ─────────────────────────────────────────────────────────────
  *
  * Scan `packages/runtime/src/motebit-runtime.ts`. For every method
- * containing a call to `runTurn(` or `runTurnStreaming(`, the method
- * body MUST also contain a call to `this.assertSensitivityPermitsAiCall()`
- * appearing BEFORE the AI invocation.
+ * containing a call to `runTurn(`, `runTurnStreaming(`, or a direct
+ * `.generate(` / `.generateStream(` invocation on a provider
+ * reference, the method body MUST also contain a call to
+ * `this.assertSensitivityPermitsAiCall()` appearing BEFORE the AI
+ * invocation. Methods on `DIRECT_PROVIDER_CALL_ALLOWLIST` are exempt
+ * from the direct-call check (consolidation carve-out — see below).
  *
  * ── Why this file only ───────────────────────────────────────────────
  *
@@ -40,11 +45,12 @@
  * or break the runtime's role as the policy gate.
  *
  * Consolidation calls (`provider.generate(...)` for memory
- * consolidation) are intentionally NOT gated here: they operate on
- * memories that have already passed through `CONTEXT_SAFE_SENSITIVITY`
- * at retrieval time, so high-sensitivity bytes never enter the
- * consolidation path. Locking that invariant is the memory-retrieval
- * filter's job, not this gate's.
+ * consolidation) are intentionally exempted via
+ * `DIRECT_PROVIDER_CALL_ALLOWLIST`: they operate on memories that
+ * have already passed through `CONTEXT_SAFE_SENSITIVITY` at retrieval
+ * time, so high-sensitivity bytes never enter the consolidation
+ * path. Locking that invariant is the memory-retrieval filter's job,
+ * not this gate's.
  *
  * Exit 1 on violation. Runs in CI via `pnpm check`.
  */
@@ -58,7 +64,36 @@ const ROOT = resolve(__dirname, "..");
 
 const TARGET = resolve(ROOT, "packages/runtime/src/motebit-runtime.ts");
 const AI_CALL_PATTERNS = [/\brunTurn\s*\(/g, /\brunTurnStreaming\s*\(/g];
+/**
+ * Direct provider-call pattern. Matches `provider.generate(`,
+ * `p.generate(`, `provider.generateStream(`, etc. — any method call on
+ * an `IntelligenceProvider` reference that crosses the network boundary
+ * outside the `runTurn` / `runTurnStreaming` orchestrators. Housekeeping
+ * paths (title generation, summarization, classification) call these
+ * directly, and the previous gate scoped only to `runTurn(*` missed them.
+ *
+ * Scoped to `.generate(` / `.generateStream(` because those are the
+ * `IntelligenceProvider` interface's only network methods; nothing else
+ * in the codebase shares the name.
+ */
+const DIRECT_PROVIDER_CALL_PATTERN = /\.(?:generate|generateStream)\s*\(/g;
 const GATE_PATTERN = /\bthis\.assertSensitivityPermitsAiCall\s*\(/g;
+
+/**
+ * Methods exempt from the direct-provider-call check. The consolidation
+ * provider built inside `wireLoopDeps` operates on memories that have
+ * already passed through `CONTEXT_SAFE_SENSITIVITY` at retrieval time,
+ * so high-sensitivity bytes never enter that path — locking that
+ * invariant is the memory-retrieval filter's job, not this gate's.
+ *
+ * Adding an entry is a privacy-load-bearing decision: name the
+ * justification in the comment so future readers can audit.
+ */
+const DIRECT_PROVIDER_CALL_ALLOWLIST: ReadonlySet<string> = new Set([
+  // Constructs `consolidationProvider`; the inner `provider.generate`
+  // call only sees memory bodies pre-filtered by `CONTEXT_SAFE_SENSITIVITY`.
+  "wireLoopDeps",
+]);
 
 interface MethodSlice {
   /** 1-indexed line where the method body starts (the line with the opening `{`). */
@@ -145,12 +180,23 @@ function checkMethod(slice: MethodSlice): string | null {
     const m = pat.exec(stripped);
     if (m && m.index < firstAiCallOffset) firstAiCallOffset = m.index;
   }
+
+  // Direct-provider-call sites — same gate semantics as turn-level
+  // calls, applied to `provider.generate*` invocations that bypass
+  // `runTurn` / `runTurnStreaming` (housekeeping completions). Methods
+  // on the consolidation allowlist are exempt by carve-out.
+  if (!DIRECT_PROVIDER_CALL_ALLOWLIST.has(slice.name)) {
+    DIRECT_PROVIDER_CALL_PATTERN.lastIndex = 0;
+    const m = DIRECT_PROVIDER_CALL_PATTERN.exec(stripped);
+    if (m && m.index < firstAiCallOffset) firstAiCallOffset = m.index;
+  }
+
   if (firstAiCallOffset === Infinity) return null; // no AI call — gate not applicable
 
   GATE_PATTERN.lastIndex = 0;
   const gateMatch = GATE_PATTERN.exec(stripped);
   if (!gateMatch || gateMatch.index > firstAiCallOffset) {
-    return `${slice.name} (lines ${slice.startLine}–${slice.endLine}) calls runTurn / runTurnStreaming without first calling \`this.assertSensitivityPermitsAiCall()\``;
+    return `${slice.name} (lines ${slice.startLine}–${slice.endLine}) invokes the AI provider (runTurn / runTurnStreaming / provider.generate) without first calling \`this.assertSensitivityPermitsAiCall()\``;
   }
   return null;
 }
@@ -281,7 +327,7 @@ function main(): void {
 
   if (violations.length === 0) {
     console.log(
-      `✓ check-sensitivity-routing: AI-call entries gate on \`assertSensitivityPermitsAiCall\`, the tool registry is wrapped via \`wrapToolRegistryForSensitivity\`, and every registered surface (${SURFACE_AFFORDANCES.map((s) => s.surface).join(", ")}) exposes \`/sensitivity\` routed through the canonical runtime setter.\n`,
+      `✓ check-sensitivity-routing: AI-call entries (runTurn / runTurnStreaming / direct provider.generate) gate on \`assertSensitivityPermitsAiCall\`, the tool registry is wrapped via \`wrapToolRegistryForSensitivity\`, and every registered surface (${SURFACE_AFFORDANCES.map((s) => s.surface).join(", ")}) exposes \`/sensitivity\` routed through the canonical runtime setter.\n`,
     );
     return;
   }
@@ -292,7 +338,7 @@ function main(): void {
     console.error(`  ${v}\n`);
   }
   console.error(
-    'Per CLAUDE.md privacy doctrine ("Medical/financial/secret never reach external AI"), the gate has three load-bearing pieces:\n  1. Every runtime AI-call entry MUST call `this.assertSensitivityPermitsAiCall()` before invoking runTurn / runTurnStreaming.\n  2. The runtime\'s tool registry MUST be wrapped through `wrapToolRegistryForSensitivity` so outbound tools (web_search, read_url, delegate_to_agent, MCP) fail-close on high-sensitivity sessions.\n  3. Every user-facing surface with chat/slash dispatch MUST expose `/sensitivity` routed through `runtime.setSessionSensitivity` / `getSessionSensitivity` — without this affordance, the gate is enforced in code but unreachable from any user action.\n\nAll three together close the doctrine end-to-end: enforcement at the boundary + a path for users to actually trip the gate.\n',
+    'Per CLAUDE.md privacy doctrine ("Medical/financial/secret never reach external AI"), the gate has three load-bearing pieces:\n  1. Every runtime AI-call entry MUST call `this.assertSensitivityPermitsAiCall()` before invoking runTurn / runTurnStreaming OR a direct `provider.generate*` call. Housekeeping completions (title generation, summarization, classification) feed user-authored text straight to the provider, so they take the same gate as a turn.\n  2. The runtime\'s tool registry MUST be wrapped through `wrapToolRegistryForSensitivity` so outbound tools (web_search, read_url, delegate_to_agent, MCP) fail-close on high-sensitivity sessions.\n  3. Every user-facing surface with chat/slash dispatch MUST expose `/sensitivity` routed through `runtime.setSessionSensitivity` / `getSessionSensitivity` — without this affordance, the gate is enforced in code but unreachable from any user action.\n\nAll three together close the doctrine end-to-end: enforcement at the boundary + a path for users to actually trip the gate.\n',
   );
   process.exit(1);
 }

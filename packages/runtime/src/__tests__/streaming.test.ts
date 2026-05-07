@@ -3,7 +3,7 @@ import { MotebitRuntime, NullRenderer, SimpleToolRegistry, createInMemoryStorage
 import type { PlatformAdapters, StreamChunk, ConversationStoreAdapter } from "../index";
 import type { StreamingProvider, AgenticChunk, TurnResult } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ToolHandler } from "@motebit/sdk";
-import { TrustMode, BatteryMode, EventType } from "@motebit/sdk";
+import { TrustMode, BatteryMode, EventType, SensitivityLevel } from "@motebit/sdk";
 
 // === Mock ai-core: override runTurnStreaming and reflect, keep everything else real ===
 
@@ -2030,6 +2030,42 @@ describe("SkillLoaded event emission — phase 3", () => {
       event_types: [EventType.SkillLoaded],
     });
     expect(events).toHaveLength(0);
+  });
+
+  it("payload session_sensitivity reflects the runtime's live tier at emit time", async () => {
+    // Audit-trail accuracy: a stale `"none"` in the payload would mask
+    // elevation events (`/sensitivity personal` set before a turn) from
+    // the audit ledger. Personal doesn't trip the routing gate, so the
+    // turn proceeds and the event emits — letting us verify the payload
+    // mirrors `_sessionSensitivity` rather than a hardcoded default.
+    const motebitId = "skill-load-sensitivity-reflect";
+    const selectorMock = vi.fn().mockResolvedValue([
+      {
+        name: "git-commit-motebit-style",
+        version: "1.0.0",
+        body: "# Procedure\n",
+        provenance: "verified" as const,
+        score: 4.27,
+        signature: "SGVsbG8tc2lnbmF0dXJl",
+      },
+    ]);
+    const runtime = new MotebitRuntime(
+      { motebitId, tickRateHz: 0, skillSelector: { selectForTurn: selectorMock } },
+      createAdapters(provider),
+    );
+    runtime.setSessionSensitivity(SensitivityLevel.Personal);
+
+    await collectChunks(runtime.sendMessageStreaming("help me with a commit message"));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const events = await runtime.events.query({
+      motebit_id: motebitId,
+      event_types: [EventType.SkillLoaded],
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload).toMatchObject({
+      session_sensitivity: "personal",
+    });
   });
 
   it("emits no events when no skillSelector is wired (default config)", async () => {

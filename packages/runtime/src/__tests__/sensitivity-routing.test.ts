@@ -137,6 +137,77 @@ describe("MotebitRuntime — sensitivity gate fail-closed semantics", () => {
   });
 });
 
+describe("MotebitRuntime — generateCompletion gate", () => {
+  // generateCompletion is the housekeeping path (title generation,
+  // summarization, classification). It calls `provider.generate()`
+  // directly, bypassing `runTurn` / `runTurnStreaming`. The gate must
+  // fire here too — same fail-closed semantics as a turn — because the
+  // user's authored text is fed straight to the provider as the prompt
+  // body, with no memory-retrieval pre-filter to lean on.
+
+  it("throws SovereignTierRequiredError at sensitivity=medical with byok", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("byok");
+    r.setSessionSensitivity(SensitivityLevel.Medical);
+    await expect(r.generateCompletion("classify this")).rejects.toBeInstanceOf(
+      SovereignTierRequiredError,
+    );
+  });
+
+  it("throws SovereignTierRequiredError at sensitivity=financial with motebit-cloud", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("motebit-cloud");
+    r.setSessionSensitivity(SensitivityLevel.Financial);
+    await expect(r.generateCompletion("summarize")).rejects.toBeInstanceOf(
+      SovereignTierRequiredError,
+    );
+  });
+
+  it("throws SovereignTierRequiredError at sensitivity=secret with provider mode unset", async () => {
+    const r = makeRuntime();
+    // Don't call setProviderMode — null is treated as external (fail-closed).
+    r.setSessionSensitivity(SensitivityLevel.Secret);
+    try {
+      await r.generateCompletion("title");
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SovereignTierRequiredError);
+      expect((err as SovereignTierRequiredError).providerMode).toBe("unset");
+    }
+  });
+
+  it("does not throw when provider is on-device, even at high sensitivity", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("on-device");
+    r.setSessionSensitivity(SensitivityLevel.Secret);
+    // Gate is no-op; the call still fails because no provider is wired
+    // — but with a different error, NOT SovereignTierRequiredError.
+    await expect(r.generateCompletion("title")).rejects.not.toBeInstanceOf(
+      SovereignTierRequiredError,
+    );
+  });
+
+  it("does not throw at sensitivity=none regardless of provider mode", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("byok");
+    // Default sensitivity is none — gate is a no-op; call falls through
+    // to the "No AI provider configured" error in the test runtime.
+    await expect(r.generateCompletion("title")).rejects.not.toBeInstanceOf(
+      SovereignTierRequiredError,
+    );
+  });
+
+  it("does not throw at sensitivity=personal regardless of provider mode", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("byok");
+    r.setSessionSensitivity(SensitivityLevel.Personal);
+    // Personal is not high-sensitivity per the doctrine.
+    await expect(r.generateCompletion("title")).rejects.not.toBeInstanceOf(
+      SovereignTierRequiredError,
+    );
+  });
+});
+
 describe("MotebitRuntime — provider mode setter", () => {
   it("setProviderMode round-trips and changes gate behavior", async () => {
     const r = makeRuntime();
