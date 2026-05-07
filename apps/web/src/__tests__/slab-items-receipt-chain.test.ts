@@ -15,6 +15,7 @@ import { describe, it, expect } from "vitest";
 import {
   summarizeDelegationReceipt,
   truncatePeerId,
+  describeOutboundWait,
   type ReceiptSummary,
 } from "../ui/slab-items.js";
 
@@ -161,6 +162,23 @@ describe("summarizeDelegationReceipt", () => {
       expect(r?.chain.length).toBe(1);
       expect(r?.chain[0]?.toolsUsed).toEqual(["only_one"]);
     });
+  });
+});
+
+describe("describeOutboundWait", () => {
+  it("uses the truncated peer id when present", () => {
+    expect(
+      describeOutboundWait("did:motebit:9d8b7a6c5f4e3d2c1b0a987654321010", "fly.example.com"),
+    ).toBe("Waiting for did:motebit:9d…");
+  });
+
+  it("falls back to the server name when peer id is empty", () => {
+    expect(describeOutboundWait("", "research.fly.dev")).toBe("Waiting for research.fly.dev…");
+  });
+
+  it("falls back to a generic peer when neither is present", () => {
+    expect(describeOutboundWait("", undefined)).toBe("Waiting for peer…");
+    expect(describeOutboundWait("", "")).toBe("Waiting for peer…");
   });
 });
 

@@ -1451,7 +1451,13 @@ function applyDelegationPayload(
 
   const summary = summarizeDelegationReceipt(p?.full_receipt ?? p?.receipt);
   if (!summary) {
-    body.textContent = ""; // Outbound — nothing perceived yet.
+    // Outbound — packet has left, no receipt yet. Doctrine
+    // (motebit-computer.md §Hand): "a packet leaves the slab toward
+    // a peer, returns as a bead with a signed receipt." The chrome
+    // already shows ⇝ + peer + tool; the body filler names the
+    // wait-state honestly so the card isn't a silent void during
+    // the outbound interval.
+    body.textContent = describeOutboundWait(peerId, p?.server);
     detail.replaceChildren();
     return;
   }
@@ -1571,6 +1577,28 @@ function hopFrom(r: ReceiptLike): ReceiptHopSummary {
 export function truncatePeerId(id: string, head = 14): string {
   if (id.length <= head + 1) return id;
   return `${id.slice(0, head)}…`;
+}
+
+/**
+ * Compose the body filler shown while a delegation is in-flight
+ * (packet sent, receipt not yet returned). Prefers the truncated
+ * peer motebit_id, falls back to the server name, falls back to a
+ * generic "peer." Strips the truncation ellipsis so it doesn't
+ * collide with the wait-message's own trailing ellipsis (a double
+ * "…" reads as a typo, not as two distinct semantics). Exported for
+ * tests.
+ */
+export function describeOutboundWait(peerId: string, server: string | undefined): string {
+  let target: string;
+  if (peerId) {
+    const truncated = truncatePeerId(peerId);
+    target = truncated.endsWith("…") ? truncated.slice(0, -1) : truncated;
+  } else if (server && server.length > 0) {
+    target = server;
+  } else {
+    target = "peer";
+  }
+  return `Waiting for ${target}…`;
 }
 
 function makeDetailLine(label: string, value: string): HTMLElement {
