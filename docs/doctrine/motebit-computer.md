@@ -141,7 +141,7 @@ A future `mode-grant` kind (drag a permission token onto the slab — "you may d
 
 - `slab` — turn/session-scoped perception. The sensitivity classifier inspects the payload; `tier-bounded-by-source` per `shared_gaze` mode. v1 surfaces all default here.
 - `creature` — identity-adjacent state mutation (memory graph, trust graph, capability bindings, persona preferences). Persistent across sessions. **Requires explicit confirmation / signed user intent.** Closer to changing the agent's body than feeding task context. The dangerous version of this gesture is silent persistent mutation; the per-target governance UX must ship before the gesture does.
-- `ambient` — workspace-scoped reference with source-consent + expiration. Background context the motebit can consult but does not auto-include in turns.
+- `ambient` — workspace-scoped reference with source-consent + expiration. **Invariant: ambient references are consultable context, not automatic prompt context.** The motebit can reach for them when a turn calls for it, but ambient drops never auto-fill the prompt. Future implementations will be tempted to dump ambient bytes into every turn's context pack — that's the failure mode this invariant exists to prevent.
 
 v1 surfaces only set `slab`. On a 2D screen there's no unambiguous gesture for the other two; on glasses, the user's hand-path makes them physically distinct (drag toward the floating creature droplet vs. place onto the user's physical workspace). Spatial Phase 1B unlocks `creature` and `ambient` together with the per-target governance UX — never separately. The protocol commitment exists from the start so surfaces opt in without a wire-format change.
 

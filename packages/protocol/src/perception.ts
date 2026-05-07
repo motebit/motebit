@@ -85,9 +85,13 @@ export type DropPayloadKind = "url" | "text" | "image" | "file" | "artifact";
  *
  *   - `ambient` — environmental context ("background reference for
  *     this session, not turn-perception"). Workspace-scoped
- *     persistence with source-consent + expiration. The motebit can
- *     consult ambient references but they don't enter the next turn
- *     context unless explicitly invoked. Spatial-first; in glasses,
+ *     persistence with source-consent + expiration. **Invariant:
+ *     ambient references are consultable context, not automatic
+ *     prompt context.** The motebit can reach for them when a turn
+ *     calls for it, but ambient drops never auto-fill the prompt.
+ *     Future implementations will be tempted to dump ambient bytes
+ *     into every turn's context pack; that's the failure mode this
+ *     invariant exists to prevent. Spatial-first; in glasses,
  *     dropping a reference into the user's physical workspace is the
  *     natural gesture.
  *
