@@ -1325,6 +1325,15 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
         src.replace(/runtime\.feedPerception\b/g, "runtime._disabledFeedPerception"),
       ),
   },
+  {
+    script: "check-computer-use-dispatcher-parity",
+    proves:
+      'flags a `ComputerActionKind` declared in `@motebit/protocol` but missing from one of the two dispatcher producers. Renaming `case "screenshot":` → `case "_disabled_screenshot":` in the cloud Playwright executor (services/browser-sandbox/src/action-executor.ts) makes the kind disappear from the TS coverage set, firing the gate\'s missing-from-ts arm. The desktop Tauri Rust dispatcher still handles it, the protocol still declares it — exactly the asymmetric-drift failure the gate exists to catch. The orphan arm (handled-by-producer-but-not-in-protocol) is symmetric and tested in the gate\'s own development cycle.',
+    perturb: () =>
+      mutateFile("services/browser-sandbox/src/action-executor.ts", (src) =>
+        src.replace(/case "screenshot":/g, 'case "_disabled_screenshot":'),
+      ),
+  },
 ];
 
 /**
