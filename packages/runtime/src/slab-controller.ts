@@ -310,6 +310,21 @@ export interface SlabController {
   restItem(id: string, payload?: unknown): void;
 
   /**
+   * Tag a slab item with a sensitivity tier discovered after open.
+   * The classic case: a tool item opens at `tool_status: "calling"`
+   * before its result is known; the runtime classifies the result
+   * via `scanText` once `tool_status: "done"` arrives and tags the
+   * item. The runtime's `getEffectiveSessionSensitivity` reads
+   * `item.sensitivity` so the gate composes the tier on the next
+   * AI-call entry.
+   *
+   * No-op against unknown ids or items in terminal phases
+   * (`detached` / `gone`). Idempotent — calling with the same level
+   * re-notifies subscribers but does not reset the phase.
+   */
+  setItemSensitivity(id: string, sensitivity: SensitivityLevel): void;
+
+  /**
    * User-initiated force-dissolve — the swipe gesture from
    * docs/doctrine/motebit-computer.md §"The user's touch." Bypasses
    * the detach policy: a swipe means "no, I don't want this,"
@@ -699,6 +714,26 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
       recomputeAmbient();
       notify();
       scheduleTail(id, "gone", DISSOLVING_TAIL_MS);
+    },
+
+    setItemSensitivity(id: string, sensitivity: SensitivityLevel): void {
+      if (disposed) return;
+      const current = items.get(id);
+      if (!current) {
+        warn("slab setItemSensitivity ignored — unknown id", { id });
+        return;
+      }
+      if (current.phase === "detached" || current.phase === "gone") {
+        warn("slab setItemSensitivity ignored — item already in terminal phase", {
+          id,
+          phase: current.phase,
+        });
+        return;
+      }
+      // Idempotent for the same value; still notify so downstream
+      // observers (renderer badges, gate-driven UI) stay coherent.
+      items.set(id, { ...current, sensitivity });
+      notify();
     },
 
     restItem(id: string, payload?: unknown): void {

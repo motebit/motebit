@@ -50,6 +50,115 @@ function toSensitivityEnum(level: ScanLevel): SensitivityLevel {
   }
 }
 
+/**
+ * Bounded preview length when classifying tool results. Tools can
+ * return arbitrarily large payloads (a multi-MB scrape, a binary
+ * file, a paginated result set); running `scanText` over the entire
+ * blob is unbounded runtime cost. Cap the classified window so the
+ * classifier's hot path stays predictable.
+ *
+ * **The preview cap bounds runtime cost. It is not a proof the
+ * remainder is clean.** Secrets can appear after 64 KB in scraped
+ * pages, server logs, paginated responses, JSON payloads with deep
+ * nesting. Large-result handling that scans the full payload (or
+ * uses parser-aware / pagination-aware / OCR classification) is a
+ * later pass. Today the contract is: this function inspected the
+ * preview window; the rest is unscanned.
+ */
+const TOOL_RESULT_CLASSIFY_PREVIEW_BYTES = 64 * 1024; // 64 KB
+
+/**
+ * Extract a classifiable string from an arbitrary tool result. Tool
+ * outputs come in many shapes — strings, JSON, arrays of records,
+ * markdown, HTML, binary references — and the canonical sensitivity
+ * classifier (`scanText`) only consumes plain text. This helper
+ * normalizes:
+ *
+ *   - `string` → passed through (truncated to the preview cap)
+ *   - `null` / `undefined` → empty string (classifier yields none)
+ *   - `Uint8Array` / `ArrayBuffer` → empty string. Binary content
+ *     needs OCR / parsing to inspect; pretending `scanText` saw it
+ *     would be false confidence. The slab item leaves sensitivity
+ *     undefined, signaling "unscanned" rather than "clean."
+ *   - any other shape → `JSON.stringify` (truncated). Catches
+ *     structured records (search results, parsed JSON responses,
+ *     plan steps) where the embedded strings are what classification
+ *     cares about.
+ *
+ * Bounded preview keeps the classifier's hot path predictable. The
+ * preview window is `TOOL_RESULT_CLASSIFY_PREVIEW_BYTES` (64 KB).
+ */
+export function extractClassifiableText(result: unknown): string {
+  if (result === null || result === undefined) return "";
+  if (typeof result === "string") {
+    return result.length <= TOOL_RESULT_CLASSIFY_PREVIEW_BYTES
+      ? result
+      : result.slice(0, TOOL_RESULT_CLASSIFY_PREVIEW_BYTES);
+  }
+  if (result instanceof Uint8Array || result instanceof ArrayBuffer) {
+    // Binary — leave classification undefined rather than mislead.
+    // OCR / parser paths land in v1.1.
+    return "";
+  }
+  // Structured data — walk via JSON to catch embedded strings. JSON
+  // serialization can throw on circular references; on failure,
+  // return empty (conservative — the item won't get tagged, the gate
+  // won't compose this item, but the runtime stays honest about not
+  // having seen the bytes).
+  try {
+    const serialized = JSON.stringify(result);
+    if (serialized === undefined) return "";
+    return serialized.length <= TOOL_RESULT_CLASSIFY_PREVIEW_BYTES
+      ? serialized
+      : serialized.slice(0, TOOL_RESULT_CLASSIFY_PREVIEW_BYTES);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Classify a tool result and return the sensitivity tier the slab
+ * item should carry, OR `undefined` when no tag is warranted.
+ * Composes `extractClassifiableText` with `scanText`.
+ *
+ * Returns `undefined` in two cases — collapsed at the API boundary
+ * because both produce the same call-site behavior (don't tag the
+ * item):
+ *
+ *   - **Unscanned** — binary content (Uint8Array, ArrayBuffer),
+ *     null/undefined, circular-reference structures the JSON
+ *     serializer can't walk. We never inspected text; tagging
+ *     `None` would mislead with false confidence ("I classified
+ *     this and it's clean") when the truth is "I never looked."
+ *
+ *   - **Scanned-and-clean** — text was inspected by `scanText` and
+ *     no sensitive patterns matched. The slab item also doesn't
+ *     need a tag because the gate's effective-sensitivity
+ *     composition skips items without a tier.
+ *
+ * The two states are different epistemically (one is "no" knowledge,
+ * the other is "we looked and it was clean") but call-site
+ * equivalent: tag if the function returns a level, skip otherwise.
+ * Future callers that need to distinguish unscanned from clean can
+ * branch through `extractClassifiableText` plus `scanText` directly
+ * — or this function's return type can grow into a richer
+ * `{ status: "scanned" | "unscanned", sensitivity? }` shape if a
+ * concrete consumer drives it.
+ *
+ * Doctrine — `motebit-computer.md` §"Mode contract — six declarations
+ * per mode": `tool_result` carries `tier-bounded-by-tool` posture.
+ * The runtime's gate composes items in tier-bounded-by-tool modes
+ * the same way it composes tier-bounded-by-source items; this
+ * function is the classifier the runtime calls at the tool-result
+ * boundary.
+ */
+export function classifyToolResult(result: unknown): SensitivityLevel | undefined {
+  const text = extractClassifiableText(result);
+  if (text === "") return undefined; // unscanned (binary/empty/unserializable)
+  const level = toSensitivityEnum(scanText(text).level);
+  return level === SensitivityLevel.None ? undefined : level; // clean → no tag
+}
+
 /** Handler signature parameterized by the categorical drop kind. */
 export type DropHandler<K extends DropPayloadKind> = (
   payload: Extract<DropPayload, { kind: K }>,

@@ -25,6 +25,7 @@ import {
 import { SensitivityLevel } from "@motebit/sdk";
 import type { DropPayload, UserActionAttestation } from "@motebit/sdk";
 import { resolveDropTarget } from "@motebit/sdk";
+import { extractClassifiableText, classifyToolResult } from "../perception";
 
 function makeRuntime(): MotebitRuntime {
   return new MotebitRuntime(
@@ -340,6 +341,186 @@ describe("feedPerception × sensitivity routing — mode-posture cross-reference
     // that the gate at least has a path to lower (the architecture).
     // For this test, we re-feed to verify the gate IS state-based.
     expect(secretItem.id).toBeTruthy();
+  });
+});
+
+describe("extractClassifiableText — structured tool-output normalization", () => {
+  it("string passes through unchanged when under preview cap", () => {
+    expect(extractClassifiableText("hello world")).toBe("hello world");
+  });
+
+  it("null and undefined become empty strings", () => {
+    expect(extractClassifiableText(null)).toBe("");
+    expect(extractClassifiableText(undefined)).toBe("");
+  });
+
+  it("Uint8Array returns empty (binary unscanned, not pretended-clean)", () => {
+    expect(extractClassifiableText(new Uint8Array([1, 2, 3]))).toBe("");
+  });
+
+  it("ArrayBuffer returns empty", () => {
+    expect(extractClassifiableText(new ArrayBuffer(8))).toBe("");
+  });
+
+  it("structured object serializes to JSON for embedded-string scanning", () => {
+    const result = { items: [{ key: "AKIA1234567890123456" }] };
+    const text = extractClassifiableText(result);
+    expect(text).toContain("AKIA1234567890123456");
+  });
+
+  it("circular-reference structures classify as empty (conservative)", () => {
+    const obj: Record<string, unknown> = { a: 1 };
+    obj.self = obj;
+    expect(extractClassifiableText(obj)).toBe("");
+  });
+
+  it("oversized strings are truncated to the preview cap", () => {
+    const huge = "x".repeat(200_000);
+    const text = extractClassifiableText(huge);
+    expect(text.length).toBeLessThan(huge.length);
+    expect(text.length).toBeLessThanOrEqual(64 * 1024);
+  });
+});
+
+describe("classifyToolResult — sensitivity tier from tool output", () => {
+  // Returns `undefined` for both unscanned content (binary, empty,
+  // unserializable) AND scanned-and-clean text — collapsed at the
+  // API boundary because both produce the same call-site behavior:
+  // don't tag the slab item. The two states are epistemically
+  // different; tagging `None` on unscanned content would mislead
+  // with false confidence ("I classified this and it's clean") when
+  // the truth is "I never looked." See classifyToolResult JSDoc.
+
+  it("clean string result returns undefined (no tag warranted)", () => {
+    expect(classifyToolResult("hello world, just some text")).toBeUndefined();
+  });
+
+  it("string containing AWS access key classifies as Secret", () => {
+    expect(classifyToolResult("here is a key: AKIA1234567890123456")).toBe(SensitivityLevel.Secret);
+  });
+
+  it("string containing JWT classifies as Secret", () => {
+    const jwt =
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+    expect(classifyToolResult(`token: ${jwt}`)).toBe(SensitivityLevel.Secret);
+  });
+
+  it("string containing valid credit card (Luhn) classifies as Financial", () => {
+    expect(classifyToolResult("card on file: 4111 1111 1111 1111")).toBe(
+      SensitivityLevel.Financial,
+    );
+  });
+
+  it("structured search result with embedded secret classifies as Secret", () => {
+    const result = {
+      hits: [{ url: "https://example.com", snippet: "found AKIA1234567890123456 in repo" }],
+    };
+    expect(classifyToolResult(result)).toBe(SensitivityLevel.Secret);
+  });
+
+  it("binary tool result returns undefined (unscanned — NOT pretended-clean)", () => {
+    expect(classifyToolResult(new Uint8Array([0, 1, 2, 3]))).toBeUndefined();
+  });
+
+  it("null/undefined tool results return undefined (no input to scan)", () => {
+    expect(classifyToolResult(null)).toBeUndefined();
+    expect(classifyToolResult(undefined)).toBeUndefined();
+  });
+});
+
+describe("tool-result × effective sensitivity gate composition", () => {
+  // The bypass regression: a tool produces a secret-tier output → the
+  // tool_result slab item carries `tier-bounded-by-tool` posture →
+  // the effective-sensitivity gate composes the tier → next AI call
+  // throws SovereignTierRequiredError when provider is non-sovereign.
+  // Closes the third major egress shape (after session-elevated state
+  // and user-fed perception). Doctrine: motebit-computer.md
+  // §"Mode contract" + §"Three drop targets, three governance scopes."
+
+  it("tool_result item with Secret tag elevates effective sensitivity", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("byok");
+    // Simulate the runtime's tool-execution flow: open a tool_result
+    // item, classify the result, set the sensitivity. The tool path
+    // in runTurnStreaming does this on `tool_status: "done"`.
+    const itemId = "test-tool-secret";
+    r.slab.openItem({ id: itemId, kind: "fetch", mode: "tool_result" });
+    r.slab.setItemSensitivity(itemId, SensitivityLevel.Secret);
+    await expect(r.sendMessage("hello")).rejects.toBeInstanceOf(SovereignTierRequiredError);
+  });
+
+  it("tool_result item with Financial tag elevates effective sensitivity", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("byok");
+    const itemId = "test-tool-fin";
+    r.slab.openItem({ id: itemId, kind: "fetch", mode: "tool_result" });
+    r.slab.setItemSensitivity(itemId, SensitivityLevel.Financial);
+    await expect(r.sendMessage("hello")).rejects.toBeInstanceOf(SovereignTierRequiredError);
+  });
+
+  it("clean tool_result does not elevate", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("byok");
+    const itemId = "test-tool-clean";
+    r.slab.openItem({ id: itemId, kind: "fetch", mode: "tool_result" });
+    // No setItemSensitivity call — item.sensitivity is undefined.
+    await expect(r.sendMessage("hello")).rejects.not.toBeInstanceOf(SovereignTierRequiredError);
+  });
+
+  it("session sensitivity higher than tool tier wins (max composition)", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("byok");
+    r.setSessionSensitivity(SensitivityLevel.Secret);
+    const itemId = "test-tool-personal";
+    r.slab.openItem({ id: itemId, kind: "fetch", mode: "tool_result" });
+    r.slab.setItemSensitivity(itemId, SensitivityLevel.Personal);
+    try {
+      await r.sendMessage("hello");
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SovereignTierRequiredError);
+      const e = err as SovereignTierRequiredError;
+      // Session was Secret, item was Personal — Secret wins.
+      expect(e.effectiveSensitivity).toBe(SensitivityLevel.Secret);
+    }
+  });
+
+  it("on-device provider permits high-tier tool results (no throw)", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("on-device");
+    const itemId = "test-tool-secret-sovereign";
+    r.slab.openItem({ id: itemId, kind: "fetch", mode: "tool_result" });
+    r.slab.setItemSensitivity(itemId, SensitivityLevel.Secret);
+    // Gate is no-op on sovereign; sendMessage fails downstream for
+    // provider-not-wired but NOT with SovereignTierRequiredError.
+    await expect(r.sendMessage("hello")).rejects.not.toBeInstanceOf(SovereignTierRequiredError);
+  });
+
+  it("BYPASS REGRESSION: tool returns secret → next external AI call throws", async () => {
+    // Money test: this is the exact failure mode the move closes.
+    // Pre-fix: tool_result items had no sensitivity tag → gate didn't
+    // see the tier → next AI call shipped the bytes outward. Post-fix:
+    // the runtime classifies the result, tags the item, the gate
+    // composes the tier, the call throws.
+    const r = makeRuntime();
+    r.setProviderMode("byok");
+    // Session is None (default). The user has not explicitly elevated.
+    expect(r.getSessionSensitivity()).toBe(SensitivityLevel.None);
+    // Simulate read_url returning a page containing a fake API key.
+    const itemId = "test-tool-bypass-regression";
+    r.slab.openItem({ id: itemId, kind: "fetch", mode: "tool_result" });
+    const fakeResult = {
+      url: "https://example.com",
+      content: "API key for testing: AKIA1234567890123456",
+    };
+    const sensitivity = classifyToolResult(fakeResult);
+    expect(sensitivity).toBe(SensitivityLevel.Secret);
+    if (sensitivity === undefined) throw new Error("expected classifier to tag the result");
+    r.slab.setItemSensitivity(itemId, sensitivity);
+    // The very next AI call attempt — without the user touching the
+    // session sensitivity — must throw because the tier-bounded-by-tool
+    // posture composes the secret tier into the gate.
+    await expect(r.sendMessage("summarize")).rejects.toBeInstanceOf(SovereignTierRequiredError);
   });
 });
 

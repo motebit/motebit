@@ -240,7 +240,7 @@ import {
   type SlabController,
   type SlabItemOutcome,
 } from "./slab-controller.js";
-import { DropDispatcher, type DropHandler } from "./perception.js";
+import { DropDispatcher, type DropHandler, classifyToolResult } from "./perception.js";
 import { toolPolicy } from "./tool-policy.js";
 import {
   runConsolidationCycle,
@@ -1583,6 +1583,25 @@ export class MotebitRuntime {
             const toolItemId = toolItemIds.get(chunk.name);
             if (toolItemId != null) {
               toolItemIds.delete(chunk.name);
+              // Classify the tool result before settling the slab
+              // item. Per `motebit-computer.md` §"Mode contract":
+              // tool_result mode carries `tier-bounded-by-tool`
+              // posture; the runtime's `getEffectiveSessionSensitivity`
+              // composes tagged items in tier-bounded-by-tool modes
+              // into the gate's effective ceiling. Without this
+              // classification, a tool returning a secret/financial/
+              // medical payload would land on the slab unscanned and
+              // the next AI call would cross the provider boundary
+              // without composing the tool-result tier into the
+              // gate. `classifyToolResult` returns `undefined` for
+              // both unscanned (binary/empty/unserializable) AND
+              // scanned-and-clean — both produce the same call-site
+              // behavior (don't tag), without misleading the audit
+              // trail by tagging `None` on content we never inspected.
+              const sensitivity = classifyToolResult(chunk.result);
+              if (sensitivity !== undefined) {
+                this.slab.setItemSensitivity(toolItemId, sensitivity);
+              }
               // End-state policy: rest = working material the user may
               // consult (tabs open on the slab); dissolve = ephemeral
               // plumbing. Policy comes from the canonical registry.
@@ -2948,26 +2967,41 @@ export class MotebitRuntime {
   /**
    * Effective session sensitivity — the max of the explicit
    * `_sessionSensitivity` (set via `setSessionSensitivity`) and the
-   * highest tier of any slab item in a `tier-bounded-by-source` mode
-   * (per `EmbodimentSensitivityRouting`). User-fed perception (drops
-   * classified by `scanText`) tags items with their tier; this
-   * composition makes the runtime's egress gate honor the mode
+   * highest tier of any slab item whose `EmbodimentSensitivityRouting`
+   * posture bounds the tier from a non-interior source. Two postures
+   * contribute:
+   *
+   *   - `tier-bounded-by-source` — `shared_gaze`, `virtual_browser`,
+   *     `peer_viewport`. The user (or a federated peer) supplied the
+   *     content; the source's classification is the ceiling. Drops
+   *     land here.
+   *   - `tier-bounded-by-tool` — `tool_result`. The tool's output
+   *     classification is the ceiling. Tool-result items tagged at
+   *     the tool-execution boundary land here.
+   *
+   * `all-tiers` posture (`mind`, `desktop_drive`) is interior /
+   * sovereign-by-definition and does NOT contribute — those modes
+   * admit any tier without elevating egress.
+   *
+   * The composition makes the runtime's gate honor the mode
    * contract's posture without requiring callers to manually elevate
-   * the session.
+   * the session. The thesis claim "medical/financial/secret never
+   * reach external AI" now structurally covers session-elevated
+   * state, user-fed perception (drops), and tool-fed perception
+   * (classified outputs).
    *
    * Doctrine: `motebit-computer.md` §"Mode contract — six declarations
    * per mode" + the closure of the `sensitivity` ALLOWLIST entry in
-   * `check-mode-contract-readers` (#76). The gate becomes the real
-   * consumer of the mode field, converting it from typed-but-passive
-   * declaration into load-bearing behavior.
+   * `check-mode-contract-readers` (#76). Both `tier-bounded-by-*`
+   * postures are now real runtime readers.
    */
   private getEffectiveSessionSensitivity(): SensitivityLevel {
     let effective = this._sessionSensitivity;
     const slabState = this.slab.getState();
     for (const item of slabState.items.values()) {
       if (item.sensitivity === undefined) continue;
-      const contract = EMBODIMENT_MODE_CONTRACTS[item.mode];
-      if (contract.sensitivity !== "tier-bounded-by-source") continue;
+      const posture = EMBODIMENT_MODE_CONTRACTS[item.mode].sensitivity;
+      if (posture !== "tier-bounded-by-source" && posture !== "tier-bounded-by-tool") continue;
       if (rankSensitivity(item.sensitivity) > rankSensitivity(effective)) {
         effective = item.sensitivity;
       }
