@@ -386,17 +386,51 @@ A conforming implementation:
 - `@motebit/protocol` — wire-format type definitions (this spec).
 - `@motebit/wire-schemas` — zod + JSON Schema artifacts.
 - `@motebit/tools` — the `computer` tool definition. Handler on surfaces without OS access returns `{ ok: false, error: "not_supported" }`.
-- `apps/desktop` — Tauri Rust bridge. Stub in v1; real screen capture + input injection + accessibility integration lands in a dedicated follow-up pass.
+- `apps/desktop` — Tauri Rust bridge. Real screen capture (`xcap`), input injection (`enigo`), macOS Vision OCR for the redaction-classifier path.
+- `@motebit/runtime` — the dispatcher seam (`ComputerPlatformDispatcher`) and the second producer (`CloudBrowserDispatcher`). See §8.1.
+- `services/browser-sandbox` — the cloud-browser executor backing `CloudBrowserDispatcher`. See §8.1.
 
-Surface matrix (`docs/doctrine/workstation-viewport.md` §Per-surface map):
+Surface matrix — **OS-reach** semantics. The "real OS" column answers: can this surface drive the user's actual operating system? It does not include the cloud-browser dispatcher, which is a different runtime backend (one that drives an isolated Chromium context, not the user's OS):
 
-| Surface | Computer-use handler  | Notes                                   |
-| ------- | --------------------- | --------------------------------------- |
-| Desktop | Tauri Rust bridge     | Full implementation target. Stub in v1. |
-| Web     | `not_supported` error | Browser sandbox cannot reach OS.        |
-| Mobile  | `not_supported` error | Same.                                   |
-| Spatial | `not_supported` error | Same.                                   |
-| CLI     | `not_supported` error | No physical display to observe.         |
+| Surface | OS-reach handler      | Notes                                                                                                       |
+| ------- | --------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Desktop | Tauri Rust bridge     | Drives the user's real OS. `desktop_drive` embodiment.                                                      |
+| Web     | `not_supported` error | Browser sandbox cannot reach OS. Use the cloud-browser dispatcher instead for `virtual_browser` embodiment. |
+| Mobile  | `not_supported` error | Same.                                                                                                       |
+| Spatial | `not_supported` error | Same.                                                                                                       |
+| CLI     | `not_supported` error | No physical display to observe.                                                                             |
+
+### 8.1 — Cloud browser dispatcher
+
+The same wire format drives a second physical executor: an isolated cloud-browser session (Playwright-driven Chromium) hosted by `services/browser-sandbox`. The dispatcher is `CloudBrowserDispatcher` in `@motebit/runtime` (`packages/runtime/src/cloud-browser-dispatcher.ts`).
+
+**What changes** (vs the desktop dispatcher):
+
+- Source of perception: `isolated-browser` (per `EMBODIMENT_MODE_CONTRACTS.virtual_browser`), not the user's real OS.
+- Embodiment mode: `virtual_browser`, not `desktop_drive`.
+- Session lifecycle: `dispatcher.queryDisplay()` opens a Chromium context server-side and stashes the cloud session id; `dispatcher.dispose(sessionId)` tears it down. Idempotent; subsequent disposes are no-ops.
+- Auth: caller-supplied bearer token via `getAuthToken` callback. The cloud-browser service verifies; the dispatcher is transport only.
+
+**What stays identical:**
+
+- Wire format. Every `ComputerActionKind` (`screenshot`, `cursor_position`, `click`, `double_click`, `mouse_move`, `drag`, `key`, `type`, `scroll`) is supported verbatim. URL navigation works by typing into the address bar — no new `navigate` action in v1.
+- Foundation-law invariants (§3.1 signed observations, §3.2 gated actions, §3.3 user-floor, §3.4 redaction-before-AI, §3.5 session identity). The session-manager hooks (`classify`, `classifyObservation`, `approvalFlow`) wrap the cloud dispatcher exactly as they wrap the desktop one.
+- Outcome taxonomy (§7.1). HTTP errors map to `ComputerFailureReason` values: 401/403 → `permission_denied`, 404/409 → `session_closed`, 429 → `policy_denied`, 501 → `not_supported`, other 4xx/5xx → `platform_blocked`. Network failures → `platform_blocked`.
+
+**Consent posture (`virtual_browser`):**
+
+- Session-scoped grant for the bulk of browser operation: `screenshot`, `cursor_position`, scroll, navigation, typing in ordinary fields.
+- Per-action approval for irreversible actions — clicks whose `target_hint.label` matches the irreversibility heuristics in `@motebit/policy-invariants` (`Submit`, `Buy`, `Pay`, `File application`, `Send message`, `Permanently delete`, `I agree`, `Authorize app`, `Upload`). Sandboxing the browser does not sandbox the consequences: a "Submit application" click on a USPTO form is a real legal filing; a "Buy now" click places a real order. The user confirms before motebit commits.
+
+**Sensitivity classification:** the cloud dispatcher returns observations verbatim; the session-manager's `classifyObservation` hook applies the same OCR-aware classifier (`classifyScreenshotWithOcr` in `@motebit/policy-invariants`) used by the desktop path. URL classification is the cheap pre-check; **screenshot/page-text classification is the load-bearing one** — if the page content classifies as `medical` / `financial` / `secret`, the manager's redaction layer strips bytes before the AI sees the observation. Fail-closed: an unclassifiable observation defaults to stricter handling.
+
+**v1 limits (kept honest):**
+
+- One active cloud session per dispatcher instance per motebit. The contract grows a `session_id` parameter on `execute` for both backends when concurrent cloud sessions become a real consumer need.
+- Motebit-driven only. The "user drives motebit's sandbox" pattern (co-browse) is a distinct future embodiment row, not a runtime mode of this dispatcher. `shared_gaze` continues to mean user-pre-existing-source crossing into perception, not user-driving-motebit's-sandbox.
+- No new wire-format actions. The promotion path for adding `navigate(url)` etc. is real-usage-driven, not speculative.
+
+**Promotion path:** this is the second producer the @alpha annotations on `packages/protocol/src/computer-use.ts` are gating on (the protocol release-status block names "cloud-browser surface" or "federation peer replaying an audit log"). When `services/browser-sandbox` is exercising the format in anger, `@alpha` promotes to `@beta`; `@public` follows when a federation peer also replays an audit log.
 
 ---
 

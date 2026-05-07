@@ -109,6 +109,8 @@ export type {
   ComputerGovernanceClassifier,
   ComputerApprovalFlow,
 } from "./computer-use.js";
+export { CloudBrowserDispatcher } from "./cloud-browser-dispatcher.js";
+export type { CloudBrowserDispatcherOptions } from "./cloud-browser-dispatcher.js";
 
 export { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 export type { RouteWeight } from "./agent-graph.js";

@@ -328,6 +328,96 @@ export function scanText(text: string): TextSensitivityReport {
   return { level, matches };
 }
 
+// ── Irreversibility heuristics ───────────────────────────────────────
+
+/**
+ * Click-target labels indicating a real-world side effect: form
+ * submission, purchase, OAuth grant, file upload, government filing,
+ * destructive operation. Sandboxing the cloud browser does NOT
+ * sandbox the consequences — its outbound HTTP requests still hit
+ * real servers. A click on "Submit" inside a USPTO form is a real
+ * legal filing; a click on "Buy now" places a real order. We
+ * classify `require_approval` so the user confirms before motebit
+ * commits.
+ *
+ * The signal is the click target's accessible label
+ * (`target_hint.label`); without DOM/AX context the classifier can't
+ * fire (false negative). The desktop_drive dispatcher carries the
+ * same field shape and gets the same protection — irreversibility is
+ * orthogonal to the source-of-perception axis.
+ *
+ * Patterns favor precision over recall: a missed irreversible click
+ * is recoverable (the user sees the slab, can halt); an over-firing
+ * approval gate makes the tool unusable. New patterns land with a
+ * specific failure that motivated them.
+ */
+const IRREVERSIBLE_LABEL_PATTERNS: ReadonlyArray<{
+  rule: string;
+  pattern: RegExp;
+  description: string;
+}> = [
+  {
+    rule: "irreversible.submit",
+    pattern: /\bsubmit\b/i,
+    description: "Form submission",
+  },
+  {
+    rule: "irreversible.purchase",
+    pattern:
+      /\b(buy now|buy|purchase|checkout|place order|order now|pay now|complete (order|purchase|payment))\b/i,
+    description: "Purchase or payment",
+  },
+  {
+    rule: "irreversible.filing",
+    pattern: /\b(file (application|filing|petition|form|return)|complete filing|submit filing)\b/i,
+    description: "Government or legal filing",
+  },
+  {
+    rule: "irreversible.send",
+    pattern: /\b(send (now|message|email|invite|to)|reply all)\b/i,
+    description: "Message send",
+  },
+  {
+    rule: "irreversible.delete",
+    pattern: /\b(permanently delete|delete (account|forever|permanently)|destroy|wipe)\b/i,
+    description: "Destructive action",
+  },
+  {
+    rule: "irreversible.consent",
+    pattern: /\b(i agree|accept (terms|cookies|all)|agree (to terms|and continue))\b/i,
+    description: "Consent or terms acceptance",
+  },
+  {
+    rule: "irreversible.authorize",
+    pattern: /\b(authorize (app|access)|grant (access|permission)|allow access)\b/i,
+    description: "OAuth or authorization grant",
+  },
+  {
+    rule: "irreversible.upload",
+    pattern: /\bupload\b/i,
+    description: "File upload",
+  },
+];
+
+/**
+ * Inspect a click/double_click action's `target_hint.label` for
+ * irreversibility patterns. Returns the matched rule on hit, `null`
+ * on no-hint or no-match.
+ */
+function classifyIrreversibleClick(
+  action: ComputerAction,
+): { rule: string; description: string } | null {
+  if (action.kind !== "click" && action.kind !== "double_click") return null;
+  const hint = action.target_hint;
+  if (!hint || typeof hint.label !== "string" || hint.label.length === 0) return null;
+  for (const { rule, pattern, description } of IRREVERSIBLE_LABEL_PATTERNS) {
+    if (pattern.test(hint.label)) {
+      return { rule, description };
+    }
+  }
+  return null;
+}
+
 // ── Action classifier ────────────────────────────────────────────────
 
 /**
@@ -338,6 +428,11 @@ export function scanText(text: string): TextSensitivityReport {
  *     type a secret. Ambiguous-case-honest: denying outright would
  *     block legitimate "type my API key I pasted above" flows.
  *   - `type` with `personal` (SSN only, today) → `require_approval`.
+ *   - `click` / `double_click` whose `target_hint.label` matches an
+ *     irreversibility pattern (Submit, Buy, Pay, File, Authorize,
+ *     Delete, etc.) → `require_approval`. Sandboxing the browser
+ *     doesn't sandbox the consequences — submitted forms reach real
+ *     servers.
  *   - Every other action → `allow`.
  *
  * The decision is paired with a stable `rule` id so approval UX and
@@ -354,6 +449,18 @@ export function classifyComputerAction(action: ComputerAction): ActionClassifica
         sensitivity: report,
       };
     }
+  }
+  const irreversible = classifyIrreversibleClick(action);
+  if (irreversible !== null) {
+    const label =
+      action.kind === "click" || action.kind === "double_click"
+        ? action.target_hint?.label
+        : undefined;
+    return {
+      decision: "require_approval",
+      rule: irreversible.rule,
+      reason: `Click on "${label ?? "?"}" looks like ${irreversible.description.toLowerCase()}; requires user approval.`,
+    };
   }
   return { decision: "allow" };
 }

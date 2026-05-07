@@ -251,6 +251,134 @@ describe("classifyComputerAction", () => {
     expect(r2.reason).toContain("1 match");
     expect(r2.reason).not.toContain("matches");
   });
+
+  // ── Irreversibility heuristics on click/double_click ──────────────
+  // The cloud-browser dispatcher (virtual_browser embodiment) shares
+  // this classifier with desktop_drive. Sandboxing the browser does
+  // NOT sandbox the consequences — submitted forms reach real servers.
+  // The signal is `target_hint.label`; without DOM/AX context the
+  // classifier can't fire and the action defaults to allow.
+
+  it("routes click on a Submit-labeled target to require_approval", () => {
+    const r = classifyComputerAction({
+      kind: "click",
+      target: { x: 100, y: 200 },
+      target_hint: { source: "accessibility", label: "Submit application", role: "button" },
+    });
+    expect(r.decision).toBe("require_approval");
+    expect(r.rule).toBe("irreversible.submit");
+    expect(r.reason).toContain("Submit application");
+  });
+
+  it("routes click on a purchase / checkout label to require_approval", () => {
+    const cases = ["Buy now", "Place order", "Pay now", "Complete purchase", "Checkout"];
+    for (const label of cases) {
+      const r = classifyComputerAction({
+        kind: "click",
+        target: { x: 1, y: 1 },
+        target_hint: { source: "dom", label, role: "button" },
+      });
+      expect(r.decision, `label=${label}`).toBe("require_approval");
+      expect(r.rule, `label=${label}`).toBe("irreversible.purchase");
+    }
+  });
+
+  it("routes click on a government filing label to require_approval (USPTO shape)", () => {
+    const r = classifyComputerAction({
+      kind: "click",
+      target: { x: 1, y: 1 },
+      target_hint: { source: "accessibility", label: "File application", role: "button" },
+    });
+    expect(r.decision).toBe("require_approval");
+    expect(r.rule).toBe("irreversible.filing");
+  });
+
+  it("routes click on send / reply-all to require_approval", () => {
+    const r = classifyComputerAction({
+      kind: "click",
+      target: { x: 1, y: 1 },
+      target_hint: { source: "dom", label: "Send message", role: "button" },
+    });
+    expect(r.decision).toBe("require_approval");
+    expect(r.rule).toBe("irreversible.send");
+  });
+
+  it("routes click on permanent delete to require_approval", () => {
+    const r = classifyComputerAction({
+      kind: "click",
+      target: { x: 1, y: 1 },
+      target_hint: { source: "dom", label: "Permanently delete", role: "button" },
+    });
+    expect(r.decision).toBe("require_approval");
+    expect(r.rule).toBe("irreversible.delete");
+  });
+
+  it("routes click on terms-acceptance to require_approval", () => {
+    const r = classifyComputerAction({
+      kind: "click",
+      target: { x: 1, y: 1 },
+      target_hint: { source: "accessibility", label: "I agree", role: "button" },
+    });
+    expect(r.decision).toBe("require_approval");
+    expect(r.rule).toBe("irreversible.consent");
+  });
+
+  it("routes click on OAuth grant to require_approval", () => {
+    const r = classifyComputerAction({
+      kind: "click",
+      target: { x: 1, y: 1 },
+      target_hint: { source: "dom", label: "Authorize app", role: "button" },
+    });
+    expect(r.decision).toBe("require_approval");
+    expect(r.rule).toBe("irreversible.authorize");
+  });
+
+  it("routes double_click on irreversible label the same as click", () => {
+    const r = classifyComputerAction({
+      kind: "double_click",
+      target: { x: 1, y: 1 },
+      target_hint: { source: "dom", label: "Submit", role: "button" },
+    });
+    expect(r.decision).toBe("require_approval");
+    expect(r.rule).toBe("irreversible.submit");
+  });
+
+  it("allows click without target_hint (false-negative tolerated by design)", () => {
+    const r = classifyComputerAction({
+      kind: "click",
+      target: { x: 100, y: 200 },
+    });
+    expect(r.decision).toBe("allow");
+  });
+
+  it("allows click on benign labels", () => {
+    const benign = ["Cancel", "Back", "Search", "Show more", "Help", "Settings"];
+    for (const label of benign) {
+      const r = classifyComputerAction({
+        kind: "click",
+        target: { x: 1, y: 1 },
+        target_hint: { source: "dom", label },
+      });
+      expect(r.decision, `label=${label}`).toBe("allow");
+    }
+  });
+
+  it("does not fire irreversibility on non-click actions even with matching text", () => {
+    // mouse_move and drag carry target_hint but are not commit-shaped.
+    const r1 = classifyComputerAction({
+      kind: "mouse_move",
+      target: { x: 1, y: 1 },
+      target_hint: { source: "dom", label: "Submit" },
+    });
+    expect(r1.decision).toBe("allow");
+    const r2 = classifyComputerAction({
+      kind: "drag",
+      from: { x: 1, y: 1 },
+      to: { x: 2, y: 2 },
+      target_hint: { source: "dom", label: "Submit" },
+    });
+    expect(r2.decision).toBe("allow");
+  });
 });
 
 describe("classifyScreenshotObservation", () => {
