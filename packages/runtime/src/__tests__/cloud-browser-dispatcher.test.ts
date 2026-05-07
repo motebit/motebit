@@ -136,7 +136,7 @@ describe("CloudBrowserDispatcher", () => {
       expect(calls).toHaveLength(0);
     });
 
-    it("posts the action to /actions after a session is open", async () => {
+    it("posts the action to /sessions/:id/actions after a session is open", async () => {
       const { fetchImpl } = makeFetch(
         [
           { body: { session_id: "cs-1", display: { width: 100, height: 100, scaling_factor: 1 } } },
@@ -149,7 +149,7 @@ describe("CloudBrowserDispatcher", () => {
       const result = (await d.execute(SCREENSHOT_ACTION)) as { kind: string; artifact_id: string };
       expect(result.artifact_id).toBe("shot-1");
       expect(calls[1]?.method).toBe("POST");
-      expect(calls[1]?.url).toBe("https://browser.example.com/actions");
+      expect(calls[1]?.url).toBe("https://browser.example.com/sessions/cs-1/actions");
       expect(calls[1]?.body).toBe(JSON.stringify({ action: SCREENSHOT_ACTION }));
     });
   });

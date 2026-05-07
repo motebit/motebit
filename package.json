@@ -77,6 +77,7 @@
     "check-relay-retention-coverage": "npx tsx scripts/check-relay-retention-coverage.ts",
     "check-skills-cross-surface": "npx tsx scripts/check-skills-cross-surface.ts",
     "check-package-browser-entry": "npx tsx scripts/check-package-browser-entry.ts",
+    "check-computer-use-dispatcher-parity": "npx tsx scripts/check-computer-use-dispatcher-parity.ts",
     "check-readme-bin-claims": "npx tsx scripts/check-readme-bin-claims.ts",
     "check-docs-cli-claims": "npx tsx scripts/check-docs-cli-claims.ts",
     "check-docs-slash-claims": "npx tsx scripts/check-docs-slash-claims.ts",

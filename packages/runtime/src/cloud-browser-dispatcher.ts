@@ -170,7 +170,11 @@ export class CloudBrowserDispatcher implements ComputerPlatformDispatcher {
         "Cloud browser session not opened — call queryDisplay() first.",
       );
     }
-    return this.request<unknown>("POST", "/actions", { action });
+    return this.request<unknown>(
+      "POST",
+      `/sessions/${encodeURIComponent(this.cloudSessionId)}/actions`,
+      { action },
+    );
   }
 
   /**

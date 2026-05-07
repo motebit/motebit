@@ -226,7 +226,7 @@ The 10 Apache-2.0 packages are the permissive floor: a third party can build an 
 
 **Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and four supporting (`admin` dashboard, `identity` viewer, `docs` site, `vscode` extension).
 
-**Marketplace** ([`services/`](services/)) — 8 services in four roles:
+**Marketplace** ([`services/`](services/)) — 9 services in four roles:
 
 - **The relay** — `api` (sync, settlement, federation, 5-tier rate limiting, the only piece with legitimate centralization)
 - **Molecules** — agents that reason and compose other agents: `research` ($0.25/report, Claude + web search with cryptographic citation chain), `code-review` ($0.50/review, Claude-powered)
@@ -291,7 +291,7 @@ pnpm run lint          # Lint all packages
 
 11 packages publish to npm — 10 Apache-2.0 (the permissive floor) and 1 BSL-1.1 (the `motebit` reference runtime). They version independently on their own merit (`updateInternalDependencies: "patch"`, no fixed or linked groups). Breaking changes to a package's public surface require a major bump on that package.
 
-The 55 workspace-private packages — `@motebit/runtime`, `@motebit/relay`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the 11 published packages above.
+The 56 workspace-private packages — `@motebit/runtime`, `@motebit/relay`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the 11 published packages above.
 
 The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`) promise wire-format and type stability independently, gated by `check-api-surface`.
 

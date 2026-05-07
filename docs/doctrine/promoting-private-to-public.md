@@ -1,6 +1,6 @@
 # Promoting a private package to public
 
-Motebit ships 11 packages to npm and keeps 55 workspace-internal at `0.0.0-private`. The boundary is settled by [`docs/doctrine/protocol-model.md`](protocol-model.md) and the sentinel commit `fa5fdfeb` (2026-04-24). This file documents the _process_ — what to do when a real third-party trigger arrives and a private package needs to become public.
+Motebit ships 11 packages to npm and keeps 56 workspace-internal at `0.0.0-private`. The boundary is settled by [`docs/doctrine/protocol-model.md`](protocol-model.md) and the sentinel commit `fa5fdfeb` (2026-04-24). This file documents the _process_ — what to do when a real third-party trigger arrives and a private package needs to become public.
 
 ## The trigger condition
 

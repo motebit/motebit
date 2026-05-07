@@ -1,0 +1,42 @@
+app = "motebit-browser-sandbox"
+primary_region = "sjc"
+kill_signal = "SIGINT"
+kill_timeout = 10
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  MOTEBIT_PORT = "3500"
+  BROWSER_SANDBOX_MAX_SESSIONS = "4"
+  BROWSER_SANDBOX_IDLE_MS = "600000"
+  BROWSER_SANDBOX_VIEWPORT_WIDTH = "1280"
+  BROWSER_SANDBOX_VIEWPORT_HEIGHT = "800"
+
+[http_service]
+  internal_port = 3500
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 20
+    soft_limit = 16
+
+  [[http_service.checks]]
+    interval = "15s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    timeout = "3s"
+
+# Chromium needs ~200MB per session + browser overhead. 1GB gives
+# headroom for 4 concurrent sessions plus the JS runtime.
+[[vm]]
+  memory = "1024mb"
+  cpu_kind = "shared"
+  cpus = 1
