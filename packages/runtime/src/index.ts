@@ -111,6 +111,11 @@ export type {
 } from "./computer-use.js";
 export { CloudBrowserDispatcher } from "./cloud-browser-dispatcher.js";
 export type { CloudBrowserDispatcherOptions } from "./cloud-browser-dispatcher.js";
+export { createComputerApprovalFlow } from "./computer-approval-shared.js";
+export type {
+  ApprovalRenderHost,
+  CreateComputerApprovalFlowOptions,
+} from "./computer-approval-shared.js";
 
 export { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 export type { RouteWeight } from "./agent-graph.js";

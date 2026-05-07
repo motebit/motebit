@@ -41,6 +41,8 @@ import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import { McpClientAdapter, AdvisoryManifestVerifier } from "@motebit/mcp-client";
 import type { McpServerConfig } from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
+import { createWebComputerApprovalFlow } from "./computer-approval.js";
+import { registerWebComputerTool, type ComputerToolRegistration } from "./computer-tool.js";
 import {
   bootstrapIdentity,
   rotateIdentityKeys,
@@ -133,6 +135,13 @@ export class WebApp {
    * Sibling of `DesktopApp.slabBridgeUnsub`.
    */
   private slabBridgeUnsub: (() => void) | null = null;
+  /**
+   * Cloud-browser computer-tool registration. `null` when not
+   * configured (`VITE_BROWSER_SANDBOX_URL` empty); `dispose()` on
+   * `stop()` tears down the cloud Chromium context server-side and
+   * emits the closing audit event.
+   */
+  private computerRegistration: ComputerToolRegistration | null = null;
   private _motebitId = "";
   private _deviceId = "";
   private _publicKeyHex = "";
@@ -641,6 +650,27 @@ export class WebApp {
         ),
       ),
     );
+
+    // Cloud-browser `computer` tool (virtual_browser embodiment).
+    // Registered ONLY when `VITE_BROWSER_SANDBOX_URL` is configured —
+    // explicit-not-configured beats silent-not-supported. Per
+    // services/browser-sandbox/README.md, v1 is a single-tenant
+    // deployment boundary: the token in the bundle is acceptable
+    // only when the operator controls bundle distribution.
+    // Multi-tenant production exposure is gated on per-motebit
+    // signed JWTs, not on this wiring.
+    const env = (import.meta as unknown as Record<string, Record<string, string> | undefined>).env;
+    const browserSandboxUrl = env?.VITE_BROWSER_SANDBOX_URL ?? "";
+    const browserSandboxToken = env?.VITE_BROWSER_SANDBOX_TOKEN ?? "";
+    if (browserSandboxUrl && browserSandboxToken) {
+      this.computerRegistration = registerWebComputerTool(registry, {
+        baseUrl: browserSandboxUrl,
+        getAuthToken: () => browserSandboxToken,
+        motebitId: runtime.motebitId,
+        approvalFlow: createWebComputerApprovalFlow(),
+        events: runtime.events,
+      });
+    }
   }
 
   stop(): void {
@@ -656,6 +686,13 @@ export class WebApp {
     if (this.slabBridgeUnsub) {
       this.slabBridgeUnsub();
       this.slabBridgeUnsub = null;
+    }
+    // Tear down the cloud-browser session (if any) BEFORE the runtime
+    // stops — the dispose path emits a `ComputerSessionClosed` event
+    // that needs a live runtime.events sink to land in the audit log.
+    if (this.computerRegistration) {
+      void this.computerRegistration.dispose();
+      this.computerRegistration = null;
     }
     this.runtime?.stop();
     this.renderer.dispose();
