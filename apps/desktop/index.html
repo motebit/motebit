@@ -6453,7 +6453,7 @@
               <div class="settings-field">
                 <label for="settings-apikey">API Key</label>
                 <div class="settings-key-row">
-                  <input id="settings-apikey" type="password" placeholder="sk-ant-..." autocomplete="off" />
+                  <input id="settings-apikey" type="password" placeholder="sk-ant-..." autocomplete="new-password" />
                   <button id="settings-apikey-toggle" type="button">Show</button>
                 </div>
               </div>
@@ -6612,7 +6612,7 @@
             <div class="settings-field">
               <label for="settings-elevenlabs-apikey">ElevenLabs API Key</label>
               <div class="settings-key-row">
-                <input id="settings-elevenlabs-apikey" type="password" placeholder="xi-..." />
+                <input id="settings-elevenlabs-apikey" type="password" placeholder="xi-..." autocomplete="new-password" />
                 <button id="settings-elevenlabs-apikey-toggle" type="button">Show</button>
               </div>
               <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
@@ -6622,7 +6622,7 @@
             <div class="settings-field" style="margin-top: 10px">
               <label for="settings-inworld-apikey">Inworld API Key</label>
               <div class="settings-key-row">
-                <input id="settings-inworld-apikey" type="password" placeholder="..." />
+                <input id="settings-inworld-apikey" type="password" placeholder="..." autocomplete="new-password" />
                 <button id="settings-inworld-apikey-toggle" type="button">Show</button>
               </div>
               <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
@@ -6632,7 +6632,7 @@
             <div class="settings-field" style="margin-top: 10px">
               <label for="settings-deepgram-apikey">Deepgram API Key</label>
               <div class="settings-key-row">
-                <input id="settings-deepgram-apikey" type="password" placeholder="..." />
+                <input id="settings-deepgram-apikey" type="password" placeholder="..." autocomplete="new-password" />
                 <button id="settings-deepgram-apikey-toggle" type="button">Show</button>
               </div>
               <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
@@ -7051,7 +7051,15 @@
       <div id="chat-input-row">
         <div id="input-bar-wrapper">
           <canvas id="voice-waveform"></canvas>
-          <input id="chat-input" type="text" placeholder="Say something..." autocomplete="off" />
+          <input
+            id="chat-input"
+            type="text"
+            name="say-something"
+            placeholder="Say something..."
+            autocomplete="off"
+            data-1p-ignore
+            data-lpignore="true"
+          />
           <span id="voice-transcript"></span>
           <button id="send-btn" aria-label="Send message">
             <svg

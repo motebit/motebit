@@ -7206,7 +7206,7 @@
                       id="anthropic-api-key"
                       type="password"
                       placeholder="sk-ant-..."
-                      autocomplete="off"
+                      autocomplete="new-password"
                     />
                     <button
                       type="button"
@@ -7226,6 +7226,7 @@
                     type="text"
                     list="anthropic-models"
                     placeholder="claude-sonnet-4-6"
+                    autocomplete="off"
                   />
                   <datalist id="anthropic-models"></datalist>
                 </div>
@@ -7238,7 +7239,7 @@
                       id="openai-api-key"
                       type="password"
                       placeholder="sk-..."
-                      autocomplete="off"
+                      autocomplete="new-password"
                     />
                     <button
                       type="button"
@@ -7258,6 +7259,7 @@
                     type="text"
                     list="openai-models"
                     placeholder="gpt-5.4-mini"
+                    autocomplete="off"
                   />
                   <datalist id="openai-models"></datalist>
                 </div>
@@ -7270,7 +7272,7 @@
                       id="google-api-key"
                       type="password"
                       placeholder="AIza..."
-                      autocomplete="off"
+                      autocomplete="new-password"
                     />
                     <button
                       type="button"
@@ -7290,6 +7292,7 @@
                     type="text"
                     list="google-models"
                     placeholder="gemini-2.5-flash"
+                    autocomplete="off"
                   />
                   <datalist id="google-models"></datalist>
                 </div>
@@ -7474,7 +7477,7 @@
                   id="tts-elevenlabs-key"
                   type="password"
                   placeholder="sk_..."
-                  autocomplete="off"
+                  autocomplete="new-password"
                 />
                 <button
                   type="button"
@@ -7497,7 +7500,7 @@
                   id="tts-inworld-key"
                   type="password"
                   placeholder="..."
-                  autocomplete="off"
+                  autocomplete="new-password"
                 />
                 <button
                   type="button"
@@ -7520,7 +7523,7 @@
                   id="tts-deepgram-key"
                   type="password"
                   placeholder="..."
-                  autocomplete="off"
+                  autocomplete="new-password"
                 />
                 <button
                   type="button"
@@ -7888,7 +7891,15 @@
         <div id="input-bar-wrapper">
           <canvas id="voice-waveform"></canvas>
           <span id="voice-transcript"></span>
-          <input id="chat-input" type="text" placeholder="Say something..." autocomplete="off" />
+          <input
+            id="chat-input"
+            type="text"
+            name="say-something"
+            placeholder="Say something..."
+            autocomplete="off"
+            data-1p-ignore
+            data-lpignore="true"
+          />
           <button id="send-btn" aria-label="Send message">
             <svg
               width="16"
