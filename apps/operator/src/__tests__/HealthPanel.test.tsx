@@ -37,6 +37,13 @@ const ZERO_SUMMARY = {
     fees_7d_micro: 0,
     fees_30d_micro: 0,
   },
+  subscribers: {
+    total_active: 0,
+    total_lifetime: 0,
+    created_7d: 0,
+    created_30d: 0,
+    status_counts: {},
+  },
   generated_at: Date.now(),
 };
 

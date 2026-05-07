@@ -57,6 +57,19 @@ function insertSettlement(
   );
 }
 
+function insertSubscription(
+  db: import("@motebit/persistence").DatabaseDriver,
+  motebitId: string,
+  status: string,
+  createdAtMs: number,
+) {
+  db.prepare(
+    `INSERT OR IGNORE INTO relay_subscriptions
+     (motebit_id, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(motebitId, status, createdAtMs, createdAtMs);
+}
+
 describe("aggregateHealthSummary", () => {
   let relay: SyncRelay;
 
@@ -80,6 +93,11 @@ describe("aggregateHealthSummary", () => {
     expect(out.tasks.settlements_7d).toBe(0);
     expect(out.tasks.settlements_30d).toBe(0);
     expect(out.tasks.fees_7d_micro).toBe(0);
+    expect(out.subscribers.total_active).toBe(0);
+    expect(out.subscribers.total_lifetime).toBe(0);
+    expect(out.subscribers.created_7d).toBe(0);
+    expect(out.subscribers.created_30d).toBe(0);
+    expect(out.subscribers.status_counts).toEqual({});
     expect(out.generated_at).toBe(now);
   });
 
@@ -113,6 +131,27 @@ describe("aggregateHealthSummary", () => {
     expect(out.tasks.fees_7d_micro).toBe(15_000);
     expect(out.tasks.fees_30d_micro).toBe(30_000);
   });
+
+  it("counts subscribers by status and creation window", () => {
+    const now = Date.UTC(2026, 3, 15, 12, 0, 0);
+    insertSubscription(relay.moteDb.db, "paying-1", "active", now - 1 * DAY_MS);
+    insertSubscription(relay.moteDb.db, "paying-2", "active", now - 5 * DAY_MS);
+    insertSubscription(relay.moteDb.db, "paying-3", "active", now - 20 * DAY_MS); // outside 7d, inside 30d
+    insertSubscription(relay.moteDb.db, "churned-1", "canceled", now - 10 * DAY_MS);
+    insertSubscription(relay.moteDb.db, "delinquent-1", "past_due", now - 3 * DAY_MS);
+    insertSubscription(relay.moteDb.db, "ancient-1", "canceled", now - 60 * DAY_MS); // outside both
+
+    const out = aggregateHealthSummary(relay.moteDb.db, now);
+    expect(out.subscribers.total_active).toBe(3);
+    expect(out.subscribers.total_lifetime).toBe(6);
+    expect(out.subscribers.created_7d).toBe(3); // paying-1, paying-2, delinquent-1
+    expect(out.subscribers.created_30d).toBe(5); // + paying-3 + churned-1
+    expect(out.subscribers.status_counts).toEqual({
+      active: 3,
+      canceled: 2,
+      past_due: 1,
+    });
+  });
 });
 
 describe("GET /api/v1/admin/health (HTTP)", () => {
@@ -135,6 +174,7 @@ describe("GET /api/v1/admin/health (HTTP)", () => {
     const now = Date.now();
     insertAgent(relay.moteDb.db, "m1", now - 1000);
     insertSettlement(relay.moteDb.db, "s1", 100_000, 5_000, now - 1 * DAY_MS);
+    insertSubscription(relay.moteDb.db, "m1", "active", now - 1000);
 
     const res = await relay.app.request("/api/v1/admin/health", { headers: AUTH_HEADER });
     expect(res.status).toBe(200);
@@ -142,12 +182,20 @@ describe("GET /api/v1/admin/health (HTTP)", () => {
       motebits: { total_registered: number; active_24h: number };
       federation: { peer_count: number };
       tasks: { settlements_7d: number; volume_7d_micro: number };
+      subscribers: {
+        total_active: number;
+        total_lifetime: number;
+        status_counts: Record<string, number>;
+      };
       generated_at: number;
     };
     expect(body.motebits.total_registered).toBe(1);
     expect(body.motebits.active_24h).toBe(1);
     expect(body.tasks.settlements_7d).toBe(1);
     expect(body.tasks.volume_7d_micro).toBe(100_000);
+    expect(body.subscribers.total_active).toBe(1);
+    expect(body.subscribers.total_lifetime).toBe(1);
+    expect(body.subscribers.status_counts).toEqual({ active: 1 });
     expect(typeof body.generated_at).toBe("number");
   });
 });

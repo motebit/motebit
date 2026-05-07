@@ -334,10 +334,20 @@ export interface HealthTasks {
   fees_30d_micro: number;
 }
 
+export interface HealthSubscribers {
+  total_active: number;
+  total_lifetime: number;
+  created_7d: number;
+  created_30d: number;
+  /** Stripe statuses keyed verbatim (active, canceled, past_due, …); zero buckets are omitted. */
+  status_counts: Record<string, number>;
+}
+
 export interface HealthSummary {
   motebits: HealthMotebits;
   federation: HealthFederation;
   tasks: HealthTasks;
+  subscribers: HealthSubscribers;
   generated_at: number;
 }
 

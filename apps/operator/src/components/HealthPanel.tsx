@@ -63,7 +63,7 @@ export function HealthPanel(): React.ReactElement {
     );
   }
 
-  const { motebits, federation, tasks, generated_at } = summary;
+  const { motebits, federation, tasks, subscribers, generated_at } = summary;
   const now = Date.now();
 
   // Color the headline numbers honestly: zero is zero, not "low" or
@@ -80,6 +80,16 @@ export function HealthPanel(): React.ReactElement {
       : tasks.settlements_30d < 5
         ? "var(--yellow)"
         : "var(--green)";
+  const subscribersColor =
+    subscribers.total_active === 0
+      ? "var(--red)"
+      : subscribers.total_active < 3
+        ? "var(--yellow)"
+        : "var(--green)";
+
+  const statusBuckets = Object.entries(subscribers.status_counts).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
 
   return React.createElement(
     "div",
@@ -88,7 +98,7 @@ export function HealthPanel(): React.ReactElement {
     React.createElement(
       "p",
       { className: "count" },
-      `Snapshot ${relativeTime(generated_at, now)}. Single SQL aggregation pass over agent_registry / relay_peers / relay_settlements / relay_federation_settlements. Honest zeros — empty means empty.`,
+      `Snapshot ${relativeTime(generated_at, now)}. Single SQL aggregation pass over agent_registry / relay_peers / relay_settlements / relay_federation_settlements / relay_subscriptions. Honest zeros — empty means empty.`,
     ),
     React.createElement("h3", null, "Motebits"),
     React.createElement(
@@ -121,6 +131,52 @@ export function HealthPanel(): React.ReactElement {
         { className: "stat-card" },
         React.createElement("div", { className: "label" }, "Active 30d"),
         React.createElement("div", { className: "value" }, String(motebits.active_30d)),
+      ),
+    ),
+    React.createElement("h3", null, "Subscribers"),
+    React.createElement(
+      "p",
+      { className: "count" },
+      "Stripe-synced from relay_subscriptions. Joined to motebits, settlements, and federation for relay-shaped correlation; not a Stripe Billing replacement.",
+    ),
+    React.createElement(
+      "div",
+      { className: "stat-grid" },
+      React.createElement(
+        "div",
+        { className: "stat-card" },
+        React.createElement("div", { className: "label" }, "Active (paying)"),
+        React.createElement(
+          "div",
+          { className: "value", style: { color: subscribersColor } },
+          String(subscribers.total_active),
+        ),
+      ),
+      React.createElement(
+        "div",
+        { className: "stat-card" },
+        React.createElement("div", { className: "label" }, "Lifetime"),
+        React.createElement("div", { className: "value" }, String(subscribers.total_lifetime)),
+      ),
+      React.createElement(
+        "div",
+        { className: "stat-card" },
+        React.createElement("div", { className: "label" }, "New 7d / 30d"),
+        React.createElement(
+          "div",
+          { className: "value" },
+          `${subscribers.created_7d} / ${subscribers.created_30d}`,
+        ),
+      ),
+      React.createElement(
+        "div",
+        { className: "stat-card" },
+        React.createElement("div", { className: "label" }, "By status"),
+        React.createElement(
+          "div",
+          { className: "value" },
+          statusBuckets.length === 0 ? "—" : statusBuckets.map(([s, n]) => `${s} ${n}`).join(" · "),
+        ),
       ),
     ),
     React.createElement("h3", null, "Federation"),

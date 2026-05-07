@@ -6,7 +6,7 @@
  * sampling, just SQL over the truth tables. The output is the load-
  * bearing signal the operator console's Health panel renders.
  *
- * Three classes of signal:
+ * Four classes of signal:
  *
  *   1. Motebit registry — total registered + activity windows
  *      (last-heartbeat within 24h / 7d / 30d). Activity is the proof
@@ -21,6 +21,12 @@
  *      30d. The economic loop's heartbeat. Zero settlements over 30d
  *      on a relay with N>0 registered motebits is the strongest
  *      "no real usage" signal there is.
+ *   4. Subscribers — Stripe-source-of-truth count of paying customers
+ *      (relay_subscriptions, status='active'), lifetime cohort size,
+ *      and 7d/30d new-subscriber counts. The commercial-legibility
+ *      signal: "how many paying users" answered without leaving the
+ *      relay db. Status counts are aggregated as a map so churn shows
+ *      up as a non-zero `canceled` bucket alongside `active`.
  *
  * Every count is integer; every micro-unit value is a SUM of `INTEGER
  * NOT NULL` columns; no float arithmetic. The query block is
@@ -54,10 +60,20 @@ export interface HealthTasks {
   fees_30d_micro: number;
 }
 
+export interface HealthSubscribers {
+  total_active: number;
+  total_lifetime: number;
+  created_7d: number;
+  created_30d: number;
+  /** Stripe statuses keyed verbatim (active, canceled, past_due, …); zero buckets are omitted. */
+  status_counts: Record<string, number>;
+}
+
 export interface HealthSummary {
   motebits: HealthMotebits;
   federation: HealthFederation;
   tasks: HealthTasks;
+  subscribers: HealthSubscribers;
   generated_at: number;
 }
 
@@ -150,10 +166,30 @@ export function aggregateHealthSummary(
     ),
   };
 
+  const subscribers: HealthSubscribers = {
+    total_active: count(
+      db,
+      "SELECT COUNT(*) AS n FROM relay_subscriptions WHERE status = 'active'",
+    ),
+    total_lifetime: count(db, "SELECT COUNT(*) AS n FROM relay_subscriptions"),
+    created_7d: count(
+      db,
+      "SELECT COUNT(*) AS n FROM relay_subscriptions WHERE created_at >= ?",
+      cutoff7d,
+    ),
+    created_30d: count(
+      db,
+      "SELECT COUNT(*) AS n FROM relay_subscriptions WHERE created_at >= ?",
+      cutoff30d,
+    ),
+    status_counts: subscriptionStatusCounts(db),
+  };
+
   return {
     motebits,
     federation,
     tasks,
+    subscribers,
     generated_at: nowMs,
   };
 }
@@ -169,4 +205,26 @@ function count(db: DatabaseDriver, sql: string, ...params: unknown[]): number {
 
 function sum(db: DatabaseDriver, sql: string, ...params: unknown[]): number {
   return count(db, sql, ...params); // shape-identical
+}
+
+/**
+ * GROUP BY status over `relay_subscriptions`. Best-effort: a missing
+ * table on a fresh boot returns an empty map rather than failing the
+ * snapshot, mirroring the `count`/`sum` helpers above.
+ */
+function subscriptionStatusCounts(db: DatabaseDriver): Record<string, number> {
+  try {
+    const rows = db
+      .prepare("SELECT status, COUNT(*) AS n FROM relay_subscriptions GROUP BY status")
+      .all() as Array<{ status: string; n: number }>;
+    const out: Record<string, number> = {};
+    for (const row of rows) {
+      if (typeof row.status === "string" && row.status.length > 0) {
+        out[row.status] = row.n;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
