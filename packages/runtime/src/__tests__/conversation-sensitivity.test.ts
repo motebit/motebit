@@ -173,3 +173,175 @@ describe("ConversationManager — sensitivity floor on persisted messages", () =
     ).toBe(true);
   });
 });
+
+describe("ConversationManager — read-side trimmed() filter by effective tier", () => {
+  it("untagged legacy messages always pass through (backward compat)", () => {
+    // Pre-floor data: messages persisted before the v1 sensitivity
+    // tag landed have no `sensitivity` field. They MUST flow through
+    // trimmed() regardless of effective tier — otherwise the read
+    // filter retroactively erases the user's history.
+    const legacyStore: ConversationStoreAdapter = {
+      createConversation: () => "conv-legacy",
+      appendMessage() {},
+      loadMessages: () => [
+        {
+          messageId: "m1",
+          conversationId: "conv-legacy",
+          motebitId: "mb-1",
+          role: "user",
+          content: "legacy untagged user",
+          toolCalls: null,
+          toolCallId: null,
+          createdAt: 0,
+          tokenEstimate: 4,
+        },
+        {
+          messageId: "m2",
+          conversationId: "conv-legacy",
+          motebitId: "mb-1",
+          role: "assistant",
+          content: "legacy untagged assistant",
+          toolCalls: null,
+          toolCallId: null,
+          createdAt: 1,
+          tokenEstimate: 4,
+        },
+      ],
+      getActiveConversation: () => null,
+      updateSummary() {},
+      updateTitle() {},
+      listConversations: () => [],
+      deleteConversation() {},
+    };
+    const provider = { generate: vi.fn() } as unknown as NonNullable<
+      ReturnType<ConversationDeps["getProvider"]>
+    >;
+    const deps: ConversationDeps = {
+      motebitId: "mb-1",
+      maxHistory: 100,
+      summarizeAfterMessages: 50,
+      store: legacyStore,
+      getProvider: () => provider,
+      getTaskRouter: () => null,
+      generateCompletion: vi.fn(async () => "AI Title"),
+      // Non-permissive session tier — would block tagged messages.
+      getEffectiveSensitivity: () => SensitivityLevel.None,
+    };
+    const cm = new ConversationManager(deps);
+    cm.load("conv-legacy");
+    const out = cm.trimmed();
+    expect(out).toHaveLength(2);
+    expect(out.every((m) => m.sensitivity == null)).toBe(true);
+  });
+
+  it("absent getter: defaults to None effective; messages tagged above None excluded", () => {
+    const store = makeCapturingStore();
+    const deps = makeDeps(store, {
+      defaultSensitivity: SensitivityLevel.Personal,
+      // No getEffectiveSensitivity. trimmed() defaults effective to None,
+      // so Personal-tagged messages are excluded.
+    });
+    const cm = new ConversationManager(deps);
+    cm.pushExchange("hello", "hi");
+    expect(cm.trimmed()).toHaveLength(0);
+  });
+
+  it("effective at or above message tier: included", () => {
+    const store = makeCapturingStore();
+    const deps = makeDeps(store, {
+      defaultSensitivity: SensitivityLevel.Personal,
+      getEffectiveSensitivity: () => SensitivityLevel.Personal,
+    });
+    const cm = new ConversationManager(deps);
+    cm.pushExchange("hello", "hi");
+    expect(cm.trimmed()).toHaveLength(2);
+  });
+
+  it("effective below message tier: excluded", () => {
+    const store = makeCapturingStore();
+    let effective = SensitivityLevel.Secret;
+    const deps = makeDeps(store, {
+      defaultSensitivity: SensitivityLevel.Personal,
+      getEffectiveSensitivity: () => effective,
+    });
+    const cm = new ConversationManager(deps);
+    // Persist a Secret-effective turn.
+    cm.pushExchange("secret prompt", "secret reply");
+    // Drop back to None. Secret-tagged messages must be filtered out.
+    effective = SensitivityLevel.None;
+    expect(cm.trimmed()).toHaveLength(0);
+  });
+
+  it("dynamic re-elevation: same messages reappear when effective tier rises again", () => {
+    // The filter is dynamic, not session-fixed. A session whose tier
+    // elevates mid-conversation regains access to its own elevated
+    // messages — the same posture the pre-call AI gate enforces.
+    const store = makeCapturingStore();
+    let effective = SensitivityLevel.Medical;
+    const deps = makeDeps(store, {
+      defaultSensitivity: SensitivityLevel.Personal,
+      getEffectiveSensitivity: () => effective,
+    });
+    const cm = new ConversationManager(deps);
+    cm.pushExchange("medical-tier user", "medical-tier assistant");
+    expect(cm.trimmed()).toHaveLength(2);
+
+    effective = SensitivityLevel.None;
+    expect(cm.trimmed()).toHaveLength(0);
+
+    effective = SensitivityLevel.Medical;
+    expect(cm.trimmed()).toHaveLength(2);
+  });
+
+  it("mixed history: only messages above effective are filtered, lower tagged + untagged remain", () => {
+    const store = makeCapturingStore();
+    let effective = SensitivityLevel.Personal;
+    const deps = makeDeps(store, {
+      defaultSensitivity: SensitivityLevel.Personal,
+      getEffectiveSensitivity: () => effective,
+    });
+    const cm = new ConversationManager(deps);
+    // Personal-tagged turn at Personal effective.
+    cm.pushExchange("personal-user", "personal-assistant");
+    // Elevate to Secret, persist Secret-tagged turn.
+    effective = SensitivityLevel.Secret;
+    cm.pushExchange("secret-user", "secret-assistant");
+    // Drop to Personal. Secret turn must be filtered, Personal turn remains.
+    effective = SensitivityLevel.Personal;
+    const out = cm.trimmed();
+    expect(out).toHaveLength(2);
+    expect(out.every((m) => m.content.startsWith("personal"))).toBe(true);
+  });
+
+  it("BYPASS REGRESSION: high-tier persisted messages do NOT leak into low-tier session trimmed history", () => {
+    // The money test for the read-side filter (closes the read side
+    // of the fifth egress-write boundary). Pre-fix: a Secret-effective
+    // turn persisted user/assistant messages at Secret (write-side
+    // floor); cross-device sync surfaced them to another device whose
+    // session is at None tier. The pre-call AI gate sees None × None
+    // and passes — but trimmed() included the Secret-tagged history
+    // verbatim → BYOK egress of Secret content while the gate
+    // reported "Personal sufficient." The read-side filter closes the
+    // bypass: tagged messages above the current effective tier are
+    // excluded from trimmed history regardless of what the gate
+    // permits, because trimmed history is itself an egress shape.
+    const store = makeCapturingStore();
+    let effective = SensitivityLevel.Secret;
+    const deps = makeDeps(store, {
+      defaultSensitivity: SensitivityLevel.Personal,
+      getEffectiveSensitivity: () => effective,
+    });
+    const cm = new ConversationManager(deps);
+    cm.pushExchange("medical-history detail", "noted");
+    // Confirm write-side did its job.
+    expect(store._captured.every((m) => m.sensitivity === SensitivityLevel.Secret)).toBe(true);
+    // Sync horizon: another device, None-tier session, BYOK provider.
+    effective = SensitivityLevel.None;
+    const trimmedAtNone = cm.trimmed();
+    expect(trimmedAtNone).toHaveLength(0);
+    // Same conversation, on-device session that re-elevates to Secret
+    // (e.g., user pulls in a Secret slab item): the messages reappear.
+    effective = SensitivityLevel.Secret;
+    expect(cm.trimmed()).toHaveLength(2);
+  });
+});

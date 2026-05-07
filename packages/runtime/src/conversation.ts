@@ -154,7 +154,7 @@ export class ConversationManager {
     const messages = store.loadMessages(active.conversationId);
     for (const msg of messages) {
       if (msg.role === "user" || msg.role === "assistant") {
-        this.history.push({ role: msg.role, content: msg.content });
+        this.history.push({ role: msg.role, content: msg.content, sensitivity: msg.sensitivity });
       }
     }
     if (this.history.length > 0) {
@@ -194,7 +194,7 @@ export class ConversationManager {
     this.history = [];
     for (const msg of messages) {
       if (msg.role === "user" || msg.role === "assistant") {
-        this.history.push({ role: msg.role, content: msg.content });
+        this.history.push({ role: msg.role, content: msg.content, sensitivity: msg.sensitivity });
       }
     }
     this.currentId = conversationId;
@@ -229,10 +229,37 @@ export class ConversationManager {
 
   // --- Context window ---
 
-  /** Return history trimmed to fit within the token budget. */
+  /**
+   * Return history trimmed to fit within the token budget. When the
+   * runtime supplies an effective tier, messages tagged above it are
+   * filtered out before trimming — the read-side companion to the
+   * write-side floor in `pushExchange` / `pushActivation`.
+   *
+   * Untagged messages (legacy data persisted before the v1 floor, or
+   * fixtures without a runtime) flow through unchanged for backward
+   * compat. Filter is dynamic by current effective tier (not a static
+   * `CONTEXT_SAFE_SENSITIVITY` constant) so a session whose tier
+   * elevates mid-conversation (e.g., a Secret-tier slab item arrives
+   * via `classifyToolResult`) regains access to its own elevated
+   * messages, and a session at None tier excludes Secret messages
+   * even if they're load-bearing for the current turn — same posture
+   * the pre-call AI gate enforces upstream.
+   *
+   * Closes the read side of the fifth (and final) egress-write
+   * boundary: cross-device sync surfaces high-tier messages to a
+   * low-tier session whose pre-call gate passes (None × None → None);
+   * trimmed history would carry those persisted-at-Secret messages
+   * into BYOK without this filter.
+   */
   trimmed(): ConversationMessage[] {
     const summary = this.getStoredSummary();
-    return trimConversation(this.history, CONVERSATION_BUDGET, summary);
+    const effective = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
+    const effectiveRank = rankSensitivity(effective);
+    const filtered = this.history.filter((msg) => {
+      if (msg.sensitivity == null) return true;
+      return rankSensitivity(msg.sensitivity) <= effectiveRank;
+    });
+    return trimConversation(filtered, CONVERSATION_BUDGET, summary);
   }
 
   // --- Push + auto-summarize ---
@@ -241,12 +268,11 @@ export class ConversationManager {
    *  generation like first-contact activation where there is no user input. */
   pushActivation(assistantResponse: string): void {
     const cleaned = stripInternalTags(assistantResponse).trim();
-    this.history.push({ role: "assistant", content: cleaned });
+    const sensitivity = this.resolveMessageSensitivity();
+    this.history.push({ role: "assistant", content: cleaned, sensitivity });
     if (this.history.length > this.deps.maxHistory) {
       this.history = this.history.slice(-this.deps.maxHistory);
     }
-
-    const sensitivity = this.resolveMessageSensitivity();
     const { store } = this.deps;
     if (store != null) {
       if (this.currentId == null || this.currentId === "") {
@@ -262,15 +288,15 @@ export class ConversationManager {
 
   pushExchange(userMessage: string, assistantResponse: string): void {
     const cleaned = stripInternalTags(assistantResponse).trim();
+    const sensitivity = this.resolveMessageSensitivity();
     this.history.push(
-      { role: "user", content: userMessage },
-      { role: "assistant", content: cleaned },
+      { role: "user", content: userMessage, sensitivity },
+      { role: "assistant", content: cleaned, sensitivity },
     );
     if (this.history.length > this.deps.maxHistory) {
       this.history = this.history.slice(-this.deps.maxHistory);
     }
 
-    const sensitivity = this.resolveMessageSensitivity();
     const { store } = this.deps;
     if (store != null) {
       if (this.currentId == null || this.currentId === "") {

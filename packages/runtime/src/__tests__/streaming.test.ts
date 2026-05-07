@@ -403,8 +403,8 @@ describe("sendMessageStreaming", () => {
     await collectChunks(runtime.sendMessageStreaming("hello"));
     const history = runtime.getConversationHistory();
     expect(history).toHaveLength(2);
-    expect(history[0]).toEqual({ role: "user", content: "hello" });
-    expect(history[1]).toEqual({ role: "assistant", content: "Response text" });
+    expect(history[0]).toMatchObject({ role: "user", content: "hello" });
+    expect(history[1]).toMatchObject({ role: "assistant", content: "Response text" });
   });
 
   it("clears isProcessing after stream completes", async () => {
@@ -1530,8 +1530,8 @@ describe("Conversation resume from store", () => {
 
     const history = runtime.getConversationHistory();
     expect(history).toHaveLength(2);
-    expect(history[0]).toEqual({ role: "user", content: "previous message" });
-    expect(history[1]).toEqual({ role: "assistant", content: "previous reply" });
+    expect(history[0]).toMatchObject({ role: "user", content: "previous message" });
+    expect(history[1]).toMatchObject({ role: "assistant", content: "previous reply" });
     expect(runtime.getConversationId()).toBe(convId);
   });
 });

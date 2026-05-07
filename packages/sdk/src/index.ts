@@ -276,10 +276,25 @@ export interface SkillSelectorHook {
   selectForTurn(turn: string): Promise<SkillInjection[]>;
 }
 
+/**
+ * In-memory conversation message. Optional `sensitivity` field is the
+ * runtime's effective tier at write time (composed from session tier
+ * × tier-bounded slab items via `getEffectiveSessionSensitivity`).
+ * Persisted messages carry the same value via the conversation
+ * store's `appendMessage`. The runtime's `trimmed()` consumes this
+ * field to filter trimmed history at AI-context construction time
+ * — read-side companion to the write-side floor that landed in
+ * commit 6a3c3b9a. Untagged messages (legacy data, in-memory
+ * pre-floor) flow through filters unchanged for backward compat.
+ *
+ * Same compounding pattern as `MemoryNode.sensitivity` and
+ * `SlabItem.sensitivity`: write-side classification → tag → read-
+ * side filter. See doctrine: motebit-computer.md §"Mode contract."
+ */
 export type ConversationMessage =
-  | { role: "user"; content: string }
-  | { role: "assistant"; content: string; tool_calls?: ToolCall[] }
-  | { role: "tool"; content: string; tool_call_id: string };
+  | { role: "user"; content: string; sensitivity?: SensitivityLevel }
+  | { role: "assistant"; content: string; tool_calls?: ToolCall[]; sensitivity?: SensitivityLevel }
+  | { role: "tool"; content: string; tool_call_id: string; sensitivity?: SensitivityLevel };
 
 export interface ToolCall {
   id: string;

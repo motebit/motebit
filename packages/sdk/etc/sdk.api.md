@@ -191,18 +191,21 @@ export interface ContextPack {
     user_message: string;
 }
 
-// @public (undocumented)
+// @public
 export type ConversationMessage = {
     role: "user";
     content: string;
+    sensitivity?: SensitivityLevel;
 } | {
     role: "assistant";
     content: string;
     tool_calls?: ToolCall[];
+    sensitivity?: SensitivityLevel;
 } | {
     role: "tool";
     content: string;
     tool_call_id: string;
+    sensitivity?: SensitivityLevel;
 };
 
 // @public

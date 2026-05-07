@@ -203,9 +203,9 @@ describe("MotebitRuntime", () => {
 
     const history = runtime.getConversationHistory();
     expect(history).toHaveLength(4);
-    expect(history[0]).toEqual({ role: "user", content: "first" });
-    expect(history[1]).toEqual({ role: "assistant", content: "Hello from mock" });
-    expect(history[2]).toEqual({ role: "user", content: "second" });
+    expect(history[0]).toMatchObject({ role: "user", content: "first" });
+    expect(history[1]).toMatchObject({ role: "assistant", content: "Hello from mock" });
+    expect(history[2]).toMatchObject({ role: "user", content: "second" });
   });
 
   it("resetConversation clears history", async () => {
