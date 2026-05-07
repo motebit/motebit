@@ -117,6 +117,30 @@ The minimum viable set of gestures (per the surface-determinism doctrine — eac
 
 Additions to this set need a justification: they must be physical interactions with droplets, not chrome, and must route through a typed capability — no prompt-injection backdoor.
 
+### Perception input — drop kinds and handlers
+
+The "drag onto the slab → feed perception" gesture is typed end-to-end. A user drag event lands as a closed-union `DropPayload` at the protocol layer (`@motebit/protocol::perception.ts`); the runtime's `feedPerception(payload)` is the single entry point; per-kind handlers stage the perception as a slab item the user sees on drop. Surfaces translate platform-native drop events (DOM `dataTransfer` on web/desktop, WebXR pinch-and-throw on spatial, share-sheet on mobile) into the same payload shape — Ring 1 contract, Ring 3 surface translation.
+
+The categorical drop kinds are closed at the protocol layer:
+
+| Kind         | What it carries                                                 | v1 status                                                                                                      |
+| ------------ | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **url**      | A hyperlink, optionally with the source page's HTML frame       | shipped — slab item kind=`fetch`, mode=`mind`                                                                  |
+| **text**     | Plain or markdown text snippet                                  | shipped — slab item kind=`stream`, mode=`mind`                                                                 |
+| **image**    | Raster bytes with MIME (the multimodal moment)                  | shipped — slab item kind=`embedding`, mode=`mind` (rich preview is v1.1 alongside vision-provider integration) |
+| **file**     | Opaque bytes with filename + MIME                               | allowlisted — defers to v1.1 (file-format proliferation is unbounded; ships with concrete handler-extension)   |
+| **artifact** | A motebit-produced signed artifact (bytes + `ExecutionReceipt`) | allowlisted — defers until multi-motebit UX gives drag motebit-to-motebit a consumer                           |
+
+A future `mode-grant` kind (drag a permission token onto the slab — "you may drive my desktop for this session") waits for `EmbodimentMode` to lift from `@motebit/render-engine` to `@motebit/protocol`. Adding it is a registry append, not a wire-format break.
+
+**Two-level pattern.** Categorical kinds are closed (protocol commitment); per-kind handlers are open (registered in-runtime via `registerDropHandler(kind, handler)`). A surface or extension package can specialize within a kind — a markdown-aware text handler, a PDF handler for `file` drops once v1.1 lands — without modifying the protocol. Same `agility-as-role` pattern as `SuiteId` / `ToolMode` / `GuestRail`.
+
+**Three drop targets.** Every payload carries an optional `target: "slab" | "creature" | "ambient"`. v1 surfaces only set `slab` (the default) — on a 2D screen there is no unambiguous gesture for the other two. On glasses, the user's hand-path makes `creature` (drag toward the floating creature droplet — "carry this with you across sessions") and `ambient` (place onto the user's physical workspace — "background reference, not turn-perception") physically distinct. Spatial Phase 1B unlocks the other two; the protocol commitment exists from the start so surfaces opt in without a wire-format change.
+
+**Provenance.** Each `DropPayload` carries a `UserActionAttestation` — the user's gesture IS the attestation. By dragging, the user vouches for the content's authenticity from their authoritative context. For high-sensitivity tiers the runtime can cosign with the user's identity key; that path is deferred until per-tier signing UX lands.
+
+The drift gate `check-drop-handlers` (#77) enforces both arms: every `DropPayloadKind` has a registered handler or an explicit allowlist entry, AND every per-surface drop handler routes through `runtime.feedPerception` (never constructs a prompt and calls `sendMessage` — the prompt-backdoor failure mode named below).
+
 ### What the user's touch is _not_
 
 - **Not a kill switch.** The halt gesture is a pause, not a disconnect. Killing the motebit happens at the identity layer, not on the slab.

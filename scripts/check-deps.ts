@@ -177,6 +177,8 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "getSuiteEntry",
     // Tool-mode taxonomy — pure sort-priority lookup over a closed union
     "toolModePriority",
+    // Drag-drop perception — pure default-target resolver over a closed union
+    "resolveDropTarget",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)

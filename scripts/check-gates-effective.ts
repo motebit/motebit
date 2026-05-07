@@ -1316,6 +1316,15 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
         src.replace(/contract\.lifecycleDefaults\b/g, "contract._disabledLifecycleDefaults"),
       ),
   },
+  {
+    script: "check-drop-handlers",
+    proves:
+      "flags a per-surface drop handler that captures DataTransfer events without routing through `runtime.feedPerception(...)` — exactly the prompt-backdoor failure mode the gate's routing arm exists to catch. Stripping `feedPerception(` from the web surface's drop module (apps/web/src/ui/drop.ts) leaves the file's drag-event listeners intact while removing the canonical typed-input call, simulating a refactor that quietly downgraded the gesture into a prompt-construction path. The coverage arm (DropPayloadKind without a registered handler) is symmetric and exercised in the gate's own development tests.",
+    perturb: () =>
+      mutateFile("apps/web/src/ui/drop.ts", (src) =>
+        src.replace(/runtime\.feedPerception\b/g, "runtime._disabledFeedPerception"),
+      ),
+  },
 ];
 
 /**

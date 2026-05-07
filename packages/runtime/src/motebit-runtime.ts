@@ -29,7 +29,7 @@ import type {
 } from "@motebit/sdk";
 import { signToolInvocationReceipt, hashToolPayload } from "@motebit/crypto";
 import { EventType, AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
-import type { ProviderMode } from "@motebit/sdk";
+import type { ProviderMode, DropPayload, DropPayloadKind } from "@motebit/sdk";
 
 /**
  * Thrown by the runtime's sensitivity gate when an AI call would
@@ -160,6 +160,7 @@ import {
   type SlabController,
   type SlabItemOutcome,
 } from "./slab-controller.js";
+import { DropDispatcher, type DropHandler } from "./perception.js";
 import { toolPolicy } from "./tool-policy.js";
 import {
   runConsolidationCycle,
@@ -283,6 +284,15 @@ export class MotebitRuntime {
    * `docs/doctrine/motebit-computer.md`.
    */
   readonly slab: SlabController;
+  /**
+   * Drop dispatcher — routes typed `DropPayload` events from direct
+   * gestures (drag-drop on web/desktop, pinch-throw on spatial) to
+   * per-kind handlers. v1 default handlers create slab items the user
+   * sees on drop. Surfaces / extensions can replace handlers via
+   * `registerDropHandler`. See `docs/doctrine/motebit-computer.md`
+   * §"Perception input — drop kinds and handlers."
+   */
+  private readonly dropDispatcher: DropDispatcher;
   /** Allowed proactive capability names. Empty by default — fail-closed
    *  sovereign default. User opts in explicitly via runtime config. */
   private _proactiveCapabilities: ReadonlySet<string>;
@@ -485,6 +495,7 @@ export class MotebitRuntime {
     // project events onto it. Initialized here with the runtime's
     // logger; no additional config today.
     this.slab = createSlabController({ logger: this._logger });
+    this.dropDispatcher = new DropDispatcher({ slab: this.slab, logger: this._logger });
     if (config.proactiveTickMs != null && config.proactiveTickMs > 0) {
       const tickMs = config.proactiveTickMs;
       const quietMs = config.proactiveQuietWindowMs ?? 60_000;
@@ -2787,6 +2798,43 @@ export class MotebitRuntime {
    */
   setProviderMode(mode: ProviderMode | null): void {
     this._providerMode = mode;
+  }
+
+  /**
+   * Feed a typed perception payload to the motebit. Drops created by
+   * direct gestures (drag-drop on web/desktop, pinch-throw on spatial,
+   * share-sheet on mobile) classify into a `DropPayload` and land here.
+   * The runtime stages a slab item for the perception so the user sees
+   * it arrive immediately; the per-kind handler decides how to render
+   * and what (if anything) to forward to the next AI turn.
+   *
+   * Per surface-determinism doctrine, surface drag handlers MUST call
+   * this method directly — never construct a prompt string and route
+   * through `sendMessage` / `sendMessageStreaming`. Drop is a typed
+   * input, not a capability invocation. Enforced by the
+   * `check-drop-handlers` drift gate.
+   *
+   * The closed `DropPayloadKind` union is the protocol-layer
+   * commitment (see `@motebit/protocol::perception.ts`); per-kind
+   * handlers are runtime-extensible via `registerDropHandler`. v1
+   * default handlers exist for `url`, `text`, `image`. `file` and
+   * `artifact` are allowlisted-deferred — registering a handler is
+   * opt-in until v1.1.
+   */
+  feedPerception(payload: DropPayload): Promise<void> {
+    return this.dropDispatcher.dispatch(payload);
+  }
+
+  /**
+   * Replace the default handler for a drop kind. Surfaces or extension
+   * packages call this to specialize behavior — for example, a
+   * markdown-aware text handler that pre-renders structured tokens, or
+   * a PDF handler for `file` drops once v1.1 lands. Replacing a
+   * handler does not modify the closed `DropPayloadKind` union; that
+   * remains a protocol-layer concern.
+   */
+  registerDropHandler<K extends DropPayloadKind>(kind: K, handler: DropHandler<K>): void {
+    this.dropDispatcher.registerHandler(kind, handler);
   }
 
   /**

@@ -51,6 +51,7 @@ import { initActivityPanel } from "./ui/activity-panel";
 import { initTheme } from "./ui/theme";
 import { initSlashCommands } from "./ui/slash-commands";
 import { initKeyboard, openShortcutDialog } from "./ui/keyboard";
+import { initDropHandlers } from "./ui/drop";
 
 // === Core Objects ===
 
@@ -206,6 +207,13 @@ const gatedPanels = initGatedPanels(ctx);
 const sovereignPanels = initSovereignPanels(ctx);
 const skillsPanel = initSkillsPanel(ctx);
 const activityPanel = initActivityPanel(ctx);
+
+// Drop handlers — DOM drag-drop translates into typed `feedPerception`
+// payloads. Doctrine: motebit-computer.md §"Supervised agency / minimum
+// gesture set" (Drag a file / URL / snippet onto the slab → feed
+// perception). Single document-level listener; the runtime is fetched
+// lazily so first-run / signed-out states no-op cleanly.
+initDropHandlers({ getRuntime: () => app.getRuntime() });
 // URL-driven entry: visiting /skills or /activity auto-opens the
 // panel. The panel closes by popping the route back to /, so the
 // back button does the expected thing.

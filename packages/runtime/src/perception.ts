@@ -1,0 +1,153 @@
+/**
+ * Drop dispatcher — translates typed `DropPayload` (the protocol-layer
+ * substrate for direct-gesture content delivery) into slab events. The
+ * runtime exposes `feedPerception(payload)` as the canonical entry
+ * point; surfaces that capture drag-drop / pinch-throw / share-sheet
+ * gestures call it with the classified payload.
+ *
+ * Two-level pattern. The categorical drop kinds are closed at the
+ * protocol layer (`DropPayloadKind` union — `url | text | image |
+ * file | artifact`). Handlers within those kinds are open here:
+ * `registerHandler(kind, handler)` replaces the v1 default, allowing
+ * surfaces or future extension packages to specialize per-MIME or
+ * per-source without modifying the protocol or runtime core.
+ *
+ * v1 ships handlers for `url`, `text`, and `image` — the high-frequency
+ * intent shapes. `file` and `artifact` sit on the deferred allowlist;
+ * registering a handler for either is opt-in until the broader UX
+ * lands. The drift gate `check-drop-handlers` enforces this: every
+ * `DropPayloadKind` either has a registered handler OR an explicit
+ * allowlist entry naming the deferral reason.
+ *
+ * Doctrine: `motebit-computer.md` §"Supervised agency / minimum
+ * gesture set" names the drop gestures; `liquescentia-as-substrate.md`
+ * §"Cohesive permeability" frames the policy gate as the surface-
+ * tension membrane drops cross.
+ */
+
+import type { DropPayload, DropPayloadKind } from "@motebit/sdk";
+import type { SlabController } from "./slab-controller.js";
+
+/** Handler signature parameterized by the categorical drop kind. */
+export type DropHandler<K extends DropPayloadKind> = (
+  payload: Extract<DropPayload, { kind: K }>,
+) => Promise<void> | void;
+
+/** Generic handler used internally by the dispatcher's map storage. */
+type AnyDropHandler = (payload: DropPayload) => Promise<void> | void;
+
+export interface DropDispatcherDeps {
+  slab: SlabController;
+  logger: { warn(message: string, context?: Record<string, unknown>): void };
+}
+
+/**
+ * Routes typed `DropPayload` events to per-kind handlers. v1 default
+ * handlers create slab items the user sees on drop; replace via
+ * `registerHandler` to specialize.
+ */
+export class DropDispatcher {
+  private readonly handlers = new Map<DropPayloadKind, AnyDropHandler>();
+
+  constructor(private readonly deps: DropDispatcherDeps) {
+    // v1 defaults — the high-frequency drop intents. file and artifact
+    // are intentionally absent (allowlisted-deferred); registering one
+    // is opt-in until v1.1.
+    this.registerHandler("url", defaultUrlHandler(deps));
+    this.registerHandler("text", defaultTextHandler(deps));
+    this.registerHandler("image", defaultImageHandler(deps));
+  }
+
+  /** Replace the handler for a drop kind. v1 callers usually let defaults stand. */
+  registerHandler<K extends DropPayloadKind>(kind: K, handler: DropHandler<K>): void {
+    this.handlers.set(kind, handler as AnyDropHandler);
+  }
+
+  /**
+   * Dispatch a payload to its registered handler. No-op (warns) when
+   * no handler is registered — happens for `file` / `artifact` until
+   * v1.1 lifts them off the allowlist.
+   */
+  async dispatch(payload: DropPayload): Promise<void> {
+    const handler = this.handlers.get(payload.kind);
+    if (handler === undefined) {
+      this.deps.logger.warn("drop_dispatcher.no_handler", {
+        kind: payload.kind,
+        reason:
+          "no handler registered for this drop kind (allowlisted-deferred or surface forgot to register)",
+      });
+      return;
+    }
+    await handler(payload);
+  }
+}
+
+/**
+ * v1 default URL handler. Opens a `fetch`-kind slab item in `mind`
+ * mode (the user fed it; not motebit-driven), then settles into rest
+ * so the page reference stays as workstation material.
+ */
+function defaultUrlHandler(deps: DropDispatcherDeps): DropHandler<"url"> {
+  return (payload) => {
+    const id = `perception-url-${cryptoRandom()}`;
+    const itemPayload = {
+      url: payload.url,
+      source: "user-drop" as const,
+      sourceFrame: payload.sourceFrame,
+    };
+    deps.slab.openItem({ id, kind: "fetch", mode: "mind", payload: itemPayload });
+    deps.slab.restItem(id, itemPayload);
+  };
+}
+
+/**
+ * v1 default text handler. Opens a `stream`-kind slab item in `mind`
+ * mode carrying the dropped text. MIME defaults to `text/plain`;
+ * markdown drops carry `text/markdown` for downstream rendering.
+ */
+function defaultTextHandler(deps: DropDispatcherDeps): DropHandler<"text"> {
+  return (payload) => {
+    const id = `perception-text-${cryptoRandom()}`;
+    const itemPayload = {
+      text: payload.text,
+      mimeType: payload.mimeType ?? "text/plain",
+      source: "user-drop" as const,
+    };
+    deps.slab.openItem({ id, kind: "stream", mode: "mind", payload: itemPayload });
+    deps.slab.restItem(id, itemPayload);
+  };
+}
+
+/**
+ * v1 default image handler. Opens an `embedding`-kind slab item in
+ * `mind` mode carrying the image metadata (byte length, MIME). The
+ * raw bytes stay attached to the payload for the next AI turn to
+ * forward to a vision-capable provider; the slab renders metadata
+ * only at v1 (rich preview is v1.1).
+ */
+function defaultImageHandler(deps: DropDispatcherDeps): DropHandler<"image"> {
+  return (payload) => {
+    const id = `perception-image-${cryptoRandom()}`;
+    const itemPayload = {
+      byteLength: payload.bytes.byteLength,
+      mimeType: payload.mimeType,
+      source: "user-drop" as const,
+    };
+    deps.slab.openItem({ id, kind: "embedding", mode: "mind", payload: itemPayload });
+    deps.slab.restItem(id, itemPayload);
+  };
+}
+
+/**
+ * `crypto.randomUUID()` is available in Node 18+ and every modern
+ * browser, but the runtime targets older Node fallback paths via
+ * `crypto.getRandomValues`. Inline a minimal v4-shape generator so
+ * the perception module doesn't pull in a UUID dependency.
+ */
+function cryptoRandom(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  // Fallback — not RFC-compliant; sufficient as a slab-item id.
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}

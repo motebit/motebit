@@ -63,6 +63,8 @@ The medium permits information to cross the droplet's surface, but at a rate gov
 
 In code: `@motebit/policy`'s ordinal-band `PolicyGate` IS the information-side surface tension. The eight gates in `validate()` (denylist, delegation scope, risk band, budget, path/domain allowlists, approval, caller trust, sensitivity routing) are the membrane physics applied to information. `SensitivityLevel` (`none → personal → medical → financial → secret`) is the gradient of permeability.
 
+The drag-drop substrate (`@motebit/protocol::perception.ts` and the runtime's `feedPerception`) makes this membrane physics **gesture-visible**. Every drop is bytes crossing the boundary under conditions: the sensitivity classifier inspects the payload, the user's `UserActionAttestation` accompanies the bytes, the policy gate composes with the `EmbodimentSensitivityRouting` posture of the target mode. The motebit-produced converse — artifacts detaching from the slab carrying their `ExecutionReceipt` — is provenance crossing outward under signature. The membrane lets things through, and the things that cross it carry proof of having done so. See [`motebit-computer.md`](motebit-computer.md) §"Perception input — drop kinds and handlers."
+
 This is why Liquescentia is the system-holder, not just a backdrop: the medium's properties define the interface's physics, and the interface's physics determines what the motebit can receive and transmit. The policy gate isn't a feature — it's surface tension manifested in the information dimension.
 
 ### 5. Persistence → identity + memory + dissolution spectrum

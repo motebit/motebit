@@ -437,6 +437,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-mode-contract-readers",
   },
   {
+    name: "check-drop-handlers",
+    defends:
+      "two arms of the drag-drop substrate. (1) Coverage: every `DropPayloadKind` entry in the closed union (`packages/protocol/src/perception.ts`) MUST be either registered in `DropDispatcher`'s constructor (`packages/runtime/src/perception.ts`) OR named on the gate's `ALLOWLIST` with a deferral reason; v1 ships handlers for url/text/image, v1.1-deferred file/artifact sit on the allowlist. (2) Routing: every per-surface file capturing DOM drag-drop events (`document.addEventListener('drop', ...)`, `dataTransfer.getData(...)`, `onDragEnd` etc.) MUST call `runtime.feedPerception(...)`; constructing a prompt string and calling sendMessage is the prompt-backdoor failure mode named in motebit-computer.md §\"Failure modes specific to supervised agency.\" Same agility-as-role pattern as the suite-dispatch / tool-mode / mode-contract-readers gates: closure on the protocol surface + drift gate that asks role questions, not instance questions (invariant #77, added 2026-05-07 as the gesture-ship-companion gate when the v1 drag-drop substrate landed end-to-end across protocol + runtime + web surface).",
+    script: "check-drop-handlers",
+  },
+  {
     name: "check-hardware-attestation-primitives",
     defends:
       'the canonical composer (`composeHardwareAttestationCredential` in @motebit/encryption) and verifier (`verifyHardwareAttestationClaim` in @motebit/crypto) are the only way to build or parse a HardwareAttestationClaim-carrying AgentTrustCredential — inline VC composers (type-tuple ["VerifiableCredential", "AgentTrustCredential"] + `hardware_attestation:` subject) and inline attestation_receipt parsers (.split(\'.\') / base64url decode / P-256 verify) are CI failures (invariant #37, added 2026-04-22 after the CLI+desktop consolidation and ahead of the iOS / Expo mobile surface landing — extends the protocol-primitive doctrine to hardware-attestation judgment, prevents the third inline copy of the VC envelope and the first inline copy of the receipt parser)',

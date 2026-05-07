@@ -2381,6 +2381,17 @@ export { COMPUTER_ACTION_KINDS, COMPUTER_FAILURE_REASONS } from "./computer-use.
 
 export type { ToolMode } from "./tool-mode.js";
 export { TOOL_MODES, toolModePriority } from "./tool-mode.js";
+
+// ── Perception input (drag-drop substrate) ──────────────────────
+// Closed categorical drop kinds; within-kind handlers register in-
+// runtime per surface. Same agility-as-role pattern as ToolMode.
+export type {
+  DropPayloadKind,
+  DropTarget,
+  DropPayload,
+  UserActionAttestation,
+} from "./perception.js";
+export { resolveDropTarget } from "./perception.js";
 import type { ToolMode } from "./tool-mode.js";
 
 // ── Skill manifest + envelope (spec/skills-v1.md) ────────────────

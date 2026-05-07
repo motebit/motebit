@@ -1100,6 +1100,46 @@ export interface DragAction {
     readonly to: ComputerPoint;
 }
 
+// @public
+export type DropPayload = {
+    kind: "url";
+    url: string;
+    sourceFrame?: string;
+    target?: DropTarget;
+    attestation: UserActionAttestation;
+} | {
+    kind: "text";
+    text: string;
+    mimeType?: string;
+    target?: DropTarget;
+    attestation: UserActionAttestation;
+} | {
+    kind: "image";
+    bytes: Uint8Array;
+    mimeType: string;
+    target?: DropTarget;
+    attestation: UserActionAttestation;
+} | {
+    kind: "file";
+    bytes: Uint8Array;
+    filename: string;
+    mimeType: string;
+    target?: DropTarget;
+    attestation: UserActionAttestation;
+} | {
+    kind: "artifact";
+    receiptHash: string;
+    payloadJson: string;
+    target?: DropTarget;
+    attestation: UserActionAttestation;
+};
+
+// @public
+export type DropPayloadKind = "url" | "text" | "image" | "file" | "artifact";
+
+// @public
+export type DropTarget = "slab" | "creature" | "ambient";
+
 // @public (undocumented)
 export interface Edge<T> {
     // (undocumented)
@@ -2289,6 +2329,9 @@ export interface ReputationCredentialSubject {
 }
 
 // @public
+export function resolveDropTarget(payload: DropPayload): DropTarget;
+
+// @public
 export type RetentionCeilingDays = number;
 
 // @public
@@ -3118,6 +3161,18 @@ export interface TypeAction {
     readonly per_char_delay_ms?: number;
     // (undocumented)
     readonly text: string;
+}
+
+// @public
+export interface UserActionAttestation {
+    // (undocumented)
+    readonly contentHashSha256?: string;
+    // (undocumented)
+    readonly kind: "user-drag";
+    // (undocumented)
+    readonly surface: "web" | "desktop" | "mobile" | "spatial" | "cli";
+    // (undocumented)
+    readonly timestamp: number;
 }
 
 // @public (undocumented)
