@@ -1518,6 +1518,18 @@ export class MotebitRuntime {
           this.slab.openItem({
             id: delegationItemId,
             kind: "delegation",
+            // Stamp `peer_viewport` explicitly — `defaultEmbodimentMode`
+            // also resolves "delegation" to "peer_viewport", but every
+            // other mode-bearing kind sets mode at the construction
+            // site (fetch+virtual_browser, memory+mind). Implicit
+            // resolution leaves the contract dependent on a fallback
+            // helper rather than the source of truth at open time.
+            // Doctrine: motebit-computer.md §"peer_viewport" — driver
+            // is the peer agent, observer is motebit (and the user
+            // transitively), source is the peer-receipt itself,
+            // consent is the signed delegation (the receipt IS the
+            // proof — no live re-fire).
+            mode: "peer_viewport",
             payload: {
               server: chunk.server,
               tool: chunk.tool,

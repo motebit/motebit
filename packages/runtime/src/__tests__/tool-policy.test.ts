@@ -45,6 +45,19 @@ describe("toolPolicy", () => {
     expect(toolPolicy("read_file").mode).toBe("tool_result");
   });
 
+  it("routes delegate_to_agent to delegation kind with peer_viewport mode (detach end-state)", () => {
+    // Doctrine: motebit-computer.md §"peer_viewport" — a signed
+    // delegation receipt IS the proof; pinches off the slab as a
+    // receipt artifact in the scene. The streaming pipeline opens
+    // delegation slab items explicitly with the same triple
+    // (motebit-runtime.ts:1518); this row is the safe-floor for any
+    // future caller reaching the tool through the registry alone.
+    const p = toolPolicy("delegate_to_agent");
+    expect(p.kind).toBe("delegation");
+    expect(p.mode).toBe("peer_viewport");
+    expect(p.endState).toBe("detach");
+  });
+
   it("routes computer to fetch kind with tool_result mode (rest end-state)", () => {
     // Doctrine: a computer-use screenshot is the page the motebit is
     // looking at — same fetch slab kind that read_url uses, so a

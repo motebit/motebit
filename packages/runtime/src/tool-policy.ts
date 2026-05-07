@@ -99,6 +99,20 @@ const TOOL_POLICIES: ReadonlyMap<string, ToolPolicy> = new Map<string, ToolPolic
   // Rests as referenceable nodes while the turn works with them.
   ["recall_memories", { kind: "memory", mode: "mind", endState: "rest" }],
   ["search_memories", { kind: "memory", mode: "mind", endState: "rest" }],
+
+  // peer_viewport — delegation to a federated peer motebit. The
+  // streaming pipeline opens the slab item explicitly on
+  // `delegation_start` (motebit-runtime.ts L1518), so this row is
+  // the safe-floor for any future caller that reaches the tool
+  // through the registry alone (e.g. an MCP-imported delegate_to_agent
+  // surfaced at the same name). End-state is `detach`: a returned
+  // signed receipt is durable proof — pinches to a receipt artifact
+  // in the scene rather than dissolving. Doctrine:
+  // motebit-computer.md §"peer_viewport" — "the receipt is the
+  // proof." Sensitivity is `tier-bounded-by-source` (the source
+  // being the peer-receipt itself) which composes correctly through
+  // `getEffectiveSessionSensitivity`.
+  ["delegate_to_agent", { kind: "delegation", mode: "peer_viewport", endState: "detach" }],
 ]);
 
 /**
