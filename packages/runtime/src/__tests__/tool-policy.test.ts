@@ -45,6 +45,20 @@ describe("toolPolicy", () => {
     expect(toolPolicy("read_file").mode).toBe("tool_result");
   });
 
+  it("routes computer to fetch kind with tool_result mode (rest end-state)", () => {
+    // Doctrine: a computer-use screenshot is the page the motebit is
+    // looking at — same fetch slab kind that read_url uses, so a
+    // session that mixes navigation + screenshot stays on one card.
+    // Mode is `tool_result` (not virtual_browser / desktop_drive)
+    // because the policy registry is name-keyed and surface-blind;
+    // the per-surface mode upgrade is deferred until a per-item
+    // dispatcher hint exists.
+    const p = toolPolicy("computer");
+    expect(p.kind).toBe("fetch");
+    expect(p.mode).toBe("tool_result");
+    expect(p.endState).toBe("rest");
+  });
+
   it("falls back to dissolve + tool_call + tool_result for unknown tools", () => {
     // The safe floor: unknown tools get a generic card that ripples
     // away on completion — no stale plumbing left on the slab.

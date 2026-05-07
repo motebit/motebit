@@ -48,6 +48,36 @@ const TOOL_POLICIES: ReadonlyMap<string, ToolPolicy> = new Map<string, ToolPolic
   // the user dismisses it.
   ["read_url", { kind: "fetch", mode: "virtual_browser", endState: "rest" }],
   ["fetch_url", { kind: "fetch", mode: "virtual_browser", endState: "rest" }],
+  // computer — Motebit's screenshot/click/type primitive. Renders on
+  // the slab as a fetch-kind card so screenshot observations land in
+  // the same reader/image-frame surface the user is already watching
+  // (kind=fetch picks up the image-srcdoc renderer when the result
+  // shape is `{ kind: "screenshot", bytes_base64, ... }`).
+  //
+  // Mode is `tool_result` here, **not** `virtual_browser` /
+  // `desktop_drive`, even though the doctrinal embodiment differs by
+  // surface (cloud Chromium → virtual_browser; user's real OS →
+  // desktop_drive). The tool-policy registry is name-keyed and
+  // surface-blind, so a single mode would mis-tag one surface — and
+  // the sensitivity-routing implications are real: virtual_browser
+  // is `tier-bounded-by-source`, desktop_drive is `all-tiers`. Safe-
+  // floor `tool_result` (tier-bounded-by-tool) lets the OCR
+  // classifier on every screenshot do the load-bearing redaction;
+  // the per-surface mode upgrade is deferred until the runtime
+  // gains a per-item dispatcher hint (motebit-computer.md §"Mode
+  // contract" already names this graduation: "the runtime can
+  // override per item").
+  //
+  // GRADUATION TRIGGER: when the slab-item open path threads the
+  // dispatcher's mode forward (or a per-invocation mode hint lands
+  // alongside `chunk.context` in the streaming pipeline), promote
+  // this row to surface-aware: cloud browser screenshots stamp
+  // `virtual_browser` (tier-bounded-by-source) and desktop computer
+  // observations stamp `desktop_drive` (all-tiers). Until then,
+  // this is a known temporary floor — sensitivity routing is honest
+  // (tier-bounded-by-tool composes), but the embodiment-mode
+  // contract under-claims the cloud-browser case.
+  ["computer", { kind: "fetch", mode: "tool_result", endState: "rest" }],
 
   // tool_result — search is not a browser viewport, but the results
   // are still working material worth resting (user may re-read).

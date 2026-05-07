@@ -589,6 +589,53 @@ interface FetchCardParts {
 
 function applyFetchPayload(payload: unknown, parts: FetchCardParts): void {
   const p = payload as { context?: string; status?: string; result?: unknown } | null;
+
+  // Screenshot observation from the `computer` tool — the result is
+  // `{ kind: "screenshot", bytes_base64, image_format, width, height,
+  // captured_at }` per `spec/computer-use-v1.md` §5.2. Route to the
+  // image-srcdoc path so the slab renders the page the motebit is
+  // *currently looking at* — not text describing it. Doctrine:
+  // `motebit-computer.md` §"Eye — perception": "the page _appears_
+  // on the slab as the motebit reads it." The browser-frame and the
+  // article-page paths share one slab card kind so a session that
+  // mixes navigation + screenshot observation stays on one surface.
+  const screenshot = extractScreenshot(p?.result);
+  if (screenshot !== null) {
+    parts.hostEl.textContent = "browser";
+    parts.pathEl.textContent =
+      screenshot.width > 0 && screenshot.height > 0
+        ? `${screenshot.width}×${screenshot.height}`
+        : "";
+    parts.metaEl.textContent =
+      typeof screenshot.captured_at === "number" ? formatScreenshotAge(screenshot.captured_at) : "";
+
+    if (parts.favicon.dataset.host !== "__screenshot__") {
+      parts.favicon.dataset.host = "__screenshot__";
+      // Inline data-URI favicon — no network call, no leak. A small
+      // mono camera glyph hints the source kind without claiming a
+      // page-favicon meaning.
+      parts.favicon.src =
+        "data:image/svg+xml;utf8," +
+        encodeURIComponent(
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="rgba(95,115,155,0.78)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><circle cx="12" cy="12.5" r="3"/></svg>',
+        );
+    }
+    if (parts.chrome.dataset.sourceUrl !== "__screenshot__") {
+      parts.chrome.dataset.sourceUrl = "__screenshot__";
+      parts.chrome.onclick = null;
+    }
+
+    // Stable cache key so we don't re-assign srcdoc on every tick. The
+    // bytes are large (~50-200 KB base64) and re-assigning srcdoc
+    // forces an iframe reload that flickers.
+    const cacheKey = `${screenshot.captured_at ?? 0}:${screenshot.width}x${screenshot.height}`;
+    if (parts.frame.dataset.content !== cacheKey) {
+      parts.frame.dataset.content = cacheKey;
+      parts.frame.srcdoc = buildScreenshotSrcdoc(screenshot);
+    }
+    return;
+  }
+
   const raw = p?.context ?? "";
   const parsed = parseUrl(raw);
   parts.hostEl.textContent = parsed.host || (p?.status === "calling" ? "reading" : "");
@@ -627,6 +674,78 @@ function applyFetchPayload(payload: unknown, parts: FetchCardParts): void {
     parts.frame.dataset.content = preview;
     parts.frame.srcdoc = srcdoc;
   }
+}
+
+export interface ScreenshotPayload {
+  readonly bytes_base64: string;
+  readonly image_format: string;
+  readonly width: number;
+  readonly height: number;
+  readonly captured_at?: number;
+}
+
+/**
+ * Detect a screenshot-observation result and return it in a typed
+ * shape, or `null` if the result isn't a screenshot. The shape match
+ * is duck-typed (`kind === "screenshot"` + non-empty `bytes_base64`)
+ * so a malformed/empty payload never reaches the renderer.
+ *
+ * Mirrors the wire shape `services/browser-sandbox` returns from
+ * `POST /sessions/:id/actions` for `kind: "screenshot"` actions —
+ * see `services/browser-sandbox/src/action-executor.ts:doScreenshot`.
+ *
+ * Exported to mirror `apps/web/src/ui/slab-items.ts` (sibling
+ * boundary) and for unit-test reach.
+ */
+export function extractScreenshot(result: unknown): ScreenshotPayload | null {
+  if (result === null || typeof result !== "object") return null;
+  const r = result as Record<string, unknown>;
+  if (r.kind !== "screenshot") return null;
+  const bytes = r.bytes_base64;
+  if (typeof bytes !== "string" || bytes.length === 0) return null;
+  const format = typeof r.image_format === "string" ? r.image_format : "png";
+  const width = typeof r.width === "number" ? r.width : 0;
+  const height = typeof r.height === "number" ? r.height : 0;
+  const capturedAt = typeof r.captured_at === "number" ? r.captured_at : undefined;
+  return {
+    bytes_base64: bytes,
+    image_format: format,
+    width,
+    height,
+    captured_at: capturedAt,
+  };
+}
+
+/**
+ * Build a self-contained HTML doc whose only content is the
+ * screenshot, scaled to fit the frame. The iframe sandbox already
+ * blocks scripts; the data-URI img cannot fetch external resources.
+ * Inline `<style>` keeps zero-trust shape.
+ *
+ * Exported to mirror `apps/web/src/ui/slab-items.ts` (sibling
+ * boundary) and for unit-test reach.
+ */
+export function buildScreenshotSrcdoc(screenshot: ScreenshotPayload): string {
+  const mime = `image/${screenshot.image_format === "jpeg" ? "jpeg" : "png"}`;
+  const dataUri = `data:${mime};base64,${screenshot.bytes_base64}`;
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    html, body { margin: 0; padding: 0; background: rgba(245, 247, 252, 1); height: 100%; }
+    body { display: flex; align-items: flex-start; justify-content: center; }
+    img { width: 100%; height: auto; display: block; }
+  </style></head><body><img src="${dataUri}" alt="Browser viewport"></body></html>`;
+}
+
+/**
+ * Compose a meta-line age label for the screenshot. Brief — same
+ * footprint as the reading-time label on URL fetches so the chrome
+ * row doesn't reflow.
+ */
+function formatScreenshotAge(capturedAt: number): string {
+  const delta = Math.max(0, Date.now() - capturedAt);
+  if (delta < 1000) return "just now";
+  if (delta < 60_000) return `${Math.floor(delta / 1000)}s ago`;
+  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
+  return `${Math.floor(delta / 3_600_000)}h ago`;
 }
 
 /**
