@@ -26,7 +26,7 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # Typecheck/lint/test scoped to affected packages — cheaper than full run;
   # CI's check job runs these unfiltered across the whole graph.
   #
-  # `--concurrency=6` caps turbo's parallel task count. Without it, a change
+  # `--concurrency=2` caps turbo's parallel task count. Without it, a change
   # low in the dependency graph (crypto, render-engine, runtime) pulls in a
   # ~30-package transitive closure and turbo runs ~10 tasks at once, each
   # spawning its own vitest worker pool. On a 16GB machine this
@@ -35,6 +35,12 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # correct tests false-fail under contention. The cap bounds total in-flight
   # tasks to a count this host can sustain without contention spikes.
   #
+  # Concurrency=6 was the prior setting and still flaked consistently on
+  # this host (session 2026-05-07 saw `@motebit/web#test` fail twice in a
+  # row under turbo at concurrency=6; identical tests passed standalone and
+  # at concurrency=1). Empirical lower bound for reliability on M1 Pro 16GB
+  # is 2. Slower wall-clock (~1m vs ~30s) but no false-fail flakes.
+  #
   # This is the right level to solve it — one config line, harness-scoped,
   # reversible with one edit. NOT per-test timeout bumps: those embed
   # per-machine workarounds in test files that outlive the hardware and
@@ -42,6 +48,6 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # Raise this number on a more capable host or delete the flag entirely.
   # CI itself skips this hook (`$CI` check at the top of the file), so
   # production CI runs at its own full parallelism regardless.
-  pnpm turbo run typecheck lint test --filter="...[origin/main]" --concurrency=6
+  pnpm turbo run typecheck lint test --filter="...[origin/main]" --concurrency=2
   pnpm format:check
 fi
