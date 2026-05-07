@@ -7,7 +7,7 @@ vi.mock("@motebit/memory-graph", async () => {
 });
 
 import { runTurn, runTurnStreaming } from "../loop";
-import type { MotebitLoopDependencies, AgenticChunk } from "../loop";
+import type { MotebitLoopDependencies, AgenticChunk, LoopMemoryGovernor } from "../loop";
 import { AnthropicProvider } from "../index";
 import type { AnthropicProviderConfig, StreamingProvider } from "../index";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
@@ -1002,3 +1002,156 @@ async function iter(deps: MotebitLoopDependencies, text: string): Promise<unknow
     return err;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Memory candidate sensitivity floor — fourth-egress closure
+// ---------------------------------------------------------------------------
+//
+// The runtime's effective session sensitivity (session × tier-bounded
+// slab items) gets passed into the loop via
+// `MotebitLoopDependencies.getEffectiveSensitivity`. The loop floors
+// every memory candidate at that tier before the governor evaluates,
+// so a `secret`-effective turn cannot persist a candidate the model
+// classified as `none`. Closes the fourth-egress shape: sensitive
+// turns leaking benign-tagged memories into low-tier sessions later.
+
+describe("runTurnStreaming — memory candidate sensitivity floor", () => {
+  async function collectMemoriesFormed(
+    deps: MotebitLoopDependencies,
+    text: string,
+  ): Promise<Array<{ content: string; sensitivity: SensitivityLevel }>> {
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, text)) {
+      chunks.push(chunk);
+    }
+    const result = chunks.find((c) => c.type === "result") as
+      | {
+          type: "result";
+          result: {
+            memoriesFormed: Array<{ content: string; sensitivity: SensitivityLevel }>;
+          };
+        }
+      | undefined;
+    return result?.result.memoriesFormed ?? [];
+  }
+
+  it("floors None-classified candidate to Medical when effective tier is Medical", async () => {
+    const deps = makeDepsWithProvider(
+      makeMockProvider([
+        {
+          text: "Got it.",
+          confidence: 0.8,
+          memory_candidates: [
+            {
+              content: "User prefers concise responses",
+              confidence: 0.9,
+              sensitivity: SensitivityLevel.None,
+            },
+          ],
+          state_updates: {},
+        },
+      ]),
+    );
+    deps.getEffectiveSensitivity = () => SensitivityLevel.Medical;
+
+    const formed = await collectMemoriesFormed(deps, "Be concise.");
+    expect(formed).toHaveLength(1);
+    expect(formed[0]!.sensitivity).toBe(SensitivityLevel.Medical);
+  });
+
+  it("does NOT lower a Secret-classified candidate when effective tier is None", async () => {
+    const deps = makeDepsWithProvider(
+      makeMockProvider([
+        {
+          text: "Saved.",
+          confidence: 0.8,
+          memory_candidates: [
+            {
+              content: "User's API key has rotation policy",
+              confidence: 0.9,
+              sensitivity: SensitivityLevel.Secret,
+            },
+          ],
+          state_updates: {},
+        },
+      ]),
+    );
+    deps.getEffectiveSensitivity = () => SensitivityLevel.None;
+
+    const formed = await collectMemoriesFormed(deps, "Note rotation policy.");
+    if (formed.length > 0) {
+      expect(formed[0]!.sensitivity).toBe(SensitivityLevel.Secret);
+    }
+    // (formMemoriesFromCandidates may filter Secret without a governor
+    // present; the assertion guards: IF a memory persisted, it stayed
+    // Secret. The point is the floor never lowers tier.)
+  });
+
+  it("floors candidates with no effective-tier getter to model tier (backward-compat)", async () => {
+    const deps = makeDepsWithProvider(
+      makeMockProvider([
+        {
+          text: "Got it.",
+          confidence: 0.8,
+          memory_candidates: [
+            {
+              content: "User likes hiking",
+              confidence: 0.9,
+              sensitivity: SensitivityLevel.None,
+            },
+          ],
+          state_updates: {},
+        },
+      ]),
+    );
+    // No getEffectiveSensitivity — older deps shape; floor is a no-op.
+
+    const formed = await collectMemoriesFormed(deps, "I like hiking.");
+    expect(formed).toHaveLength(1);
+    expect(formed[0]!.sensitivity).toBe(SensitivityLevel.None);
+  });
+
+  it("BYPASS REGRESSION: Secret-effective turn cannot persist a None-tagged memory", async () => {
+    // Money test for the fourth-egress closure. Pre-fix: a turn at
+    // Secret-effective sensitivity emitting a candidate the model
+    // classified as None would persist at None. Future None-tier
+    // sessions would retrieve the leaked memory (their
+    // CONTEXT_SAFE_SENSITIVITY filter sees only the model's chosen
+    // tier). Post-fix: the floor raises the candidate to Secret;
+    // when a memoryGovernor is present (production wiring), it
+    // rejects Secret-tier candidates outright.
+    const rejectingGovernor: LoopMemoryGovernor = {
+      evaluate: (cands) =>
+        cands.map((c) => ({
+          candidate: c,
+          memoryClass: c.sensitivity === SensitivityLevel.Secret ? "rejected" : "persistent",
+          reason:
+            c.sensitivity === SensitivityLevel.Secret ? "Sensitivity SECRET — never stored" : "ok",
+        })),
+    };
+    const deps = makeDepsWithProvider(
+      makeMockProvider([
+        {
+          text: "Saved.",
+          confidence: 0.8,
+          memory_candidates: [
+            {
+              content: "User dropped a benign-looking string",
+              confidence: 0.9,
+              // Model's content-only assessment: None.
+              sensitivity: SensitivityLevel.None,
+            },
+          ],
+          state_updates: {},
+        },
+      ]),
+    );
+    deps.memoryGovernor = rejectingGovernor;
+    // Runtime knows the session is effectively Secret (e.g., a
+    // Secret-tier slab item from a tool result is on the slab).
+    deps.getEffectiveSensitivity = () => SensitivityLevel.Secret;
+
+    const formed = await collectMemoriesFormed(deps, "Note this.");
+    expect(formed).toHaveLength(0); // governor rejected the floored Secret candidate
+  });
+});

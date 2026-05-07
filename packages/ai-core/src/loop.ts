@@ -152,6 +152,28 @@ export interface MotebitLoopDependencies {
   policyGate?: LoopPolicyGate;
   memoryGovernor?: LoopMemoryGovernor;
   consolidationProvider?: ConsolidationProvider;
+  /**
+   * Optional getter returning the runtime's effective session
+   * sensitivity at memory-formation time — composed from the explicit
+   * session tier AND any tier-bounded slab items (drops, classified
+   * tool outputs). When provided, the loop floors each memory
+   * candidate's sensitivity at this tier before passing the candidate
+   * to the governor: a candidate the model assessed as `none` from a
+   * `secret`-effective session lands as `secret`, and the governor's
+   * `Sensitivity level is SECRET. Never stored.` arm rejects it.
+   *
+   * Closes the fourth-egress shape (after session-elevated state,
+   * drops, and tool outputs): sensitive content from a high-tier turn
+   * leaking into the memory graph un-tagged, then retrievable from
+   * future low-tier sessions whose `CONTEXT_SAFE_SENSITIVITY` filter
+   * sees only the model's chosen tier.
+   *
+   * Doctrine: `motebit-computer.md` §"Mode contract" + the closure of
+   * the `sensitivity` ALLOWLIST entry in `check-mode-contract-readers`.
+   * Optional because in-tree tests fixture the loop without a runtime;
+   * production wiring threads `runtime.getEffectiveSessionSensitivity`.
+   */
+  getEffectiveSensitivity?: () => SensitivityLevel;
 }
 
 export interface TurnResult {
@@ -326,6 +348,33 @@ function toolContext(name: string, args: Record<string, unknown>): string | unde
       return typeof args.prompt === "string" ? `"${args.prompt.slice(0, 60)}"` : undefined;
     default:
       return undefined;
+  }
+}
+
+/**
+ * Ordinal rank for `SensitivityLevel`: `none < personal < medical <
+ * financial < secret`. Used to floor memory-candidate sensitivity at
+ * the runtime's effective session tier before the governor evaluates
+ * — see `MotebitLoopDependencies.getEffectiveSensitivity` and the
+ * floor block in `runTurnStreaming`. Mirrors the private
+ * `rankSensitivity` in `@motebit/runtime/motebit-runtime.ts` and the
+ * `LEVEL_RANK` table in `@motebit/policy-invariants`. Kept private to
+ * this module so changes to the SensitivityLevel ordering remain a
+ * single-file concern at each consumer; if a third reader appears,
+ * the helper graduates to `@motebit/policy-invariants`.
+ */
+function rankSensitivity(level: SensitivityLevel): number {
+  switch (level) {
+    case SensitivityLevel.None:
+      return 0;
+    case SensitivityLevel.Personal:
+      return 1;
+    case SensitivityLevel.Medical:
+      return 2;
+    case SensitivityLevel.Financial:
+      return 3;
+    case SensitivityLevel.Secret:
+      return 4;
   }
 }
 
@@ -864,6 +913,26 @@ export async function* runTurnStreaming(
       ...c,
       confidence: Math.min(c.confidence, MAX_TOOL_TURN_CONFIDENCE),
     }));
+  }
+  // Effective-tier floor: when the runtime reports an effective
+  // session sensitivity above `none`, every candidate this turn
+  // produced is floored to at least that tier. The model classifies
+  // candidate sensitivity from content; the runtime knows what
+  // sensitive material was in scope (session-elevated state, drops,
+  // classified tool outputs). Without this floor, a `secret`-
+  // effective turn could emit candidates the model assessed as
+  // `none` (because the candidate text itself reads benign), the
+  // memory governor's `none` path persists them, and a later
+  // none-tier session retrieves the leaked memory. Conservative
+  // by design — over-restricting forms recoverable by re-elevating
+  // and re-forming, while under-restricting leaks structurally.
+  const effectiveTier = deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
+  if (rankSensitivity(effectiveTier) > rankSensitivity(SensitivityLevel.None)) {
+    rawCandidates = rawCandidates.map((c) =>
+      rankSensitivity(c.sensitivity) >= rankSensitivity(effectiveTier)
+        ? c
+        : { ...c, sensitivity: effectiveTier },
+    );
   }
   const candidates = deps.memoryGovernor
     ? rawCandidates

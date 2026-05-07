@@ -2643,6 +2643,14 @@ export class MotebitRuntime {
         policyGate: this.policy,
         memoryGovernor: this.memoryGovernor,
         consolidationProvider,
+        // Memory-candidate sensitivity floor. The loop reads this at
+        // candidate-processing time and floors each candidate to at
+        // least the runtime's effective tier before the governor
+        // evaluates. Closes the fourth-egress shape: sensitive turns
+        // forming benign-tagged memories that leak into low-tier
+        // sessions later. See `getEffectiveSessionSensitivity` and
+        // `MotebitLoopDependencies.getEffectiveSensitivity` JSDoc.
+        getEffectiveSensitivity: () => this.getEffectiveSessionSensitivity(),
       };
     }
   }
