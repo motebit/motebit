@@ -7,7 +7,7 @@
  */
 
 import type { ConversationMessage, ConversationStoreAdapter } from "@motebit/sdk";
-import { SensitivityLevel } from "@motebit/sdk";
+import { SensitivityLevel, maxSensitivity, sensitivityPermits } from "@motebit/sdk";
 import type { StreamingProvider, ContextBudget, TaskType } from "@motebit/ai-core";
 import { trimConversation, summarizeConversation, shouldSummarize } from "@motebit/ai-core";
 import type { TaskRouter } from "@motebit/ai-core";
@@ -15,28 +15,6 @@ import {
   searchConversationMessages,
   type ConversationMessageRecord,
 } from "./conversation-search.js";
-
-/**
- * Ordinal rank for `SensitivityLevel` — `none < personal < medical <
- * financial < secret`. Used to floor persisted message sensitivity at
- * `max(defaultSensitivity, runtime_effective_tier)`. Mirrors the
- * private helpers in `motebit-runtime.ts` and `ai-core/loop.ts`. When
- * a fourth reader appears, this graduates to `@motebit/policy-invariants`.
- */
-function rankSensitivity(level: SensitivityLevel): number {
-  switch (level) {
-    case SensitivityLevel.None:
-      return 0;
-    case SensitivityLevel.Personal:
-      return 1;
-    case SensitivityLevel.Medical:
-      return 2;
-    case SensitivityLevel.Financial:
-      return 3;
-    case SensitivityLevel.Secret:
-      return 4;
-  }
-}
 
 /** Strip internal tags (state, thinking, memory) before persisting — display-only, not content. */
 function stripInternalTags(text: string): string {
@@ -138,7 +116,7 @@ export class ConversationManager {
   private resolveMessageSensitivity(): SensitivityLevel {
     const baseline = this.deps.defaultSensitivity ?? SensitivityLevel.Personal;
     const effective = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
-    return rankSensitivity(effective) > rankSensitivity(baseline) ? effective : baseline;
+    return maxSensitivity(baseline, effective);
   }
 
   // --- Bootstrap ---
@@ -254,11 +232,9 @@ export class ConversationManager {
   trimmed(): ConversationMessage[] {
     const summary = this.getStoredSummary();
     const effective = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
-    const effectiveRank = rankSensitivity(effective);
-    const filtered = this.history.filter((msg) => {
-      if (msg.sensitivity == null) return true;
-      return rankSensitivity(msg.sensitivity) <= effectiveRank;
-    });
+    const filtered = this.history.filter(
+      (msg) => msg.sensitivity == null || sensitivityPermits(effective, msg.sensitivity),
+    );
     return trimConversation(filtered, CONVERSATION_BUDGET, summary);
   }
 

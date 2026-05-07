@@ -177,6 +177,16 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "getSuiteEntry",
     // Tool-mode taxonomy — pure sort-priority lookup over a closed union
     "toolModePriority",
+    // Sensitivity ladder algebra — pure math over the closed
+    // SensitivityLevel enum. The ladder is interop law (every
+    // implementation must agree on which tier dominates which);
+    // hosting the math here lets every consumer derive comparison
+    // decisions from one canonical source. Past trigger as of
+    // 2026-05-07: rankSensitivity had three local copies + a
+    // fourth-shaped table in policy-invariants.
+    "rankSensitivity",
+    "maxSensitivity",
+    "sensitivityPermits",
     // Drag-drop perception — pure default-target resolver over a closed union
     "resolveDropTarget",
   ]),

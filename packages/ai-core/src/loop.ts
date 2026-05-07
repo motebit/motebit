@@ -11,7 +11,7 @@ import type {
   TurnContext,
   ConversationMessage,
 } from "@motebit/sdk";
-import { EventType, SensitivityLevel } from "@motebit/sdk";
+import { EventType, SensitivityLevel, rankSensitivity } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, ConsolidationProvider } from "@motebit/memory-graph";
 import { embedText, formMemoriesFromCandidates } from "@motebit/memory-graph";
@@ -348,33 +348,6 @@ function toolContext(name: string, args: Record<string, unknown>): string | unde
       return typeof args.prompt === "string" ? `"${args.prompt.slice(0, 60)}"` : undefined;
     default:
       return undefined;
-  }
-}
-
-/**
- * Ordinal rank for `SensitivityLevel`: `none < personal < medical <
- * financial < secret`. Used to floor memory-candidate sensitivity at
- * the runtime's effective session tier before the governor evaluates
- * — see `MotebitLoopDependencies.getEffectiveSensitivity` and the
- * floor block in `runTurnStreaming`. Mirrors the private
- * `rankSensitivity` in `@motebit/runtime/motebit-runtime.ts` and the
- * `LEVEL_RANK` table in `@motebit/policy-invariants`. Kept private to
- * this module so changes to the SensitivityLevel ordering remain a
- * single-file concern at each consumer; if a third reader appears,
- * the helper graduates to `@motebit/policy-invariants`.
- */
-function rankSensitivity(level: SensitivityLevel): number {
-  switch (level) {
-    case SensitivityLevel.None:
-      return 0;
-    case SensitivityLevel.Personal:
-      return 1;
-    case SensitivityLevel.Medical:
-      return 2;
-    case SensitivityLevel.Financial:
-      return 3;
-    case SensitivityLevel.Secret:
-      return 4;
   }
 }
 
@@ -927,11 +900,15 @@ export async function* runTurnStreaming(
   // by design — over-restricting forms recoverable by re-elevating
   // and re-forming, while under-restricting leaks structurally.
   const effectiveTier = deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
-  if (rankSensitivity(effectiveTier) > rankSensitivity(SensitivityLevel.None)) {
+  if (effectiveTier !== SensitivityLevel.None) {
+    // Floor each candidate at the effective tier — keep candidates already
+    // at or above the floor; raise the rest. Direct rank comparison reads
+    // cleaner than the `sensitivityPermits` wrapper here, since the
+    // semantic is "is the candidate at or above the floor?" not "does
+    // an upper bound permit a candidate?"
+    const effectiveRank = rankSensitivity(effectiveTier);
     rawCandidates = rawCandidates.map((c) =>
-      rankSensitivity(c.sensitivity) >= rankSensitivity(effectiveTier)
-        ? c
-        : { ...c, sensitivity: effectiveTier },
+      rankSensitivity(c.sensitivity) >= effectiveRank ? c : { ...c, sensitivity: effectiveTier },
     );
   }
   const candidates = deps.memoryGovernor

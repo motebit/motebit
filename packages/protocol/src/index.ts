@@ -2404,6 +2404,14 @@ export type {
   SensitivityGateFiredPayload,
 } from "./perception.js";
 export { resolveDropTarget } from "./perception.js";
+
+// Sensitivity ladder algebra — pure math over the closed
+// `SensitivityLevel` enum. Single source of truth for ordering and
+// composition: every consumer derives comparison decisions through
+// `rankSensitivity` so a future tier insertion remains a one-file
+// change at the protocol layer. Doctrine: see ./sensitivity.ts header.
+export { rankSensitivity, maxSensitivity, sensitivityPermits } from "./sensitivity.js";
+
 import type { ToolMode } from "./tool-mode.js";
 
 // ── Skill manifest + envelope (spec/skills-v1.md) ────────────────

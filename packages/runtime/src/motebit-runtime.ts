@@ -28,7 +28,7 @@ import type {
   DeletionCertificate,
 } from "@motebit/sdk";
 import { signToolInvocationReceipt, hashToolPayload } from "@motebit/crypto";
-import { EventType, AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
+import { EventType, AgentTrustLevel, SensitivityLevel, rankSensitivity } from "@motebit/sdk";
 import type {
   ProviderMode,
   DropPayload,
@@ -109,28 +109,6 @@ export class SovereignTierRequiredError extends Error {
  * the `message` carries the human-readable form. Same fail-closed
  * pattern as `SovereignTierRequiredError`.
  */
-/**
- * Ordinal rank for `SensitivityLevel` — `none < personal < medical
- * < financial < secret`. Used to compute the max tier across the
- * session-level setting and slab items in tier-bounded-by-source
- * modes. Mirrors the private `LEVEL_RANK` table in
- * `@motebit/policy-invariants/computer-sensitivity.ts`; kept here
- * private to the runtime so it stays a single-file concern.
- */
-function rankSensitivity(level: SensitivityLevel): number {
-  switch (level) {
-    case SensitivityLevel.None:
-      return 0;
-    case SensitivityLevel.Personal:
-      return 1;
-    case SensitivityLevel.Medical:
-      return 2;
-    case SensitivityLevel.Financial:
-      return 3;
-    case SensitivityLevel.Secret:
-      return 4;
-  }
-}
 
 export class DropTargetGovernanceRequiredError extends Error {
   readonly code = "DROP_TARGET_GOVERNANCE_REQUIRED" as const;
@@ -3097,10 +3075,11 @@ export class MotebitRuntime {
    */
   assertSensitivityPermitsAiCall(entry: SensitivityGateEntry, toolName?: string): void {
     const { effective, elevatedByItem } = this.computeEffectiveSensitivityContext();
-    const sensitive =
-      effective === SensitivityLevel.Medical ||
-      effective === SensitivityLevel.Financial ||
-      effective === SensitivityLevel.Secret;
+    // The doctrine threshold: medical/financial/secret never reach
+    // external AI. Expressed via the protocol's rank ordering rather
+    // than enum equality so a future tier insertion remains a
+    // single-file change at the protocol layer.
+    const sensitive = rankSensitivity(effective) >= rankSensitivity(SensitivityLevel.Medical);
     if (sensitive && !this.providerIsSovereign()) {
       const providerMode = this._providerMode ?? "unset";
       // Emit BEFORE throw so the audit trail is durable even when the

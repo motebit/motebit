@@ -1746,6 +1746,9 @@ export const MAX_RETENTION_DAYS_BY_SENSITIVITY: Readonly<{
 export const MaxProductLogSemiring: Semiring<number>;
 
 // @public
+export function maxSensitivity(a: SensitivityLevel, b: SensitivityLevel): SensitivityLevel;
+
+// @public
 export interface MemoryAccessedPayload {
     // (undocumented)
     readonly node_id: string;
@@ -2267,6 +2270,9 @@ export interface PushTokenRegistration {
 }
 
 // @public
+export function rankSensitivity(level: SensitivityLevel): number;
+
+// @public
 export function recordSemiring<R extends Record<string, unknown>>(fields: {
     [K in keyof R]: Semiring<R[K]>;
 }): Semiring<R>;
@@ -2508,6 +2514,9 @@ export enum SensitivityLevel {
 
 // @public
 export type SensitivityLevelString = "none" | "personal" | "medical" | "financial" | "secret";
+
+// @public
+export function sensitivityPermits(upper: SensitivityLevel, candidate: SensitivityLevel): boolean;
 
 // @public (undocumented)
 export interface ServiceListingStoreAdapter {
