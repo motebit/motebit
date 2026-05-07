@@ -431,6 +431,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-tool-modes",
   },
   {
+    name: "check-mode-contract-readers",
+    defends:
+      "every field of the `EmbodimentModeContract` interface in packages/render-engine/src/spec.ts (driver / observer / source / consent / sensitivity / lifecycleDefaults) has ≥1 runtime reader OR an explicit ALLOWLIST entry with a `deferred until X` reason; closes the doctrine-to-code asymmetry where the contract's six invariants are compile-time enforced (the `satisfies Record<EmbodimentMode, EmbodimentModeContract>` clause prevents field omission per mode) but only `lifecycleDefaults` is actually consumed (slab-controller anomaly check, ebb232dd). The other five fields are typed-but-passive — doctrine in code, not driving behavior. Allowlist entries are visible debt; future PRs eat them down as concrete consumers arrive (invariant #76, added 2026-05-07 as the load-bearing-ness gate paired with EMBODIMENT_MODE_CONTRACTS landing in commit c947ff15).",
+    script: "check-mode-contract-readers",
+  },
+  {
     name: "check-hardware-attestation-primitives",
     defends:
       'the canonical composer (`composeHardwareAttestationCredential` in @motebit/encryption) and verifier (`verifyHardwareAttestationClaim` in @motebit/crypto) are the only way to build or parse a HardwareAttestationClaim-carrying AgentTrustCredential — inline VC composers (type-tuple ["VerifiableCredential", "AgentTrustCredential"] + `hardware_attestation:` subject) and inline attestation_receipt parsers (.split(\'.\') / base64url decode / P-256 verify) are CI failures (invariant #37, added 2026-04-22 after the CLI+desktop consolidation and ahead of the iOS / Expo mobile surface landing — extends the protocol-primitive doctrine to hardware-attestation judgment, prevents the third inline copy of the VC envelope and the first inline copy of the receipt parser)',
