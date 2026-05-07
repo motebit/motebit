@@ -400,9 +400,15 @@ export class SyncController {
           // Task-handler diagnostic — surface failures to the desktop log so
           // operators can see why a delegation didn't complete. The serving
           // path runs detached from the chat UI, so there's no other place
-          // for this to land.
+          // for this to land. Log the full `task_id` (not the prior 8-char
+          // prefix) so the user can match against the relay queue when
+          // reporting a stuck delegation; bracketed prefix matches the
+          // file's `[self-test]` convention.
           // eslint-disable-next-line no-console -- task-handler diagnostic
-          console.error(`Task ${task.task_id.slice(0, 8)}... error: ${errMsg}`);
+          console.error(`[task-handler] task error`, {
+            task_id: task.task_id,
+            error: errMsg,
+          });
         } finally {
           this._activeTaskCount = Math.max(0, this._activeTaskCount - 1);
         }

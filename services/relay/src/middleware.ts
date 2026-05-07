@@ -497,8 +497,29 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
     if (err instanceof HTTPException) {
       return c.json({ error: err.message, status: err.status }, err.status);
     }
-    console.error(err);
-    return c.json({ error: "Internal server error", status: 500 }, 500);
+    // Structured-log the unhandled exception per CLAUDE.md rule 3
+    // ("Never `console.log` in production paths"). The request-scope
+    // logger pulls correlationId from AsyncLocalStorage automatically;
+    // surfacing `correlation_id` in the response gives users a token
+    // they can quote in support reports so the operator can grep the
+    // matching log line — turning a silent 500 into a reconcilable
+    // failure category for the client.
+    const correlationId = c.get("correlationId" as never) as string | undefined;
+    logger.error("relay.unhandled_exception", {
+      error_name: err instanceof Error ? err.name : "unknown",
+      error_message: err instanceof Error ? err.message : String(err),
+      method: c.req.method,
+      path: c.req.path,
+    });
+    return c.json(
+      {
+        error: "Internal server error",
+        status: 500,
+        code: "INTERNAL_ERROR",
+        ...(correlationId != null ? { correlation_id: correlationId } : {}),
+      },
+      500,
+    );
   });
 
   // --- Health (public, no auth, no rate limiting) ---
