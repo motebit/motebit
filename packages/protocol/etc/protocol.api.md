@@ -1310,6 +1310,8 @@ export enum EventType {
     // (undocumented)
     ReflectionCompleted = "reflection_completed",
     // (undocumented)
+    SensitivityGateFired = "sensitivity_gate_fired",
+    // (undocumented)
     SkillLoaded = "skill_loaded",
     // (undocumented)
     StateUpdated = "state_updated",
@@ -2469,6 +2471,25 @@ export interface Semiring<T> {
     mul(a: T, b: T): T;
     readonly one: T;
     readonly zero: T;
+}
+
+// @public
+export type SensitivityElevationSource = "session" | "slab_item";
+
+// @public
+export type SensitivityGateEntry = "sendMessage" | "sendMessageStreaming" | "generateActivation" | "generateCompletion" | "outbound_tool";
+
+// @public
+export interface SensitivityGateFiredPayload {
+    readonly effective_sensitivity: SensitivityLevel;
+    readonly elevated_by?: {
+        readonly via: SensitivityElevationSource;
+        readonly slab_item_id?: string;
+    };
+    readonly entry: SensitivityGateEntry;
+    readonly provider_mode: "on-device" | "motebit-cloud" | "byok" | "unset";
+    readonly session_sensitivity: SensitivityLevel;
+    readonly tool_name?: string;
 }
 
 // @public (undocumented)

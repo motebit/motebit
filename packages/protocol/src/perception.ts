@@ -1,3 +1,5 @@
+import type { SensitivityLevel } from "./index.js";
+
 /**
  * Perception input — the typed surface for content the user delivers
  * to a motebit by direct gesture (drag-drop on web/desktop, pinch-throw
@@ -204,4 +206,105 @@ export type DropPayload =
  */
 export function resolveDropTarget(payload: DropPayload): DropTarget {
   return payload.target ?? "slab";
+}
+
+// ── Audit trail: sensitivity-gate firings ───────────────────────────
+
+/**
+ * Which AI-call entry the runtime blocked. The runtime gates fire at
+ * five distinct sites today; the audit event names the site so log
+ * consumers can group / branch by entry without parsing free text.
+ */
+export type SensitivityGateEntry =
+  | "sendMessage"
+  | "sendMessageStreaming"
+  | "generateActivation"
+  | "generateCompletion"
+  | "outbound_tool";
+
+/**
+ * What elevated effective sensitivity above the explicit session
+ * tier. `session` means the user explicitly elevated via
+ * `setSessionSensitivity`; `slab_item` means a `tier-bounded-by-source`
+ * or `tier-bounded-by-tool` slab item contributed the higher tier
+ * (drops, classified tool outputs). Exhaustive: future elevation
+ * sources extend this union.
+ */
+export type SensitivityElevationSource = "session" | "slab_item";
+
+/**
+ * Payload for `EventType.SensitivityGateFired`. Emitted by the
+ * runtime's `assertSensitivityPermitsAiCall` BEFORE throwing
+ * `SovereignTierRequiredError`, so every blocked egress crossing
+ * leaves an inspectable trail.
+ *
+ * **Strictly metadata.** No raw drop content, no tool result bytes,
+ * no slab item payloads, no prompt strings. The audit trail names
+ * the decision (which gate / which tier / which provider) without
+ * carrying the sensitive data that triggered the gate. Logging the
+ * payload that caused the block would itself be a leak surface —
+ * the same kind of leak the gate exists to prevent.
+ *
+ * `slab_item_id` is optional and carries the slab item's ID when
+ * elevation came from a slab item; the ID is a content-free
+ * identifier (UUID-shape) that lets a forensic consumer correlate
+ * the audit event against the slab state at fire time without
+ * including the item's content.
+ *
+ * Doctrine: `motebit-computer.md` §"Mode contract — six declarations
+ * per mode." The audit-trail pivot converts the shipped fail-closed
+ * gate from invisible-but-correct into observable-and-provable.
+ */
+export interface SensitivityGateFiredPayload {
+  /** Which AI-call entry was blocked. */
+  readonly entry: SensitivityGateEntry;
+  /** Explicit session tier at fire time (set via `setSessionSensitivity`). */
+  readonly session_sensitivity: SensitivityLevel;
+  /**
+   * Effective tier the gate decided on — `max(session,
+   * tier-bounded-slab-items)`. Equals `session_sensitivity` when no
+   * slab item elevated.
+   */
+  readonly effective_sensitivity: SensitivityLevel;
+  /** Provider mode at fire time. `unset` when surface didn't declare. */
+  /**
+   * Inline string-literal union of `ProviderMode` (declared in
+   * `@motebit/sdk::provider-mode.ts`) plus the `unset` sentinel.
+   * Inlined here rather than imported because @motebit/protocol sits
+   * below @motebit/sdk in the layer graph; if ProviderMode promotes
+   * to protocol later, this union narrows to `ProviderMode | "unset"`.
+   */
+  readonly provider_mode: "on-device" | "motebit-cloud" | "byok" | "unset";
+  /**
+   * What contributed the effective tier when it exceeds the explicit
+   * session tier. Absent when `effective_sensitivity ===
+   * session_sensitivity` (session itself was the source — no
+   * elevation beyond the explicit setter to attribute).
+   *
+   * Field-name choice: `via` not `source`. The closed
+   * `EmbodimentSourceCategory` union (`interior`, `sandboxed-tool`,
+   * `user-source`, etc.) lives on the mode contract and is matched by
+   * `check-mode-contract-readers` via `.source` / `{ source }` regex.
+   * Naming the audit field `source` would false-positive that gate
+   * (the gate's destructure detection can't distinguish object-literal
+   * write from destructure read), staling its `source` ALLOWLIST entry
+   * without an actual consumer. `via` reads naturally
+   * ("elevated via session" / "elevated via slab_item") and avoids
+   * the collision.
+   */
+  readonly elevated_by?: {
+    readonly via: SensitivityElevationSource;
+    /**
+     * Slab item ID that contributed the elevated tier — present when
+     * `via === "slab_item"`. Content-free identifier; useful for
+     * forensic correlation with slab state at fire time.
+     */
+    readonly slab_item_id?: string;
+  };
+  /**
+   * Tool name when `entry === "outbound_tool"`. Names the tool whose
+   * outbound dispatch was blocked. Tool-name strings are NOT
+   * sensitive (they're public capability names, not user content).
+   */
+  readonly tool_name?: string;
 }

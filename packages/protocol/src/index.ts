@@ -306,6 +306,15 @@ export enum EventType {
   // per selected skill, keyed to the run that triggered the load. See
   // spec/skills-v1.md §7.4 and SkillLoadPayload in skills.ts.
   SkillLoaded = "skill_loaded",
+  // Sensitivity gate fired — emitted by `assertSensitivityPermitsAiCall`
+  // when the runtime blocks an AI-call entry because effective session
+  // sensitivity exceeds the provider's tier permission. Converts the
+  // shipped fail-closed gate from invisible-but-correct to
+  // observable-and-provable. Payload: `SensitivityGateFiredPayload` in
+  // `perception.ts`. STRICTLY metadata — never raw drop / tool / slab
+  // content. Doctrine: motebit-computer.md §"Mode contract" and the
+  // four-egress closure arc.
+  SensitivityGateFired = "sensitivity_gate_fired",
 }
 
 export enum MemoryType {
@@ -2390,6 +2399,9 @@ export type {
   DropTarget,
   DropPayload,
   UserActionAttestation,
+  SensitivityGateEntry,
+  SensitivityElevationSource,
+  SensitivityGateFiredPayload,
 } from "./perception.js";
 export { resolveDropTarget } from "./perception.js";
 import type { ToolMode } from "./tool-mode.js";

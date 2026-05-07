@@ -29,7 +29,13 @@ import type {
 } from "@motebit/sdk";
 import { signToolInvocationReceipt, hashToolPayload } from "@motebit/crypto";
 import { EventType, AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
-import type { ProviderMode, DropPayload, DropPayloadKind } from "@motebit/sdk";
+import type {
+  ProviderMode,
+  DropPayload,
+  DropPayloadKind,
+  SensitivityGateEntry,
+  SensitivityGateFiredPayload,
+} from "@motebit/sdk";
 import { resolveDropTarget } from "@motebit/sdk";
 import { EMBODIMENT_MODE_CONTRACTS } from "@motebit/render-engine";
 
@@ -1402,7 +1408,7 @@ export class MotebitRuntime {
     // fail-closes regardless of init state. Default session_sensitivity
     // is `none` — this is a no-op for the common path.
     // See `check-sensitivity-routing` drift gate.
-    this.assertSensitivityPermitsAiCall();
+    this.assertSensitivityPermitsAiCall("sendMessage");
 
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
@@ -1652,7 +1658,7 @@ export class MotebitRuntime {
     // Privacy doctrine gate. See `assertSensitivityPermitsAiCall` /
     // `SovereignTierRequiredError` for the contract. Fires before the
     // loopDeps check so the gate is independent of init state.
-    this.assertSensitivityPermitsAiCall();
+    this.assertSensitivityPermitsAiCall("sendMessageStreaming");
 
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
@@ -1769,7 +1775,7 @@ export class MotebitRuntime {
     // are system-generated, but they're injected into the same provider
     // call path as user messages — same gate applies. Fires before
     // loopDeps check so the gate is independent of init state.
-    this.assertSensitivityPermitsAiCall();
+    this.assertSensitivityPermitsAiCall("generateActivation");
 
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
@@ -1902,7 +1908,7 @@ export class MotebitRuntime {
     // Fail-closed before any bytes leave the device. See
     // `assertSensitivityPermitsAiCall` and the
     // `check-sensitivity-routing` drift gate.
-    this.assertSensitivityPermitsAiCall();
+    this.assertSensitivityPermitsAiCall("generateCompletion");
 
     if (!this.provider) throw new Error("No AI provider configured");
 
@@ -2692,11 +2698,13 @@ export class MotebitRuntime {
    * wrapper above; verified for completeness by the
    * `check-sensitivity-routing` drift gate.
    */
-  private assertSensitivityPermitsOutboundTool(_toolName: string): void {
+  private assertSensitivityPermitsOutboundTool(toolName: string): void {
     // Same predicate as the AI-call gate — keeps both boundaries
-    // honoring the same contract. The toolName parameter is reserved
-    // for future structured logging / per-tool waivers.
-    this.assertSensitivityPermitsAiCall();
+    // honoring the same contract. Tool name is now passed through to
+    // the audit emission so blocked outbound dispatches name the tool
+    // in the SensitivityGateFired event payload (tool names are
+    // public capability identifiers, not user content — safe to log).
+    this.assertSensitivityPermitsAiCall("outbound_tool", toolName);
   }
 
   private async logToolUsed(toolName: string, result: unknown): Promise<void> {
@@ -3004,7 +3012,24 @@ export class MotebitRuntime {
    * postures are now real runtime readers.
    */
   private getEffectiveSessionSensitivity(): SensitivityLevel {
+    return this.computeEffectiveSensitivityContext().effective;
+  }
+
+  /**
+   * Compute effective sensitivity AND identify the source — the
+   * audit-trail companion to `getEffectiveSessionSensitivity`. Used
+   * inside `assertSensitivityPermitsAiCall` to populate the
+   * `SensitivityGateFired` event's `elevated_by` field with the slab
+   * item ID (when elevation came from an item) for forensic
+   * correlation. Pure function over current state; no side effects.
+   */
+  private computeEffectiveSensitivityContext(): {
+    effective: SensitivityLevel;
+    /** Slab item that contributed the elevated tier; null when session itself is the highest. */
+    elevatedByItem: { id: string } | null;
+  } {
     let effective = this._sessionSensitivity;
+    let elevatedByItem: { id: string } | null = null;
     const slabState = this.slab.getState();
     for (const item of slabState.items.values()) {
       if (item.sensitivity === undefined) continue;
@@ -3012,9 +3037,10 @@ export class MotebitRuntime {
       if (posture !== "tier-bounded-by-source" && posture !== "tier-bounded-by-tool") continue;
       if (rankSensitivity(item.sensitivity) > rankSensitivity(effective)) {
         effective = item.sensitivity;
+        elevatedByItem = { id: item.id };
       }
     }
-    return effective;
+    return { effective, elevatedByItem };
   }
 
   /**
@@ -3028,19 +3054,77 @@ export class MotebitRuntime {
    * sensitivity makes this a no-op for the common path — only
    * callers that elevated sensitivity OR dropped sensitive content
    * onto the slab hit the gate.
+   *
+   * **Audit emission (2026-05-07)**: every block also emits a
+   * `SensitivityGateFired` event to the EventStore BEFORE throwing,
+   * so the four shipped egress closures leave inspectable evidence.
+   * STRICTLY metadata — no raw drop / tool / slab content. The
+   * payload names: which entry, session vs effective tier, provider
+   * mode, elevation source (with slab item ID for forensic
+   * correlation), and tool name (for `outbound_tool` entries). See
+   * `SensitivityGateFiredPayload` JSDoc and the audit-trail pivot
+   * commit for the don't-log-content discipline.
    */
-  private assertSensitivityPermitsAiCall(): void {
-    const effective = this.getEffectiveSessionSensitivity();
+  /**
+   * Promoted from `private` to public on 2026-05-07 (the audit-trail
+   * pivot). The gate predicate is motebit's named primitive for
+   * sensitivity-tier-vs-provider routing — the mechanism every
+   * commit in the four-egress-shape arc is built around. Surfaces,
+   * tests, and audit tooling that need to invoke the gate without
+   * making a full AI call now have a typed entry point. Internal
+   * sites (sendMessage, sendMessageStreaming, generateActivation,
+   * generateCompletion, the outbound-tool wrap) call this same
+   * method — the public promotion adds no new code path, it just
+   * names what was already the architectural seam.
+   *
+   * @param entry — which AI-call entry is being checked. Carried into
+   *   the `SensitivityGateFired` event payload so audit consumers can
+   *   group by entry without parsing free text.
+   * @param toolName — present when `entry === "outbound_tool"`. Tool
+   *   names are public capability identifiers, not user content; safe
+   *   to log.
+   * @throws SovereignTierRequiredError when effective sensitivity is
+   *   medical/financial/secret AND the configured provider is not
+   *   sovereign. Emits a `SensitivityGateFired` event before throwing.
+   */
+  assertSensitivityPermitsAiCall(entry: SensitivityGateEntry, toolName?: string): void {
+    const { effective, elevatedByItem } = this.computeEffectiveSensitivityContext();
     const sensitive =
       effective === SensitivityLevel.Medical ||
       effective === SensitivityLevel.Financial ||
       effective === SensitivityLevel.Secret;
     if (sensitive && !this.providerIsSovereign()) {
-      throw new SovereignTierRequiredError(
-        this._sessionSensitivity,
-        this._providerMode ?? "unset",
-        effective,
-      );
+      const providerMode = this._providerMode ?? "unset";
+      // Emit BEFORE throw so the audit trail is durable even when the
+      // caller's catch swallows the error or maps it to a different
+      // shape downstream. EventStore's appendWithClock is async; we
+      // fire-and-forget — the audit event is best-effort durable, but
+      // the gate fires fail-closed regardless of whether the audit
+      // write resolves.
+      const payload: SensitivityGateFiredPayload = {
+        entry,
+        session_sensitivity: this._sessionSensitivity,
+        effective_sensitivity: effective,
+        provider_mode: providerMode,
+        ...(elevatedByItem !== null
+          ? { elevated_by: { via: "slab_item" as const, slab_item_id: elevatedByItem.id } }
+          : effective !== this._sessionSensitivity
+            ? { elevated_by: { via: "session" as const } }
+            : {}),
+        ...(toolName !== undefined ? { tool_name: toolName } : {}),
+      };
+      void this.events.appendWithClock({
+        event_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        timestamp: Date.now(),
+        event_type: EventType.SensitivityGateFired,
+        // Cast: SensitivityGateFiredPayload is a typed interface; the
+        // event log's payload field is `Record<string, unknown>` for
+        // wire flexibility. Same pattern other typed events use.
+        payload: payload as unknown as Record<string, unknown>,
+        tombstoned: false,
+      });
+      throw new SovereignTierRequiredError(this._sessionSensitivity, providerMode, effective);
     }
   }
 
