@@ -102,6 +102,18 @@ Concretely:
 
 This positioning is what makes motebit a **sovereign extension of the user's life** rather than another app. The architectural thesis (`docs/doctrine/the-stack-one-layer-up.md`) — that hosted agent platforms and motebit converge on the same five primitives, and the difference is who owns the identity layer — is exactly the bridge claim made spatial.
 
+### Mediation depth — the walled-garden risk
+
+The OS-bridge framing assumes the platform owners _let_ motebit mediate. They might not. Apple's `app-sandbox` model on visionOS doesn't permit third-party agents to read across apps or drive system actions; future glasses platforms may follow the same pattern. The mediation depth the architecture can achieve is determined by the platform's stance on agent integration, which sits on a spectrum:
+
+- **Full OS access** (best case) — agent reads cross-app content, drives system actions, presents content adjacent to native apps. Motebit operates as the agent layer the doctrine names.
+- **Scoped extension API** (likely middle case) — agent gets a defined set of system hooks (intent handlers, accessibility services, share-targets, file-provider extensions). Motebit mediates within the platform's sanctioned boundaries.
+- **Sandboxed app** (worst case) — agent runs only in its own surface, no cross-app reach. Motebit becomes a sovereign companion that integrates where APIs allow and falls back to its own surfaces elsewhere.
+
+The architectural hedge is built in: motebit's sovereign primitives — identity, memory, governance, signed receipts, trust — work standalone in any sandbox. The depth of mediation contracts as the platform restricts; the **value of sovereignty does not**. A motebit confined to its own surface still owns identity across providers, memory across sessions, and policy across actions — the things that distinguish an agent from a feature. The walled garden constrains what motebit can _reach_, not what motebit _is_.
+
+So the architecture is robust across the platform spectrum, but the product positioning is platform-dependent: _"agent layer for the spatial OS"_ requires the OS to cooperate; _"sovereign agent that bridges to platform APIs where allowed"_ works regardless. Both are defensible; the first is more strategic, the second is more durable. Motebit ships the second and pursues the first as APIs open — convergent, not contingent.
+
 ## Connections to existing doctrine
 
 - **[motebit-computer.md](motebit-computer.md)** — the slab. In spatial, the slab is a **held-tablet the motebit presents to you**, not a floating plane. The slab doctrine's "rest as dominant state" maps to "the held-tablet stays in view as long as the motebit is using it; recedes when work ends." The slab's Ring 1 contract / Ring 3 renderer split is what lets the same lifecycle types serve both desktop/web (Three.js plane) and glasses (held-tablet WebXR).
