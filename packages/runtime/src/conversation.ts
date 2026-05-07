@@ -16,6 +16,28 @@ import {
   type ConversationMessageRecord,
 } from "./conversation-search.js";
 
+/**
+ * Ordinal rank for `SensitivityLevel` — `none < personal < medical <
+ * financial < secret`. Used to floor persisted message sensitivity at
+ * `max(defaultSensitivity, runtime_effective_tier)`. Mirrors the
+ * private helpers in `motebit-runtime.ts` and `ai-core/loop.ts`. When
+ * a fourth reader appears, this graduates to `@motebit/policy-invariants`.
+ */
+function rankSensitivity(level: SensitivityLevel): number {
+  switch (level) {
+    case SensitivityLevel.None:
+      return 0;
+    case SensitivityLevel.Personal:
+      return 1;
+    case SensitivityLevel.Medical:
+      return 2;
+    case SensitivityLevel.Financial:
+      return 3;
+    case SensitivityLevel.Secret:
+      return 4;
+  }
+}
+
 /** Strip internal tags (state, thinking, memory) before persisting — display-only, not content. */
 function stripInternalTags(text: string): string {
   return text
@@ -66,6 +88,28 @@ export interface ConversationDeps {
    * any message whose tier turns out to be tighter than the default.
    */
   defaultSensitivity?: SensitivityLevel;
+  /**
+   * Optional getter returning the runtime's effective session
+   * sensitivity at message-write time — composed from the explicit
+   * session tier AND any tier-bounded slab items (drops, classified
+   * tool outputs). When provided, the manager floors each persisted
+   * message at `max(defaultSensitivity, effective)` so messages
+   * written during a high-tier turn carry their actual provenance
+   * tier rather than the static default.
+   *
+   * Closes the cross-device leak shape: a Secret-effective turn
+   * persisting the user's reply at the static `personal` default,
+   * synced to the relay, retrieved on another device whose session
+   * is at None tier, included in trimmed history → BYOK egress.
+   *
+   * Doctrine: `motebit-computer.md` §"Mode contract" + the closure of
+   * the egress-shape arc (the four prior moves shipped the same
+   * pattern at session/drops/tools/memory-write boundaries; this
+   * is the conversation-write boundary). Optional because in-tree
+   * tests fixture without a runtime; production wiring threads
+   * `runtime.getEffectiveSessionSensitivity` through.
+   */
+  getEffectiveSensitivity?: () => SensitivityLevel;
 }
 
 /** Default context window budget — conservative to fit most models. */
@@ -81,6 +125,21 @@ export class ConversationManager {
   private autoTitlePending = false;
 
   constructor(private readonly deps: ConversationDeps) {}
+
+  /**
+   * Compute the sensitivity tier to stamp on a newly-persisted
+   * message. Floors the operator-manifest default at the runtime's
+   * effective session sensitivity (`max(default, effective)`) so
+   * messages written during a high-tier turn carry their actual
+   * provenance tier rather than the static default. Closes the
+   * conversation-write egress shape (parallel to memory-write floor
+   * in `ai-core/loop.ts`).
+   */
+  private resolveMessageSensitivity(): SensitivityLevel {
+    const baseline = this.deps.defaultSensitivity ?? SensitivityLevel.Personal;
+    const effective = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
+    return rankSensitivity(effective) > rankSensitivity(baseline) ? effective : baseline;
+  }
 
   // --- Bootstrap ---
 
@@ -187,7 +246,7 @@ export class ConversationManager {
       this.history = this.history.slice(-this.deps.maxHistory);
     }
 
-    const sensitivity = this.deps.defaultSensitivity ?? SensitivityLevel.Personal;
+    const sensitivity = this.resolveMessageSensitivity();
     const { store } = this.deps;
     if (store != null) {
       if (this.currentId == null || this.currentId === "") {
@@ -211,7 +270,7 @@ export class ConversationManager {
       this.history = this.history.slice(-this.deps.maxHistory);
     }
 
-    const sensitivity = this.deps.defaultSensitivity ?? SensitivityLevel.Personal;
+    const sensitivity = this.resolveMessageSensitivity();
     const { store } = this.deps;
     if (store != null) {
       if (this.currentId == null || this.currentId === "") {

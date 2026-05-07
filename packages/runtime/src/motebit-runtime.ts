@@ -694,6 +694,14 @@ export class MotebitRuntime {
       getProvider: () => this.provider,
       getTaskRouter: () => this.taskRouter,
       generateCompletion: (prompt, taskType) => this.generateCompletion(prompt, taskType),
+      // Conversation-message sensitivity floor — closes the cross-
+      // device leak shape: a Secret-effective turn persisting messages
+      // at the static default tier, syncing to the relay, retrieved on
+      // another device's None-tier session, included in trimmed
+      // history → BYOK egress. Same shape as the memory-write floor
+      // shipped earlier this arc; ConversationManager floors persisted
+      // tier at max(default, effective) at write time.
+      getEffectiveSensitivity: () => this.getEffectiveSessionSensitivity(),
     });
     this.conversation.resumeActiveConversation();
     // First conversation: no prior history was loaded from persistence
