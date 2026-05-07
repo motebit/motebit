@@ -1444,44 +1444,211 @@ function applyDelegationPayload(
     motebit_id?: string;
     status?: string;
     receipt?: { task_id?: string; status?: string; tools_used?: string[] };
-    full_receipt?: {
-      task_id?: string;
-      status?: string;
-      motebit_id?: string;
-      signature?: string;
-      tools_used?: string[];
-      duration_ms?: number;
-    };
+    full_receipt?: ReceiptLike;
   } | null;
   const peerId = p?.motebit_id ?? p?.full_receipt?.motebit_id ?? "";
-  peerEl.textContent = peerId ? `→ ${peerId.slice(0, 10)}…` : `→ ${p?.server ?? "peer"}`;
+  peerEl.textContent = peerId ? `→ ${truncatePeerId(peerId)}` : `→ ${p?.server ?? "peer"}`;
   toolEl.textContent = p?.tool ?? "";
 
-  const r = p?.full_receipt ?? p?.receipt;
-  if (!r) {
+  const summary = summarizeDelegationReceipt(p?.full_receipt ?? p?.receipt);
+  if (!summary) {
     body.textContent = ""; // Outbound — nothing perceived yet.
-    detail.textContent = "";
+    detail.replaceChildren();
     return;
   }
-  const toolsCount = Array.isArray(r.tools_used) ? r.tools_used.length : 0;
-  const durationMs = p?.full_receipt?.duration_ms;
+  const toolsCount = summary.outer.toolsUsed.length;
   const parts = [
-    r.status ?? "returned",
+    summary.outer.status,
     toolsCount > 0 ? `${toolsCount} tool${toolsCount === 1 ? "" : "s"}` : "",
-    typeof durationMs === "number" ? formatDuration(durationMs) : "",
+    summary.outer.durationMs != null ? formatDuration(summary.outer.durationMs) : "",
   ].filter(Boolean);
   body.textContent = parts.join(" · ");
 
-  // Detail: signed receipt fields (task id, signature prefix, tools list).
-  const detailLines: string[] = [];
-  if (r.task_id) detailLines.push(`task  ${r.task_id}`);
-  if (p?.full_receipt?.signature) {
-    detailLines.push(`sig   ${p.full_receipt.signature.slice(0, 18)}…`);
+  // Detail: structured receipt view. Outer receipt fields first
+  // (task, sig, tools); then the delegation-receipts chain rendered
+  // as one row per peer hop. Doctrine: motebit-computer.md
+  // §"peer_viewport" — "the receipt is the proof"; the chain is the
+  // shape of that proof. Multi-hop receipts (motebit A → B → C)
+  // unfold here; single-hop receipts skip the chain block.
+  // Sibling-mirrored to apps/web/src/ui/slab-items.ts.
+  detail.replaceChildren();
+  if (summary.outer.taskId) {
+    detail.appendChild(makeDetailLine("task ", summary.outer.taskId));
   }
-  if (Array.isArray(r.tools_used) && r.tools_used.length > 0) {
-    detailLines.push(`tools ${r.tools_used.join(", ")}`);
+  if (summary.outer.signaturePrefix !== null) {
+    detail.appendChild(makeDetailLine("sig  ", `${summary.outer.signaturePrefix}…`));
   }
-  detail.textContent = detailLines.join("\n");
+  if (summary.outer.toolsUsed.length > 0) {
+    detail.appendChild(makeDetailLine("tools", summary.outer.toolsUsed.join(", ")));
+  }
+  if (summary.chain.length > 0) {
+    detail.appendChild(makeChainHeader(summary.chain.length));
+    for (const hop of summary.chain) {
+      detail.appendChild(makeChainRow(hop));
+    }
+  }
+}
+
+interface ReceiptLike {
+  readonly task_id?: string;
+  readonly status?: string;
+  readonly motebit_id?: string;
+  readonly signature?: string;
+  readonly tools_used?: readonly string[];
+  readonly duration_ms?: number;
+  readonly delegation_receipts?: readonly ReceiptLike[];
+}
+
+export interface ReceiptHopSummary {
+  /** Truncated motebit_id of the peer that signed this hop. */
+  readonly peerId: string;
+  /** Tools the peer used at this hop. */
+  readonly toolsUsed: readonly string[];
+  /** First 12 chars of the hex signature, or `null` if absent. */
+  readonly signaturePrefix: string | null;
+  /** Duration in ms, or `null` when absent. */
+  readonly durationMs: number | null;
+  /** Reported status. */
+  readonly status: string;
+}
+
+export interface ReceiptSummary {
+  readonly outer: ReceiptHopSummary & { readonly taskId: string };
+  readonly chain: readonly ReceiptHopSummary[];
+}
+
+/**
+ * Project a recursive `ExecutionReceipt`-shaped value into a flat
+ * summary the slab renderer can iterate without re-walking the tree.
+ * Pure / synchronous; exported for unit tests. Sibling-mirrored to
+ * apps/web/src/ui/slab-items.ts.
+ */
+export function summarizeDelegationReceipt(receipt: unknown): ReceiptSummary | null {
+  if (receipt === null || typeof receipt !== "object") return null;
+  const r = receipt as ReceiptLike;
+  const outerHop = hopFrom(r);
+  const taskId = typeof r.task_id === "string" ? r.task_id : "";
+  const chain: ReceiptHopSummary[] = [];
+  const subs = r.delegation_receipts;
+  if (Array.isArray(subs)) {
+    walkChain(subs, chain);
+  }
+  return {
+    outer: { ...outerHop, taskId },
+    chain,
+  };
+}
+
+function walkChain(subs: readonly ReceiptLike[], out: ReceiptHopSummary[]): void {
+  for (const sub of subs) {
+    if (sub === null || typeof sub !== "object") continue;
+    out.push(hopFrom(sub));
+    if (Array.isArray(sub.delegation_receipts)) {
+      walkChain(sub.delegation_receipts, out);
+    }
+  }
+}
+
+function hopFrom(r: ReceiptLike): ReceiptHopSummary {
+  const peerId = typeof r.motebit_id === "string" ? truncatePeerId(r.motebit_id) : "";
+  const toolsUsed = Array.isArray(r.tools_used)
+    ? r.tools_used.filter((t): t is string => typeof t === "string")
+    : [];
+  const sig = r.signature;
+  const signaturePrefix = typeof sig === "string" && sig.length > 0 ? sig.slice(0, 12) : null;
+  const durationMs = typeof r.duration_ms === "number" ? r.duration_ms : null;
+  const status = typeof r.status === "string" ? r.status : "returned";
+  return { peerId, toolsUsed, signaturePrefix, durationMs, status };
+}
+
+/**
+ * Truncate a motebit_id for display. Most ids are `did:motebit:` +
+ * 32-char hex; showing the first ~10 chars after the prefix
+ * disambiguates without occupying the whole row. Exported for tests.
+ */
+export function truncatePeerId(id: string, head = 14): string {
+  if (id.length <= head + 1) return id;
+  return `${id.slice(0, head)}…`;
+}
+
+function makeDetailLine(label: string, value: string): HTMLElement {
+  const row = document.createElement("div");
+  row.style.display = "flex";
+  row.style.gap = "8px";
+  row.style.alignItems = "baseline";
+  const labelEl = document.createElement("span");
+  labelEl.textContent = label;
+  labelEl.style.fontWeight = "600";
+  labelEl.style.color = "rgba(80, 100, 145, 0.78)";
+  labelEl.style.flex = "0 0 auto";
+  row.appendChild(labelEl);
+  const valueEl = document.createElement("span");
+  valueEl.textContent = value;
+  valueEl.style.flex = "1 1 auto";
+  valueEl.style.wordBreak = "break-all";
+  row.appendChild(valueEl);
+  return row;
+}
+
+function makeChainHeader(count: number): HTMLElement {
+  const header = document.createElement("div");
+  header.textContent = `chain · ${count} hop${count === 1 ? "" : "s"}`;
+  header.style.fontWeight = "600";
+  header.style.color = "rgba(80, 100, 145, 0.78)";
+  header.style.marginTop = "8px";
+  header.style.paddingTop = "8px";
+  header.style.borderTop = "1px solid rgba(120, 140, 180, 0.18)";
+  return header;
+}
+
+function makeChainRow(hop: ReceiptHopSummary): HTMLElement {
+  const row = document.createElement("div");
+  row.style.display = "flex";
+  row.style.gap = "8px";
+  row.style.alignItems = "baseline";
+  row.style.paddingLeft = "12px";
+
+  const arrow = document.createElement("span");
+  arrow.textContent = "↳";
+  arrow.style.color = "rgba(120, 140, 180, 0.78)";
+  arrow.style.flex = "0 0 auto";
+  row.appendChild(arrow);
+
+  const peerEl = document.createElement("span");
+  peerEl.textContent = hop.peerId || "peer";
+  peerEl.style.flex = "0 0 auto";
+  peerEl.style.color = "rgba(45, 60, 95, 0.92)";
+  row.appendChild(peerEl);
+
+  const toolsEl = document.createElement("span");
+  toolsEl.textContent = hop.toolsUsed.length > 0 ? hop.toolsUsed.join(",") : "—";
+  toolsEl.style.flex = "1 1 auto";
+  toolsEl.style.overflow = "hidden";
+  toolsEl.style.textOverflow = "ellipsis";
+  toolsEl.style.whiteSpace = "nowrap";
+  toolsEl.style.color = "rgba(80, 100, 145, 0.85)";
+  row.appendChild(toolsEl);
+
+  // Signed-checkmark — present only when a verifiable signature was
+  // returned by the hop. Doctrine: peer_viewport's consent boundary
+  // is signed-delegation; absence of a signature is the visible gap.
+  const sigEl = document.createElement("span");
+  sigEl.textContent = hop.signaturePrefix !== null ? "✓" : "—";
+  sigEl.title =
+    hop.signaturePrefix !== null ? `signed (${hop.signaturePrefix}…)` : "no signature returned";
+  sigEl.style.flex = "0 0 auto";
+  sigEl.style.color =
+    hop.signaturePrefix !== null ? "rgba(60, 130, 95, 0.92)" : "rgba(160, 110, 90, 0.85)";
+  row.appendChild(sigEl);
+
+  if (hop.durationMs !== null) {
+    const durEl = document.createElement("span");
+    durEl.textContent = formatDuration(hop.durationMs);
+    durEl.style.flex = "0 0 auto";
+    durEl.style.color = "rgba(95, 115, 155, 0.78)";
+    row.appendChild(durEl);
+  }
+  return row;
 }
 
 function formatDuration(ms: number): string {
