@@ -43,6 +43,7 @@ import {
 import { initSovereign } from "./ui/sovereign";
 import { initTheme } from "./ui/theme";
 import { initKeyboard } from "./ui/keyboard";
+import { initDropHandlers } from "./ui/drop";
 import {
   parseClaudeDesktopConfig,
   parseClaudeCodeConfig,
@@ -122,6 +123,17 @@ const theme = initTheme(isTauri);
 // === Keyboard Shortcuts ===
 
 initKeyboard({ settings, goals, memory, conversations, agents });
+
+// === Drop handlers ===
+//
+// DOM drag-drop translates into typed `feedPerception` payloads.
+// Sibling of apps/web/src/main.ts's drop-handler wiring; same gesture,
+// same runtime API, different surface. Doctrine: motebit-computer.md
+// §"Supervised agency / minimum gesture set" (Drag a file / URL /
+// snippet onto the slab → feed perception). Single document-level
+// listener; the runtime is fetched lazily so first-run / signed-out
+// states no-op cleanly.
+initDropHandlers({ getRuntime: () => app.getRuntime() });
 
 // === Escape Key Handler ===
 
