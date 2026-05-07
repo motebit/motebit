@@ -1,5 +1,132 @@
 # motebit CLI Changelog
 
+## 1.4.0
+
+### Minor Changes
+
+- 1570cf9: Activity + Retention panels land on desktop and mobile — the sovereignty-visible pair (signed-action timeline + browser-verified operator retention manifest) is now true on every shipping surface. Web shipped at `eb10bac6` / `ac622b64`; desktop and mobile mount the same `@motebit/panels` controllers against their own runtime accessors, with surface-specific render. The cross-surface contract is locked by drift gate `check-panel-controllers` (#33), which now enumerates `activity` and `retention` as additional families alongside `sovereign` / `agents` / `memory` / `goals` — any future surface that ships the panel UI but bypasses the controller fails CI.
+
+  Desktop: `apps/desktop/src/ui/activity.ts`, HTML markup + inline CSS, `/activity` slash command, escape-key wiring.
+
+  Mobile: `apps/mobile/src/components/ActivityPanel.tsx`, RN Modal + FlatList + chip filter row, `/activity` slash command.
+
+  Both surfaces refresh on every panel open: re-fetches `/.well-known/motebit-{transparency,retention}.json`, runs the same hex-pubkey decode + verifier-dispatch flow as web, renders the verification status badge + per-tier retention table above the audit timeline. Operator promise above, signed-action log below — same calm-software pattern, three surfaces, one controller pair.
+
+  ```ts
+  // Same shape on every surface — surfaces wire the adapter:
+  const activityCtrl = createActivityController({
+    queryAudit: ({ limit }) => runtime.auditLog.query(motebitId, { limit }),
+    queryEvents: ({ eventTypes, limit }) =>
+      runtime.events.query({
+        motebit_id: motebitId,
+        event_types: eventTypes as EventType[],
+        limit,
+      }),
+  });
+  const retentionCtrl = createRetentionController({
+    fetchTransparency: () => fetchJson("/.well-known/motebit-transparency.json"),
+    fetchRetentionManifest: () => fetchJson("/.well-known/motebit-retention.json"),
+    verifyManifest: async (m, k) => verifyRetentionManifest(m, hexToBytes(k)),
+  });
+  ```
+
+  Surface gap that remains: skill-audit log (web IDB / mobile SQLite / CLI fs) is rendered only by `motebit skills audit` today — the Activity panel doesn't merge it yet. The `ActivityKind` union has `consent` / `trust` / `skill` slots reserved for it; adding a third source to the controller's adapter is the natural follow-up.
+
+- eb10bac: Activity panel — sovereignty-visible read view. The deletion choke-point shipped in `d5e66e34` made every user-driven memory and conversation deletion signed, audited, and event-logged with `DeleteRequested` — but the receipts were invisible. The audit log accumulated `delete_memory` / `delete_conversation` / `flush_record` rows, the event log accumulated `DeleteRequested` and `ExportRequested` intents, and no surface rendered them. This commit closes the visibility half of the sovereignty arc.
+
+  Cross-surface controller in `@motebit/panels` (`createActivityController`, `filterActivityView`, `ActivityEvent`, `ActivityKind`) — same Layer 5 BSL pattern as memory/skills/goals/sovereign. Two-source merge (audit log + event log), kind classification, deterministic sort, search + chip filters. Web is the first consumer: `/activity` URL route + `motebit:open-activity` event + slash-command + escape-key wiring. Mobile and desktop will mount the same controller against their own runtime accessors as a follow-up — the panels CLAUDE.md drift-gate idiom ("the second consumer is when the gate lands") applies.
+
+  ```ts
+  const ctrl = createActivityController({
+    queryAudit: ({ limit }) => runtime.auditLog.query(motebitId, { limit }),
+    queryEvents: ({ eventTypes, limit }) =>
+      runtime.events.query({
+        motebit_id: motebitId,
+        event_types: eventTypes as EventType[],
+        limit,
+      }),
+  });
+  await ctrl.refresh();
+  ctrl.toggleKind("deletion"); // chip filter
+  ctrl.setSearch("conversation"); // substring on action / target
+  const view = ctrl.filteredView(); // most-recent-first, deterministic ties
+  ```
+
+  15 controller tests covering projection (audit + event), classification, signature surfacing, default noise filter (`list_memories` / `inspect_memory` hidden), tombstone exclusion, sort + tiebreak, kind toggle, search, error paths, subscribe lifecycle.
+
+- 81b0f56: Add `motebit skills audit [skill-name] [--event-type=…] [--limit=N] [--json]` — first read-side consumer of the durable skill audit trail. Reads `~/.motebit/skills/audit.log` (the line-delimited JSON stream emitted by `registry.trust` / `registry.untrust` / `registry.remove` and the panels-side `RegistryBackedSkillsPanelAdapter`'s `skill_consent_granted` events), filters + formats + prints. Most-recent-first ordering matches the panels-side `getAll()` convention on web (IDB) and mobile (SQLite).
+
+  Closes the doctrine gap shipped by the consent-audit arc — the protocol type and durable persistence existed, but no surface answered "did I approve installing this medical skill?" without grepping the log file directly. `motebit skills audit` answers it. Operator-grade UI; per-skill timeline / federation-dispute flows are deferred until those consumers arrive.
+
+  Adds `--event-type` flag (string) for filtering by `SkillAuditEvent` discriminator (`skill_trust_grant` / `skill_trust_revoke` / `skill_remove` / `skill_consent_granted`). Additive to the existing `--limit` and `--json` flags.
+
+- ac622b6: Operator retention manifest, browser-verified, embedded in the Activity panel. Activity (`d5e66e34`'s deletion choke + `eb10bac6`'s timeline panel) shows what the motebit DID. The retention widget shows what the operator PROMISED — the second axis of sovereignty visibility. Together they're the pair: the operator's signed retention claim is re-verified in the browser without trusting the relay, and the user's motebit's actual signed-deletion log sits below it.
+
+  The verifier (`verifyRetentionManifest`) was shipped at `fda8dd08` (phase 6a of the retention doctrine). The relay has been serving the signed JSON at `/.well-known/motebit-retention.json` ever since, with operator pubkey at `/.well-known/motebit-transparency.json`. No surface rendered them. This commit closes that.
+
+  Cross-surface controller in `@motebit/panels` (`createRetentionController`, `summarizeRetentionCeilings`, `RetentionVerification`) — same Layer 5 BSL pattern. Two-fetch coordination (transparency manifest first for the key, then retention manifest for the body), verifier dispatch, discrete verification status (`idle | loading | verified | invalid | unreachable`). `summarizeRetentionCeilings` projects the manifest's per-store `mutable_pruning` shapes into a single per-sensitivity table sorted strictest-first, taking the worst-case ceiling across all stores that hold each tier.
+
+  Web embeds it as a header block inside the Activity panel, above the filter chips. `@motebit/encryption` re-exports `verifyRetentionManifest` (matching the established `verifySkillBundle` pattern) so apps consume product vocabulary, not protocol primitives. Drift gate `check-app-primitives` enforces the layering.
+
+  11 controller tests covering verification status state machine (verified / invalid / unreachable / loading), error paths (transparency null, retention null, fetch throws, verifier throws), summary projection (sort order, multi-store strictest-ceiling, ignore non-mutable_pruning shapes).
+
+  Mobile + desktop will mount the same controller as a follow-up — the panels CLAUDE.md drift-gate idiom applies.
+
+- c264a16: Self-test affordance — third leg of the sovereignty-visible trifecta. Activity (`eb10bac6`) shows what the motebit DID; Retention (`ac622b64`) shows what the operator PROMISED; this commit ships the third axis: **the user can probe that the protocol's security boundary still holds.** One click, green/red receipt, every surface.
+
+  `cmdSelfTest` (the canonical adversarial-onboarding probe per `CLAUDE.md` "Adversarial onboarding") submits a self-delegation task through the live relay, exercising the real device-auth + audience-binding + sybil-defense flow production agents use. It's run once on every onboarding today, but the result was logged to console and never surfaced. The user couldn't ask "is my motebit still secure?" without `console.log` — until now.
+
+  Cross-surface controller in `@motebit/panels`:
+
+  ```ts
+  const ctrl = createSelfTestController({
+    runSelfTest: () => app.runSelfTestNow(),
+  });
+  ctrl.subscribe(setState);
+  ctrl.run(); // kicks off the probe; concurrent calls coalesce.
+  // state.status: idle | running | passed | failed | task_failed | timeout | skipped
+  ```
+
+  Discrete status state machine, idempotent under concurrent clicks, `selfTestBadgeLabel(status)` projection so every surface renders the same calm-software badge. Adapter throws are caught and projected into `failed` with the error in `summary` — surfaces never see a rejected promise.
+
+  Each surface ships:
+  - **Web** (`apps/web/src/web-app.ts`): `runSelfTestNow()` public method that mints `task:submit` token, calls `cmdSelfTest`, returns the structured result.
+  - **Desktop** (`apps/desktop/src/index.ts`): same shape, dynamic-imports `@tauri-apps/api/core` for `invoke`, fetches device keypair, mints token.
+  - **Mobile** (`apps/mobile/src/mobile-app.ts`): same shape against `await getSyncUrl()` + `createSyncToken("task:submit")`.
+  - All three Activity panels render a "Run security self-test" button with status badge below the retention summary, inside the existing retention block. Inline summary surfaces failure hint when relay returns 401 ("device may not be registered") / 402 ("fund the agent's budget") / etc.
+
+  Drift gate `check-panel-controllers` (#33) extends with `self-test` family — any surface that ships the button but bypasses the controller fails CI. Same shape as the existing `activity` + `retention` enforcement.
+
+  10 controller tests covering state machine (idle → running → terminal), adapter throw → `failed` projection, hint + httpStatus passthrough, concurrent-call coalescing, subscribe/dispose lifecycle, badge label projection.
+
+  The trifecta on every surface, locked by gate, demo-ready.
+
+- d5e66e3: Sovereign deletion now exits through the privacy-layer choke point on every surface. Pre-fix only desktop's UI memory-delete actually called `runtime.privacy.deleteMemory(..., "user_request")` — every other path (`/forget` slash command, web + mobile + spatial UI memory-delete, and user-driven conversation deletion across all surfaces) bypassed via `runtime.memory.deleteMemory(...)` or the storage adapter's `deleteConversation(...)`, producing silent erasures with no signed `mutable_pruning` cert, no `consolidation_flush` cert per message, no `delete_*` audit row, and no `DeleteRequested` event.
+
+  This change ties the user-driven axis of `docs/doctrine/retention-policy.md` together: `runtime.privacy.deleteConversation(id, "user_request")` lands as a sibling to `runtime.privacy.deleteMemory`, both emit `DeleteRequested` (intent) before signing (completion receipt) and erasing (decision 7 — physical erase, not tombstone). The runtime's `deleteConversation` wrapper became `async` and routes through the same choke; CLI's `/forget` and the `runtime.commands.cmdForget` slash-tool both signed-deletes now. Desktop's legacy fallback to `runtime.memory.deleteMemory` on privacy-layer failure was removed — privacy failure now surfaces as "delete failed, retry" rather than producing an unsigned, unaudited erase.
+
+  Drift gate `check-deletion-routes-through-privacy` (invariant #75) locks the contract: `<receiver>.memory.deleteMemory(` and `<receiver>.eraseMessage(` are forbidden outside the privacy layer, consolidation cycle, and storage-adapter implementation sites. Future surfaces cannot drift back into bypass.
+
+  ```ts
+  // before — silent on web / mobile / spatial / cli
+  await runtime.memory.deleteMemory(nodeId);
+
+  // after — signed, audited, event-logged on every surface
+  await runtime.privacy.deleteMemory(nodeId, "user_request");
+
+  // new — conversations get the same contract
+  await runtime.deleteConversation(conversationId);
+  // → DeleteRequested event, one consolidation_flush cert per message,
+  //   per-row erase, conversation row drop, delete_conversation audit
+  ```
+
+### Patch Changes
+
+- 748e784: Internal: widen `makeAuditSink` in `motebit skills install/list/...` subcommands to accept the broader `SkillAuditEvent` union (now including `skill_consent_granted` from the consent-gate arc). The body still writes the JSON-serialized event verbatim to `~/.motebit/skills/audit.log`, so any consumer that consumed the prior `SkillTrustGrantEvent`-only stream sees the new variant as just another event line — no log-format break, no behavior change. Companion to the protocol-side widening shipped in `cfa3d42d`.
+- 18e978a: Internal: re-route `NodeFsSkillStorageAdapter` + `resolveDirectorySkillSource` imports through `@motebit/skills/node-fs` instead of the top-level `@motebit/skills` entry. The CLI's runtime / slash-commands / `motebit skills *` subcommands all consume the same Node-fs adapter; the import path move is mechanical, no behavior change.
+
+  Why the entry-point split: `@motebit/skills`'s top-level index re-exported the Node-fs adapter, which destructures `node:fs` eagerly at module evaluation. Tree-shaking handles it in production builds, but vite dev mode evaluates ES modules eagerly — any browser-side consumer that imports `SkillRegistry` from the top-level entry triggered a `node:fs` stub access and crashed the page before the renderer's animation loop started. The hot-fix splits the package so the bare entry is browser-safe and Node-fs ships behind `/node-fs`. CLI is the only published consumer affected; the rest of the consumers are private workspace packages.
+
 ## 1.3.0
 
 ### Minor Changes
