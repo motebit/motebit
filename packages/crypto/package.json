@@ -69,9 +69,9 @@
   },
   "devDependencies": {
     "@motebit/protocol": "workspace:*",
-    "@noble/curves": "~1.7.0",
-    "@noble/ed25519": "~3.0.1",
-    "@noble/hashes": "~1.6.0",
+    "@noble/curves": "~2.2.0",
+    "@noble/ed25519": "~3.1.0",
+    "@noble/hashes": "~2.2.0",
     "@types/node": "^22.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.6.0",
