@@ -363,10 +363,10 @@ async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<voi
     settings.updateModelIndicator();
     settings.updateConnectPrompt();
   } catch {
-    if (heading) heading.textContent = "Give it a voice";
+    if (heading) heading.textContent = "Connect a model";
     if (text)
       text.textContent =
-        "Open Settings to connect — your little drop of glass will start talking back.";
+        "Open Settings to choose a provider — on-device, your own key, or motebit cloud.";
     if (btn) btn.style.display = "";
     if (progress) progress.style.display = "none";
   }
