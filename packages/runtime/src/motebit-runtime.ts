@@ -31,6 +31,7 @@ import { signToolInvocationReceipt, hashToolPayload } from "@motebit/crypto";
 import { EventType, AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
 import type { ProviderMode, DropPayload, DropPayloadKind } from "@motebit/sdk";
 import { resolveDropTarget } from "@motebit/sdk";
+import { EMBODIMENT_MODE_CONTRACTS } from "@motebit/render-engine";
 
 /**
  * Thrown by the runtime's sensitivity gate when an AI call would
@@ -48,14 +49,31 @@ import { resolveDropTarget } from "@motebit/sdk";
  */
 export class SovereignTierRequiredError extends Error {
   readonly code = "SOVEREIGN_TIER_REQUIRED" as const;
+  /**
+   * Effective sensitivity tier the gate decided on. Composes
+   * `sessionSensitivity` (set explicitly via `setSessionSensitivity`)
+   * with the max sensitivity of slab items in `tier-bounded-by-source`
+   * modes. When `effectiveSensitivity > sessionSensitivity`, the
+   * elevation came from a user-fed perception (a dropped sensitive
+   * snippet, an OCR-classified shared_gaze observation) — the user
+   * dismisses the offending slab item OR switches to a sovereign
+   * provider to clear the gate.
+   */
+  readonly effectiveSensitivity: SensitivityLevel;
   constructor(
     readonly sessionSensitivity: SensitivityLevel,
     readonly providerMode: ProviderMode | "unset",
+    effectiveSensitivity?: SensitivityLevel,
   ) {
+    const effective = effectiveSensitivity ?? sessionSensitivity;
+    const elevatedBySlab = effective !== sessionSensitivity;
     super(
-      `Session sensitivity "${sessionSensitivity}" requires sovereign (on-device) provider; current provider is "${providerMode}". Switch to an on-device provider or de-escalate session sensitivity to continue.`,
+      elevatedBySlab
+        ? `Effective sensitivity "${effective}" (elevated from session "${sessionSensitivity}" by a tier-bounded-by-source slab item) requires sovereign (on-device) provider; current provider is "${providerMode}". Dismiss the offending slab item or switch to an on-device provider to continue.`
+        : `Session sensitivity "${sessionSensitivity}" requires sovereign (on-device) provider; current provider is "${providerMode}". Switch to an on-device provider or de-escalate session sensitivity to continue.`,
     );
     this.name = "SovereignTierRequiredError";
+    this.effectiveSensitivity = effective;
   }
 }
 
@@ -85,6 +103,29 @@ export class SovereignTierRequiredError extends Error {
  * the `message` carries the human-readable form. Same fail-closed
  * pattern as `SovereignTierRequiredError`.
  */
+/**
+ * Ordinal rank for `SensitivityLevel` — `none < personal < medical
+ * < financial < secret`. Used to compute the max tier across the
+ * session-level setting and slab items in tier-bounded-by-source
+ * modes. Mirrors the private `LEVEL_RANK` table in
+ * `@motebit/policy-invariants/computer-sensitivity.ts`; kept here
+ * private to the runtime so it stays a single-file concern.
+ */
+function rankSensitivity(level: SensitivityLevel): number {
+  switch (level) {
+    case SensitivityLevel.None:
+      return 0;
+    case SensitivityLevel.Personal:
+      return 1;
+    case SensitivityLevel.Medical:
+      return 2;
+    case SensitivityLevel.Financial:
+      return 3;
+    case SensitivityLevel.Secret:
+      return 4;
+  }
+}
+
 export class DropTargetGovernanceRequiredError extends Error {
   readonly code = "DROP_TARGET_GOVERNANCE_REQUIRED" as const;
   constructor(readonly target: "creature" | "ambient") {
@@ -2905,21 +2946,59 @@ export class MotebitRuntime {
   }
 
   /**
+   * Effective session sensitivity — the max of the explicit
+   * `_sessionSensitivity` (set via `setSessionSensitivity`) and the
+   * highest tier of any slab item in a `tier-bounded-by-source` mode
+   * (per `EmbodimentSensitivityRouting`). User-fed perception (drops
+   * classified by `scanText`) tags items with their tier; this
+   * composition makes the runtime's egress gate honor the mode
+   * contract's posture without requiring callers to manually elevate
+   * the session.
+   *
+   * Doctrine: `motebit-computer.md` §"Mode contract — six declarations
+   * per mode" + the closure of the `sensitivity` ALLOWLIST entry in
+   * `check-mode-contract-readers` (#76). The gate becomes the real
+   * consumer of the mode field, converting it from typed-but-passive
+   * declaration into load-bearing behavior.
+   */
+  private getEffectiveSessionSensitivity(): SensitivityLevel {
+    let effective = this._sessionSensitivity;
+    const slabState = this.slab.getState();
+    for (const item of slabState.items.values()) {
+      if (item.sensitivity === undefined) continue;
+      const contract = EMBODIMENT_MODE_CONTRACTS[item.mode];
+      if (contract.sensitivity !== "tier-bounded-by-source") continue;
+      if (rankSensitivity(item.sensitivity) > rankSensitivity(effective)) {
+        effective = item.sensitivity;
+      }
+    }
+    return effective;
+  }
+
+  /**
    * Sensitivity-aware AI routing gate. Throws
-   * `SovereignTierRequiredError` when the session is at `medical`,
-   * `financial`, or `secret` tier AND the configured provider is not
-   * sovereign. Called at every runtime AI-call entry before any
-   * network bytes leave; enforced by the `check-sensitivity-routing`
-   * drift gate. Default `none` sensitivity makes this a no-op for the
-   * common path — only callers that elevated sensitivity hit the gate.
+   * `SovereignTierRequiredError` when the **effective** session
+   * sensitivity (session × slab items in tier-bounded-by-source
+   * modes) is `medical`, `financial`, or `secret` AND the configured
+   * provider is not sovereign. Called at every runtime AI-call entry
+   * before any network bytes leave; enforced by the
+   * `check-sensitivity-routing` drift gate. Default `none`
+   * sensitivity makes this a no-op for the common path — only
+   * callers that elevated sensitivity OR dropped sensitive content
+   * onto the slab hit the gate.
    */
   private assertSensitivityPermitsAiCall(): void {
+    const effective = this.getEffectiveSessionSensitivity();
     const sensitive =
-      this._sessionSensitivity === SensitivityLevel.Medical ||
-      this._sessionSensitivity === SensitivityLevel.Financial ||
-      this._sessionSensitivity === SensitivityLevel.Secret;
+      effective === SensitivityLevel.Medical ||
+      effective === SensitivityLevel.Financial ||
+      effective === SensitivityLevel.Secret;
     if (sensitive && !this.providerIsSovereign()) {
-      throw new SovereignTierRequiredError(this._sessionSensitivity, this._providerMode ?? "unset");
+      throw new SovereignTierRequiredError(
+        this._sessionSensitivity,
+        this._providerMode ?? "unset",
+        effective,
+      );
     }
   }
 

@@ -58,6 +58,7 @@
 
 import type { EmbodimentMode, SlabItemKind, SlabItemPhase } from "@motebit/render-engine";
 import { defaultEmbodimentMode, EMBODIMENT_MODE_CONTRACTS } from "@motebit/render-engine";
+import type { SensitivityLevel } from "@motebit/sdk";
 
 /**
  * Phases the contract validator inspects. Only terminal-shape transitions
@@ -170,6 +171,28 @@ export interface SlabItem {
    * §"Embodiment modes — governance-gated perception."
    */
   readonly mode: EmbodimentMode;
+  /**
+   * Sensitivity tier of the item's content, classified at open time.
+   * Optional — items without a classifier (motebit-driven tool
+   * outputs whose tier is implicit, plan steps, streaming tokens of
+   * the motebit's own response) leave this unset. User-fed perception
+   * (drag-drop, share-sheet, pinch-throw) classifies via
+   * `@motebit/policy-invariants::scanText` and tags the item.
+   *
+   * The runtime's `assertSensitivityPermitsAiCall` consults this
+   * field as part of computing the effective session sensitivity:
+   * for items whose `mode`'s `EmbodimentSensitivityRouting` is
+   * `tier-bounded-by-source`, the item's sensitivity contributes to
+   * the gate's ceiling. The thesis claim "medical/financial/secret
+   * never reach external AI" then covers user-fed external content,
+   * not just session-elevated state.
+   *
+   * Doctrine: motebit-computer.md §"Mode contract — six declarations
+   * per mode" + the `sensitivity` allowlist entry in
+   * `check-mode-contract-readers` that named this field as the
+   * blocker. Adding the field closes that entry.
+   */
+  readonly sensitivity?: SensitivityLevel;
 }
 
 export interface SlabState {
@@ -239,6 +262,14 @@ export interface SlabController {
     kind: SlabItemKind;
     payload?: unknown;
     mode?: EmbodimentMode;
+    /**
+     * Optional sensitivity tier of the content. Set by callers that
+     * classify the payload (e.g., drop handlers running scanText on
+     * user-fed text). Items in `tier-bounded-by-source` modes
+     * contribute to the runtime's effective-sensitivity computation
+     * for the AI-call gate; items left unset don't influence the gate.
+     */
+    sensitivity?: SensitivityLevel;
   }): void;
 
   /**
@@ -551,7 +582,7 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
       };
     },
 
-    openItem({ id, kind, payload, mode }): void {
+    openItem({ id, kind, payload, mode, sensitivity }): void {
       if (disposed) return;
       if (items.has(id)) {
         warn("slab openItem ignored — item id already present", { id, kind });
@@ -566,6 +597,7 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
         lastUpdatedAt: ts,
         payload,
         mode: mode ?? defaultEmbodimentMode(kind),
+        ...(sensitivity !== undefined ? { sensitivity } : {}),
       });
       recomputeAmbient();
       notify();

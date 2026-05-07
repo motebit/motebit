@@ -103,11 +103,15 @@ const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
     reason:
       "deferred until the policy gate cross-references `EMBODIMENT_MODE_CONTRACTS[mode].consent` for slab-item-driven approval decisions; today the gate fires per-tool config, not per-mode contract — unifying the two is the next architectural step but needs a concrete consumer driver to scope correctly",
   },
-  {
-    field: "sensitivity",
-    reason:
-      "deferred until the runtime's existing sensitivity routing (the `SovereignTierRequiredError` path, gate #65) cross-references the mode's admission posture — `tier-bounded-by-tool` etc. — when an item carrying user-data flows toward an external provider; structurally aligned but blocks on a SlabItem.sensitivity field that doesn't exist yet",
-  },
+  // `sensitivity` removed from the allowlist on 2026-05-07 when the
+  // runtime's `getEffectiveSessionSensitivity` started consuming
+  // `EMBODIMENT_MODE_CONTRACTS[item.mode].sensitivity`. Drops classified
+  // by `scanText` tag the slab item with their tier; items in
+  // `tier-bounded-by-source` modes contribute to the gate's effective
+  // ceiling. The mode contract's sensitivity field is now load-bearing
+  // for every AI-call entry in `motebit-runtime.ts`. See
+  // `assertSensitivityPermitsAiCall` and the perception substrate
+  // commits.
 ];
 
 interface Violation {

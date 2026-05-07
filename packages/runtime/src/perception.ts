@@ -25,8 +25,30 @@
  * tension membrane drops cross.
  */
 
-import type { DropPayload, DropPayloadKind } from "@motebit/sdk";
+import { type DropPayload, type DropPayloadKind, SensitivityLevel } from "@motebit/sdk";
+import { scanText, type SensitivityLevel as ScanLevel } from "@motebit/policy-invariants";
 import type { SlabController } from "./slab-controller.js";
+
+/**
+ * Convert the string-union sensitivity level emitted by `scanText`
+ * into the protocol's `SensitivityLevel` enum. The string values are
+ * identical (`"none" | "personal" | ...`), but TS treats the enum as
+ * nominal so the conversion is explicit.
+ */
+function toSensitivityEnum(level: ScanLevel): SensitivityLevel {
+  switch (level) {
+    case "none":
+      return SensitivityLevel.None;
+    case "personal":
+      return SensitivityLevel.Personal;
+    case "medical":
+      return SensitivityLevel.Medical;
+    case "financial":
+      return SensitivityLevel.Financial;
+    case "secret":
+      return SensitivityLevel.Secret;
+  }
+}
 
 /** Handler signature parameterized by the categorical drop kind. */
 export type DropHandler<K extends DropPayloadKind> = (
@@ -97,12 +119,24 @@ export class DropDispatcher {
 function defaultUrlHandler(deps: DropDispatcherDeps): DropHandler<"url"> {
   return (payload) => {
     const id = `perception-url-${cryptoRandom()}`;
+    // URL strings rarely contain sensitive patterns themselves; the
+    // sensitive content lives at the URL's destination, which the
+    // runtime classifies later if/when it fetches via read_url.
+    // Classifying the URL string still catches the rare case (e.g. a
+    // signed pre-auth URL containing an embedded secret token).
+    const sensitivity = toSensitivityEnum(scanText(payload.url).level);
     const itemPayload = {
       url: payload.url,
       source: "user-drop" as const,
       sourceFrame: payload.sourceFrame,
     };
-    deps.slab.openItem({ id, kind: "fetch", mode: "shared_gaze", payload: itemPayload });
+    deps.slab.openItem({
+      id,
+      kind: "fetch",
+      mode: "shared_gaze",
+      payload: itemPayload,
+      sensitivity,
+    });
     deps.slab.restItem(id, itemPayload);
   };
 }
@@ -117,12 +151,26 @@ function defaultUrlHandler(deps: DropDispatcherDeps): DropHandler<"url"> {
 function defaultTextHandler(deps: DropDispatcherDeps): DropHandler<"text"> {
   return (payload) => {
     const id = `perception-text-${cryptoRandom()}`;
+    // Run the canonical text classifier on the dropped payload — the
+    // same regex engine `classifyComputerAction` uses for `type` action
+    // gating. Catches credit cards (Luhn-verified), SSNs, AWS keys,
+    // GitHub tokens, OpenAI/Anthropic API keys, JWTs, PEM blocks.
+    // Items in `shared_gaze` mode contribute their tier to the
+    // runtime's effective-sensitivity gate; a user dropping a secret
+    // snippet onto motebit while in BYOK mode triggers the gate.
+    const sensitivity = toSensitivityEnum(scanText(payload.text).level);
     const itemPayload = {
       text: payload.text,
       mimeType: payload.mimeType ?? "text/plain",
       source: "user-drop" as const,
     };
-    deps.slab.openItem({ id, kind: "stream", mode: "shared_gaze", payload: itemPayload });
+    deps.slab.openItem({
+      id,
+      kind: "stream",
+      mode: "shared_gaze",
+      payload: itemPayload,
+      sensitivity,
+    });
     deps.slab.restItem(id, itemPayload);
   };
 }
@@ -137,6 +185,12 @@ function defaultTextHandler(deps: DropDispatcherDeps): DropHandler<"text"> {
 function defaultImageHandler(deps: DropDispatcherDeps): DropHandler<"image"> {
   return (payload) => {
     const id = `perception-image-${cryptoRandom()}`;
+    // Image classification needs OCR to inspect rendered text inside
+    // the raster — the same path `classifyScreenshotWithOcr` takes
+    // for computer-use observations. v1 ships without OCR-on-drop, so
+    // image drops carry no sensitivity tag (left undefined). v1.1
+    // wires the existing OCR path; the slab item shape is already
+    // ready to receive the field.
     const itemPayload = {
       byteLength: payload.bytes.byteLength,
       mimeType: payload.mimeType,
