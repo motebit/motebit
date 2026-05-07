@@ -46,6 +46,17 @@ export interface BrowserSession {
    */
   lastCursorX: number;
   lastCursorY: number;
+  /**
+   * In-flight action count. Incremented by `beginAction`, decremented
+   * in `endAction`'s `finally`. The idle reaper skips sessions with
+   * `inFlight > 0` so a slow action whose runtime exceeds the idle
+   * window is not torn down mid-execution. Practical mitigation for
+   * the touch-then-execute race: `touchSession` updates `lastUsedAt`
+   * before the action runs, but if the action takes longer than
+   * `idleMs` the reaper would otherwise close the context the
+   * executor is still using.
+   */
+  inFlight: number;
 }
 
 export interface BrowserPoolConfig {
@@ -111,6 +122,7 @@ export class BrowserPool {
       lastUsedAt: opened,
       lastCursorX: 0,
       lastCursorY: 0,
+      inFlight: 0,
     };
     this.sessions.set(sessionId, session);
     return session;
@@ -125,6 +137,27 @@ export class BrowserPool {
   touchSession(sessionId: string): void {
     const s = this.sessions.get(sessionId);
     if (s) s.lastUsedAt = this.now();
+  }
+
+  /**
+   * Mark the start of an action against a session. The route handler
+   * MUST pair this with `endAction` in a `finally` block so the
+   * counter returns to zero even when `executeAction` throws.
+   */
+  beginAction(sessionId: string): void {
+    const s = this.sessions.get(sessionId);
+    if (s) s.inFlight += 1;
+  }
+
+  /**
+   * Mark the end of an action. Idempotent at zero — a decrement on a
+   * counter that's already zero stays at zero (defensive against a
+   * caller pairing wrong, though the gate test exercises the
+   * happy-path discipline).
+   */
+  endAction(sessionId: string): void {
+    const s = this.sessions.get(sessionId);
+    if (s && s.inFlight > 0) s.inFlight -= 1;
   }
 
   /**
@@ -144,14 +177,19 @@ export class BrowserPool {
 
   /**
    * Walk the session map and close everything older than the idle
-   * threshold. Called from the boot-side reaper interval; exposed
-   * publicly for deterministic tests.
+   * threshold AND with no in-flight actions. Called from the
+   * boot-side reaper interval; exposed publicly for deterministic
+   * tests. Sessions with `inFlight > 0` are deliberately spared even
+   * if their `lastUsedAt` is past the cutoff — `touchSession` runs
+   * before `executeAction`, so a slow action whose runtime exceeds
+   * the idle window would otherwise have its context torn down
+   * mid-execution.
    */
   async reapIdle(): Promise<void> {
     const cutoff = this.now() - this.config.idleMs;
     const expired: string[] = [];
     for (const [id, s] of this.sessions) {
-      if (s.lastUsedAt < cutoff) expired.push(id);
+      if (s.lastUsedAt < cutoff && s.inFlight === 0) expired.push(id);
     }
     await Promise.all(expired.map((id) => this.closeSession(id)));
   }

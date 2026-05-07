@@ -145,6 +145,58 @@ describe("BrowserPool", () => {
       await pool.reapIdle();
       expect(pool.size()).toBe(1);
     });
+
+    it("does NOT reap a session with an in-flight action", async () => {
+      const session = await pool.openSession();
+      pool.beginAction(session.sessionId);
+      // Walk past the idle threshold while the action is still running.
+      now += 90_000;
+      await pool.reapIdle();
+      expect(pool.getSession(session.sessionId)).not.toBeNull();
+      expect(session.inFlight).toBe(1);
+    });
+
+    it("reaps after the in-flight action completes and the idle window passes", async () => {
+      const session = await pool.openSession();
+      pool.beginAction(session.sessionId);
+      now += 90_000;
+      pool.endAction(session.sessionId);
+      // `lastUsedAt` was set at openSession (still 1_000_000); the
+      // session is past the 60_000 idle cutoff and now has 0 in-flight.
+      await pool.reapIdle();
+      expect(pool.getSession(session.sessionId)).toBeNull();
+    });
+
+    it("respects nested in-flight counts (concurrent actions on the same session)", async () => {
+      const session = await pool.openSession();
+      pool.beginAction(session.sessionId);
+      pool.beginAction(session.sessionId);
+      expect(session.inFlight).toBe(2);
+      now += 90_000;
+      await pool.reapIdle();
+      expect(pool.getSession(session.sessionId)).not.toBeNull();
+      pool.endAction(session.sessionId);
+      expect(session.inFlight).toBe(1);
+      await pool.reapIdle();
+      expect(pool.getSession(session.sessionId)).not.toBeNull();
+      pool.endAction(session.sessionId);
+      expect(session.inFlight).toBe(0);
+      await pool.reapIdle();
+      expect(pool.getSession(session.sessionId)).toBeNull();
+    });
+  });
+
+  describe("beginAction / endAction", () => {
+    it("endAction is a no-op on a counter already at zero", async () => {
+      const session = await pool.openSession();
+      pool.endAction(session.sessionId);
+      expect(session.inFlight).toBe(0);
+    });
+
+    it("begin/end on unknown session id is a no-op (defensive)", () => {
+      expect(() => pool.beginAction("nope")).not.toThrow();
+      expect(() => pool.endAction("nope")).not.toThrow();
+    });
   });
 
   describe("shutdown", () => {

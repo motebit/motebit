@@ -77,8 +77,17 @@ export function buildApp(deps: BuildAppDeps): Hono {
       throw new ServiceError("not_supported", "missing or malformed `action` body");
     }
     deps.pool.touchSession(sessionId);
-    const result = await executeAction(session, action as ComputerAction);
-    return c.json(result);
+    deps.pool.beginAction(sessionId);
+    try {
+      const result = await executeAction(session, action as ComputerAction);
+      return c.json(result);
+    } finally {
+      // `finally` so a thrown executor returns inFlight to zero — the
+      // global error handler still runs after this and surfaces the
+      // ServiceError envelope; the reaper sees the session as idle-able
+      // again (assuming `lastUsedAt` is past the cutoff).
+      deps.pool.endAction(sessionId);
+    }
   });
 
   app.delete("/sessions/:id", async (c) => {

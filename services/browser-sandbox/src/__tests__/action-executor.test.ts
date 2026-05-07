@@ -82,6 +82,7 @@ function makeMockSession(): {
     lastUsedAt: 1_000_000,
     lastCursorX: 0,
     lastCursorY: 0,
+    inFlight: 0,
   };
 
   return {

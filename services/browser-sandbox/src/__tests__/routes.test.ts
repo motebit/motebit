@@ -70,6 +70,7 @@ function makeFakePool(): { pool: BrowserPool; state: FakePoolState } {
       lastUsedAt: 1_000_000,
       lastCursorX: 0,
       lastCursorY: 0,
+      inFlight: 0,
     } as unknown as BrowserSession;
     sessions.set(id, session);
     return session;
@@ -88,6 +89,16 @@ function makeFakePool(): { pool: BrowserPool; state: FakePoolState } {
     reapIdle: async () => undefined,
     shutdown: async () => undefined,
     start: async () => undefined,
+    beginAction: (id: string) => {
+      const s = sessions.get(id);
+      if (s) (s as { inFlight: number }).inFlight += 1;
+    },
+    endAction: (id: string) => {
+      const s = sessions.get(id);
+      if (s && (s as { inFlight: number }).inFlight > 0) {
+        (s as { inFlight: number }).inFlight -= 1;
+      }
+    },
   } as unknown as BrowserPool;
 
   return { pool, state };
@@ -217,6 +228,58 @@ describe("browser-sandbox routes", () => {
       expect(res.status).toBe(501);
       const body = (await res.json()) as { error: { reason: string } };
       expect(body.error.reason).toBe("not_supported");
+    });
+
+    it("decrements inFlight on a happy-path action (begin/end discipline)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      expect(session.inFlight).toBe(0);
+
+      const res = await app.request(`/sessions/${session_id}/actions`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({ action: { kind: "screenshot" } }),
+      });
+      expect(res.status).toBe(200);
+      // After the action returns, inFlight has returned to zero.
+      expect(session.inFlight).toBe(0);
+    });
+
+    it("decrements inFlight when executeAction throws — finally discipline", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+
+      // Force the executor to throw by replacing page.mouse.click. The
+      // route's `finally` branch MUST decrement inFlight even though
+      // the response goes through the platform_blocked error path.
+      (session.page as unknown as { mouse: { click: () => Promise<void> } }).mouse.click =
+        async () => {
+          throw new Error("simulated chromium crash");
+        };
+
+      const res = await app.request(`/sessions/${session_id}/actions`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: { kind: "click", target: { x: 1, y: 1 } },
+        }),
+      });
+      expect(res.status).toBe(500);
+      const body = (await res.json()) as { error: { reason: string } };
+      expect(body.error.reason).toBe("platform_blocked");
+      // The thrown executor MUST NOT leak an in-flight count — otherwise
+      // the reaper would skip this session forever after a crash.
+      expect(session.inFlight).toBe(0);
     });
   });
 

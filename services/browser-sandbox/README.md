@@ -31,9 +31,23 @@ route.
 - One page per session (single tab).
 - Concurrent-session cap (config-driven; default 4).
 - Idle reaper closes forgotten sessions after `BROWSER_SANDBOX_IDLE_MS`.
-- Single shared bearer token across motebits — multi-tenant
-  isolation is a future graduation (audience-bound signed JWTs with
-  `motebit_id` claim).
+  The reaper skips sessions with in-flight actions, so a slow action
+  whose runtime exceeds the idle window is not torn down
+  mid-execution.
+- **Single-tenant deployment boundary.** v1 auth is one shared bearer
+  token (`MOTEBIT_API_TOKEN`) across all callers. Session IDs are
+  128-bit random and unguessable, but the shared bearer is **not** a
+  per-motebit cryptographic authorization layer — anyone holding the
+  token plus a valid session id can act on that session. Practical
+  isolation in v1 rests on session-id obscurity + transport-layer
+  trust, not cryptographic per-motebit scoping.
+
+  **Operational rule:** until audience-bound, per-motebit signed
+  tokens land (the relay's `aud: "browser-sandbox"` model with a
+  `motebit_id` claim), run **one service per motebit** — or per
+  same-operator deployment — and treat the service as a single-tenant
+  boundary. Multi-tenant production exposure is gated on the JWT
+  graduation, not on slice 3's web wiring.
 
 ## Where to read more
 
