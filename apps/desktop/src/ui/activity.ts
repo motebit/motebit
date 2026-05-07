@@ -40,6 +40,7 @@ const KIND_LABEL: Record<ActivityKind, string> = {
   export: "Exports",
   trust: "Trust",
   skill: "Skills",
+  governance: "Governance",
   other: "Other",
 };
 
@@ -52,6 +53,7 @@ const ACTION_LABEL: Record<string, string> = {
   delete_requested: "Requested deletion",
   export_requested: "Requested export",
   skill_loaded: "Loaded skill",
+  sensitivity_gate_fired: "Blocked egress",
 };
 
 function escapeHtml(s: string): string {
@@ -315,7 +317,15 @@ export function initActivity(ctx: DesktopContext): ActivityAPI {
     const ctrl = activityCtrl;
     if (filterBar === null) return;
     const activeKinds = ctrl?.getState().filter.kinds ?? new Set<ActivityKind>();
-    const kinds: ActivityKind[] = ["deletion", "consent", "export", "trust", "skill", "other"];
+    const kinds: ActivityKind[] = [
+      "deletion",
+      "consent",
+      "export",
+      "trust",
+      "skill",
+      "governance",
+      "other",
+    ];
     const chips = kinds.map((k) => {
       const active = activeKinds.has(k);
       return `<button class="activity-chip${active ? " active" : ""}" data-kind="${k}">${KIND_LABEL[k]}</button>`;

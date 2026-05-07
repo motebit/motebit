@@ -79,6 +79,18 @@ describe("ActivityController — projection", () => {
         makeEvent({ event_id: "e1", event_type: "delete_requested" }),
         makeEvent({ event_id: "e2", event_type: "export_requested", payload: {} }),
         makeEvent({ event_id: "e3", event_type: "skill_loaded", payload: {} }),
+        // SensitivityGateFired — denied egress at the boundary, classified as governance
+        makeEvent({
+          event_id: "e4",
+          event_type: "sensitivity_gate_fired",
+          payload: {
+            entry: "outbound_tool",
+            session_sensitivity: "none",
+            effective_sensitivity: "secret",
+            provider_mode: "byok",
+            tool_name: "web_search",
+          },
+        }),
       ],
     );
     const ctrl = createActivityController(adapter);
@@ -86,6 +98,59 @@ describe("ActivityController — projection", () => {
     expect(ctrl.getState().events.find((e) => e.id === "event:e1")?.kind).toBe("deletion");
     expect(ctrl.getState().events.find((e) => e.id === "event:e2")?.kind).toBe("export");
     expect(ctrl.getState().events.find((e) => e.id === "event:e3")?.kind).toBe("skill");
+    expect(ctrl.getState().events.find((e) => e.id === "event:e4")?.kind).toBe("governance");
+  });
+
+  it("preserves SensitivityGateFired payload on the projected event details", async () => {
+    // The activity panel renders extra fields (entry, session/effective tier,
+    // provider_mode, tool_name) from `details`. The controller must
+    // pass the payload through unchanged so surfaces can show "Blocked
+    // outbound web_search to BYOK at session=none / effective=secret"
+    // without parsing the event_log row a second time.
+    const adapter = makeAdapter(
+      [],
+      [
+        makeEvent({
+          event_id: "gate-1",
+          event_type: "sensitivity_gate_fired",
+          payload: {
+            entry: "sendMessageStreaming",
+            session_sensitivity: "personal",
+            effective_sensitivity: "medical",
+            provider_mode: "byok",
+            elevated_by: { via: "slab_item", slab_item_id: "slab-42" },
+          },
+        }),
+      ],
+    );
+    const ctrl = createActivityController(adapter);
+    await ctrl.refresh();
+    const ev = ctrl.getState().events[0]!;
+    expect(ev.kind).toBe("governance");
+    expect(ev.action).toBe("sensitivity_gate_fired");
+    expect(ev.details["entry"]).toBe("sendMessageStreaming");
+    expect(ev.details["effective_sensitivity"]).toBe("medical");
+    expect(ev.details["provider_mode"]).toBe("byok");
+  });
+
+  it("DEFAULT_SURFACED_EVENT_TYPES includes sensitivity_gate_fired (subscription contract)", async () => {
+    // Surface adapters honor `eventTypes` and pass it down to
+    // `runtime.events.query`. If the controller's defaults don't list
+    // `sensitivity_gate_fired`, the surface query never asks for them
+    // and governance fires never reach the timeline. This is the
+    // load-bearing config: drop it and the moat-proof feature
+    // silently disappears.
+    let requestedTypes: ReadonlyArray<string> | undefined;
+    const adapter: ActivityFetchAdapter = {
+      queryAudit: async () => [],
+      queryEvents: async (opts) => {
+        requestedTypes = opts.eventTypes;
+        return [];
+      },
+    };
+    const ctrl = createActivityController(adapter);
+    await ctrl.refresh();
+    expect(requestedTypes).toContain("sensitivity_gate_fired");
   });
 
   it("surfaces cert signature + kind from delete_memory audit row", async () => {

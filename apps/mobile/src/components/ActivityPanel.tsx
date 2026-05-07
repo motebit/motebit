@@ -39,6 +39,7 @@ const KIND_LABEL: Record<ActivityKind, string> = {
   export: "Exports",
   trust: "Trust",
   skill: "Skills",
+  governance: "Governance",
   other: "Other",
 };
 
@@ -51,6 +52,7 @@ const ACTION_LABEL: Record<string, string> = {
   delete_requested: "Requested deletion",
   export_requested: "Requested export",
   skill_loaded: "Loaded skill",
+  sensitivity_gate_fired: "Blocked egress",
 };
 
 function formatTimeAgo(ts: number): string {
@@ -180,7 +182,15 @@ function createMobileRetentionAdapter(app: MobileApp): RetentionFetchAdapter {
   };
 }
 
-const ALL_KINDS: ActivityKind[] = ["deletion", "consent", "export", "trust", "skill", "other"];
+const ALL_KINDS: ActivityKind[] = [
+  "deletion",
+  "consent",
+  "export",
+  "trust",
+  "skill",
+  "governance",
+  "other",
+];
 
 export function ActivityPanel({ visible, app, onClose }: ActivityPanelProps): React.ReactElement {
   const colors = useTheme();

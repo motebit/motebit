@@ -60,6 +60,7 @@ export type ActivityKind =
   | "export" // export_all, ExportRequested
   | "trust" // skill_trust_grant, skill_trust_revoke, skill_remove
   | "skill" // SkillLoaded
+  | "governance" // sensitivity_gate_fired — denied egress at the boundary
   | "other";
 
 export interface ActivityEvent {
@@ -146,6 +147,12 @@ const DEFAULT_SURFACED_EVENT_TYPES: ReadonlyArray<string> = [
   "delete_requested",
   "export_requested",
   "skill_loaded",
+  // SensitivityGateFired — every blocked egress crossing emits one.
+  // The audit-trail pivot: the five-boundary sensitivity gate is
+  // fail-closed but invisible until a consumer reads the events.
+  // Surfacing them in the activity timeline converts internal
+  // correctness into user-visible governance proof.
+  "sensitivity_gate_fired",
 ];
 
 const DEFAULT_FETCH_LIMIT = 200;
@@ -198,6 +205,8 @@ function classifyEventType(eventType: string): ActivityKind {
       return "export";
     case "skill_loaded":
       return "skill";
+    case "sensitivity_gate_fired":
+      return "governance";
     default:
       return "other";
   }
