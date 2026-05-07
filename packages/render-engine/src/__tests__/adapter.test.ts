@@ -702,6 +702,51 @@ describe("WebXRThreeJSAdapter", () => {
     adapter.resize(1920, 1080);
     adapter.dispose();
   });
+
+  // Slab passthroughs — in headless mode (`init(null)`), the held-
+  // tablet `SpatialSlabManager` is never constructed, so each method
+  // must degrade to a safe no-op / sentinel return. The slab bridge
+  // uses optional chaining; surfaces that hit a headless adapter
+  // (tests, WebGL-unavailable Node environments) still compose
+  // cleanly. Mirrors the desktop `ThreeJSAdapter` contract above.
+  it("addSlabItem returns undefined in headless mode", async () => {
+    await adapter.init(null);
+    const el = { style: {} } as unknown as HTMLElement;
+    const handle = adapter.addSlabItem({ id: "test", kind: "tool_call", element: el });
+    expect(handle).toBeUndefined();
+  });
+
+  it("dissolveSlabItem resolves in headless mode", async () => {
+    await adapter.init(null);
+    await expect(adapter.dissolveSlabItem("test")).resolves.toBeUndefined();
+  });
+
+  it("detachSlabItemAsArtifact resolves undefined in headless mode", async () => {
+    await adapter.init(null);
+    const el = { style: {} } as unknown as HTMLElement;
+    const result = await adapter.detachSlabItemAsArtifact("test", {
+      id: "a",
+      kind: "receipt",
+      element: el,
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("clearSlabItems is safe in headless mode", async () => {
+    await adapter.init(null);
+    expect(() => adapter.clearSlabItems()).not.toThrow();
+  });
+
+  it("setSlabVisible is safe in headless mode", async () => {
+    await adapter.init(null);
+    expect(() => adapter.setSlabVisible(true)).not.toThrow();
+    expect(() => adapter.setSlabVisible(false)).not.toThrow();
+  });
+
+  it("toggleSlabVisible returns false sentinel in headless mode", async () => {
+    await adapter.init(null);
+    expect(adapter.toggleSlabVisible()).toBe(false);
+  });
 });
 
 // === RenderAdapter interface conformance ===

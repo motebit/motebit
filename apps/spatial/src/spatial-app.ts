@@ -28,6 +28,7 @@ import {
   ProxySession,
   PLANNING_TASK_ROUTER,
   createRelayCapabilitiesFetcher,
+  bindSlabControllerToRenderer,
 } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
@@ -227,6 +228,13 @@ export class SpatialApp {
   };
   private attentionLevel = 0.2;
   private unsubscribeState: (() => void) | null = null;
+  /**
+   * Slab bridge unsubscribe — drops the runtime → renderer subscription
+   * on dispose. Phase 1A wires the contract end-to-end with a placeholder
+   * renderItem; Phase 1B replaces the placeholder with per-kind held-tablet
+   * renderers. See `~/.../memory/spatial_slab_port_held_tablet.md`.
+   */
+  private slabBridgeUnsub: (() => void) | null = null;
   private _presenceState: PresenceState = "ambient";
 
   // Receipt observers — subscribed by the spatial surface to materialize
@@ -676,6 +684,26 @@ export class SpatialApp {
       this.attentionLevel = state.attention;
       // Feed trust mode to render adapter
       this.adapter.setTrustMode(state.trust_mode);
+    });
+
+    // Slab ("Motebit Computer") bridge — wire the runtime's slab
+    // controller (Ring 1) to the WebXR adapter's held-tablet manager
+    // (Ring 3). Phase 1A passes a placeholder renderItem since the
+    // spatial slab doesn't mount visible cards yet — Phase 1B
+    // replaces it with per-kind held-tablet rendering. The bridge
+    // contract is exercised end-to-end today so adding the visual
+    // landing in 1B is a single-point change. See
+    // `docs/doctrine/motebit-computer.md` and the
+    // `spatial_slab_port_held_tablet` memory.
+    this.slabBridgeUnsub = bindSlabControllerToRenderer({
+      controller: this.runtime.slab,
+      renderer: this.adapter,
+      renderItem: () => {
+        // Phase 1A placeholder — `SpatialSlabManager.addItem` stores the
+        // element ref but does not mount it; Phase 1B will swap in
+        // per-kind renderers (`fetch` first per the doctrine).
+        return document.createElement("div");
+      },
     });
 
     // Wire heartbeat to runtime
@@ -1210,6 +1238,8 @@ export class SpatialApp {
     this.heartbeat.stop();
     this.gestures.reset();
     this.unsubscribeState?.();
+    this.slabBridgeUnsub?.();
+    this.slabBridgeUnsub = null;
     this.runtime?.stop();
 
     // Clean up MCP adapters

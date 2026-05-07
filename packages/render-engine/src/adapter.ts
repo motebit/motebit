@@ -14,6 +14,7 @@ import type {
 } from "./spec.js";
 import { ArtifactManager } from "./artifacts.js";
 import { SlabManager } from "./slab.js";
+import { SpatialSlabManager } from "./slab-spatial.js";
 import {
   createCreature,
   createCreatureState,
@@ -395,6 +396,15 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
 
   private envMap: THREE.Texture | null = null;
 
+  /**
+   * Held-tablet slab — Phase 1A primitive. Constructed in `init()`
+   * when a real canvas is available; left null in headless mode so
+   * the slab passthrough methods degrade to safe no-ops via optional
+   * chaining (mirrors `ThreeJSAdapter.slab`). Phase 1B adds the
+   * tablet mesh; this slot is the wiring anchor for that work.
+   */
+  private slab: SpatialSlabManager | null = null;
+
   /** Check if WebXR immersive-ar is available in this browser. */
   static async isSupported(): Promise<boolean> {
     if (typeof navigator === "undefined" || !navigator.xr) return false;
@@ -445,6 +455,17 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     // Initial position: 0.5m in front of the user at shoulder height
     this.creatureState.basePosition = { x: 0, y: -0.2, z: -0.5 };
 
+    // === Held-tablet slab — Phase 1A primitive ===
+    // Anchored on the creature group; same Ring 1 state machine as
+    // the desktop slab (both consume `SlabCore`). Phase 1A ships the
+    // typed primitive + state machine + position; Phase 1B adds the
+    // visible tablet mesh + emerge/dissolve animations. See
+    // `docs/doctrine/spatial-as-endgame.md` and the
+    // `spatial_slab_port_held_tablet` memory for the split rationale.
+    if (this.creatureRefs) {
+      this.slab = new SpatialSlabManager(this.creatureRefs.group);
+    }
+
     // === Lighting ===
     // Softer than desktop — the real environment provides ambient context.
     this.scene.add(new THREE.AmbientLight(0x8090b0, 0.4));
@@ -468,6 +489,16 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     animateCreature(this.creatureRefs, this.creatureState, frame);
 
     this.renderer.render(this.scene, this.camera);
+
+    // Drive the held-tablet slab forward. Phase 1A ticks the state
+    // machine; Phase 1B adds the visual landing inside the manager.
+    // No CSS2D overlay in spatial — the slab's `render()` is a no-op
+    // hook today, kept symmetric with `ThreeJSAdapter` so Phase 1B
+    // wiring (e.g., a CSS3D / WebXR-panel pass) is a one-line change.
+    if (this.slab) {
+      this.slab.update(frame.time, frame.delta_time);
+      this.slab.render(this.scene, this.camera);
+    }
   }
 
   /** Set the creature's base position in world space (meters). */
@@ -598,8 +629,48 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     this.creatureState.listeningActive = active;
   }
 
+  // === Slab ("Motebit Computer") — held-tablet renderer ===
+  //
+  // Delegates to `SpatialSlabManager` constructed in init(). Same Ring
+  // 1 state machine as the desktop slab; different body. The bridge
+  // uses optional chaining, so a null manager (headless / pre-init /
+  // post-dispose) degrades to safe no-ops — matching the desktop
+  // ThreeJSAdapter contract.
+
+  addSlabItem(spec: SlabItemSpec): SlabItemHandle | undefined {
+    return this.slab?.addItem(spec);
+  }
+
+  dissolveSlabItem(id: string): Promise<void> {
+    return this.slab?.dissolveItem(id) ?? Promise.resolve();
+  }
+
+  detachSlabItemAsArtifact(
+    id: string,
+    artifact: ArtifactSpec,
+  ): Promise<ArtifactHandle | undefined> {
+    return this.slab?.detachItemAsArtifact(id, artifact) ?? Promise.resolve(undefined);
+  }
+
+  clearSlabItems(): void {
+    this.slab?.clearItems();
+  }
+
+  setSlabVisible(visible: boolean): void {
+    this.slab?.setUserVisible(visible);
+  }
+
+  toggleSlabVisible(): boolean {
+    return this.slab?.toggleUserVisible() ?? false;
+  }
+
   dispose(): void {
     this.endSession().catch(() => {});
+
+    if (this.slab) {
+      this.slab.dispose();
+      this.slab = null;
+    }
 
     if (this.creatureRefs) {
       disposeCreature(this.creatureRefs);
