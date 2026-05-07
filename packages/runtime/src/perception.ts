@@ -83,9 +83,16 @@ export class DropDispatcher {
 }
 
 /**
- * v1 default URL handler. Opens a `fetch`-kind slab item in `mind`
- * mode (the user fed it; not motebit-driven), then settles into rest
- * so the page reference stays as workstation material.
+ * v1 default URL handler. Opens a `fetch`-kind slab item in
+ * `shared_gaze` mode — the user is the driver (they pointed the
+ * motebit at this), the motebit is the observer, the source is
+ * `user-source`, and consent fires per-source (each drag IS a new
+ * source-consent moment). `mind` would be the wrong mode here:
+ * `mind` is interior cognition (memory, reasoning, plan state), not
+ * user-fed external material crossing the membrane.
+ *
+ * Settles into rest so the page reference stays as workstation
+ * material the motebit and user can both consult.
  */
 function defaultUrlHandler(deps: DropDispatcherDeps): DropHandler<"url"> {
   return (payload) => {
@@ -95,15 +102,17 @@ function defaultUrlHandler(deps: DropDispatcherDeps): DropHandler<"url"> {
       source: "user-drop" as const,
       sourceFrame: payload.sourceFrame,
     };
-    deps.slab.openItem({ id, kind: "fetch", mode: "mind", payload: itemPayload });
+    deps.slab.openItem({ id, kind: "fetch", mode: "shared_gaze", payload: itemPayload });
     deps.slab.restItem(id, itemPayload);
   };
 }
 
 /**
- * v1 default text handler. Opens a `stream`-kind slab item in `mind`
- * mode carrying the dropped text. MIME defaults to `text/plain`;
- * markdown drops carry `text/markdown` for downstream rendering.
+ * v1 default text handler. Opens a `stream`-kind slab item in
+ * `shared_gaze` mode (same reasoning as the URL handler — the user
+ * is pointing the motebit at user-source content). MIME defaults to
+ * `text/plain`; markdown drops carry `text/markdown` for downstream
+ * rendering.
  */
 function defaultTextHandler(deps: DropDispatcherDeps): DropHandler<"text"> {
   return (payload) => {
@@ -113,15 +122,15 @@ function defaultTextHandler(deps: DropDispatcherDeps): DropHandler<"text"> {
       mimeType: payload.mimeType ?? "text/plain",
       source: "user-drop" as const,
     };
-    deps.slab.openItem({ id, kind: "stream", mode: "mind", payload: itemPayload });
+    deps.slab.openItem({ id, kind: "stream", mode: "shared_gaze", payload: itemPayload });
     deps.slab.restItem(id, itemPayload);
   };
 }
 
 /**
  * v1 default image handler. Opens an `embedding`-kind slab item in
- * `mind` mode carrying the image metadata (byte length, MIME). The
- * raw bytes stay attached to the payload for the next AI turn to
+ * `shared_gaze` mode carrying the image metadata (byte length, MIME).
+ * The raw bytes stay attached to the payload for the next AI turn to
  * forward to a vision-capable provider; the slab renders metadata
  * only at v1 (rich preview is v1.1).
  */
@@ -133,7 +142,7 @@ function defaultImageHandler(deps: DropDispatcherDeps): DropHandler<"image"> {
       mimeType: payload.mimeType,
       source: "user-drop" as const,
     };
-    deps.slab.openItem({ id, kind: "embedding", mode: "mind", payload: itemPayload });
+    deps.slab.openItem({ id, kind: "embedding", mode: "shared_gaze", payload: itemPayload });
     deps.slab.restItem(id, itemPayload);
   };
 }

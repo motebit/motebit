@@ -144,6 +144,28 @@ function checkCoverage(): string[] {
 
 const SURFACE_ROOTS = ["apps/web/src", "apps/desktop/src", "apps/mobile/src", "apps/spatial/src"];
 
+/**
+ * Files that legitimately use DOM drag-drop primitives but NOT for
+ * perception input — generic UI affordances like list reordering,
+ * card-in-dashboard repositioning, or avatar upload widgets. Each
+ * entry MUST name the affordance shape and why it isn't a perception
+ * surface; "this isn't perception" is not a sufficient reason. The
+ * gate's routing arm exempts files in this list; the coverage arm
+ * still applies (the protocol union and handler registry are
+ * unaffected by this list).
+ *
+ * Empty as of v1: no surface today uses drag-drop for anything other
+ * than perception input. The mechanism exists so a future contributor
+ * adding a non-perception drag affordance has a documented release
+ * valve, not an obstacle. Adding an entry is a deliberate
+ * doctrine-adjacent decision — the slab's gesture set in
+ * `motebit-computer.md` is intentionally narrow, and any new
+ * non-perception drag affordance should justify why it isn't a
+ * perception input first (most drag-shaped UI ideas in motebit are
+ * perception inputs in disguise).
+ */
+const ALLOW_NON_PERCEPTION_DROP_FILES: ReadonlyArray<{ path: string; reason: string }> = [];
+
 const DRAG_EVENT_PATTERNS: RegExp[] = [
   // DOM-level drop event handlers
   /\bdocument\.addEventListener\s*\(\s*['"](drop|dragover|dragenter|dragleave)['"]/g,
@@ -224,12 +246,38 @@ function fileRoutesThroughFeedPerception(stripped: string): boolean {
 
 function checkRouting(): string[] {
   const violations: string[] = [];
+  const allowedPaths = new Set(ALLOW_NON_PERCEPTION_DROP_FILES.map((e) => e.path));
   const files = walkSurfaceFiles();
   for (const file of files) {
     if (!fileHasDragHandler(file.stripped)) continue;
+    const relPath = relative(ROOT, file.path);
+    if (allowedPaths.has(relPath)) continue;
     if (!fileRoutesThroughFeedPerception(file.stripped)) {
       violations.push(
-        `${relative(ROOT, file.path)} — captures drag-drop events but does not call \`runtime.feedPerception(...)\`. Surface drop handlers MUST route through the canonical typed input. Constructing a prompt string and calling sendMessage is the prompt-backdoor failure mode named in motebit-computer.md.`,
+        `${relPath} — captures drag-drop events but does not call \`runtime.feedPerception(...)\`. Surface drop handlers MUST route through the canonical typed input. Constructing a prompt string and calling sendMessage is the prompt-backdoor failure mode named in motebit-computer.md. If this drag-drop is a generic UI affordance (reorder, panel-drag, avatar upload) and NOT perception input, add the file path to ALLOW_NON_PERCEPTION_DROP_FILES with a reason naming the affordance shape.`,
+      );
+    }
+  }
+  // Reverse direction: an allowlisted file that no longer captures
+  // drag-drop OR has gained a feedPerception call means the entry is
+  // stale. Match the stale-allowlist discipline of #76.
+  for (const entry of ALLOW_NON_PERCEPTION_DROP_FILES) {
+    const abs = resolve(ROOT, entry.path);
+    const file = files.find((f) => f.path === abs);
+    if (file === undefined) {
+      violations.push(
+        `ALLOW_NON_PERCEPTION_DROP_FILES entry \`${entry.path}\` does not exist — entry is stale, remove`,
+      );
+      continue;
+    }
+    if (!fileHasDragHandler(file.stripped)) {
+      violations.push(
+        `ALLOW_NON_PERCEPTION_DROP_FILES entry \`${entry.path}\` no longer captures drag-drop events — entry is stale, remove`,
+      );
+    }
+    if (fileRoutesThroughFeedPerception(file.stripped)) {
+      violations.push(
+        `ALLOW_NON_PERCEPTION_DROP_FILES entry \`${entry.path}\` now calls feedPerception() — it IS a perception surface; remove from allowlist`,
       );
     }
   }

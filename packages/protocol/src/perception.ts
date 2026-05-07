@@ -77,20 +77,31 @@ export type DropPayloadKind = "url" | "text" | "image" | "file" | "artifact";
 export type DropTarget = "slab" | "creature" | "ambient";
 
 /**
- * Provenance attestation that travels with every drop. The user's
- * gesture IS the attestation — by dragging, the user vouches for the
- * content's authenticity from their authoritative context (browser
- * tab, file system, selection). For high-sensitivity tiers the
- * runtime may cosign with the user's identity key; that path is
- * deferred until per-tier signing UX lands.
+ * Attestation of **intentional delivery** — not content authenticity.
+ *
+ * The user's gesture proves they meant to deliver the payload to the
+ * motebit. It does NOT prove the payload is authentic, unforged, or
+ * what it claims to be: a user can drag a forged PDF, a misleading
+ * URL, or a tampered file, and the gesture still attests only that
+ * delivery was intentional. Authenticity of the content itself
+ * requires separate provenance — a source URL the runtime fetched,
+ * a cryptographic signature on the bytes, an `ExecutionReceipt`
+ * carried with the artifact, or a content hash the user-trusted
+ * source previously published. Keep the two distinct in audit logs
+ * and any prose-level claim about what a drop "vouches for."
  *
  * `surface` names which motebit surface produced the event so audit
  * logs can reconstruct the gesture's physical context (DOM drop,
- * WebXR pinch-release, share-sheet receive).
+ * WebXR pinch-release, share-sheet receive). For high-sensitivity
+ * tiers the runtime may cosign the attestation with the user's
+ * identity key; that path is deferred until per-tier signing UX
+ * lands.
  *
  * `contentHashSha256` is optional and present for binary kinds
  * (`image`, `file`, `artifact`) where a hash gives the audit trail
- * something to bind against.
+ * something to bind against. The hash binds delivery to a specific
+ * byte sequence; it does not, on its own, attest to content
+ * authenticity.
  */
 export interface UserActionAttestation {
   readonly kind: "user-drag";

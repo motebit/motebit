@@ -123,13 +123,15 @@ The "drag onto the slab → feed perception" gesture is typed end-to-end. A user
 
 The categorical drop kinds are closed at the protocol layer:
 
-| Kind         | What it carries                                                 | v1 status                                                                                                      |
-| ------------ | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **url**      | A hyperlink, optionally with the source page's HTML frame       | shipped — slab item kind=`fetch`, mode=`mind`                                                                  |
-| **text**     | Plain or markdown text snippet                                  | shipped — slab item kind=`stream`, mode=`mind`                                                                 |
-| **image**    | Raster bytes with MIME (the multimodal moment)                  | shipped — slab item kind=`embedding`, mode=`mind` (rich preview is v1.1 alongside vision-provider integration) |
-| **file**     | Opaque bytes with filename + MIME                               | allowlisted — defers to v1.1 (file-format proliferation is unbounded; ships with concrete handler-extension)   |
-| **artifact** | A motebit-produced signed artifact (bytes + `ExecutionReceipt`) | allowlisted — defers until multi-motebit UX gives drag motebit-to-motebit a consumer                           |
+| Kind         | What it carries                                                 | v1 status                                                                                                                |
+| ------------ | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| **url**      | A hyperlink, optionally with the source page's HTML frame       | shipped — slab item kind=`fetch`, mode=`shared_gaze`                                                                     |
+| **text**     | Plain or markdown text snippet                                  | shipped — slab item kind=`stream`, mode=`shared_gaze`                                                                    |
+| **image**    | Raster bytes with MIME (the multimodal moment)                  | shipped — slab item kind=`embedding`, mode=`shared_gaze` (rich preview is v1.1 alongside vision-provider integration)    |
+| **file**     | Opaque bytes with filename + MIME                               | allowlisted — defers to v1.1 (file-format proliferation is unbounded; ships with concrete handler-extension)             |
+| **artifact** | A motebit-produced signed artifact (bytes + `ExecutionReceipt`) | allowlisted — defers until multi-motebit UX gives drag motebit-to-motebit a consumer (mode=`peer_viewport` when shipped) |
+
+The mode choice is `shared_gaze` because the user is the driver, the motebit is the observer, and the source is `user-source` (a browser tab, file, selection, or page the user pointed motebit at) — the contract's exact match for the gesture (Zed-pattern). `mind` would be a category error: `mind` is interior cognition (memory, reasoning, plan state), not user-fed external material crossing the membrane. Per `EmbodimentSensitivityRouting`, `shared_gaze` is `tier-bounded-by-source` — once the runtime cross-references mode posture with `assertSensitivityPermitsAiCall` (deferred per #76's allowlist), drops automatically inherit source-sensitivity classification.
 
 A future `mode-grant` kind (drag a permission token onto the slab — "you may drive my desktop for this session") waits for `EmbodimentMode` to lift from `@motebit/render-engine` to `@motebit/protocol`. Adding it is a registry append, not a wire-format break.
 
@@ -137,7 +139,7 @@ A future `mode-grant` kind (drag a permission token onto the slab — "you may d
 
 **Three drop targets.** Every payload carries an optional `target: "slab" | "creature" | "ambient"`. v1 surfaces only set `slab` (the default) — on a 2D screen there is no unambiguous gesture for the other two. On glasses, the user's hand-path makes `creature` (drag toward the floating creature droplet — "carry this with you across sessions") and `ambient` (place onto the user's physical workspace — "background reference, not turn-perception") physically distinct. Spatial Phase 1B unlocks the other two; the protocol commitment exists from the start so surfaces opt in without a wire-format change.
 
-**Provenance.** Each `DropPayload` carries a `UserActionAttestation` — the user's gesture IS the attestation. By dragging, the user vouches for the content's authenticity from their authoritative context. For high-sensitivity tiers the runtime can cosign with the user's identity key; that path is deferred until per-tier signing UX lands.
+**Attestation of intentional delivery, not content authenticity.** Each `DropPayload` carries a `UserActionAttestation`. The user's gesture proves they meant to deliver the payload — it does NOT prove the payload is authentic, unforged, or what it claims to be. A user can drag a forged PDF, a misleading URL, or a tampered file; the gesture still attests only that delivery was intentional. Authenticity of the content itself comes from separate provenance: a source URL the runtime fetched, a cryptographic signature on the bytes, an `ExecutionReceipt` carried with the artifact, or a content hash the user-trusted source previously published. Audit prose and any claim about what a drop "vouches for" must keep the two distinct. For high-sensitivity tiers the runtime can cosign the attestation with the user's identity key; that path is deferred until per-tier signing UX lands.
 
 The drift gate `check-drop-handlers` (#77) enforces both arms: every `DropPayloadKind` has a registered handler or an explicit allowlist entry, AND every per-surface drop handler routes through `runtime.feedPerception` (never constructs a prompt and calls `sendMessage` — the prompt-backdoor failure mode named below).
 
