@@ -57,22 +57,44 @@ export type DropPayloadKind = "url" | "text" | "image" | "file" | "artifact";
  * by default since the user can't aim at a non-slab target without
  * spatial separation.
  *
+ * **The targets are NOT equivalent drop zones with different visual
+ * effects.** Each has meaningfully different persistence and
+ * governance scopes — implementing them with a uniform governance
+ * posture is the silent-persistent-mutation failure mode this
+ * doctrine exists to prevent.
+ *
  *   - `slab` — perception input ("the motebit sees this for this
- *     turn"). v1 default for every surface that doesn't yet
- *     distinguish targets.
+ *     turn"). Turn/session-scoped persistence; the sensitivity
+ *     classifier inspects the payload at the next AI call;
+ *     `tier-bounded-by-source` per the `EmbodimentSensitivityRouting`
+ *     of `shared_gaze` mode. v1 default for every surface that
+ *     doesn't yet distinguish targets.
+ *
  *   - `creature` — body-bound carry ("this travels with the motebit
- *     across sessions"). Different semantics from a slab item;
- *     identity-touch, not workstation. Spatial-first; deferred until
- *     the gesture surface (drag toward floating creature droplet)
- *     lands.
+ *     across sessions"). Identity-adjacent state mutation: the
+ *     payload is destined for the motebit's interior (memory graph,
+ *     trust graph, capability bindings, persona preferences) rather
+ *     than the workstation's turn context. **Stronger governance
+ *     than slab is required:** explicit confirmation / signed user
+ *     intent before any persistent state mutation. Closer to
+ *     changing the agent's body than feeding task context.
+ *     Spatial-first; deferred until the gesture surface (drag toward
+ *     floating creature droplet) lands AND the per-target governance
+ *     UX ships. Do NOT implement creature-drop with slab-drop's
+ *     governance posture.
+ *
  *   - `ambient` — environmental context ("background reference for
- *     this session, not turn-perception"). Spatial-first; in glasses,
+ *     this session, not turn-perception"). Workspace-scoped
+ *     persistence with source-consent + expiration. The motebit can
+ *     consult ambient references but they don't enter the next turn
+ *     context unless explicitly invoked. Spatial-first; in glasses,
  *     dropping a reference into the user's physical workspace is the
  *     natural gesture.
  *
  * Field is optional; absent ≡ `slab`. Surfaces only set non-default
- * targets once they implement the gesture vocabulary that makes the
- * target unambiguous (3D pick on the user's hand path).
+ * targets once they implement BOTH the gesture vocabulary that makes
+ * the target unambiguous (3D pick on the user's hand path) AND the
+ * per-target governance UX that makes elevation safe.
  */
 export type DropTarget = "slab" | "creature" | "ambient";
 
