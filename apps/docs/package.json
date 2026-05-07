@@ -35,6 +35,6 @@
     "@types/react-dom": "^19.0.0",
     "@types/three": "^0.170.0",
     "tailwindcss": "^4.2.2",
-    "typescript": "^5.6.0"
+    "typescript": "^6.0.3"
   }
 }
