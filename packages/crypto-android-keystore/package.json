@@ -64,7 +64,7 @@
   "dependencies": {
     "@motebit/protocol": "workspace:*",
     "@motebit/crypto": "workspace:*",
-    "@peculiar/asn1-schema": "^2.6.0",
+    "@peculiar/asn1-schema": "^2.7.0",
     "@peculiar/x509": "^1.12.0"
   },
   "devDependencies": {
