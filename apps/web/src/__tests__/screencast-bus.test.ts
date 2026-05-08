@@ -97,4 +97,38 @@ describe("ScreencastFrameBus", () => {
     bus.subscribe(fresh);
     expect(fresh).not.toHaveBeenCalled();
   });
+
+  // v1.3 hardening — `hasFrame()` is the predicate the slab uses to
+  // decide whether per-action `tool_call` cards should be hidden in
+  // favor of the live surface. False until the first frame; true
+  // until reset. The duplicate-card suppression contract depends on
+  // this gating: per-action cards stay visible while we're still
+  // waiting for the first frame, so a screencast that never starts
+  // doesn't leave the slab empty.
+
+  it("hasFrame() is false on a fresh bus", () => {
+    const bus = new ScreencastFrameBus();
+    expect(bus.hasFrame()).toBe(false);
+  });
+
+  it("hasFrame() flips to true after the first publish", () => {
+    const bus = new ScreencastFrameBus();
+    bus.publish(makeFrame());
+    expect(bus.hasFrame()).toBe(true);
+  });
+
+  it("hasFrame() stays true across multiple publishes", () => {
+    const bus = new ScreencastFrameBus();
+    bus.publish(makeFrame({ timestamp: 1 }));
+    bus.publish(makeFrame({ timestamp: 2 }));
+    bus.publish(makeFrame({ timestamp: 3 }));
+    expect(bus.hasFrame()).toBe(true);
+  });
+
+  it("hasFrame() returns to false after reset()", () => {
+    const bus = new ScreencastFrameBus();
+    bus.publish(makeFrame());
+    bus.reset();
+    expect(bus.hasFrame()).toBe(false);
+  });
 });

@@ -45,7 +45,7 @@ import { createWebComputerApprovalFlow } from "./computer-approval.js";
 import { registerWebComputerTool, type ComputerToolRegistration } from "./computer-tool.js";
 import type { ComputerSessionReceipt } from "@motebit/sdk";
 import { ScreencastFrameBus } from "./screencast-bus.js";
-import { releaseLiveBrowserItem } from "./ui/slab-items.js";
+import { releaseLiveBrowserItem, setLiveBrowserSuppressionPredicate } from "./ui/slab-items.js";
 import {
   bootstrapIdentity,
   rotateIdentityKeys,
@@ -244,6 +244,19 @@ export class WebApp {
   }
 
   async bootstrap(): Promise<void> {
+    // v1.3 hardening — register the per-action `tool_call`
+    // suppression predicate so the slab renderer hides duplicate
+    // `computer` cards while a live screencast owns the slab.
+    // Predicate fires per-item: per-action cards are visible until
+    // the first frame lands (fallback path for screencast failure),
+    // hidden after frames flow (no slideshow over the live surface).
+    // Doctrine: motebit-computer.md §"v1 implementation status —
+    // virtual_browser v1.3 live screencast."
+    setLiveBrowserSuppressionPredicate(() => {
+      if (this.liveBrowserItemId === null) return false;
+      return this.screencastBus.hasFrame();
+    });
+
     // Configure semantic embeddings via proxy (browser can't load ONNX model locally)
     setRemoteEmbedUrl(`${PROXY_BASE_URL}/v1/embed`);
 

@@ -77,4 +77,18 @@ export class ScreencastFrameBus implements ScreencastFrameSource {
     this.subscribers.clear();
     this.latestFrame = null;
   }
+
+  /**
+   * True iff at least one frame has been published (and not yet
+   * `reset()`-ed). The duplicate-card suppression predicate uses
+   * this: per-action `tool_call` cards stay visible until the first
+   * live frame arrives, so a screencast that fails to start (or
+   * stalls before frame 1) leaves the per-action screenshots as the
+   * fallback render. Once frames flow, the live surface owns the
+   * slab and per-action cards become audit-only (still emitted,
+   * still on the receipt chain — just slab-hidden).
+   */
+  hasFrame(): boolean {
+    return this.latestFrame !== null;
+  }
 }

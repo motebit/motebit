@@ -1838,6 +1838,28 @@ export function renderSlabItem(item: SlabItem, actions: SlabItemActions): HTMLEl
 }
 
 function buildCardForKind(item: SlabItem, actions: SlabItemActions): HTMLElement {
+  // v1.3 hardening — when a live `virtual_browser` surface is active
+  // and showing real frames, the per-action `tool_call` card for the
+  // `computer` tool is a perceptual duplicate of what's already on
+  // the slab. Render it slab-hidden so the audit / receipt-chain
+  // path still fires (`runtime.slab.openItem` already happened) but
+  // the user doesn't see a slideshow of stills layered over the
+  // continuous frame surface. The check is gated on the apps-side
+  // predicate (set via `setLiveBrowserSuppressionPredicate`) which
+  // fires only after the first frame lands — until then per-action
+  // cards remain the fallback render, satisfying the "screencast
+  // failure falls back to screenshots" contract.
+  if (
+    item.kind === "tool_call" &&
+    item.mode === "virtual_browser" &&
+    isLiveBrowserSuppressing(item)
+  ) {
+    const hidden = document.createElement("div");
+    hidden.className = "slab-item-hidden-for-live-browser";
+    hidden.dataset.slabHidden = "true";
+    hidden.style.display = "none";
+    return hidden;
+  }
   switch (item.kind) {
     case "stream":
       return renderStream(item);
@@ -1858,6 +1880,23 @@ function buildCardForKind(item: SlabItem, actions: SlabItemActions): HTMLElement
     default:
       return renderGeneric(item);
   }
+}
+
+/**
+ * Apps-side predicate that decides whether per-action `tool_call`
+ * cards for the `computer` tool should hide while a live screencast
+ * owns the slab. The check fires per-item, so a future hand-off
+ * pattern (e.g., user-driven session pauses screencast — per-action
+ * cards return) flips automatically without re-binding. Default is
+ * "always show" so unwired tests + non-cloud-browser surfaces (like
+ * desktop's `desktop_drive`) keep their per-action cards. The web
+ * app registers a predicate at WebApp construction; any consumer
+ * that wires a different predicate replaces it.
+ */
+let isLiveBrowserSuppressing: (item: SlabItem) => boolean = () => false;
+
+export function setLiveBrowserSuppressionPredicate(predicate: (item: SlabItem) => boolean): void {
+  isLiveBrowserSuppressing = predicate;
 }
 
 /**
