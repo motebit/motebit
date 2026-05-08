@@ -21,6 +21,7 @@ import {
   type ComputerGovernanceClassifier,
   type ComputerPlatformDispatcher,
 } from "../computer-use.js";
+import { createDefaultComputerGovernance } from "@motebit/policy-invariants";
 
 const DEFAULT_DISPLAY = { width: 2560, height: 1440, scaling_factor: 2 } as const;
 
@@ -588,5 +589,312 @@ describe("ComputerSessionManager — observation classifier", () => {
     if (result.outcome === "success") {
       expect(result.data).toEqual(observation);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v1.1b — verify the REAL classifiers (not toy mocks) compose end-to-end
+// on the cloud-browser path: createDefaultComputerGovernance() +
+// createComputerSessionManager. Same composition apps/web's
+// `registerWebComputerTool` builds. The earlier "governance gate" suite
+// covers the session-manager mechanics with always-allow / always-deny /
+// always-require_approval mocks; this suite covers the realistic
+// per-action and per-observation classification paths the
+// virtual_browser embodiment depends on.
+//
+// Doctrine: motebit-computer.md §"v1 implementation status —
+// virtual_browser v1" + spec/computer-use-v1.md §3.2 (gated-action
+// invariant) + §3.4 (redaction-before-AI invariant).
+// ---------------------------------------------------------------------------
+
+describe("v1.1b — real classifiers compose end-to-end on the cloud-browser path", () => {
+  const FAKE_PNG_BYTES = "iVBORw0KGgoAAAANSUhEUg".repeat(20);
+
+  describe("approval path — classifyComputerAction fires for irreversible clicks", () => {
+    it("Submit-labeled click hits the irreversibility classifier → require_approval (no flow → approval_required, dispatcher skipped)", async () => {
+      const execute = vi.fn(async () => ({}));
+      const manager = createComputerSessionManager({
+        dispatcher: makeDispatcher({ execute }),
+        governance: createDefaultComputerGovernance(),
+        // No approvalFlow — fail-closed at the gate per spec §3.2.
+        generateSessionId: () => "cs_1",
+      });
+      await manager.openSession("mot_1");
+
+      const result = await manager.executeAction("cs_1", {
+        kind: "click",
+        target: { x: 100, y: 200 },
+        target_hint: { label: "Submit", source: "accessibility" },
+      });
+
+      expect(result.outcome).toBe("failure");
+      if (result.outcome === "failure") {
+        expect(result.reason).toBe("approval_required");
+      }
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it("Submit-labeled click + approving flow → dispatcher runs, action commits", async () => {
+      const execute = vi.fn(async () => ({ kind: "click", ok: true }));
+      const approvalFlow = vi.fn(async () => true);
+      const manager = createComputerSessionManager({
+        dispatcher: makeDispatcher({ execute }),
+        governance: createDefaultComputerGovernance(),
+        approvalFlow,
+        generateSessionId: () => "cs_1",
+      });
+      await manager.openSession("mot_1");
+
+      const result = await manager.executeAction("cs_1", {
+        kind: "click",
+        target: { x: 100, y: 200 },
+        target_hint: { label: "Submit", source: "accessibility" },
+      });
+
+      expect(result.outcome).toBe("success");
+      expect(approvalFlow).toHaveBeenCalledTimes(1);
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("Submit-labeled click + denying flow → approval_required, dispatcher skipped", async () => {
+      const execute = vi.fn(async () => ({}));
+      const approvalFlow = vi.fn(async () => false);
+      const manager = createComputerSessionManager({
+        dispatcher: makeDispatcher({ execute }),
+        governance: createDefaultComputerGovernance(),
+        approvalFlow,
+        generateSessionId: () => "cs_1",
+      });
+      await manager.openSession("mot_1");
+
+      const result = await manager.executeAction("cs_1", {
+        kind: "click",
+        target: { x: 100, y: 200 },
+        target_hint: { label: "Submit", source: "accessibility" },
+      });
+
+      expect(result.outcome).toBe("failure");
+      if (result.outcome === "failure") {
+        expect(result.reason).toBe("approval_required");
+      }
+      expect(approvalFlow).toHaveBeenCalledTimes(1);
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it("multiple irreversibility patterns each trigger approval (Submit / Buy now / Pay now / Authorize app / Permanently delete)", async () => {
+      const labels = [
+        "Submit",
+        "Buy now",
+        "Pay now",
+        "Authorize app",
+        "Permanently delete",
+        "I agree",
+      ];
+      for (const label of labels) {
+        const execute = vi.fn(async () => ({}));
+        const manager = createComputerSessionManager({
+          dispatcher: makeDispatcher({ execute }),
+          governance: createDefaultComputerGovernance(),
+          generateSessionId: () => `cs_${label}`,
+        });
+        await manager.openSession("mot_1");
+        const result = await manager.executeAction(`cs_${label}`, {
+          kind: "click",
+          target: { x: 100, y: 200 },
+          target_hint: { label, source: "accessibility" },
+        });
+        expect(result.outcome, `label "${label}" should require approval`).toBe("failure");
+        expect(execute, `dispatcher must not run for "${label}"`).not.toHaveBeenCalled();
+      }
+    });
+
+    it("benign-labeled click (Cancel) skips approval — over-firing would make the tool unusable", async () => {
+      const execute = vi.fn(async () => ({ kind: "click", ok: true }));
+      const approvalFlow = vi.fn(async () => true);
+      const manager = createComputerSessionManager({
+        dispatcher: makeDispatcher({ execute }),
+        governance: createDefaultComputerGovernance(),
+        approvalFlow,
+        generateSessionId: () => "cs_1",
+      });
+      await manager.openSession("mot_1");
+
+      const result = await manager.executeAction("cs_1", {
+        kind: "click",
+        target: { x: 100, y: 200 },
+        target_hint: { label: "Cancel", source: "accessibility" },
+      });
+
+      expect(result.outcome).toBe("success");
+      expect(approvalFlow).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("type action with secret-pattern text fires approval — same regex engine as observation classifier", async () => {
+      const execute = vi.fn(async () => ({}));
+      const manager = createComputerSessionManager({
+        dispatcher: makeDispatcher({ execute }),
+        governance: createDefaultComputerGovernance(),
+        generateSessionId: () => "cs_1",
+      });
+      await manager.openSession("mot_1");
+
+      // sk- prefix matches the SECRET_PATTERNS in
+      // policy-invariants/computer-sensitivity.ts; classifyComputerAction
+      // returns require_approval per spec §3.2.
+      const result = await manager.executeAction("cs_1", {
+        kind: "type",
+        text: "sk-test1234567890abcdefghij",
+      });
+
+      expect(result.outcome).toBe("failure");
+      if (result.outcome === "failure") {
+        expect(result.reason).toBe("approval_required");
+      }
+      expect(execute).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("observation classification — classifyObservation fires on screenshot results", () => {
+    it("benign screenshot (no OCR tokens) gets the v1 stub redaction stamp (applied: false, projection_kind: 'raw')", async () => {
+      const screenshot = {
+        kind: "screenshot",
+        width: 1280,
+        height: 800,
+        bytes_base64: FAKE_PNG_BYTES,
+      };
+      const manager = createComputerSessionManager({
+        dispatcher: makeDispatcher({
+          async execute() {
+            return screenshot;
+          },
+        }),
+        governance: createDefaultComputerGovernance(),
+        generateSessionId: () => "cs_1",
+      });
+      await manager.openSession("mot_1");
+
+      const result = await manager.executeAction("cs_1", { kind: "screenshot" });
+      expect(result.outcome).toBe("success");
+      if (result.outcome === "success") {
+        const d = result.data as Record<string, unknown>;
+        const redaction = d.redaction as { applied: boolean; projection_kind: string };
+        expect(redaction.applied).toBe(false);
+        expect(redaction.projection_kind).toBe("raw");
+        // Bytes stay intact when no sensitivity is detected — the slab
+        // can render the image; the AI sees it (subject to upstream
+        // bytes_omitted projection in ai-core's projectForAi).
+        expect(d.bytes_base64).toBe(FAKE_PNG_BYTES);
+      }
+    });
+
+    it("OCR tokens with financial content (Luhn-valid card #) → projection_kind: 'blocked', bytes stripped (spec §3.4 redaction-before-AI)", async () => {
+      // 4111111111111111 is a valid Luhn test Visa number; CARD_NUMBER_PATTERN
+      // matches; classifyScreenshotWithOcr returns financial → strip_bytes.
+      // The session manager removes bytes_base64 + ocr_tokens before the
+      // AI sees the result.
+      const screenshot = {
+        kind: "screenshot",
+        width: 1280,
+        height: 800,
+        bytes_base64: FAKE_PNG_BYTES,
+        ocr_tokens: [{ text: "Card number: 4111 1111 1111 1111", x: 0, y: 0, w: 200, h: 20 }],
+      };
+      const manager = createComputerSessionManager({
+        dispatcher: makeDispatcher({
+          async execute() {
+            return screenshot;
+          },
+        }),
+        governance: createDefaultComputerGovernance(),
+        generateSessionId: () => "cs_1",
+      });
+      await manager.openSession("mot_1");
+
+      const result = await manager.executeAction("cs_1", { kind: "screenshot" });
+      expect(result.outcome).toBe("success");
+      if (result.outcome === "success") {
+        const d = result.data as Record<string, unknown>;
+        const redaction = d.redaction as {
+          applied: boolean;
+          projection_kind: string;
+          strip_bytes?: boolean;
+          classified_regions_count: number;
+        };
+        expect(redaction.applied).toBe(true);
+        expect(redaction.projection_kind).toBe("blocked");
+        expect(redaction.strip_bytes).toBe(true);
+        expect(redaction.classified_regions_count).toBeGreaterThan(0);
+        // Spec §3.4: raw bytes never reach the AI when sensitivity
+        // classifier flags blocking-tier (medical / financial / secret).
+        // The session manager strips them upstream.
+        expect(d.bytes_base64).toBeUndefined();
+        expect(d.ocr_tokens).toBeUndefined();
+      }
+    });
+
+    it("OCR tokens with secret content (sk- prefix API key) → projection_kind: 'blocked', bytes stripped", async () => {
+      const screenshot = {
+        kind: "screenshot",
+        width: 1280,
+        height: 800,
+        bytes_base64: FAKE_PNG_BYTES,
+        ocr_tokens: [{ text: "API key: sk-test1234567890abcdefghij", x: 0, y: 0, w: 200, h: 20 }],
+      };
+      const manager = createComputerSessionManager({
+        dispatcher: makeDispatcher({
+          async execute() {
+            return screenshot;
+          },
+        }),
+        governance: createDefaultComputerGovernance(),
+        generateSessionId: () => "cs_1",
+      });
+      await manager.openSession("mot_1");
+
+      const result = await manager.executeAction("cs_1", { kind: "screenshot" });
+      expect(result.outcome).toBe("success");
+      if (result.outcome === "success") {
+        const d = result.data as Record<string, unknown>;
+        const redaction = d.redaction as { projection_kind: string; strip_bytes?: boolean };
+        expect(redaction.projection_kind).toBe("blocked");
+        expect(redaction.strip_bytes).toBe(true);
+        expect(d.bytes_base64).toBeUndefined();
+      }
+    });
+
+    it("OCR tokens with personal content (SSN) → personal_flagged, bytes preserved (over-stripping personal would make the tool unusable)", async () => {
+      const screenshot = {
+        kind: "screenshot",
+        width: 1280,
+        height: 800,
+        bytes_base64: FAKE_PNG_BYTES,
+        ocr_tokens: [{ text: "SSN: 123-45-6789", x: 0, y: 0, w: 100, h: 20 }],
+      };
+      const manager = createComputerSessionManager({
+        dispatcher: makeDispatcher({
+          async execute() {
+            return screenshot;
+          },
+        }),
+        governance: createDefaultComputerGovernance(),
+        generateSessionId: () => "cs_1",
+      });
+      await manager.openSession("mot_1");
+
+      const result = await manager.executeAction("cs_1", { kind: "screenshot" });
+      expect(result.outcome).toBe("success");
+      if (result.outcome === "success") {
+        const d = result.data as Record<string, unknown>;
+        const redaction = d.redaction as { projection_kind: string; strip_bytes?: boolean };
+        expect(redaction.projection_kind).toBe("personal_flagged");
+        // Personal matches recorded but bytes flow through — doctrine:
+        // "blocking every screenshot that contained one would make the
+        // tool unusable." The slab still gets the image; the audit
+        // trail records the personal-tier match.
+        expect(redaction.strip_bytes).toBeFalsy();
+        expect(d.bytes_base64).toBe(FAKE_PNG_BYTES);
+      }
+    });
   });
 });
