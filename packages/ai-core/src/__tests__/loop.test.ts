@@ -711,6 +711,114 @@ describe("runTurnStreaming (agentic loop)", () => {
     expect(historyText).toContain("800");
   });
 
+  it("navigate result with inline bytes: bytes hidden from AI history, slab still gets them (v1.3 hardening)", async () => {
+    // Same privacy contract as the screenshot path, applied to the
+    // navigate action. v1.3: navigate captures a screenshot inline so
+    // the slab can render the page without a follow-up `screenshot`
+    // call. The bytes-omit pipeline must catch `kind: "navigate"`
+    // too, or the AI ends up with a 50KB base64 blob in its
+    // conversation history.
+    const fakeBytes = "navigateBytes".repeat(40);
+    const toolRegistry = makeMockToolRegistry(
+      new Map([
+        [
+          "computer",
+          {
+            def: {
+              name: "computer",
+              description: "screenshot/click/type/navigate",
+              inputSchema: { type: "object", properties: { action: { type: "object" } } },
+            },
+            result: {
+              ok: true,
+              data: {
+                kind: "navigate",
+                ok: true,
+                url: "https://motebit.com/",
+                visual_content_detected: true,
+                blank_page_detected: false,
+                access_denied_detected: false,
+                visual_readiness_timeout: false,
+                bytes_base64: fakeBytes,
+                image_format: "jpeg",
+                width: 1280,
+                height: 800,
+                captured_at: 1_000_000,
+              },
+            },
+          },
+        ],
+      ]),
+    );
+
+    const capturedContexts: ContextPack[] = [];
+    const responses: AIResponse[] = [
+      {
+        text: "Navigating.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        tool_calls: [
+          {
+            id: "tc_nav",
+            name: "computer",
+            args: { action: { kind: "navigate", url: "motebit.com" } },
+          },
+        ],
+      },
+      {
+        text: "Page loaded.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      },
+    ];
+    let callIndex = 0;
+    const provider: StreamingProvider = {
+      model: "test-model",
+      setModel: vi.fn(),
+      async generate(ctx: ContextPack): Promise<AIResponse> {
+        capturedContexts.push(ctx);
+        const response = responses[callIndex] ?? responses[responses.length - 1]!;
+        callIndex++;
+        return response;
+      },
+      async *generateStream(ctx: ContextPack) {
+        capturedContexts.push(ctx);
+        const response = responses[callIndex] ?? responses[responses.length - 1]!;
+        callIndex++;
+        if (response.text) yield { type: "text" as const, text: response.text };
+        yield { type: "done" as const, response };
+      },
+      estimateConfidence: () => Promise.resolve(0.8),
+      extractMemoryCandidates: (r: AIResponse) => Promise.resolve(r.memory_candidates),
+    };
+
+    const deps = makeDepsWithProvider(provider, toolRegistry);
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "visit motebit.com")) {
+      chunks.push(chunk);
+    }
+
+    // Slab still receives the bytes verbatim.
+    const doneChunk = chunks.find(
+      (c) => c.type === "tool_status" && (c as { status: string }).status === "done",
+    ) as { type: "tool_status"; result?: { kind?: string; bytes_base64?: string } } | undefined;
+    expect(doneChunk).toBeDefined();
+    expect(doneChunk!.result?.kind).toBe("navigate");
+    expect(doneChunk!.result?.bytes_base64).toBe(fakeBytes);
+
+    // AI sees the marker, not the bytes.
+    expect(capturedContexts.length).toBeGreaterThanOrEqual(2);
+    const secondCtx = capturedContexts[capturedContexts.length - 1]!;
+    const historyText = JSON.stringify(secondCtx);
+    expect(historyText).not.toContain(fakeBytes);
+    expect(historyText).toContain("bytes_omitted");
+    // Metadata still flows so the AI can describe what happened.
+    expect(historyText).toContain("motebit.com");
+    expect(historyText).toContain("visual_content_detected");
+  });
+
   it("propagates ToolDefinition.embodimentMode onto every tool_status chunk (calling + done)", async () => {
     // v1.1 of the virtual_browser arc: the same `computer` tool name
     // produces different embodiments per dispatcher (cloud-browser →

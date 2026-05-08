@@ -51,6 +51,41 @@ describe("extractScreenshot", () => {
     expect(extractScreenshot({ kind: "cursor_position", x: 1, y: 2 })).toBeNull();
   });
 
+  // v1.3 hardening — `navigate` results carry inline screenshot
+  // bytes so the slab can render the page right after navigation
+  // without a follow-up `screenshot` action. Same payload shape as
+  // the `screenshot` action; same renderable image card.
+  it("accepts a navigate result with inline bytes_base64", () => {
+    const out = extractScreenshot({
+      kind: "navigate",
+      ok: true,
+      url: "https://motebit.com/",
+      visual_content_detected: true,
+      bytes_base64: "iVBORw0KGgo=",
+      image_format: "jpeg",
+      width: 1280,
+      height: 800,
+      captured_at: 1_700_000_000_000,
+    });
+    expect(out).not.toBeNull();
+    expect(out!.bytes_base64).toBe("iVBORw0KGgo=");
+    expect(out!.image_format).toBe("jpeg");
+  });
+
+  it("returns null for a navigate result without bytes (metadata-only path stays)", () => {
+    // The capture-failure branch in doNavigate omits bytes; the slab
+    // must fall through to the generic / fallback renderer rather
+    // than try to render an empty image.
+    expect(
+      extractScreenshot({
+        kind: "navigate",
+        ok: true,
+        url: "https://motebit.com/",
+        visual_content_detected: true,
+      }),
+    ).toBeNull();
+  });
+
   it("returns null for malformed inputs (no crash)", () => {
     expect(extractScreenshot(null)).toBeNull();
     expect(extractScreenshot(undefined)).toBeNull();

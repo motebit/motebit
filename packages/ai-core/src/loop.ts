@@ -118,7 +118,18 @@ function wrapExternalData(data: unknown, toolName: string): string {
 function projectForAi(data: unknown): unknown {
   if (data == null || typeof data !== "object") return data;
   const r = data as Record<string, unknown>;
-  if (r.kind === "screenshot" && typeof r.bytes_base64 === "string" && r.bytes_base64.length > 0) {
+  // Two kinds carry inline screenshot bytes today: the explicit
+  // `screenshot` action and the `navigate` action (v1.3 hardening —
+  // navigate captures inline so the slab gets a frame without a
+  // separate screenshot action). Both must strip bytes from the AI's
+  // context with the same self-instructive directive — the privacy
+  // contract is "AI never sees pixel bytes," and that has to hold
+  // regardless of which action produced them.
+  if (
+    (r.kind === "screenshot" || r.kind === "navigate") &&
+    typeof r.bytes_base64 === "string" &&
+    r.bytes_base64.length > 0
+  ) {
     const { bytes_base64: _bytes_base64, ...rest } = r;
     return {
       ...rest,

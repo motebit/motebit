@@ -216,10 +216,18 @@ async function doNavigate(session: BrowserSession, action: NavigateAction): Prom
     // so it's capped at 5s with a soft fallback — those pages don't
     // hang the navigate. The screenshot then captures whatever DID
     // render in those 5s, typically enough to be useful.
-    await session.page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    // Timeouts tightened 2026-05-08: 30s/5s was reading as a 30-second
+    // load on otherwise-fast sites because cold-start Chromium + AI
+    // loop overhead stacked on top. 15s for `goto` is enough for any
+    // honest first-paint; honest failure faster beats waiting longer
+    // for sites that aren't going to render. networkidle dropped to
+    // 2s — long enough to settle SPAs that finish their mount in the
+    // first second after DOMContentLoaded, short enough that
+    // analytics-heavy pages don't pin the wait to its ceiling.
+    await session.page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
     let visualReadinessTimeout = false;
     try {
-      await session.page.waitForLoadState("networkidle", { timeout: 5_000 });
+      await session.page.waitForLoadState("networkidle", { timeout: 2_000 });
     } catch {
       // networkidle timeout — page has persistent connections or is
       // still streaming. Continue anyway; the capture surfaces
@@ -264,6 +272,36 @@ async function doNavigate(session: BrowserSession, action: NavigateAction): Prom
         denied: false,
       }));
 
+    // 2026-05-08: capture a screenshot inline as part of the navigate
+    // result. Restores the "slab shows the page after navigate" UX
+    // the user expects — independent of whether the live-screencast
+    // endpoint is deployed (the live stream is additive; this is the
+    // synchronous first frame). The bytes are user-visible-only
+    // (`@motebit/ai-core`'s `projectForAi` strips them from the AI's
+    // context with the same `bytes_omitted` directive that the
+    // standalone `screenshot` action uses), so the privacy contract
+    // is unchanged. JPEG 60% mirrors the screencast's quality
+    // register; PNG is overkill for a navigate snapshot.
+    let bytes_base64: string | undefined;
+    let image_format: "jpeg" | "png" | undefined;
+    let width = 0;
+    let height = 0;
+    try {
+      const buf = await session.page.screenshot({ type: "jpeg", quality: 60, fullPage: false });
+      bytes_base64 = Buffer.from(buf).toString("base64");
+      image_format = "jpeg";
+      const viewport = session.page.viewportSize();
+      width = viewport?.width ?? 0;
+      height = viewport?.height ?? 0;
+    } catch {
+      // Capture failure must not break the navigate result — the
+      // metadata fields below still let the AI describe what
+      // happened. The user's slab falls through to the navigate
+      // friendly card without the inline image (still better than
+      // raw JSON, since extractScreenshot returns null and the
+      // generic renderer takes over).
+    }
+
     return {
       kind: "navigate",
       ok: true,
@@ -272,6 +310,9 @@ async function doNavigate(session: BrowserSession, action: NavigateAction): Prom
       blank_page_detected: heuristic.blankish,
       access_denied_detected: heuristic.denied,
       visual_readiness_timeout: visualReadinessTimeout,
+      ...(bytes_base64 !== undefined
+        ? { bytes_base64, image_format, width, height, captured_at: Date.now() }
+        : {}),
     };
   } catch (err) {
     throw new ServiceError(

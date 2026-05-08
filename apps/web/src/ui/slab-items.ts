@@ -696,7 +696,13 @@ export interface ScreenshotPayload {
 export function extractScreenshot(result: unknown): ScreenshotPayload | null {
   if (result === null || typeof result !== "object") return null;
   const r = result as Record<string, unknown>;
-  if (r.kind !== "screenshot") return null;
+  // Two action kinds carry inline screenshot bytes today: the
+  // explicit `screenshot` action (always returns bytes) and the
+  // `navigate` action (v1.3 hardening — returns inline bytes so the
+  // slab shows the page right after navigation without depending on
+  // the live-screencast deploy). Both produce the same renderable
+  // payload; the kind is just the dispatch site that captured it.
+  if (r.kind !== "screenshot" && r.kind !== "navigate") return null;
   const bytes = r.bytes_base64;
   if (typeof bytes !== "string" || bytes.length === 0) return null;
   const format = typeof r.image_format === "string" ? r.image_format : "png";
