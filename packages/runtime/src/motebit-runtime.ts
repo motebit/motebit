@@ -142,6 +142,7 @@ import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import { assertSpeciesIntegrity } from "@motebit/policy-invariants";
 import { SyncEngine } from "@motebit/sync-engine";
 import type { RenderAdapter } from "@motebit/render-engine/spec";
+import { normalizeEmbodimentMode } from "@motebit/render-engine/spec";
 import {
   runTurn,
   runTurnStreaming,
@@ -1588,7 +1589,18 @@ export class MotebitRuntime {
             // — Deferred to v1.5+: per-dispatcher mode stamping" —
             // landed as v1.1 of the virtual_browser arc.
             const policy = toolPolicy(chunk.name);
-            const stampedMode = (chunk.mode ?? policy.mode) as typeof policy.mode;
+            // chunk.mode is loose `string | undefined` (the protocol
+            // can't statically type it as EmbodimentMode without a
+            // protocol→render-engine layer break). Validate at the
+            // boundary: a typo or a future loose caller (federation
+            // peer's MCP-imported `computer` tool with a freeform mode
+            // field) gets the safe-floor instead of a malformed slab
+            // item. The drift gate `check-computer-dispatcher-modes`
+            // catches static cases; this validator covers runtime
+            // ones. Doctrine: motebit-computer.md §"Mode contract" —
+            // under-claiming is correct, mis-claiming is the failure
+            // mode the gate-and-validator pair closes.
+            const stampedMode = normalizeEmbodimentMode(chunk.mode, policy.mode);
             this.slab.openItem({
               id: toolItemId,
               kind: policy.kind,

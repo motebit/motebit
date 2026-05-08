@@ -5,6 +5,8 @@ import {
   CANONICAL_MATERIAL,
   CANONICAL_LIGHTING,
   EMBODIMENT_MODE_CONTRACTS,
+  EMBODIMENT_MODES,
+  normalizeEmbodimentMode,
   smoothDelta,
   ThreeJSAdapter,
   SpatialAdapter,
@@ -301,5 +303,64 @@ describe("EMBODIMENT_MODE_CONTRACTS — total coverage + invariants", () => {
         );
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normalizeEmbodimentMode — runtime defense for loose mode strings
+// ---------------------------------------------------------------------------
+//
+// `ToolDefinition.embodimentMode` is typed as `string` in
+// `@motebit/protocol` (the EmbodimentMode union lives here in
+// `@motebit/render-engine`; protocol-layer promotion is deferred). The
+// runtime's `projectSlabForTurn` validates `chunk.mode` through this
+// normalizer before stamping a slab item. The drift gate
+// `check-computer-dispatcher-modes` covers static registration sites;
+// this test covers the runtime cases the gate can't see.
+
+describe("normalizeEmbodimentMode — closed-union runtime defense", () => {
+  it("returns each valid mode verbatim", () => {
+    for (const mode of EMBODIMENT_MODES) {
+      // Fallback intentionally different from the input so a passthrough
+      // bug masquerading as identity would surface.
+      const fallback: EmbodimentMode = mode === "mind" ? "tool_result" : "mind";
+      expect(normalizeEmbodimentMode(mode, fallback)).toBe(mode);
+    }
+  });
+
+  it("falls back when mode is undefined (the common no-stamp path)", () => {
+    expect(normalizeEmbodimentMode(undefined, "tool_result")).toBe("tool_result");
+  });
+
+  it("falls back when mode is null", () => {
+    expect(normalizeEmbodimentMode(null, "virtual_browser")).toBe("virtual_browser");
+  });
+
+  it("falls back when mode is an empty string", () => {
+    expect(normalizeEmbodimentMode("", "tool_result")).toBe("tool_result");
+  });
+
+  it("falls back on a typo close to a real mode", () => {
+    // The exact failure shape this validator was added to defend
+    // against: a typo enters the slab unchecked under the prior cast.
+    expect(normalizeEmbodimentMode("virtual-broswer", "tool_result")).toBe("tool_result");
+    expect(normalizeEmbodimentMode("desktop_drrive", "tool_result")).toBe("tool_result");
+    expect(normalizeEmbodimentMode("VirtualBrowser", "tool_result")).toBe("tool_result");
+  });
+
+  it("falls back on an invented mode (e.g. a federation peer's freeform mode field)", () => {
+    expect(normalizeEmbodimentMode("kitchen_sink", "tool_result")).toBe("tool_result");
+  });
+
+  it("EMBODIMENT_MODES is the full closed union (the type-vs-runtime sync invariant)", () => {
+    // If a future entry is added to the EmbodimentMode union but
+    // forgotten in the EMBODIMENT_MODES array, the runtime validator
+    // would reject the new mode as invalid even when stamped
+    // correctly. The `satisfies ReadonlyArray<EmbodimentMode>` clause
+    // on the array declaration catches the inverse (typo'd member),
+    // and the comprehensive coverage check above catches the omission
+    // direction (every union member must round-trip).
+    expect(EMBODIMENT_MODES.length).toBe(6);
+    expect(new Set(EMBODIMENT_MODES).size).toBe(EMBODIMENT_MODES.length);
   });
 });

@@ -271,6 +271,57 @@ export function defaultEmbodimentMode(kind: SlabItemKind): EmbodimentMode {
 }
 
 /**
+ * The closed set of valid embodiment-mode strings, in declaration
+ * order. Lifted out of the type union so runtime validators can
+ * iterate / membership-test without re-listing the strings — keeps
+ * the type and the validator in sync at the source.
+ */
+export const EMBODIMENT_MODES = [
+  "mind",
+  "tool_result",
+  "virtual_browser",
+  "shared_gaze",
+  "desktop_drive",
+  "peer_viewport",
+] as const satisfies ReadonlyArray<EmbodimentMode>;
+
+const EMBODIMENT_MODE_SET: ReadonlySet<string> = new Set<string>(EMBODIMENT_MODES);
+
+/**
+ * Runtime-checked normalizer for an untrusted embodiment-mode string.
+ *
+ * Why this exists. `ToolDefinition.embodimentMode` is typed as
+ * `string` in `@motebit/protocol` to avoid a protocol→render-engine
+ * layer break (the canonical `EmbodimentMode` union lives here in
+ * `@motebit/render-engine`; promoting it into the protocol layer is a
+ * separate slice the doctrine names as deferred). That means the
+ * value flowing onto the runtime's `tool_status` chunk is structurally
+ * loose — a typo (`"virtual-broswer"`), a federation peer's
+ * MCP-imported tool with a freeform mode field, or any future loose
+ * caller could push an invalid string into slab state. A TypeScript
+ * cast (`as EmbodimentMode`) is type-system theater, not runtime
+ * defense; the drift gate `check-computer-dispatcher-modes` catches
+ * the static cases (every in-tree registration site stamps a known
+ * mode) but offers nothing for runtime-supplied modes.
+ *
+ * Behavior: returns the input verbatim when it's a known mode;
+ * otherwise returns `fallback`. Conservative on `undefined` and
+ * non-string inputs — both fall through to fallback so the slab
+ * never lands in an undefined-mode state.
+ *
+ * Doctrine: motebit-computer.md §"Mode contract" — every slab item
+ * declares an embodiment mode; under-claiming is correct, mis-
+ * claiming is the failure mode the gate-and-validator pair closes.
+ */
+export function normalizeEmbodimentMode(
+  mode: string | undefined | null,
+  fallback: EmbodimentMode,
+): EmbodimentMode {
+  if (typeof mode !== "string" || mode.length === 0) return fallback;
+  return EMBODIMENT_MODE_SET.has(mode) ? (mode as EmbodimentMode) : fallback;
+}
+
+/**
  * Lifecycle phase for a slab item. The doctrine treats detachment as a
  * typed phase (not a private animation detail) so cross-surface
  * renderers can't silently diverge on the pinch physics.

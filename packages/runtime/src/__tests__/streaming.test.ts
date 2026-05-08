@@ -492,6 +492,102 @@ describe("sendMessageStreaming", () => {
     await collectChunks(runtime.sendMessageStreaming("hello"));
     expect(runtime.hasPendingApproval).toBe(false);
   });
+
+  it("stamps the slab item with chunk.mode when valid (v1.1 per-dispatcher mode stamping)", async () => {
+    // The cloud-browser path (apps/web) registers `computer` with
+    // `embodimentMode: "virtual_browser"`; ai-core forwards it on
+    // every tool_status chunk; runtime's projectSlabForTurn picks
+    // chunk.mode over the safe-floor in tool-policy.ts.
+    mockRunTurnStreaming.mockReturnValue(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "computer",
+          status: "calling" as const,
+          mode: "virtual_browser",
+        };
+        throw new Error("end");
+      })(),
+    );
+
+    const slabSnapshots: Array<{ items: ReadonlyMap<string, { kind: string; mode: string }> }> = [];
+    runtime.slab.subscribe((state) => {
+      slabSnapshots.push({ items: state.items });
+    });
+
+    await expect(async () => {
+      await collectChunks(runtime.sendMessageStreaming("screenshot"));
+    }).rejects.toThrow();
+
+    // Inspect the first observation that included the tool item.
+    const itemSeen = slabSnapshots
+      .flatMap((s) => Array.from(s.items.values()))
+      .find((i) => i.kind === "fetch");
+    expect(itemSeen?.mode).toBe("virtual_browser");
+  });
+
+  it("falls back to tool-policy mode when chunk.mode is invalid (runtime defense, not just type-system theater)", async () => {
+    // The validator's job: a typo or a future loose caller cannot
+    // push a malformed mode into slab state. tool-policy says
+    // computer's safe-floor is tool_result; an invalid chunk.mode
+    // should land there, not in an undefined-mode state.
+    mockRunTurnStreaming.mockReturnValue(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "computer",
+          status: "calling" as const,
+          mode: "virtual-broswer", // typo
+        };
+        throw new Error("end");
+      })(),
+    );
+
+    const slabSnapshots: Array<{ items: ReadonlyMap<string, { kind: string; mode: string }> }> = [];
+    runtime.slab.subscribe((state) => {
+      slabSnapshots.push({ items: state.items });
+    });
+
+    await expect(async () => {
+      await collectChunks(runtime.sendMessageStreaming("screenshot"));
+    }).rejects.toThrow();
+
+    const itemSeen = slabSnapshots
+      .flatMap((s) => Array.from(s.items.values()))
+      .find((i) => i.kind === "fetch");
+    // tool-policy.ts maps `computer` → mode: "tool_result" as the
+    // safe-floor; the validator returns that when the chunk's mode
+    // doesn't match a known EmbodimentMode.
+    expect(itemSeen?.mode).toBe("tool_result");
+  });
+
+  it("falls back to tool-policy mode when chunk.mode is missing (the no-stamp legacy path)", async () => {
+    mockRunTurnStreaming.mockReturnValue(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "computer",
+          status: "calling" as const,
+          // no mode field
+        };
+        throw new Error("end");
+      })(),
+    );
+
+    const slabSnapshots: Array<{ items: ReadonlyMap<string, { kind: string; mode: string }> }> = [];
+    runtime.slab.subscribe((state) => {
+      slabSnapshots.push({ items: state.items });
+    });
+
+    await expect(async () => {
+      await collectChunks(runtime.sendMessageStreaming("screenshot"));
+    }).rejects.toThrow();
+
+    const itemSeen = slabSnapshots
+      .flatMap((s) => Array.from(s.items.values()))
+      .find((i) => i.kind === "fetch");
+    expect(itemSeen?.mode).toBe("tool_result");
+  });
 });
 
 // === processStream: state extraction and side effects ===
