@@ -222,6 +222,41 @@ export interface ComputerSessionManager {
 
   /** Close all active sessions with `reason: "manager_disposed"`. */
   dispose(): void;
+
+  /**
+   * Halt the manager — fail-closed user-floor invariant per
+   * `spec/computer-use-v1.md` §3.3 + the doctrine's two-finger-hold
+   * gesture in `motebit-computer.md` §"The user's touch — supervised
+   * agency."
+   *
+   * Semantics: while halted, every new `executeAction` call returns
+   * `{ outcome: "failure", reason: "user_preempted" }` WITHOUT
+   * touching the dispatcher. In-flight atomic actions are NOT
+   * cancelled — per spec §3.3, "in-flight atomic action MAY
+   * complete; no new dispatch begins until the quiet period
+   * elapses." Callers see the rejection at the session-manager
+   * boundary; the dispatcher never hears about the halt.
+   *
+   * The motebit's AI loop, the slab's per-item lifecycle, the
+   * proactive consolidation cycle — none of those are this
+   * primitive's responsibility. Halt is the user's "stop dispatching
+   * synthetic input" boundary, narrow and surgical. Higher-level
+   * pause semantics (e.g. presence going `tending → halted`) compose
+   * above this primitive; they don't live inside it.
+   */
+  halt(): void;
+
+  /**
+   * Resume from halt. New `executeAction` calls are honored again.
+   * Idempotent — `resume()` on an already-resumed manager is a
+   * no-op. The doctrine's gesture is "release to resume" — the
+   * surface releasing the two-finger-hold (or `/resume` slash
+   * command, or any other trigger) calls this primitive.
+   */
+  resume(): void;
+
+  /** True when `halt()` was called more recently than `resume()`. */
+  isHalted(): boolean;
 }
 
 export interface ComputerSessionManagerDeps {
@@ -272,6 +307,12 @@ export function createComputerSessionManager(
   } = deps;
 
   const sessions = new Map<string, InternalSession>();
+  // User-floor halt flag — see `halt()` / `resume()` / `isHalted()`
+  // on the ComputerSessionManager interface for the semantics. While
+  // true, executeAction returns user_preempted without touching the
+  // dispatcher. Per spec §3.3 in-flight actions complete naturally;
+  // this flag only blocks NEW dispatches.
+  let halted = false;
 
   async function openSession(
     motebitId: string,
@@ -349,6 +390,21 @@ export function createComputerSessionManager(
     action: ComputerAction,
     onChunk?: (chunk: unknown) => void,
   ): Promise<ComputerActionOutcome> {
+    // User-floor halt check — runs BEFORE session validation and
+    // governance classification. The two-finger-hold gesture (or
+    // /halt slash command, or any other release-trigger) sets this
+    // flag; the AI's next dispatched action lands here and gets
+    // user_preempted per spec §3.3. Order matters: halt is the
+    // user's stop button; it preempts everything else, including
+    // an action that would otherwise be allow-ed by governance.
+    if (halted) {
+      return {
+        outcome: "failure",
+        reason: "user_preempted",
+        message: "Manager is halted; user has paused dispatch.",
+      };
+    }
+
     const session = sessions.get(sessionId);
     if (!session || session.closed_at != null) {
       return {
@@ -449,6 +505,18 @@ export function createComputerSessionManager(
     }
   }
 
+  function halt(): void {
+    halted = true;
+  }
+
+  function resume(): void {
+    halted = false;
+  }
+
+  function isHalted(): boolean {
+    return halted;
+  }
+
   return {
     openSession,
     closeSession,
@@ -456,5 +524,8 @@ export function createComputerSessionManager(
     getSession,
     activeSessionIds,
     dispose,
+    halt,
+    resume,
+    isHalted,
   };
 }

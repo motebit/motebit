@@ -898,3 +898,174 @@ describe("v1.1b — real classifiers compose end-to-end on the cloud-browser pat
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// v1.2 — halt / resume primitive (user-floor invariant per spec §3.3 +
+// "two-finger hold on the plane" gesture per motebit-computer.md
+// §"The user's touch — supervised agency"). The primitive lives at the
+// session-manager level so any trigger surface (slash command, slab plane
+// gesture, voice command, AI's own "stop" tool) composes the same fail-
+// closed user_preempted boundary.
+// ---------------------------------------------------------------------------
+
+describe("v1.2 — halt / resume primitive (fail-closed user_preempted)", () => {
+  it("isHalted defaults to false on a fresh manager", () => {
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher(),
+    });
+    expect(manager.isHalted()).toBe(false);
+  });
+
+  it("halt() flips isHalted to true; resume() flips it back; both idempotent", () => {
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher(),
+    });
+    manager.halt();
+    expect(manager.isHalted()).toBe(true);
+    manager.halt(); // idempotent
+    expect(manager.isHalted()).toBe(true);
+    manager.resume();
+    expect(manager.isHalted()).toBe(false);
+    manager.resume(); // idempotent
+    expect(manager.isHalted()).toBe(false);
+  });
+
+  it("halted: executeAction returns user_preempted WITHOUT calling dispatcher (spec §3.3)", async () => {
+    const execute = vi.fn(async () => ({ kind: "click", ok: true }));
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({ execute }),
+      governance: createDefaultComputerGovernance(),
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    manager.halt();
+
+    const result = await manager.executeAction("cs_1", CLICK_ACTION);
+
+    expect(result.outcome).toBe("failure");
+    if (result.outcome === "failure") {
+      expect(result.reason).toBe("user_preempted");
+    }
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("halt preempts BEFORE governance — even allow-classified actions get user_preempted (halt is the user's stop button, it overrides everything)", async () => {
+    const classify = vi.fn(async () => "allow" as const);
+    const execute = vi.fn(async () => ({}));
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({ execute }),
+      governance: { classify },
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    manager.halt();
+
+    const result = await manager.executeAction("cs_1", CLICK_ACTION);
+
+    expect(result.outcome).toBe("failure");
+    if (result.outcome === "failure") {
+      expect(result.reason).toBe("user_preempted");
+    }
+    // Halt fires before governance — neither classify nor execute runs.
+    expect(classify).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("resume() lets new actions through; halt+resume+halt cycle works correctly", async () => {
+    const execute = vi.fn(async () => ({ kind: "click", ok: true }));
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({ execute }),
+      governance: createDefaultComputerGovernance(),
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+
+    // Pre-halt: executes normally.
+    let result = await manager.executeAction("cs_1", CLICK_ACTION);
+    expect(result.outcome).toBe("success");
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    // Halt: rejected.
+    manager.halt();
+    result = await manager.executeAction("cs_1", CLICK_ACTION);
+    expect(result.outcome).toBe("failure");
+    expect(execute).toHaveBeenCalledTimes(1); // unchanged
+
+    // Resume: executes again.
+    manager.resume();
+    result = await manager.executeAction("cs_1", CLICK_ACTION);
+    expect(result.outcome).toBe("success");
+    expect(execute).toHaveBeenCalledTimes(2);
+
+    // Halt again: rejected.
+    manager.halt();
+    result = await manager.executeAction("cs_1", CLICK_ACTION);
+    expect(result.outcome).toBe("failure");
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("in-flight actions complete naturally (spec §3.3: 'in-flight atomic action MAY complete; no new dispatch begins')", async () => {
+    // The halt primitive's contract is "no new dispatch starts." It
+    // does NOT cancel in-flight actions — that would require the
+    // dispatcher to support AbortSignal mid-call, which Playwright
+    // (cloud-browser) and most Tauri input-injection paths do not.
+    // The spec explicitly carves this out: "in-flight atomic action
+    // MAY complete." This test pins that semantics — a long-running
+    // action started before halt completes successfully even when
+    // halt fires mid-flight.
+    let resolveAction: (() => void) | null = null;
+    const inFlight = new Promise<void>((r) => {
+      resolveAction = r;
+    });
+    const execute = vi.fn(async () => {
+      await inFlight; // simulate slow Playwright call
+      return { kind: "click", ok: true };
+    });
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({ execute }),
+      governance: createDefaultComputerGovernance(),
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+
+    const actionPromise = manager.executeAction("cs_1", CLICK_ACTION);
+    // Halt while the action is mid-flight.
+    manager.halt();
+    expect(manager.isHalted()).toBe(true);
+    // Release the in-flight action's resolve.
+    resolveAction!();
+    const result = await actionPromise;
+    // The in-flight call completes successfully — halt only blocks NEW
+    // dispatches, not ones that already started.
+    expect(result.outcome).toBe("success");
+
+    // But the NEXT call IS blocked.
+    const next = await manager.executeAction("cs_1", CLICK_ACTION);
+    expect(next.outcome).toBe("failure");
+    if (next.outcome === "failure") {
+      expect(next.reason).toBe("user_preempted");
+    }
+  });
+
+  it("halt rejects actions on closed sessions with user_preempted, not session_closed (halt fires first)", async () => {
+    // Order matters: the user's stop button preempts every other
+    // failure mode. If halt fires before the session-validity check,
+    // a closed session also gets user_preempted while halted —
+    // honest about why the action didn't run (the user halted, full
+    // stop), not about a downstream condition that would have failed
+    // anyway.
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher(),
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    await manager.closeSession("cs_1");
+    manager.halt();
+
+    const result = await manager.executeAction("cs_1", CLICK_ACTION);
+    expect(result.outcome).toBe("failure");
+    if (result.outcome === "failure") {
+      expect(result.reason).toBe("user_preempted");
+    }
+  });
+});
