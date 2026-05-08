@@ -200,13 +200,30 @@ async function doNavigate(session: BrowserSession, action: NavigateAction): Prom
   // as a hostname-leading path and prefixed with `https://`.
   const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(action.url) ? action.url : `https://${action.url}`;
   try {
-    // `domcontentloaded` is the right wait condition for slab rendering:
-    // the next `screenshot` call captures the page once the DOM is
-    // assembled, even if late-loading network resources (analytics,
-    // images below the fold) are still streaming. `load` would block
-    // longer for marginal gain; `networkidle` is too strict on pages
-    // with persistent SSE / WebSocket connections.
+    // Two-phase wait. `domcontentloaded` is the navigation guarantee
+    // (DOM exists, scripts can run); the `networkidle` follow-up is
+    // the rendering settle so the next `screenshot` action captures
+    // content, not the SPA mount placeholder.
+    //
+    // Witnessed 2026-05-07: after Slice Q stealth defeated Akamai's
+    // first-tier check on tesla.com, the screenshot came back blank
+    // white — Tesla's SPA finishes mounting ~1-2s after
+    // domcontentloaded fires, and the slab dutifully rendered the
+    // pre-mount blank state.
+    //
+    // networkidle has known reliability issues on pages with
+    // persistent connections (SSE, WebSocket, long-poll analytics),
+    // so it's capped at 5s with a soft fallback — those pages don't
+    // hang the navigate. The screenshot then captures whatever DID
+    // render in those 5s, typically enough to be useful.
     await session.page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    try {
+      await session.page.waitForLoadState("networkidle", { timeout: 5_000 });
+    } catch {
+      // networkidle timeout — page has persistent connections or is
+      // still streaming. Continue to screenshot anyway; the capture
+      // surfaces whatever's currently painted.
+    }
   } catch (err) {
     throw new ServiceError(
       "not_supported",
