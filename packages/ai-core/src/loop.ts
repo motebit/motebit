@@ -674,11 +674,31 @@ export async function* runTurnStreaming(
         }
 
         toolCallsSucceeded++;
+        // Two outputs, two audiences:
+        //   - The chunk's `result` flows to the slab and the runtime's
+        //     UI-facing streaming pipeline. Renderers expect the
+        //     STRUCTURED tool output (e.g., the screenshot-observation
+        //     dict `{ kind: "screenshot", bytes_base64, ... }`) so they
+        //     can route by `kind` and access fields like
+        //     `bytes_base64`. Yielding `sanitized.data` here was a
+        //     category error — it serializes the dict to a JSON
+        //     string, runs the redactor over the bytes_base64 (whose
+        //     long base64 matches encoded-secret patterns), and wraps
+        //     the whole thing in `[EXTERNAL_DATA]` markers. The slab
+        //     loses the screenshot entirely. Witnessed 2026-05-07.
+        //   - `conversationHistory` is what the AI reads on its next
+        //     turn. That's where boundary-wrapping (prompt-injection
+        //     defense) and redaction belong — the AI is the consumer
+        //     whose text-as-instructions confusion the boundaries
+        //     prevent.
+        // So: yield the raw `result.data` to the chunk, push the
+        // sanitized JSON to conversation history. Same shape as the
+        // fallback (no-PolicyGate) path below.
         yield {
           type: "tool_status",
           name: toolCall.name,
           status: "done",
-          result: sanitized.data ?? sanitized.error,
+          result: result.data ?? result.error,
           tool_call_id: toolCall.id,
         };
 

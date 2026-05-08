@@ -466,6 +466,8 @@ describe("sendMessageStreaming", () => {
     //   1. tool item phase is terminal (dissolving | detached | gone)
     //   2. no entry in toolItemIds remains after `finally`
     const finalState = slabSnapshots[slabSnapshots.length - 1];
+    expect(finalState).toBeDefined();
+    if (!finalState) return;
     const toolItem = Array.from(finalState.items.values()).find((i) => i.kind === "tool_call");
     if (toolItem !== undefined) {
       // If still in state.items, it's animating its dissolution tail.

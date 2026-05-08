@@ -300,15 +300,23 @@ export class StreamingManager {
             yield { type: "delegation_start", server: motebitServer, tool: chunk.name };
           }
         } else if (chunk.status === "done") {
-          // Defense-in-depth: redact secrets from tool results at the streaming
-          // boundary BEFORE they reach the client. ai-core sanitizes upstream,
-          // but the streaming boundary is the last checkpoint before bits leave
-          // the droplet. A gap in ai-core must not leak secrets to the UI.
-          if (chunk.result != null) {
-            const resultText =
-              typeof chunk.result === "string" ? chunk.result : JSON.stringify(chunk.result);
-            const redacted = this.deps.redactText(resultText);
-            if (redacted !== resultText) {
+          // Defense-in-depth: redact secrets from tool results at the
+          // streaming boundary BEFORE they reach the client. The redactor
+          // operates on text — it scans for API-key / token / encoded-
+          // secret patterns. Structured object results (e.g., the
+          // screenshot dict `{ kind, bytes_base64, ... }`) are wire-
+          // shapes whose tool author defined the schema; the slab and
+          // per-kind renderers consume them by field. Stringifying an
+          // object here to scan it lit up the screenshot's bytes_base64
+          // as `[REDACTED:ENCODED_SECRET]` and broke slab rendering
+          // entirely (witnessed 2026-05-07). Redaction now only fires
+          // on string results — objects pass through unchanged.
+          // Conversation-history-bound text (what the AI consumes next
+          // turn) is sanitized upstream in ai-core's PolicyGate path
+          // where it belongs.
+          if (chunk.result != null && typeof chunk.result === "string") {
+            const redacted = this.deps.redactText(chunk.result);
+            if (redacted !== chunk.result) {
               chunk = { ...chunk, result: redacted };
             }
           }
