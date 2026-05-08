@@ -1,6 +1,5 @@
 ---
 "@motebit/runtime": minor
-"@motebit/browser-sandbox": minor
 ---
 
 v1.3 slice 1 — live screencast data path.

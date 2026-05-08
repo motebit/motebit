@@ -137,6 +137,31 @@ export interface RegisterWebComputerToolOptions {
    * time this fires; the artifact emergence is a UX layer.
    */
   readonly onSessionReceiptSigned?: (receipt: ComputerSessionReceipt) => void;
+  /**
+   * v1.3 — when supplied, the registration opens a CDP screencast on
+   * the cloud-browser dispatcher right after session-open and pipes
+   * frames into the bus. The slab item kind `live_browser` (mounted
+   * by `onSessionLive`) subscribes through the bus and renders a
+   * continuous JPEG stream. Without this hook, sessions still work
+   * — they just fall back to per-action screenshots.
+   */
+  readonly screencastBus?: import("./screencast-bus.js").ScreencastFrameBus;
+  /**
+   * v1.3 — fired right after `screencastBus` starts publishing so the
+   * surface (apps/web/src/web-app.ts) can mount the
+   * `live_browser` slab item. The companion `onSessionEnding` clears
+   * it on close. Decoupled callback because the slab controller lives
+   * on the runtime, not in this registration scope.
+   */
+  readonly onSessionLive?: (cloudSessionId: string) => void;
+  /**
+   * v1.3 — fired right before the cloud session closes (or on
+   * dispose), so the surface can dissolve the live slab item before
+   * the bus stops publishing. Order matters: dissolve first, then
+   * stop publishing, otherwise the slab item could re-mount and
+   * subscribe to a frozen bus.
+   */
+  readonly onSessionEnding?: (cloudSessionId: string) => void;
 }
 
 /**
@@ -172,6 +197,13 @@ export function registerWebComputerTool(
 
   let defaultSession: ComputerSessionHandle | null = null;
   let openingDefault: Promise<ComputerSessionHandle> | null = null;
+  /**
+   * v1.3 — disposer for the active CDP screencast. `null` outside an
+   * open session or when no screencast is wired (e.g. tests that
+   * don't supply a `screencastBus`). Cleared on session close so the
+   * next session can re-open a fresh stream.
+   */
+  let stopScreencast: (() => Promise<void>) | null = null;
 
   /**
    * Best-effort event-log append. An event sink that throws must not
@@ -211,6 +243,21 @@ export function registerWebComputerTool(
    * itself.
    */
   async function closeAndEmit(sessionId: string, reason: string): Promise<void> {
+    // v1.3 — tear down the screencast BEFORE the session closes so
+    // the slab can dissolve its live_browser item against a known
+    // sessionId, and so the bus stops publishing before the
+    // dispatcher's session is gone. Order: surface dissolves, then
+    // bus stops, then session closes.
+    opts.onSessionEnding?.(sessionId);
+    if (stopScreencast) {
+      try {
+        await stopScreencast();
+      } catch {
+        // best-effort
+      }
+      stopScreencast = null;
+    }
+    opts.screencastBus?.reset();
     const closedEvent = await sessionManager.closeSession(sessionId, reason);
     await emit(EventType.ComputerSessionClosed, closedEvent);
     if (!opts.signSessionReceipt) return;
@@ -249,6 +296,29 @@ export function registerWebComputerTool(
     const pending = sessionManager.openSession(opts.motebitId).then(async ({ handle, event }) => {
       defaultSession = handle;
       await emit(EventType.ComputerSessionOpened, event);
+      // v1.3 — start the live screencast right after the session
+      // opens. The dispatcher's `queryDisplay` (called from inside
+      // `openSession`) seeded the cloud session id; `openScreencast`
+      // attaches CDP and pipes JPEG frames to the bus. Best-effort:
+      // a screencast failure must not prevent the AI from acting on
+      // the session — the per-action screenshot fallback still
+      // works. The slab simply stays still until manual screenshot.
+      if (opts.screencastBus && dispatcher instanceof CloudBrowserDispatcher) {
+        try {
+          stopScreencast = await dispatcher.openScreencast({
+            onFrame: (frame) => opts.screencastBus?.publish(frame),
+            onError: () => {
+              // Transport faults are surfaced through the slab's own
+              // pending state; no toast, no console noise (the AI
+              // loop notices when screenshot actions return errors).
+            },
+          });
+          opts.onSessionLive?.(handle.session_id);
+        } catch {
+          // Open-screencast failure leaves stopScreencast null; the
+          // session is still usable for actions.
+        }
+      }
       return handle;
     });
     openingDefault = pending;

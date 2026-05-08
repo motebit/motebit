@@ -44,6 +44,8 @@ import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
 import { createWebComputerApprovalFlow } from "./computer-approval.js";
 import { registerWebComputerTool, type ComputerToolRegistration } from "./computer-tool.js";
 import type { ComputerSessionReceipt } from "@motebit/sdk";
+import { ScreencastFrameBus } from "./screencast-bus.js";
+import { releaseLiveBrowserItem } from "./ui/slab-items.js";
 import {
   bootstrapIdentity,
   rotateIdentityKeys,
@@ -143,6 +145,20 @@ export class WebApp {
    * emits the closing audit event.
    */
   private computerRegistration: ComputerToolRegistration | null = null;
+  /**
+   * v1.3 — single screencast bus per WebApp (v1 cloud-browser
+   * dispatcher tracks one cloud session at a time). Producer is the
+   * dispatcher's `openScreencast({onFrame})`; consumer is the
+   * `live_browser` slab item built per session via
+   * `runtime.slab.openItem`.
+   */
+  private readonly screencastBus = new ScreencastFrameBus();
+  /**
+   * v1.3 — id of the slab item showing the live screencast for the
+   * currently-open cloud session. Tracked here so `onSessionEnding`
+   * can dissolve it deterministically.
+   */
+  private liveBrowserItemId: string | null = null;
   private _motebitId = "";
   private _deviceId = "";
   private _publicKeyHex = "";
@@ -682,6 +698,15 @@ export class WebApp {
         // bubble in chat.ts). The card runs Ed25519 verify locally;
         // user can dismiss via the close button.
         onSessionReceiptSigned: (receipt) => this.emergeSessionReceipt(receipt),
+        // v1.3 — live screencast wiring. Bus is constructed once on
+        // the WebApp; computer-tool starts the dispatcher's
+        // openScreencast right after openSession and pipes frames
+        // here. The `onSessionLive` hook mounts the live_browser
+        // slab item (so the user sees motion); `onSessionEnding`
+        // dissolves it before the bus stops publishing.
+        screencastBus: this.screencastBus,
+        onSessionLive: (sessionId) => this.openLiveBrowserSlabItem(sessionId),
+        onSessionEnding: () => this.dissolveLiveBrowserSlabItem(),
       });
     }
 
@@ -1451,6 +1476,47 @@ export class WebApp {
     spec: import("@motebit/render-engine").ArtifactSpec,
   ): import("@motebit/render-engine").ArtifactHandle | undefined {
     return this.renderer.addArtifact?.(spec);
+  }
+
+  /**
+   * v1.3 — open the `live_browser` slab item that subscribes to the
+   * screencast bus. Idempotent: a second call without an intervening
+   * dissolve is a no-op (the bus only publishes one stream at a
+   * time).
+   */
+  private openLiveBrowserSlabItem(sessionId: string): void {
+    if (this.liveBrowserItemId !== null) return;
+    if (!this.runtime) return;
+    const id = `live-browser-${sessionId}`;
+    this.liveBrowserItemId = id;
+    this.runtime.slab.openItem({
+      id,
+      kind: "live_browser",
+      mode: "virtual_browser",
+      payload: { frameSource: this.screencastBus, sessionId },
+    });
+  }
+
+  /**
+   * v1.3 — dissolve the active `live_browser` slab item and release
+   * its frame-source subscription. Pairs with
+   * `openLiveBrowserSlabItem`. Order matters: the slab item must
+   * dissolve before the bus stops publishing so the dispose path
+   * runs while the subscription is still alive.
+   */
+  private dissolveLiveBrowserSlabItem(): void {
+    if (this.liveBrowserItemId === null || !this.runtime) return;
+    const id = this.liveBrowserItemId;
+    this.liveBrowserItemId = null;
+    try {
+      // Live screencast does not detach as an artifact — it's a
+      // continuous surface, not a durable output. `kind: "completed"`
+      // without `detachAs` routes through the default dissolve.
+      this.runtime.slab.endItem(id, { kind: "completed" });
+    } catch {
+      // best-effort
+    }
+    releaseLiveBrowserItem(id);
   }
 
   /**

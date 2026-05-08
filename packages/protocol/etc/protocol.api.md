@@ -2477,6 +2477,12 @@ export interface ScreencastFrame {
 }
 
 // @alpha
+export interface ScreencastFrameSource {
+    // (undocumented)
+    subscribe(callback: (frame: ScreencastFrame) => void): () => void;
+}
+
+// @alpha
 export interface ScreenshotAction {
     // (undocumented)
     readonly kind: "screenshot";

@@ -1,5 +1,6 @@
 ---
 "@motebit/protocol": minor
+"@motebit/browser-sandbox": minor
 ---
 
 v1.3 of the virtual_browser arc — `ScreencastFrame` wire-format type

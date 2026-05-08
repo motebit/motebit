@@ -33,6 +33,8 @@
 
 import { stripInternalTags } from "@motebit/ai-core";
 import type { SlabItem, SlabItemActions, ArtifactKindForDetach } from "@motebit/runtime";
+import { buildLiveBrowserElement } from "@motebit/render-engine";
+import type { ScreencastFrameSource } from "@motebit/sdk";
 
 // ── Hover-close affordance ────────────────────────────────────────────
 //
@@ -1849,10 +1851,71 @@ function buildCardForKind(item: SlabItem, actions: SlabItemActions): HTMLElement
       return renderDelegation(item, actions);
     case "memory":
       return renderMemory(item, actions);
+    case "live_browser":
+      return renderLiveBrowser(item);
     case "shell":
     case "embedding":
     default:
       return renderGeneric(item);
+  }
+}
+
+/**
+ * v1.3 — render the live `<img>` surface that consumes screencast
+ * frames from the bus stashed on the item's payload. The element
+ * is built by `@motebit/render-engine`'s `buildLiveBrowserElement`
+ * (sibling pattern to `buildReceiptArtifact`); the dispose ref is
+ * tracked in `liveBrowserDisposers` keyed by the slab item id so
+ * `updateLiveBrowser` and the slab dissolve hook can release it
+ * cleanly.
+ */
+function renderLiveBrowser(item: SlabItem): HTMLElement {
+  const payload = (item.payload ?? {}) as { frameSource?: ScreencastFrameSource };
+  const source = payload.frameSource;
+  if (!source || typeof source.subscribe !== "function") {
+    // Defensive: if the apps wired the slab item without a frame
+    // source, render the empty card rather than throwing — the
+    // session is still functional via per-action screenshots.
+    const fallback = document.createElement("div");
+    fallback.className = "slab-live-browser slab-live-browser-fallback";
+    fallback.textContent = "live browser · frame source missing";
+    fallback.style.padding = "1.5rem";
+    fallback.style.textAlign = "center";
+    fallback.style.opacity = "0.55";
+    return fallback;
+  }
+  const handle = buildLiveBrowserElement(source);
+  // Track the handle so `updateLiveBrowser` (rare; payload swap)
+  // and the slab's dissolve can call `dispose()` to drop the
+  // subscription. Keyed by item id; cleaned up when the slab
+  // signals item end.
+  liveBrowserDisposers.set(item.id, handle.dispose);
+  // Wire the gone-state to dispose so a missed dissolve callback
+  // still releases the subscription within one frame.
+  handle.element.dataset.slabItemId = item.id;
+  return handle.element;
+}
+
+/**
+ * v1.3 — per-item disposers for live_browser slab items. Set on
+ * mount, called on payload-replace / unmount. Module-scoped because
+ * the slab-items.ts surface is per-window; one map suffices.
+ */
+const liveBrowserDisposers = new Map<string, () => void>();
+
+/**
+ * Release a live_browser item's subscription. Called by the surface
+ * when the slab item is dissolved. No-op for items of any other kind
+ * or for already-released ids.
+ */
+export function releaseLiveBrowserItem(itemId: string): void {
+  const dispose = liveBrowserDisposers.get(itemId);
+  if (!dispose) return;
+  liveBrowserDisposers.delete(itemId);
+  try {
+    dispose();
+  } catch {
+    // Disposers must not throw upward — best-effort cleanup.
   }
 }
 
@@ -1876,6 +1939,16 @@ export function updateSlabItem(item: SlabItem, element: HTMLElement): void {
       break;
     case "memory":
       updateMemory(item, element);
+      break;
+    case "live_browser":
+      // The live browser element subscribes once at mount and reads
+      // every subsequent frame off the bus — there is no payload
+      // shape to re-apply here. If the consumer ever swaps the
+      // frameSource itself (a session reset), they should dissolve
+      // and re-open the slab item rather than mutate it in place;
+      // that path keeps the dispose semantics honest. Released-on-
+      // unmount via `releaseLiveBrowserDisposer` from the bridge's
+      // dissolve hook.
       break;
     case "shell":
     case "embedding":

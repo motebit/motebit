@@ -223,7 +223,15 @@ export type SlabItemKind =
   | "fetch"
   | "embedding"
   | "delegation"
-  | "memory";
+  | "memory"
+  // v1.3 — live browser screencast (continuous CDP frame stream from
+  // the cloud-browser dispatcher). Sibling of `tool_call` for the
+  // `virtual_browser` embodiment: where `tool_call` renders one
+  // observation per AI action, `live_browser` renders the whole
+  // session's continuous frame stream as a single live surface that
+  // updates between actions. Per-action items still emit alongside
+  // for the audit register; this kind is the perceptual primary.
+  | "live_browser";
 
 /**
  * Embodiment mode — the coarse-grained perceptual category the slab
@@ -282,6 +290,8 @@ export function defaultEmbodimentMode(kind: SlabItemKind): EmbodimentMode {
       return "tool_result";
     case "delegation":
       return "peer_viewport";
+    case "live_browser":
+      return "virtual_browser";
   }
 }
 

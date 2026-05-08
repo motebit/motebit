@@ -461,6 +461,24 @@ export interface ScreencastFrame {
 }
 
 /**
+ * Subscribe-shape source of `ScreencastFrame`s. Producers (apps) own
+ * the publish path (dispatcher → bus); consumers (the slab's live-
+ * browser renderer) subscribe via `subscribe(cb)` and dispose via the
+ * returned unsubscribe.
+ *
+ * Why subscribe-shape rather than push-callback in payload. A slab
+ * item's `payload` is signed-eligible state; embedding a closure
+ * makes the payload non-serializable. `ScreencastFrameSource` is a
+ * minimal observer interface — easy to fake in tests, easy to
+ * implement (one Set + iterate). The frame stream itself is in-
+ * memory only and never goes through the audit log.
+ * @alpha
+ */
+export interface ScreencastFrameSource {
+  subscribe(callback: (frame: ScreencastFrame) => void): () => void;
+}
+
+/**
  * Per-action structural roll-up entry. The runtime appends one of these
  * to the in-session log on every `executeAction` call, regardless of
  * outcome. The canonical JSON of the array (in dispatch order) is

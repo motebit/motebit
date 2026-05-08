@@ -2423,6 +2423,7 @@ export type {
   SignableComputerSessionReceipt,
   ComputerSessionReceipt,
   ScreencastFrame,
+  ScreencastFrameSource,
 } from "./computer-use.js";
 export { COMPUTER_ACTION_KINDS, COMPUTER_FAILURE_REASONS } from "./computer-use.js";
 
