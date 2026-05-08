@@ -217,20 +217,68 @@ async function doNavigate(session: BrowserSession, action: NavigateAction): Prom
     // hang the navigate. The screenshot then captures whatever DID
     // render in those 5s, typically enough to be useful.
     await session.page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    let visualReadinessTimeout = false;
     try {
       await session.page.waitForLoadState("networkidle", { timeout: 5_000 });
     } catch {
       // networkidle timeout — page has persistent connections or is
-      // still streaming. Continue to screenshot anyway; the capture
-      // surfaces whatever's currently painted.
+      // still streaming. Continue anyway; the capture surfaces
+      // whatever's currently painted, and the metadata below records
+      // the timeout so the AI can describe the result honestly.
+      visualReadinessTimeout = true;
     }
+
+    // Result metadata — derived from a quick in-page heuristic so the
+    // AI can describe what happened without seeing the screenshot
+    // bytes (the bytes are user-visible-only, projected away from the
+    // AI's context per ai-core's projectForAi). Honest result-shape
+    // beats a generic ok:true that lets the AI hallucinate.
+    //
+    // Heuristics are deliberately coarse — they're a hint, not a
+    // verdict. The user's slab still shows the actual pixels; this
+    // metadata exists so the AI's text response can be honest about
+    // failure modes a human eye recognizes instantly (blank page,
+    // bot-block splash, etc.).
+    const heuristic = await session.page
+      .evaluate(() => {
+        const text = (document.body?.innerText ?? "").trim();
+        const hasImages = document.querySelectorAll("img").length > 0;
+        const hasCanvases = document.querySelectorAll("canvas").length > 0;
+        const denied =
+          /access denied|forbidden|cloudflare|attention required|just a moment|please verify|are you human|enable\s+javascript/i.test(
+            text,
+          );
+        return {
+          textLength: text.length,
+          hasImages,
+          hasCanvases,
+          blankish: text.length < 32 && !hasImages && !hasCanvases,
+          denied,
+        };
+      })
+      .catch(() => ({
+        textLength: 0,
+        hasImages: false,
+        hasCanvases: false,
+        blankish: true,
+        denied: false,
+      }));
+
+    return {
+      kind: "navigate",
+      ok: true,
+      url: session.page.url(),
+      visual_content_detected: !heuristic.blankish && !heuristic.denied,
+      blank_page_detected: heuristic.blankish,
+      access_denied_detected: heuristic.denied,
+      visual_readiness_timeout: visualReadinessTimeout,
+    };
   } catch (err) {
     throw new ServiceError(
       "not_supported",
       `navigate failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  return { kind: "navigate", ok: true, url: session.page.url() };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

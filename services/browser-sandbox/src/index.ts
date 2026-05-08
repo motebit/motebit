@@ -18,17 +18,17 @@
  * this; without it, Chromium processes leak across deploys.
  *
  * Stealth: `playwright-extra` + `puppeteer-extra-plugin-stealth`
- * patch ~17 JS-fingerprint detection vectors (`navigator.webdriver`,
- * `chrome.runtime` shape, plugin lists, WebGL renderer strings,
- * console.debug fingerprints, etc.) used by Akamai, Cloudflare,
- * DataDome, PerimeterX, Imperva to block headless browsers. Tactical
- * patch for the cloud-browser embodiment — the architectural answer
- * to "agent and web" is embodiment-routing (cloud-browser vs
- * desktop-drive vs API vs sovereign user-handoff), tracked
- * separately. Stealth gets us past the first detection layer for
- * ~70-80% of bot-protected sites; behavioral analysis, IP
- * reputation, CAPTCHA, and TLS fingerprinting remain unaddressed
- * (each is a separate arms-race layer).
+ * patches the JS-fingerprint signals that headless Chromium leaks
+ * by default (`navigator.webdriver`, `chrome.runtime` shape, plugin
+ * lists, WebGL renderer strings, console.debug fingerprints). This
+ * is one detection layer. It does not address IP reputation, TLS
+ * fingerprinting, CAPTCHA challenges, behavioral analysis, or
+ * server-side policy. Treat stealth as a quality-of-baseline patch,
+ * not as a bot-detection-defeat product. The architectural answer
+ * to "agent and web" is `virtual_browser` (governed, isolated
+ * browser embodiment owned by motebit, supervised by the user,
+ * operated by the agent through computer-use actions, emitting
+ * receipts) — tracked as a separate arc, not screenshot polish.
  */
 
 import { serve } from "@hono/node-server";
