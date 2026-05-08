@@ -119,7 +119,7 @@ function projectForAi(data: unknown): unknown {
   if (data == null || typeof data !== "object") return data;
   const r = data as Record<string, unknown>;
   if (r.kind === "screenshot" && typeof r.bytes_base64 === "string" && r.bytes_base64.length > 0) {
-    const { bytes_base64, ...rest } = r;
+    const { bytes_base64: _bytes_base64, ...rest } = r;
     return {
       ...rest,
       // Self-instructive marker — written as a directive the AI
