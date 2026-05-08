@@ -35,6 +35,7 @@ import { stripInternalTags } from "@motebit/ai-core";
 import type { SlabItem, SlabItemActions, ArtifactKindForDetach } from "@motebit/runtime";
 import type { UserInputForwardResult } from "@motebit/runtime";
 import { buildLiveBrowserElement } from "@motebit/render-engine";
+import type { LiveBrowserElementHandle } from "@motebit/render-engine";
 import type { ScreencastFrameSource, UserInputEvent } from "@motebit/sdk";
 import { attachInputCapture } from "./cobrowse-input-capture.js";
 
@@ -1922,11 +1923,18 @@ function renderLiveBrowser(item: SlabItem): HTMLElement {
   // attach DOM capture to the screencast img after construction
   // and chain the detacher into the disposer so the slab's
   // dissolve releases both subscriptions atomically.
+  //
+  // Slice 2d — payload may also carry `onLiveBrowserMount(handle)`,
+  // a callback the surface uses to capture the
+  // `LiveBrowserElementHandle` (specifically `addressBarSlot`) so
+  // it can mount/clear the address bar based on coBrowseControl
+  // state.
   const payload = (item.payload ?? {}) as {
     frameSource?: ScreencastFrameSource;
     forwardUserInput?: (event: UserInputEvent) => Promise<UserInputForwardResult>;
     displayWidth?: number;
     displayHeight?: number;
+    onLiveBrowserMount?: (handle: LiveBrowserElementHandle) => void;
   };
   const source = payload.frameSource;
   if (!source || typeof source.subscribe !== "function") {
@@ -1964,6 +1972,18 @@ function renderLiveBrowser(item: SlabItem): HTMLElement {
   // Wire the gone-state to dispose so a missed dissolve callback
   // still releases the subscription within one frame.
   handle.element.dataset.slabItemId = item.id;
+  // Slice 2d — surface the mounted handle so the surface can reach
+  // `addressBarSlot` to mount/clear the address bar on
+  // coBrowseControl transitions. Fired AFTER all other wiring so
+  // surfaces see a fully-attached handle.
+  if (typeof payload.onLiveBrowserMount === "function") {
+    try {
+      payload.onLiveBrowserMount(handle);
+    } catch {
+      // Surface mount-callback faults are non-fatal; the slab item
+      // still renders and the screencast still flows.
+    }
+  }
   return handle.element;
 }
 

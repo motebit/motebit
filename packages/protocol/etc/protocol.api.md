@@ -3412,6 +3412,24 @@ export type UserInputEvent =
     readonly dx: number;
     readonly dy: number;
     readonly event_count: number;
+}
+/**
+* User-driven navigation. The wire carries the normalized URL
+* (the address-bar surface MUST normalize before forwarding —
+* `^[a-z][a-z0-9+.-]*:\/\/` passes through, otherwise prepend
+* `https://`). Server-side: `page.goto(url, { waitUntil:
+* "domcontentloaded" })`. The screencast surface reflects the
+* new page automatically; navigate does not return a screenshot
+* payload (unlike motebit-side `ComputerAction.navigate`, which
+* carries inline heuristics for the AI loop's text response).
+*
+* Slice 2d scope: URL navigation only. Genuine search ("best
+* laptops 2026" → DuckDuckGo) deferred; the address-bar surface
+* is responsible for narrowing to URL-shaped input in v1.
+*/
+| {
+    readonly kind: "navigate";
+    readonly url: string;
 };
 
 // @alpha
@@ -3437,6 +3455,30 @@ export type UserInputForwardedDetail = {
     readonly dx: number;
     readonly dy: number;
     readonly event_count: number;
+}
+/**
+* URL-redacted navigate detail. The wire carries the full URL;
+* the audit logs only the **scheme + host** plus presence flags
+* for path / query. Mirrors browser-history privacy: "where did
+* the user go" survives the audit, "what specifically did they
+* fetch" does not.
+*
+* Why redact the path/query: URLs commonly carry session tokens,
+* bearer tokens, account ids, or sensitive identifiers
+* (`?reset_token=...`, `/patient/12345`). The user's signed
+* audit log is a more permanent artifact than a browser history;
+* conservative is correct.
+*
+* Malformed URLs (URL parser threw) collapse to
+* `{ scheme: "unknown", host: "unknown", has_path: false,
+*   has_query: false }` — defensive.
+*/
+| {
+    readonly kind: "navigate";
+    readonly scheme: string;
+    readonly host: string;
+    readonly has_path: boolean;
+    readonly has_query: boolean;
 };
 
 // @alpha

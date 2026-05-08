@@ -114,6 +114,7 @@ export {
   classifyCharacter,
   classifyKeyRole,
   pasteAuditDetail,
+  urlAuditDetail,
   buildUserInputAuditDetail,
 } from "./co-browse-input.js";
 export { CloudBrowserDispatcher } from "./cloud-browser-dispatcher.js";

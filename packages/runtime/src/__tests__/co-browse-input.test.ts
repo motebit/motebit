@@ -25,6 +25,7 @@ import {
   classifyCharacter,
   classifyKeyRole,
   pasteAuditDetail,
+  urlAuditDetail,
   buildUserInputAuditDetail,
 } from "../co-browse-input.js";
 import { createComputerSessionManager } from "../computer-use.js";
@@ -168,6 +169,76 @@ describe("pasteAuditDetail — content never logged", () => {
   });
 });
 
+// ── urlAuditDetail ──────────────────────────────────────────────────────
+
+describe("urlAuditDetail — host preserved, path/query redacted", () => {
+  it("captures scheme + host without path / query", () => {
+    const detail = urlAuditDetail("https://example.com");
+    expect(detail).toEqual({
+      scheme: "https",
+      host: "example.com",
+      has_path: false,
+      has_query: false,
+    });
+  });
+
+  it("flags has_path when path is non-empty (and not bare /)", () => {
+    expect(urlAuditDetail("https://example.com/").has_path).toBe(false);
+    expect(urlAuditDetail("https://example.com/about").has_path).toBe(true);
+    expect(urlAuditDetail("https://example.com/path/to/page").has_path).toBe(true);
+  });
+
+  it("flags has_query when query is non-empty", () => {
+    expect(urlAuditDetail("https://example.com/").has_query).toBe(false);
+    expect(urlAuditDetail("https://example.com/?q=1").has_query).toBe(true);
+    expect(urlAuditDetail("https://example.com/path?token=abc").has_query).toBe(true);
+  });
+
+  it("preserves port in host", () => {
+    expect(urlAuditDetail("http://example.com:8080/").host).toBe("example.com:8080");
+  });
+
+  it("lowercases scheme and host (canonical form across replays)", () => {
+    const detail = urlAuditDetail("HTTPS://EXAMPLE.COM/Path");
+    expect(detail.scheme).toBe("https");
+    expect(detail.host).toBe("example.com");
+  });
+
+  it("does NOT log path or query content (privacy guard)", () => {
+    const detail = urlAuditDetail("https://bank.example.com/accounts/12345?reset_token=secret123");
+    const json = JSON.stringify(detail);
+    expect(json).not.toContain("12345");
+    expect(json).not.toContain("reset_token");
+    expect(json).not.toContain("secret123");
+    // But host IS preserved.
+    expect(detail.host).toBe("bank.example.com");
+  });
+
+  it("malformed URLs collapse to all-unknown (defensive)", () => {
+    expect(urlAuditDetail("not a url")).toEqual({
+      scheme: "unknown",
+      host: "unknown",
+      has_path: false,
+      has_query: false,
+    });
+    expect(urlAuditDetail("")).toEqual({
+      scheme: "unknown",
+      host: "unknown",
+      has_path: false,
+      has_query: false,
+    });
+  });
+
+  it("supports non-http schemes (file:, ftp:, custom)", () => {
+    // Surface SHOULD normalize to https before forwarding, but be
+    // defensive in audit if a non-http URL gets through.
+    const detail = urlAuditDetail("ftp://files.example.com/dir");
+    expect(detail.scheme).toBe("ftp");
+    expect(detail.host).toBe("files.example.com");
+    expect(detail.has_path).toBe(true);
+  });
+});
+
 // ── buildUserInputAuditDetail ───────────────────────────────────────────
 
 describe("buildUserInputAuditDetail — wire → redacted detail", () => {
@@ -239,6 +310,27 @@ describe("buildUserInputAuditDetail — wire → redacted detail", () => {
     const wheelDetail = detail as Extract<UserInputForwardedDetail, { kind: "wheel" }>;
     expect(wheelDetail.dx).toBe(-50);
     expect(wheelDetail.dy).toBe(-200);
+  });
+
+  it("navigate detail redacts URL to scheme + host (path / query stripped)", () => {
+    const detail = buildUserInputAuditDetail(
+      { kind: "navigate", url: "https://example.com/secret-path?token=xyz" },
+      1280,
+      800,
+    );
+    expect(detail).toEqual({
+      kind: "navigate",
+      scheme: "https",
+      host: "example.com",
+      has_path: true,
+      has_query: true,
+    });
+    // Path + query CONTENT never appear (the boolean field
+    // names contain "path" / "query" by design — that's structural).
+    const json = JSON.stringify(detail);
+    expect(json).not.toContain("secret-path");
+    expect(json).not.toContain("token=");
+    expect(json).not.toContain("xyz");
   });
 
   it("paste detail collapses content to length/line_count/looks_like_url", () => {
@@ -548,6 +640,8 @@ describe("UserInputForwardedPayload — type surface", () => {
           return `${d.length}|${d.line_count}|${d.looks_like_url}`;
         case "wheel":
           return `${d.x_norm}|${d.y_norm}|${d.dx}|${d.dy}|${d.event_count}`;
+        case "navigate":
+          return `${d.scheme}|${d.host}|${d.has_path}|${d.has_query}`;
       }
     };
     expect(typeof exhaust({ kind: "click", x_norm: 0, y_norm: 0, button: "left" })).toBe("string");

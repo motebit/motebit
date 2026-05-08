@@ -126,6 +126,46 @@ export function pasteAuditDetail(text: string): {
 }
 
 /**
+ * Build the redacted detail for a URL navigation. The wire carries
+ * the full URL; the audit gets scheme + host + presence flags only.
+ * Path and query stripped because they commonly carry tokens /
+ * session ids / sensitive identifiers (`?reset_token=...`,
+ * `/patient/12345`).
+ *
+ * Malformed URLs (parser throws) collapse to all-`unknown`. The
+ * server-side dispatch will fail anyway; the audit just records
+ * "user attempted navigation that didn't parse" without leaking
+ * anything.
+ */
+export function urlAuditDetail(url: string): {
+  readonly scheme: string;
+  readonly host: string;
+  readonly has_path: boolean;
+  readonly has_query: boolean;
+} {
+  if (typeof url !== "string" || url.length === 0) {
+    return { scheme: "unknown", host: "unknown", has_path: false, has_query: false };
+  }
+  try {
+    const parsed = new URL(url);
+    // `pathname` is always at least "/" for absolute URLs; treat
+    // the bare-root case as "no path" for the redaction signal.
+    const path = parsed.pathname;
+    const hasPath = path.length > 0 && path !== "/";
+    return {
+      // Drop the trailing colon ("https:" → "https"). Lowercased
+      // for canonical-form audit comparisons across replays.
+      scheme: parsed.protocol.replace(/:$/, "").toLowerCase(),
+      host: parsed.host.toLowerCase(),
+      has_path: hasPath,
+      has_query: parsed.search.length > 0,
+    };
+  } catch {
+    return { scheme: "unknown", host: "unknown", has_path: false, has_query: false };
+  }
+}
+
+/**
  * Build the redacted audit detail from a wire-format
  * `UserInputEvent`. The session manager calls this immediately
  * before emitting the audit event. Click coordinates are
@@ -177,6 +217,11 @@ export function buildUserInputAuditDetail(
         event_count: event.event_count,
       };
     }
+    case "navigate":
+      return {
+        kind: "navigate",
+        ...urlAuditDetail(event.url),
+      };
   }
 }
 

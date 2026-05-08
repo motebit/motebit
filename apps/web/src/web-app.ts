@@ -7,13 +7,20 @@ import {
   resolveProactiveAnchor,
   bindSlabControllerToRenderer,
 } from "@motebit/runtime";
-import type { StreamChunk, StorageAdapters, PlanChunk } from "@motebit/runtime";
+import type {
+  StreamChunk,
+  StorageAdapters,
+  PlanChunk,
+  UserInputForwardResult,
+} from "@motebit/runtime";
 import {
   renderSlabItem,
   updateSlabItem,
   renderDetachArtifact as renderSlabDetachArtifact,
 } from "./ui/slab-items";
 import { renderCoBrowseBand } from "./ui/cobrowse-band";
+import { renderCoBrowseAddressBar } from "./ui/cobrowse-address-bar";
+import type { LiveBrowserElementHandle } from "@motebit/render-engine";
 import type {
   ConversationMessage,
   BehaviorCues,
@@ -172,6 +179,23 @@ export class WebApp {
    * can dissolve it deterministically.
    */
   private liveBrowserItemId: string | null = null;
+  /**
+   * Slice 2d — handle to the mounted live_browser element. Captured
+   * via the `onLiveBrowserMount` payload callback. Used by
+   * `applyAddressBarToCurrentState` to mount/clear the user-side
+   * address bar based on coBrowseControl state. Cleared when the
+   * slab item dissolves.
+   */
+  private liveBrowserHandle: LiveBrowserElementHandle | null = null;
+  /**
+   * Slice 2d — the forward-event callback bound to the active
+   * cloud session. Stashed so the address bar can reuse the same
+   * dispatch + audit pipeline as input capture without duplicating
+   * the wiring.
+   */
+  private liveBrowserForwardEvent:
+    | ((event: UserInputEvent) => Promise<UserInputForwardResult>)
+    | null = null;
   private _motebitId = "";
   private _deviceId = "";
   private _publicKeyHex = "";
@@ -783,6 +807,10 @@ export class WebApp {
     const unsubscribeBand = machine.subscribe((state) => {
       const band = renderCoBrowseBand(state, machine);
       this.renderer.setSlabControlBand?.(band);
+      // Slice 2d — keep the address bar in sync with the same state
+      // transitions. user-state mounts the bar; any other state
+      // clears it.
+      this.applyAddressBarToCurrentState();
     });
     this.coBrowseDisposers.push(unsubscribeBand, () => {
       // Clear the slot on teardown so a re-mount doesn't inherit a
@@ -1593,7 +1621,7 @@ export class WebApp {
     const reg = this.computerRegistration;
     const handle = reg?.sessionManager.getSession(sessionId);
     const forwardUserInput = reg
-      ? async (event: UserInputEvent) => {
+      ? async (event: UserInputEvent): Promise<UserInputForwardResult> => {
           // Manager call: gates on coBrowseControl, dispatches via
           // CloudBrowserDispatcher, returns audit. Audit emission
           // happens here (single-source-of-truth for event log).
@@ -1602,6 +1630,9 @@ export class WebApp {
           return result;
         }
       : undefined;
+    // Stash the forward callback so the address bar (Slice 2d) can
+    // use the same dispatch + audit pipeline without re-deriving it.
+    this.liveBrowserForwardEvent = forwardUserInput ?? null;
     this.runtime.slab.openItem({
       id,
       kind: "live_browser",
@@ -1612,8 +1643,42 @@ export class WebApp {
         forwardUserInput,
         displayWidth: handle?.display.width,
         displayHeight: handle?.display.height,
+        // Slice 2d — capture the handle when the slab item mounts so
+        // we can reach into `addressBarSlot` from coBrowseControl
+        // state changes. Mount fires synchronously inside the slab
+        // bridge's renderItem path; by the time openItem returns,
+        // `liveBrowserHandle` is set.
+        onLiveBrowserMount: (h: LiveBrowserElementHandle) => {
+          this.liveBrowserHandle = h;
+          this.applyAddressBarToCurrentState();
+        },
       },
     });
+  }
+
+  /**
+   * Slice 2d — mount or clear the address bar based on the current
+   * co-browse control state. Called both on coBrowseControl
+   * transitions (via the existing subscribe in setupCoBrowseListeners)
+   * and on live_browser slab-item mount (so the bar is correct from
+   * frame zero, not a tick later).
+   *
+   * Visible only when state.kind === "user" — calm chrome (motebit
+   * has its own navigate tool when it drives; the address bar would
+   * just be noise).
+   */
+  private applyAddressBarToCurrentState(): void {
+    const handle = this.liveBrowserHandle;
+    if (!handle) return;
+    const machine = this.computerRegistration?.coBrowseControl;
+    const forwardEvent = this.liveBrowserForwardEvent;
+    const state = machine?.getState();
+    if (state?.kind === "user" && forwardEvent) {
+      const bar = renderCoBrowseAddressBar({ forwardEvent });
+      handle.addressBarSlot.replaceChildren(bar);
+    } else {
+      handle.addressBarSlot.replaceChildren();
+    }
   }
 
   /**
@@ -1660,6 +1725,11 @@ export class WebApp {
     if (this.liveBrowserItemId === null || !this.runtime) return;
     const id = this.liveBrowserItemId;
     this.liveBrowserItemId = null;
+    // Slice 2d — drop the handle + forward callback so a re-open
+    // re-derives them. Stale references would point at the
+    // previous session's dispatcher.
+    this.liveBrowserHandle = null;
+    this.liveBrowserForwardEvent = null;
     try {
       // Live screencast does not detach as an artifact — it's a
       // continuous surface, not a durable output. `kind: "completed"`

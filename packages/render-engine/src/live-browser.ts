@@ -49,6 +49,22 @@ export interface LiveBrowserElementHandle {
    */
   readonly frameElement: HTMLImageElement;
   /**
+   * Slice 2d — mount slot for an address-bar element placed above
+   * the screencast img. Empty by default; surfaces fill it via
+   * `addressBarSlot.replaceChildren(...)` when state.kind === "user"
+   * and clear it otherwise. The render engine knows nothing about
+   * navigation; the slot is just a generic mounting point for
+   * surface-built browser chrome.
+   *
+   * Why above the img and not as separate slab chrome (parallel to
+   * `setSlabControlBand`): the address bar is part of the
+   * "browser-inside-the-slab," not chrome of the slab itself. Same
+   * way Chrome's address bar is part of Chrome's window, not
+   * separate from it. Visually + semantically belongs with the
+   * live_browser item.
+   */
+  readonly addressBarSlot: HTMLElement;
+  /**
    * Stop the subscription and clear the rendered frame. Idempotent —
    * a second call is a no-op. The element itself is left in the DOM
    * for the slab's dissolve animation to take it the rest of the way.
@@ -59,6 +75,20 @@ export interface LiveBrowserElementHandle {
 export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrowserElementHandle {
   const root = document.createElement("div");
   root.className = "slab-live-browser";
+
+  // Slice 2d — address-bar mount slot above the screencast img.
+  // Empty until the surface fills it (apps/web mounts a navigation
+  // input when state.kind === "user", clears it otherwise). Render
+  // engine knows nothing about navigation; this is generic chrome
+  // plumbing parallel to the screencast img.
+  const addressBarSlot = document.createElement("div");
+  addressBarSlot.className = "slab-live-browser-address-bar-slot";
+  // The slot's own pointer-events: none so empty space passes
+  // through to underlying canvas controls; the surface-supplied
+  // input element opts back in to pointer-events: auto on its
+  // interactive children.
+  addressBarSlot.style.pointerEvents = "none";
+  root.appendChild(addressBarSlot);
 
   // The frame surface itself — `<img>` updated in place each frame.
   // `decoding="async"` hints the browser to decode off the main
@@ -119,6 +149,7 @@ export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrow
   return {
     element: root,
     frameElement: img,
+    addressBarSlot,
     dispose(): void {
       if (disposed) return;
       disposed = true;

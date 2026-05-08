@@ -533,6 +533,80 @@ describe("browser-sandbox routes", () => {
       expect(wheelSpy).toHaveBeenCalledWith(0, 240);
     });
 
+    it("forwards a navigate via page.goto (Slice 2d)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      const gotoSpy = vi.fn(async () => undefined);
+      (session.page as unknown as { goto: typeof gotoSpy }).goto = gotoSpy;
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: { kind: "navigate", url: "https://example.com" },
+        }),
+      });
+      expect(res.status).toBe(204);
+      expect(gotoSpy).toHaveBeenCalledWith("https://example.com", {
+        waitUntil: "domcontentloaded",
+        timeout: 15_000,
+      });
+    });
+
+    it("normalizes scheme-less URLs to https before page.goto", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      const gotoSpy = vi.fn(async () => undefined);
+      (session.page as unknown as { goto: typeof gotoSpy }).goto = gotoSpy;
+
+      await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: { kind: "navigate", url: "example.com/path" },
+        }),
+      });
+      expect(gotoSpy).toHaveBeenCalledWith(
+        "https://example.com/path",
+        expect.objectContaining({ waitUntil: "domcontentloaded" }),
+      );
+    });
+
+    it("returns 500 + platform_blocked when navigate throws (network drop, malformed URL)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      (session.page as unknown as { goto: () => Promise<void> }).goto = async () => {
+        throw new Error("net::ERR_NAME_NOT_RESOLVED");
+      };
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: { kind: "navigate", url: "https://invalid.example" },
+        }),
+      });
+      expect(res.status).toBe(500);
+      const body = (await res.json()) as { error: { reason: string; message: string } };
+      expect(body.error.reason).toBe("platform_blocked");
+      expect(body.error.message).toContain("navigate failed");
+    });
+
     it("wheel updates the session cursor position (mirrors scroll action)", async () => {
       const app = buildApp({ config: TEST_CONFIG, pool });
       const ensure = await app.request("/sessions/ensure", {

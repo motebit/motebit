@@ -399,6 +399,28 @@ export async function executeUserInput(
       session.lastCursorY = event.y;
       return;
     }
+    case "navigate": {
+      // Slice 2d — user-driven navigation from the address bar. The
+      // capture surface MUST normalize before forwarding (`example.com`
+      // → `https://example.com`); we still defensively re-normalize
+      // so a malformed wire input fails honestly here rather than
+      // letting Playwright produce a noisier error. Mirrors the regex
+      // motebit-side `doNavigate` uses.
+      const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(event.url) ? event.url : `https://${event.url}`;
+      try {
+        // Single-phase wait. Unlike motebit-side `doNavigate` we don't
+        // need the SPA-settle window or in-page heuristics — the
+        // screencast surfaces whatever paints, and the user is
+        // observing in real time.
+        await session.page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
+      } catch (err) {
+        throw new ServiceError(
+          "platform_blocked",
+          `navigate failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return;
+    }
   }
 }
 
