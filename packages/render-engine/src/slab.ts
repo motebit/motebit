@@ -997,6 +997,17 @@ function createContainerElement(): HTMLDivElement {
   el.style.boxSizing = "border-box";
   el.style.display = "block";
   el.style.overflow = "hidden";
+  // Match the slab plane's φ-meniscus corner radius. Pixel value
+  // derived from the world-unit constant: the stage scales to world
+  // by STAGE_PIXEL_TO_WORLD, so the inverse maps SLAB_CORNER_RADIUS
+  // back to CSS pixels (~83px for the current 480×300 stage). With
+  // overflow: hidden already set above, content (chrome strips, page
+  // iframes, terminal output) clips to the slab's curve instead of
+  // jutting past it as a hard rectangle. Doctrine: motebit-computer.md
+  // §"Visual properties — Edges: meniscus, no frame, no border, no
+  // corner radius. Droplet family." The stage and the plane trace
+  // the same outline.
+  el.style.borderRadius = `${SLAB_CORNER_RADIUS / STAGE_PIXEL_TO_WORLD}px`;
   // `pointer-events: none` on the stage so its dead space — when the
   // plane is visible but empty, or in transparent margins around a
   // mounted item — passes pointer events through to the canvas's
