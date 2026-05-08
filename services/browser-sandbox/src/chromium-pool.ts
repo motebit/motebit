@@ -110,6 +110,20 @@ export class BrowserPool {
     }
     const context = await this.browser.newContext({
       viewport: { width: this.config.viewportWidth, height: this.config.viewportHeight },
+      // Realistic browser fingerprint — pairs with the stealth plugin
+      // applied at index.ts module load. The default Chromium user-
+      // agent leaks `HeadlessChrome/...`; replacing it with a real
+      // Chrome UA is the single most-flagged signal in bot detection.
+      // Linux UA chosen to match the actual Fly runtime — Akamai and
+      // Cloudflare cross-check OS-claimed-by-UA against other
+      // OS-fingerprint signals (font lists, WebGL renderer, etc.) and
+      // a mismatch flags. Locale + timezone supplied for the same
+      // reason: a missing or default-en-US setup is a weaker signal
+      // than a present-and-consistent one.
+      userAgent:
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      locale: "en-US",
+      timezoneId: "America/Los_Angeles",
     });
     const page = await context.newPage();
     const sessionId = randomUUID();

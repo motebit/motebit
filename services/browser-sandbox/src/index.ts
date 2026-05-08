@@ -16,14 +16,36 @@
  * Graceful shutdown: SIGINT/SIGTERM → close every active session +
  * the singleton browser → exit cleanly. Fly's deploy lifecycle expects
  * this; without it, Chromium processes leak across deploys.
+ *
+ * Stealth: `playwright-extra` + `puppeteer-extra-plugin-stealth`
+ * patch ~17 JS-fingerprint detection vectors (`navigator.webdriver`,
+ * `chrome.runtime` shape, plugin lists, WebGL renderer strings,
+ * console.debug fingerprints, etc.) used by Akamai, Cloudflare,
+ * DataDome, PerimeterX, Imperva to block headless browsers. Tactical
+ * patch for the cloud-browser embodiment — the architectural answer
+ * to "agent and web" is embodiment-routing (cloud-browser vs
+ * desktop-drive vs API vs sovereign user-handoff), tracked
+ * separately. Stealth gets us past the first detection layer for
+ * ~70-80% of bot-protected sites; behavioral analysis, IP
+ * reputation, CAPTCHA, and TLS fingerprinting remain unaddressed
+ * (each is a separate arms-race layer).
  */
 
 import { serve } from "@hono/node-server";
-import { chromium } from "playwright-core";
+import { chromium } from "playwright-extra";
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
 
 import { BrowserPool } from "./chromium-pool.js";
 import { loadConfig } from "./env.js";
 import { buildApp } from "./routes.js";
+
+// Apply stealth at module load — once per process. The plugin
+// registers JS evasion modules that run on every newContext via
+// init scripts; per-session opt-out isn't needed because the
+// patches are non-destructive (they spoof presence of normal
+// browser APIs that headless Chromium otherwise exposes as
+// missing or malformed).
+chromium.use(StealthPlugin());
 
 function log(msg: string): void {
   const ts = new Date().toISOString();

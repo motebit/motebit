@@ -21,7 +21,9 @@
     "@hono/node-server": "^1.19.12",
     "@motebit/protocol": "workspace:*",
     "hono": "^4.6.0",
-    "playwright-core": "^1.49.0"
+    "playwright-core": "^1.49.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
