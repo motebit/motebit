@@ -513,6 +513,25 @@ export function registerWebComputerTool(
     // calling so the synchronous transition emit can't fire and
     // resolve in between (current implementation is sync, but the
     // future may not be).
+
+    // Slice 2f — eagerly ensure the cloud session is open BEFORE
+    // calling requestControl. The slab control band's home is
+    // inside the live_browser slab item (controlBandSlot); without
+    // a session there's no live_browser, and the band has to fall
+    // back to the slab outer container (degraded placement, the
+    // bug we're fixing). Awaiting here costs the screencast attach
+    // time (~1-2s) but means the doorbell rings on the right
+    // surface every time the path succeeds.
+    //
+    // Failure path: if ensureDefaultSession returns null (cloud
+    // browser unreachable, auth failure, etc.) we still proceed
+    // with requestControl — the band falls back to the legacy
+    // outer-container slot (visible, mispositioned), which beats
+    // failing the request_control tool outright on a sandbox blip.
+    // Graceful-degrade-not-fail-closed; same shape as the
+    // surface's transport-error handling.
+    await ensureDefaultSession();
+
     return new Promise<RequestControlOutcome>((resolve) => {
       let resolved = false;
       let unsubscribe: (() => void) | null = null;

@@ -83,6 +83,18 @@ export const requestControlDefinition: ToolDefinition = {
   mode: "api",
   description:
     "Ask the user to grant motebit drive control of the isolated browser. Call this when `computer` failed with reason `not_in_control` — it rings the slab's control band so the user can Grant or Deny. Resolves with one of: `granted` (retry `computer` now), `denied` (ask the user out-of-band), `timeout` (no response), `already_in_control` (you already have it — retry `computer` directly), `request_pending` (an earlier request is still awaiting the user), `session_paused` (ask the user to resume first).",
+  // Slice 2f — `request_control` is **state chrome**, not a body act.
+  // Its visible representation is the slab control band (the doorbell
+  // with Grant/Deny). Without this flag, the runtime opens a generic
+  // `tool_call` slab item showing "REQUEST_CONTROL / calling…" — a
+  // duplicate, empty-looking card that competes with the band and
+  // obscures its buttons. Marking it `"none"` keeps the slab clean
+  // and makes the band the canonical surface for this transition.
+  // Doctrine: motebit-computer.md — slab content (browser, peer
+  // viewport, memory artifact, tool result, desktop surface) vs.
+  // slab chrome (control band, address bar, halt indicator). Tools
+  // that author chrome MUST NOT also project as content.
+  slabProjection: "none",
   inputSchema: {
     type: "object",
     properties: {

@@ -313,6 +313,16 @@ export type StreamChunk =
        * virtual_browser arc.
        */
       mode?: string;
+      /**
+       * Slice 2f — slab-projection policy for this tool. Sourced
+       * from `ToolDefinition.slabProjection` at registration time
+       * and threaded through `AgenticChunk.tool_status.slabProjection`
+       * in ai-core. When `"none"`, the runtime's projectSlabForTurn
+       * MUST skip opening a slab item — the tool is state chrome
+       * (e.g. `request_control`), not a body act. Default `"tool_call"`
+       * (or omitted) preserves the existing card-per-call behavior.
+       */
+      slabProjection?: "none" | "tool_call";
     }
   | {
       type: "approval_request";

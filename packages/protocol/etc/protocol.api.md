@@ -3184,6 +3184,7 @@ export interface ToolDefinition {
         dataClass?: DataClass;
         sideEffect?: SideEffect;
     };
+    slabProjection?: "none" | "tool_call";
 }
 
 // @public (undocumented)

@@ -552,6 +552,34 @@ export interface ToolDefinition {
    * stamping" — landed as v1.1 of the virtual_browser arc.
    */
   embodimentMode?: string;
+  /**
+   * Slab-projection policy for this tool. Closed string-literal union:
+   *
+   *   - `"tool_call"` (default when omitted) — open a generic
+   *     `tool_call` slab item on each invocation. The familiar
+   *     "REQUEST_X / calling…" card. Right for tools that produce
+   *     body acts (web_search, read_file, computer).
+   *   - `"none"` — do NOT open a slab item. The tool is **state
+   *     chrome**, not a body act, and its visible representation is
+   *     a different surface (e.g. `request_control`'s visible
+   *     surface is the slab control band, not a tool_call card).
+   *     Without this, state-chrome tools would render duplicate UI:
+   *     the affordance card AND the chrome both visible, competing
+   *     for attention and obscuring the band's Grant/Deny buttons.
+   *
+   * Doctrine: motebit-computer.md — slab content is body acts
+   * (browser, peer viewport, memory artifact, tool result, desktop
+   * surface). Slab CHROME is state-aware overlays (control band,
+   * address bar, halt indicator). State-chrome tools belong in the
+   * latter; the slab item projection is for the former.
+   *
+   * Plumbing: read on the tool_status chunk by ai-core's loop.ts
+   * and consumed by the runtime's slab-projection at open time.
+   * The closed-string-literal union keeps additions backward
+   * compatible (a future `"observation"` variant could narrow
+   * further without breaking existing consumers).
+   */
+  slabProjection?: "none" | "tool_call";
 }
 
 export interface ToolResult {

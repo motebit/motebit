@@ -1620,6 +1620,18 @@ export class MotebitRuntime {
           // generic tool_call path for them to avoid dual-render.
           if (delegationToolNames.has(chunk.name)) {
             // no-op — delegation slab item handles lifecycle
+          } else if (chunk.slabProjection === "none") {
+            // Slice 2f — state-chrome tools (e.g. `request_control`)
+            // declare `slabProjection: "none"` on their
+            // ToolDefinition. Their visible representation is a
+            // different surface — for `request_control` it's the
+            // slab control band (Slice 2b doorbell). Opening a
+            // tool_call slab item here would render a duplicate,
+            // empty-looking card that competes with the band for
+            // attention. Suppress the projection AND the
+            // toolItemIds.set so the matching `done` chunk has
+            // nothing to dissolve. Doctrine: motebit-computer.md —
+            // slab content is body acts; state chrome is overlays.
           } else if (chunk.status === "calling") {
             const toolItemId = `slab-tool-${turnId}-${chunk.name}-${Date.now()}`;
             toolItemIds.set(chunk.name, toolItemId);

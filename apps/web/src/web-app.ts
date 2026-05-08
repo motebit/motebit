@@ -180,11 +180,11 @@ export class WebApp {
    */
   private liveBrowserItemId: string | null = null;
   /**
-   * Slice 2d — handle to the mounted live_browser element. Captured
-   * via the `onLiveBrowserMount` payload callback. Used by
-   * `applyAddressBarToCurrentState` to mount/clear the user-side
-   * address bar based on coBrowseControl state. Cleared when the
-   * slab item dissolves.
+   * Slice 2d/2f — handle to the mounted live_browser element.
+   * Captured via the `onLiveBrowserMount` payload callback. Used
+   * by `applyChromeToCurrentState` to mount/clear BOTH the
+   * control band and the address bar based on coBrowseControl
+   * state. Cleared when the slab item dissolves.
    */
   private liveBrowserHandle: LiveBrowserElementHandle | null = null;
   /**
@@ -804,17 +804,20 @@ export class WebApp {
     // Slab band re-renders on each successful transition. Failed
     // transitions don't fire — the listener is correct by
     // construction.
-    const unsubscribeBand = machine.subscribe((state) => {
-      const band = renderCoBrowseBand(state, machine);
-      this.renderer.setSlabControlBand?.(band);
-      // Slice 2d — keep the address bar in sync with the same state
-      // transitions. user-state mounts the bar; any other state
-      // clears it.
-      this.applyAddressBarToCurrentState();
+    const unsubscribeBand = machine.subscribe(() => {
+      // Slice 2f — the band's home is now the live_browser slab
+      // item's controlBandSlot (above the address bar). Both the
+      // band AND the address bar are state-aware chrome on the
+      // browser surface; one applier covers both.
+      this.applyChromeToCurrentState();
     });
     this.coBrowseDisposers.push(unsubscribeBand, () => {
-      // Clear the slot on teardown so a re-mount doesn't inherit a
-      // stale element from a previous session.
+      // Clear chrome on teardown. The live_browser handle may
+      // already be gone; chrome-applier no-ops in that case.
+      this.applyChromeToCurrentState();
+      // Also clear the legacy outer-container slot for the
+      // degraded-fallback path (when no live_browser exists and we
+      // routed the band there).
       this.renderer.setSlabControlBand?.(null);
     });
 
@@ -1650,35 +1653,73 @@ export class WebApp {
         // `liveBrowserHandle` is set.
         onLiveBrowserMount: (h: LiveBrowserElementHandle) => {
           this.liveBrowserHandle = h;
-          this.applyAddressBarToCurrentState();
+          // Slice 2f — apply BOTH band and address bar at mount so
+          // chrome lands at frame zero, not a tick later. If the
+          // band was on the legacy slot (degraded fallback), this
+          // call also lifts it to the live_browser surface and
+          // clears the legacy slot.
+          this.applyChromeToCurrentState();
         },
       },
     });
   }
 
   /**
-   * Slice 2d — mount or clear the address bar based on the current
-   * co-browse control state. Called both on coBrowseControl
-   * transitions (via the existing subscribe in setupCoBrowseListeners)
-   * and on live_browser slab-item mount (so the bar is correct from
-   * frame zero, not a tick later).
+   * Slice 2f — apply BOTH the control band and the address bar to
+   * the current co-browse control state. Both are state-aware chrome
+   * mounted on the live_browser slab item; both clear when the state
+   * doesn't ask for them.
    *
-   * Visible only when state.kind === "user" — calm chrome (motebit
-   * has its own navigate tool when it drives; the address bar would
-   * just be noise).
+   * - Control band (`controlBandSlot`): mounted on every state EXCEPT
+   *   `user` (handoff_pending → doorbell, motebit → reclaim, paused
+   *   → resume). Cleared on `user` because nothing to surface.
+   *
+   * - Address bar (`addressBarSlot`): mounted ONLY on `user`. Cleared
+   *   otherwise (motebit has its own navigate tool when driving).
+   *
+   * Degraded fallback: if the live_browser handle isn't mounted yet
+   * (race between `request_control` and the eager session open), the
+   * band routes to the legacy outer-container slot via
+   * `setSlabControlBand`. Logged as a warning — it's the visible
+   * symptom of a session-open failure, not the success path.
    */
-  private applyAddressBarToCurrentState(): void {
+  private applyChromeToCurrentState(): void {
     const handle = this.liveBrowserHandle;
-    if (!handle) return;
     const machine = this.computerRegistration?.coBrowseControl;
     const forwardEvent = this.liveBrowserForwardEvent;
     const state = machine?.getState();
-    if (state?.kind === "user" && forwardEvent) {
-      const bar = renderCoBrowseAddressBar({ forwardEvent });
-      handle.addressBarSlot.replaceChildren(bar);
-    } else {
-      handle.addressBarSlot.replaceChildren();
+    if (!state || !machine) return;
+
+    // Build the band element (or null on user-state). The renderer's
+    // null-on-user contract is unchanged from Slice 2b — calm
+    // chrome.
+    const band = renderCoBrowseBand(state, machine);
+
+    if (handle) {
+      // Live-browser-mounted path: chrome lives ON the browser
+      // surface. This is the correct placement after Slice 2f.
+      if (band) {
+        handle.controlBandSlot.replaceChildren(band);
+      } else {
+        handle.controlBandSlot.replaceChildren();
+      }
+      if (state.kind === "user" && forwardEvent) {
+        const bar = renderCoBrowseAddressBar({ forwardEvent });
+        handle.addressBarSlot.replaceChildren(bar);
+      } else {
+        handle.addressBarSlot.replaceChildren();
+      }
+      // Make sure the legacy slot is empty if we ever fell back
+      // before the handle existed.
+      this.renderer.setSlabControlBand?.(null);
+      return;
     }
+
+    // Degraded path: no live_browser yet. The band routes to the
+    // outer-container slot — visible but mispositioned. This should
+    // only fire when ensureDefaultSession failed before
+    // request_control; if it fires often, that's a real signal.
+    this.renderer.setSlabControlBand?.(band);
   }
 
   /**

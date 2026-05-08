@@ -65,6 +65,27 @@ export interface LiveBrowserElementHandle {
    */
   readonly addressBarSlot: HTMLElement;
   /**
+   * Slice 2f — mount slot for the co-browse control band (the
+   * Grant/Deny doorbell, "Motebit is driving / Take back",
+   * "Paused / Resume"). Sits above the address bar — it's the
+   * highest-priority chrome on the live_browser item because it
+   * carries consent decisions.
+   *
+   * Why on the live_browser item rather than at the slab outer
+   * container (the original Slice 2b position): the band's natural
+   * home is on the browser surface, not on the page. The previous
+   * slot positioned the band at the top of the entire 3D scene
+   * wrapper, where it eclipsed the chat-chrome icons and got
+   * clipped at the viewport edge — confirmed UI bug from the smoke
+   * test. Mounting here keeps the band attached to the surface it
+   * controls.
+   *
+   * Render engine remains co-browse-agnostic — the slot is generic
+   * chrome plumbing; surfaces fill it via
+   * `controlBandSlot.replaceChildren(...)`.
+   */
+  readonly controlBandSlot: HTMLElement;
+  /**
    * Stop the subscription and clear the rendered frame. Idempotent —
    * a second call is a no-op. The element itself is left in the DOM
    * for the slab's dissolve animation to take it the rest of the way.
@@ -75,6 +96,17 @@ export interface LiveBrowserElementHandle {
 export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrowserElementHandle {
   const root = document.createElement("div");
   root.className = "slab-live-browser";
+
+  // Slice 2f — control-band mount slot. Sits ABOVE the address bar
+  // because it carries the consent decisions (doorbell,
+  // motebit-driving, paused). Empty by default; surfaces fill via
+  // controlBandSlot.replaceChildren(...) on coBrowseControl
+  // transitions. Same pointer-events: none discipline as the
+  // address-bar slot.
+  const controlBandSlot = document.createElement("div");
+  controlBandSlot.className = "slab-live-browser-control-band-slot";
+  controlBandSlot.style.pointerEvents = "none";
+  root.appendChild(controlBandSlot);
 
   // Slice 2d — address-bar mount slot above the screencast img.
   // Empty until the surface fills it (apps/web mounts a navigation
@@ -150,6 +182,7 @@ export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrow
     element: root,
     frameElement: img,
     addressBarSlot,
+    controlBandSlot,
     dispose(): void {
       if (disposed) return;
       disposed = true;

@@ -44,6 +44,38 @@ function grantMotebit(reg: NonNullable<ReturnType<typeof registerWebComputerTool
   reg.coBrowseControl.grantControl("user");
 }
 
+/**
+ * Slice 2f — wait until the co-browse control machine reaches the
+ * named state. Used in `request_control` flow tests because the
+ * eager `ensureDefaultSession()` adds async work between the tool
+ * call and the state transition; a single `await Promise.resolve()`
+ * no longer covers it.
+ *
+ * Bounded with a timeout (default 1s) so a stuck state doesn't hang
+ * the whole test suite — tests that need the timeout-branch should
+ * exercise it via `requestControlTimeoutMs`, not by relying on this
+ * helper to fail.
+ */
+function waitForState(
+  machine: NonNullable<ReturnType<typeof registerWebComputerTool>>["coBrowseControl"],
+  kind: "user" | "motebit" | "handoff_pending" | "paused",
+  timeoutMs = 1000,
+): Promise<void> {
+  if (machine.getState().kind === kind) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      unsubscribe();
+      reject(new Error(`waitForState timed out waiting for kind=${kind}`));
+    }, timeoutMs);
+    const unsubscribe = machine.subscribe((state) => {
+      if (state.kind !== kind) return;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    });
+  });
+}
+
 function makeMockDispatcher(): {
   dispatcher: ComputerPlatformDispatcher;
   calls: MockDispatcherCalls;
@@ -493,10 +525,12 @@ describe("registerWebComputerTool", () => {
 
     // Fire the AI's request_control. It will block on the user's
     // verdict; resolve it asynchronously by simulating the slab
-    // band's Grant button click on the next tick.
+    // band's Grant button click. Slice 2f added an eager
+    // ensureDefaultSession() call before requestControl, so the
+    // state transition no longer happens on the next microtask —
+    // we await the actual transition via the machine's subscribe.
     const pending = registry.execute("request_control", {});
-    await Promise.resolve(); // let subscribe register
-    expect(reg!.coBrowseControl.getState().kind).toBe("handoff_pending");
+    await waitForState(reg!.coBrowseControl, "handoff_pending");
     reg!.coBrowseControl.grantControl("user");
 
     const result = await pending;
@@ -516,7 +550,7 @@ describe("registerWebComputerTool", () => {
     });
 
     const pending = registry.execute("request_control", {});
-    await Promise.resolve();
+    await waitForState(reg!.coBrowseControl, "handoff_pending");
     reg!.coBrowseControl.denyControl("user");
 
     const result = await pending;
@@ -537,7 +571,7 @@ describe("registerWebComputerTool", () => {
 
     // First call enters handoff_pending and waits for user.
     const first = registry.execute("request_control", {});
-    await Promise.resolve();
+    await waitForState(reg!.coBrowseControl, "handoff_pending");
 
     // Second call sees handoff_pending and returns immediately.
     const second = await registry.execute("request_control", {});
@@ -588,6 +622,56 @@ describe("registerWebComputerTool", () => {
     // The hint that closes the loop — the AI sees the affordance
     // name and knows the next move.
     expect(error).toContain("request_control");
+  });
+
+  // -------------------------------------------------------------------
+  // Slice 2f — slab control-chrome cleanup. Three contracts:
+  //   1. request_control's ToolDefinition declares slabProjection: "none"
+  //      so the runtime suppresses the duplicate tool_call slab item.
+  //   2. requestControlFlow eagerly opens the cloud session BEFORE
+  //      requestControl("motebit") so the live_browser exists when the
+  //      doorbell rings (no degraded fallback in the success path).
+  //   3. The chrome-applier (via openLiveBrowserSlabItem's onLiveBrowserMount
+  //      payload callback) gets a handle reference for downstream
+  //      band/address-bar mounting.
+  // -------------------------------------------------------------------
+
+  it("request_control declares slabProjection: 'none' (state chrome, not body content)", () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+    const def = registry.list().find((t) => t.name === "request_control");
+    expect(def).toBeDefined();
+    expect(def?.slabProjection).toBe("none");
+  });
+
+  it("request_control eagerly opens the cloud session before transitioning to handoff_pending", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher, calls } = makeMockDispatcher();
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+
+    expect(calls.queryDisplay).toBe(0);
+
+    const pending = registry.execute("request_control", {});
+    await waitForState(reg!.coBrowseControl, "handoff_pending");
+
+    // queryDisplay fired during the eager ensureDefaultSession — the
+    // live_browser surface exists by the time the doorbell rings.
+    expect(calls.queryDisplay).toBe(1);
+
+    // Resolve so the pending promise doesn't leak.
+    reg!.coBrowseControl.grantControl("user");
+    await pending;
   });
 
   it("dispose reverts control to user (covers the page-unload-equivalent wire shape)", async () => {

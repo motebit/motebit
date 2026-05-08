@@ -345,6 +345,19 @@ export type AgenticChunk =
        * doesn't declare an embodimentMode.
        */
       mode?: string;
+      /**
+       * Slab-projection policy for this tool, sourced from
+       * `ToolDefinition.slabProjection` at registration time. When
+       * `"none"`, the runtime's projection site MUST skip opening a
+       * slab item — the tool is state chrome (e.g. `request_control`),
+       * not a body act, and its visible representation is a different
+       * surface (the slab control band). When `"tool_call"` (default
+       * when omitted), the runtime opens a generic `tool_call` slab
+       * item. Closed string-literal union — additive (future variants
+       * like `"observation"` could narrow further without breaking
+       * existing callers).
+       */
+      slabProjection?: "none" | "tool_call";
     }
   | {
       type: "approval_request";
@@ -630,6 +643,7 @@ export async function* runTurnStreaming(
             result: decision.reason,
             tool_call_id: toolCall.id,
             mode: toolDef.embodimentMode,
+            slabProjection: toolDef.slabProjection,
           };
           conversationHistory.push({
             role: "tool",
@@ -669,6 +683,7 @@ export async function* runTurnStreaming(
           args: toolCall.args,
           started_at: Date.now(),
           mode: toolDef.embodimentMode,
+          slabProjection: toolDef.slabProjection,
         };
 
         let result: ToolResult;
@@ -684,6 +699,7 @@ export async function* runTurnStreaming(
             result: msg,
             tool_call_id: toolCall.id,
             mode: toolDef.embodimentMode,
+            slabProjection: toolDef.slabProjection,
           };
           conversationHistory.push({
             role: "tool",
@@ -748,6 +764,7 @@ export async function* runTurnStreaming(
                 result: reason,
                 tool_call_id: toolCall.id,
                 mode: toolDef.embodimentMode,
+                slabProjection: toolDef.slabProjection,
               };
               conversationHistory.push({
                 role: "tool",
@@ -790,6 +807,7 @@ export async function* runTurnStreaming(
           result: result.data ?? result.error,
           tool_call_id: toolCall.id,
           mode: toolDef.embodimentMode,
+          slabProjection: toolDef.slabProjection,
         };
 
         conversationHistory.push({
