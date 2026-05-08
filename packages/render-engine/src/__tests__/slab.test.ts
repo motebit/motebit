@@ -264,6 +264,79 @@ describe("SlabManager — plane visibility + ambient", () => {
     expect(planeMesh.visible).toBe(false);
   });
 
+  // ── Slab honesty: empty membrane + drag-hover lift ──────────────
+  // Doctrine (motebit-computer.md §"Visual properties"): the empty
+  // user-held slab must read as "present, recessed" — distinct from
+  // the active register at full opacity. The drag-hover signal lifts
+  // the membrane to a drop-target register without crossing into
+  // "active" — the surface answers the gesture without preempting it.
+
+  it("empty user-held slab eases to the membrane register (~0.20), not the active register", () => {
+    const mgr = makeManager();
+    mgr.setUserVisible(true);
+    for (let i = 0; i < 50; i++) mgr.update(i * 0.1, 0.1);
+    const planeMesh = mgr
+      .getGroup()
+      .children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
+    const material = planeMesh.material as THREE.MeshPhysicalMaterial;
+    // Recessed: visible enough to acknowledge the invocation, dim
+    // enough to read as glass-at-rest.
+    expect(material.opacity).toBeGreaterThan(0.1);
+    expect(material.opacity).toBeLessThan(0.35);
+  });
+
+  it("drag-hover lifts an empty held slab from membrane (~0.20) to drop-target (~0.65)", () => {
+    const mgr = makeManager();
+    mgr.setUserVisible(true);
+    // Settle to the membrane register first.
+    for (let i = 0; i < 50; i++) mgr.update(i * 0.1, 0.1);
+    const planeMesh = mgr
+      .getGroup()
+      .children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
+    const material = planeMesh.material as THREE.MeshPhysicalMaterial;
+    const beforeHover = material.opacity;
+    expect(beforeHover).toBeLessThan(0.35);
+
+    // Begin drag.
+    mgr.setDragHover(true);
+    for (let i = 0; i < 30; i++) mgr.update(5 + i * 0.05, 0.05);
+    expect(material.opacity).toBeGreaterThan(0.5);
+    expect(material.opacity).toBeLessThan(0.8);
+
+    // End drag (drop or dragleave).
+    mgr.setDragHover(false);
+    for (let i = 0; i < 50; i++) mgr.update(7 + i * 0.05, 0.05);
+    expect(material.opacity).toBeLessThan(0.35);
+  });
+
+  it("drag-hover summons a not-held slab from dissolved to drop-target (gesture overrides held state)", () => {
+    const mgr = makeManager();
+    // Slab not held — would normally be invisible.
+    for (let i = 0; i < 50; i++) mgr.update(i * 0.1, 0.1);
+    const planeMesh = mgr
+      .getGroup()
+      .children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
+    const material = planeMesh.material as THREE.MeshPhysicalMaterial;
+    expect(planeMesh.visible).toBe(false);
+
+    mgr.setDragHover(true);
+    for (let i = 0; i < 50; i++) mgr.update(5 + i * 0.05, 0.05);
+    expect(material.opacity).toBeGreaterThan(0.5);
+  });
+
+  it("active items still own the plane during drag-hover (no double-lift)", () => {
+    const mgr = makeManager();
+    mgr.addItem(makeSpec("s1"));
+    mgr.setDragHover(true);
+    for (let i = 0; i < 30; i++) mgr.update(i * 0.1, 0.1);
+    const planeMesh = mgr
+      .getGroup()
+      .children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh)!;
+    const material = planeMesh.material as THREE.MeshPhysicalMaterial;
+    // Active register dominates: opacity at 1.0, not 0.65.
+    expect(material.opacity).toBeGreaterThan(0.9);
+  });
+
   it("plane auto-hides after the last item ends (no user hold)", async () => {
     // Doctrine: absence is the default empty state. Work brings the
     // plane; work ending dismisses it. The user can hold it open via

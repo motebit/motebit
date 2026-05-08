@@ -497,6 +497,16 @@ export class SlabManager {
     return this.core.toggleUserVisible();
   }
 
+  /**
+   * Forward the drag-hover signal to the core. Apps wire this from
+   * their drop handlers (`dragenter` / `dragleave` / `drop`) so the
+   * slab membrane lifts to the drop-target register during an active
+   * drag. Doctrine: motebit-computer.md §"The user's touch."
+   */
+  setDragHover(hovering: boolean): void {
+    this.core.setDragHover(hovering);
+  }
+
   // ── Public API — mirrors the RenderAdapter slab methods ───────────
 
   addItem(spec: SlabItemSpec): SlabItemHandle {

@@ -234,6 +234,15 @@ export class ThreeJSAdapter implements RenderAdapter {
   }
 
   /**
+   * Forward the drag-hover signal from app drop handlers to the slab
+   * core. Slab honesty work: the membrane lifts to a drop-target
+   * register during an active drag.
+   */
+  setSlabDragHover(hovering: boolean): void {
+    this.slab?.setDragHover(hovering);
+  }
+
+  /**
    * Wire the slab's two-finger-hold gesture to a halt handler — the
    * user-floor primitive (`ComputerSessionManager.halt()`). Doctrine:
    * motebit-computer.md §"The user's touch — supervised agency".

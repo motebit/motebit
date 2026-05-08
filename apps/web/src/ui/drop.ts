@@ -34,6 +34,14 @@ import type { DropPayload, UserActionAttestation } from "@motebit/sdk";
 interface DropHandlersOptions {
   /** Returns the active runtime, or null when not yet wired. */
   getRuntime: () => MotebitRuntime | null;
+  /**
+   * Slab honesty — fires `true` when the user begins dragging anything
+   * over the document, `false` on drop / dragleave-with-no-relatedTarget.
+   * The slab's empty-held membrane lifts to the drop-target register
+   * while this is true. Optional: surfaces that don't render the slab
+   * (relay, mobile in headless mode) can omit it.
+   */
+  onDragHover?: (hovering: boolean) => void;
 }
 
 /**
@@ -43,6 +51,27 @@ interface DropHandlersOptions {
  * is mostly used in tests.
  */
 export function initDropHandlers(opts: DropHandlersOptions): () => void {
+  // Slab honesty — track whether the user is currently dragging over
+  // the document. `dragenter` / `dragleave` fire per element on the
+  // path of entered elements (so dragging from a card into a button
+  // fires `dragleave` on the card and `dragenter` on the button), but
+  // when the cursor leaves the document entirely `dragleave.relatedTarget`
+  // is null. Counting enter/leave pairs is fragile across browsers;
+  // the cleaner pattern is: enter → set; leave-with-null-relatedTarget
+  // → clear; drop / dragend → clear. dragOver maintains the signal
+  // (otherwise long stationary drags would expire when the browser
+  // batches events).
+  let hovering = false;
+  const setHover = (next: boolean): void => {
+    if (hovering === next) return;
+    hovering = next;
+    opts.onDragHover?.(next);
+  };
+
+  const onDragEnter = (_e: DragEvent): void => {
+    setHover(true);
+  };
+
   const onDragOver = (e: DragEvent): void => {
     if (e.dataTransfer === null) return;
     // The browser cancels drop unless dragover preventDefault fires;
@@ -50,13 +79,38 @@ export function initDropHandlers(opts: DropHandlersOptions): () => void {
     // anywhere, then `onDrop` decides whether to consume them.
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
+    // Re-affirm hover during the drag — covers the case where
+    // dragenter fired before listeners attached, or where a stale
+    // dragleave cleared the flag mid-gesture.
+    if (!hovering) setHover(true);
+  };
+
+  const onDragLeave = (e: DragEvent): void => {
+    // `relatedTarget === null` means the pointer left the window /
+    // document; per-element dragleaves (entering a child) carry a
+    // relatedTarget and shouldn't clear the membrane.
+    if (e.relatedTarget === null) setHover(false);
+  };
+
+  const onDragEnd = (): void => {
+    // Some browsers fire dragend on the source even when the drop
+    // didn't land on a registered target — clear here so the
+    // membrane doesn't stay lifted indefinitely.
+    setHover(false);
   };
 
   const onDrop = (e: DragEvent): void => {
-    if (e.dataTransfer === null) return;
+    if (e.dataTransfer === null) {
+      setHover(false);
+      return;
+    }
     const payload = classifyDropEvent(e);
-    if (payload === null) return; // unknown shape — let the browser default fire
+    if (payload === null) {
+      setHover(false);
+      return; // unknown shape — let the browser default fire
+    }
     e.preventDefault();
+    setHover(false);
     const runtime = opts.getRuntime();
     if (runtime === null) {
       // Runtime not yet wired (first-run, signed-out). Silently drop
@@ -66,10 +120,16 @@ export function initDropHandlers(opts: DropHandlersOptions): () => void {
     void runtime.feedPerception(payload);
   };
 
+  document.addEventListener("dragenter", onDragEnter);
   document.addEventListener("dragover", onDragOver);
+  document.addEventListener("dragleave", onDragLeave);
+  document.addEventListener("dragend", onDragEnd);
   document.addEventListener("drop", onDrop);
   return () => {
+    document.removeEventListener("dragenter", onDragEnter);
     document.removeEventListener("dragover", onDragOver);
+    document.removeEventListener("dragleave", onDragLeave);
+    document.removeEventListener("dragend", onDragEnd);
     document.removeEventListener("drop", onDrop);
   };
 }

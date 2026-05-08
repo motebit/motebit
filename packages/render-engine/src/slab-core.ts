@@ -77,6 +77,26 @@ export const SLAB_BREATHE_FREQUENCY_HZ = 0.3;
 /** Slab amplitude factor relative to creature. 0.3 = same body, not mimic. */
 export const SLAB_BREATHE_AMPLITUDE_FACTOR = 0.3;
 
+/**
+ * Empty-held membrane opacity. The slab's "present-but-recessed"
+ * register — the user invoked `/computer` (or Option+C); the slab
+ * acknowledges the invocation by becoming visible-but-faint. Doctrine
+ * (motebit-computer.md §"Visual properties"): the asymmetry between
+ * "present" and "active" depends on this being well below the active
+ * register so the two states don't conflate. 0.20 reads as glass-at-
+ * rest; 0.85 (the legacy value) read as "still working" and made
+ * every empty held slab fight the active register.
+ */
+const MEMBRANE_OPACITY = 0.2;
+/**
+ * Drag-hover lift target. When the user drags content over the slab's
+ * screen-space rect, the membrane lifts to this opacity so it signals
+ * targetability without preempting the gesture. Sits between
+ * `MEMBRANE_OPACITY` and the active register (1.0) so the slab reads
+ * as "I can take this" but not as "I am working."
+ */
+const DRAG_HOVER_OPACITY = 0.65;
+
 // ── Detach handler ───────────────────────────────────────────────────
 
 /**
@@ -163,6 +183,16 @@ export class SlabCore {
   private activeWarmth = 0;
   /** User-held override (Option+C / `/computer`). */
   private userHeldVisible = false;
+  /**
+   * Drag-hover override (slab-honesty membrane work). When the user is
+   * dragging content over the slab's surface, the membrane lifts from
+   * the recessed `MEMBRANE_OPACITY` (0.20) up to `DRAG_HOVER_OPACITY`
+   * (0.65) so the slab signals targetability without preempting the
+   * gesture. Cleared on drop or dragleave. Doctrine: motebit-
+   * computer.md §"The user's touch — supervised agency" + the
+   * calm-software pattern (drop targets answer, don't shout).
+   */
+  private dragHover = false;
 
   constructor(deps: SlabCoreDeps = {}) {
     this.detachHandler = deps.detachHandler ?? null;
@@ -246,14 +276,32 @@ export class SlabCore {
     this.userHeldVisible = visible;
     // Pre-warm the visibility so the user sees the surface materialize
     // immediately on open; `tick()` then eases to the right target.
-    if (visible && this.planeVisibility < 0.5) {
-      this.planeVisibility = 0.85;
+    // Pre-warm to MEMBRANE_OPACITY (the empty-held target) instead of
+    // the legacy 0.85 so opening an empty slab lands at the membrane
+    // register, not the active register. The doctrine asymmetry —
+    // "present" vs "active" — depends on this being recessed by
+    // default.
+    if (visible && this.planeVisibility < MEMBRANE_OPACITY) {
+      this.planeVisibility = MEMBRANE_OPACITY;
     }
   }
 
   toggleUserVisible(): boolean {
     this.setUserVisible(!this.userHeldVisible);
     return this.userHeldVisible;
+  }
+
+  /**
+   * Drag-hover signal — set true when the user starts dragging
+   * content (file, URL, text) over the slab's screen-space rect, false
+   * on drop / dragleave. The empty membrane lifts from
+   * `MEMBRANE_OPACITY` to `DRAG_HOVER_OPACITY` so the slab signals
+   * "I can take this" without preempting the gesture. Has no effect
+   * when items are present (the active register already owns the
+   * plane). Idempotent.
+   */
+  setDragHover(hovering: boolean): void {
+    this.dragHover = hovering;
   }
 
   /** Read-only check used by renderers to gate per-id parallel state. */
@@ -294,15 +342,33 @@ export class SlabCore {
       activeCount++;
     }
 
-    // Plane visibility easing — same shape as original SlabManager:
-    // active items snap toward 1 fast (rate 3), idle eases toward
-    // target (rate 4).
+    // Plane visibility easing — three states + one override.
+    //
+    //   1. Items present  → snap toward 1.0 fast (rate 3). Active
+    //      register; warmth rises with it.
+    //   2. Drag-hover     → ease to DRAG_HOVER_OPACITY. The user is
+    //      asking the surface to receive a gesture; the slab lifts
+    //      to signal "I can take this," whether or not it was held
+    //      open before the drag started. Drag-summoned membrane.
+    //   3. User-held      → ease to MEMBRANE_OPACITY (faint
+    //      "present" register; doctrine: the slab acknowledges the
+    //      `/computer` invocation by becoming recessed-but-real,
+    //      not by lighting up).
+    //   4. Otherwise      → ease to 0 (full dissolve).
+    //
+    // Order matters: drag-hover overrides user-held because the
+    // user's active gesture is the strongest signal of intent.
     let warmthTarget = 0;
     if (activeCount > 0) {
       this.planeVisibility = Math.min(1, this.planeVisibility + deltaTime * 3);
       warmthTarget = 1;
+    } else if (this.dragHover) {
+      // Faster ease (rate 6) so the slab answers the gesture
+      // promptly — slow ease here would feel like the slab is
+      // hesitating to take the drop.
+      this.planeVisibility = smoothToward(this.planeVisibility, DRAG_HOVER_OPACITY, deltaTime, 6);
     } else if (this.userHeldVisible) {
-      this.planeVisibility = smoothToward(this.planeVisibility, 0.85, deltaTime, 4);
+      this.planeVisibility = smoothToward(this.planeVisibility, MEMBRANE_OPACITY, deltaTime, 4);
     } else {
       this.planeVisibility = smoothToward(this.planeVisibility, 0, deltaTime, 4);
     }

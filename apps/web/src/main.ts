@@ -213,7 +213,14 @@ const activityPanel = initActivityPanel(ctx);
 // gesture set" (Drag a file / URL / snippet onto the slab → feed
 // perception). Single document-level listener; the runtime is fetched
 // lazily so first-run / signed-out states no-op cleanly.
-initDropHandlers({ getRuntime: () => app.getRuntime() });
+initDropHandlers({
+  getRuntime: () => app.getRuntime(),
+  // Slab honesty — pipe the drag-hover signal into the slab so the
+  // empty membrane lifts to the drop-target register during an
+  // active drag. Optional chaining on the renderer keeps this safe
+  // against adapters that don't render a slab.
+  onDragHover: (hovering) => app.getRenderer().setSlabDragHover?.(hovering),
+});
 // URL-driven entry: visiting /skills or /activity auto-opens the
 // panel. The panel closes by popping the route back to /, so the
 // back button does the expected thing.

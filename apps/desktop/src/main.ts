@@ -133,7 +133,12 @@ initKeyboard({ settings, goals, memory, conversations, agents });
 // snippet onto the slab → feed perception). Single document-level
 // listener; the runtime is fetched lazily so first-run / signed-out
 // states no-op cleanly.
-initDropHandlers({ getRuntime: () => app.getRuntime() });
+initDropHandlers({
+  getRuntime: () => app.getRuntime(),
+  // Slab honesty — pipe drag-hover into the slab membrane.
+  // Sibling of apps/web/src/main.ts.
+  onDragHover: (hovering) => app.getRenderer().setSlabDragHover?.(hovering),
+});
 
 // === Escape Key Handler ===
 

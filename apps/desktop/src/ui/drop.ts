@@ -46,6 +46,13 @@ import type { DropPayload, UserActionAttestation } from "@motebit/sdk";
 interface DropHandlersOptions {
   /** Returns the active runtime, or null when not yet wired. */
   getRuntime: () => MotebitRuntime | null;
+  /**
+   * Slab honesty — fires `true` when the user begins dragging anything
+   * over the document, `false` on drop / dragleave-with-no-relatedTarget.
+   * Mirrors the web sibling so both surfaces feed the same drag-hover
+   * signal into the slab membrane.
+   */
+  onDragHover?: (hovering: boolean) => void;
 }
 
 /**
@@ -55,6 +62,21 @@ interface DropHandlersOptions {
  * is mostly used in tests.
  */
 export function initDropHandlers(opts: DropHandlersOptions): () => void {
+  // Mirrors the web sibling. See apps/web/src/ui/drop.ts for the
+  // dragenter/dragover/dragleave/drop signal logic — same semantics,
+  // same tradeoffs (relatedTarget === null detects window-leave;
+  // dragover re-affirms hover; drop / dragend always clear).
+  let hovering = false;
+  const setHover = (next: boolean): void => {
+    if (hovering === next) return;
+    hovering = next;
+    opts.onDragHover?.(next);
+  };
+
+  const onDragEnter = (_e: DragEvent): void => {
+    setHover(true);
+  };
+
   const onDragOver = (e: DragEvent): void => {
     if (e.dataTransfer === null) return;
     // The browser cancels drop unless dragover preventDefault fires;
@@ -62,13 +84,29 @@ export function initDropHandlers(opts: DropHandlersOptions): () => void {
     // anywhere, then `onDrop` decides whether to consume them.
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
+    if (!hovering) setHover(true);
+  };
+
+  const onDragLeave = (e: DragEvent): void => {
+    if (e.relatedTarget === null) setHover(false);
+  };
+
+  const onDragEnd = (): void => {
+    setHover(false);
   };
 
   const onDrop = (e: DragEvent): void => {
-    if (e.dataTransfer === null) return;
+    if (e.dataTransfer === null) {
+      setHover(false);
+      return;
+    }
     const payload = classifyDropEvent(e);
-    if (payload === null) return; // unknown shape — let the browser default fire
+    if (payload === null) {
+      setHover(false);
+      return; // unknown shape — let the browser default fire
+    }
     e.preventDefault();
+    setHover(false);
     const runtime = opts.getRuntime();
     if (runtime === null) {
       // Runtime not yet wired (first-run, signed-out). Silently drop
@@ -78,10 +116,16 @@ export function initDropHandlers(opts: DropHandlersOptions): () => void {
     void runtime.feedPerception(payload);
   };
 
+  document.addEventListener("dragenter", onDragEnter);
   document.addEventListener("dragover", onDragOver);
+  document.addEventListener("dragleave", onDragLeave);
+  document.addEventListener("dragend", onDragEnd);
   document.addEventListener("drop", onDrop);
   return () => {
+    document.removeEventListener("dragenter", onDragEnter);
     document.removeEventListener("dragover", onDragOver);
+    document.removeEventListener("dragleave", onDragLeave);
+    document.removeEventListener("dragend", onDragEnd);
     document.removeEventListener("drop", onDrop);
   };
 }

@@ -171,6 +171,16 @@ export interface RenderAdapter {
    */
   toggleSlabVisible?(): boolean;
   /**
+   * Drag-hover signal — true while the user is dragging content over
+   * the slab's screen-space rect, false on drop / dragleave. The slab's
+   * empty-membrane register lifts to a drop-target opacity during an
+   * active drag so the surface signals "I can take this" without
+   * preempting the gesture. No-op when items are present (the active
+   * register already owns the plane). Doctrine: motebit-computer.md
+   * §"The user's touch — supervised agency."
+   */
+  setSlabDragHover?(hovering: boolean): void;
+  /**
    * Wire the two-finger-hold-on-plane gesture (v1.2b) to the app's
    * halt handler — the user-floor primitive at the runtime layer
    * (`ComputerSessionManager.halt()`). Optional because not every
