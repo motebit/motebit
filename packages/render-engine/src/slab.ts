@@ -283,7 +283,7 @@ export class SlabManager {
       clearcoatRoughness: 0.05,
       color: new THREE.Color(0.98, 0.985, 1.0),
       attenuationColor: new THREE.Color(0.92, 0.95, 1.0),
-      attenuationDistance: 0.3,
+      attenuationDistance: 0.15,
       sheen: 0.15,
       sheenRoughness: 0.9,
       sheenColor: new THREE.Color(0.75, 0.85, 1.0),
@@ -514,11 +514,14 @@ export class SlabManager {
       this.soulTint[2],
     );
     this.planeMaterial.emissive.setRGB(this.soulGlow[0], this.soulGlow[1], this.soulGlow[2]);
-    // Idle baseline 0.015 + activity ramp up to 0.12 at full warmth.
-    // Both modulated by breath so the glow inherits the creature's
-    // sympathetic rhythm rather than reading as flat back-light.
-    const baseline = 0.015;
-    const peak = 0.12;
+    // Idle baseline 0.020 + activity ramp up to 0.20 at full warmth.
+    // 10× range between idle and peak — the slab whispers identity at
+    // rest and announces work when active, calm-software meaningful
+    // signal rather than always-loud soul glow. Both modulated by
+    // breath so the glow inherits the creature's sympathetic rhythm
+    // rather than reading as flat back-light.
+    const baseline = 0.02;
+    const peak = 0.2;
     this.planeMaterial.emissiveIntensity =
       (baseline + (peak - baseline) * w) * (0.85 + 0.15 * breatheRaw);
 
