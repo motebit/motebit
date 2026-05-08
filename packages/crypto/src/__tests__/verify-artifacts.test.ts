@@ -45,11 +45,18 @@ import {
   hexToBytes,
   bytesToHex,
   hash,
+  signComputerSessionReceipt,
+  verifyComputerSessionReceipt,
+  hashComputerSessionActions,
   type SignedTokenPayload,
   type SignableReceipt,
   type SignableToolInvocationReceipt,
   type KnownKeys,
 } from "../index.js";
+import type {
+  SignableComputerSessionReceipt,
+  ComputerSessionActionRecord,
+} from "@motebit/protocol";
 
 // ---------------------------------------------------------------------------
 // hash()
@@ -1894,5 +1901,174 @@ describe("signSovereignPaymentReceipt", () => {
       payeeKp.publicKey,
     );
     expect(receipt.tools_used).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signComputerSessionReceipt / verifyComputerSessionReceipt (v1.5)
+// ---------------------------------------------------------------------------
+
+describe("signComputerSessionReceipt / verifyComputerSessionReceipt", () => {
+  function makeActions(): ComputerSessionActionRecord[] {
+    return [
+      {
+        kind: "screenshot",
+        started_at: 1700000000000,
+        completed_at: 1700000000200,
+        outcome: "success",
+      },
+      {
+        kind: "click",
+        started_at: 1700000000300,
+        completed_at: 1700000000500,
+        outcome: "success",
+      },
+      {
+        kind: "type",
+        started_at: 1700000000600,
+        completed_at: 1700000001000,
+        outcome: "failure",
+        failure_reason: "approval_required",
+      },
+    ];
+  }
+
+  async function makeSession(): Promise<
+    Omit<SignableComputerSessionReceipt, "actions_hash"> & { actions_hash: string }
+  > {
+    const actions_hash = await hashComputerSessionActions(makeActions());
+    return {
+      receipt_id: "csr-001",
+      session_id: "cs_abc",
+      motebit_id: "mote-123",
+      embodiment_mode: "virtual_browser",
+      display_width: 1280,
+      display_height: 800,
+      scaling_factor: 2,
+      opened_at: 1699999999000,
+      closed_at: 1700000002000,
+      close_reason: "user_closed",
+      action_count: 3,
+      outcomes_summary: { success: 2, failure: 1 },
+      failure_breakdown: { approval_required: 1 },
+      was_halted: false,
+      max_sensitivity: "personal",
+      actions_hash,
+    };
+  }
+
+  it("round-trips (sign -> verify = true)", async () => {
+    const kp = await generateKeypair();
+    const body = await makeSession();
+    const signed = await signComputerSessionReceipt(body, kp.privateKey);
+
+    expect(signed.signature).toBeTruthy();
+    expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(signed.session_id).toBe("cs_abc");
+    expect(signed.embodiment_mode).toBe("virtual_browser");
+
+    const valid = await verifyComputerSessionReceipt(signed, kp.publicKey);
+    expect(valid).toBe(true);
+  });
+
+  it("embeds the public key (hex) when provided", async () => {
+    const kp = await generateKeypair();
+    const signed = await signComputerSessionReceipt(
+      await makeSession(),
+      kp.privateKey,
+      kp.publicKey,
+    );
+    expect(signed.public_key).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("detects tampering on action_count", async () => {
+    const kp = await generateKeypair();
+    const signed = await signComputerSessionReceipt(await makeSession(), kp.privateKey);
+    const tampered = { ...signed, action_count: 99 };
+    expect(await verifyComputerSessionReceipt(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("detects tampering on outcomes_summary", async () => {
+    const kp = await generateKeypair();
+    const signed = await signComputerSessionReceipt(await makeSession(), kp.privateKey);
+    const tampered = { ...signed, outcomes_summary: { success: 999, failure: 0 } };
+    expect(await verifyComputerSessionReceipt(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("detects tampering on actions_hash (per-action roll-up swap)", async () => {
+    const kp = await generateKeypair();
+    const signed = await signComputerSessionReceipt(await makeSession(), kp.privateKey);
+    const tampered = { ...signed, actions_hash: "f".repeat(64) };
+    expect(await verifyComputerSessionReceipt(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("detects tampering on was_halted (false → true)", async () => {
+    const kp = await generateKeypair();
+    const signed = await signComputerSessionReceipt(await makeSession(), kp.privateKey);
+    const tampered = { ...signed, was_halted: true };
+    expect(await verifyComputerSessionReceipt(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("detects tampering on embodiment_mode", async () => {
+    const kp = await generateKeypair();
+    const signed = await signComputerSessionReceipt(await makeSession(), kp.privateKey);
+    const tampered = { ...signed, embodiment_mode: "desktop_drive" };
+    expect(await verifyComputerSessionReceipt(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("detects tampering on max_sensitivity", async () => {
+    const kp = await generateKeypair();
+    const signed = await signComputerSessionReceipt(await makeSession(), kp.privateKey);
+    const tampered = { ...signed, max_sensitivity: "none" };
+    expect(await verifyComputerSessionReceipt(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("rejects wrong key", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const signed = await signComputerSessionReceipt(await makeSession(), kpA.privateKey);
+    expect(await verifyComputerSessionReceipt(signed, kpB.publicKey)).toBe(false);
+  });
+
+  it("rejects unknown suite (fail-closed)", async () => {
+    const kp = await generateKeypair();
+    const signed = await signComputerSessionReceipt(await makeSession(), kp.privateKey);
+    const wrongSuite = { ...signed, suite: "made-up-suite" } as unknown as Parameters<
+      typeof verifyComputerSessionReceipt
+    >[0];
+    expect(await verifyComputerSessionReceipt(wrongSuite, kp.publicKey)).toBe(false);
+  });
+
+  it("is deterministic (same inputs -> same signature)", async () => {
+    const kp = await generateKeypair();
+    const body = await makeSession();
+    const a = await signComputerSessionReceipt(body, kp.privateKey);
+    const b = await signComputerSessionReceipt(body, kp.privateKey);
+    expect(a.signature).toBe(b.signature);
+  });
+
+  it("hashComputerSessionActions: order matters (different order ⇒ different hash)", async () => {
+    const a = makeActions();
+    const reversed = [...a].reverse();
+    const ha = await hashComputerSessionActions(a);
+    const hb = await hashComputerSessionActions(reversed);
+    expect(ha).not.toBe(hb);
+  });
+
+  it("hashComputerSessionActions: empty array yields a stable digest", async () => {
+    const h = await hashComputerSessionActions([]);
+    expect(h).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("verifier with raw actions can recompute and match the bound digest", async () => {
+    const kp = await generateKeypair();
+    const actions = makeActions();
+    const actions_hash = await hashComputerSessionActions(actions);
+    const body = { ...(await makeSession()), actions_hash };
+    const signed = await signComputerSessionReceipt(body, kp.privateKey);
+    expect(await verifyComputerSessionReceipt(signed, kp.publicKey)).toBe(true);
+    // Verifier independently recomputes from the per-action records.
+    const recomputed = await hashComputerSessionActions(actions);
+    expect(recomputed).toBe(signed.actions_hash);
   });
 });

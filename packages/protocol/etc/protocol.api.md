@@ -558,6 +558,20 @@ export interface ComputerRedaction {
 }
 
 // @alpha
+export interface ComputerSessionActionRecord {
+    // (undocumented)
+    readonly completed_at: number;
+    // (undocumented)
+    readonly failure_reason?: ComputerFailureReason;
+    // (undocumented)
+    readonly kind: ComputerActionKind;
+    // (undocumented)
+    readonly outcome: "success" | "failure";
+    // (undocumented)
+    readonly started_at: number;
+}
+
+// @alpha
 export interface ComputerSessionClosed {
     // (undocumented)
     readonly closed_at: number;
@@ -580,6 +594,13 @@ export interface ComputerSessionOpened {
     readonly scaling_factor: number;
     // (undocumented)
     readonly session_id: string;
+}
+
+// @alpha
+export interface ComputerSessionReceipt extends SignableComputerSessionReceipt {
+    // (undocumented)
+    readonly signature: string;
+    readonly suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @alpha
@@ -2599,6 +2620,41 @@ export enum SideEffect {
     NONE = "none",
     // (undocumented)
     REVERSIBLE = "reversible"
+}
+
+// @alpha
+export interface SignableComputerSessionReceipt {
+    readonly action_count: number;
+    readonly actions_hash: string;
+    readonly close_reason?: string;
+    // (undocumented)
+    readonly closed_at: number;
+    // (undocumented)
+    readonly display_height: number;
+    // (undocumented)
+    readonly display_width: number;
+    readonly embodiment_mode: string;
+    readonly failure_breakdown: {
+        readonly [K in ComputerFailureReason]?: number;
+    };
+    readonly max_sensitivity: string;
+    // (undocumented)
+    readonly motebit_id: string;
+    // (undocumented)
+    readonly opened_at: number;
+    readonly outcomes_summary: {
+        readonly success: number;
+        readonly failure: number;
+    };
+    // (undocumented)
+    readonly public_key?: string;
+    // (undocumented)
+    readonly receipt_id: string;
+    // (undocumented)
+    readonly scaling_factor: number;
+    // (undocumented)
+    readonly session_id: string;
+    readonly was_halted: boolean;
 }
 
 // @public

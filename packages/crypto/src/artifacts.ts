@@ -378,6 +378,123 @@ export async function verifyToolInvocationReceipt(
   return valid;
 }
 
+// === Computer-Session Receipts (v1.5) ===
+//
+// Sibling of ToolInvocationReceipt. Same JCS+Ed25519+base64url
+// pattern; same fail-closed verifier rules. The wire-format type
+// (`ComputerSessionReceipt`) lives in `@motebit/protocol`'s
+// `computer-use.ts`. The runtime composes the unsigned body via
+// `ComputerSessionManager.summarize(...)` and hands it to
+// `signComputerSessionReceipt` here.
+
+import type {
+  SignableComputerSessionReceipt,
+  ComputerSessionActionRecord,
+} from "@motebit/protocol";
+
+/** The one suite ComputerSessionReceipts sign under today. */
+export const COMPUTER_SESSION_RECEIPT_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/**
+ * Compute the `actions_hash` for a computer-session receipt — JCS-
+ * canonicalize the per-action structural roll-up, SHA-256 the UTF-8
+ * bytes, return hex. Use on both sides of the wire: the signer
+ * computes at session-close time; verifiers with the per-action
+ * records recompute and match.
+ *
+ * The actions array MUST be in dispatch order — different orderings
+ * produce different hashes by construction. The signer is the source
+ * of truth for ordering; verifiers replaying from per-action receipts
+ * sort by `started_at` ascending (ties broken by `completed_at`).
+ */
+export async function hashComputerSessionActions(
+  actions: ReadonlyArray<ComputerSessionActionRecord>,
+): Promise<string> {
+  return canonicalSha256(actions);
+}
+
+/**
+ * Sign a computer-session receipt. Mirrors `signToolInvocationReceipt`:
+ * stamps the cryptosuite into the body, canonicalizes with JCS,
+ * dispatches through `signBySuite`, and encodes as base64url.
+ *
+ * Caller passes the body without `signature` or `suite`; the signer
+ * owns both. Embeds the public key (hex) so the receipt is
+ * independently verifiable with no relay lookup.
+ */
+export async function signComputerSessionReceipt<
+  T extends Omit<SignableComputerSessionReceipt, "public_key"> & { public_key?: string },
+>(
+  receipt: T,
+  privateKey: Uint8Array,
+  publicKey?: Uint8Array,
+): Promise<T & { suite: typeof COMPUTER_SESSION_RECEIPT_SUITE; signature: string }> {
+  const withKey = publicKey ? { ...receipt, public_key: bytesToHex(publicKey) } : receipt;
+  const body = { ...withKey, suite: COMPUTER_SESSION_RECEIPT_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(COMPUTER_SESSION_RECEIPT_SUITE, message, privateKey);
+  const signed = { ...body, signature: toBase64Url(sig) } as T & {
+    suite: typeof COMPUTER_SESSION_RECEIPT_SUITE;
+    signature: string;
+  };
+
+  if (isReceiptDebugEnabled()) {
+    const sha = await canonicalSha256(body);
+    // eslint-disable-next-line no-console -- opt-in diagnostic, off by default
+    console.debug(
+      `[motebit/crypto] signComputerSessionReceipt canonical_sha256=${sha} session=${
+        (body as Record<string, unknown>).session_id as string
+      } actions=${(body as Record<string, unknown>).action_count as number} bytes=${canonical.length}`,
+    );
+  }
+
+  return Object.freeze(signed);
+}
+
+/**
+ * Verify a computer-session receipt. Fails closed on unknown suite,
+ * bad base64, or signature mismatch — same rules as
+ * `verifyToolInvocationReceipt`. Caller passes the receipt verbatim
+ * (with signature) and the signer's public key; on success the
+ * structural body is committed to as-signed.
+ */
+export async function verifyComputerSessionReceipt(
+  receipt: SignableComputerSessionReceipt & { suite: string; signature: string },
+  publicKey: Uint8Array,
+): Promise<boolean> {
+  if (receipt.suite !== COMPUTER_SESSION_RECEIPT_SUITE) {
+    if (isReceiptDebugEnabled()) {
+      // eslint-disable-next-line no-console -- opt-in diagnostic
+      console.debug(
+        `[motebit/crypto] verifyComputerSessionReceipt EARLY_RETURN suite_mismatch actual=${JSON.stringify(receipt.suite)} expected=${JSON.stringify(COMPUTER_SESSION_RECEIPT_SUITE)}`,
+      );
+    }
+    return false;
+  }
+  const { signature, ...body } = receipt;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+
+  let valid = false;
+  try {
+    const sig = fromBase64Url(signature);
+    valid = await verifyBySuite(receipt.suite, message, sig, publicKey);
+  } catch {
+    valid = false;
+  }
+
+  if (isReceiptDebugEnabled()) {
+    const sha = await canonicalSha256(body);
+    // eslint-disable-next-line no-console -- opt-in diagnostic
+    console.debug(
+      `[motebit/crypto] verifyComputerSessionReceipt canonical_sha256=${sha} valid=${valid} bytes=${canonical.length}`,
+    );
+  }
+
+  return valid;
+}
+
 // === Sovereign Payment Receipts ===
 
 /**

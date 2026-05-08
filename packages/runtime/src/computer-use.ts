@@ -48,9 +48,12 @@
 
 import type {
   ComputerAction,
+  ComputerActionKind,
   ComputerFailureReason,
+  ComputerSessionActionRecord,
   ComputerSessionClosed,
   ComputerSessionOpened,
+  SignableComputerSessionReceipt,
 } from "@motebit/sdk";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -151,6 +154,19 @@ export interface ObservationRedaction {
    * is retained so the audit trail still binds to the blocked capture.
    */
   readonly strip_bytes?: boolean;
+  /**
+   * Optional explicit sensitivity tier the classifier assigned to this
+   * observation. Closed `SensitivityLevel` union by convention
+   * (`"none" | "personal" | "medical" | "financial" | "secret"`).
+   *
+   * Used by the v1.5 session-summary receipt to fill `max_sensitivity`.
+   * When absent, the runtime infers from `strip_bytes` (true →
+   * `"financial"` as the conservative floor of the bytes-stripping
+   * trio per CLAUDE.md "medical/financial/secret never reach external
+   * AI"; false → `"none"`). Classifiers that know the tier should set
+   * it explicitly so the receipt commits to the actual value.
+   */
+  readonly sensitivity_level?: string;
 }
 
 /**
@@ -257,6 +273,64 @@ export interface ComputerSessionManager {
 
   /** True when `halt()` was called more recently than `resume()`. */
   isHalted(): boolean;
+
+  /**
+   * v1.5 — produce the *unsigned* body of a `ComputerSessionReceipt`
+   * for the named session. The signer (typically the runtime, which
+   * owns the motebit's identity key) consumes this and emits the
+   * signed receipt via `signComputerSessionReceipt` from
+   * `@motebit/crypto`.
+   *
+   * The summary is built from per-action structural records the
+   * manager appends on every `executeAction` call (kind, timing,
+   * outcome, failure reason). Records carry no targets, args, or
+   * observation bytes — the receipt commits to *structure*, the
+   * per-action `ToolInvocationReceipt` already commits to args/result
+   * hashes. Splitting the two preserves the privacy invariant of the
+   * session-level receipt while keeping the audit invariant of the
+   * per-call receipts intact.
+   *
+   * Available on both open and closed sessions (closed sessions are
+   * tracked as long as their record is in memory). Returns `null`
+   * when the session id is unknown — callers downstream of an
+   * idempotent re-close should not error on that path.
+   *
+   * `actions_hash` is computed by JCS-canonicalizing the per-action
+   * roll-up and SHA-256ing the bytes — same digest a third-party
+   * verifier would compute from the per-action receipts. Keep
+   * deterministic so signatures are stable.
+   */
+  summarize(
+    sessionId: string,
+    deps: ComputerSessionSummarizeDeps,
+  ): Promise<Omit<SignableComputerSessionReceipt, "public_key"> | null>;
+}
+
+/**
+ * Deps passed to `summarize()`. The manager doesn't hold the motebit's
+ * identity, doesn't know how to canonical-JSON or hash, and doesn't
+ * carry an embodiment-mode constant — those are the consumer's
+ * concerns. Inversion of control keeps the manager pure runtime
+ * plumbing; the BSL signer composes it with `@motebit/crypto`'s
+ * `hashComputerSessionActions` and `signComputerSessionReceipt`.
+ */
+export interface ComputerSessionSummarizeDeps {
+  /** Source of the receipt's `receipt_id` (UUID). */
+  generateReceiptId: () => string;
+  /**
+   * Embodiment mode the session ran under. Apps stamp this at
+   * registration time (`apps/web/src/computer-tool.ts` →
+   * `"virtual_browser"`; `apps/desktop/src/computer-tool.ts` →
+   * `"desktop_drive"`). Surfaces that haven't stamped one fall back
+   * to `"tool_result"` per `tool-policy.ts`'s safe floor.
+   */
+  embodimentMode: string;
+  /**
+   * Hash the canonical-JSON of the per-action roll-up. Caller wires
+   * this to `@motebit/crypto`'s `hashComputerSessionActions` so the
+   * runtime layer doesn't take a direct crypto dep here.
+   */
+  hashActions: (actions: ReadonlyArray<ComputerSessionActionRecord>) => Promise<string>;
 }
 
 export interface ComputerSessionManagerDeps {
@@ -293,6 +367,29 @@ interface InternalSession {
   readonly opened_at: number;
   closed_at: number | null;
   close_reason: string | null;
+  /**
+   * Per-action structural records (v1.5). Append-only during the
+   * session's life; consumed by `summarize()`. Carries kind + timing
+   * + outcome + failure_reason — never targets, args, or observation
+   * payloads. Privacy invariant: any field added here MUST be
+   * structural-only.
+   */
+  readonly actions: ComputerSessionActionRecord[];
+  /**
+   * Highest sensitivity tier observed on any action's classifier
+   * pass during the session (v1.5). Persisted on the session object
+   * so the summary commits to the envelope regardless of whether
+   * each per-action observation gets retained downstream.
+   * Encoded as a SensitivityLevel string (`"none"` baseline,
+   * lifted by `applyObservationClassifier`).
+   */
+  max_sensitivity: string;
+  /**
+   * True if `halt()` fired at any point during the session — even
+   * if `resume()` was called before close. The receipt commits to
+   * "the user paused at least once," not to terminal halt state.
+   */
+  was_halted: boolean;
 }
 
 export function createComputerSessionManager(
@@ -307,6 +404,14 @@ export function createComputerSessionManager(
   } = deps;
 
   const sessions = new Map<string, InternalSession>();
+  // Closed sessions retained for v1.5 `summarize()` calls that happen
+  // after `closeSession()` returns. Bounded to the most-recent N so a
+  // long-running motebit doesn't accumulate unbounded closed-session
+  // metadata; per session this is ~1KB even with 100 actions, so
+  // retaining the last 64 closes is cheap and keeps the audit-event
+  // append-then-summarize flow safe under any caller ordering.
+  const closedSessions = new Map<string, InternalSession>();
+  const CLOSED_SESSION_RETENTION_LIMIT = 64;
   // User-floor halt flag — see `halt()` / `resume()` / `isHalted()`
   // on the ComputerSessionManager interface for the semantics. While
   // true, executeAction returns user_preempted without touching the
@@ -327,6 +432,9 @@ export function createComputerSessionManager(
       opened_at,
       closed_at: null,
       close_reason: null,
+      actions: [],
+      max_sensitivity: "none",
+      was_halted: false,
     };
     sessions.set(session_id, session);
     const handle: ComputerSessionHandle = {
@@ -378,6 +486,13 @@ export function createComputerSessionManager(
       }
     }
     sessions.delete(sessionId);
+    // v1.5 — retain the closed session so `summarize()` works even
+    // after closeSession returns. FIFO eviction keeps memory bounded.
+    closedSessions.set(sessionId, session);
+    if (closedSessions.size > CLOSED_SESSION_RETENTION_LIMIT) {
+      const oldest = closedSessions.keys().next().value;
+      if (oldest != null) closedSessions.delete(oldest);
+    }
     return {
       session_id: sessionId,
       closed_at,
@@ -390,6 +505,28 @@ export function createComputerSessionManager(
     action: ComputerAction,
     onChunk?: (chunk: unknown) => void,
   ): Promise<ComputerActionOutcome> {
+    const started_at = now();
+    const session = sessions.get(sessionId);
+    // v1.5 — every executeAction call appends a structural record to
+    // the session's roll-up (when the session is open and resolvable).
+    // Halt-without-session and session_closed paths still return their
+    // typed outcomes but skip the record append; the session that
+    // doesn't exist has no per-action ledger to commit to. Recording
+    // happens in finishOutcome() so we capture all branches uniformly.
+    const recordOutcome = (outcome: ComputerActionOutcome): ComputerActionOutcome => {
+      if (session && session.closed_at == null) {
+        const record: ComputerSessionActionRecord = {
+          kind: action.kind as ComputerActionKind,
+          started_at,
+          completed_at: now(),
+          outcome: outcome.outcome,
+          ...(outcome.outcome === "failure" ? { failure_reason: outcome.reason } : {}),
+        };
+        session.actions.push(record);
+      }
+      return outcome;
+    };
+
     // User-floor halt check — runs BEFORE session validation and
     // governance classification. The two-finger-hold gesture (or
     // /halt slash command, or any other release-trigger) sets this
@@ -398,54 +535,53 @@ export function createComputerSessionManager(
     // user's stop button; it preempts everything else, including
     // an action that would otherwise be allow-ed by governance.
     if (halted) {
-      return {
+      return recordOutcome({
         outcome: "failure",
         reason: "user_preempted",
         message: "Manager is halted; user has paused dispatch.",
-      };
+      });
     }
 
-    const session = sessions.get(sessionId);
     if (!session || session.closed_at != null) {
-      return {
+      return recordOutcome({
         outcome: "failure",
         reason: "session_closed",
         message: `session ${sessionId} is not open`,
-      };
+      });
     }
 
     const classification = await governance.classify(action);
     if (classification === "deny") {
-      return { outcome: "failure", reason: "policy_denied" };
+      return recordOutcome({ outcome: "failure", reason: "policy_denied" });
     }
     if (classification === "require_approval") {
       if (!approvalFlow) {
-        return { outcome: "failure", reason: "approval_required" };
+        return recordOutcome({ outcome: "failure", reason: "approval_required" });
       }
       const approved = await approvalFlow(action);
       if (!approved) {
-        return { outcome: "failure", reason: "approval_required" };
+        return recordOutcome({ outcome: "failure", reason: "approval_required" });
       }
     }
 
     try {
       const data = await dispatcher.execute(action, onChunk);
-      const finalData = await applyObservationClassifier(data);
-      return { outcome: "success", data: finalData };
+      const finalData = await applyObservationClassifier(data, session);
+      return recordOutcome({ outcome: "success", data: finalData });
     } catch (err: unknown) {
       if (err instanceof ComputerDispatcherError) {
-        return {
+        return recordOutcome({
           outcome: "failure",
           reason: err.reason,
           message: err.message,
-        };
+        });
       }
       const msg = err instanceof Error ? err.message : String(err);
-      return {
+      return recordOutcome({
         outcome: "failure",
         reason: "platform_blocked",
         message: msg,
-      };
+      });
     }
   }
 
@@ -477,7 +613,10 @@ export function createComputerSessionManager(
    * so the AI cannot silently receive raw bytes when the classifier
    * malfunctioned.
    */
-  async function applyObservationClassifier(data: unknown): Promise<unknown> {
+  async function applyObservationClassifier(
+    data: unknown,
+    session: InternalSession,
+  ): Promise<unknown> {
     if (!governance.classifyObservation) return data;
     if (data === null || typeof data !== "object") return data;
     let redaction: ObservationRedaction | undefined;
@@ -491,11 +630,47 @@ export function createComputerSessionManager(
       };
     }
     if (!redaction) return data;
+    // v1.5 sensitivity envelope — lift `session.max_sensitivity` to the
+    // higher of (current, observed). Use the classifier's explicit
+    // `sensitivity_level` when supplied; fall back to inferring from
+    // `strip_bytes` (true → "financial" as the conservative floor of
+    // medical/financial/secret). The receipt commits to the high-water
+    // mark, never decays.
+    const observed: string =
+      typeof redaction.sensitivity_level === "string"
+        ? redaction.sensitivity_level
+        : redaction.strip_bytes
+          ? "financial"
+          : "none";
+    if (sensitivityRank(observed) > sensitivityRank(session.max_sensitivity)) {
+      session.max_sensitivity = observed;
+    }
     const next: Record<string, unknown> = { ...(data as Record<string, unknown>), redaction };
     if (redaction.strip_bytes) {
       for (const field of STRIPPED_FIELDS) delete next[field];
     }
     return next;
+  }
+
+  // Local ordinal rank — same closed `SensitivityLevel` order as
+  // `@motebit/protocol`'s `rankSensitivity`. Inlined to avoid a
+  // protocol import for one closed-enum lookup. Unknown strings rank
+  // 0 (treated as `"none"`) — fail-permissive on the inference path
+  // because the doctrine's medical/financial/secret bytes-strip rule
+  // is enforced by the strip itself, not by this rank.
+  function sensitivityRank(level: string): number {
+    switch (level) {
+      case "personal":
+        return 1;
+      case "medical":
+        return 2;
+      case "financial":
+        return 3;
+      case "secret":
+        return 4;
+      default:
+        return 0;
+    }
   }
 
   function dispose(): void {
@@ -507,6 +682,13 @@ export function createComputerSessionManager(
 
   function halt(): void {
     halted = true;
+    // v1.5 — sticky was_halted on every active session so the
+    // receipt commits to "the user paused at least once," not to
+    // terminal halt state. `resume()` does not clear this — the
+    // history is the data the receipt is meant to preserve.
+    for (const s of sessions.values()) {
+      s.was_halted = true;
+    }
   }
 
   function resume(): void {
@@ -515,6 +697,46 @@ export function createComputerSessionManager(
 
   function isHalted(): boolean {
     return halted;
+  }
+
+  async function summarize(
+    sessionId: string,
+    summarizeDeps: ComputerSessionSummarizeDeps,
+  ): Promise<Omit<SignableComputerSessionReceipt, "public_key"> | null> {
+    const session = sessions.get(sessionId) ?? closedSessions.get(sessionId);
+    if (!session) return null;
+    let success = 0;
+    let failure = 0;
+    const failure_breakdown: Partial<Record<ComputerFailureReason, number>> = {};
+    for (const a of session.actions) {
+      if (a.outcome === "success") {
+        success++;
+      } else {
+        failure++;
+        if (a.failure_reason) {
+          failure_breakdown[a.failure_reason] = (failure_breakdown[a.failure_reason] ?? 0) + 1;
+        }
+      }
+    }
+    const actions_hash = await summarizeDeps.hashActions(session.actions);
+    return {
+      receipt_id: summarizeDeps.generateReceiptId(),
+      session_id: session.session_id,
+      motebit_id: session.motebit_id,
+      embodiment_mode: summarizeDeps.embodimentMode,
+      display_width: session.display.width,
+      display_height: session.display.height,
+      scaling_factor: session.display.scaling_factor,
+      opened_at: session.opened_at,
+      closed_at: session.closed_at ?? now(),
+      ...(session.close_reason ? { close_reason: session.close_reason } : {}),
+      action_count: session.actions.length,
+      outcomes_summary: { success, failure },
+      failure_breakdown,
+      was_halted: session.was_halted,
+      max_sensitivity: session.max_sensitivity,
+      actions_hash,
+    };
   }
 
   return {
@@ -527,5 +749,6 @@ export function createComputerSessionManager(
     halt,
     resume,
     isHalted,
+    summarize,
   };
 }

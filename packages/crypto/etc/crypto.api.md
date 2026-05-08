@@ -6,6 +6,7 @@
 
 import type { AdjudicatorVote } from '@motebit/protocol';
 import type { BalanceWaiver } from '@motebit/protocol';
+import type { ComputerSessionActionRecord } from '@motebit/protocol';
 import type { ConsolidationReceipt } from '@motebit/protocol';
 import type { DelegationToken } from '@motebit/protocol';
 import type { DeletionCertificate } from '@motebit/protocol';
@@ -18,6 +19,7 @@ import type { HorizonWitness } from '@motebit/protocol';
 import type { HorizonWitnessRequestBody } from '@motebit/protocol';
 import type { RetentionManifest } from '@motebit/protocol';
 import type { SettlementRecord } from '@motebit/protocol';
+import type { SignableComputerSessionReceipt } from '@motebit/protocol';
 import type { SkillEnvelope } from '@motebit/protocol';
 import type { SkillManifest } from '@motebit/protocol';
 import type { SkillSignature } from '@motebit/protocol';
@@ -105,6 +107,9 @@ export const COLLABORATIVE_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
 export function computeCredentialLeaf(credential: Record<string, unknown>): Promise<string>;
+
+// @public
+export const COMPUTER_SESSION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
 export const CONSOLIDATION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
@@ -457,6 +462,9 @@ export interface HardwareAttestationVerifyResult {
 
 // @public (undocumented)
 export function hash(data: Uint8Array): Promise<string>;
+
+// @public
+export function hashComputerSessionActions(actions: ReadonlyArray<ComputerSessionActionRecord>): Promise<string>;
 
 // @public
 export function hashToolPayload(value: unknown): Promise<string>;
@@ -915,6 +923,14 @@ export function signCertAsSubject<T extends Extract<DeletionCertificate, {
 export function signCollaborativeReceipt(receipt: Omit<SignableCollaborativeReceipt, "content_hash" | "initiator_signature" | "suite">, initiatorPrivateKey: Uint8Array): Promise<SignableCollaborativeReceipt>;
 
 // @public
+export function signComputerSessionReceipt<T extends Omit<SignableComputerSessionReceipt, "public_key"> & {
+    public_key?: string;
+}>(receipt: T, privateKey: Uint8Array, publicKey?: Uint8Array): Promise<T & {
+    suite: typeof COMPUTER_SESSION_RECEIPT_SUITE;
+    signature: string;
+}>;
+
+// @public
 export function signConsolidationReceipt(receipt: Omit<ConsolidationReceipt, "signature" | "suite" | "public_key">, privateKey: Uint8Array, publicKey?: Uint8Array): Promise<ConsolidationReceipt>;
 
 // @public
@@ -1221,6 +1237,12 @@ export function verifyCollaborativeReceipt(receipt: SignableCollaborativeReceipt
     valid: boolean;
     error?: string;
 }>;
+
+// @public
+export function verifyComputerSessionReceipt(receipt: SignableComputerSessionReceipt & {
+    suite: string;
+    signature: string;
+}, publicKey: Uint8Array): Promise<boolean>;
 
 // @public
 export function verifyConsolidationReceipt(receipt: ConsolidationReceipt, publicKey: Uint8Array): Promise<boolean>;

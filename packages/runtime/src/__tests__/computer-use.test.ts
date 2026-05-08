@@ -1069,3 +1069,265 @@ describe("v1.2 — halt / resume primitive (fail-closed user_preempted)", () => 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// v1.5 — `summarize()` produces the unsigned body of a
+// `ComputerSessionReceipt`. Exercises the per-action ledger,
+// outcome counts, failure breakdown, sensitivity envelope, halt-
+// stickiness, and post-close availability via the closedSessions
+// retention. The signing path is covered in @motebit/crypto's
+// verify-artifacts.test.ts; tests here stay pure runtime logic.
+// ---------------------------------------------------------------------------
+
+describe("v1.5 — summarize() session-summary roll-up", () => {
+  function makeSummarizeDeps(): {
+    generateReceiptId: () => string;
+    embodimentMode: string;
+    hashActions: (actions: ReadonlyArray<unknown>) => Promise<string>;
+  } {
+    let n = 0;
+    return {
+      generateReceiptId: () => `csr_${++n}`,
+      embodimentMode: "virtual_browser",
+      hashActions: async (actions) => `h${actions.length}`,
+    };
+  }
+
+  it("returns null for an unknown session id", async () => {
+    const manager = createComputerSessionManager({ dispatcher: makeDispatcher() });
+    const summary = await manager.summarize("cs_does_not_exist", makeSummarizeDeps());
+    expect(summary).toBeNull();
+  });
+
+  it("summarizes an open session with zero actions", async () => {
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher(),
+      generateSessionId: () => "cs_1",
+      now: () => 1_000,
+    });
+    await manager.openSession("mot_1");
+    const summary = await manager.summarize("cs_1", makeSummarizeDeps());
+    expect(summary).not.toBeNull();
+    if (summary == null) return;
+    expect(summary.session_id).toBe("cs_1");
+    expect(summary.motebit_id).toBe("mot_1");
+    expect(summary.embodiment_mode).toBe("virtual_browser");
+    expect(summary.action_count).toBe(0);
+    expect(summary.outcomes_summary).toEqual({ success: 0, failure: 0 });
+    expect(summary.failure_breakdown).toEqual({});
+    expect(summary.was_halted).toBe(false);
+    expect(summary.max_sensitivity).toBe("none");
+    expect(summary.actions_hash).toBe("h0");
+    expect(summary.display_width).toBe(2560);
+    expect(summary.display_height).toBe(1440);
+    expect(summary.scaling_factor).toBe(2);
+  });
+
+  it("counts successes and failures across mixed outcomes", async () => {
+    let t = 1000;
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({
+        async execute() {
+          // Fail on every other action to produce a known mix.
+          if (t > 1100) throw new ComputerDispatcherError("target_not_found", "missing");
+          return undefined;
+        },
+      }),
+      governance: createDefaultComputerGovernance(),
+      generateSessionId: () => "cs_1",
+      now: () => t,
+    });
+    await manager.openSession("mot_1");
+    t = 1010;
+    await manager.executeAction("cs_1", SCREENSHOT_ACTION); // success
+    t = 1050;
+    await manager.executeAction("cs_1", CLICK_ACTION); // success
+    t = 1200;
+    await manager.executeAction("cs_1", CLICK_ACTION); // failure (target_not_found)
+    t = 1300;
+    await manager.executeAction("cs_1", CLICK_ACTION); // failure
+    const summary = await manager.summarize("cs_1", makeSummarizeDeps());
+    if (summary == null) throw new Error("expected summary");
+    expect(summary.action_count).toBe(4);
+    expect(summary.outcomes_summary).toEqual({ success: 2, failure: 2 });
+    expect(summary.failure_breakdown).toEqual({ target_not_found: 2 });
+    expect(summary.actions_hash).toBe("h4");
+  });
+
+  it("breaks failures down by reason (multiple distinct reasons)", async () => {
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({
+        async execute() {
+          throw new ComputerDispatcherError("target_obscured", "covered");
+        },
+      }),
+      governance: {
+        // First call denies; subsequent calls allow so dispatcher fires.
+        classify: vi
+          .fn<ComputerGovernanceClassifier["classify"]>()
+          .mockResolvedValueOnce("deny")
+          .mockResolvedValue("allow"),
+      },
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    await manager.executeAction("cs_1", CLICK_ACTION); // policy_denied
+    await manager.executeAction("cs_1", CLICK_ACTION); // target_obscured
+    await manager.executeAction("cs_1", CLICK_ACTION); // target_obscured
+    const summary = await manager.summarize("cs_1", makeSummarizeDeps());
+    if (summary == null) throw new Error("expected summary");
+    expect(summary.outcomes_summary).toEqual({ success: 0, failure: 3 });
+    expect(summary.failure_breakdown).toEqual({
+      policy_denied: 1,
+      target_obscured: 2,
+    });
+  });
+
+  it("halt() stamps was_halted on every active session, sticky across resume", async () => {
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher(),
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    let summary = await manager.summarize("cs_1", makeSummarizeDeps());
+    expect(summary?.was_halted).toBe(false);
+    manager.halt();
+    summary = await manager.summarize("cs_1", makeSummarizeDeps());
+    expect(summary?.was_halted).toBe(true);
+    manager.resume();
+    summary = await manager.summarize("cs_1", makeSummarizeDeps());
+    // Stickiness — receipt commits to "user paused at least once."
+    expect(summary?.was_halted).toBe(true);
+  });
+
+  it("max_sensitivity lifts to 'financial' when classifier strips bytes (inferred floor)", async () => {
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({
+        async execute() {
+          return { kind: "screenshot", artifact_id: "a", bytes_base64: "x" };
+        },
+      }),
+      governance: {
+        classify: async () => "allow",
+        async classifyObservation() {
+          return { applied: true, projection_kind: "redacted", strip_bytes: true };
+        },
+      },
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    await manager.executeAction("cs_1", SCREENSHOT_ACTION);
+    const summary = await manager.summarize("cs_1", makeSummarizeDeps());
+    expect(summary?.max_sensitivity).toBe("financial");
+  });
+
+  it("max_sensitivity uses classifier's explicit sensitivity_level when supplied", async () => {
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({
+        async execute() {
+          return { kind: "screenshot" };
+        },
+      }),
+      governance: {
+        classify: async () => "allow",
+        async classifyObservation() {
+          return { applied: true, projection_kind: "raw", sensitivity_level: "secret" };
+        },
+      },
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    await manager.executeAction("cs_1", SCREENSHOT_ACTION);
+    const summary = await manager.summarize("cs_1", makeSummarizeDeps());
+    expect(summary?.max_sensitivity).toBe("secret");
+  });
+
+  it("max_sensitivity is the high-water mark across the session (never decays)", async () => {
+    let observed = "personal";
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({
+        async execute() {
+          return { kind: "screenshot" };
+        },
+      }),
+      governance: {
+        classify: async () => "allow",
+        async classifyObservation() {
+          return { applied: true, projection_kind: "raw", sensitivity_level: observed };
+        },
+      },
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    await manager.executeAction("cs_1", SCREENSHOT_ACTION);
+    observed = "financial";
+    await manager.executeAction("cs_1", SCREENSHOT_ACTION);
+    observed = "personal"; // lower — must NOT pull max_sensitivity down
+    await manager.executeAction("cs_1", SCREENSHOT_ACTION);
+    const summary = await manager.summarize("cs_1", makeSummarizeDeps());
+    expect(summary?.max_sensitivity).toBe("financial");
+  });
+
+  it("works on a closed session via the post-close retention buffer", async () => {
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher(),
+      generateSessionId: () => "cs_1",
+      now: () => 1_000,
+    });
+    await manager.openSession("mot_1");
+    await manager.executeAction("cs_1", CLICK_ACTION);
+    await manager.closeSession("cs_1", "user_closed");
+    expect(manager.activeSessionIds()).toEqual([]);
+    const summary = await manager.summarize("cs_1", makeSummarizeDeps());
+    expect(summary).not.toBeNull();
+    if (summary == null) return;
+    expect(summary.close_reason).toBe("user_closed");
+    expect(summary.action_count).toBe(1);
+    expect(summary.closed_at).toBe(1_000);
+  });
+
+  it("hashActions receives the per-action ledger in dispatch order", async () => {
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher(),
+      governance: createDefaultComputerGovernance(),
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    await manager.executeAction("cs_1", SCREENSHOT_ACTION);
+    await manager.executeAction("cs_1", CLICK_ACTION);
+    let captured: ReadonlyArray<unknown> | null = null;
+    await manager.summarize("cs_1", {
+      generateReceiptId: () => "csr_1",
+      embodimentMode: "virtual_browser",
+      hashActions: async (actions) => {
+        captured = [...actions];
+        return "h";
+      },
+    });
+    expect(captured).not.toBeNull();
+    expect(captured).toHaveLength(2);
+    if (captured) {
+      const [a, b] = captured as Array<{ kind: string; outcome: string }>;
+      expect(a.kind).toBe("screenshot");
+      expect(b.kind).toBe("click");
+      expect(a.outcome).toBe("success");
+      expect(b.outcome).toBe("success");
+    }
+  });
+
+  it("records halt-rejected actions in the ledger as failure/user_preempted", async () => {
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher(),
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    manager.halt();
+    await manager.executeAction("cs_1", CLICK_ACTION);
+    await manager.executeAction("cs_1", CLICK_ACTION);
+    const summary = await manager.summarize("cs_1", makeSummarizeDeps());
+    expect(summary?.action_count).toBe(2);
+    expect(summary?.outcomes_summary).toEqual({ success: 0, failure: 2 });
+    expect(summary?.failure_breakdown).toEqual({ user_preempted: 2 });
+    expect(summary?.was_halted).toBe(true);
+  });
+});

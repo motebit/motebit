@@ -404,3 +404,146 @@ export const COMPUTER_FAILURE_REASONS = [
 
 /** @alpha */
 export type ComputerFailureReason = (typeof COMPUTER_FAILURE_REASONS)[number];
+
+// ── Session-summary receipt (v1.5) ───────────────────────────────────
+//
+// Closes the asymmetry where `ExecutionReceipt` and `ToolInvocationReceipt`
+// commit to AI-loop work cryptographically but computer-use sessions
+// emit only `ComputerSessionOpened` / `ComputerSessionClosed` lifecycle
+// events. After v1.5 every session crystallizes at close into one
+// signed `ComputerSessionReceipt` — counts, sensitivity envelope,
+// approval / halt outcomes, and a SHA-256 over the canonical
+// per-action structural roll-up. A verifier with the signer's public
+// key can prove the session existed, ran exactly N actions in this
+// shape, and produced this outcome distribution, without needing the
+// raw observation bytes (which may be sensitive) or the relay.
+//
+// Same tactical pattern as `ToolInvocationReceipt`: structural facts
+// only, hash-binds to detail held elsewhere, JCS canonicalization,
+// Ed25519 under the canonical motebit suite. Sign / verify helpers
+// live in `@motebit/crypto`'s `artifacts.ts` (sibling of
+// `signToolInvocationReceipt`).
+
+/**
+ * Per-action structural roll-up entry. The runtime appends one of these
+ * to the in-session log on every `executeAction` call, regardless of
+ * outcome. The canonical JSON of the array (in dispatch order) is
+ * hashed into `ComputerSessionReceipt.actions_hash` at session close.
+ *
+ * Carries kind + timing + outcome only — never targets, args, screenshot
+ * bytes, OCR text, or any payload that could leak content. The
+ * `failure_reason` is present iff `outcome === "failure"`.
+ *
+ * Why a separate type rather than reusing `ComputerActionRequest`:
+ * the request type carries action-specific payloads (target points,
+ * type strings, drag deltas). The receipt commits to *structure*, not
+ * *intent* — the per-action ToolInvocationReceipt already commits to
+ * the args via `args_hash`. Splitting the two keeps the session
+ * receipt's privacy invariant (no leak surface) compositional with
+ * the per-action receipt's audit invariant.
+ * @alpha
+ */
+export interface ComputerSessionActionRecord {
+  readonly kind: ComputerActionKind;
+  readonly started_at: number;
+  readonly completed_at: number;
+  readonly outcome: "success" | "failure";
+  readonly failure_reason?: ComputerFailureReason;
+}
+
+/**
+ * Body of a `ComputerSessionReceipt` *before* it is signed. The signer
+ * stamps `suite` and `signature`. Embedded as the input shape of the
+ * runtime's session summarizer; the signer (`@motebit/crypto`'s
+ * `signComputerSessionReceipt`) consumes this and emits a
+ * `ComputerSessionReceipt`.
+ * @alpha
+ */
+export interface SignableComputerSessionReceipt {
+  readonly receipt_id: string;
+  readonly session_id: string;
+  readonly motebit_id: string;
+  readonly public_key?: string;
+  /**
+   * Embodiment mode the session ran under (`"virtual_browser"`,
+   * `"desktop_drive"`, etc.). Free-typed string here for the same
+   * reason `ToolDefinition.embodimentMode` is — the canonical
+   * `EmbodimentMode` union lives in `@motebit/render-engine` and
+   * promoting it into the protocol layer is a separate slice.
+   * Production callers always pass a member of `EMBODIMENT_MODES`;
+   * verifiers should treat unknown strings as opaque-but-valid.
+   */
+  readonly embodiment_mode: string;
+  readonly display_width: number;
+  readonly display_height: number;
+  readonly scaling_factor: number;
+  readonly opened_at: number;
+  readonly closed_at: number;
+  /** Free-text closure code from `ComputerSessionClosed.reason`. */
+  readonly close_reason?: string;
+  /** Total actions dispatched during the session. */
+  readonly action_count: number;
+  /** Action outcome counts. `success + failure === action_count`. */
+  readonly outcomes_summary: {
+    readonly success: number;
+    readonly failure: number;
+  };
+  /**
+   * Per-failure-reason counts. Closed key set
+   * (`ComputerFailureReason`); absent keys mean zero. Sum of values
+   * equals `outcomes_summary.failure`.
+   */
+  readonly failure_breakdown: { readonly [K in ComputerFailureReason]?: number };
+  /**
+   * True if `ComputerSessionManager.halt()` fired during this session
+   * (spec §3.3 user-floor primitive). A halted session that resumed
+   * and continued still has `was_halted: true` — the flag commits to
+   * "the user paused at least once," not to terminal state.
+   */
+  readonly was_halted: boolean;
+  /**
+   * Highest sensitivity tier observed across all action observations
+   * during the session. Closed `SensitivityLevel` union by
+   * convention — encoded as the string value (e.g. `"financial"`).
+   * The runtime's observation classifier sets this; absence implies
+   * `"none"` (no observation rose above the floor).
+   */
+  readonly max_sensitivity: string;
+  /**
+   * SHA-256 hex digest of JCS-canonicalized
+   * `ReadonlyArray<ComputerSessionActionRecord>` in dispatch order.
+   * Verifiers with the per-action records recompute and match;
+   * verifiers without the records still get the signature's commit
+   * to the digest itself.
+   */
+  readonly actions_hash: string;
+}
+
+/**
+ * Signed proof that a computer-use session ran with this exact
+ * shape. Sibling of `ExecutionReceipt` and `ToolInvocationReceipt`.
+ *
+ *   - Self-verifiable: a third party with the signer's public key
+ *     can verify without contacting any relay.
+ *   - Structural-only: never carries observation bytes, OCR text,
+ *     action targets, or any content that could leak. The
+ *     `actions_hash` binds to a roll-up; per-action
+ *     `ToolInvocationReceipt`s carry the args/result hashes.
+ *   - Issued at session close. The runtime emits one per
+ *     `closeSession()` call (including idempotent replays of an
+ *     already-closed session).
+ *   - Composes with delegation: a session whose outer task was
+ *     delegated produces a `ComputerSessionReceipt` AND a
+ *     `DelegationReceipt`. Verifiers can chain the two by
+ *     `motebit_id` + timeframe.
+ * @alpha
+ */
+export interface ComputerSessionReceipt extends SignableComputerSessionReceipt {
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"`
+   * today. Widening requires a registry change in `SuiteId` + a new
+   * dispatch arm in `@motebit/crypto`, not a wire-format break.
+   */
+  readonly suite: "motebit-jcs-ed25519-b64-v1";
+  readonly signature: string;
+}
