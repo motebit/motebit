@@ -38,9 +38,12 @@ import {
 import { createDefaultComputerGovernance } from "@motebit/policy-invariants";
 import type {
   ComputerAction,
+  ComputerSessionActionRecord,
   ComputerSessionOpened,
   ComputerSessionClosed,
+  ComputerSessionReceipt,
   EventStoreAdapter,
+  SignableComputerSessionReceipt,
 } from "@motebit/sdk";
 import { EventType } from "@motebit/sdk";
 
@@ -83,6 +86,17 @@ export interface RegisterComputerToolOptions {
    * verifier story.
    */
   events?: EventStoreAdapter;
+  /**
+   * v1.5 — sign a session-summary receipt body. Wired by the app to
+   * `runtime.signComputerSessionReceiptBody`. Sibling of the web
+   * surface's option of the same name; see
+   * `apps/web/src/computer-tool.ts` for the rationale.
+   */
+  signSessionReceipt?: (
+    body: SignableComputerSessionReceipt,
+  ) => Promise<ComputerSessionReceipt | null>;
+  /** v1.5 — hash the per-action structural roll-up. */
+  hashSessionActions?: (actions: ReadonlyArray<ComputerSessionActionRecord>) => Promise<string>;
 }
 
 /**
@@ -119,7 +133,7 @@ export function registerComputerTool(
    */
   async function emit(
     eventType: EventType,
-    payload: ComputerSessionOpened | ComputerSessionClosed,
+    payload: ComputerSessionOpened | ComputerSessionClosed | ComputerSessionReceipt,
   ): Promise<void> {
     if (!opts.events) return;
     try {
@@ -138,6 +152,34 @@ export function registerComputerTool(
       }
     } catch {
       // Event sink faults are non-fatal — the AI loop must keep working.
+    }
+  }
+
+  /**
+   * v1.5 — close + emit the close-event + (when wired) emit a signed
+   * `ComputerSessionSummarized` receipt. Sibling of the web surface's
+   * `closeAndEmit` in `apps/web/src/computer-tool.ts`. Keep both
+   * close paths centralized so every audit emission goes through the
+   * same shape.
+   */
+  async function closeAndEmit(sessionId: string, reason: string): Promise<void> {
+    const closedEvent = await sessionManager.closeSession(sessionId, reason);
+    await emit(EventType.ComputerSessionClosed, closedEvent);
+    if (!opts.signSessionReceipt) return;
+    try {
+      const hashActions = opts.hashSessionActions ?? (async () => "0".repeat(64));
+      const body = await sessionManager.summarize(sessionId, {
+        generateReceiptId: () => `csr_${crypto.randomUUID()}`,
+        embodimentMode: "desktop_drive",
+        hashActions,
+      });
+      if (!body) return;
+      const signed = await opts.signSessionReceipt(body);
+      if (signed) {
+        await emit(EventType.ComputerSessionSummarized, signed);
+      }
+    } catch {
+      // Receipt path is fail-soft — the close already landed.
     }
   }
 
@@ -228,8 +270,7 @@ export function registerComputerTool(
 
   async function dispose(): Promise<void> {
     if (defaultSession) {
-      const event = await sessionManager.closeSession(defaultSession.session_id, "desktop_dispose");
-      await emit(EventType.ComputerSessionClosed, event);
+      await closeAndEmit(defaultSession.session_id, "desktop_dispose");
       defaultSession = null;
     }
     sessionManager.dispose();

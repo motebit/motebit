@@ -301,6 +301,13 @@ export enum EventType {
   // via the session_id → observation-action sequence binding.
   ComputerSessionOpened = "computer_session_opened",
   ComputerSessionClosed = "computer_session_closed",
+  // v1.5 — session-summary receipt. Emitted at closeSession time after
+  // the structural roll-up has been signed under
+  // `motebit-jcs-ed25519-b64-v1`. Payload is the signed
+  // `ComputerSessionReceipt`. Verifiers replaying the audit log gain
+  // a single self-verifiable artifact per session, in addition to the
+  // open/close lifecycle pair already on the trail.
+  ComputerSessionSummarized = "computer_session_summarized",
   // Skill load — per-skill audit entry emitted by the runtime when the
   // SkillSelector pulls a skill body into the system context. One event
   // per selected skill, keyed to the run that triggered the load. See

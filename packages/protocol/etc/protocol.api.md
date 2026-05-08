@@ -1255,6 +1255,8 @@ export enum EventType {
     // (undocumented)
     ComputerSessionOpened = "computer_session_opened",
     // (undocumented)
+    ComputerSessionSummarized = "computer_session_summarized",
+    // (undocumented)
     ConsolidationCycleRun = "consolidation_cycle_run",
     // (undocumented)
     ConsolidationReceiptsAnchored = "consolidation_receipts_anchored",

@@ -117,6 +117,12 @@ export function registerDesktopTools(
     computer = registerComputerTool(registry, {
       invoke,
       motebitId: runtime.motebitId,
+      // v1.5 — wire the runtime's signing + hash helpers so close
+      // emits a signed `ComputerSessionSummarized` receipt. Sibling
+      // of the web surface's wiring in apps/web/src/web-app.ts.
+      events: runtime.events,
+      signSessionReceipt: (body) => runtime.signComputerSessionReceiptBody(body),
+      hashSessionActions: (actions) => runtime.hashComputerSessionActions(actions),
     });
   }
 

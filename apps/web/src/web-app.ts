@@ -669,6 +669,13 @@ export class WebApp {
         motebitId: runtime.motebitId,
         approvalFlow: createWebComputerApprovalFlow(),
         events: runtime.events,
+        // v1.5 — wire the runtime's signing path so closeSession also
+        // emits a signed `ComputerSessionSummarized` receipt. Sibling
+        // of the desktop wiring in apps/desktop/src/index.ts. The
+        // runtime owns the signing keys; the registration owns the
+        // session manager and audit-event sink.
+        signSessionReceipt: (body) => runtime.signComputerSessionReceiptBody(body),
+        hashSessionActions: (actions) => runtime.hashComputerSessionActions(actions),
       });
     }
 

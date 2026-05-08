@@ -50,6 +50,7 @@ import type {
   ComputerAction,
   ComputerSessionClosed,
   ComputerSessionOpened,
+  ComputerSessionReceipt,
   EventStoreAdapter,
 } from "@motebit/sdk";
 import { EventType } from "@motebit/sdk";
@@ -101,6 +102,28 @@ export interface RegisterWebComputerToolOptions {
    * session_id → observation-action binding.
    */
   readonly events?: EventStoreAdapter;
+  /**
+   * v1.5 — sign a session-summary receipt body. Wired by the app to
+   * `runtime.signComputerSessionReceiptBody`. When supplied, the
+   * registration emits a `ComputerSessionSummarized` audit event
+   * after each `closeSession` returns. Without it, lifecycle events
+   * still fire but no signed receipt lands. Optional precisely
+   * because the runtime may not have a signing key yet (test paths,
+   * pre-bootstrap).
+   */
+  readonly signSessionReceipt?: (
+    body: import("@motebit/sdk").SignableComputerSessionReceipt,
+  ) => Promise<ComputerSessionReceipt | null>;
+  /**
+   * v1.5 — hash the per-action structural roll-up. Wired to
+   * `runtime.hashComputerSessionActions`. When supplied alongside
+   * `signSessionReceipt`, the receipt's `actions_hash` commits to
+   * the per-action ledger; without it, signing falls back to a
+   * digest of the empty array.
+   */
+  readonly hashSessionActions?: (
+    actions: ReadonlyArray<import("@motebit/sdk").ComputerSessionActionRecord>,
+  ) => Promise<string>;
 }
 
 /**
@@ -143,7 +166,7 @@ export function registerWebComputerTool(
    */
   async function emit(
     eventType: EventType,
-    payload: ComputerSessionOpened | ComputerSessionClosed,
+    payload: ComputerSessionOpened | ComputerSessionClosed | ComputerSessionReceipt,
   ): Promise<void> {
     if (!opts.events) return;
     try {
@@ -162,6 +185,43 @@ export function registerWebComputerTool(
       }
     } catch {
       // Event sink faults are non-fatal — the AI loop must keep working.
+    }
+  }
+
+  /**
+   * v1.5 — close the session, emit `ComputerSessionClosed`, and (when
+   * a signing path is wired) also emit `ComputerSessionSummarized`
+   * with the signed `ComputerSessionReceipt`. Centralized so every
+   * close path goes through the same audit emission. Best-effort
+   * isolation: a signing failure must not prevent the close-event
+   * append, and an event-sink failure must not prevent the close
+   * itself.
+   */
+  async function closeAndEmit(sessionId: string, reason: string): Promise<void> {
+    const closedEvent = await sessionManager.closeSession(sessionId, reason);
+    await emit(EventType.ComputerSessionClosed, closedEvent);
+    if (!opts.signSessionReceipt) return;
+    try {
+      const hashActions =
+        opts.hashSessionActions ??
+        (async () => {
+          // Fail-permissive fallback: an empty digest still produces
+          // a verifiable signature. Apps SHOULD wire the real hash so
+          // the receipt commits to the actual roll-up.
+          return "0".repeat(64);
+        });
+      const body = await sessionManager.summarize(sessionId, {
+        generateReceiptId: () => `csr_${crypto.randomUUID()}`,
+        embodimentMode: "virtual_browser",
+        hashActions,
+      });
+      if (!body) return;
+      const signed = await opts.signSessionReceipt(body);
+      if (signed) {
+        await emit(EventType.ComputerSessionSummarized, signed);
+      }
+    } catch {
+      // Receipt path is fail-soft — the close already landed.
     }
   }
 
@@ -241,8 +301,7 @@ export function registerWebComputerTool(
 
   async function dispose(): Promise<void> {
     if (defaultSession) {
-      const event = await sessionManager.closeSession(defaultSession.session_id, "web_dispose");
-      await emit(EventType.ComputerSessionClosed, event);
+      await closeAndEmit(defaultSession.session_id, "web_dispose");
       defaultSession = null;
     }
     sessionManager.dispose();

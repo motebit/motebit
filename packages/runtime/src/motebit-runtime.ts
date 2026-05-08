@@ -27,7 +27,17 @@ import type {
   MotebitId,
   DeletionCertificate,
 } from "@motebit/sdk";
-import { signToolInvocationReceipt, hashToolPayload } from "@motebit/crypto";
+import {
+  signToolInvocationReceipt,
+  hashToolPayload,
+  signComputerSessionReceipt,
+  hashComputerSessionActions,
+} from "@motebit/crypto";
+import type {
+  ComputerSessionReceipt,
+  SignableComputerSessionReceipt,
+  ComputerSessionActionRecord,
+} from "@motebit/sdk";
 import { EventType, AgentTrustLevel, SensitivityLevel, rankSensitivity } from "@motebit/sdk";
 import type {
   ProviderMode,
@@ -983,6 +993,46 @@ export class MotebitRuntime {
   /** Access the tool registry to register additional tools at runtime. */
   getToolRegistry(): SimpleToolRegistry {
     return this.toolRegistry;
+  }
+
+  /**
+   * v1.5 — sign a `ComputerSessionReceipt` body with the runtime's
+   * identity key. Apps construct the body via
+   * `sessionManager.summarize(...)` and pass it here; the runtime
+   * stamps `suite` + `signature` and embeds the public key (hex) so
+   * the receipt is independently verifiable. Returns `null` when the
+   * runtime has no signing key (test / non-Tauri / pre-bootstrap),
+   * matching the fail-closed contract used by the tool-invocation
+   * receipt path: no key → no receipt.
+   *
+   * Why this lives on the runtime: signing is the runtime's
+   * responsibility (it holds `_signingKeys`); apps construct the
+   * body but never see private keys. Same separation as
+   * `signToolInvocationReceipt` — the runtime is the one signing
+   * site for every artifact bound to the motebit's identity.
+   */
+  async signComputerSessionReceiptBody(
+    body: Omit<SignableComputerSessionReceipt, "public_key">,
+  ): Promise<ComputerSessionReceipt | null> {
+    if (!this._signingKeys || this._signingKeysErased) return null;
+    return signComputerSessionReceipt(
+      body,
+      this._signingKeys.privateKey,
+      this._signingKeys.publicKey,
+    ) as Promise<ComputerSessionReceipt>;
+  }
+
+  /**
+   * Hash a per-action structural roll-up (forwards to
+   * `@motebit/crypto`'s `hashComputerSessionActions`). Re-exported on
+   * the runtime so apps don't need to add a direct `@motebit/crypto`
+   * dependency just for the digest helper — the runtime is already a
+   * crypto consumer for the signing path.
+   */
+  async hashComputerSessionActions(
+    actions: ReadonlyArray<ComputerSessionActionRecord>,
+  ): Promise<string> {
+    return hashComputerSessionActions(actions);
   }
 
   /**

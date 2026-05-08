@@ -134,4 +134,114 @@ describe("registerWebComputerTool", () => {
     await reg!.dispose();
     expect(calls.dispose).toBe(1);
   });
+
+  // -------------------------------------------------------------------
+  // v1.5 — close emits a signed `ComputerSessionSummarized` event when
+  // the registration has the runtime's signing path wired.
+  // -------------------------------------------------------------------
+
+  it("emits ComputerSessionSummarized at dispose when signing is wired (v1.5)", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const events: Array<{ event_type: string; payload: Record<string, unknown> }> = [];
+    const eventsAdapter = {
+      append: async (entry: { event_type: string; payload: Record<string, unknown> }) => {
+        events.push({ event_type: entry.event_type, payload: entry.payload });
+      },
+    } as unknown as Parameters<typeof registerWebComputerTool>[1]["events"];
+
+    const signSessionReceipt = async (body: {
+      session_id: string;
+      action_count: number;
+      embodiment_mode: string;
+    }) => ({
+      ...body,
+      receipt_id: "csr_test",
+      suite: "motebit-jcs-ed25519-b64-v1" as const,
+      signature: "fake_sig_b64url",
+      public_key: "f".repeat(64),
+    });
+
+    const hashSessionActions = async () => "h".repeat(64);
+
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      events: eventsAdapter,
+      signSessionReceipt: signSessionReceipt as never,
+      hashSessionActions,
+    });
+
+    await registry.execute("computer", { action: { kind: "screenshot" } });
+    await registry.execute("computer", { action: { kind: "screenshot" } });
+    await reg!.dispose();
+
+    const types = events.map((e) => e.event_type);
+    expect(types).toContain("computer_session_opened");
+    expect(types).toContain("computer_session_closed");
+    expect(types).toContain("computer_session_summarized");
+
+    const summarized = events.find((e) => e.event_type === "computer_session_summarized");
+    expect(summarized).toBeDefined();
+    expect(summarized!.payload.embodiment_mode).toBe("virtual_browser");
+    expect(summarized!.payload.action_count).toBe(2);
+    expect(summarized!.payload.signature).toBe("fake_sig_b64url");
+  });
+
+  it("skips ComputerSessionSummarized when signSessionReceipt returns null (no signing key)", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const events: Array<{ event_type: string }> = [];
+    const eventsAdapter = {
+      append: async (entry: { event_type: string }) => {
+        events.push({ event_type: entry.event_type });
+      },
+    } as unknown as Parameters<typeof registerWebComputerTool>[1]["events"];
+
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      events: eventsAdapter,
+      // Null return mimics a runtime with no signing keys.
+      signSessionReceipt: async () => null,
+    });
+
+    await registry.execute("computer", { action: { kind: "screenshot" } });
+    await reg!.dispose();
+
+    const types = events.map((e) => e.event_type);
+    expect(types).toContain("computer_session_closed");
+    expect(types).not.toContain("computer_session_summarized");
+  });
+
+  it("does NOT emit ComputerSessionSummarized when signSessionReceipt is unwired", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const events: Array<{ event_type: string }> = [];
+    const eventsAdapter = {
+      append: async (entry: { event_type: string }) => {
+        events.push({ event_type: entry.event_type });
+      },
+    } as unknown as Parameters<typeof registerWebComputerTool>[1]["events"];
+
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      events: eventsAdapter,
+      // signSessionReceipt deliberately omitted.
+    });
+
+    await registry.execute("computer", { action: { kind: "screenshot" } });
+    await reg!.dispose();
+
+    const types = events.map((e) => e.event_type);
+    expect(types).toContain("computer_session_closed");
+    expect(types).not.toContain("computer_session_summarized");
+  });
 });

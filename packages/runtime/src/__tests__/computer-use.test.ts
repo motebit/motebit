@@ -1307,11 +1307,13 @@ describe("v1.5 — summarize() session-summary roll-up", () => {
     expect(captured).not.toBeNull();
     expect(captured).toHaveLength(2);
     if (captured) {
-      const [a, b] = captured as Array<{ kind: string; outcome: string }>;
-      expect(a.kind).toBe("screenshot");
-      expect(b.kind).toBe("click");
-      expect(a.outcome).toBe("success");
-      expect(b.outcome).toBe("success");
+      const arr = captured as Array<{ kind: string; outcome: string }>;
+      const a = arr[0];
+      const b = arr[1];
+      expect(a?.kind).toBe("screenshot");
+      expect(b?.kind).toBe("click");
+      expect(a?.outcome).toBe("success");
+      expect(b?.outcome).toBe("success");
     }
   });
 

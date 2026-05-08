@@ -1,7 +1,6 @@
 ---
 "@motebit/protocol": minor
 "@motebit/crypto": minor
-"@motebit/runtime": minor
 ---
 
 v1.5 — `ComputerSessionReceipt` closes the asymmetry where delegation
