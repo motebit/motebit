@@ -210,6 +210,29 @@ export type UserInputEvent =
   | {
       readonly kind: "paste";
       readonly text: string;
+    }
+  /**
+   * Mouse wheel scroll. Logical-pixel `(x, y)` is the cursor anchor
+   * for the scroll (Playwright requires the cursor over the
+   * scrollable element); `(dx, dy)` are the scroll deltas in CSS
+   * pixels matching the browser `WheelEvent.deltaX`/`deltaY` axis
+   * convention (positive `dy` scrolls down, positive `dx` scrolls
+   * right). `event_count` tracks how many native wheel events the
+   * capture surface coalesced into this one — kept in the wire so
+   * the audit can record interaction density without inflating the
+   * log to one entry per native event.
+   *
+   * Slice 2c-batching scope: the capture surface MUST coalesce
+   * native wheel events at ≤60Hz (one wire event per ~16ms window).
+   * Server-side: `page.mouse.move(x, y) + page.mouse.wheel(dx, dy)`.
+   */
+  | {
+      readonly kind: "wheel";
+      readonly x: number;
+      readonly y: number;
+      readonly dx: number;
+      readonly dy: number;
+      readonly event_count: number;
     };
 
 /**
@@ -292,6 +315,23 @@ export type UserInputForwardedDetail =
       readonly length: number;
       readonly line_count: number;
       readonly looks_like_url: boolean;
+    }
+  | {
+      readonly kind: "wheel";
+      /** Normalized [0, 1] x of the wheel anchor against the rendered screencast rect. */
+      readonly x_norm: number;
+      /** Normalized [0, 1] y of the wheel anchor. */
+      readonly y_norm: number;
+      /**
+       * Scroll deltas in CSS pixels — wire-format passthrough. Wheel
+       * deltas don't carry sensitivity (they're cursor-anchored
+       * scroll amounts, not text); logging them is not a privacy
+       * concern.
+       */
+      readonly dx: number;
+      readonly dy: number;
+      /** Native wheel events coalesced into this one (interaction density). */
+      readonly event_count: number;
     };
 
 /**

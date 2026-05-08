@@ -1627,7 +1627,7 @@ export class WebApp {
   private async emitUserInputAudit(payload: UserInputForwardedPayload): Promise<void> {
     if (!this.runtime) return;
     const events = this.runtime.events;
-    if (!events) return;
+    if (events == null) return;
     try {
       const entry = {
         event_id: crypto.randomUUID(),
@@ -1637,7 +1637,7 @@ export class WebApp {
         payload: payload as unknown as Record<string, unknown>,
         tombstoned: false,
       };
-      if (events.appendWithClock) {
+      if (typeof events.appendWithClock === "function") {
         await events.appendWithClock(entry);
       } else {
         await events.append({ ...entry, version_clock: 0 });

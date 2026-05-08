@@ -161,6 +161,22 @@ export function buildUserInputAuditDetail(
         kind: "paste",
         ...pasteAuditDetail(event.text),
       };
+    case "wheel": {
+      const safeWidth = displayWidth > 0 ? displayWidth : 1;
+      const safeHeight = displayHeight > 0 ? displayHeight : 1;
+      // Wheel deltas pass through unchanged — they're CSS-pixel
+      // scroll amounts, not sensitivity-bearing content. Anchor
+      // coords normalize like click for the same robustness reason
+      // (viewport resize across replays).
+      return {
+        kind: "wheel",
+        x_norm: event.x / safeWidth,
+        y_norm: event.y / safeHeight,
+        dx: event.dx,
+        dy: event.dy,
+        event_count: event.event_count,
+      };
+    }
   }
 }
 

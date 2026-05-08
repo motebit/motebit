@@ -261,6 +261,148 @@ describe("attachInputCapture — keyboard", () => {
   });
 });
 
+// ── attachInputCapture — wheel (Slice 2c-batching) ──────────────────────
+
+describe("attachInputCapture — wheel coalescing", () => {
+  it("forwards a single wheel event after the coalesce window flushes", async () => {
+    const img = makeImg(640, 400);
+    const { forward, events } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+    img.focus();
+
+    const evt = new WheelEvent("wheel", {
+      clientX: 320,
+      clientY: 200,
+      deltaX: 0,
+      deltaY: 100,
+    });
+    img.dispatchEvent(evt);
+
+    // Before flush — the wire is empty (events accumulating in the window).
+    expect(events).toHaveLength(0);
+
+    // Flush window — 16ms is the configured coalesce window.
+    await new Promise((resolve) => setTimeout(resolve, 32));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      kind: "wheel",
+      x: 640,
+      y: 400,
+      dx: 0,
+      dy: 100,
+      event_count: 1,
+    });
+  });
+
+  it("coalesces multiple wheels within the window into one event", async () => {
+    const img = makeImg(640, 400);
+    const { forward, events } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+    img.focus();
+
+    img.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 200, deltaY: 30 }));
+    img.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 200, deltaY: 40 }));
+    img.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 200, deltaY: 50 }));
+
+    await new Promise((resolve) => setTimeout(resolve, 32));
+
+    expect(events).toHaveLength(1);
+    const e = events[0];
+    expect(e?.kind).toBe("wheel");
+    if (e?.kind === "wheel") {
+      expect(e.dy).toBe(120); // 30 + 40 + 50
+      expect(e.event_count).toBe(3);
+    }
+  });
+
+  it("emits separate events across windows (sustained scroll splits correctly)", async () => {
+    const img = makeImg(640, 400);
+    const { forward, events } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+    img.focus();
+
+    img.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 200, deltaY: 50 }));
+    await new Promise((resolve) => setTimeout(resolve, 32));
+    img.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 200, deltaY: 80 }));
+    await new Promise((resolve) => setTimeout(resolve, 32));
+
+    expect(events).toHaveLength(2);
+    if (events[0]?.kind === "wheel") expect(events[0].dy).toBe(50);
+    if (events[1]?.kind === "wheel") expect(events[1].dy).toBe(80);
+  });
+
+  it("uses the LATEST cursor position when coalescing (mid-swipe drift honored)", async () => {
+    const img = makeImg(640, 400);
+    const { forward, events } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+    img.focus();
+
+    img.dispatchEvent(new WheelEvent("wheel", { clientX: 100, clientY: 100, deltaY: 30 }));
+    img.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 200, deltaY: 40 }));
+
+    await new Promise((resolve) => setTimeout(resolve, 32));
+
+    expect(events).toHaveLength(1);
+    if (events[0]?.kind === "wheel") {
+      // Latest cursor position (320, 200) → logical (640, 400).
+      expect(events[0].x).toBe(640);
+      expect(events[0].y).toBe(400);
+    }
+  });
+
+  it("does NOT capture wheel when the img is not focused", async () => {
+    const img = makeImg(640, 400);
+    const other = document.createElement("input");
+    document.body.appendChild(other);
+    const { forward, events } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+    other.focus();
+
+    img.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 200, deltaY: 100 }));
+    await new Promise((resolve) => setTimeout(resolve, 32));
+
+    expect(events).toHaveLength(0);
+  });
+
+  it("flushes pending wheel window on detach (fast drag-disable doesn't strand events)", async () => {
+    const img = makeImg(640, 400);
+    const { forward, events } = makeForward();
+    const detach = attachInputCapture({
+      img,
+      forwardEvent: forward,
+      fallbackWidth: 1280,
+      fallbackHeight: 800,
+    });
+    img.focus();
+
+    img.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 200, deltaY: 100 }));
+    // Detach BEFORE the window flushes — flush must happen on detach.
+    detach();
+
+    expect(events).toHaveLength(1);
+    if (events[0]?.kind === "wheel") expect(events[0].dy).toBe(100);
+  });
+
+  it("preserves negative deltas (upward / leftward scroll)", async () => {
+    const img = makeImg(640, 400);
+    const { forward, events } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+    img.focus();
+
+    img.dispatchEvent(
+      new WheelEvent("wheel", { clientX: 320, clientY: 200, deltaX: -50, deltaY: -100 }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 32));
+
+    expect(events).toHaveLength(1);
+    if (events[0]?.kind === "wheel") {
+      expect(events[0].dx).toBe(-50);
+      expect(events[0].dy).toBe(-100);
+    }
+  });
+});
+
 // ── attachInputCapture — paste ──────────────────────────────────────────
 
 describe("attachInputCapture — paste", () => {

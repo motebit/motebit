@@ -508,6 +508,51 @@ describe("browser-sandbox routes", () => {
       expect(body.error.reason).toBe("session_closed");
     });
 
+    it("forwards a wheel event via mouse.move + mouse.wheel (coalesced delta)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      const moveSpy = vi.fn(async () => undefined);
+      const wheelSpy = vi.fn(async () => undefined);
+      (session.page as unknown as { mouse: { move: typeof moveSpy } }).mouse.move = moveSpy;
+      (session.page as unknown as { mouse: { wheel: typeof wheelSpy } }).mouse.wheel = wheelSpy;
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: { kind: "wheel", x: 640, y: 200, dx: 0, dy: 240, event_count: 4 },
+        }),
+      });
+      expect(res.status).toBe(204);
+      expect(moveSpy).toHaveBeenCalledWith(640, 200);
+      expect(wheelSpy).toHaveBeenCalledWith(0, 240);
+    });
+
+    it("wheel updates the session cursor position (mirrors scroll action)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+
+      await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: { kind: "wheel", x: 320, y: 400, dx: 0, dy: 50, event_count: 1 },
+        }),
+      });
+      expect(session.lastCursorX).toBe(320);
+      expect(session.lastCursorY).toBe(400);
+    });
+
     it("returns 501 + not_supported for malformed event body", async () => {
       const app = buildApp({ config: TEST_CONFIG, pool });
       const ensure = await app.request("/sessions/ensure", {

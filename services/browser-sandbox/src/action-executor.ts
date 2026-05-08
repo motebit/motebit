@@ -386,6 +386,19 @@ export async function executeUserInput(
       await session.page.keyboard.type(event.text);
       return;
     }
+    case "wheel": {
+      // Slice 2c-batching — coalesced wheel events. The capture
+      // surface samples native WheelEvents at ≤60Hz and sums dx/dy
+      // over the window; we receive ONE wire event per ~16ms even
+      // under sustained scrolling. Same Playwright primitive as
+      // motebit-side `scroll`: anchor the cursor, then dispatch the
+      // wheel delta.
+      await session.page.mouse.move(event.x, event.y);
+      await session.page.mouse.wheel(event.dx, event.dy);
+      session.lastCursorX = event.x;
+      session.lastCursorY = event.y;
+      return;
+    }
   }
 }
 

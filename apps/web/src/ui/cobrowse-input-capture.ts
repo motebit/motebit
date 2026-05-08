@@ -83,7 +83,10 @@ export interface AttachInputCaptureDeps {
  */
 export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
   const { img, forwardEvent, fallbackWidth, fallbackHeight } = deps;
-  const logger = deps.logger ?? { warn: (msg, ctx) => console.warn(msg, ctx) };
+  const logger = deps.logger ?? {
+    // eslint-disable-next-line no-console -- fail-soft default; real surfaces wire a logger
+    warn: (msg, ctx) => console.warn(msg, ctx),
+  };
 
   // Make the img focusable so it can receive keyboard events. Save
   // the prior value so detach restores faithfully (the slab item
@@ -154,6 +157,73 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
     });
   }
 
+  // ── Wheel capture (Slice 2c-batching) ───────────────────────────
+  //
+  // Native WheelEvents fire at 30-100Hz (trackpads at the high end);
+  // forwarding each one as a POST would saturate the wire. We
+  // coalesce in a 16ms window: collect deltas + cursor position,
+  // emit ONE wire event when the window flushes. Sustained scrolling
+  // resolves to ~60 wire events/sec — bounded.
+  //
+  // Coalescing scope: dx + dy sum together within the window. The
+  // anchor cursor position uses the LATEST native event in the
+  // window (so a trackpad swipe that drifts while scrolling lands
+  // its wheel at the user's actual cursor, not where they started).
+  // event_count rides along so the audit can record interaction
+  // density.
+  //
+  // Boundary: the wheel window is per-attach. Detach flushes any
+  // in-flight window so a quick drag-disable doesn't strand
+  // events.
+  let wheelAccum: { x: number; y: number; dx: number; dy: number; count: number } | null = null;
+  let wheelFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  const WHEEL_COALESCE_MS = 16;
+
+  function flushWheel(): void {
+    if (wheelFlushTimer != null) {
+      clearTimeout(wheelFlushTimer);
+      wheelFlushTimer = null;
+    }
+    if (!wheelAccum) return;
+    const accum = wheelAccum;
+    wheelAccum = null;
+    dispatch({
+      kind: "wheel",
+      x: accum.x,
+      y: accum.y,
+      dx: accum.dx,
+      dy: accum.dy,
+      event_count: accum.count,
+    });
+  }
+
+  function onWheel(e: WheelEvent): void {
+    // Only capture wheel when the slab is focused — otherwise we'd
+    // steal scroll from the page itself.
+    if (document.activeElement !== img) return;
+    // Suppress browser-default page scroll on the slab img. The
+    // wheel is heading to Chromium, not to scroll motebit.com.
+    e.preventDefault();
+    const coords = translateClick(img, e, fallbackWidth, fallbackHeight);
+    if (!coords) return; // out-of-bounds — defensive
+    if (wheelAccum) {
+      wheelAccum.x = coords.x;
+      wheelAccum.y = coords.y;
+      wheelAccum.dx += e.deltaX;
+      wheelAccum.dy += e.deltaY;
+      wheelAccum.count += 1;
+      return;
+    }
+    wheelAccum = {
+      x: coords.x,
+      y: coords.y,
+      dx: e.deltaX,
+      dy: e.deltaY,
+      count: 1,
+    };
+    wheelFlushTimer = setTimeout(flushWheel, WHEEL_COALESCE_MS);
+  }
+
   // ── Paste capture ──────────────────────────────────────────────
   function onPaste(e: ClipboardEvent): void {
     if (document.activeElement !== img) return;
@@ -167,6 +237,10 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
   }
 
   img.addEventListener("click", onClick);
+  // Wheel attaches on the img with `passive: false` so preventDefault
+  // can suppress the page-level scroll. Modern browsers default
+  // wheel listeners to passive — we need active.
+  img.addEventListener("wheel", onWheel, { passive: false });
   // Keydown attaches on document so we catch keys regardless of which
   // ancestor element the focus event reports — but we ALSO check
   // `document.activeElement === img` inside the handler, so the
@@ -178,7 +252,11 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
   return () => {
     if (detached) return;
     detached = true;
+    // Flush any pending wheel window so a fast drag-disable doesn't
+    // strand the user's last scroll delta.
+    flushWheel();
     img.removeEventListener("click", onClick);
+    img.removeEventListener("wheel", onWheel);
     document.removeEventListener("keydown", onKeydown, true);
     document.removeEventListener("paste", onPaste, true);
     // Restore pre-attach state.

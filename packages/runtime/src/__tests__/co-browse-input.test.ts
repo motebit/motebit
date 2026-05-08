@@ -214,6 +214,33 @@ describe("buildUserInputAuditDetail — wire → redacted detail", () => {
     expect(JSON.stringify(detail)).not.toContain('"key":"a"');
   });
 
+  it("wheel detail normalizes coords and passes deltas through unchanged", () => {
+    const detail = buildUserInputAuditDetail(
+      { kind: "wheel", x: 640, y: 200, dx: 0, dy: 120, event_count: 4 },
+      1280,
+      800,
+    );
+    expect(detail).toEqual({
+      kind: "wheel",
+      x_norm: 0.5,
+      y_norm: 0.25,
+      dx: 0,
+      dy: 120,
+      event_count: 4,
+    });
+  });
+
+  it("wheel detail preserves negative deltas (upward / leftward scroll)", () => {
+    const detail = buildUserInputAuditDetail(
+      { kind: "wheel", x: 0, y: 0, dx: -50, dy: -200, event_count: 1 },
+      1280,
+      800,
+    );
+    const wheelDetail = detail as Extract<UserInputForwardedDetail, { kind: "wheel" }>;
+    expect(wheelDetail.dx).toBe(-50);
+    expect(wheelDetail.dy).toBe(-200);
+  });
+
   it("paste detail collapses content to length/line_count/looks_like_url", () => {
     const detail = buildUserInputAuditDetail(
       { kind: "paste", text: "secret-password-123" },
@@ -519,6 +546,8 @@ describe("UserInputForwardedPayload — type surface", () => {
           return `${d.character_class}|${d.key_role}`;
         case "paste":
           return `${d.length}|${d.line_count}|${d.looks_like_url}`;
+        case "wheel":
+          return `${d.x_norm}|${d.y_norm}|${d.dx}|${d.dy}|${d.event_count}`;
       }
     };
     expect(typeof exhaust({ kind: "click", x_norm: 0, y_norm: 0, button: "left" })).toBe("string");

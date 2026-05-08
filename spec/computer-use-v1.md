@@ -356,10 +356,11 @@ Wire format for **user-driven** input forwarded into a co-browse session. Availa
 - **click** — pointer click at logical-pixel `(x, y)` against the cloud Chromium viewport. `button ∈ {"left", "right", "middle"}`. Same coordinate system as motebit-side `ComputerAction.click`.
 - **key** — keyboard press. `key` is the browser `KeyboardEvent.key` value (single character for printable input, named key for control keys, e.g. `"Enter"`, `"Backspace"`, `"ArrowUp"`). `modifiers` reports the four standard modifier states. Implementations route printable single-character `key` with no non-shift modifier through `page.keyboard.type(key)`; named keys and any non-shift modifier through `page.keyboard.press(combo)`.
 - **paste** — clipboard paste. The wire carries raw text; v1 implementations dispatch via `page.keyboard.type(text)` (per-character). A future slice MAY upgrade to CDP `Input.insertText` for true paste semantics.
+- **wheel** (Slice 2c-batching) — coalesced scroll. `(x, y)` is the cursor anchor (logical pixels); `(dx, dy)` are CSS-pixel scroll deltas matching `WheelEvent.deltaX`/`deltaY` (positive `dy` scrolls down, positive `dx` scrolls right). `event_count` reports how many native `WheelEvent`s the capture surface coalesced into this one. Server-side: `page.mouse.move(x, y) + page.mouse.wheel(dx, dy)`. **Capture surfaces MUST coalesce native wheel events at ≤60Hz** (one wire event per ~16ms window) — sustained scrolling at 100Hz native rate must NOT produce 100 wire events/sec.
 
-#### Discrete events only (Slice 2c scope)
+#### Discrete events + coalesced wheel (Slice 2c-batching scope)
 
-Wheel, drag, continuous pointermove, selection-drag, and file-drag are explicitly **out of v1**. POST-per-event cannot sustain 50+ events/sec at 30-100ms RTT; those event classes require batching/coalescing or a WebSocket-shaped substrate, deferred to a follow-up slice.
+Drag, continuous pointermove, selection-drag, and file-drag remain **out of v1**. Those classes need either burst-aggregated audit (one entry per drag rather than per frame) or a WebSocket-shaped substrate to sustain >60Hz, deferred to follow-up slices.
 
 #### Audit format (foundation law)
 
@@ -380,6 +381,7 @@ Per-kind audit detail:
 - **click** — `{ kind: "click", x_norm: float, y_norm: float, button: "left"\|"right"\|"middle" }`. Coordinates are normalized [0, 1] against the rendered screencast rect; raw logical pixels are NOT logged.
 - **key** — `{ kind: "key", character_class, key_role, modifiers }`. `character_class ∈ {"letter","digit","punct","whitespace","control","modifier","unknown"}`. `key_role ∈ {"enter","tab","escape","backspace","arrow","shortcut","printable","unknown"}`. Raw key value is NOT logged. Multi-char unrecognized key names (e.g. IME composition strings) MUST collapse to `character_class: "unknown"` rather than being classified by their first character.
 - **paste** — `{ kind: "paste", length: int, line_count: int, looks_like_url: bool }`. `looks_like_url` is `^https?://...` matching only. Content is NEVER logged.
+- **wheel** — `{ kind: "wheel", x_norm: float, y_norm: float, dx: int, dy: int, event_count: int }`. Anchor coords are normalized [0, 1] like clicks. Deltas pass through unchanged — wheel deltas are CSS-pixel scroll amounts, not sensitivity-bearing content; logging them is not a privacy concern. `event_count` records interaction density (how many native events were coalesced into this one).
 
 #### Sensitivity boundary — Slice 2c does NOT change policy
 
