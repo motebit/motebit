@@ -52,8 +52,11 @@ import type {
   ComputerSessionActionRecord,
   ComputerSessionClosed,
   ComputerSessionOpened,
+  ControlState,
   SignableComputerSessionReceipt,
 } from "@motebit/sdk";
+
+import type { CoBrowseControlMachine } from "./co-browse-control.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -341,6 +344,22 @@ export interface ComputerSessionManagerDeps {
   /** Injected for test determinism. */
   generateSessionId?: () => string;
   now?: () => number;
+  /**
+   * Co-browse Slice 1 — control-state gate. When provided,
+   * `executeAction` denies dispatch with `not_in_control` whenever
+   * the machine reports `state.kind !== "motebit"`, and stamps the
+   * literal state on the per-action ledger entry so the audit
+   * answers "what state were we in" without cross-referencing
+   * adjacent `co_browse_control_changed` events.
+   *
+   * `coBrowseControl` is only present for `virtual_browser` co-browse
+   * sessions; `desktop_drive` is exempt here because its
+   * control/consent model is separate (the user's real OS is the
+   * source; there's no isolated browser to hand off). When this dep
+   * is undefined, the gate is a no-op — preserves
+   * desktop_drive / non-co-browse sessions unchanged.
+   */
+  coBrowseControl?: CoBrowseControlMachine;
 }
 
 // ── Implementation ───────────────────────────────────────────────────
@@ -400,6 +419,7 @@ export function createComputerSessionManager(
     approvalFlow,
     generateSessionId = defaultGenerateSessionId,
     now = () => Date.now(),
+    coBrowseControl,
   } = deps;
 
   const sessions = new Map<string, InternalSession>();
@@ -512,7 +532,10 @@ export function createComputerSessionManager(
     // typed outcomes but skip the record append; the session that
     // doesn't exist has no per-action ledger to commit to. Recording
     // happens in finishOutcome() so we capture all branches uniformly.
-    const recordOutcome = (outcome: ComputerActionOutcome): ComputerActionOutcome => {
+    const recordOutcome = (
+      outcome: ComputerActionOutcome,
+      controlStateAtDenial?: ControlState,
+    ): ComputerActionOutcome => {
       if (session && session.closed_at == null) {
         const record: ComputerSessionActionRecord = {
           kind: action.kind,
@@ -520,6 +543,11 @@ export function createComputerSessionManager(
           completed_at: now(),
           outcome: outcome.outcome,
           ...(outcome.outcome === "failure" ? { failure_reason: outcome.reason } : {}),
+          // Co-browse Slice 1 — stamp the literal ControlState on
+          // not_in_control denials. Field flows into actions_hash so
+          // tampering breaks the session-receipt signature; absent on
+          // success and on every other failure mode (category clean).
+          ...(controlStateAtDenial ? { control_state_at_denial: controlStateAtDenial } : {}),
         };
         session.actions.push(record);
       }
@@ -547,6 +575,37 @@ export function createComputerSessionManager(
         reason: "session_closed",
         message: `session ${sessionId} is not open`,
       });
+    }
+
+    // Co-browse Slice 1 — control-state gate. When the manager was
+    // constructed with a `coBrowseControl` machine (virtual_browser
+    // sessions), motebit-driven dispatch is denied unless the
+    // machine reports `state.kind === "motebit"`. The denial outcome
+    // carries the literal `ControlState` on the per-action ledger
+    // entry (`control_state_at_denial`) so verifiers replaying the
+    // log can answer "what state were we in" directly from the
+    // signed actions_hash, not by cross-referencing adjacent
+    // co_browse_control_changed events. When `coBrowseControl` is
+    // undefined (desktop_drive, non-co-browse paths), the gate is a
+    // no-op — preserves existing behavior unchanged.
+    //
+    // Order: after session-validity (a closed session has no
+    // meaningful control state to report) but before governance
+    // (governance is "what acts are allowed"; control is "who is
+    // allowed to act"). Sibling of the `halted` user-floor check
+    // above, but driven by a different primitive.
+    if (coBrowseControl) {
+      const controlState = coBrowseControl.getState();
+      if (controlState.kind !== "motebit") {
+        return recordOutcome(
+          {
+            outcome: "failure",
+            reason: "not_in_control",
+            message: `Motebit not in control (state: ${controlState.kind}); user must grant control before dispatch.`,
+          },
+          controlState,
+        );
+      }
     }
 
     const classification = await governance.classify(action);

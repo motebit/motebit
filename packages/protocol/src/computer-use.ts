@@ -38,6 +38,8 @@
  * or a non-desktop-shim consumer exercises the format in anger.
  */
 
+import type { ControlState } from "./co-browse.js";
+
 // ── Primitives ───────────────────────────────────────────────────────
 
 /**
@@ -400,6 +402,15 @@ export const COMPUTER_FAILURE_REASONS = [
   "user_preempted",
   "platform_blocked",
   "not_supported",
+  // Co-browse Slice 1 — fired when the session manager's optional
+  // `coBrowseControl` machine reports `state.kind !== "motebit"` at
+  // dispatch time. Distinct from `user_preempted` (which fires for
+  // active halt) and `policy_denied` (governance-driven). The
+  // accompanying `control_state_at_denial` field on the per-action
+  // record carries the literal ControlState so verifiers replaying
+  // the log answer "what state were we in" without cross-referencing
+  // adjacent co_browse_control_changed events.
+  "not_in_control",
 ] as const;
 
 /** @alpha */
@@ -503,6 +514,21 @@ export interface ComputerSessionActionRecord {
   readonly completed_at: number;
   readonly outcome: "success" | "failure";
   readonly failure_reason?: ComputerFailureReason;
+  /**
+   * Co-browse Slice 1 — when `failure_reason === "not_in_control"`,
+   * this field carries the literal `ControlState` at dispatch time
+   * (e.g. `{kind: "user"}` or `{kind: "paused", previousDriver:
+   * "motebit"}`). The runtime stamps it on the action ledger; the
+   * field flows into `actions_hash` so any retroactive edit to the
+   * recorded state breaks the session-receipt signature.
+   *
+   * Present iff `failure_reason === "not_in_control"` — control
+   * state at non-control denials would be category noise. Absent on
+   * success and on every other failure mode.
+   *
+   * @alpha
+   */
+  readonly control_state_at_denial?: ControlState;
 }
 
 /**

@@ -543,7 +543,7 @@ export function composeTrustChain(scores: number[]): number;
 export const COMPUTER_ACTION_KINDS: readonly ["screenshot", "cursor_position", "click", "double_click", "mouse_move", "drag", "type", "key", "scroll", "navigate"];
 
 // @alpha
-export const COMPUTER_FAILURE_REASONS: readonly ["policy_denied", "approval_required", "approval_expired", "permission_denied", "session_closed", "target_not_found", "target_obscured", "user_preempted", "platform_blocked", "not_supported"];
+export const COMPUTER_FAILURE_REASONS: readonly ["policy_denied", "approval_required", "approval_expired", "permission_denied", "session_closed", "target_not_found", "target_obscured", "user_preempted", "platform_blocked", "not_supported", "not_in_control"];
 
 // @alpha
 export type ComputerAction = ScreenshotAction | CursorPositionAction | ClickAction | DoubleClickAction | MouseMoveAction | DragAction | TypeAction | KeyAction | ScrollAction | NavigateAction;
@@ -585,6 +585,7 @@ export interface ComputerRedaction {
 export interface ComputerSessionActionRecord {
     // (undocumented)
     readonly completed_at: number;
+    readonly control_state_at_denial?: ControlState;
     // (undocumented)
     readonly failure_reason?: ComputerFailureReason;
     // (undocumented)

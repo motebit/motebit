@@ -21,7 +21,10 @@ import {
   type ComputerGovernanceClassifier,
   type ComputerPlatformDispatcher,
 } from "../computer-use.js";
+import { createCoBrowseControlMachine } from "../co-browse-control.js";
 import { createDefaultComputerGovernance } from "@motebit/policy-invariants";
+import { hashComputerSessionActions, signComputerSessionReceipt } from "@motebit/crypto";
+import { generateKeypair } from "@motebit/crypto";
 
 const DEFAULT_DISPLAY = { width: 2560, height: 1440, scaling_factor: 2 } as const;
 
@@ -1331,5 +1334,283 @@ describe("v1.5 — summarize() session-summary roll-up", () => {
     expect(summary?.outcomes_summary).toEqual({ success: 0, failure: 2 });
     expect(summary?.failure_breakdown).toEqual({ user_preempted: 2 });
     expect(summary?.was_halted).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Co-browse Slice 1 — control-state gate.
+//
+// `coBrowseControl` is only present for virtual_browser co-browse
+// sessions; desktop_drive is exempt because its control/consent model
+// is separate. The acceptance criteria below pin:
+//
+//   1. user / handoff_pending / paused all deny with not_in_control.
+//   2. motebit allows the existing path unchanged.
+//   3. undefined dep is a no-op (preserves desktop_drive et al).
+//   4. user-reclaim from motebit blocks the next motebit action.
+//   5. disconnect from motebit/handoff/paused reverts → blocks.
+//   6. denied actions don't reach the dispatcher.
+//   7. control_state_at_denial flows into actions_hash, so tampering
+//      it after sign breaks the session-receipt signature.
+// ─────────────────────────────────────────────────────────────────────
+
+describe("ComputerSessionManager — co-browse control gate (Slice 1)", () => {
+  function makeMachine() {
+    return createCoBrowseControlMachine({
+      sessionId: "cs_1",
+      motebitId: "mot_1",
+      now: () => 1_000_000,
+    });
+  }
+
+  it("user state denies with not_in_control and does NOT hit the dispatcher", async () => {
+    const execute = vi.fn(async () => ({}));
+    const machine = makeMachine(); // starts in {kind: "user"}
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({ execute }),
+      coBrowseControl: machine,
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    const result = await manager.executeAction("cs_1", CLICK_ACTION);
+    expect(result.outcome).toBe("failure");
+    if (result.outcome === "failure") {
+      expect(result.reason).toBe("not_in_control");
+    }
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("handoff_pending denies and stamps the full state on the action record", async () => {
+    const machine = makeMachine();
+    machine.requestControl("motebit"); // → handoff_pending
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher(),
+      coBrowseControl: machine,
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    await manager.executeAction("cs_1", CLICK_ACTION);
+    const summary = await manager.summarize("cs_1", {
+      generateReceiptId: () => "csr_1",
+      embodimentMode: "virtual_browser",
+      hashActions: async () => "h",
+    });
+    expect(summary).not.toBeNull();
+    if (!summary) return;
+    expect(summary.action_count).toBe(1);
+    expect(summary.failure_breakdown).toEqual({ not_in_control: 1 });
+    // Reach into the manager's action ledger via summary's hash deps:
+    // alternative — re-summarize with a hashActions that captures the
+    // ledger contents.
+    let captured: Record<string, unknown>[] = [];
+    await manager.summarize("cs_1", {
+      generateReceiptId: () => "csr_2",
+      embodimentMode: "virtual_browser",
+      hashActions: async (records) => {
+        captured = records as unknown as Record<string, unknown>[];
+        return "h";
+      },
+    });
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.failure_reason).toBe("not_in_control");
+    expect(captured[0]?.control_state_at_denial).toEqual({
+      kind: "handoff_pending",
+      current: "user",
+      requesting: "motebit",
+    });
+  });
+
+  it("paused state denies and stamps the full state (carrying previousDriver)", async () => {
+    const machine = makeMachine();
+    machine.requestControl("motebit");
+    machine.grantControl("user"); // → motebit
+    machine.pause("user"); // → paused, previousDriver: "motebit"
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher(),
+      coBrowseControl: machine,
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    const result = await manager.executeAction("cs_1", CLICK_ACTION);
+    expect(result.outcome).toBe("failure");
+    let captured: Record<string, unknown>[] = [];
+    await manager.summarize("cs_1", {
+      generateReceiptId: () => "csr_1",
+      embodimentMode: "virtual_browser",
+      hashActions: async (records) => {
+        captured = records as unknown as Record<string, unknown>[];
+        return "h";
+      },
+    });
+    expect(captured[0]?.control_state_at_denial).toEqual({
+      kind: "paused",
+      previousDriver: "motebit",
+    });
+  });
+
+  it("motebit state allows existing executeAction path (dispatcher fires)", async () => {
+    const execute = vi.fn(async () => ({ kind: "click", ok: true }));
+    const machine = makeMachine();
+    machine.requestControl("motebit");
+    machine.grantControl("user"); // → motebit
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({ execute }),
+      coBrowseControl: machine,
+      governance: createDefaultComputerGovernance(),
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    const result = await manager.executeAction("cs_1", CLICK_ACTION);
+    expect(result.outcome).toBe("success");
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("undefined coBrowseControl preserves existing behavior (desktop_drive et al)", async () => {
+    const execute = vi.fn(async () => ({ kind: "click", ok: true }));
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({ execute }),
+      governance: createDefaultComputerGovernance(),
+      generateSessionId: () => "cs_1",
+      // No coBrowseControl — gate is a no-op.
+    });
+    await manager.openSession("mot_1");
+    const result = await manager.executeAction("cs_1", CLICK_ACTION);
+    expect(result.outcome).toBe("success");
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("user-reclaim from motebit blocks the next motebit action", async () => {
+    const execute = vi.fn(async () => ({}));
+    const machine = makeMachine();
+    machine.requestControl("motebit");
+    machine.grantControl("user"); // → motebit
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({ execute }),
+      coBrowseControl: machine,
+      governance: createDefaultComputerGovernance(),
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    // First action: motebit holds, succeeds.
+    expect((await manager.executeAction("cs_1", CLICK_ACTION)).outcome).toBe("success");
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    // User reclaims unilaterally; next action denies.
+    machine.reclaimControl();
+    const blocked = await manager.executeAction("cs_1", CLICK_ACTION);
+    expect(blocked.outcome).toBe("failure");
+    if (blocked.outcome === "failure") {
+      expect(blocked.reason).toBe("not_in_control");
+    }
+    expect(execute).toHaveBeenCalledTimes(1); // unchanged
+  });
+
+  it.each([
+    {
+      label: "from motebit",
+      setup: (m: ReturnType<typeof makeMachine>) => {
+        m.requestControl("motebit");
+        m.grantControl("user");
+      },
+    },
+    {
+      label: "from handoff_pending",
+      setup: (m: ReturnType<typeof makeMachine>) => {
+        m.requestControl("motebit");
+      },
+    },
+    {
+      label: "from paused",
+      setup: (m: ReturnType<typeof makeMachine>) => {
+        m.requestControl("motebit");
+        m.grantControl("user");
+        m.pause("user");
+      },
+    },
+  ])("disconnect $label reverts to user and blocks the next motebit action", async ({ setup }) => {
+    const execute = vi.fn(async () => ({}));
+    const machine = makeMachine();
+    setup(machine);
+    machine.disconnect();
+    expect(machine.getState()).toEqual({ kind: "user" });
+
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher({ execute }),
+      coBrowseControl: machine,
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    const result = await manager.executeAction("cs_1", CLICK_ACTION);
+    expect(result.outcome).toBe("failure");
+    if (result.outcome === "failure") {
+      expect(result.reason).toBe("not_in_control");
+    }
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("control_state_at_denial flows into actions_hash — tampering breaks the session receipt signature", async () => {
+    const machine = makeMachine();
+    machine.requestControl("motebit"); // → handoff_pending
+    const manager = createComputerSessionManager({
+      dispatcher: makeDispatcher(),
+      coBrowseControl: machine,
+      generateSessionId: () => "cs_1",
+    });
+    await manager.openSession("mot_1");
+    await manager.executeAction("cs_1", CLICK_ACTION); // denied not_in_control
+
+    // Capture the real action ledger via summarize's hashActions hook.
+    let realRecords: Parameters<typeof hashComputerSessionActions>[0] | null = null;
+    const realHash = await new Promise<string>((resolve) => {
+      void manager.summarize("cs_1", {
+        generateReceiptId: () => "csr_1",
+        embodimentMode: "virtual_browser",
+        hashActions: async (records) => {
+          realRecords = records;
+          const h = await hashComputerSessionActions(records);
+          resolve(h);
+          return h;
+        },
+      });
+    });
+    expect(realRecords).not.toBeNull();
+    if (!realRecords) return;
+
+    // Sign the receipt body with the REAL hash.
+    const kp = await generateKeypair();
+    const summary = await manager.summarize("cs_1", {
+      generateReceiptId: () => "csr_1",
+      embodimentMode: "virtual_browser",
+      hashActions: async () => realHash,
+    });
+    if (!summary) throw new Error("summary missing");
+    const signed = await signComputerSessionReceipt(summary, kp.privateKey, kp.publicKey);
+    expect(signed.signature).toBeTruthy();
+
+    // Build a tampered ledger: same shape, but lie about the control
+    // state at denial (claim "user" instead of "handoff_pending").
+    const tampered = (
+      realRecords as ReadonlyArray<{
+        kind: string;
+        started_at: number;
+        completed_at: number;
+        outcome: string;
+        failure_reason?: string;
+        control_state_at_denial?: unknown;
+      }>
+    ).map((r) => ({
+      ...r,
+      control_state_at_denial:
+        r.control_state_at_denial !== undefined ? { kind: "user" } : undefined,
+    }));
+    const tamperedHash = await hashComputerSessionActions(
+      tampered as unknown as Parameters<typeof hashComputerSessionActions>[0],
+    );
+
+    // Tampered hash != real hash. A receipt signed over the real
+    // hash, with the tampered hash substituted, would fail signature
+    // verification — the field is part of the signed structural
+    // commitment.
+    expect(tamperedHash).not.toBe(realHash);
   });
 });
