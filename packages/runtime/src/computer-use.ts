@@ -48,7 +48,6 @@
 
 import type {
   ComputerAction,
-  ComputerActionKind,
   ComputerFailureReason,
   ComputerSessionActionRecord,
   ComputerSessionClosed,
@@ -516,7 +515,7 @@ export function createComputerSessionManager(
     const recordOutcome = (outcome: ComputerActionOutcome): ComputerActionOutcome => {
       if (session && session.closed_at == null) {
         const record: ComputerSessionActionRecord = {
-          kind: action.kind as ComputerActionKind,
+          kind: action.kind,
           started_at,
           completed_at: now(),
           outcome: outcome.outcome,
