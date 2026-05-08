@@ -15,7 +15,20 @@
  *     with the right HTTP status
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+// Mock the screencast module — the route's stream-start handler
+// calls `startScreencast(session.page, onFrame)`, which would attach
+// CDP against the fake page. The mock fires one synthetic frame so
+// tests that read the body can exercise the start path; the
+// disposer is a no-op so the cancel path runs cleanly.
+vi.mock("../screencast.js", () => ({
+  startScreencast: vi.fn(async (_page: unknown, onFrame: (frame: unknown) => void) => {
+    // Fire one frame so the start handler enqueues something readable.
+    onFrame({ jpeg_base64: "AAAA", timestamp: 1, device_width: 1280, device_height: 800 });
+    return async () => undefined;
+  }),
+}));
 
 import { buildApp } from "../routes.js";
 import type { BrowserSandboxConfig } from "../env.js";
@@ -71,6 +84,9 @@ function makeFakePool(): { pool: BrowserPool; state: FakePoolState } {
       lastCursorX: 0,
       lastCursorY: 0,
       inFlight: 0,
+      // The screencast route's double-start guard checks for `!== null`;
+      // an undefined slot would falsely look "in use" to that check.
+      stopScreencast: null,
     } as unknown as BrowserSession;
     sessions.set(id, session);
     return session;
@@ -415,6 +431,49 @@ describe("browser-sandbox routes", () => {
       const body = (await res.json()) as { error: { reason: string; message: string } };
       expect(body.error.reason).toBe("policy_denied");
       expect(body.error.message).toContain("already has an active screencast");
+    });
+
+    // Stream lifecycle — exercise the ReadableStream.start path
+    // (binds the screencast disposer to the session) AND the cancel
+    // path (clears the disposer on consumer disconnect). The
+    // `startScreencast` module is module-mocked at the bottom of the
+    // file so the test drives frames + lifecycle synthetically without
+    // a real CDP attach.
+    it("attaches screencast on stream start and stashes the disposer on the session", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+
+      const res = await app.request(`/sessions/${session_id}/screencast`, {
+        headers: authHeader(),
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Type")).toContain("application/x-ndjson");
+      expect(res.headers.get("Cache-Control")).toBe("no-cache");
+
+      // Read one frame off the body so the start handler runs.
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      const { value } = await reader.read();
+      const line = decoder.decode(value).split("\n")[0]!;
+      const frame = JSON.parse(line) as { jpeg_base64: string };
+      expect(frame.jpeg_base64).toBeTruthy();
+
+      // Disposer is stashed on the session.
+      const session = state.sessions.get(session_id) as unknown as {
+        stopScreencast: (() => Promise<void>) | null;
+      };
+      expect(session.stopScreencast).not.toBeNull();
+
+      // Cancel via reader — the cancel path runs the disposer and
+      // clears the slot.
+      await reader.cancel();
+      // Allow the cancel callback's microtasks to settle.
+      await new Promise((r) => setTimeout(r, 0));
+      expect(session.stopScreencast).toBeNull();
     });
   });
 });

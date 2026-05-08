@@ -38,7 +38,28 @@ function makeMockSession(): {
   const keyboardCalls: KeyboardCall[] = [];
   let screenshotCalls = 0;
 
+  // Navigate-path overrides — tests can replace these to drive the
+  // heuristic / waitForLoadState branches without rebuilding the
+  // whole mock session. Defaults pass everything (DOM ready, no
+  // bot-block, content visible).
+  let gotoImpl: (url: string, opts: unknown) => Promise<void> = async () => {};
+  let waitForLoadStateImpl: (state: string, opts?: unknown) => Promise<void> = async () => {};
+  let evaluateImpl: () => Promise<unknown> = async () => ({
+    textLength: 1024,
+    hasImages: true,
+    hasCanvases: false,
+    blankish: false,
+    denied: false,
+  });
+  let pageUrlImpl: () => string = () => "https://example.com/";
+
   const mockPage = {
+    goto: vi.fn(async (url: string, opts: unknown) => gotoImpl(url, opts)),
+    waitForLoadState: vi.fn(async (state: string, opts?: unknown) =>
+      waitForLoadStateImpl(state, opts),
+    ),
+    evaluate: vi.fn(async () => evaluateImpl()),
+    url: vi.fn(() => pageUrlImpl()),
     screenshot: vi.fn(async () => {
       screenshotCalls++;
       return Buffer.from([0x89, 0x50, 0x4e, 0x47]); // PNG header magic bytes
@@ -93,7 +114,26 @@ function makeMockSession(): {
     get screenshotCalls() {
       return screenshotCalls;
     },
-  } as unknown as ReturnType<typeof makeMockSession>;
+    setGotoImpl(fn: typeof gotoImpl): void {
+      gotoImpl = fn;
+    },
+    setWaitForLoadStateImpl(fn: typeof waitForLoadStateImpl): void {
+      waitForLoadStateImpl = fn;
+    },
+    setEvaluateImpl(fn: typeof evaluateImpl): void {
+      evaluateImpl = fn;
+    },
+    setPageUrlImpl(fn: typeof pageUrlImpl): void {
+      pageUrlImpl = fn;
+    },
+    mockPage,
+  } as unknown as ReturnType<typeof makeMockSession> & {
+    setGotoImpl(fn: (url: string, opts: unknown) => Promise<void>): void;
+    setWaitForLoadStateImpl(fn: (state: string, opts?: unknown) => Promise<void>): void;
+    setEvaluateImpl(fn: () => Promise<unknown>): void;
+    setPageUrlImpl(fn: () => string): void;
+    mockPage: typeof mockPage;
+  };
 }
 
 const FIXED_NOW = 1_700_000_000_000;
@@ -244,6 +284,151 @@ describe("executeAction", () => {
       expect(mouseCalls[1]?.method).toBe("wheel");
       expect(mouseCalls[1]?.x).toBe(0);
       expect(mouseCalls[1]?.y).toBe(100);
+    });
+  });
+
+  describe("navigate", () => {
+    it("normalizes scheme-less URLs to https://", async () => {
+      const m = makeMockSession();
+      let gotoUrl = "";
+      m.setGotoImpl(async (url) => {
+        gotoUrl = url;
+      });
+      m.setPageUrlImpl(() => "https://motebit.com/");
+      await executeAction(m.session, { kind: "navigate", url: "motebit.com" }, deps);
+      expect(gotoUrl).toBe("https://motebit.com");
+    });
+
+    it("preserves absolute URLs verbatim", async () => {
+      const m = makeMockSession();
+      let gotoUrl = "";
+      m.setGotoImpl(async (url) => {
+        gotoUrl = url;
+      });
+      m.setPageUrlImpl(() => "http://localhost:3000/");
+      await executeAction(m.session, { kind: "navigate", url: "http://localhost:3000" }, deps);
+      expect(gotoUrl).toBe("http://localhost:3000");
+    });
+
+    it("returns metadata + inline screenshot bytes on success", async () => {
+      const m = makeMockSession();
+      m.setPageUrlImpl(() => "https://motebit.com/");
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "motebit.com" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.kind).toBe("navigate");
+      expect(result.ok).toBe(true);
+      expect(result.url).toBe("https://motebit.com/");
+      expect(result.visual_content_detected).toBe(true);
+      expect(result.blank_page_detected).toBe(false);
+      expect(result.access_denied_detected).toBe(false);
+      expect(result.visual_readiness_timeout).toBe(false);
+      // Inline-screenshot fields populated (v1.3 hardening).
+      expect(typeof result.bytes_base64).toBe("string");
+      expect((result.bytes_base64 as string).length).toBeGreaterThan(0);
+      expect(result.image_format).toBe("jpeg");
+      expect(result.width).toBe(1280);
+      expect(result.height).toBe(800);
+    });
+
+    it("flags networkidle timeout without failing the action", async () => {
+      const m = makeMockSession();
+      m.setWaitForLoadStateImpl(async () => {
+        throw new Error("Timeout 2000ms exceeded");
+      });
+      m.setPageUrlImpl(() => "https://example.com/");
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "example.com" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.ok).toBe(true);
+      expect(result.visual_readiness_timeout).toBe(true);
+    });
+
+    it("detects blank page via the heuristic", async () => {
+      const m = makeMockSession();
+      m.setEvaluateImpl(async () => ({
+        textLength: 5,
+        hasImages: false,
+        hasCanvases: false,
+        blankish: true,
+        denied: false,
+      }));
+      m.setPageUrlImpl(() => "https://blank.example/");
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "blank.example" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.blank_page_detected).toBe(true);
+      expect(result.visual_content_detected).toBe(false);
+    });
+
+    it("detects access-denied / bot-block via the heuristic", async () => {
+      const m = makeMockSession();
+      m.setEvaluateImpl(async () => ({
+        textLength: 200,
+        hasImages: false,
+        hasCanvases: false,
+        blankish: false,
+        denied: true,
+      }));
+      m.setPageUrlImpl(() => "https://tesla.com/");
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "tesla.com" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.access_denied_detected).toBe(true);
+      expect(result.visual_content_detected).toBe(false);
+    });
+
+    it("falls back to defaults when the heuristic evaluate throws", async () => {
+      const m = makeMockSession();
+      m.setEvaluateImpl(async () => {
+        throw new Error("evaluate boom");
+      });
+      m.setPageUrlImpl(() => "https://example.com/");
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "example.com" },
+        deps,
+      )) as Record<string, unknown>;
+      // Heuristic catch path → blankish=true defaults.
+      expect(result.blank_page_detected).toBe(true);
+      expect(result.access_denied_detected).toBe(false);
+    });
+
+    it("omits screenshot fields when capture fails (capture-error fallback)", async () => {
+      const m = makeMockSession();
+      // Force the screenshot call inside doNavigate to throw — the
+      // navigate path catches and continues without bytes.
+      m.mockPage.screenshot.mockImplementationOnce(async () => {
+        throw new Error("screenshot disabled");
+      });
+      m.setPageUrlImpl(() => "https://example.com/");
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "example.com" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.kind).toBe("navigate");
+      expect(result.ok).toBe(true);
+      expect(result.bytes_base64).toBeUndefined();
+      expect(result.image_format).toBeUndefined();
+    });
+
+    it("throws not_supported when goto fails", async () => {
+      const m = makeMockSession();
+      m.setGotoImpl(async () => {
+        throw new Error("net::ERR_NAME_NOT_RESOLVED");
+      });
+      await expect(
+        executeAction(m.session, { kind: "navigate", url: "doesnotexist.invalid" }, deps),
+      ).rejects.toMatchObject({ reason: "not_supported" });
     });
   });
 });
