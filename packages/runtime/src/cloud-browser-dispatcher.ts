@@ -308,14 +308,20 @@ export class CloudBrowserDispatcher implements ComputerPlatformDispatcher {
       }
     })();
 
-    return async () => {
-      if (stopped) return;
+    // Async signature satisfies the openScreencast contract (`Promise<()
+    // => Promise<void>>`), but the body's only side effect is an
+    // immediate AbortController.abort — no await needed. Wrap in
+    // Promise.resolve() so lint doesn't fire on async-without-await
+    // while preserving the documented signature.
+    return () => {
+      if (stopped) return Promise.resolve();
       stopped = true;
       try {
         controller.abort();
       } catch {
         // Already aborted or controller in a bad state.
       }
+      return Promise.resolve();
     };
   }
 

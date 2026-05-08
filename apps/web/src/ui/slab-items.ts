@@ -1934,7 +1934,9 @@ function renderLiveBrowser(item: SlabItem): HTMLElement {
   // and the slab's dissolve can call `dispose()` to drop the
   // subscription. Keyed by item id; cleaned up when the slab
   // signals item end.
-  liveBrowserDisposers.set(item.id, handle.dispose);
+  // Wrap in an arrow so the unbound-method lint doesn't fire — the
+  // disposer doesn't use `this`, but the rule is structural.
+  liveBrowserDisposers.set(item.id, () => handle.dispose());
   // Wire the gone-state to dispose so a missed dissolve callback
   // still releases the subscription within one frame.
   handle.element.dataset.slabItemId = item.id;

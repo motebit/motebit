@@ -164,7 +164,7 @@ export function buildApp(deps: BuildAppDeps): Hono {
    * and clears the slot, so a hung consumer doesn't keep the
    * session pinned.
    */
-  app.get("/sessions/:id/screencast", async (c) => {
+  app.get("/sessions/:id/screencast", (c) => {
     const sessionId = c.req.param("id");
     const session = deps.pool.getSession(sessionId);
     if (!session) {
