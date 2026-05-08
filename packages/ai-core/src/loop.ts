@@ -122,7 +122,20 @@ function projectForAi(data: unknown): unknown {
     const { bytes_base64, ...rest } = r;
     return {
       ...rest,
-      bytes_omitted: `user-visible-only (${bytes_base64.length} base64 chars)`,
+      // Self-instructive marker — written as a directive the AI
+      // reads in-context, not as metadata. Witnessed 2026-05-07: a
+      // terse marker ("user-visible-only (N base64 chars)") let the
+      // AI hallucinate page content (claimed "Model Y hero is up
+      // top" when the page was tesla.com's Access Denied splash).
+      // The AI treated the cryptic field as background data and
+      // generated plausible content from training. The directive
+      // form below tells the AI exactly what's true: the user has
+      // the image, you don't, don't describe what you can't see.
+      bytes_omitted:
+        "Image rendered on the user's slab. Bytes withheld from your " +
+        "context to save tokens — you have not seen this image. Do not " +
+        "describe what's visible. If you need information about the page, " +
+        "ask the user or take another action (scroll, click, navigate).",
     };
   }
   return data;
