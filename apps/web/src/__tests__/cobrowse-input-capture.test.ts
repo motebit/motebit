@@ -261,6 +261,118 @@ describe("attachInputCapture — keyboard", () => {
   });
 });
 
+// ── attachInputCapture — click ripple (Slice 2e) ────────────────────────
+
+describe("attachInputCapture — click-ripple feedback", () => {
+  it("spawns a ripple element on click as a sibling of the img", () => {
+    // Wrap img in a parent so the ripple has a mount point.
+    const parent = document.createElement("div");
+    parent.style.position = "relative";
+    document.body.appendChild(parent);
+    const img = makeImg(640, 400);
+    parent.appendChild(img);
+
+    const { forward } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+
+    img.dispatchEvent(new MouseEvent("click", { clientX: 320, clientY: 200, button: 0 }));
+
+    const ripple = parent.querySelector(".cobrowse-click-ripple");
+    expect(ripple).not.toBeNull();
+  });
+
+  it("ripple positions at the click coordinate (offset within parent)", () => {
+    const parent = document.createElement("div");
+    parent.style.position = "relative";
+    document.body.appendChild(parent);
+    const img = makeImg(640, 400);
+    parent.appendChild(img);
+    // Force img's offset within parent so the test exercises
+    // offset-aware positioning.
+    Object.defineProperty(img, "offsetLeft", { value: 10, configurable: true });
+    Object.defineProperty(img, "offsetTop", { value: 20, configurable: true });
+
+    const { forward } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+
+    img.dispatchEvent(new MouseEvent("click", { clientX: 320, clientY: 200, button: 0 }));
+
+    const ripple = parent.querySelector(".cobrowse-click-ripple") as HTMLElement;
+    // Click at clientX/Y (320, 200) → img-local (320, 200) (rect at
+    // 0,0) → parent-local (10+320, 20+200) = (330, 220).
+    expect(ripple.style.left).toBe("330px");
+    expect(ripple.style.top).toBe("220px");
+  });
+
+  it("ripple auto-removes after the animation duration", async () => {
+    const parent = document.createElement("div");
+    parent.style.position = "relative";
+    document.body.appendChild(parent);
+    const img = makeImg(640, 400);
+    parent.appendChild(img);
+
+    const { forward } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+
+    img.dispatchEvent(new MouseEvent("click", { clientX: 1, clientY: 1, button: 0 }));
+    expect(parent.querySelectorAll(".cobrowse-click-ripple").length).toBe(1);
+
+    // Wait beyond the 400ms animation duration.
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(parent.querySelectorAll(".cobrowse-click-ripple").length).toBe(0);
+  });
+
+  it("multiple clicks spawn multiple ripples (one per click, not coalesced)", () => {
+    const parent = document.createElement("div");
+    parent.style.position = "relative";
+    document.body.appendChild(parent);
+    const img = makeImg(640, 400);
+    parent.appendChild(img);
+
+    const { forward } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+
+    img.dispatchEvent(new MouseEvent("click", { clientX: 100, clientY: 100, button: 0 }));
+    img.dispatchEvent(new MouseEvent("click", { clientX: 200, clientY: 200, button: 0 }));
+    img.dispatchEvent(new MouseEvent("click", { clientX: 300, clientY: 300, button: 0 }));
+
+    expect(parent.querySelectorAll(".cobrowse-click-ripple").length).toBe(3);
+  });
+
+  it("does NOT spawn a ripple on out-of-bounds clicks (no event forwarded either)", () => {
+    const parent = document.createElement("div");
+    parent.style.position = "relative";
+    document.body.appendChild(parent);
+    const img = makeImg(640, 400);
+    parent.appendChild(img);
+
+    const { forward, events } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+
+    // Out-of-bounds click — translateClick returns null.
+    img.dispatchEvent(new MouseEvent("click", { clientX: -10, clientY: -10, button: 0 }));
+
+    expect(parent.querySelectorAll(".cobrowse-click-ripple").length).toBe(0);
+    expect(events).toHaveLength(0);
+  });
+
+  it("silently no-ops when the img has no parent (defensive — feedback is best-effort)", () => {
+    const img = makeImg(640, 400);
+    // Detach from any parent.
+    img.remove();
+
+    const { forward, events } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+
+    expect(() => {
+      img.dispatchEvent(new MouseEvent("click", { clientX: 100, clientY: 100, button: 0 }));
+    }).not.toThrow();
+    // Forward still happens — feedback is best-effort, click
+    // forwarding is load-bearing.
+    expect(events).toHaveLength(1);
+  });
+});
+
 // ── attachInputCapture — wheel (Slice 2c-batching) ──────────────────────
 
 describe("attachInputCapture — wheel coalescing", () => {

@@ -160,6 +160,71 @@ describe("renderCoBrowseAddressBar — Enter dispatch", () => {
   });
 });
 
+// ── Slice 2e — history navigation buttons ───────────────────────────────
+
+describe("renderCoBrowseAddressBar — history navigation buttons", () => {
+  it("renders ← / → / ↻ buttons before the URL input", () => {
+    const { forward } = makeForward();
+    const bar = renderCoBrowseAddressBar({ forwardEvent: forward });
+    document.body.appendChild(bar);
+    const buttons = bar.querySelectorAll("button");
+    expect(buttons).toHaveLength(3);
+    expect(buttons[0]?.textContent).toBe("←");
+    expect(buttons[1]?.textContent).toBe("→");
+    expect(buttons[2]?.textContent).toBe("↻");
+  });
+
+  it("← dispatches { kind: 'back' }", async () => {
+    const { forward, events } = makeForward();
+    const bar = renderCoBrowseAddressBar({ forwardEvent: forward });
+    document.body.appendChild(bar);
+    const back = bar.querySelector('[aria-label="Go back"]') as HTMLButtonElement;
+    back.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toEqual([{ kind: "back" }]);
+  });
+
+  it("→ dispatches { kind: 'forward' }", async () => {
+    const { forward, events } = makeForward();
+    const bar = renderCoBrowseAddressBar({ forwardEvent: forward });
+    document.body.appendChild(bar);
+    const fwd = bar.querySelector('[aria-label="Go forward"]') as HTMLButtonElement;
+    fwd.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toEqual([{ kind: "forward" }]);
+  });
+
+  it("↻ dispatches { kind: 'reload' }", async () => {
+    const { forward, events } = makeForward();
+    const bar = renderCoBrowseAddressBar({ forwardEvent: forward });
+    document.body.appendChild(bar);
+    const reload = bar.querySelector('[aria-label="Reload"]') as HTMLButtonElement;
+    reload.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toEqual([{ kind: "reload" }]);
+  });
+
+  it("buttons carry aria-labels for screen readers (glyph-only is not enough)", () => {
+    const { forward } = makeForward();
+    const bar = renderCoBrowseAddressBar({ forwardEvent: forward });
+    document.body.appendChild(bar);
+    expect(bar.querySelector('[aria-label="Go back"]')).not.toBeNull();
+    expect(bar.querySelector('[aria-label="Go forward"]')).not.toBeNull();
+    expect(bar.querySelector('[aria-label="Reload"]')).not.toBeNull();
+  });
+
+  it("button clicks stopPropagation (so input-capture doesn't double-forward)", () => {
+    const { forward } = makeForward();
+    const bar = renderCoBrowseAddressBar({ forwardEvent: forward });
+    document.body.appendChild(bar);
+    let bubbled = false;
+    document.addEventListener("click", () => (bubbled = true));
+    const back = bar.querySelector('[aria-label="Go back"]') as HTMLButtonElement;
+    back.click();
+    expect(bubbled).toBe(false);
+  });
+});
+
 // ── Stop-propagation contract — coexistence with input capture ──────────
 
 describe("renderCoBrowseAddressBar — propagation discipline", () => {

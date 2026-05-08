@@ -222,6 +222,15 @@ export function buildUserInputAuditDetail(
         kind: "navigate",
         ...urlAuditDetail(event.url),
       };
+    // Slice 2e — parameter-less history navigations. Audit just
+    // records the action kind; nothing to redact, nothing to
+    // normalize.
+    case "back":
+      return { kind: "back" };
+    case "forward":
+      return { kind: "forward" };
+    case "reload":
+      return { kind: "reload" };
   }
 }
 

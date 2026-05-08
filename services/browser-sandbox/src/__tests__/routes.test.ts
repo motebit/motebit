@@ -582,6 +582,93 @@ describe("browser-sandbox routes", () => {
       );
     });
 
+    it("forwards back via page.goBack (Slice 2e)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      const goBackSpy = vi.fn(async () => null);
+      (session.page as unknown as { goBack: typeof goBackSpy }).goBack = goBackSpy;
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({ event: { kind: "back" } }),
+      });
+      expect(res.status).toBe(204);
+      expect(goBackSpy).toHaveBeenCalledWith({
+        waitUntil: "domcontentloaded",
+        timeout: 15_000,
+      });
+    });
+
+    it("forwards forward via page.goForward", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      const goForwardSpy = vi.fn(async () => null);
+      (session.page as unknown as { goForward: typeof goForwardSpy }).goForward = goForwardSpy;
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({ event: { kind: "forward" } }),
+      });
+      expect(res.status).toBe(204);
+      expect(goForwardSpy).toHaveBeenCalled();
+    });
+
+    it("forwards reload via page.reload", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      const reloadSpy = vi.fn(async () => undefined);
+      (session.page as unknown as { reload: typeof reloadSpy }).reload = reloadSpy;
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({ event: { kind: "reload" } }),
+      });
+      expect(res.status).toBe(204);
+      expect(reloadSpy).toHaveBeenCalledWith({
+        waitUntil: "domcontentloaded",
+        timeout: 15_000,
+      });
+    });
+
+    it("back is a no-op when there's no history (page.goBack returns null)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      // Default fake doesn't expose goBack at all; bind a null-returning stub.
+      (session.page as unknown as { goBack: () => Promise<null> }).goBack = async () => null;
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({ event: { kind: "back" } }),
+      });
+      // Null-return path lands as 204 — empty-history is success-with-
+      // no-op, matching real-browser UX.
+      expect(res.status).toBe(204);
+    });
+
     it("returns 500 + platform_blocked when navigate throws (network drop, malformed URL)", async () => {
       const app = buildApp({ config: TEST_CONFIG, pool });
       const ensure = await app.request("/sessions/ensure", {

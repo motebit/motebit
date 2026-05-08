@@ -421,6 +421,45 @@ export async function executeUserInput(
       }
       return;
     }
+    // Slice 2e — browser history navigation. Empty-history
+    // semantics: page.goBack / goForward return null when there's
+    // nothing to navigate to. We treat null as success (no-op) —
+    // matches a real browser at the start of its history; the
+    // user sees no change, which is the right UX. A thrown error
+    // surfaces as platform_blocked.
+    case "back": {
+      try {
+        await session.page.goBack({ waitUntil: "domcontentloaded", timeout: 15_000 });
+      } catch (err) {
+        throw new ServiceError(
+          "platform_blocked",
+          `back failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return;
+    }
+    case "forward": {
+      try {
+        await session.page.goForward({ waitUntil: "domcontentloaded", timeout: 15_000 });
+      } catch (err) {
+        throw new ServiceError(
+          "platform_blocked",
+          `forward failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return;
+    }
+    case "reload": {
+      try {
+        await session.page.reload({ waitUntil: "domcontentloaded", timeout: 15_000 });
+      } catch (err) {
+        throw new ServiceError(
+          "platform_blocked",
+          `reload failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return;
+    }
   }
 }
 

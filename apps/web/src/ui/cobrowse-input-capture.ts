@@ -117,6 +117,11 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
     img.focus();
     const coords = translateClick(img, e, fallbackWidth, fallbackHeight);
     if (!coords) return; // out-of-bounds (defensive — clicks on the img should always be in-bounds)
+    // Slice 2e — local click-ripple feedback. Pure DOM animation;
+    // no wire involvement. Confirms "my click registered there"
+    // before the next screencast frame arrives (which can be up
+    // to ~67ms later at 15fps).
+    spawnClickRipple(img, e);
     dispatch({
       kind: "click",
       x: coords.x,
@@ -313,6 +318,70 @@ function mouseButton(button: number): "left" | "right" | "middle" {
   if (button === 1) return "middle";
   return "left";
 }
+
+/**
+ * Slice 2e — spawn a brief expanding+fading circle at the click
+ * coordinate. Pure DOM animation; the ripple element auto-removes
+ * after `RIPPLE_DURATION_MS`. No wire involvement — this is local
+ * feedback so the user sees "my click registered there" without
+ * waiting for the next screencast frame.
+ *
+ * Mounted to the img's parent so the ripple positions absolutely
+ * against the same coordinate space the click came from. The
+ * parent (live_browser root div) has `position: relative` set in
+ * `buildLiveBrowserElement` for the placeholder, which is
+ * convenient for our absolute positioning here.
+ *
+ * Defensive: if the img has no parent (test shim, mid-detach), the
+ * ripple is silently skipped — feedback is best-effort UX, never
+ * load-bearing for the click forwarding itself.
+ */
+function spawnClickRipple(img: HTMLImageElement, e: MouseEvent): void {
+  const parent = img.parentElement;
+  if (!parent) return;
+  // Compute click position relative to the img's own bounding rect,
+  // then offset by the img's offsetLeft/Top within the parent. This
+  // keeps the ripple anchored even if the parent has padding/margin
+  // around the img.
+  const rect = img.getBoundingClientRect();
+  const lx = e.clientX - rect.left;
+  const ly = e.clientY - rect.top;
+  const ripple = document.createElement("span");
+  ripple.className = "cobrowse-click-ripple";
+  // Position absolute relative to parent. img.offsetLeft/Top
+  // accounts for parent-internal layout (padding, sibling-induced
+  // offsets); rect-based lx/ly is then the click point INSIDE the
+  // img. Sum gives the click point in parent-local coordinates.
+  const cx = img.offsetLeft + lx;
+  const cy = img.offsetTop + ly;
+  ripple.style.position = "absolute";
+  ripple.style.left = `${cx}px`;
+  ripple.style.top = `${cy}px`;
+  ripple.style.width = "0";
+  ripple.style.height = "0";
+  // Translate-50% centers the ripple on (cx, cy) regardless of
+  // its size at any given animation frame.
+  ripple.style.transform = "translate(-50%, -50%)";
+  ripple.style.borderRadius = "50%";
+  ripple.style.background = "rgba(80, 130, 200, 0.42)";
+  ripple.style.pointerEvents = "none";
+  ripple.style.opacity = "0.6";
+  ripple.style.transition = `width ${RIPPLE_DURATION_MS}ms ease-out, height ${RIPPLE_DURATION_MS}ms ease-out, opacity ${RIPPLE_DURATION_MS}ms ease-out`;
+  parent.appendChild(ripple);
+  // Force a reflow so the transition starts from the initial 0/0.6
+  // state rather than collapsing to the final 30/0 with no visible
+  // animation.
+  void ripple.offsetWidth;
+  ripple.style.width = `${RIPPLE_SIZE_PX}px`;
+  ripple.style.height = `${RIPPLE_SIZE_PX}px`;
+  ripple.style.opacity = "0";
+  setTimeout(() => {
+    ripple.remove();
+  }, RIPPLE_DURATION_MS + 16);
+}
+
+const RIPPLE_DURATION_MS = 400;
+const RIPPLE_SIZE_PX = 30;
 
 const PURE_MODIFIER_KEYS: ReadonlySet<string> = new Set([
   "Shift",

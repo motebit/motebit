@@ -251,7 +251,24 @@ export type UserInputEvent =
   | {
       readonly kind: "navigate";
       readonly url: string;
-    };
+    }
+  /**
+   * Slice 2e — browser history navigation. The triple `back` /
+   * `forward` / `reload` map to Playwright's `page.goBack` /
+   * `page.goForward` / `page.reload` and complete the
+   * "Chrome-feel" minimum on the user-driveable side. Each is a
+   * parameter-less event — the cursor anchor / URL / etc. don't
+   * apply.
+   *
+   * Empty-history semantics: `back` / `forward` against a session
+   * with no matching history MUST be a no-op (Playwright returns
+   * null; the wire treats null + thrown identically as success).
+   * The user's UX is "I clicked the button and nothing changed,"
+   * which matches a real browser at the start of its history.
+   */
+  | { readonly kind: "back" }
+  | { readonly kind: "forward" }
+  | { readonly kind: "reload" };
 
 /**
  * Outcome of a `forwardUserInput` call. `forwarded` means the wire
@@ -374,7 +391,16 @@ export type UserInputForwardedDetail =
       readonly host: string;
       readonly has_path: boolean;
       readonly has_query: boolean;
-    };
+    }
+  /**
+   * Slice 2e — history-navigation audit shapes. Parameter-less
+   * events; the audit just records that the user pressed
+   * back/forward/reload. No path/url to redact; no anchor coords
+   * to normalize.
+   */
+  | { readonly kind: "back" }
+  | { readonly kind: "forward" }
+  | { readonly kind: "reload" };
 
 /**
  * Audit-event payload for a user-driven input forward. Emitted on

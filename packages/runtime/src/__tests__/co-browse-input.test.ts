@@ -333,6 +333,12 @@ describe("buildUserInputAuditDetail — wire → redacted detail", () => {
     expect(json).not.toContain("xyz");
   });
 
+  it("back / forward / reload audit shapes pass through with just `kind`", () => {
+    expect(buildUserInputAuditDetail({ kind: "back" }, 1280, 800)).toEqual({ kind: "back" });
+    expect(buildUserInputAuditDetail({ kind: "forward" }, 1280, 800)).toEqual({ kind: "forward" });
+    expect(buildUserInputAuditDetail({ kind: "reload" }, 1280, 800)).toEqual({ kind: "reload" });
+  });
+
   it("paste detail collapses content to length/line_count/looks_like_url", () => {
     const detail = buildUserInputAuditDetail(
       { kind: "paste", text: "secret-password-123" },
@@ -642,6 +648,10 @@ describe("UserInputForwardedPayload — type surface", () => {
           return `${d.x_norm}|${d.y_norm}|${d.dx}|${d.dy}|${d.event_count}`;
         case "navigate":
           return `${d.scheme}|${d.host}|${d.has_path}|${d.has_query}`;
+        case "back":
+        case "forward":
+        case "reload":
+          return d.kind;
       }
     };
     expect(typeof exhaust({ kind: "click", x_norm: 0, y_norm: 0, button: "left" })).toBe("string");

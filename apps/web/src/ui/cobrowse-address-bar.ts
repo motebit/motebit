@@ -75,6 +75,14 @@ export function renderCoBrowseAddressBar(opts: RenderCoBrowseAddressBarOpts): HT
   wrap.style.color = "rgba(40, 55, 90, 0.92)";
   wrap.style.pointerEvents = "auto";
 
+  // Slice 2e — history navigation: ← → ↻ buttons before the URL
+  // input. Each dispatches a parameter-less wire event. Calm
+  // chrome — same visual register as the wrapper, no separate
+  // toolbar surface.
+  wrap.appendChild(buildHistoryButton("←", "back", forwardEvent, "Go back"));
+  wrap.appendChild(buildHistoryButton("→", "forward", forwardEvent, "Go forward"));
+  wrap.appendChild(buildHistoryButton("↻", "reload", forwardEvent, "Reload"));
+
   const input = document.createElement("input");
   input.className = "cobrowse-address-bar-input";
   input.type = "url";
@@ -140,4 +148,49 @@ export function renderCoBrowseAddressBar(opts: RenderCoBrowseAddressBarOpts): HT
 export function normalizeUrl(input: string): string {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) return input;
   return `https://${input}`;
+}
+
+/**
+ * Slice 2e — build a history-navigation button. Same visual register
+ * as the address-bar wrapper; click dispatches a parameter-less
+ * wire event. The button is `aria-label`-tagged so screen readers
+ * announce the action even though the visible glyph is just an
+ * arrow / refresh symbol.
+ */
+function buildHistoryButton(
+  glyph: string,
+  kind: "back" | "forward" | "reload",
+  forwardEvent: (event: UserInputEvent) => Promise<UserInputForwardResult>,
+  label: string,
+): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `cobrowse-address-bar-btn cobrowse-address-bar-btn-${kind}`;
+  btn.textContent = glyph;
+  btn.setAttribute("aria-label", label);
+  btn.style.flex = "0 0 auto";
+  btn.style.width = "26px";
+  btn.style.height = "26px";
+  btn.style.padding = "0";
+  btn.style.font = "16px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
+  btn.style.color = "rgba(40, 55, 90, 0.78)";
+  btn.style.background = "rgba(255, 255, 255, 0.62)";
+  btn.style.border = "1px solid rgba(120, 140, 180, 0.32)";
+  btn.style.borderRadius = "6px";
+  btn.style.cursor = "pointer";
+  btn.style.userSelect = "none";
+  btn.style.pointerEvents = "auto";
+  btn.style.transition = "background 120ms ease-out";
+  btn.addEventListener("click", (e) => {
+    // Same propagation discipline as the URL input — clicks on the
+    // address-bar buttons belong to the bar, not to Chromium below.
+    e.stopPropagation();
+    void forwardEvent({ kind }).catch((err: unknown) => {
+      // eslint-disable-next-line no-console -- fail-soft default
+      console.warn(`co-browse ${kind} forward threw`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  });
+  return btn;
 }
