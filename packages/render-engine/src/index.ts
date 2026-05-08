@@ -5,6 +5,7 @@ export * from "./expression.js";
 export * from "./credential-satellites.js";
 export * from "./receipt-summary.js";
 export { buildReceiptArtifact } from "./receipt-artifact.js";
+export { buildComputerSessionReceiptArtifact } from "./computer-session-receipt-artifact.js";
 export { ArtifactManager } from "./artifacts.js";
 export { GOLDEN_RATIO } from "./design-ratios.js";
 export {

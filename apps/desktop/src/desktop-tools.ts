@@ -47,6 +47,10 @@ export function registerDesktopTools(
   registry: SimpleToolRegistry,
   runtime: MotebitRuntime,
   invoke?: InvokeFn,
+  callbacks?: {
+    /** v1.5 — emerge signed ComputerSessionReceipt as a scene artifact. */
+    onSessionReceiptSigned?: (receipt: import("@motebit/sdk").ComputerSessionReceipt) => void;
+  },
 ): { computer: ComputerToolRegistration | null } {
   let computer: ComputerToolRegistration | null = null;
   // Search provider chain: Brave (if API key configured) → DuckDuckGo fallback
@@ -123,6 +127,7 @@ export function registerDesktopTools(
       events: runtime.events,
       signSessionReceipt: (body) => runtime.signComputerSessionReceiptBody(body),
       hashSessionActions: (actions) => runtime.hashComputerSessionActions(actions),
+      onSessionReceiptSigned: callbacks?.onSessionReceiptSigned,
     });
   }
 

@@ -97,6 +97,14 @@ export interface RegisterComputerToolOptions {
   ) => Promise<ComputerSessionReceipt | null>;
   /** v1.5 — hash the per-action structural roll-up. */
   hashSessionActions?: (actions: ReadonlyArray<ComputerSessionActionRecord>) => Promise<string>;
+  /**
+   * v1.5 — fired after a session-summary receipt is signed and
+   * emitted to the audit log. Apps wire this to `addArtifact` +
+   * `buildComputerSessionReceiptArtifact` so the receipt emerges
+   * in the scene as a verifiable artifact. Sibling of the web
+   * surface's option of the same name.
+   */
+  onSessionReceiptSigned?: (receipt: ComputerSessionReceipt) => void;
 }
 
 /**
@@ -177,6 +185,15 @@ export function registerComputerTool(
       const signed = await opts.signSessionReceipt(body);
       if (signed) {
         await emit(EventType.ComputerSessionSummarized, signed);
+        if (opts.onSessionReceiptSigned) {
+          try {
+            opts.onSessionReceiptSigned(signed);
+          } catch {
+            // UX-emergence callback is fail-soft — the audit log
+            // already has the receipt; a render failure must not
+            // tear down the close path.
+          }
+        }
       }
     } catch {
       // Receipt path is fail-soft — the close already landed.

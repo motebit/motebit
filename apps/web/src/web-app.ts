@@ -21,7 +21,7 @@ import type {
   ExecutionReceipt,
 } from "@motebit/sdk";
 import { DeviceCapability } from "@motebit/sdk";
-import { ThreeJSAdapter } from "@motebit/render-engine";
+import { ThreeJSAdapter, buildComputerSessionReceiptArtifact } from "@motebit/render-engine";
 import type { AudioReactivity } from "@motebit/render-engine";
 import type { StreamingProvider } from "@motebit/ai-core/browser";
 import {
@@ -43,6 +43,7 @@ import type { McpServerConfig } from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
 import { createWebComputerApprovalFlow } from "./computer-approval.js";
 import { registerWebComputerTool, type ComputerToolRegistration } from "./computer-tool.js";
+import type { ComputerSessionReceipt } from "@motebit/sdk";
 import {
   bootstrapIdentity,
   rotateIdentityKeys,
@@ -676,6 +677,11 @@ export class WebApp {
         // session manager and audit-event sink.
         signSessionReceipt: (body) => runtime.signComputerSessionReceiptBody(body),
         hashSessionActions: (actions) => runtime.hashComputerSessionActions(actions),
+        // v1.5 detach — emerge the signed receipt in the scene as a
+        // verifiable artifact (sibling of the delegation receipt
+        // bubble in chat.ts). The card runs Ed25519 verify locally;
+        // user can dismiss via the close button.
+        onSessionReceiptSigned: (receipt) => this.emergeSessionReceipt(receipt),
       });
     }
 
@@ -1445,6 +1451,25 @@ export class WebApp {
     spec: import("@motebit/render-engine").ArtifactSpec,
   ): import("@motebit/render-engine").ArtifactHandle | undefined {
     return this.renderer.addArtifact?.(spec);
+  }
+
+  /**
+   * v1.5 detach — emerge a signed `ComputerSessionReceipt` as a
+   * verifiable artifact in the scene. Sibling of the delegation
+   * receipt bubble (chat.ts → `buildReceiptArtifact`); same
+   * `addArtifact` path, same close-via-onDismiss contract.
+   * Exposed as a method (not inlined into the registration) so the
+   * desktop surface can drive the same emergence path through the
+   * shared `WebApp` / `DesktopApp` pattern, and tests can fire the
+   * emergence in isolation. No-ops in environments without `document`.
+   */
+  emergeSessionReceipt(receipt: ComputerSessionReceipt): void {
+    if (typeof document === "undefined") return;
+    const id = `csr-${receipt.receipt_id}`;
+    const el = buildComputerSessionReceiptArtifact(receipt, () => {
+      this.removeArtifact(id);
+    });
+    this.addArtifact({ id, kind: "receipt", element: el });
   }
 
   removeArtifact(id: string): void {

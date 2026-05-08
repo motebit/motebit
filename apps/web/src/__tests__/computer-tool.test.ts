@@ -244,4 +244,77 @@ describe("registerWebComputerTool", () => {
     expect(types).toContain("computer_session_closed");
     expect(types).not.toContain("computer_session_summarized");
   });
+
+  it("fires onSessionReceiptSigned after the audit emit so apps can emerge an artifact (v1.5 detach)", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const events: string[] = [];
+    const eventsAdapter = {
+      append: async (entry: { event_type: string }) => {
+        events.push(entry.event_type);
+      },
+    } as unknown as Parameters<typeof registerWebComputerTool>[1]["events"];
+
+    const signSessionReceipt = async (body: { session_id: string }) => ({
+      ...body,
+      receipt_id: "csr_test",
+      suite: "motebit-jcs-ed25519-b64-v1" as const,
+      signature: "fake_sig",
+      public_key: "f".repeat(64),
+    });
+
+    const emerged: Array<{ session_id: string }> = [];
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      events: eventsAdapter,
+      signSessionReceipt: signSessionReceipt as never,
+      onSessionReceiptSigned: (receipt) => {
+        emerged.push({ session_id: receipt.session_id });
+      },
+    });
+
+    await registry.execute("computer", { action: { kind: "screenshot" } });
+    await reg!.dispose();
+
+    expect(emerged).toHaveLength(1);
+    expect(emerged[0]?.session_id).toBeTruthy();
+    // Audit emit happened FIRST (calm-software ordering — record on the
+    // log before UX surface emerges).
+    const summarizedIdx = events.indexOf("computer_session_summarized");
+    expect(summarizedIdx).toBeGreaterThanOrEqual(0);
+  });
+
+  it("a throwing onSessionReceiptSigned callback does not break the close path", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher, calls } = makeMockDispatcher();
+
+    const signSessionReceipt = async (body: { session_id: string }) => ({
+      ...body,
+      receipt_id: "csr_test",
+      suite: "motebit-jcs-ed25519-b64-v1" as const,
+      signature: "fake_sig",
+      public_key: "f".repeat(64),
+    });
+
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      signSessionReceipt: signSessionReceipt as never,
+      onSessionReceiptSigned: () => {
+        throw new Error("emerge boom");
+      },
+    });
+
+    await registry.execute("computer", { action: { kind: "screenshot" } });
+    await expect(reg!.dispose()).resolves.toBeUndefined();
+    // Dispatcher still tore down — close path completed despite the
+    // emerge callback throwing. UX failure ≠ audit failure ≠ close
+    // failure; fail-soft chain works.
+    expect(calls.dispose).toBe(1);
+  });
 });

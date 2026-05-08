@@ -31,7 +31,7 @@ import type {
   PolicyConfig,
   MemoryGovernanceConfig,
 } from "@motebit/runtime";
-import { ThreeJSAdapter } from "@motebit/render-engine";
+import { ThreeJSAdapter, buildComputerSessionReceiptArtifact } from "@motebit/render-engine";
 import {
   AnthropicProvider,
   OpenAIProvider,
@@ -87,6 +87,7 @@ import { IdentityManager } from "./identity-manager.js";
 import { McpManager } from "./mcp-manager.js";
 import { registerDesktopTools } from "./desktop-tools.js";
 import type { ComputerToolRegistration } from "./computer-tool.js";
+import type { ComputerSessionReceipt } from "@motebit/sdk";
 import {
   GoalScheduler,
   type GoalCompleteEvent,
@@ -639,6 +640,21 @@ export class DesktopApp {
     void this.renderer.removeArtifact?.(id);
   }
 
+  /**
+   * v1.5 detach — emerge a signed `ComputerSessionReceipt` as a
+   * verifiable artifact. Sibling of `WebApp.emergeSessionReceipt`;
+   * keep both shapes identical so a per-surface migration of the
+   * artifact-emerge path is one-pass.
+   */
+  emergeSessionReceipt(receipt: ComputerSessionReceipt): void {
+    if (typeof document === "undefined") return;
+    const id = `csr-${receipt.receipt_id}`;
+    const el = buildComputerSessionReceiptArtifact(receipt, () => {
+      this.removeArtifact(id);
+    });
+    this.addArtifact({ id, kind: "receipt", element: el });
+  }
+
   clearArtifacts(): void {
     this.renderer.clearArtifacts?.();
   }
@@ -1118,6 +1134,12 @@ export class DesktopApp {
         this.runtime.getToolRegistry(),
         this.runtime,
         config.invoke,
+        {
+          // v1.5 detach — emerge the signed receipt in the scene as
+          // a verifiable artifact. Sibling of WebApp's wiring in
+          // apps/web/src/web-app.ts.
+          onSessionReceiptSigned: (receipt) => this.emergeSessionReceipt(receipt),
+        },
       );
       this.computerRegistration = desktopTools.computer;
 

@@ -124,6 +124,19 @@ export interface RegisterWebComputerToolOptions {
   readonly hashSessionActions?: (
     actions: ReadonlyArray<import("@motebit/sdk").ComputerSessionActionRecord>,
   ) => Promise<string>;
+  /**
+   * v1.5 — fired after a session-summary receipt is signed and
+   * emitted to the audit log. Apps wire this to `addArtifact` +
+   * `buildComputerSessionReceiptArtifact` so the receipt emerges
+   * in the scene as a verifiable artifact the user can hand to a
+   * third party. Same calm-software pattern as
+   * `buildReceiptArtifact` for delegation/execution chains.
+   *
+   * Fail-soft: a callback that throws must not break the close
+   * path. The signed receipt is already on the audit log by the
+   * time this fires; the artifact emergence is a UX layer.
+   */
+  readonly onSessionReceiptSigned?: (receipt: ComputerSessionReceipt) => void;
 }
 
 /**
@@ -215,6 +228,15 @@ export function registerWebComputerTool(
       const signed = await opts.signSessionReceipt(body);
       if (signed) {
         await emit(EventType.ComputerSessionSummarized, signed);
+        if (opts.onSessionReceiptSigned) {
+          try {
+            opts.onSessionReceiptSigned(signed);
+          } catch {
+            // UX-emergence callback is fail-soft — the audit log
+            // already has the receipt; a render failure must not
+            // tear down the close path.
+          }
+        }
       }
     } catch {
       // Receipt path is fail-soft — the close already landed.
