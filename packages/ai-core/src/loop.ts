@@ -91,6 +91,43 @@ function wrapExternalData(data: unknown, toolName: string): string {
   return `${EXTERNAL_DATA_START}"tool:${safeName}"]\n${escaped}\n${EXTERNAL_DATA_END}`;
 }
 
+/**
+ * Project a tool result into the shape the AI should see in
+ * conversation history. The slab and the AI have different needs:
+ *
+ *   - The slab consumes structured wire shapes by field — it needs
+ *     the raw bytes_base64 to render the screenshot iframe.
+ *   - The AI consumes the text representation of tool results to
+ *     decide its next step — it doesn't gain anything from a 50KB
+ *     base64 blob inlined into its context window, and the redaction
+ *     pipeline downstream of this would mangle the bytes anyway
+ *     (matching base64 against secret-detection regexes lit them up
+ *     as `[REDACTED:ENCODED_SECRET]` and made the AI report
+ *     "screenshot redacted in transit" when in fact the user could
+ *     see the page on the slab — witnessed 2026-05-07 21:30).
+ *
+ * For known byte-payload kinds, swap `bytes_base64` for an explicit
+ * `bytes_omitted` marker so the AI can read the result accurately:
+ * "the user is looking at this; here's the metadata I have."
+ *
+ * Per-kind handling: only screenshot today. Add other kinds (image
+ * embedding result, file download result) here when their tools
+ * land. The transformation is non-destructive — only fields the AI
+ * provably doesn't need text-as-text are swapped.
+ */
+function projectForAi(data: unknown): unknown {
+  if (data == null || typeof data !== "object") return data;
+  const r = data as Record<string, unknown>;
+  if (r.kind === "screenshot" && typeof r.bytes_base64 === "string" && r.bytes_base64.length > 0) {
+    const { bytes_base64, ...rest } = r;
+    return {
+      ...rest,
+      bytes_omitted: `user-visible-only (${bytes_base64.length} base64 chars)`,
+    };
+  }
+  return data;
+}
+
 // === Types ===
 
 /**
@@ -615,10 +652,19 @@ export async function* runTurnStreaming(
         }
         turnCtx = deps.policyGate.recordToolCall(turnCtx);
 
+        // Project the tool result into the AI-visible shape BEFORE
+        // sanitization. Byte-payload kinds (screenshots) get their
+        // bytes_base64 swapped for an explicit `bytes_omitted` marker
+        // — the AI doesn't gain from a 50KB base64 blob in its
+        // context, and the downstream redactor would mangle the bytes
+        // as encoded secrets. The slab's chunk path (yielded above)
+        // still gets the raw `result.data`.
+        const aiProjectedResult: ToolResult = { ...result, data: projectForAi(result.data) };
+
         // Use sanitizeAndCheck if available (duck-typed), otherwise fall back
         let sanitized: ToolResult;
         if (typeof deps.policyGate.sanitizeAndCheck === "function") {
-          const check = deps.policyGate.sanitizeAndCheck(result, toolCall.name);
+          const check = deps.policyGate.sanitizeAndCheck(aiProjectedResult, toolCall.name);
           sanitized = check.result;
           if (check.injectionDetected) {
             yield {
@@ -670,7 +716,7 @@ export async function* runTurnStreaming(
             // Low-confidence (directive density only): warn but allow through (boundary-wrapped)
           }
         } else {
-          sanitized = deps.policyGate.sanitizeResult(result, toolCall.name);
+          sanitized = deps.policyGate.sanitizeResult(aiProjectedResult, toolCall.name);
         }
 
         toolCallsSucceeded++;
@@ -785,10 +831,14 @@ export async function* runTurnStreaming(
         tool_call_id: toolCall.id,
       };
 
-      // Fallback path: no PolicyGate — wrap in boundaries AND detect injection
+      // Fallback path: no PolicyGate — wrap in boundaries AND detect injection.
+      // Same projection as the PolicyGate path: byte-payload kinds get
+      // their bytes swapped for a marker before the AI sees them.
+      const aiProjectedData = projectForAi(result.data);
       let wrappedResult = result;
-      if (result.data != null) {
-        const dataStr = typeof result.data === "string" ? result.data : JSON.stringify(result.data);
+      if (aiProjectedData != null) {
+        const dataStr =
+          typeof aiProjectedData === "string" ? aiProjectedData : JSON.stringify(aiProjectedData);
         // Lightweight injection detection (subset of @motebit/policy sanitizer)
         const injectionHints: string[] = [];
         if (/ignore\s+(previous|all|above)\s+(instructions|prompts)/i.test(dataStr))
@@ -804,7 +854,7 @@ export async function* runTurnStreaming(
             patterns: injectionHints,
           };
         }
-        wrappedResult = { ...result, data: wrapExternalData(result.data, toolCall.name) };
+        wrappedResult = { ...result, data: wrapExternalData(aiProjectedData, toolCall.name) };
       }
       conversationHistory.push({
         role: "tool",

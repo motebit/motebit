@@ -602,6 +602,115 @@ describe("runTurnStreaming (agentic loop)", () => {
     expect(resultChunk.result.response).toContain("72°F");
   });
 
+  it("screenshot result: full bytes_base64 in slab chunk; bytes_omitted marker in AI conversation history", async () => {
+    // Asymmetry the loop owes its two consumers:
+    //   - Slab consumes the structured wire shape by field — needs raw
+    //     bytes_base64 to render the screenshot iframe.
+    //   - AI consumes the text representation — doesn't gain from a
+    //     50KB base64 blob in its context, and the downstream redactor
+    //     mangles bytes as encoded secrets if they reach it (witnessed
+    //     2026-05-07: AI reported "screenshot redacted in transit"
+    //     while the slab successfully rendered the page).
+    // `projectForAi` swaps bytes_base64 for an explicit `bytes_omitted`
+    // marker on the AI path; the slab path is untouched.
+    const fakeBytes = "iVBORw0KGgoAAAANSUhEUg".repeat(20); // ~440 chars
+    const toolRegistry = makeMockToolRegistry(
+      new Map([
+        [
+          "computer",
+          {
+            def: {
+              name: "computer",
+              description: "screenshot/click/type/navigate",
+              inputSchema: { type: "object", properties: { action: { type: "object" } } },
+            },
+            result: {
+              ok: true,
+              data: {
+                kind: "screenshot",
+                bytes_base64: fakeBytes,
+                image_format: "png",
+                width: 1280,
+                height: 800,
+                captured_at: 1_000_000,
+              },
+            },
+          },
+        ],
+      ]),
+    );
+
+    // Capture every contextPack the provider receives so we can
+    // inspect the conversation history the loop hands the AI on
+    // the second turn (after the tool resolved).
+    const capturedContexts: ContextPack[] = [];
+    const responses: AIResponse[] = [
+      {
+        text: "Let me capture the screen.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        tool_calls: [{ id: "tc_shot", name: "computer", args: { action: { kind: "screenshot" } } }],
+      },
+      {
+        text: "Got the screenshot.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      },
+    ];
+    let callIndex = 0;
+    const provider: StreamingProvider = {
+      model: "test-model",
+      setModel: vi.fn(),
+      async generate(ctx: ContextPack): Promise<AIResponse> {
+        capturedContexts.push(ctx);
+        const response = responses[callIndex] ?? responses[responses.length - 1]!;
+        callIndex++;
+        return response;
+      },
+      async *generateStream(ctx: ContextPack) {
+        capturedContexts.push(ctx);
+        const response = responses[callIndex] ?? responses[responses.length - 1]!;
+        callIndex++;
+        if (response.text) yield { type: "text" as const, text: response.text };
+        yield { type: "done" as const, response };
+      },
+      estimateConfidence: () => Promise.resolve(0.8),
+      extractMemoryCandidates: (r: AIResponse) => Promise.resolve(r.memory_candidates),
+    };
+
+    const deps = makeDepsWithProvider(provider, toolRegistry);
+
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "screenshot please")) {
+      chunks.push(chunk);
+    }
+
+    // Slab path: the tool_status:done chunk carries the full structured
+    // result with bytes_base64 intact.
+    const doneChunk = chunks.find(
+      (c) => c.type === "tool_status" && (c as { status: string }).status === "done",
+    ) as { type: "tool_status"; result?: { kind?: string; bytes_base64?: string } } | undefined;
+    expect(doneChunk).toBeDefined();
+    expect(doneChunk!.result?.kind).toBe("screenshot");
+    expect(doneChunk!.result?.bytes_base64).toBe(fakeBytes);
+
+    // AI path: the second contextPack (the one fed back after the tool
+    // resolved) contains the conversation history with the tool result.
+    // The result string MUST NOT contain the raw bytes — it should
+    // carry the bytes_omitted marker instead.
+    expect(capturedContexts.length).toBeGreaterThanOrEqual(2);
+    const secondCtx = capturedContexts[capturedContexts.length - 1]!;
+    const historyText = JSON.stringify(secondCtx);
+    expect(historyText).not.toContain(fakeBytes);
+    expect(historyText).toContain("bytes_omitted");
+    // Width/height/captured_at survive — the AI can describe what the
+    // user is looking at without seeing the bytes.
+    expect(historyText).toContain("1280");
+    expect(historyText).toContain("800");
+  });
+
   it("yields approval_request for tools requiring approval", async () => {
     const toolRegistry = makeMockToolRegistry(
       new Map([
