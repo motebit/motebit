@@ -477,6 +477,30 @@ export interface ClickAction {
     readonly target_hint?: ComputerTargetHint;
 }
 
+// @alpha
+export const CO_BROWSE_TRANSITION_KINDS: readonly ["request_control", "grant_control", "deny_control", "reclaim_control", "release_control", "pause", "resume", "disconnect"];
+
+// @alpha
+export interface CoBrowseControlChangedPayload {
+    // (undocumented)
+    readonly from: ControlState;
+    // (undocumented)
+    readonly initiator: ControlHolder | "system";
+    // (undocumented)
+    readonly motebit_id: string;
+    // (undocumented)
+    readonly session_id: string;
+    // (undocumented)
+    readonly timestamp: number;
+    // (undocumented)
+    readonly to: ControlState;
+    // (undocumented)
+    readonly transition_kind: CoBrowseTransitionKind;
+}
+
+// @alpha (undocumented)
+export type CoBrowseTransitionKind = (typeof CO_BROWSE_TRANSITION_KINDS)[number];
+
 // @public (undocumented)
 export interface CollaborativePlanProposal {
     // (undocumented)
@@ -658,6 +682,23 @@ export interface ConsolidationReceipt {
         flushed_tool_audits?: number;
     };
 }
+
+// @alpha
+export type ControlHolder = "user" | "motebit";
+
+// @alpha
+export type ControlState = {
+    readonly kind: "user";
+} | {
+    readonly kind: "motebit";
+} | {
+    readonly kind: "handoff_pending";
+    readonly current: ControlHolder;
+    readonly requesting: ControlHolder;
+} | {
+    readonly kind: "paused";
+    readonly previousDriver: ControlHolder;
+};
 
 // @public (undocumented)
 export type ConversationId = Brand<string, "ConversationId">;
@@ -1248,6 +1289,8 @@ export enum EventType {
     AuditEntry = "audit_entry",
     // (undocumented)
     ChainTrustComputed = "chain_trust_computed",
+    // (undocumented)
+    CoBrowseControlChanged = "co_browse_control_changed",
     // (undocumented)
     CollaborativeStepCompleted = "collaborative_step_completed",
     // (undocumented)

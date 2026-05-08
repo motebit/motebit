@@ -111,6 +111,13 @@ export type {
 } from "./computer-use.js";
 export { CloudBrowserDispatcher } from "./cloud-browser-dispatcher.js";
 export type { CloudBrowserDispatcherOptions } from "./cloud-browser-dispatcher.js";
+export { createCoBrowseControlMachine } from "./co-browse-control.js";
+export type {
+  CoBrowseControlMachine,
+  CoBrowseControlMachineDeps,
+  CoBrowseTransitionError,
+  CoBrowseTransitionResult,
+} from "./co-browse-control.js";
 export { createComputerApprovalFlow } from "./computer-approval-shared.js";
 export type {
   ApprovalRenderHost,

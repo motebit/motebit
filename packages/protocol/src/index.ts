@@ -308,6 +308,13 @@ export enum EventType {
   // a single self-verifiable artifact per session, in addition to the
   // open/close lifecycle pair already on the trail.
   ComputerSessionSummarized = "computer_session_summarized",
+  // Co-browse control transitions (Slice 0). Every change to who's
+  // driving an isolated-browser session — `user → motebit`,
+  // `motebit → user`, requests, grants, denies, pauses, disconnect-
+  // induced reverts — emits one of these. Verifiers replaying the
+  // event log can rebuild the control state machine independently;
+  // the agent can `list_events` to know who was driving when.
+  CoBrowseControlChanged = "co_browse_control_changed",
   // Skill load — per-skill audit entry emitted by the runtime when the
   // SkillSelector pulls a skill body into the system context. One event
   // per selected skill, keyed to the run that triggered the load. See
@@ -2426,6 +2433,17 @@ export type {
   ScreencastFrameSource,
 } from "./computer-use.js";
 export { COMPUTER_ACTION_KINDS, COMPUTER_FAILURE_REASONS } from "./computer-use.js";
+
+// ── Co-browse — control state machine for the virtual_browser
+// embodiment (Slice 0). Pure protocol surface here; runtime state
+// machine lives in `@motebit/runtime`'s `co-browse-control.ts`.
+export type {
+  ControlHolder,
+  ControlState,
+  CoBrowseTransitionKind,
+  CoBrowseControlChangedPayload,
+} from "./co-browse.js";
+export { CO_BROWSE_TRANSITION_KINDS } from "./co-browse.js";
 
 export type { ToolMode } from "./tool-mode.js";
 export { TOOL_MODES, toolModePriority } from "./tool-mode.js";
