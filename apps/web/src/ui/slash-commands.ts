@@ -77,6 +77,14 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "computer", description: "Motebit Computer — reveal or hide the slab" },
   { name: "halt", description: "Halt the Motebit Computer — preempt in-flight session dispatch" },
   { name: "resume", description: "Resume the Motebit Computer after a halt" },
+  // Co-browse Slice 2b — keyboard-accessible drivers for the slab's
+  // control band. Same fail-closed transitions that band-button clicks
+  // drive; offered here as power-user / accessibility affordances.
+  // `/request` and `/release` are motebit-side and not exposed —
+  // user-typed invocations would be `wrong_party` at the machine.
+  { name: "grant", description: "Grant Motebit's pending control request" },
+  { name: "deny", description: "Deny Motebit's pending control request" },
+  { name: "reclaim", description: "Take back control from Motebit" },
   { name: "mcp", description: "MCP server management" },
   { name: "state", description: "Show state vector" },
   { name: "tools", description: "List registered tools" },
@@ -246,6 +254,23 @@ export function initSlashCommands(
       case "resume":
         chatInput.value = "";
         document.dispatchEvent(new CustomEvent("motebit:resume"));
+        return;
+      // Co-browse Slice 2b — sibling pattern of /halt /resume.
+      // web-app.ts listens, calls coBrowseControl.* directly. The
+      // machine rejects illegal transitions silently; the band's
+      // next subscribe-emit reflects the truth (no chat-log spam
+      // for wrong_party / invalid_from_state).
+      case "grant":
+        chatInput.value = "";
+        document.dispatchEvent(new CustomEvent("motebit:cobrowse-grant"));
+        return;
+      case "deny":
+        chatInput.value = "";
+        document.dispatchEvent(new CustomEvent("motebit:cobrowse-deny"));
+        return;
+      case "reclaim":
+        chatInput.value = "";
+        document.dispatchEvent(new CustomEvent("motebit:cobrowse-reclaim"));
         return;
       case "mcp": {
         chatInput.value = "";

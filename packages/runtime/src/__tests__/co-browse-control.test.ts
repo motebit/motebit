@@ -307,3 +307,114 @@ describe("CoBrowseControlMachine — failed transitions never emit audit events"
     expect(onTransition).not.toHaveBeenCalled();
   });
 });
+
+describe("CoBrowseControlMachine — subscribe (UI fan-out)", () => {
+  it("notifies subscribers with the new state after each successful transition", () => {
+    const { machine } = makeMachine();
+    const listener = vi.fn<(s: ControlStateForTest) => void>();
+    machine.subscribe(listener);
+
+    machine.requestControl("motebit");
+    machine.grantControl("user");
+    machine.reclaimControl();
+
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(listener.mock.calls[0]?.[0]).toEqual({
+      kind: "handoff_pending",
+      current: "user",
+      requesting: "motebit",
+    });
+    expect(listener.mock.calls[1]?.[0]).toEqual({ kind: "motebit" });
+    expect(listener.mock.calls[2]?.[0]).toEqual({ kind: "user" });
+  });
+
+  it("does NOT notify on failed transitions (state didn't change)", () => {
+    const { machine } = makeMachine();
+    const listener = vi.fn<(s: ControlStateForTest) => void>();
+    machine.subscribe(listener);
+
+    // All rejected — wrong state or wrong party.
+    machine.denyControl("user");
+    machine.grantControl("user");
+    machine.releaseControl("motebit");
+    machine.reclaimControl();
+    machine.resume("user");
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("does NOT notify on a no-op disconnect from user (no audit emit, no UI emit)", () => {
+    const { machine } = makeMachine();
+    const listener = vi.fn<(s: ControlStateForTest) => void>();
+    machine.subscribe(listener);
+
+    machine.disconnect();
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("multiple subscribers all receive every transition", () => {
+    const { machine } = makeMachine();
+    const a = vi.fn<(s: ControlStateForTest) => void>();
+    const b = vi.fn<(s: ControlStateForTest) => void>();
+    machine.subscribe(a);
+    machine.subscribe(b);
+
+    machine.requestControl("motebit");
+
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).toHaveBeenCalledTimes(1);
+    expect(a.mock.calls[0]?.[0]).toEqual(b.mock.calls[0]?.[0]);
+  });
+
+  it("unsubscribe stops further notifications without affecting other subscribers", () => {
+    const { machine } = makeMachine();
+    const a = vi.fn<(s: ControlStateForTest) => void>();
+    const b = vi.fn<(s: ControlStateForTest) => void>();
+    const unsubA = machine.subscribe(a);
+    machine.subscribe(b);
+
+    machine.requestControl("motebit");
+    unsubA();
+    machine.grantControl("user");
+
+    expect(a).toHaveBeenCalledTimes(1); // only the first transition
+    expect(b).toHaveBeenCalledTimes(2); // both transitions
+  });
+
+  it("a listener that throws does not break audit emission or sibling listeners", () => {
+    const { machine, onTransition } = makeMachine();
+    const bad = vi.fn<(s: ControlStateForTest) => void>(() => {
+      throw new Error("buggy slab renderer");
+    });
+    const sibling = vi.fn<(s: ControlStateForTest) => void>();
+    machine.subscribe(bad);
+    machine.subscribe(sibling);
+
+    expect(() => machine.requestControl("motebit")).not.toThrow();
+    expect(bad).toHaveBeenCalledTimes(1);
+    expect(sibling).toHaveBeenCalledTimes(1);
+    expect(onTransition).toHaveBeenCalledTimes(1); // audit still landed
+  });
+
+  it("audit fires before UI fan-out (so a listener throwing cannot pre-empt the audit)", () => {
+    const { machine, onTransition } = makeMachine();
+    const order: string[] = [];
+    onTransition.mockImplementation(() => order.push("audit"));
+    machine.subscribe(() => order.push("listener"));
+
+    machine.requestControl("motebit");
+
+    expect(order).toEqual(["audit", "listener"]);
+  });
+});
+
+// Local re-alias so the test file doesn't import ControlState from
+// @motebit/sdk directly (the protocol type lives there but tests
+// historically rely on structural matching against the runtime
+// machine's getState shape).
+type ControlStateForTest =
+  | { readonly kind: "user" }
+  | { readonly kind: "motebit" }
+  | { readonly kind: "handoff_pending"; readonly current: string; readonly requesting: string }
+  | { readonly kind: "paused"; readonly previousDriver: string };

@@ -258,6 +258,19 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.slab?.setHalted(halted);
   }
 
+  /**
+   * Co-browse Slice 2b — mount or clear the surface-built control
+   * band on the slab's chrome slot. Generic plumbing: the render
+   * engine doesn't know `ControlState`; the surface (`apps/web`)
+   * subscribes to its `CoBrowseControlMachine` and supplies the
+   * element. `null` clears the slot. Doctrine: motebit-computer.md
+   * §"Embodiment modes" — co-browse is a substate of `virtual_browser`
+   * and the slab band is its consent-contract surface.
+   */
+  setSlabControlBand(element: HTMLElement | null): void {
+    this.slab?.setControlBand(element);
+  }
+
   setBackground(color: number | null): void {
     if (this.scene) {
       this.scene.background = color === null ? null : new THREE.Color(color);

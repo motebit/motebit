@@ -87,6 +87,29 @@ export interface CoBrowseControlMachine {
   getState(): ControlState;
 
   /**
+   * Subscribe to state changes. The listener fires AFTER each
+   * successful transition with the new state — same moment the audit
+   * `onTransition` fires, but typed as a state-change subscription
+   * rather than an audit-payload emit. Returns an unsubscribe thunk.
+   *
+   * Why this is separate from `onTransition`:
+   *   - `onTransition` carries the full audit payload (from/to/kind/
+   *     initiator/timestamp) and is wired once at construction to the
+   *     event log. UI subscribers don't need that full payload — they
+   *     just need to re-render against the new state.
+   *   - Multiple UI subscribers (slab band, slash-command status hint,
+   *     future panels) need fan-out; audit emission is single-shot.
+   *   - Listeners that throw are isolated from each other so a buggy
+   *     surface doesn't tear down the audit path or sibling renderers.
+   *
+   * Failed transitions (`{ ok: false, ... }`) do not notify — the
+   * state didn't change; nothing to re-render. Subscribers that need
+   * to react to denials should attach to the AI-loop tool-result
+   * surface where `not_in_control` errors land.
+   */
+  subscribe(listener: (state: ControlState) => void): () => void;
+
+  /**
    * Motebit requests drive control from the user. From `{kind:
    * "user"}` only — re-requesting from `handoff_pending` or `paused`
    * is `invalid_from_state`. `motebit → motebit` is `wrong_party`
@@ -167,6 +190,10 @@ export function createCoBrowseControlMachine(
 ): CoBrowseControlMachine {
   const now = deps.now ?? Date.now;
   let state: ControlState = { kind: "user" };
+  // UI subscribers — fanned out from commit() after the audit emit.
+  // Set semantics so the same listener registered twice still
+  // unsubscribes cleanly via the returned thunk.
+  const listeners = new Set<(state: ControlState) => void>();
 
   function commit(
     next: ControlState,
@@ -184,11 +211,28 @@ export function createCoBrowseControlMachine(
       to: next,
       timestamp: now(),
     });
+    // Fan out to UI subscribers. Each listener is isolated — a throw
+    // from one slab renderer must not block the audit emit (already
+    // landed above) or sibling renderers / panels.
+    for (const listener of listeners) {
+      try {
+        listener(next);
+      } catch {
+        // listener fault is non-fatal — state has already committed.
+      }
+    }
     return { ok: true, state: next };
   }
 
   return {
     getState: () => state,
+
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
 
     requestControl(by) {
       // Motebit requests from user-holding state. handoff_pending

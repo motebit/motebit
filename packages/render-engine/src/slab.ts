@@ -256,6 +256,15 @@ export class SlabManager {
   private haltGestureHandler: (() => void) | null = null;
   private holdProgress = 0;
   private halted = false;
+  /**
+   * Co-browse Slice 2b — chrome slot for the surface-built control
+   * band. 2D overlay pinned to the slab's screen-space rect (NOT
+   * CSS3D — chrome stays readable regardless of slab tilt). Holds
+   * zero or one element at a time; replaced wholesale on each
+   * `setControlBand(...)` call. Sibling of the halted state and the
+   * drag-hover register — non-item chrome owned by the slab core.
+   */
+  private readonly controlBandSlotEl: HTMLDivElement;
 
   constructor(
     creatureGroup: THREE.Group,
@@ -394,6 +403,21 @@ export class SlabManager {
     this.css3dRenderer.domElement.style.pointerEvents = "none";
     container.appendChild(this.css3dRenderer.domElement);
 
+    // Co-browse Slice 2b — chrome slot. The slab plane is the
+    // surface; the band is its frame. Positioned absolute at the
+    // top of the slab's screen rect; pointer-events: none on the
+    // slot itself so children opt in (the surface-supplied band
+    // sets pointer-events: auto on its interactive controls). One
+    // child at a time; null clears it.
+    //
+    // 2D overlay rather than CSS3D: chrome must stay readable
+    // regardless of slab tilt — `setSlabHalted` is the same shape
+    // (a state-aware visual that the slab carries always). The slab
+    // plane's own pose handles content; the band's pose follows the
+    // viewport.
+    this.controlBandSlotEl = createControlBandSlotElement();
+    container.appendChild(this.controlBandSlotEl);
+
     // Plane gesture detector — two-finger hold for ~700ms fires
     // `halt()` on whatever handler the app has wired. The attach
     // helper listens on the renderer container (the parent of the
@@ -483,6 +507,42 @@ export class SlabManager {
 
   isHalted(): boolean {
     return this.halted;
+  }
+
+  /**
+   * Co-browse Slice 2b — mount or clear the control band. The
+   * render engine has no notion of `ControlState`; the surface
+   * (`apps/web`) subscribes to its `CoBrowseControlMachine` and
+   * builds the state-appropriate element. Passing `null` clears the
+   * slot — that's the `{kind: "user"}` register (don't announce what
+   * the user already sees).
+   *
+   * Replace semantics: each call swaps the slot's single child.
+   * `replaceChildren` is preferred when present (real DOM); falls
+   * back to remove-then-append for headless test shims.
+   */
+  setControlBand(element: HTMLElement | null): void {
+    const slot = this.controlBandSlotEl;
+    if (typeof slot.replaceChildren === "function") {
+      if (element == null) {
+        slot.replaceChildren();
+      } else {
+        slot.replaceChildren(element);
+      }
+      return;
+    }
+    // Headless / minimal-shim path. The shim's appendChild +
+    // removeChild manage the children array; iterate via the
+    // exposed children if present.
+    const children = (slot as unknown as { children?: HTMLElement[] }).children;
+    if (children) {
+      for (const child of [...children]) {
+        slot.removeChild(child);
+      }
+    }
+    if (element != null) {
+      slot.appendChild(element);
+    }
   }
 
   /**
@@ -1152,6 +1212,71 @@ function createContainerElement(): HTMLDivElement {
   // only unoccupied stage area becomes click-through. Without this,
   // any pointer in the slab's region was stolen from the creature's
   // rotate/zoom controls — the bug fixed by commit 89467720.
+  el.style.pointerEvents = "none";
+  return el;
+}
+
+/**
+ * Co-browse Slice 2b — build the chrome slot for the control band.
+ * Position: absolute, pinned to top of the slab's container. Calm
+ * chrome — `pointer-events: none` on the slot itself so unoccupied
+ * area passes through; surface-supplied band content opts in to
+ * `pointer-events: auto` on its own interactive controls.
+ *
+ * z-index 3 to render above the CSS3D layer (z-index 2). Background
+ * stays transparent so the slab membrane shows through; the
+ * surface's element decides its own visual register (translucent
+ * card, doorbell pulse, etc.).
+ *
+ * Headless test shim returns the same `appendChild`/`removeChild`/
+ * `replaceChildren`-capable stand-in `createContainerElement` uses,
+ * with a `children` array exposed for the iteration fallback in
+ * `SlabManager.setControlBand`.
+ */
+function createControlBandSlotElement(): HTMLDivElement {
+  if (typeof document === "undefined") {
+    const children: HTMLElement[] = [];
+    const stub = {
+      className: "slab-control-band-slot",
+      children,
+      style: new Proxy(
+        {},
+        {
+          get: () => "",
+          set: () => true,
+        },
+      ) as unknown as CSSStyleDeclaration,
+      appendChild: (child: HTMLElement) => {
+        children.push(child);
+        (child as unknown as { parentNode: unknown }).parentNode = stub;
+        return child;
+      },
+      removeChild: (child: HTMLElement) => {
+        const i = children.indexOf(child);
+        if (i >= 0) children.splice(i, 1);
+        (child as unknown as { parentNode: unknown }).parentNode = null;
+        return child;
+      },
+      replaceChildren: (...newChildren: HTMLElement[]) => {
+        for (const c of children) {
+          (c as unknown as { parentNode: unknown }).parentNode = null;
+        }
+        children.length = 0;
+        for (const c of newChildren) {
+          children.push(c);
+          (c as unknown as { parentNode: unknown }).parentNode = stub;
+        }
+      },
+    };
+    return stub as unknown as HTMLDivElement;
+  }
+  const el = document.createElement("div");
+  el.className = "slab-control-band-slot";
+  el.style.position = "absolute";
+  el.style.top = "0";
+  el.style.left = "0";
+  el.style.right = "0";
+  el.style.zIndex = "3";
   el.style.pointerEvents = "none";
   return el;
 }

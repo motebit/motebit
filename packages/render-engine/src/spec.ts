@@ -195,6 +195,29 @@ export interface RenderAdapter {
    * Pair with `setSlabHaltGestureHandler` for the end-to-end loop.
    */
   setSlabHalted?(halted: boolean): void;
+  /**
+   * Co-browse Slice 2b — chrome slot for surface-built control-band
+   * UI. Generic by design: the render engine knows nothing about
+   * `ControlState`. The surface (`apps/web`) subscribes to its
+   * `CoBrowseControlMachine`, builds a state-appropriate element
+   * (handoff doorbell, "motebit is driving" reclaim, paused resume),
+   * and mounts it here. Passing `null` clears the slot — that's the
+   * `{kind: "user"}` register (calm: don't announce what the user
+   * already sees).
+   *
+   * Sibling of `setSlabHalted` / `setSlabDragHover` — non-item slab
+   * chrome, owned by the slab core, replaceable per call. The slot
+   * is a 2D overlay pinned over the slab's screen-space rect; this
+   * is calm chrome (always readable) rather than CSS3D content
+   * (would follow tilt). The slab plane itself is the surface; the
+   * band is its frame.
+   *
+   * Contract: the surface's element owns its styling, click handlers,
+   * and any pointer-events opt-in. The slot's wrapper has
+   * `pointer-events: none` so unoccupied chrome area passes through
+   * to the canvas's controls.
+   */
+  setSlabControlBand?(element: HTMLElement | null): void;
 }
 
 // === Slab ("Motebit Computer") — scene primitive types ===

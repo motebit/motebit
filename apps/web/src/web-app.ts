@@ -13,6 +13,7 @@ import {
   updateSlabItem,
   renderDetachArtifact as renderSlabDetachArtifact,
 } from "./ui/slab-items";
+import { renderCoBrowseBand } from "./ui/cobrowse-band";
 import type {
   ConversationMessage,
   BehaviorCues,
@@ -145,6 +146,17 @@ export class WebApp {
    * emits the closing audit event.
    */
   private computerRegistration: ComputerToolRegistration | null = null;
+  /**
+   * Co-browse Slice 2b — disposers wired against the active
+   * `coBrowseControl` machine. Two registrations bundled here:
+   *   1. `subscribe(...)` for slab-band re-rendering on each
+   *      transition, and
+   *   2. `motebit:cobrowse-grant` / `-deny` / `-reclaim` document-
+   *      level listeners that the slash-command surface dispatches.
+   * Both clear in `stop()`. Sibling pattern of `slabBridgeUnsub` and
+   * `haltResumeListeners`.
+   */
+  private coBrowseDisposers: Array<() => void> = [];
   /**
    * v1.3 — single screencast bus per WebApp (v1 cloud-browser
    * dispatcher tracks one cloud session at a time). Producer is the
@@ -736,6 +748,68 @@ export class WebApp {
       // through `motebit:resume`.
     });
     this.setupHaltResumeListeners();
+    this.setupCoBrowseListeners();
+  }
+
+  /**
+   * Co-browse Slice 2b — subscribe to the control state machine and
+   * push the surface-built band element through the slab's chrome
+   * slot on each transition. Also wire document-level listeners for
+   * `/grant`, `/deny`, `/reclaim` slash commands (sibling of
+   * `setupHaltResumeListeners`).
+   *
+   * No-op when the cloud-browser tool isn't registered (no co-browse
+   * to govern). Subscriber + listeners both register against the
+   * SAME `coBrowseControl` machine — Slice 2c+ will lift this to a
+   * map-per-session if concurrent sessions arrive.
+   *
+   * Surface determinism: slash-command handlers call
+   * `coBrowseControl.{grantControl,denyControl,reclaimControl}`
+   * directly. Failed transitions (`{ok: false, reason}`) surface as
+   * console hints rather than chat messages — calm software; the
+   * band re-renders on the NEXT successful transition, so a wrong-
+   * party / invalid-from-state click is silently absorbed at the UI
+   * (the user just sees the truth of the current state).
+   */
+  private setupCoBrowseListeners(): void {
+    if (!this.computerRegistration) return;
+    if (typeof document === "undefined") return;
+    const machine = this.computerRegistration.coBrowseControl;
+
+    // Slab band re-renders on each successful transition. Failed
+    // transitions don't fire — the listener is correct by
+    // construction.
+    const unsubscribeBand = machine.subscribe((state) => {
+      const band = renderCoBrowseBand(state, machine);
+      this.renderer.setSlabControlBand?.(band);
+    });
+    this.coBrowseDisposers.push(unsubscribeBand, () => {
+      // Clear the slot on teardown so a re-mount doesn't inherit a
+      // stale element from a previous session.
+      this.renderer.setSlabControlBand?.(null);
+    });
+
+    // Slash-command surface — `/grant`, `/deny`, `/reclaim` dispatch
+    // CustomEvents (sibling of `motebit:halt` / `motebit:resume`).
+    // Direct typed-capability calls; check-affordance-routing
+    // approves by construction.
+    const onGrant = (): void => {
+      machine.grantControl("user");
+    };
+    const onDeny = (): void => {
+      machine.denyControl("user");
+    };
+    const onReclaim = (): void => {
+      machine.reclaimControl();
+    };
+    document.addEventListener("motebit:cobrowse-grant", onGrant);
+    document.addEventListener("motebit:cobrowse-deny", onDeny);
+    document.addEventListener("motebit:cobrowse-reclaim", onReclaim);
+    this.coBrowseDisposers.push(
+      () => document.removeEventListener("motebit:cobrowse-grant", onGrant),
+      () => document.removeEventListener("motebit:cobrowse-deny", onDeny),
+      () => document.removeEventListener("motebit:cobrowse-reclaim", onReclaim),
+    );
   }
 
   /**
@@ -788,6 +862,10 @@ export class WebApp {
     }
     while (this.haltResumeListeners.length > 0) {
       const dispose = this.haltResumeListeners.pop();
+      dispose?.();
+    }
+    while (this.coBrowseDisposers.length > 0) {
+      const dispose = this.coBrowseDisposers.pop();
       dispose?.();
     }
     // Tear down the cloud-browser session (if any) BEFORE the runtime
