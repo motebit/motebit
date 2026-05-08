@@ -108,7 +108,14 @@ export type {
   ComputerPlatformDispatcher,
   ComputerGovernanceClassifier,
   ComputerApprovalFlow,
+  UserInputForwardResult,
 } from "./computer-use.js";
+export {
+  classifyCharacter,
+  classifyKeyRole,
+  pasteAuditDetail,
+  buildUserInputAuditDetail,
+} from "./co-browse-input.js";
 export { CloudBrowserDispatcher } from "./cloud-browser-dispatcher.js";
 export type { CloudBrowserDispatcherOptions } from "./cloud-browser-dispatcher.js";
 export { createCoBrowseControlMachine } from "./co-browse-control.js";

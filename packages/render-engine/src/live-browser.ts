@@ -35,6 +35,20 @@ export interface LiveBrowserElementHandle {
   /** Mountable HTMLElement — the slab manager appends this to the plane. */
   readonly element: HTMLElement;
   /**
+   * The actual `<img>` rendering the JPEG frames. Surfaces (apps/web)
+   * use this for Slice 2c input capture: attaching `click` /
+   * `keydown` / `paste` listeners against the visible frame so the
+   * capture surface coincides with the visible frame surface — what
+   * the user clicks IS what gets forwarded to Chromium.
+   *
+   * Returning the inner element rather than just the root keeps
+   * coordinate math honest: `getBoundingClientRect()` on this img
+   * IS the rendered screencast rect; no object-fit / letterbox
+   * compensation needed because the img itself adopts the
+   * screencast's aspect ratio (set in `pushFrame`).
+   */
+  readonly frameElement: HTMLImageElement;
+  /**
    * Stop the subscription and clear the rendered frame. Idempotent —
    * a second call is a no-op. The element itself is left in the DOM
    * for the slab's dissolve animation to take it the rest of the way.
@@ -104,6 +118,7 @@ export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrow
 
   return {
     element: root,
+    frameElement: img,
     dispose(): void {
       if (disposed) return;
       disposed = true;

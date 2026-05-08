@@ -327,6 +327,64 @@ Signed event emitted when a session ends.
 
 - `reason` (string, optional) — `"user_closed" | "timeout" | "error"` or an implementation-specific code.
 
+### 5.5 — UserInputEvent (Slice 2c)
+
+Wire format for **user-driven** input forwarded into a co-browse session. Available only on surfaces that carry a `ControlState` machine (`virtual_browser` embodiment); `desktop_drive` does not have this plane. Forwarding is gated at the runtime layer on `controlState.kind === "user"`; any other state rejects with `not_in_user_state`.
+
+#### Wire format (foundation law)
+
+```json
+{ "event": { "kind": "click", "x": 320, "y": 200, "button": "left" } }
+```
+
+```json
+{
+  "event": {
+    "kind": "key",
+    "key": "c",
+    "modifiers": { "ctrl": false, "meta": true, "alt": false, "shift": false }
+  }
+}
+```
+
+```json
+{ "event": { "kind": "paste", "text": "<clipboard content>" } }
+```
+
+#### Event variants
+
+- **click** — pointer click at logical-pixel `(x, y)` against the cloud Chromium viewport. `button ∈ {"left", "right", "middle"}`. Same coordinate system as motebit-side `ComputerAction.click`.
+- **key** — keyboard press. `key` is the browser `KeyboardEvent.key` value (single character for printable input, named key for control keys, e.g. `"Enter"`, `"Backspace"`, `"ArrowUp"`). `modifiers` reports the four standard modifier states. Implementations route printable single-character `key` with no non-shift modifier through `page.keyboard.type(key)`; named keys and any non-shift modifier through `page.keyboard.press(combo)`.
+- **paste** — clipboard paste. The wire carries raw text; v1 implementations dispatch via `page.keyboard.type(text)` (per-character). A future slice MAY upgrade to CDP `Input.insertText` for true paste semantics.
+
+#### Discrete events only (Slice 2c scope)
+
+Wheel, drag, continuous pointermove, selection-drag, and file-drag are explicitly **out of v1**. POST-per-event cannot sustain 50+ events/sec at 30-100ms RTT; those event classes require batching/coalescing or a WebSocket-shaped substrate, deferred to a follow-up slice.
+
+#### Audit format (foundation law)
+
+Every forward attempt — successes and rejections — emits one `UserInputForwarded` event. The audit format is **redacted by construction**. Raw text, raw key values, and raw pixel coordinates do NOT appear:
+
+| Field                         | Type                        | Notes                                                                                                              |
+| ----------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `session_id`                  | string                      | Open computer-use session.                                                                                         |
+| `motebit_id`                  | string                      | Identity binding.                                                                                                  |
+| `outcome`                     | `"forwarded" \| "rejected"` | Forward attempt result.                                                                                            |
+| `rejection_reason`            | enum, optional              | `"not_in_user_state" \| "session_closed" \| "transport_error" \| "not_supported"`. Present iff `outcome` rejected. |
+| `control_state_at_forwarding` | `ControlState`              | Mirrors `control_state_at_denial` on motebit-side denials — verifiers reconstruct context without cross-reference. |
+| `detail`                      | per-kind shape              | See below.                                                                                                         |
+| `timestamp`                   | int                         | Unix millis.                                                                                                       |
+
+Per-kind audit detail:
+
+- **click** — `{ kind: "click", x_norm: float, y_norm: float, button: "left"\|"right"\|"middle" }`. Coordinates are normalized [0, 1] against the rendered screencast rect; raw logical pixels are NOT logged.
+- **key** — `{ kind: "key", character_class, key_role, modifiers }`. `character_class ∈ {"letter","digit","punct","whitespace","control","modifier","unknown"}`. `key_role ∈ {"enter","tab","escape","backspace","arrow","shortcut","printable","unknown"}`. Raw key value is NOT logged. Multi-char unrecognized key names (e.g. IME composition strings) MUST collapse to `character_class: "unknown"` rather than being classified by their first character.
+- **paste** — `{ kind: "paste", length: int, line_count: int, looks_like_url: bool }`. `looks_like_url` is `^https?://...` matching only. Content is NEVER logged.
+
+#### Sensitivity boundary — Slice 2c does NOT change policy
+
+User-driven screencast frames are still observations. The runtime's existing sensitivity-classification policy (§6) applies unchanged. Slice 2c documents this boundary explicitly: implementations SHOULD NOT silently treat user-driven frames as safe just because the user is the actor. Before medical / financial / secret session use of co-browse, implementations MUST run a policy pass on the screencast surface itself.
+
 ---
 
 ## 6. Sensitivity Classification Boundary

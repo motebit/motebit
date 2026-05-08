@@ -315,6 +315,19 @@ export enum EventType {
   // event log can rebuild the control state machine independently;
   // the agent can `list_events` to know who was driving when.
   CoBrowseControlChanged = "co_browse_control_changed",
+  // Co-browse user-driven input forward (Slice 2c). Emitted on
+  // every user input attempt against the cloud Chromium —
+  // forwarded clicks/keys/pastes when `controlState.kind === "user"`,
+  // rejections (gate denied, transport error) on every other
+  // outcome. Payload (`UserInputForwardedPayload` in co-browse.ts)
+  // is REDACTED by construction: keys log as character_class +
+  // key_role, pastes log length + line_count + looks_like_url,
+  // pointer events log normalized [0, 1] coordinates. Raw text
+  // never lands in the audit. The `control_state_at_forwarding`
+  // field mirrors `control_state_at_denial` on motebit-side denials
+  // so verifiers replaying the log don't have to cross-reference
+  // adjacent control events for context.
+  UserInputForwarded = "user_input_forwarded",
   // Skill load — per-skill audit entry emitted by the runtime when the
   // SkillSelector pulls a skill body into the system context. One event
   // per selected skill, keyed to the run that triggered the load. See
@@ -2442,6 +2455,14 @@ export type {
   ControlState,
   CoBrowseTransitionKind,
   CoBrowseControlChangedPayload,
+  KeyModifiers,
+  UserInputEvent,
+  UserInputForwardOutcome,
+  UserInputRejectionReason,
+  CharacterClass,
+  KeyRole,
+  UserInputForwardedDetail,
+  UserInputForwardedPayload,
 } from "./co-browse.js";
 export { CO_BROWSE_TRANSITION_KINDS } from "./co-browse.js";
 

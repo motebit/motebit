@@ -42,6 +42,7 @@ import type {
   NavigateAction,
   ScrollAction,
   TypeAction,
+  UserInputEvent,
 } from "@motebit/protocol";
 import type { Page } from "playwright-core";
 
@@ -319,6 +320,72 @@ async function doNavigate(session: BrowserSession, action: NavigateAction): Prom
       "not_supported",
       `navigate failed: ${err instanceof Error ? err.message : String(err)}`,
     );
+  }
+}
+
+// ── Slice 2c: user-driven input forwarding ───────────────────────────
+//
+// Discrete events only — click, key, paste. Wheel and drag are out
+// of 2c (POST-per-event can't sustain 50+ events/sec without
+// batching; see spec/computer-use-v1.md §5.5). The runtime's
+// session manager has already gated this against
+// `controlState.kind === "user"` before the wire reaches us; here
+// we just dispatch.
+//
+// Coordinate system: same logical-pixel viewport coordinates the
+// motebit-side `click` action uses. The capture surface translates
+// CSS rect → logical pixels before posting; we hand them to
+// Playwright unchanged.
+
+export async function executeUserInput(
+  session: BrowserSession,
+  event: UserInputEvent,
+): Promise<void> {
+  switch (event.kind) {
+    case "click": {
+      await session.page.mouse.click(event.x, event.y, {
+        button: parseButton(event.button),
+      });
+      session.lastCursorX = event.x;
+      session.lastCursorY = event.y;
+      return;
+    }
+    case "key": {
+      const { key, modifiers } = event;
+      // Any non-shift modifier turns the press into a shortcut combo.
+      // Shift alone for "A" / "$" / etc. is still printable input —
+      // route through type() so it behaves like character entry.
+      const hasNonShiftModifier = modifiers.ctrl || modifiers.meta || modifiers.alt;
+      if (hasNonShiftModifier) {
+        const parts: string[] = [];
+        if (modifiers.meta) parts.push("Meta");
+        if (modifiers.ctrl) parts.push("Control");
+        if (modifiers.alt) parts.push("Alt");
+        if (modifiers.shift) parts.push("Shift");
+        parts.push(key);
+        await session.page.keyboard.press(parts.join("+"));
+        return;
+      }
+      // No non-shift modifier present.
+      if (Array.from(key).length === 1) {
+        // Printable single character — type() drives the page through
+        // the normal character-entry pipeline (autocomplete, IME,
+        // input-event dispatch).
+        await session.page.keyboard.type(key);
+      } else {
+        // Named key (Enter, Tab, Backspace, ArrowUp, F1, …) — press
+        // it. Playwright accepts the wire-format names verbatim.
+        await session.page.keyboard.press(key);
+      }
+      return;
+    }
+    case "paste": {
+      // v1 paste-as-type. A future slice may upgrade to CDP
+      // `Input.insertText` for true paste semantics (faster on long
+      // text, fires `paste` event instead of N keypresses).
+      await session.page.keyboard.type(event.text);
+      return;
+    }
   }
 }
 

@@ -365,6 +365,201 @@ describe("browser-sandbox routes", () => {
     });
   });
 
+  describe("POST /sessions/:id/forward-input (Slice 2c)", () => {
+    it("forwards a click and returns 204", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      const clickSpy = vi.fn(async () => undefined);
+      (session.page as unknown as { mouse: { click: typeof clickSpy } }).mouse.click = clickSpy;
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: { kind: "click", x: 320, y: 200, button: "left" },
+        }),
+      });
+      expect(res.status).toBe(204);
+      expect(clickSpy).toHaveBeenCalledWith(320, 200, { button: "left" });
+    });
+
+    it("forwards a printable key via keyboard.type (single char, no modifier)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      const typeSpy = vi.fn(async () => undefined);
+      const pressSpy = vi.fn(async () => undefined);
+      (session.page as unknown as { keyboard: { type: typeof typeSpy } }).keyboard.type = typeSpy;
+      (session.page as unknown as { keyboard: { press: typeof pressSpy } }).keyboard.press =
+        pressSpy;
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: {
+            kind: "key",
+            key: "a",
+            modifiers: { ctrl: false, meta: false, alt: false, shift: false },
+          },
+        }),
+      });
+      expect(res.status).toBe(204);
+      expect(typeSpy).toHaveBeenCalledWith("a");
+      expect(pressSpy).not.toHaveBeenCalled();
+    });
+
+    it("forwards a Cmd+C shortcut via keyboard.press(combo)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      const pressSpy = vi.fn(async () => undefined);
+      (session.page as unknown as { keyboard: { press: typeof pressSpy } }).keyboard.press =
+        pressSpy;
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: {
+            kind: "key",
+            key: "c",
+            modifiers: { ctrl: false, meta: true, alt: false, shift: false },
+          },
+        }),
+      });
+      expect(res.status).toBe(204);
+      expect(pressSpy).toHaveBeenCalledWith("Meta+c");
+    });
+
+    it("forwards a named key (Enter) via keyboard.press(key)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      const pressSpy = vi.fn(async () => undefined);
+      (session.page as unknown as { keyboard: { press: typeof pressSpy } }).keyboard.press =
+        pressSpy;
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: {
+            kind: "key",
+            key: "Enter",
+            modifiers: { ctrl: false, meta: false, alt: false, shift: false },
+          },
+        }),
+      });
+      expect(res.status).toBe(204);
+      expect(pressSpy).toHaveBeenCalledWith("Enter");
+    });
+
+    it("forwards a paste via keyboard.type(text)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      const typeSpy = vi.fn(async () => undefined);
+      (session.page as unknown as { keyboard: { type: typeof typeSpy } }).keyboard.type = typeSpy;
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: { kind: "paste", text: "https://example.com" },
+        }),
+      });
+      expect(res.status).toBe(204);
+      expect(typeSpy).toHaveBeenCalledWith("https://example.com");
+    });
+
+    it("returns 404 + session_closed for unknown session id", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const res = await app.request("/sessions/nope/forward-input", {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: { kind: "click", x: 1, y: 1, button: "left" },
+        }),
+      });
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error: { reason: string } };
+      expect(body.error.reason).toBe("session_closed");
+    });
+
+    it("returns 501 + not_supported for malformed event body", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(501);
+      const body = (await res.json()) as { error: { reason: string } };
+      expect(body.error.reason).toBe("not_supported");
+    });
+
+    it("rejects without bearer (401)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const res = await app.request("/sessions/anything/forward-input", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: { kind: "click", x: 1, y: 1, button: "left" },
+        }),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("decrements inFlight on a happy-path forward (begin/end discipline)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      expect(session.inFlight).toBe(0);
+
+      const res = await app.request(`/sessions/${session_id}/forward-input`, {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: { kind: "click", x: 1, y: 1, button: "left" },
+        }),
+      });
+      expect(res.status).toBe(204);
+      expect(session.inFlight).toBe(0);
+    });
+  });
+
   describe("global error handler", () => {
     it("maps unstructured errors to platform_blocked", async () => {
       const app = buildApp({ config: TEST_CONFIG, pool });

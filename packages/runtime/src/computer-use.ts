@@ -54,9 +54,13 @@ import type {
   ComputerSessionOpened,
   ControlState,
   SignableComputerSessionReceipt,
+  UserInputEvent,
+  UserInputForwardedPayload,
+  UserInputRejectionReason,
 } from "@motebit/sdk";
 
 import type { CoBrowseControlMachine } from "./co-browse-control.js";
+import { buildUserInputAuditDetail } from "./co-browse-input.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -92,6 +96,22 @@ export interface ComputerPlatformDispatcher {
    * (e.g. cloud browser frame streams).
    */
   execute(action: ComputerAction, onChunk?: (chunk: unknown) => void): Promise<unknown>;
+  /**
+   * Co-browse Slice 2c — forward a user-driven input event into the
+   * dispatcher. Optional: only surfaces with a co-browse substate
+   * (cloud-browser → `virtual_browser`) implement this. Tauri-based
+   * desktop dispatchers omit it; user input on the desktop surface
+   * is just normal OS input, no forwarding plane.
+   *
+   * `event` carries raw text/keys/coordinates — Chromium needs them
+   * to dispatch. Redaction is the session manager's responsibility
+   * and happens at the audit-emission layer (`forwardUserInput`),
+   * not here. The dispatcher is the wire, not the policy.
+   *
+   * Throw `ComputerDispatcherError` for structured failures the
+   * manager should surface as `transport_error`.
+   */
+  forwardInput?(event: UserInputEvent): Promise<void>;
   /** Optional teardown when the session closes. */
   dispose?(sessionId: string): Promise<void>;
 }
@@ -200,6 +220,22 @@ export type ComputerActionOutcome =
   | { outcome: "success"; data: unknown }
   | { outcome: "failure"; reason: ComputerFailureReason; message?: string };
 
+/**
+ * Co-browse Slice 2c — outcome of a `forwardUserInput` call. Carries
+ * the structured wire result PLUS the audit payload the caller
+ * writes to the event log. Symmetric to `ComputerActionOutcome` for
+ * motebit-side dispatch but typed against the user-input redaction
+ * shape (`UserInputForwardedPayload`) rather than
+ * `ComputerFailureReason`.
+ */
+export type UserInputForwardResult =
+  | { outcome: "forwarded"; audit: UserInputForwardedPayload }
+  | {
+      outcome: "rejected";
+      rejection_reason: UserInputRejectionReason;
+      audit: UserInputForwardedPayload;
+    };
+
 export interface ComputerSessionManager {
   /**
    * Allocate a new session. Queries the dispatcher for display info and
@@ -231,6 +267,24 @@ export interface ComputerSessionManager {
     action: ComputerAction,
     onChunk?: (chunk: unknown) => void,
   ): Promise<ComputerActionOutcome>;
+
+  /**
+   * Co-browse Slice 2c — forward a user-driven input event. Gated
+   * on `coBrowseControl.getState().kind === "user"`: any other
+   * state rejects with `not_in_user_state` (no-op + audit). Calls
+   * `dispatcher.forwardInput` if implemented; rejects with
+   * `not_supported` if the dispatcher omits it.
+   *
+   * Returns an audit payload (`UserInputForwardedPayload`-shaped)
+   * that the caller emits to the event log. Redaction happens
+   * here — raw text/keys/pixel coords NEVER appear in the
+   * returned audit; the wire `event` carries them only as long
+   * as needed to forward.
+   *
+   * Symmetric to `executeAction`'s outcome envelope: every call
+   * returns a structured result, the caller signs/emits.
+   */
+  forwardUserInput(sessionId: string, event: UserInputEvent): Promise<UserInputForwardResult>;
 
   /** Return an open session's handle, or `null` if not open. */
   getSession(sessionId: string): ComputerSessionHandle | null;
@@ -643,6 +697,81 @@ export function createComputerSessionManager(
     }
   }
 
+  /**
+   * Co-browse Slice 2c — forward a user-driven input event into the
+   * cloud Chromium. Gate (Slice 2b sibling): rejects with
+   * `not_in_user_state` unless `coBrowseControl.getState().kind ===
+   * "user"`. Validates session, calls `dispatcher.forwardInput`,
+   * builds the redacted audit payload (raw text/keys/pixel coords
+   * stay in the wire `event` only as long as the dispatcher needs
+   * them — never land in the returned audit).
+   *
+   * Sessions without a `coBrowseControl` machine are not co-browse
+   * sessions and forwarding is structurally illegal — reject with
+   * `not_supported`.
+   */
+  async function forwardUserInput(
+    sessionId: string,
+    event: UserInputEvent,
+  ): Promise<UserInputForwardResult> {
+    const session = sessions.get(sessionId);
+    const sessionDisplay: ComputerDisplayInfo = session?.display ?? {
+      width: 1,
+      height: 1,
+      scaling_factor: 1,
+    };
+    // Build the redacted detail up front — same shape across every
+    // outcome branch so the caller always has an audit payload to
+    // emit (even on rejection).
+    const detail = buildUserInputAuditDetail(event, sessionDisplay.width, sessionDisplay.height);
+    const motebitId = session?.motebit_id ?? "";
+    const controlStateAtForwarding: ControlState = coBrowseControl?.getState() ?? { kind: "user" };
+    const reject = (reason: UserInputRejectionReason): UserInputForwardResult => {
+      const audit: UserInputForwardedPayload = {
+        session_id: sessionId,
+        motebit_id: motebitId,
+        outcome: "rejected",
+        rejection_reason: reason,
+        control_state_at_forwarding: controlStateAtForwarding,
+        detail,
+        timestamp: now(),
+      };
+      return { outcome: "rejected", rejection_reason: reason, audit };
+    };
+
+    if (!session || session.closed_at != null) return reject("session_closed");
+
+    // Gate: forwarding requires the user to hold control. The
+    // `coBrowseControl` machine MUST be present for forwarding —
+    // its absence means this session is not a co-browse session
+    // (e.g. desktop_drive) and the input plane has no policy.
+    if (!coBrowseControl) return reject("not_supported");
+    if (controlStateAtForwarding.kind !== "user") return reject("not_in_user_state");
+
+    if (!dispatcher.forwardInput) return reject("not_supported");
+
+    try {
+      await dispatcher.forwardInput(event);
+    } catch (err: unknown) {
+      void err;
+      // Transport faults fail-closed at the audit layer. The visual-
+      // continuity-lost path (caller observes a screencast drop)
+      // wires `coBrowseControl.disconnect()` separately — that's
+      // owned by the surface, not by per-event transport here.
+      return reject("transport_error");
+    }
+
+    const audit: UserInputForwardedPayload = {
+      session_id: sessionId,
+      motebit_id: motebitId,
+      outcome: "forwarded",
+      control_state_at_forwarding: controlStateAtForwarding,
+      detail,
+      timestamp: now(),
+    };
+    return { outcome: "forwarded", audit };
+  }
+
   function getSession(sessionId: string): ComputerSessionHandle | null {
     const s = sessions.get(sessionId);
     if (!s || s.closed_at != null) return null;
@@ -801,6 +930,7 @@ export function createComputerSessionManager(
     openSession,
     closeSession,
     executeAction,
+    forwardUserInput,
     getSession,
     activeSessionIds,
     dispose,

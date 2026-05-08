@@ -33,8 +33,10 @@
 
 import { stripInternalTags } from "@motebit/ai-core";
 import type { SlabItem, SlabItemActions, ArtifactKindForDetach } from "@motebit/runtime";
+import type { UserInputForwardResult } from "@motebit/runtime";
 import { buildLiveBrowserElement } from "@motebit/render-engine";
-import type { ScreencastFrameSource } from "@motebit/sdk";
+import type { ScreencastFrameSource, UserInputEvent } from "@motebit/sdk";
+import { attachInputCapture } from "./cobrowse-input-capture.js";
 
 // ── Hover-close affordance ────────────────────────────────────────────
 //
@@ -1915,7 +1917,17 @@ export function setLiveBrowserSuppressionPredicate(predicate: (item: SlabItem) =
  * cleanly.
  */
 function renderLiveBrowser(item: SlabItem): HTMLElement {
-  const payload = (item.payload ?? {}) as { frameSource?: ScreencastFrameSource };
+  // Slice 2c — the payload may carry user-input forwarding wiring
+  // (forwardUserInput callback + viewport dims). When present, we
+  // attach DOM capture to the screencast img after construction
+  // and chain the detacher into the disposer so the slab's
+  // dissolve releases both subscriptions atomically.
+  const payload = (item.payload ?? {}) as {
+    frameSource?: ScreencastFrameSource;
+    forwardUserInput?: (event: UserInputEvent) => Promise<UserInputForwardResult>;
+    displayWidth?: number;
+    displayHeight?: number;
+  };
   const source = payload.frameSource;
   if (!source || typeof source.subscribe !== "function") {
     // Defensive: if the apps wired the slab item without a frame
@@ -1930,13 +1942,25 @@ function renderLiveBrowser(item: SlabItem): HTMLElement {
     return fallback;
   }
   const handle = buildLiveBrowserElement(source);
+  let detachInput: (() => void) | null = null;
+  if (typeof payload.forwardUserInput === "function") {
+    detachInput = attachInputCapture({
+      img: handle.frameElement,
+      forwardEvent: payload.forwardUserInput,
+      fallbackWidth: payload.displayWidth ?? 1280,
+      fallbackHeight: payload.displayHeight ?? 800,
+    });
+  }
   // Track the handle so `updateLiveBrowser` (rare; payload swap)
   // and the slab's dissolve can call `dispose()` to drop the
   // subscription. Keyed by item id; cleaned up when the slab
   // signals item end.
   // Wrap in an arrow so the unbound-method lint doesn't fire — the
   // disposer doesn't use `this`, but the rule is structural.
-  liveBrowserDisposers.set(item.id, () => handle.dispose());
+  liveBrowserDisposers.set(item.id, () => {
+    detachInput?.();
+    handle.dispose();
+  });
   // Wire the gone-state to dispose so a missed dissolve callback
   // still releases the subscription within one frame.
   handle.element.dataset.slabItemId = item.id;

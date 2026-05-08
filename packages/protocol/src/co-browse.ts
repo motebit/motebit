@@ -118,3 +118,202 @@ export interface CoBrowseControlChangedPayload {
   readonly to: ControlState;
   readonly timestamp: number;
 }
+
+// ── Slice 2c: user-driven input forwarding ─────────────────────────────
+//
+// When `controlState.kind === "user"`, the user drives the cloud
+// Chromium directly via pointer + keyboard + paste events captured on
+// the slab's screencast surface. These types pin both the wire
+// format (what motebit's runtime forwards to the cloud-browser
+// service) and the audit format (what lands in the signed event log).
+//
+// Two-layer discipline:
+//
+//   - **Wire format** (`UserInputEvent`) carries the raw data
+//     Chromium needs to actually dispatch the input — exact text,
+//     exact key, logical-pixel coordinates. Lives in transit, not in
+//     audit storage.
+//
+//   - **Audit format** (`UserInputForwardedPayload`) is redacted by
+//     construction. Keys log as character_class + key_role
+//     (`letter`/`digit`/`enter`/`shortcut`/...), NOT raw text.
+//     Pastes log length + line_count + looks_like_url, NOT content.
+//     Pointer events log normalized [0, 1] coordinates (robust to
+//     viewport resize, doesn't fingerprint cursor paths in
+//     replayed logs).
+//
+// Discrete events only (Slice 2c scope): click, key, paste. Wheel,
+// drag, continuous pointermove, selection-drag, file-drag are
+// explicitly out — they require batching/coalescing that POST-per-
+// event can't sustain at 30-100ms RTT × 50+ events/sec. Those slices
+// follow once the substrate ships.
+
+/**
+ * Modifier keys held during a user input event. Booleans for each
+ * standard modifier the AI loop's gate reads back; matches the
+ * shape `KeyboardEvent` exposes in the browser.
+ * @alpha
+ */
+export interface KeyModifiers {
+  readonly ctrl: boolean;
+  readonly meta: boolean;
+  readonly alt: boolean;
+  readonly shift: boolean;
+}
+
+/**
+ * Wire format for a user-driven input event forwarded into the cloud
+ * Chromium. Carries the raw data Chromium needs to dispatch (text,
+ * coordinates) — the audit shape (`UserInputForwardedPayload`)
+ * redacts before logging.
+ *
+ * Coordinate system: `click.x` and `click.y` are logical-pixel
+ * coordinates against the cloud Chromium viewport (same coordinate
+ * system `ComputerAction.click` uses for motebit-side dispatch).
+ * The capture surface is responsible for translating screen pixels
+ * to logical pixels via the screencast's natural dimensions.
+ *
+ * @alpha
+ */
+export type UserInputEvent =
+  /**
+   * Pointer click. Logical-pixel coordinates against the cloud
+   * Chromium viewport.
+   */
+  | {
+      readonly kind: "click";
+      readonly x: number;
+      readonly y: number;
+      readonly button: "left" | "right" | "middle";
+    }
+  /**
+   * Keyboard event. `key` is the browser `KeyboardEvent.key`
+   * value — single character for printable input ("a"), named
+   * key for control keys ("Enter", "Backspace"), Playwright-
+   * compatible combo for shortcuts ("Control+a"). The cloud-browser
+   * service maps:
+   *   - Single printable char + no modifiers → `page.keyboard.type(key)`.
+   *   - Named key OR any modifier present → `page.keyboard.press(combo)`.
+   */
+  | {
+      readonly kind: "key";
+      readonly key: string;
+      readonly modifiers: KeyModifiers;
+    }
+  /**
+   * Clipboard paste. The wire carries raw text; the audit logs only
+   * length + line_count + looks_like_url (never content). Server-
+   * side: dispatched as `page.keyboard.type(text)` for v1, which
+   * synthesizes per-character keypresses. A future slice may
+   * upgrade to CDP `Input.insertText` for true paste semantics.
+   */
+  | {
+      readonly kind: "paste";
+      readonly text: string;
+    };
+
+/**
+ * Outcome of a `forwardUserInput` call. `forwarded` means the wire
+ * landed at Chromium; `rejected` means the runtime denied dispatch
+ * before the wire (gate, missing dispatcher) or the transport
+ * failed.
+ * @alpha
+ */
+export type UserInputForwardOutcome = "forwarded" | "rejected";
+
+/**
+ * Closed set of reasons a user-input forward can be rejected.
+ * Verifiers discriminate on this exhaustively.
+ * @alpha
+ */
+export type UserInputRejectionReason =
+  /** Gate denied: `controlState.kind !== "user"` at forward time. */
+  | "not_in_user_state"
+  /** Session is closed; nowhere to forward to. */
+  | "session_closed"
+  /** Dispatcher transport failed (HTTP error, network drop). */
+  | "transport_error"
+  /** Surface dispatcher does not implement input forwarding. */
+  | "not_supported";
+
+/**
+ * Character class for a key audit entry. The redaction default —
+ * raw characters NEVER land in the audit log; the class survives.
+ * @alpha
+ */
+export type CharacterClass =
+  | "letter"
+  | "digit"
+  | "punct"
+  | "whitespace"
+  | "control"
+  | "modifier"
+  | "unknown";
+
+/**
+ * Semantic role of a key for audit purposes. Coarser-grained than
+ * `key_code` would be — "the user pressed something that submits
+ * a form" rather than "the user pressed Return on a U.S. layout."
+ * @alpha
+ */
+export type KeyRole =
+  | "enter"
+  | "tab"
+  | "escape"
+  | "backspace"
+  | "arrow"
+  | "shortcut"
+  | "printable"
+  | "unknown";
+
+/**
+ * Per-kind audit detail. The wire-format `UserInputEvent` is
+ * mapped through redaction at the runtime layer to produce one of
+ * these shapes; raw text/keys/pixel coordinates do NOT appear here.
+ * @alpha
+ */
+export type UserInputForwardedDetail =
+  | {
+      readonly kind: "click";
+      /** Normalized [0, 1] x against the rendered screencast rect. */
+      readonly x_norm: number;
+      /** Normalized [0, 1] y against the rendered screencast rect. */
+      readonly y_norm: number;
+      readonly button: "left" | "right" | "middle";
+    }
+  | {
+      readonly kind: "key";
+      readonly character_class: CharacterClass;
+      readonly key_role: KeyRole;
+      readonly modifiers: KeyModifiers;
+    }
+  | {
+      readonly kind: "paste";
+      readonly length: number;
+      readonly line_count: number;
+      readonly looks_like_url: boolean;
+    };
+
+/**
+ * Audit-event payload for a user-driven input forward. Emitted on
+ * every forward attempt — both successes and rejections — so the
+ * audit trail records who tried to drive when. Sibling of
+ * `CoBrowseControlChangedPayload`; same `EventType`-keyed event
+ * stream the runtime already threads through `appendWithClock`.
+ *
+ * `control_state_at_forwarding` mirrors the `control_state_at_denial`
+ * field on motebit-side denials (Slice 1) — verifiers replaying
+ * the log don't have to cross-reference adjacent control events to
+ * answer "what state were we in when this fired."
+ * @alpha
+ */
+export interface UserInputForwardedPayload {
+  readonly session_id: string;
+  readonly motebit_id: string;
+  readonly outcome: UserInputForwardOutcome;
+  /** Present iff `outcome === "rejected"`. */
+  readonly rejection_reason?: UserInputRejectionReason;
+  readonly control_state_at_forwarding: ControlState;
+  readonly detail: UserInputForwardedDetail;
+  readonly timestamp: number;
+}

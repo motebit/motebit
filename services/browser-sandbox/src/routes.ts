@@ -25,10 +25,10 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
-import type { ComputerAction } from "@motebit/protocol";
+import type { ComputerAction, UserInputEvent } from "@motebit/protocol";
 
 import { requireBearer } from "./auth.js";
-import { executeAction } from "./action-executor.js";
+import { executeAction, executeUserInput } from "./action-executor.js";
 import type { BrowserPool } from "./chromium-pool.js";
 import type { BrowserSandboxConfig } from "./env.js";
 import { ServiceError, isServiceError } from "./errors.js";
@@ -131,6 +131,48 @@ export function buildApp(deps: BuildAppDeps): Hono {
     const sessionId = c.req.param("id");
     await deps.pool.closeSession(sessionId);
     return c.body(null, 204);
+  });
+
+  /**
+   * Slice 2c — user-driven input forwarding into the cloud Chromium.
+   * Sibling of `/sessions/:id/actions`, but for user events captured
+   * on the slab's screencast surface (`controlState.kind === "user"`).
+   * The runtime's session manager has already gated this against the
+   * co-browse machine before the request reaches us; here we just
+   * dispatch via Playwright. The dispatcher (`CloudBrowserDispatcher`)
+   * sets the wire shape with `{ event: UserInputEvent }`.
+   *
+   * Discrete events only (click | key | paste). Wheel + drag are out
+   * of scope and would arrive as `not_supported` from the dispatcher
+   * before reaching this route.
+   *
+   * Returns 204 on success — no body. Errors flow through `ServiceError`
+   * as on `/actions` so the dispatcher's reason taxonomy stays closed.
+   */
+  app.post("/sessions/:id/forward-input", async (c) => {
+    const sessionId = c.req.param("id");
+    const session = deps.pool.getSession(sessionId);
+    if (!session) {
+      throw new ServiceError("session_closed", `session not found: ${sessionId}`);
+    }
+    const body = (await c.req.json().catch(() => ({}))) as { event?: unknown };
+    const event = body.event;
+    if (
+      event === null ||
+      event === undefined ||
+      typeof event !== "object" ||
+      typeof (event as { kind?: unknown }).kind !== "string"
+    ) {
+      throw new ServiceError("not_supported", "missing or malformed `event` body");
+    }
+    deps.pool.touchSession(sessionId);
+    deps.pool.beginAction(sessionId);
+    try {
+      await executeUserInput(session, event as UserInputEvent);
+      return c.body(null, 204);
+    } finally {
+      deps.pool.endAction(sessionId);
+    }
   });
 
   /**

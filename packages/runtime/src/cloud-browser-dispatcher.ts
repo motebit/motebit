@@ -48,7 +48,12 @@
  * anger).
  */
 
-import type { ComputerAction, ComputerFailureReason, ScreencastFrame } from "@motebit/sdk";
+import type {
+  ComputerAction,
+  ComputerFailureReason,
+  ScreencastFrame,
+  UserInputEvent,
+} from "@motebit/sdk";
 
 import type { ComputerDisplayInfo, ComputerPlatformDispatcher } from "./computer-use.js";
 import { ComputerDispatcherError } from "./computer-use.js";
@@ -179,6 +184,31 @@ export class CloudBrowserDispatcher implements ComputerPlatformDispatcher {
       "POST",
       `/sessions/${encodeURIComponent(this.cloudSessionId)}/actions`,
       { action },
+    );
+  }
+
+  /**
+   * Co-browse Slice 2c — forward a user-driven input event to the
+   * cloud-browser service. POST /sessions/:id/forward-input. The
+   * session manager handles redaction at the audit-emission layer;
+   * here the wire carries raw text/keys/coordinates because Chromium
+   * needs them.
+   *
+   * Discrete events only (Slice 2c scope): click, key, paste. Wheel,
+   * drag, continuous pointermove are out — those need batching/
+   * coalescing and a future slice's WebSocket-shaped substrate.
+   */
+  async forwardInput(event: UserInputEvent): Promise<void> {
+    if (this.cloudSessionId === null) {
+      throw new ComputerDispatcherError(
+        "session_closed",
+        "Cloud browser session not opened — call queryDisplay() first.",
+      );
+    }
+    await this.request<void>(
+      "POST",
+      `/sessions/${encodeURIComponent(this.cloudSessionId)}/forward-input`,
+      { event },
     );
   }
 

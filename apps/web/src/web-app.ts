@@ -17,11 +17,12 @@ import { renderCoBrowseBand } from "./ui/cobrowse-band";
 import type {
   ConversationMessage,
   BehaviorCues,
-  EventType,
   AgentTask,
   ExecutionReceipt,
+  UserInputEvent,
+  UserInputForwardedPayload,
 } from "@motebit/sdk";
-import { DeviceCapability } from "@motebit/sdk";
+import { DeviceCapability, EventType } from "@motebit/sdk";
 import { ThreeJSAdapter, buildComputerSessionReceiptArtifact } from "@motebit/render-engine";
 import type { AudioReactivity } from "@motebit/render-engine";
 import type { StreamingProvider } from "@motebit/ai-core/browser";
@@ -1574,18 +1575,78 @@ export class WebApp {
    * screencast bus. Idempotent: a second call without an intervening
    * dissolve is a no-op (the bus only publishes one stream at a
    * time).
+   *
+   * Slice 2c — bundles the input-forwarding wiring into the slab
+   * item payload: `forwardUserInput` callback (drives runtime ->
+   * dispatcher -> Chromium) plus the cloud viewport dimensions for
+   * coordinate translation fallback. The slab-items renderer
+   * extracts these and wires DOM capture onto the screencast img
+   * via `attachInputCapture`. When the registration lacks a
+   * session manager (registry not configured), the payload omits
+   * forwarding and the slab is read-only — same shape as before.
    */
   private openLiveBrowserSlabItem(sessionId: string): void {
     if (this.liveBrowserItemId !== null) return;
     if (!this.runtime) return;
     const id = `live-browser-${sessionId}`;
     this.liveBrowserItemId = id;
+    const reg = this.computerRegistration;
+    const handle = reg?.sessionManager.getSession(sessionId);
+    const forwardUserInput = reg
+      ? async (event: UserInputEvent) => {
+          // Manager call: gates on coBrowseControl, dispatches via
+          // CloudBrowserDispatcher, returns audit. Audit emission
+          // happens here (single-source-of-truth for event log).
+          const result = await reg.sessionManager.forwardUserInput(sessionId, event);
+          await this.emitUserInputAudit(result.audit);
+          return result;
+        }
+      : undefined;
     this.runtime.slab.openItem({
       id,
       kind: "live_browser",
       mode: "virtual_browser",
-      payload: { frameSource: this.screencastBus, sessionId },
+      payload: {
+        frameSource: this.screencastBus,
+        sessionId,
+        forwardUserInput,
+        displayWidth: handle?.display.width,
+        displayHeight: handle?.display.height,
+      },
     });
+  }
+
+  /**
+   * Slice 2c — append a `UserInputForwarded` audit entry to the
+   * event log. Sibling of the co-browse-control audit emission
+   * (`emitControlEvent` in computer-tool.ts) and the session-open/
+   * close emissions. Best-effort: a sink fault must not break
+   * input forwarding (the wire already landed by the time this
+   * fires).
+   */
+  private async emitUserInputAudit(payload: UserInputForwardedPayload): Promise<void> {
+    if (!this.runtime) return;
+    const events = this.runtime.events;
+    if (!events) return;
+    try {
+      const entry = {
+        event_id: crypto.randomUUID(),
+        motebit_id: this._motebitId,
+        timestamp: payload.timestamp,
+        event_type: EventType.UserInputForwarded,
+        payload: payload as unknown as Record<string, unknown>,
+        tombstoned: false,
+      };
+      if (events.appendWithClock) {
+        await events.appendWithClock(entry);
+      } else {
+        await events.append({ ...entry, version_clock: 0 });
+      }
+    } catch {
+      // Audit-sink fault is non-fatal — the input has already
+      // landed at Chromium; a logging failure must not bounce
+      // the next keystroke.
+    }
   }
 
   /**

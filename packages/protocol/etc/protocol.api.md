@@ -447,6 +447,9 @@ export interface ChainAnchorSubmitter {
     }>;
 }
 
+// @alpha
+export type CharacterClass = "letter" | "digit" | "punct" | "whitespace" | "control" | "modifier" | "unknown";
+
 // @public
 export interface Citation {
     locator: string;
@@ -1387,7 +1390,9 @@ export enum EventType {
     // (undocumented)
     ToolUsed = "tool_used",
     // (undocumented)
-    TrustLevelChanged = "trust_level_changed"
+    TrustLevelChanged = "trust_level_changed",
+    // (undocumented)
+    UserInputForwarded = "user_input_forwarded"
 }
 
 // @public (undocumented)
@@ -1718,6 +1723,18 @@ export interface KeyAction {
     readonly kind: "key";
 }
 
+// @alpha
+export interface KeyModifiers {
+    // (undocumented)
+    readonly alt: boolean;
+    // (undocumented)
+    readonly ctrl: boolean;
+    // (undocumented)
+    readonly meta: boolean;
+    // (undocumented)
+    readonly shift: boolean;
+}
+
 // @public (undocumented)
 export interface KeyringAdapter {
     // (undocumented)
@@ -1727,6 +1744,9 @@ export interface KeyringAdapter {
     // (undocumented)
     set(key: string, value: string): Promise<void>;
 }
+
+// @alpha
+export type KeyRole = "enter" | "tab" | "escape" | "backspace" | "arrow" | "shortcut" | "printable" | "unknown";
 
 // @public
 export interface KeySuccessionRecord {
@@ -3332,6 +3352,93 @@ export interface UserActionAttestation {
     // (undocumented)
     readonly timestamp: number;
 }
+
+// @alpha
+export type UserInputEvent =
+/**
+* Pointer click. Logical-pixel coordinates against the cloud
+* Chromium viewport.
+*/
+    {
+    readonly kind: "click";
+    readonly x: number;
+    readonly y: number;
+    readonly button: "left" | "right" | "middle";
+}
+/**
+* Keyboard event. `key` is the browser `KeyboardEvent.key`
+* value — single character for printable input ("a"), named
+* key for control keys ("Enter", "Backspace"), Playwright-
+* compatible combo for shortcuts ("Control+a"). The cloud-browser
+* service maps:
+*   - Single printable char + no modifiers → `page.keyboard.type(key)`.
+*   - Named key OR any modifier present → `page.keyboard.press(combo)`.
+*/
+| {
+    readonly kind: "key";
+    readonly key: string;
+    readonly modifiers: KeyModifiers;
+}
+/**
+* Clipboard paste. The wire carries raw text; the audit logs only
+* length + line_count + looks_like_url (never content). Server-
+* side: dispatched as `page.keyboard.type(text)` for v1, which
+* synthesizes per-character keypresses. A future slice may
+* upgrade to CDP `Input.insertText` for true paste semantics.
+*/
+| {
+    readonly kind: "paste";
+    readonly text: string;
+};
+
+// @alpha
+export type UserInputForwardedDetail = {
+    readonly kind: "click";
+    readonly x_norm: number;
+    readonly y_norm: number;
+    readonly button: "left" | "right" | "middle";
+} | {
+    readonly kind: "key";
+    readonly character_class: CharacterClass;
+    readonly key_role: KeyRole;
+    readonly modifiers: KeyModifiers;
+} | {
+    readonly kind: "paste";
+    readonly length: number;
+    readonly line_count: number;
+    readonly looks_like_url: boolean;
+};
+
+// @alpha
+export interface UserInputForwardedPayload {
+    // (undocumented)
+    readonly control_state_at_forwarding: ControlState;
+    // (undocumented)
+    readonly detail: UserInputForwardedDetail;
+    // (undocumented)
+    readonly motebit_id: string;
+    // (undocumented)
+    readonly outcome: UserInputForwardOutcome;
+    readonly rejection_reason?: UserInputRejectionReason;
+    // (undocumented)
+    readonly session_id: string;
+    // (undocumented)
+    readonly timestamp: number;
+}
+
+// @alpha
+export type UserInputForwardOutcome = "forwarded" | "rejected";
+
+// @alpha
+export type UserInputRejectionReason =
+/** Gate denied: `controlState.kind !== "user"` at forward time. */
+"not_in_user_state"
+/** Session is closed; nowhere to forward to. */
+| "session_closed"
+/** Dispatcher transport failed (HTTP error, network drop). */
+| "transport_error"
+/** Surface dispatcher does not implement input forwarding. */
+| "not_supported";
 
 // @public (undocumented)
 export const VC_TYPE_GRADIENT = "AgentGradientCredential";
