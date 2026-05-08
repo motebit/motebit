@@ -98,6 +98,30 @@ const SLAB_WIDTH = 0.54;
 const SLAB_HEIGHT = SLAB_WIDTH / GOLDEN_RATIO;
 
 /**
+ * Volumetric thickness of the slab. The body is a 3D droplet — eyes,
+ * mouth, and soul-glow are *embedded inside* its glass, not painted
+ * on. A flat-plane slab read as a "razor-thin paper sticker next to
+ * the body" (2026-05-07 angled-view triage); doctrine
+ * (motebit-computer.md §"Visual properties") names the slab as
+ * body-adjacent, same material family as the creature, so it must
+ * share the body's volumetric register.
+ *
+ * 0.04m matches the `MeshPhysicalMaterial.thickness` shader hint
+ * already declared on `planeMaterial` — keeping geometry and
+ * refraction-thickness aligned avoids the discrepancy where the
+ * shader believed the glass was 4cm thick while the geometry
+ * presented as 0mm.
+ *
+ * The slab is built as a front pane + back pane separated by this
+ * thickness; the open volume between them is where embodiment
+ * content lives (see `STAGE_Z_OFFSET_FROM_BACK`). Step 3 of the
+ * volume arc renders content as a back-pane texture so it refracts
+ * through the front; step 2 (this) gets the geometry depth in place
+ * first so the perceptual register changes.
+ */
+const SLAB_THICKNESS = 0.04;
+
+/**
  * CSS3DObject pixel→world scale. The stage div is sized in CSS pixels
  * (480×300 from createContainerElement); CSS3D treats those pixels as
  * world units unless scaled. Map the stage edge-to-edge with the
@@ -116,6 +140,17 @@ const SLAB_HEIGHT = SLAB_WIDTH / GOLDEN_RATIO;
 const STAGE_PIXEL_WIDTH = 480;
 const STAGE_PIXEL_TO_WORLD = SLAB_WIDTH / STAGE_PIXEL_WIDTH;
 
+/**
+ * Stage z-position relative to the back pane. Content sits 1mm in
+ * front of the back glass — close enough to read as "embedded
+ * against the rear surface" rather than floating in the middle of
+ * the volume, and far enough that pinch deformation on the front
+ * pane (which arcs forward toward the camera) doesn't intersect
+ * the stage's CSS3D plane. The full stage z in slab-local space is
+ * `(-SLAB_THICKNESS / 2) + STAGE_Z_OFFSET_FROM_BACK`.
+ */
+const STAGE_Z_OFFSET_FROM_BACK = 0.001;
+
 // ── Renderer-side per-item state ─────────────────────────────────────
 
 interface ManagedElement {
@@ -128,7 +163,19 @@ interface ManagedElement {
 
 export class SlabManager {
   private readonly group: THREE.Group;
+  /**
+   * Front (camera-facing) pane. Pinch displacement targets this one.
+   * `group.children` ordering puts this first so consumers (tests,
+   * adapters) that read `group.children.find(c => c instanceof Mesh)`
+   * still resolve to the visible-from-the-front pane.
+   */
   private readonly planeMesh: THREE.Mesh;
+  /**
+   * Back pane. Mirrors the front geometry, sealed against camera-
+   * side. Stays rigid during pinches — only the front face arcs
+   * toward the viewer when an item detaches as an artifact.
+   */
+  private readonly backPaneMesh: THREE.Mesh;
   private readonly planeMaterial: THREE.MeshPhysicalMaterial;
   /**
    * One CSS3DObject anchored at the plane's center, holding a single
@@ -199,11 +246,34 @@ export class SlabManager {
       opacity: 0,
       side: THREE.DoubleSide,
     });
+    // Front + back panes form the slab volume. Front holds the
+    // pinch-displacement geometry (its restPositions live in
+    // userData); back is a clone of the same geometry so its position
+    // buffer is independent — pinch displacement writes to front
+    // vertex positions only, and the clone keeps the back rigid.
+    // Both panes share planeMaterial so opacity / soul-color easing
+    // applies uniformly with one assignment. Both attach directly
+    // to `group` so existing consumers that walk `group.children`
+    // for the slab mesh still resolve (front is added first; the
+    // first Mesh in children is the front pane).
     this.planeMesh = new THREE.Mesh(planeGeo, this.planeMaterial);
+    this.planeMesh.position.z = SLAB_THICKNESS / 2;
     this.planeMesh.visible = false; // skip GL work when truly recessed
     this.group.add(this.planeMesh);
 
-    // Items container — one CSS3DObject rooted at the plane's center.
+    const backPaneGeo = planeGeo.clone();
+    this.backPaneMesh = new THREE.Mesh(backPaneGeo, this.planeMaterial);
+    this.backPaneMesh.position.z = -SLAB_THICKNESS / 2;
+    // Back pane faces "outward" relative to the volume — flip it so
+    // its normals point away from the camera, letting the sheen and
+    // clearcoat read on the side a viewer never directly sees but
+    // whose silhouette is what gives the slab its depth from any
+    // angle off-axis.
+    this.backPaneMesh.rotation.y = Math.PI;
+    this.backPaneMesh.visible = false;
+    this.group.add(this.backPaneMesh);
+
+    // Items container — one CSS3DObject rooted near the back pane.
     // `CSS3DObject`'s constructor force-sets `pointer-events: auto` and
     // `position: absolute` on the wrapped element; the stage's
     // pointer-events: none (so empty stage passes camera-control
@@ -211,12 +281,16 @@ export class SlabManager {
     this.stageEl = createContainerElement();
     this.stageAnchor = new CSS3DObject(this.stageEl);
     this.stageEl.style.pointerEvents = "none";
-    // Sit just in front of the plane's front face. With the current
-    // razor-thin geometry this is a small offset; once the plane
-    // gains volumetric depth (Path A step 2), the stage moves to a
-    // negative-z slot embedded behind the front pane and refracted
-    // through the glass.
-    this.stageAnchor.position.set(0, 0, 0.001);
+    // Embed the stage inside the slab's glass volume — 1mm in front
+    // of the back pane (slab-local z = -SLAB_THICKNESS/2 + offset).
+    // Reads as "content rests against the back of the slab and is
+    // viewed *through* the front glass," parallel to how the
+    // creature's eyes sit inside the droplet and are viewed through
+    // the front of the sphere. Step 3 of the volume arc makes that
+    // viewing literally refractive (canvas-textured back pane); for
+    // step 2 the registry depth alone is the visible win — content
+    // recedes into the volume instead of floating on top of paper.
+    this.stageAnchor.position.set(0, 0, -SLAB_THICKNESS / 2 + STAGE_Z_OFFSET_FROM_BACK);
     // Pixel→world scale so the 480×300 CSS-pixel stage maps to the
     // plane's 0.54×0.334m extent edge-to-edge. Without this, CSS3D
     // would render 480 world units across — the stage would be a
@@ -366,10 +440,19 @@ export class SlabManager {
     this.planeMaterial.emissiveIntensity = w * 0.12 * (0.85 + 0.15 * breatheRaw);
 
     this.planeMaterial.opacity = frame.planeVisibility;
-    this.planeMesh.visible = frame.planeVisibility > 0.01;
-    this.planeMesh.scale.set(1 + breathe, 1 + breathe, 1);
+    const visible = frame.planeVisibility > 0.01;
+    this.planeMesh.visible = visible;
+    this.backPaneMesh.visible = visible;
+    // Sympathetic breathing applies to both panes uniformly. Apply
+    // per-mesh (rather than via a wrapper group) so the CSS3D stage
+    // — also a child of `group` — stays at its native scale; if the
+    // stage breathed, text glyphs would jitter along the breathe
+    // axis at 0.3Hz, fighting readability for visual rhythm.
+    const breatheScale = 1 + breathe;
+    this.planeMesh.scale.set(breatheScale, breatheScale, 1);
+    this.backPaneMesh.scale.set(breatheScale, breatheScale, 1);
     if (this.stageEl.style) {
-      this.stageEl.style.display = this.planeMesh.visible ? "block" : "none";
+      this.stageEl.style.display = visible ? "block" : "none";
     }
   }
 
