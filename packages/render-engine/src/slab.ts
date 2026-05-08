@@ -262,16 +262,29 @@ export class SlabManager {
     this.planeMaterial = new THREE.MeshPhysicalMaterial({
       // Same material family as the creature — same IOR, same
       // clearcoat chemistry. The slab is body-adjacent.
+      //
+      // Tuning history: when the slab gained closed volume (slices E
+      // + F), the original transmission 0.55 + roughness 0.12 + sheen
+      // 0.35 read as opaque white plastic — the creature's glass
+      // register didn't carry over. Pushed transmission, dropped
+      // roughness + sheen, tightened attenuationDistance so the soul
+      // tint shows through the 4cm volume rather than barely tinting
+      // it (4cm / 0.6m old distance = 6.7% attenuation; 4cm / 0.3m
+      // new = 13.3% — twice as much color shows). Creature reference:
+      // transmission 0.94, roughness 0.0, attenuationDistance =
+      // BODY_R * 0.7 ≈ 0.063m. The slab stays slightly less
+      // transparent than the creature so it reads as "slate of the
+      // same family" rather than "second creature."
       ior: CANONICAL_MATERIAL.ior,
-      roughness: 0.12,
-      transmission: 0.55,
+      roughness: 0.05,
+      transmission: 0.85,
       thickness: 0.04,
-      clearcoat: 0.6,
+      clearcoat: 0.4,
       clearcoatRoughness: 0.05,
       color: new THREE.Color(0.98, 0.985, 1.0),
       attenuationColor: new THREE.Color(0.92, 0.95, 1.0),
-      attenuationDistance: 0.6,
-      sheen: 0.35,
+      attenuationDistance: 0.3,
+      sheen: 0.15,
       sheenRoughness: 0.9,
       sheenColor: new THREE.Color(0.75, 0.85, 1.0),
       emissive: new THREE.Color(0, 0, 0),
