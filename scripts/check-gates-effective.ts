@@ -1334,6 +1334,23 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
         src.replace(/case "screenshot":/g, 'case "_disabled_screenshot":'),
       ),
   },
+  {
+    script: "check-computer-dispatcher-modes",
+    proves:
+      'flags a `computer` tool registration site that fails to stamp an explicit `embodimentMode`. Renaming the field name `embodimentMode:` → `embodimentModeDisabled:` in apps/web/src/computer-tool.ts breaks the literal extraction the gate uses (`embodimentMode:\\s*"<value>"`), so the gate sees the cloud-browser registration as unstamped and fires. The desktop registration still has the field, so the failure is asymmetric — exactly the per-dispatcher-mode-stamping drift the gate exists to catch (v1.1 of the virtual_browser arc).',
+    perturb: () =>
+      mutateFile("apps/web/src/computer-tool.ts", (src) =>
+        // /g — the file has two `embodimentMode: "virtual_browser"`
+        // occurrences (one in the registration site, one in the
+        // closeAndEmit helper added by v1.5 wiring). Renaming only the
+        // first leaves the gate's first-match regex satisfied. Both
+        // must go.
+        src.replace(
+          /embodimentMode:\s*"virtual_browser"/g,
+          'embodimentModeDisabled: "virtual_browser"',
+        ),
+      ),
+  },
 ];
 
 /**
