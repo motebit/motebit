@@ -174,6 +174,34 @@ export interface ScrollAction {
 }
 
 /**
+ * Navigate the active browser context to `url`. Cloud-browser-only in
+ * v1: the headless Playwright runtime in `services/browser-sandbox`
+ * has no address-bar UI for `key`/`type` to drive, so the spec
+ * promotion path
+ * (`spec/computer-use-v1.md` §"No new wire-format actions… real-usage-
+ * driven, not speculative") fired when the AI hit "navigate to
+ * tesla.com" against the cloud-browser dispatcher.
+ *
+ * Desktop dispatcher (`apps/desktop/src-tauri/src/computer_use.rs`)
+ * does NOT implement this action — OS-level computer-use has no
+ * notion of "the active browser context"; the user is in control of
+ * which app is focused. The dispatcher-parity check at
+ * `scripts/check-computer-use-dispatcher-parity.ts` carries an
+ * ALLOWLIST entry naming desktop as deferred until an OS-level
+ * navigation use-case proves itself.
+ * @alpha
+ */
+export interface NavigateAction {
+  readonly kind: "navigate";
+  /**
+   * Target URL. Implementations SHOULD normalize relative-looking
+   * inputs (`example.com` → `https://example.com`) but MAY reject
+   * malformed inputs with a `not_supported` failure.
+   */
+  readonly url: string;
+}
+
+/**
  * Full action taxonomy. Every concrete action the motebit can request is
  * one of these. Exhaustive discriminated union on `kind`.
  * @alpha
@@ -187,7 +215,8 @@ export type ComputerAction =
   | DragAction
   | TypeAction
   | KeyAction
-  | ScrollAction;
+  | ScrollAction
+  | NavigateAction;
 
 /**
  * Discriminator values — useful for JSON Schema enum and runtime validation.
@@ -203,6 +232,7 @@ export const COMPUTER_ACTION_KINDS = [
   "type",
   "key",
   "scroll",
+  "navigate",
 ] as const;
 
 /** @alpha */

@@ -216,6 +216,22 @@
           },
           "required": ["kind", "target", "dx", "dy"],
           "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "navigate"
+            },
+            "url": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Target URL. Implementations SHOULD normalize relative-looking inputs (`example.com` → `https://example.com`) but MAY reject malformed URLs with a `not_supported` failure. Cloud-browser-only in v1; desktop dispatcher does not implement (no OS-level browser context)."
+            }
+          },
+          "required": ["kind", "url"],
+          "additionalProperties": true
         }
       ],
       "description": "Discriminated action variant. The `kind` field selects the branch."
@@ -436,6 +452,22 @@
                 }
               },
               "required": ["kind", "target", "dx", "dy"],
+              "additionalProperties": true
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "navigate"
+                },
+                "url": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Target URL. Implementations SHOULD normalize relative-looking inputs (`example.com` → `https://example.com`) but MAY reject malformed URLs with a `not_supported` failure. Cloud-browser-only in v1; desktop dispatcher does not implement (no OS-level browser context)."
+                }
+              },
+              "required": ["kind", "url"],
               "additionalProperties": true
             }
           ],

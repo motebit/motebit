@@ -26,7 +26,7 @@ describe("computerDefinition", () => {
     const props = computerDefinition.inputSchema.properties as Record<string, unknown>;
     const action = props.action as { oneOf: Array<{ properties: { kind: { enum: string[] } } }> };
     expect(action.oneOf).toBeDefined();
-    expect(action.oneOf.length).toBe(9);
+    expect(action.oneOf.length).toBe(10);
     const kinds = action.oneOf.map((v) => v.properties.kind.enum[0]);
     expect(kinds).toEqual([
       "screenshot",
@@ -38,6 +38,7 @@ describe("computerDefinition", () => {
       "type",
       "key",
       "scroll",
+      "navigate",
     ]);
   });
 

@@ -2375,6 +2375,7 @@ export type {
   TypeAction,
   KeyAction,
   ScrollAction,
+  NavigateAction,
   ComputerAction,
   ComputerActionKind,
   ComputerActionRequest,

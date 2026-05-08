@@ -413,7 +413,7 @@ The same wire format drives a second physical executor: an isolated cloud-browse
 
 **What stays identical:**
 
-- Wire format. Every `ComputerActionKind` (`screenshot`, `cursor_position`, `click`, `double_click`, `mouse_move`, `drag`, `key`, `type`, `scroll`) is supported verbatim. URL navigation works by typing into the address bar — no new `navigate` action in v1.
+- Wire format. Every `ComputerActionKind` (`screenshot`, `cursor_position`, `click`, `double_click`, `mouse_move`, `drag`, `key`, `type`, `scroll`, `navigate`) is supported verbatim. The `navigate` kind was added when the cloud-browser sandbox's headless Playwright runtime hit "navigate to tesla.com" — there's no address bar in a headless viewport for `key`/`type` to drive, so the spec's promotion path (§"v1 limits — No new wire-format actions… real-usage-driven, not speculative") fired. Cloud-browser dispatcher implements via `page.goto(url)`; desktop dispatcher does not implement (no OS-level browser context — the user controls which app is focused). The dispatcher-parity check carries an explicit ALLOWLIST entry for desktop.
 - Foundation-law invariants (§3.1 signed observations, §3.2 gated actions, §3.3 user-floor, §3.4 redaction-before-AI, §3.5 session identity). The session-manager hooks (`classify`, `classifyObservation`, `approvalFlow`) wrap the cloud dispatcher exactly as they wrap the desktop one.
 - Outcome taxonomy (§7.1). HTTP errors map to `ComputerFailureReason` values: 401/403 → `permission_denied`, 404/409 → `session_closed`, 429 → `policy_denied`, 501 → `not_supported`, other 4xx/5xx → `platform_blocked`. Network failures → `platform_blocked`.
 
@@ -428,7 +428,7 @@ The same wire format drives a second physical executor: an isolated cloud-browse
 
 - One active cloud session per dispatcher instance per motebit. The contract grows a `session_id` parameter on `execute` for both backends when concurrent cloud sessions become a real consumer need.
 - Motebit-driven only. The "user drives motebit's sandbox" pattern (co-browse) is a distinct future embodiment row, not a runtime mode of this dispatcher. `shared_gaze` continues to mean user-pre-existing-source crossing into perception, not user-driving-motebit's-sandbox.
-- No new wire-format actions. The promotion path for adding `navigate(url)` etc. is real-usage-driven, not speculative.
+- The `navigate(url)` action was added when real cloud-browser usage demanded it (see §"What stays identical" above). Future additions follow the same pattern — driven by a producer that needs the primitive, not by speculation.
 
 **Promotion path:** this is the second producer the @alpha annotations on `packages/protocol/src/computer-use.ts` are gating on (the protocol release-status block names "cloud-browser surface" or "federation peer replaying an audit log"). When `services/browser-sandbox` is exercising the format in anger, `@alpha` promotes to `@beta`; `@public` follows when a federation peer also replays an audit log.
 

@@ -63,7 +63,20 @@ const ALLOWLIST: ReadonlyArray<{
   readonly kind: string;
   readonly missingFrom: "rust" | "ts";
   readonly reason: string;
-}> = [];
+}> = [
+  {
+    kind: "navigate",
+    missingFrom: "rust",
+    reason:
+      "OS-level computer-use (xcap + enigo) has no notion of 'the active browser " +
+      "context' — the user is in control of which app is focused. Navigate is a " +
+      "browser-context primitive that only fires meaningfully against the " +
+      "Playwright cloud-browser dispatcher. Deferred until an OS-level " +
+      "navigation use-case proves itself (e.g., 'open the user's default " +
+      "browser to URL'); when that lands the rust dispatcher implements via a " +
+      "platform-specific URL handler call, not via xcap/enigo simulation.",
+  },
+];
 
 interface ParseResult {
   readonly kinds: ReadonlySet<string>;

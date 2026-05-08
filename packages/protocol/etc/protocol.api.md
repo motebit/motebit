@@ -516,13 +516,13 @@ export interface CollaborativeReceipt {
 export function composeTrustChain(scores: number[]): number;
 
 // @alpha
-export const COMPUTER_ACTION_KINDS: readonly ["screenshot", "cursor_position", "click", "double_click", "mouse_move", "drag", "type", "key", "scroll"];
+export const COMPUTER_ACTION_KINDS: readonly ["screenshot", "cursor_position", "click", "double_click", "mouse_move", "drag", "type", "key", "scroll", "navigate"];
 
 // @alpha
 export const COMPUTER_FAILURE_REASONS: readonly ["policy_denied", "approval_required", "approval_expired", "permission_denied", "session_closed", "target_not_found", "target_obscured", "user_preempted", "platform_blocked", "not_supported"];
 
 // @alpha
-export type ComputerAction = ScreenshotAction | CursorPositionAction | ClickAction | DoubleClickAction | MouseMoveAction | DragAction | TypeAction | KeyAction | ScrollAction;
+export type ComputerAction = ScreenshotAction | CursorPositionAction | ClickAction | DoubleClickAction | MouseMoveAction | DragAction | TypeAction | KeyAction | ScrollAction | NavigateAction;
 
 // @alpha (undocumented)
 export type ComputerActionKind = (typeof COMPUTER_ACTION_KINDS)[number];
@@ -1920,6 +1920,13 @@ export interface MouseMoveAction {
     readonly target: ComputerPoint;
     // (undocumented)
     readonly target_hint?: ComputerTargetHint;
+}
+
+// @alpha
+export interface NavigateAction {
+    // (undocumented)
+    readonly kind: "navigate";
+    readonly url: string;
 }
 
 // @public (undocumented)

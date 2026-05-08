@@ -39,6 +39,7 @@ import type {
   DragAction,
   KeyAction,
   MouseMoveAction,
+  NavigateAction,
   ScrollAction,
   TypeAction,
 } from "@motebit/protocol";
@@ -105,6 +106,8 @@ export async function executeAction(
       return doKey(session, action);
     case "scroll":
       return doScroll(session, action);
+    case "navigate":
+      return doNavigate(session, action);
     default: {
       // Exhaustiveness — every `ComputerActionKind` must be handled.
       // If a new kind is added to `@motebit/protocol::ComputerAction`,
@@ -187,6 +190,30 @@ async function doScroll(session: BrowserSession, action: ScrollAction): Promise<
   session.lastCursorX = action.target.x;
   session.lastCursorY = action.target.y;
   return { kind: "scroll", ok: true };
+}
+
+async function doNavigate(session: BrowserSession, action: NavigateAction): Promise<ActionResult> {
+  // Normalize relative-looking inputs (`example.com`, `tesla.com/about`)
+  // into absolute URLs. Per spec: implementations SHOULD normalize but
+  // MAY reject malformed inputs with `not_supported`. The test for
+  // "looks absolute" is presence of a scheme — anything else is treated
+  // as a hostname-leading path and prefixed with `https://`.
+  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(action.url) ? action.url : `https://${action.url}`;
+  try {
+    // `domcontentloaded` is the right wait condition for slab rendering:
+    // the next `screenshot` call captures the page once the DOM is
+    // assembled, even if late-loading network resources (analytics,
+    // images below the fold) are still streaming. `load` would block
+    // longer for marginal gain; `networkidle` is too strict on pages
+    // with persistent SSE / WebSocket connections.
+    await session.page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  } catch (err) {
+    throw new ServiceError(
+      "not_supported",
+      `navigate failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return { kind: "navigate", ok: true, url: session.page.url() };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

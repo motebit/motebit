@@ -82,7 +82,7 @@ export const computerDefinition: ToolDefinition = {
   name: "computer",
   mode: "pixels",
   description:
-    "Observe or act on the user's computer — screenshot, click, type, scroll. Only available on the desktop surface; other surfaces do not expose this tool. Every observation and action emits a signed receipt and flows through the governance gate. See spec/computer-use-v1.md.",
+    "Observe or act on the user's computer — screenshot, click, type, scroll, navigate. Available on desktop (drives the user's OS via xcap+enigo) and on web (drives a cloud-browser sandbox via Playwright). On the cloud-browser surface, use `navigate` to reach a URL — there's no address bar for `key`/`type` to drive. Every observation and action emits a signed receipt and flows through the governance gate. See spec/computer-use-v1.md.",
   inputSchema: {
     type: "object",
     properties: {
@@ -199,6 +199,26 @@ export const computerDefinition: ToolDefinition = {
             required: ["kind", "target", "dx", "dy"],
             additionalProperties: false,
             description: "Scroll at `target` by `(dx, dy)` wheel deltas.",
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["navigate"] },
+              url: {
+                type: "string",
+                description:
+                  "Target URL. Hostnames without a scheme (e.g. 'example.com') " +
+                  "are normalized to 'https://example.com'.",
+              },
+            },
+            required: ["kind", "url"],
+            additionalProperties: false,
+            description:
+              "Navigate the active browser context to a URL. Cloud-browser-only — " +
+              "use this when you need to reach a specific page on the cloud-browser " +
+              "surface (no address bar exists in the headless viewport for `key`/`type` " +
+              "to drive). Not available on the desktop surface (the user controls " +
+              "which app is focused there).",
           },
         ],
       },

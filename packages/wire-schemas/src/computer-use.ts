@@ -137,6 +137,21 @@ const ScrollActionSchema = z
   })
   .passthrough();
 
+const NavigateActionSchema = z
+  .object({
+    kind: z.literal("navigate"),
+    url: z
+      .string()
+      .min(1)
+      .describe(
+        "Target URL. Implementations SHOULD normalize relative-looking inputs " +
+          "(`example.com` → `https://example.com`) but MAY reject malformed URLs " +
+          "with a `not_supported` failure. Cloud-browser-only in v1; desktop " +
+          "dispatcher does not implement (no OS-level browser context).",
+      ),
+  })
+  .passthrough();
+
 /**
  * Discriminated union of all action variants. Exported so consumers can
  * validate an action value directly without wrapping in a request.
@@ -151,6 +166,7 @@ export const ComputerActionSchema = z.discriminatedUnion("kind", [
   TypeActionSchema,
   KeyActionSchema,
   ScrollActionSchema,
+  NavigateActionSchema,
 ]);
 
 // ── 5.1 ComputerActionRequest ────────────────────────────────────────
