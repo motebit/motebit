@@ -32,6 +32,18 @@ interface MockDispatcherCalls {
   dispose: number;
 }
 
+/**
+ * Slice 2a — most tests exercising motebit-driven dispatcher calls
+ * need to grant motebit control first (the new default is `user`,
+ * which the gate denies). This helper runs the request → grant cycle
+ * the production UX would do via slab gestures, so test setup stays
+ * one line.
+ */
+function grantMotebit(reg: NonNullable<ReturnType<typeof registerWebComputerTool>>): void {
+  reg.coBrowseControl.requestControl("motebit");
+  reg.coBrowseControl.grantControl("user");
+}
+
 function makeMockDispatcher(): {
   dispatcher: ComputerPlatformDispatcher;
   calls: MockDispatcherCalls;
@@ -87,6 +99,7 @@ describe("registerWebComputerTool", () => {
       motebitId: "did:motebit:test",
       dispatcher,
     });
+    grantMotebit(reg!);
 
     const result = await registry.execute("computer", { action: { kind: "screenshot" } });
     expect(result.ok).toBe(true);
@@ -128,6 +141,7 @@ describe("registerWebComputerTool", () => {
       motebitId: "did:motebit:test",
       dispatcher,
     });
+    grantMotebit(reg!);
     // Open the default session
     await registry.execute("computer", { action: { kind: "screenshot" } });
     await reg!.dispose();
@@ -173,6 +187,7 @@ describe("registerWebComputerTool", () => {
       signSessionReceipt: signSessionReceipt as never,
       hashSessionActions,
     });
+    grantMotebit(reg!);
 
     await registry.execute("computer", { action: { kind: "screenshot" } });
     await registry.execute("computer", { action: { kind: "screenshot" } });
@@ -209,6 +224,7 @@ describe("registerWebComputerTool", () => {
       // Null return mimics a runtime with no signing keys.
       signSessionReceipt: async () => null,
     });
+    grantMotebit(reg!);
 
     await registry.execute("computer", { action: { kind: "screenshot" } });
     await reg!.dispose();
@@ -236,6 +252,7 @@ describe("registerWebComputerTool", () => {
       events: eventsAdapter,
       // signSessionReceipt deliberately omitted.
     });
+    grantMotebit(reg!);
 
     await registry.execute("computer", { action: { kind: "screenshot" } });
     await reg!.dispose();
@@ -275,6 +292,7 @@ describe("registerWebComputerTool", () => {
         emerged.push({ session_id: receipt.session_id });
       },
     });
+    grantMotebit(reg!);
 
     await registry.execute("computer", { action: { kind: "screenshot" } });
     await reg!.dispose();
@@ -309,6 +327,7 @@ describe("registerWebComputerTool", () => {
         throw new Error("emerge boom");
       },
     });
+    grantMotebit(reg!);
 
     await registry.execute("computer", { action: { kind: "screenshot" } });
     await expect(reg!.dispose()).resolves.toBeUndefined();
@@ -316,5 +335,125 @@ describe("registerWebComputerTool", () => {
     // emerge callback throwing. UX failure ≠ audit failure ≠ close
     // failure; fail-soft chain works.
     expect(calls.dispose).toBe(1);
+  });
+
+  // ─────────────────────────────────────────────────────────────────
+  // Co-browse Slice 2a — the apps wire that activates Slice 1's gate.
+  // The registration constructs a CoBrowseControlMachine, exposes it
+  // on the handle, gates executeAction through it, wires
+  // onTransition into the audit log, and reverts to user on
+  // transport-failure / close. Together with Slice 1, motebit-driven
+  // dispatch is denied with not_in_control whenever the machine
+  // reports state.kind !== "motebit".
+  // ─────────────────────────────────────────────────────────────────
+
+  it("exposes coBrowseControl on the registration handle (initial state: user)", () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+    expect(reg).not.toBeNull();
+    expect(reg!.coBrowseControl).toBeDefined();
+    expect(reg!.coBrowseControl.getState()).toEqual({ kind: "user" });
+  });
+
+  it("Slice 1 gate fires through the registration: motebit action denied with not_in_control while user holds", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher, calls } = makeMockDispatcher();
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+    // Default state is user — motebit action must be denied before
+    // dispatcher.execute runs.
+    const result = await registry.execute("computer", {
+      action: { kind: "screenshot" },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok === false) {
+      expect((result as { error: string }).error).toContain("not_in_control");
+    }
+    expect(calls.execute).toEqual([]);
+    expect(reg!.coBrowseControl.getState()).toEqual({ kind: "user" });
+  });
+
+  it("dispatcher executes once motebit holds control (request → grant → motebit action runs)", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher, calls } = makeMockDispatcher();
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+    reg!.coBrowseControl.requestControl("motebit");
+    reg!.coBrowseControl.grantControl("user");
+    expect(reg!.coBrowseControl.getState()).toEqual({ kind: "motebit" });
+    const result = await registry.execute("computer", {
+      action: { kind: "screenshot" },
+    });
+    expect(result.ok).toBe(true);
+    expect(calls.execute).toEqual([{ kind: "screenshot" }]);
+  });
+
+  it("control transitions land on the audit log as co_browse_control_changed events", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const events: Array<{ event_type: string; payload: Record<string, unknown> }> = [];
+    const eventsAdapter = {
+      append: async (entry: { event_type: string; payload: Record<string, unknown> }) => {
+        events.push({ event_type: entry.event_type, payload: entry.payload });
+      },
+    } as unknown as Parameters<typeof registerWebComputerTool>[1]["events"];
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      events: eventsAdapter,
+    });
+    // Cycle through transitions; assert each lands.
+    reg!.coBrowseControl.requestControl("motebit");
+    reg!.coBrowseControl.grantControl("user");
+    reg!.coBrowseControl.reclaimControl();
+    // Let the fire-and-forget audit appends settle.
+    await new Promise((r) => setTimeout(r, 0));
+    const controlEvents = events.filter((e) => e.event_type === "co_browse_control_changed");
+    expect(controlEvents).toHaveLength(3);
+    expect(controlEvents[0]?.payload.transition_kind).toBe("request_control");
+    expect(controlEvents[1]?.payload.transition_kind).toBe("grant_control");
+    expect(controlEvents[2]?.payload.transition_kind).toBe("reclaim_control");
+  });
+
+  it("dispose reverts control to user (covers the page-unload-equivalent wire shape)", async () => {
+    // jsdom doesn't fire beforeunload reliably; the next-best
+    // coverage is a direct dispose() call, which exercises the same
+    // teardown wire (closeAndEmit → coBrowseControl.disconnect()).
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+    reg!.coBrowseControl.requestControl("motebit");
+    reg!.coBrowseControl.grantControl("user");
+    expect(reg!.coBrowseControl.getState()).toEqual({ kind: "motebit" });
+    // Open default session so dispose has something to close.
+    reg!.coBrowseControl.reclaimControl(); // back to user so executeAction lands the open
+    reg!.coBrowseControl.requestControl("motebit");
+    reg!.coBrowseControl.grantControl("user");
+    await registry.execute("computer", { action: { kind: "screenshot" } });
+    expect(reg!.coBrowseControl.getState()).toEqual({ kind: "motebit" });
+    await reg!.dispose();
+    // After dispose, control is back to user (fail-closed revert).
+    expect(reg!.coBrowseControl.getState()).toEqual({ kind: "user" });
   });
 });

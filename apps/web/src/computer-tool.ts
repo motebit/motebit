@@ -33,6 +33,8 @@
 import {
   CloudBrowserDispatcher,
   createComputerSessionManager,
+  createCoBrowseControlMachine,
+  type CoBrowseControlMachine,
   type ComputerApprovalFlow,
   type ComputerGovernanceClassifier,
   type ComputerPlatformDispatcher,
@@ -47,6 +49,7 @@ import {
   type ToolRegistry,
 } from "@motebit/tools/web-safe";
 import type {
+  CoBrowseControlChangedPayload,
   ComputerAction,
   ComputerSessionClosed,
   ComputerSessionOpened,
@@ -58,6 +61,17 @@ import { EventType } from "@motebit/sdk";
 export interface ComputerToolRegistration {
   /** The session manager; caller may use it for lifecycle events. */
   readonly sessionManager: ComputerSessionManager;
+  /**
+   * Co-browse Slice 2a — the control state machine the session
+   * manager is gating on. Slab UI (Slice 2b) reads `getState()` to
+   * render the control band on the membrane and drives the
+   * `requestControl` / `grantControl` / `denyControl` /
+   * `reclaimControl` / `releaseControl` / `pause` / `resume`
+   * transitions from gestures and slash commands. The runtime
+   * already wires `onTransition` to the audit log; consumers don't
+   * re-wire it.
+   */
+  readonly coBrowseControl: CoBrowseControlMachine;
   /** Teardown — closes the default session and disposes the cloud browser. */
   dispose: () => Promise<void>;
 }
@@ -189,11 +203,63 @@ export function registerWebComputerTool(
       getAuthToken: opts.getAuthToken,
     });
 
+  // Co-browse Slice 2a — construct the control machine BEFORE
+  // anything that could call `disconnect()` on it. The transport-
+  // failure handlers (openScreencast.onError, closeAndEmit teardown)
+  // reference this binding by closure; constructing here ensures the
+  // reference is always valid by the time those handlers can fire.
+  // V1: one cloud session per registration, so one machine per
+  // registration. When concurrent cloud sessions become a real
+  // consumer need, this lifts to a Map<sessionId, machine>; the per-
+  // session shape stays.
+  //
+  // The audit emitter wires `onTransition` directly into the runtime
+  // event log (when supplied). Each transition lands as one signed
+  // `CoBrowseControlChanged` event, exactly the substrate Slice 2b
+  // (UI affordances) and Slice 2c (wire forwarding) read off.
+  // Slice 1 + Slice 2a together: gate exists AND fires in production
+  // for the first time.
+  const coBrowseControl: CoBrowseControlMachine = createCoBrowseControlMachine({
+    sessionId: "cs_pending", // placeholder; rebound below if v1.5+ multi-session lifts this
+    motebitId: opts.motebitId,
+    onTransition: (payload: CoBrowseControlChangedPayload) => {
+      void emitControlEvent(payload);
+    },
+  });
+
   const sessionManager = createComputerSessionManager({
     dispatcher,
     governance: opts.governance ?? createDefaultComputerGovernance(),
     approvalFlow: opts.approvalFlow,
+    coBrowseControl,
   });
+
+  /**
+   * Best-effort audit append for `co_browse_control_changed` events.
+   * Same fail-soft shape as `emit()` below — an event-sink fault must
+   * not block the state-machine transition itself (which has already
+   * committed by the time `onTransition` fires).
+   */
+  async function emitControlEvent(payload: CoBrowseControlChangedPayload): Promise<void> {
+    if (!opts.events) return;
+    try {
+      const entry = {
+        event_id: crypto.randomUUID(),
+        motebit_id: opts.motebitId,
+        timestamp: payload.timestamp,
+        event_type: EventType.CoBrowseControlChanged,
+        payload: payload as unknown as Record<string, unknown>,
+        tombstoned: false,
+      };
+      if (opts.events.appendWithClock) {
+        await opts.events.appendWithClock(entry);
+      } else {
+        await opts.events.append({ ...entry, version_clock: 0 });
+      }
+    } catch {
+      // Audit-log fault must not break the AI loop or the gate.
+    }
+  }
 
   let defaultSession: ComputerSessionHandle | null = null;
   let openingDefault: Promise<ComputerSessionHandle> | null = null;
@@ -258,6 +324,14 @@ export function registerWebComputerTool(
       stopScreencast = null;
     }
     opts.screencastBus?.reset();
+    // Co-browse Slice 2a — session is going away; revert control to
+    // user. Same fail-closed semantics as a transport drop: the
+    // motebit cannot continue acting on a session that no longer
+    // exists. From {kind: "user"} this is a no-op (no audit
+    // emission); from any other state it emits one final
+    // co_browse_control_changed event so the audit log records the
+    // revert before the session-close event lands.
+    coBrowseControl.disconnect();
     const closedEvent = await sessionManager.closeSession(sessionId, reason);
     await emit(EventType.ComputerSessionClosed, closedEvent);
     if (!opts.signSessionReceipt) return;
@@ -311,6 +385,14 @@ export function registerWebComputerTool(
               // Transport faults are surfaced through the slab's own
               // pending state; no toast, no console noise (the AI
               // loop notices when screenshot actions return errors).
+              // Co-browse Slice 2a — fail-closed revert. A dead
+              // screencast means we've lost our window into the
+              // page; if motebit was driving, it must yield. The
+              // machine's disconnect from non-user states reverts
+              // to user, blocking the next motebit dispatch via
+              // Slice 1's gate. From {kind: "user"} this is a no-op
+              // (no audit event; the user already holds).
+              coBrowseControl.disconnect();
             },
           });
           opts.onSessionLive?.(handle.session_id);
@@ -395,5 +477,5 @@ export function registerWebComputerTool(
     sessionManager.dispose();
   }
 
-  return { sessionManager, dispose };
+  return { sessionManager, coBrowseControl, dispose };
 }
