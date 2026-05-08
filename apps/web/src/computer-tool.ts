@@ -202,14 +202,10 @@ export function registerWebComputerTool(
     await emit(EventType.ComputerSessionClosed, closedEvent);
     if (!opts.signSessionReceipt) return;
     try {
-      const hashActions =
-        opts.hashSessionActions ??
-        (async () => {
-          // Fail-permissive fallback: an empty digest still produces
-          // a verifiable signature. Apps SHOULD wire the real hash so
-          // the receipt commits to the actual roll-up.
-          return "0".repeat(64);
-        });
+      // Fail-permissive fallback: an empty digest still produces a
+      // verifiable signature. Apps SHOULD wire the real hash so the
+      // receipt commits to the actual roll-up.
+      const hashActions = opts.hashSessionActions ?? (() => Promise.resolve("0".repeat(64)));
       const body = await sessionManager.summarize(sessionId, {
         generateReceiptId: () => `csr_${crypto.randomUUID()}`,
         embodimentMode: "virtual_browser",

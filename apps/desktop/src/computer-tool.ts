@@ -167,7 +167,7 @@ export function registerComputerTool(
     await emit(EventType.ComputerSessionClosed, closedEvent);
     if (!opts.signSessionReceipt) return;
     try {
-      const hashActions = opts.hashSessionActions ?? (async () => "0".repeat(64));
+      const hashActions = opts.hashSessionActions ?? (() => Promise.resolve("0".repeat(64)));
       const body = await sessionManager.summarize(sessionId, {
         generateReceiptId: () => `csr_${crypto.randomUUID()}`,
         embodimentMode: "desktop_drive",
