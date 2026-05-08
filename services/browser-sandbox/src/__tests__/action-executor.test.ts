@@ -28,12 +28,28 @@ interface KeyboardCall {
   options?: unknown;
 }
 
-function makeMockSession(): {
+interface MockSession {
   session: BrowserSession;
   mouseCalls: MouseCall[];
   keyboardCalls: KeyboardCall[];
   screenshotCalls: number;
-} {
+  setGotoImpl(fn: (url: string, opts: unknown) => Promise<void>): void;
+  setWaitForLoadStateImpl(fn: (state: string, opts?: unknown) => Promise<void>): void;
+  setEvaluateImpl(fn: () => Promise<unknown>): void;
+  setPageUrlImpl(fn: () => string): void;
+  mockPage: {
+    goto: ReturnType<typeof vi.fn>;
+    waitForLoadState: ReturnType<typeof vi.fn>;
+    evaluate: ReturnType<typeof vi.fn>;
+    url: ReturnType<typeof vi.fn>;
+    screenshot: ReturnType<typeof vi.fn>;
+    viewportSize(): { width: number; height: number };
+    mouse: BrowserSession["page"]["mouse"];
+    keyboard: BrowserSession["page"]["keyboard"];
+  };
+}
+
+function makeMockSession(): MockSession {
   const mouseCalls: MouseCall[] = [];
   const keyboardCalls: KeyboardCall[] = [];
   let screenshotCalls = 0;
@@ -127,13 +143,7 @@ function makeMockSession(): {
       pageUrlImpl = fn;
     },
     mockPage,
-  } as unknown as ReturnType<typeof makeMockSession> & {
-    setGotoImpl(fn: (url: string, opts: unknown) => Promise<void>): void;
-    setWaitForLoadStateImpl(fn: (state: string, opts?: unknown) => Promise<void>): void;
-    setEvaluateImpl(fn: () => Promise<unknown>): void;
-    setPageUrlImpl(fn: () => string): void;
-    mockPage: typeof mockPage;
-  };
+  } as unknown as MockSession;
 }
 
 const FIXED_NOW = 1_700_000_000_000;

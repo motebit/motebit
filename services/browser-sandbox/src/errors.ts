@@ -39,6 +39,13 @@ const REASON_STATUS: Record<ComputerFailureReason, number> = {
   user_preempted: 408,
   platform_blocked: 500,
   not_supported: 501,
+  // Co-browse Slice 1: motebit attempted to act while not holding
+  // control. 423 Locked is the closest standard pairing — the
+  // resource (the browser session) is allocated but locked to
+  // another holder until a control transition. The dispatcher's
+  // `statusToReason` reverse-maps this back, so the cross-network
+  // shape stays clean.
+  not_in_control: 423,
 };
 
 /**

@@ -121,6 +121,11 @@ function statusToReason(status: number): ComputerFailureReason {
   if (status === 404) return "session_closed";
   if (status === 408 || status === 504) return "user_preempted";
   if (status === 409) return "session_closed";
+  // Co-browse Slice 1: 423 Locked maps back to not_in_control. Pairs
+  // with browser-sandbox's REASON_STATUS map; the wire shape stays
+  // symmetric so a remote-side gate fires the same reason on the
+  // dispatcher side.
+  if (status === 423) return "not_in_control";
   if (status === 429) return "policy_denied";
   if (status === 501) return "not_supported";
   return "platform_blocked";
