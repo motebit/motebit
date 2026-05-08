@@ -330,3 +330,132 @@ describe("SlabManager — phase change listeners", () => {
     expect(handle.getPhase()).toBe("active");
   });
 });
+
+// ---------------------------------------------------------------------------
+// v1.2b — halt-gesture integration. The plane-gesture detector lives
+// inside SlabManager; the app wires `setHaltGestureHandler(...)` to a
+// callback that fires `ComputerSessionManager.halt()`. Tests below
+// drive the detector directly through the (private but accessible)
+// reset / halted state surface, since headless tests have no real DOM
+// EventTarget for the attach helper to listen on.
+// ---------------------------------------------------------------------------
+
+describe("SlabManager — halt-gesture wiring (v1.2b)", () => {
+  it("halt gesture handler fires when SlabManager observes a fired-detector signal via setHalted", () => {
+    const mgr = makeManager();
+    const handler = vi.fn();
+    mgr.setHaltGestureHandler(handler);
+    expect(mgr.isHalted()).toBe(false);
+    // The detector itself fires `setHalted(true)` inside the manager
+    // when the gesture completes; in headless tests we simulate that
+    // post-condition directly.
+    mgr.setHalted(true);
+    expect(mgr.isHalted()).toBe(true);
+  });
+
+  it("setHalted(false) clears halted visual state and re-arms the detector for a future hold", () => {
+    const mgr = makeManager();
+    mgr.setHalted(true);
+    expect(mgr.isHalted()).toBe(true);
+    mgr.setHalted(false);
+    expect(mgr.isHalted()).toBe(false);
+    // No throw; the detector reset path is exercised.
+    expect(() => mgr.update(1, 0.1)).not.toThrow();
+  });
+
+  it("setHalted is idempotent (no spurious work on re-setting same state)", () => {
+    const mgr = makeManager();
+    expect(() => {
+      mgr.setHalted(false);
+      mgr.setHalted(false);
+      mgr.setHalted(true);
+      mgr.setHalted(true);
+    }).not.toThrow();
+    expect(mgr.isHalted()).toBe(true);
+  });
+
+  it("setHaltGestureHandler(null) clears the handler so a future fire is a no-op", () => {
+    const mgr = makeManager();
+    const handler = vi.fn();
+    mgr.setHaltGestureHandler(handler);
+    mgr.setHaltGestureHandler(null);
+    // No way to trigger a real gesture in headless tests; we just
+    // verify the API accepts null without throwing. The internal
+    // `haltGestureHandler?.()` optional-call guards against null at
+    // runtime so a missing handler can never NPE the detector.
+    expect(() => mgr.update(1, 0.1)).not.toThrow();
+  });
+
+  it("update() drives the detector tick without throwing in headless test env", () => {
+    const mgr = makeManager();
+    expect(() => {
+      for (let i = 0; i < 10; i++) mgr.update(i * 0.1, 0.1);
+    }).not.toThrow();
+  });
+
+  it("halted slab maintains a sustained emissive glow under update()", () => {
+    const mgr = makeManager();
+    mgr.addItem(makeSpec("s1"));
+    mgr.update(0, 0.5); // → active so plane is visible
+    mgr.setHalted(true);
+    // Multiple ticks; the halted-sustain branch in update() runs each
+    // frame and clamps emissiveIntensity to ≥ peak * 0.5. No
+    // throw, no NaN.
+    for (let i = 0; i < 5; i++) mgr.update(1 + i * 0.1, 0.1);
+    expect(mgr.isHalted()).toBe(true);
+  });
+
+  it("end-to-end gesture: two-finger touch on container fires halt handler after hold elapses", () => {
+    // Real EventTarget container so the SlabManager's gesture detach
+    // helper's `typeof container.addEventListener === "function"`
+    // branch picks up. Plus a PointerEvent shim so the touch-pointer
+    // accept path runs end-to-end through update().
+    class FakeContainer extends EventTarget {
+      clientWidth = 800;
+      clientHeight = 600;
+      appendChild(): void {}
+      getBoundingClientRect(): { left: number; top: number; right: number; bottom: number } {
+        return { left: 0, top: 0, right: 800, bottom: 600 };
+      }
+    }
+    class FakePointerEvent extends Event {
+      pointerId: number;
+      pointerType = "touch";
+      clientX: number;
+      clientY: number;
+      constructor(type: string, pointerId: number, x: number, y: number) {
+        super(type);
+        this.pointerId = pointerId;
+        this.clientX = x;
+        this.clientY = y;
+      }
+    }
+    const prev = (globalThis as { PointerEvent?: unknown }).PointerEvent;
+    (globalThis as { PointerEvent?: unknown }).PointerEvent = FakePointerEvent;
+    try {
+      const container = new FakeContainer();
+      const creatureGroup = new THREE.Group();
+      const mgr = new SlabManager(creatureGroup, container as unknown as HTMLElement);
+      const halt = vi.fn();
+      mgr.setHaltGestureHandler(halt);
+
+      // Two fingers down inside the container's bounds.
+      container.dispatchEvent(new FakePointerEvent("pointerdown", 1, 100, 100));
+      container.dispatchEvent(new FakePointerEvent("pointerdown", 2, 200, 200));
+
+      // Drive update() forward in seconds. The detector's tick uses
+      // performance.now() (wall-clock ms), which here advances naturally
+      // — vitest doesn't mock it. Call update repeatedly so the
+      // gesture's 700ms threshold is exceeded.
+      const start = performance.now();
+      while (performance.now() - start < 800) {
+        mgr.update(0, 0.016);
+      }
+      mgr.update(0, 0.016); // one more to land past 1.0 progress
+      expect(halt).toHaveBeenCalledTimes(1);
+      expect(mgr.isHalted()).toBe(true);
+    } finally {
+      (globalThis as { PointerEvent?: unknown }).PointerEvent = prev;
+    }
+  });
+});

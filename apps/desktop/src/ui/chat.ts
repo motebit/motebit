@@ -874,6 +874,12 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
       case "computer":
         callbacks.toggleSlab();
         return;
+      case "halt":
+        document.dispatchEvent(new CustomEvent("motebit:halt"));
+        return;
+      case "resume":
+        document.dispatchEvent(new CustomEvent("motebit:resume"));
+        return;
       case "settings":
         callbacks.openSettings();
         return;

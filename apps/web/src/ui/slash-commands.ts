@@ -75,6 +75,8 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "goals", description: "Browse goals" },
   { name: "goal", description: "Quick-add a goal" },
   { name: "computer", description: "Motebit Computer — reveal or hide the slab" },
+  { name: "halt", description: "Halt the Motebit Computer — preempt in-flight session dispatch" },
+  { name: "resume", description: "Resume the Motebit Computer after a halt" },
   { name: "mcp", description: "MCP server management" },
   { name: "state", description: "Show state vector" },
   { name: "tools", description: "List registered tools" },
@@ -236,6 +238,14 @@ export function initSlashCommands(
       case "computer":
         chatInput.value = "";
         callbacks.toggleSlab();
+        return;
+      case "halt":
+        chatInput.value = "";
+        document.dispatchEvent(new CustomEvent("motebit:halt"));
+        return;
+      case "resume":
+        chatInput.value = "";
+        document.dispatchEvent(new CustomEvent("motebit:resume"));
         return;
       case "mcp": {
         chatInput.value = "";

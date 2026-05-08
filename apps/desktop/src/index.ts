@@ -86,6 +86,7 @@ import * as rendererCommands from "./renderer-commands.js";
 import { IdentityManager } from "./identity-manager.js";
 import { McpManager } from "./mcp-manager.js";
 import { registerDesktopTools } from "./desktop-tools.js";
+import type { ComputerToolRegistration } from "./computer-tool.js";
 import {
   GoalScheduler,
   type GoalCompleteEvent,
@@ -406,6 +407,19 @@ export class DesktopApp {
    */
   private slabBridgeUnsub: (() => void) | null = null;
   /**
+   * Computer-tool registration (desktop_drive embodiment). Stashed
+   * here so the halt/resume slash commands and the slab's two-finger-
+   * hold gesture (v1.2b) can reach `sessionManager.halt()`. `null`
+   * outside Tauri or when governance gating refuses tool registration.
+   */
+  private computerRegistration: ComputerToolRegistration | null = null;
+  /**
+   * Disposers for the `motebit:halt` / `motebit:resume` document-level
+   * listeners. Called from `stop()` so a teardown leaves no live event
+   * listeners pointing at a destroyed renderer.
+   */
+  private haltResumeListeners: Array<() => void> = [];
+  /**
    * The MCP manager owns the mcpAdapters / mcpConfigs / mcpToolCounts
    * maps + the connect / disconnect / tool-dispatch lifecycle. It reads
    * the runtime lazily via a getter so DesktopApp can swap the runtime
@@ -592,6 +606,10 @@ export class DesktopApp {
     if (this.slabBridgeUnsub) {
       this.slabBridgeUnsub();
       this.slabBridgeUnsub = null;
+    }
+    while (this.haltResumeListeners.length > 0) {
+      const dispose = this.haltResumeListeners.pop();
+      dispose?.();
     }
     this.runtime?.stop();
     this.renderer.dispose();
@@ -1096,7 +1114,41 @@ export class DesktopApp {
     // - Tauri mode: tools only register if governance thresholds are present
     // - Dev mode (non-Tauri): tools register freely (no identity to govern from)
     if (!config.isTauri || governanceLoaded) {
-      registerDesktopTools(this.runtime.getToolRegistry(), this.runtime, config.invoke);
+      const desktopTools = registerDesktopTools(
+        this.runtime.getToolRegistry(),
+        this.runtime,
+        config.invoke,
+      );
+      this.computerRegistration = desktopTools.computer;
+
+      // v1.2b — wire the slab's two-finger-hold gesture + the
+      // /halt and /resume slash commands to the session-manager halt
+      // primitive (spec §3.3). Sibling of apps/web/src/web-app.ts's
+      // `setupHaltResumeListeners`. Doctrine: motebit-computer.md
+      // §"The user's touch — supervised agency."
+      this.renderer.setSlabHaltGestureHandler?.(() => {
+        this.computerRegistration?.sessionManager.halt();
+        // Slab self-marks halted on gesture fire; no setSlabHalted needed.
+      });
+      // No-op when `document` is undefined (Node test envs); the
+      // production path always has it (Tauri webview is a real DOM).
+      if (typeof document !== "undefined") {
+        const onHalt = (): void => {
+          this.computerRegistration?.sessionManager.halt();
+          this.renderer.setSlabHalted?.(true);
+        };
+        const onResume = (): void => {
+          this.computerRegistration?.sessionManager.resume();
+          this.renderer.setSlabHalted?.(false);
+        };
+        document.addEventListener("motebit:halt", onHalt);
+        document.addEventListener("motebit:resume", onResume);
+        this.haltResumeListeners.push(
+          () => document.removeEventListener("motebit:halt", onHalt),
+          () => document.removeEventListener("motebit:resume", onResume),
+        );
+      }
+
       this._governanceStatus = config.isTauri
         ? { governed: true }
         : { governed: false, reason: "dev mode" };

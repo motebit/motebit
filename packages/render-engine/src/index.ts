@@ -7,3 +7,10 @@ export * from "./receipt-summary.js";
 export { buildReceiptArtifact } from "./receipt-artifact.js";
 export { ArtifactManager } from "./artifacts.js";
 export { GOLDEN_RATIO } from "./design-ratios.js";
+export {
+  createPlaneGestureDetector,
+  attachPlaneGestureToTarget,
+  type PlaneGestureDetector,
+  type PlaneGestureCallbacks,
+  type PlaneGestureOptions,
+} from "./slab-plane-gesture.js";

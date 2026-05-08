@@ -62,6 +62,11 @@ import {
   type DetachArtifactHandler,
   type SlabCoreItemSnapshot,
 } from "./slab-core.js";
+import {
+  createPlaneGestureDetector,
+  attachPlaneGestureToTarget,
+  type PlaneGestureDetector,
+} from "./slab-plane-gesture.js";
 
 export type { DetachArtifactHandler } from "./slab-core.js";
 
@@ -236,6 +241,22 @@ export class SlabManager {
   private soulTint: [number, number, number] = [0.95, 0.97, 1.0];
   private soulGlow: [number, number, number] = [0.55, 0.78, 1.0];
 
+  // Two-finger-hold-on-plane → halt gesture (v1.2b). The detector is
+  // a pure state machine; `attachPlaneGestureToTarget` wires it to the
+  // CSS3D-renderer container's pointer events. The detector's `tick`
+  // is driven from `update()` so progress visuals stay locked to the
+  // sympathetic-breathing frame. `haltGestureHandler` is set by the
+  // app at slab-binding time (it can't be set in the constructor —
+  // the session manager that owns `halt()` lives in the app surface).
+  // Doctrine: motebit-computer.md §"The user's touch — supervised
+  // agency"; primitive at packages/runtime/src/computer-use.ts
+  // (`ComputerSessionManager.halt()`, v1.2).
+  private readonly gestureDetector: PlaneGestureDetector;
+  private readonly gestureDetach: () => void;
+  private haltGestureHandler: (() => void) | null = null;
+  private holdProgress = 0;
+  private halted = false;
+
   constructor(
     creatureGroup: THREE.Group,
     container: HTMLElement,
@@ -372,6 +393,46 @@ export class SlabManager {
     // captures input.
     this.css3dRenderer.domElement.style.pointerEvents = "none";
     container.appendChild(this.css3dRenderer.domElement);
+
+    // Plane gesture detector — two-finger hold for ~700ms fires
+    // `halt()` on whatever handler the app has wired. The attach
+    // helper listens on the renderer container (the parent of the
+    // canvas + CSS3D layers); it filters to `pointerType === "touch"`
+    // so trackpad and mouse interactions never spuriously arm.
+    // `addEventListener` is missing on test fakes that aren't a real
+    // EventTarget — the optional chain keeps SlabManager construction
+    // safe in headless tests where the container is a `{}` shim.
+    this.gestureDetector = createPlaneGestureDetector({
+      onHaltTriggered: () => {
+        // Mirror halt state into the manager so the visual sustains
+        // until the app explicitly calls `setHalted(false)` after
+        // resume. The handler call is what propagates into the
+        // session-manager primitive.
+        this.halted = true;
+        this.holdProgress = 0;
+        this.haltGestureHandler?.();
+      },
+      onProgress: (fraction) => {
+        this.holdProgress = fraction;
+      },
+      onCancel: () => {
+        this.holdProgress = 0;
+      },
+    });
+    this.gestureDetach =
+      typeof (container as { addEventListener?: unknown }).addEventListener === "function"
+        ? attachPlaneGestureToTarget(container, this.gestureDetector, () => {
+            // Bounding rect is the slab's HTML container in screen
+            // space — gates pointer events that bubbled from outside
+            // (e.g. the chat list scrolled past).
+            if (
+              typeof (container as { getBoundingClientRect?: unknown }).getBoundingClientRect !==
+              "function"
+            )
+              return null;
+            return container.getBoundingClientRect();
+          })
+        : () => {};
   }
 
   /** Expose the THREE group so the adapter can position/animate externally. */
@@ -390,6 +451,38 @@ export class SlabManager {
   setInteriorColor(color: InteriorColor): void {
     this.soulTint = [color.tint[0], color.tint[1], color.tint[2]];
     this.soulGlow = [color.glow[0], color.glow[1], color.glow[2]];
+  }
+
+  /**
+   * Wire the halt-gesture handler. Called once by the app after the
+   * `ComputerSessionManager` is constructed; the handler is invoked
+   * exactly once per arm-and-complete cycle. The slab also
+   * self-marks `halted = true` when the handler fires so the
+   * sustained visual outlasts the gesture; the app must call
+   * `setHalted(false)` after the session manager resumes for the
+   * gesture to re-arm.
+   */
+  setHaltGestureHandler(handler: (() => void) | null): void {
+    this.haltGestureHandler = handler;
+  }
+
+  /**
+   * Mirror the session manager's halted state onto the slab visual.
+   * Resets the gesture detector when transitioning halted → live so
+   * the next two-finger-hold can fire again.
+   */
+  setHalted(halted: boolean): void {
+    if (this.halted === halted) return;
+    this.halted = halted;
+    if (!halted) {
+      // Resume — clear gesture state so the detector can fire again.
+      this.gestureDetector.reset();
+      this.holdProgress = 0;
+    }
+  }
+
+  isHalted(): boolean {
+    return this.halted;
   }
 
   /**
@@ -462,6 +555,19 @@ export class SlabManager {
    * render frame. `deltaTime` is the frame delta (seconds).
    */
   update(t: number, deltaTime: number): void {
+    // Drive the gesture detector from the same animation tick the
+    // creature uses — no parallel rAF loop. The detector and the
+    // attach helper share the same clock (`performance.now()`); we
+    // can't use `t` here because that's render time (often starts at
+    // zero), while pointer events are stamped in wall-clock ms.
+    // `performance` is missing in some headless test shims — fall
+    // back to Date.now() so SlabManager still drives.
+    const nowMs =
+      typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+    this.gestureDetector.tick(nowMs);
+
     const frame = this.core.tick(deltaTime);
 
     // Per-item DOM animation. Items that just transitioned to `gone`
@@ -522,8 +628,26 @@ export class SlabManager {
     // rather than reading as flat back-light.
     const baseline = 0.02;
     const peak = 0.2;
-    this.planeMaterial.emissiveIntensity =
-      (baseline + (peak - baseline) * w) * (0.85 + 0.15 * breatheRaw);
+    let emissiveIntensity = (baseline + (peak - baseline) * w) * (0.85 + 0.15 * breatheRaw);
+    // Hold-progress nudge — during a two-finger hold, the slab brightens
+    // proportionally so the user can feel the gesture register before
+    // the halt fires. Pure additive on top of the activity-driven
+    // baseline so a working slab still reads as working while the
+    // gesture progresses; the brightness is bounded so it can't flash
+    // past the soul-coupling peak.
+    if (this.holdProgress > 0) {
+      emissiveIntensity += 0.15 * this.holdProgress;
+    }
+    // Halted-sustain — once `halt()` has fired and the app has mirrored
+    // halted state via `setHalted(true)`, the slab holds a quiet
+    // sustained glow at ~0.5× peak. Calmer than the work-active glow
+    // so "halted" reads as paused rather than active. Doctrine:
+    // motebit-computer.md §"Visual properties — slab acquires a
+    // distinct paused register."
+    if (this.halted) {
+      emissiveIntensity = Math.max(emissiveIntensity, peak * 0.5);
+    }
+    this.planeMaterial.emissiveIntensity = emissiveIntensity;
 
     this.planeMaterial.opacity = frame.planeVisibility;
     const visible = frame.planeVisibility > 0.01;
@@ -555,6 +679,8 @@ export class SlabManager {
   }
 
   dispose(): void {
+    this.gestureDetach();
+    this.haltGestureHandler = null;
     this.clearItems();
     this.css3dRenderer.domElement.remove();
     this.planeMesh.geometry.dispose();

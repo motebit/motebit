@@ -671,6 +671,54 @@ export class WebApp {
         events: runtime.events,
       });
     }
+
+    // v1.2b — wire the slab's two-finger-hold-on-plane gesture to the
+    // session-manager halt primitive. Two trigger surfaces compose the
+    // same fail-closed `user_preempted` boundary (spec §3.3): this
+    // touch gesture on the slab itself, and the `/halt` slash command
+    // (handled in `setupHaltResumeListeners` below). Doctrine:
+    // motebit-computer.md §"The user's touch — supervised agency."
+    this.renderer.setSlabHaltGestureHandler?.(() => {
+      this.computerRegistration?.sessionManager.halt();
+      // The slab self-marks `halted = true` when the gesture fires;
+      // no need to call `setSlabHalted` here. Resume mirrors back
+      // through `motebit:resume`.
+    });
+    this.setupHaltResumeListeners();
+  }
+
+  /**
+   * Disposers for the `motebit:halt` / `motebit:resume` document-level
+   * listeners. Cleared in `stop()` so a teardown leaves no live event
+   * listeners pointing at a destroyed renderer. Sibling of
+   * `DesktopApp.haltResumeListeners`.
+   */
+  private haltResumeListeners: Array<() => void> = [];
+
+  /**
+   * Subscribe to `motebit:halt` / `motebit:resume` custom events
+   * dispatched by the slash-command surface (`/halt`, `/resume`).
+   * Centralizes the keyboard-trigger path so the same call sequence
+   * (sessionManager.halt + adapter.setSlabHalted) lands no matter
+   * which surface fired the trigger. No-op when `document` is
+   * undefined (Node test envs); the production path always has it.
+   */
+  private setupHaltResumeListeners(): void {
+    if (typeof document === "undefined") return;
+    const onHalt = (): void => {
+      this.computerRegistration?.sessionManager.halt();
+      this.renderer.setSlabHalted?.(true);
+    };
+    const onResume = (): void => {
+      this.computerRegistration?.sessionManager.resume();
+      this.renderer.setSlabHalted?.(false);
+    };
+    document.addEventListener("motebit:halt", onHalt);
+    document.addEventListener("motebit:resume", onResume);
+    this.haltResumeListeners.push(
+      () => document.removeEventListener("motebit:halt", onHalt),
+      () => document.removeEventListener("motebit:resume", onResume),
+    );
   }
 
   stop(): void {
@@ -686,6 +734,10 @@ export class WebApp {
     if (this.slabBridgeUnsub) {
       this.slabBridgeUnsub();
       this.slabBridgeUnsub = null;
+    }
+    while (this.haltResumeListeners.length > 0) {
+      const dispose = this.haltResumeListeners.pop();
+      dispose?.();
     }
     // Tear down the cloud-browser session (if any) BEFORE the runtime
     // stops — the dispose path emits a `ComputerSessionClosed` event

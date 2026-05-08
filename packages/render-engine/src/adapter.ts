@@ -233,6 +233,22 @@ export class ThreeJSAdapter implements RenderAdapter {
     return this.slab?.toggleUserVisible() ?? false;
   }
 
+  /**
+   * Wire the slab's two-finger-hold gesture to a halt handler — the
+   * user-floor primitive (`ComputerSessionManager.halt()`). Doctrine:
+   * motebit-computer.md §"The user's touch — supervised agency".
+   */
+  setSlabHaltGestureHandler(handler: (() => void) | null): void {
+    this.slab?.setHaltGestureHandler(handler);
+  }
+
+  /**
+   * Mirror the session manager's halted state onto the slab visual.
+   */
+  setSlabHalted(halted: boolean): void {
+    this.slab?.setHalted(halted);
+  }
+
   setBackground(color: number | null): void {
     if (this.scene) {
       this.scene.background = color === null ? null : new THREE.Color(color);

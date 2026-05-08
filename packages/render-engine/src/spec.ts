@@ -170,6 +170,21 @@ export interface RenderAdapter {
    * can show a toast / indicator without a separate getter.
    */
   toggleSlabVisible?(): boolean;
+  /**
+   * Wire the two-finger-hold-on-plane gesture (v1.2b) to the app's
+   * halt handler — the user-floor primitive at the runtime layer
+   * (`ComputerSessionManager.halt()`). Optional because not every
+   * adapter renders a touch surface (XR uses world-space gestures).
+   * Doctrine: motebit-computer.md §"The user's touch — supervised
+   * agency."
+   */
+  setSlabHaltGestureHandler?(handler: (() => void) | null): void;
+  /**
+   * Mirror the session manager's halted state onto the slab so the
+   * user-visible "paused" register holds until the session resumes.
+   * Pair with `setSlabHaltGestureHandler` for the end-to-end loop.
+   */
+  setSlabHalted?(halted: boolean): void;
 }
 
 // === Slab ("Motebit Computer") — scene primitive types ===

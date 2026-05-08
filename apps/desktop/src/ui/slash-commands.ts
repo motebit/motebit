@@ -32,6 +32,8 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "conversations", description: "Browse past conversations" },
   { name: "goals", description: "View and manage goals" },
   { name: "computer", description: "Motebit Computer — reveal or hide the slab" },
+  { name: "halt", description: "Halt the Motebit Computer — preempt in-flight session dispatch" },
+  { name: "resume", description: "Resume the Motebit Computer after a halt" },
   { name: "tools", description: "List registered tools" },
   { name: "settings", description: "Open settings" },
   { name: "operator", description: "Show operator mode status" },
