@@ -155,25 +155,19 @@ function baseCard(): HTMLDivElement {
   // dark enough to read against any environment behind the plane.
   el.style.color = "rgba(14, 22, 40, 0.96)";
   el.style.padding = "0";
-  // Frosted-glass body with a gradient top→bottom so the card
-  // appears to catch light from above, like a droplet frozen on a
-  // sheet. Values are tuned for the light environment; the backdrop
-  // blur carries refraction from whatever's behind the plane.
-  el.style.background =
-    "linear-gradient(180deg, rgba(255,255,255,0.78) 0%, rgba(246,250,255,0.64) 100%)";
-  el.style.border = "1px solid rgba(255, 255, 255, 0.55)";
-  el.style.borderRadius = "10px";
-  el.style.backdropFilter = "blur(14px) saturate(1.25)";
-  el.style.setProperty("-webkit-backdrop-filter", "blur(14px) saturate(1.25)");
-  el.style.boxShadow = [
-    // Top rim — the surface-tension highlight where the card meets light.
-    "0 1px 0 rgba(255,255,255,0.72) inset",
-    // Bottom inset — a thin darker line reading as the droplet's base.
-    "0 -1px 0 rgba(25,35,60,0.06) inset",
-    // Subtle cast — the primary embodiment sits ON the plane, not
-    // levitating off it. Lighter shadow than when cards stacked.
-    "0 1px 4px rgba(20,30,60,0.08)",
-  ].join(", ");
+  // No card chrome here. Doctrine (slab.ts:107, motebit-computer.md
+  // §"Embodiment modes"): "cards-on-glass don't exist; the stage's
+  // child is whatever the motebit is currently working on." The
+  // plane mesh's MeshPhysicalMaterial already supplies the glass —
+  // borosilicate IOR, transmission, clearcoat, sheen. A second
+  // backdrop-blur + gradient + border + shadow on top read as a
+  // distinct surface stacked on the plane (visible in the layout
+  // gap between plane geometry and the 480×300 stage footprint),
+  // breaking the "one perceptual organ" rule. Content sits directly
+  // on the plane; the per-kind chrome strips (window-style header
+  // bars in renderFetch, command_run, peer, etc.) provide whatever
+  // visual structure each embodiment needs.
+  el.style.background = "transparent";
   // Primary embodiment fills the stage entirely — it IS the screen's
   // current view. Width/height 100% inherits from the stage's fixed
   // 480×300 footprint; cards aren't stacked anymore so there's no
