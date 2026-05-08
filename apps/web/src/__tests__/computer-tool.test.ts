@@ -431,6 +431,165 @@ describe("registerWebComputerTool", () => {
     expect(controlEvents[2]?.payload.transition_kind).toBe("reclaim_control");
   });
 
+  // -------------------------------------------------------------------
+  // Co-browse Slice 2c-prerequisite — `request_control` tool registers
+  // alongside `computer` on the cloud-browser path. Drives the slab
+  // band's doorbell from the AI loop.
+  // -------------------------------------------------------------------
+
+  it("registers `request_control` alongside `computer`", () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+    expect(registry.has("computer")).toBe(true);
+    expect(registry.has("request_control")).toBe(true);
+  });
+
+  it("request_control returns already_in_control when motebit holds", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+    grantMotebit(reg!);
+
+    const result = await registry.execute("request_control", {});
+    expect(result.ok).toBe(true);
+    expect((result as { data: unknown }).data).toEqual({ kind: "already_in_control" });
+  });
+
+  it("request_control returns session_paused when state is paused", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+    reg!.coBrowseControl.pause("user");
+
+    const result = await registry.execute("request_control", {});
+    expect((result as { data: unknown }).data).toEqual({ kind: "session_paused" });
+  });
+
+  it("request_control resolves granted when user grants the request", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+
+    // Fire the AI's request_control. It will block on the user's
+    // verdict; resolve it asynchronously by simulating the slab
+    // band's Grant button click on the next tick.
+    const pending = registry.execute("request_control", {});
+    await Promise.resolve(); // let subscribe register
+    expect(reg!.coBrowseControl.getState().kind).toBe("handoff_pending");
+    reg!.coBrowseControl.grantControl("user");
+
+    const result = await pending;
+    expect((result as { data: unknown }).data).toEqual({ kind: "granted" });
+    // After grant, motebit holds control — `computer` will dispatch.
+    expect(reg!.coBrowseControl.getState()).toEqual({ kind: "motebit" });
+  });
+
+  it("request_control resolves denied when user denies the request", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+
+    const pending = registry.execute("request_control", {});
+    await Promise.resolve();
+    reg!.coBrowseControl.denyControl("user");
+
+    const result = await pending;
+    expect((result as { data: unknown }).data).toEqual({ kind: "denied" });
+    // After deny, control is back to user; the request was lost.
+    expect(reg!.coBrowseControl.getState()).toEqual({ kind: "user" });
+  });
+
+  it("request_control returns request_pending when invoked while a request is already in flight", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+
+    // First call enters handoff_pending and waits for user.
+    const first = registry.execute("request_control", {});
+    await Promise.resolve();
+
+    // Second call sees handoff_pending and returns immediately.
+    const second = await registry.execute("request_control", {});
+    expect((second as { data: unknown }).data).toEqual({ kind: "request_pending" });
+
+    // Resolve the first call so the test doesn't leak a pending promise.
+    reg!.coBrowseControl.grantControl("user");
+    await first;
+  });
+
+  it("request_control times out and reverts to user when no verdict arrives", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      // Tight bound so the test exercises the timeout branch
+      // deterministically without slowing the suite.
+      requestControlTimeoutMs: 30,
+    });
+
+    const result = await registry.execute("request_control", {});
+    expect((result as { data: unknown }).data).toEqual({ kind: "timeout" });
+    // Fail-closed revert: machine is back at user so the next
+    // request_control starts fresh and the slab band's doorbell
+    // clears.
+    expect(reg!.coBrowseControl.getState()).toEqual({ kind: "user" });
+  });
+
+  it("computer's not_in_control failure names request_control as the remediation", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+    // Default state is user — the gate denies dispatch.
+    expect(reg!.coBrowseControl.getState().kind).toBe("user");
+
+    const result = await registry.execute("computer", { action: { kind: "screenshot" } });
+    expect(result.ok).toBe(false);
+    const error = (result as { error: string }).error;
+    expect(error).toContain("not_in_control");
+    // The hint that closes the loop — the AI sees the affordance
+    // name and knows the next move.
+    expect(error).toContain("request_control");
+  });
+
   it("dispose reverts control to user (covers the page-unload-equivalent wire shape)", async () => {
     // jsdom doesn't fire beforeunload reliably; the next-best
     // coverage is a direct dispose() call, which exercises the same

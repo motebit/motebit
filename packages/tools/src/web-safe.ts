@@ -77,6 +77,13 @@ export {
   type ComputerHandlerOptions,
   type ComputerFailureReason,
 } from "./builtins/computer.js";
+export {
+  requestControlDefinition,
+  createRequestControlHandler,
+  type RequestControlFlow,
+  type RequestControlOutcome,
+  type RequestControlHandlerOptions,
+} from "./builtins/request-control.js";
 export { InMemoryToolRegistry } from "./registry.js";
 export type { ToolDefinition, ToolResult, ToolHandler, ToolRegistry } from "@motebit/sdk";
 

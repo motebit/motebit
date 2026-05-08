@@ -45,7 +45,10 @@ import { createDefaultComputerGovernance } from "@motebit/policy-invariants";
 import {
   computerDefinition,
   createComputerHandler,
+  requestControlDefinition,
+  createRequestControlHandler,
   type ComputerDispatcher,
+  type RequestControlOutcome,
   type ToolRegistry,
 } from "@motebit/tools/web-safe";
 import type {
@@ -176,7 +179,26 @@ export interface RegisterWebComputerToolOptions {
    * subscribe to a frozen bus.
    */
   readonly onSessionEnding?: (cloudSessionId: string) => void;
+  /**
+   * Co-browse Slice 2c-prerequisite — how long the `request_control`
+   * tool waits for the user's Grant/Deny on the slab band before
+   * timing out and reverting to user. Default 60s — long enough for
+   * the user to read the doorbell and decide; short enough that a
+   * forgotten request doesn't leave the AI loop stuck. Tests pass a
+   * small value (e.g. 50ms) to exercise the timeout branch
+   * deterministically.
+   */
+  readonly requestControlTimeoutMs?: number;
 }
+
+/**
+ * Default timeout for the `request_control` tool's user-verdict
+ * wait. 60 seconds — calibrated for "user reads the doorbell and
+ * answers." A longer wait would risk an AI loop that's idled
+ * indefinitely; a shorter wait would fight inattentive users. Tests
+ * override via `requestControlTimeoutMs`.
+ */
+const DEFAULT_REQUEST_CONTROL_TIMEOUT_MS = 60_000;
 
 /**
  * Register the `computer` tool on the web surface. Returns a
@@ -418,7 +440,13 @@ export function registerWebComputerTool(
 
   /**
    * Adapter from the AI-visible args (`{ session_id?, action }`) to
-   * the session manager's call shape. Identical to desktop.
+   * the session manager's call shape. Identical to desktop, except
+   * for the `not_in_control` failure-hint enrichment: when the
+   * Slice 1 gate denies dispatch because motebit doesn't hold
+   * control, the thrown error names `request_control` so the AI's
+   * reasoning loop has a concrete remediation target. The tool's
+   * own description carries the same hint — belt-and-suspenders
+   * against a model that ignores either signal.
    */
   const toolDispatcher: ComputerDispatcher = {
     async execute(request) {
@@ -444,9 +472,92 @@ export function registerWebComputerTool(
       const parts = [outcome.reason, outcome.message].filter(
         (v): v is string => typeof v === "string" && v.length > 0,
       );
+      // Slice 2c-prerequisite — the AI's structured remediation for
+      // `not_in_control` is the `request_control` tool. Naming it in
+      // the error message gives the reasoning loop a concrete next
+      // move; without this hint the AI sees `not_in_control` and has
+      // to infer the affordance from the tool list alone.
+      if (outcome.reason === "not_in_control") {
+        parts.push("call `request_control` to ask the user for control of the isolated browser");
+      }
       throw new Error(parts.join(": "));
     },
   };
+
+  /**
+   * Co-browse Slice 2c-prerequisite — surface flow for the
+   * `request_control` tool. Reads state, fires the typed transition,
+   * waits on the Slice 2b `subscribe` fan-out for the user's
+   * verdict (rendered through the slab band's Grant/Deny), and
+   * resolves with a closed-set outcome.
+   *
+   * Timeout discipline: bounded wait (default 60s, configurable for
+   * tests). On timeout we fail-closed via `disconnect()` — the user
+   * never answered, motebit must not keep holding a stale pending
+   * request. This is the same revert-to-user shape Slice 0
+   * documents for transport drops.
+   *
+   * Concurrent calls: a second `request_control` while the first is
+   * waiting sees `handoff_pending` and returns `request_pending` —
+   * no parallel pending requests; the AI is told to wait on the
+   * one already in flight.
+   */
+  const requestControlTimeoutMs =
+    opts.requestControlTimeoutMs ?? DEFAULT_REQUEST_CONTROL_TIMEOUT_MS;
+  async function requestControlFlow(): Promise<RequestControlOutcome> {
+    const state = coBrowseControl.getState();
+    if (state.kind === "motebit") return { kind: "already_in_control" };
+    if (state.kind === "handoff_pending") return { kind: "request_pending" };
+    if (state.kind === "paused") return { kind: "session_paused" };
+    // state.kind === "user" — fire the request. Subscribe BEFORE
+    // calling so the synchronous transition emit can't fire and
+    // resolve in between (current implementation is sync, but the
+    // future may not be).
+    return new Promise<RequestControlOutcome>((resolve) => {
+      let resolved = false;
+      let unsubscribe: (() => void) | null = null;
+      const finish = (outcome: RequestControlOutcome): void => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        unsubscribe?.();
+        resolve(outcome);
+      };
+      const timer = setTimeout(() => {
+        // Order matters: finish() unsubscribes BEFORE we call
+        // disconnect, otherwise the disconnect's synchronous
+        // state-change emit would fire our listener with
+        // {kind: "user"} and resolve the promise as `denied`
+        // (the listener can't tell timeout-driven disconnect from
+        // a real user deny). Resolving with timeout first then
+        // disconnecting as cleanup is the honest sequence — the
+        // AI gets the right verdict, the machine still
+        // fail-closes back to user.
+        finish({ kind: "timeout" });
+        coBrowseControl.disconnect();
+      }, requestControlTimeoutMs);
+      unsubscribe = coBrowseControl.subscribe((next) => {
+        // While the request is still pending, stay subscribed.
+        if (next.kind === "handoff_pending") return;
+        if (next.kind === "motebit") {
+          finish({ kind: "granted" });
+          return;
+        }
+        // Anything else (user via deny or disconnect; paused via
+        // halt) means we don't hold control. Treat as denied — the
+        // AI's outward behavior is the same: it didn't get
+        // control, so it can't dispatch.
+        finish({ kind: "denied" });
+      });
+      // Fire AFTER subscribe to keep the ordering bulletproof.
+      const result = coBrowseControl.requestControl("motebit");
+      if (!result.ok) {
+        // State raced — defensive. The subscribe might still emit;
+        // the resolved guard prevents double-resolve.
+        finish({ kind: "request_pending" });
+      }
+    });
+  }
 
   // Per-dispatcher embodiment stamp. The web surface drives a cloud-
   // hosted Chromium via CloudBrowserDispatcher — that's the
@@ -467,6 +578,21 @@ export function registerWebComputerTool(
   registry.register(
     computerDefinitionForCloud,
     createComputerHandler({ dispatcher: toolDispatcher }),
+  );
+
+  // Co-browse Slice 2c-prerequisite — the `request_control` tool.
+  // Registered ONLY on the cloud-browser path because co-browse is
+  // a `virtual_browser` substate; `desktop_drive` has no machine
+  // to drive. Same per-dispatcher embodiment stamp as `computer`
+  // so the tool-policy registry can route on embodiment without
+  // the surface having to know.
+  const requestControlDefinitionForCloud = {
+    ...requestControlDefinition,
+    embodimentMode: "virtual_browser",
+  };
+  registry.register(
+    requestControlDefinitionForCloud,
+    createRequestControlHandler({ flow: requestControlFlow }),
   );
 
   async function dispose(): Promise<void> {

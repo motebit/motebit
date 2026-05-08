@@ -101,9 +101,10 @@ All actions are emitted through a single tool primitive: `computer` in `@motebit
 
 #### Tools (foundation law)
 
-The canonical tool name every conforming computer-use implementation registers. Renaming is a wire break.
+The canonical tool names every conforming computer-use implementation registers. Renaming is a wire break.
 
 - `computer` — observe or act on the user's computer. Input is a `ComputerActionRequest` (§5.1); output is a `ComputerObservationResult` (§5.2) for observation actions or a success/failure record for input actions.
+- `request_control` — co-browse remediation companion. Surfaces that carry a co-browse `ControlState` machine (`virtual_browser` embodiment) MUST register this tool alongside `computer` so motebit's reasoning loop has a typed remediation when `computer` denies dispatch with `not_in_control` (§7.1). Input is `{ session_id?: string }`; output is a closed-set `RequestControlOutcome` discriminated by `kind`: `granted` | `denied` | `timeout` | `already_in_control` | `request_pending` | `session_paused`. Surfaces without a `ControlState` machine (`desktop_drive` today) MUST NOT register this tool — there is no machine to drive, and advertising the affordance would invite an AI tool call that cannot resolve.
 
 ---
 

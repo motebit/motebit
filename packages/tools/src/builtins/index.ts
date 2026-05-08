@@ -42,6 +42,13 @@ export {
   type ComputerHandlerOptions,
   type ComputerFailureReason,
 } from "./computer.js";
+export {
+  requestControlDefinition,
+  createRequestControlHandler,
+  type RequestControlFlow,
+  type RequestControlOutcome,
+  type RequestControlHandlerOptions,
+} from "./request-control.js";
 
 import { webSearchDefinition, createWebSearchHandler } from "./web-search.js";
 import { readUrlDefinition, createReadUrlHandler } from "./read-url.js";
