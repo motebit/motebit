@@ -224,6 +224,35 @@ describe("bindSlabControllerToRenderer — updates", () => {
     controller.updateItem("s1", { any: "thing" });
     expect(addCalls).toHaveLength(1);
   });
+
+  it("fires updateItem on a phase transition into resting even when payload reference is the same", () => {
+    // Regression guard for the 2026-05-07 slab-freeze: the screenshot
+    // item correctly reached `phase: "resting"` with `result: { kind:
+    // "screenshot", bytes_base64: ... }` in controller state, but the
+    // bridge's payloadChanged check missed firing updateItem and the
+    // DOM stayed on the calling-state placeholder ("READING"). The
+    // fix triggers updateItem on phase transitions too — a phase
+    // change into a non-terminal phase IS a contract event the
+    // renderer must respond to regardless of timestamp comparison.
+    const updateItem = vi.fn();
+    const { controller } = setupBridge({ updateItem });
+    const callingPayload = { name: "computer", status: "calling" };
+    controller.openItem({
+      id: "t1",
+      kind: "fetch",
+      payload: callingPayload,
+    });
+    updateItem.mockClear();
+    // restItem from the emerging phase walks through two phase
+    // transitions (emerging → active via promoteFromEmerging,
+    // then active → resting via updatePhase). Each transition is
+    // a contract event the bridge now responds to. The final call
+    // is what matters — it lands the renderer in the resting state.
+    controller.restItem("t1", callingPayload);
+    expect(updateItem).toHaveBeenCalledTimes(2);
+    const finalCall = updateItem.mock.calls[1]!;
+    expect((finalCall[0] as { phase: string }).phase).toBe("resting");
+  });
 });
 
 describe("bindSlabControllerToRenderer — dissolve", () => {

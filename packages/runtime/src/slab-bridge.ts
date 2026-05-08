@@ -236,22 +236,35 @@ export function bindSlabControllerToRenderer(deps: SlabBridgeDeps): () => void {
         }
       }
 
-      // Payload change — update in place.
+      // Re-render in place when the item's content needs to change.
       //
-      // Fires when the item's payload has changed (lastUpdatedAt
-      // advanced) and the current phase is non-terminal. We include
-      // the active → resting transition here: restItem updates both
-      // the phase AND the payload (the status moves from "calling" to
-      // "done" with a full result), and the renderer needs to redraw
-      // with the new content. Without this, resting cards freeze on
-      // their "calling…" state even after the motebit has the result.
+      // Two triggers, both required because each catches a case the
+      // other misses:
+      //
+      //   - `payloadChanged` (lastUpdatedAt advanced): the typical
+      //     restItem path — `tool_status: "calling"` opens the item,
+      //     then `tool_status: "done"` rests it with the result. The
+      //     timestamp advances and the renderer redraws.
+      //
+      //   - `phaseChanged`: the contract-level transition. A subtle
+      //     race surfaced 2026-05-07: when `setItemSensitivity` (no
+      //     timestamp advance) interleaves with `restItem`, the
+      //     bridge can land in a state where the item has phase-
+      //     transitioned (`emerging` / `active` → `resting`) but
+      //     `prevItem.lastUpdatedAt` equals `item.lastUpdatedAt` for
+      //     this notification — payloadChanged returns false, the
+      //     renderer keeps the calling-state DOM, the slab freezes
+      //     on "READING" with no content. A phase transition into a
+      //     non-terminal phase IS a contract event the renderer
+      //     should respond to regardless of how the timestamp looks.
       //
       // Terminal phases (pinching, dissolving, detached, gone) don't
       // get updates — any content change would fight the exit
       // animation.
       const isNonTerminal = item.phase === "active" || item.phase === "resting";
       const payloadChanged = prevItem != null && prevItem.lastUpdatedAt !== item.lastUpdatedAt;
-      if (isNonTerminal && payloadChanged && updateItem) {
+      const phaseChanged = prevItem != null && prevItem.phase !== item.phase;
+      if (isNonTerminal && (payloadChanged || phaseChanged) && updateItem) {
         const element = mountedElements.get(id);
         if (element) {
           try {
