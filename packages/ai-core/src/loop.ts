@@ -319,6 +319,21 @@ export type AgenticChunk =
        * a separate event. Omitted on "done".
        */
       started_at?: number;
+      /**
+       * Embodiment mode the slab item should stamp when this tool's
+       * activity lands on the slab. Sourced from
+       * `ToolDefinition.embodimentMode` at the registration site (e.g.
+       * `apps/web/src/computer-tool.ts` registers `computer` with
+       * `embodimentMode: "virtual_browser"`; desktop registers with
+       * `embodimentMode: "desktop_drive"`). Carried on both `calling`
+       * and `done` so the runtime's slab-projection has the mode at
+       * open time AND can reaffirm at completion. The runtime's
+       * `projectSlabForTurn` picks `chunk.mode` over the generic
+       * `tool-policy.ts` floor — same tool name produces the right
+       * embodiment per surface. Omitted when the registered tool
+       * doesn't declare an embodimentMode.
+       */
+      mode?: string;
     }
   | {
       type: "approval_request";
@@ -603,6 +618,7 @@ export async function* runTurnStreaming(
             status: "done",
             result: decision.reason,
             tool_call_id: toolCall.id,
+            mode: toolDef.embodimentMode,
           };
           conversationHistory.push({
             role: "tool",
@@ -641,6 +657,7 @@ export async function* runTurnStreaming(
           tool_call_id: toolCall.id,
           args: toolCall.args,
           started_at: Date.now(),
+          mode: toolDef.embodimentMode,
         };
 
         let result: ToolResult;
@@ -655,6 +672,7 @@ export async function* runTurnStreaming(
             status: "done",
             result: msg,
             tool_call_id: toolCall.id,
+            mode: toolDef.embodimentMode,
           };
           conversationHistory.push({
             role: "tool",
@@ -718,6 +736,7 @@ export async function* runTurnStreaming(
                 status: "done",
                 result: reason,
                 tool_call_id: toolCall.id,
+                mode: toolDef.embodimentMode,
               };
               conversationHistory.push({
                 role: "tool",
@@ -759,6 +778,7 @@ export async function* runTurnStreaming(
           status: "done",
           result: result.data ?? result.error,
           tool_call_id: toolCall.id,
+          mode: toolDef.embodimentMode,
         };
 
         conversationHistory.push({
@@ -779,6 +799,7 @@ export async function* runTurnStreaming(
           status: "done",
           result: "Tool not available",
           tool_call_id: toolCall.id,
+          // No mode — toolDef wasn't found; can't infer embodiment.
         };
         conversationHistory.push({
           role: "tool",
@@ -814,6 +835,7 @@ export async function* runTurnStreaming(
         tool_call_id: toolCall.id,
         args: toolCall.args,
         started_at: Date.now(),
+        mode: toolDef?.embodimentMode,
       };
       let result: ToolResult;
       try {
@@ -827,6 +849,7 @@ export async function* runTurnStreaming(
           status: "done",
           result: msg,
           tool_call_id: toolCall.id,
+          mode: toolDef?.embodimentMode,
         };
         conversationHistory.push({
           role: "tool",
@@ -842,6 +865,7 @@ export async function* runTurnStreaming(
         status: "done",
         result: result.data ?? result.error,
         tool_call_id: toolCall.id,
+        mode: toolDef?.embodimentMode,
       };
 
       // Fallback path: no PolicyGate — wrap in boundaries AND detect injection.

@@ -54,29 +54,26 @@ const TOOL_POLICIES: ReadonlyMap<string, ToolPolicy> = new Map<string, ToolPolic
   // (kind=fetch picks up the image-srcdoc renderer when the result
   // shape is `{ kind: "screenshot", bytes_base64, ... }`).
   //
-  // Mode is `tool_result` here, **not** `virtual_browser` /
-  // `desktop_drive`, even though the doctrinal embodiment differs by
-  // surface (cloud Chromium → virtual_browser; user's real OS →
-  // desktop_drive). The tool-policy registry is name-keyed and
-  // surface-blind, so a single mode would mis-tag one surface — and
-  // the sensitivity-routing implications are real: virtual_browser
-  // is `tier-bounded-by-source`, desktop_drive is `all-tiers`. Safe-
-  // floor `tool_result` (tier-bounded-by-tool) lets the OCR
-  // classifier on every screenshot do the load-bearing redaction;
-  // the per-surface mode upgrade is deferred until the runtime
-  // gains a per-item dispatcher hint (motebit-computer.md §"Mode
-  // contract" already names this graduation: "the runtime can
-  // override per item").
+  // Mode here is the **safe floor** (`tool_result`) for unknown
+  // registrations only. The cloud-browser path (apps/web) and the
+  // desktop OS-drive path (apps/desktop) BOTH register this tool with
+  // an explicit `embodimentMode` on the ToolDefinition
+  // (`virtual_browser` and `desktop_drive` respectively); ai-core
+  // carries that mode forward on the `tool_status` chunk; the
+  // runtime's slab-projection picks `chunk.mode` over the floor (see
+  // `motebit-runtime.ts` projectSlabForTurn). So the floor here only
+  // fires when a future caller registers the `computer` tool name
+  // through some path that doesn't declare an embodimentMode — at
+  // which point the safe `tool_result` (tier-bounded-by-tool) keeps
+  // the OCR classifier on every screenshot doing the load-bearing
+  // redaction without over-claiming the embodiment contract.
   //
-  // GRADUATION TRIGGER: when the slab-item open path threads the
-  // dispatcher's mode forward (or a per-invocation mode hint lands
-  // alongside `chunk.context` in the streaming pipeline), promote
-  // this row to surface-aware: cloud browser screenshots stamp
-  // `virtual_browser` (tier-bounded-by-source) and desktop computer
-  // observations stamp `desktop_drive` (all-tiers). Until then,
-  // this is a known temporary floor — sensitivity routing is honest
-  // (tier-bounded-by-tool composes), but the embodiment-mode
-  // contract under-claims the cloud-browser case.
+  // Doctrine: motebit-computer.md §"v1 implementation status —
+  // Deferred to v1.5+: per-dispatcher mode stamping" — landed as
+  // v1.1 of the virtual_browser arc. The drift gate
+  // `check-computer-dispatcher-modes` enforces that every site
+  // registering the `computer` tool declares a mode (or marks
+  // itself as the explicit fallback path).
   ["computer", { kind: "fetch", mode: "tool_result", endState: "rest" }],
 
   // tool_result — search is not a browser viewport, but the results

@@ -1572,15 +1572,27 @@ export class MotebitRuntime {
           } else if (chunk.status === "calling") {
             const toolItemId = `slab-tool-${turnId}-${chunk.name}-${Date.now()}`;
             toolItemIds.set(chunk.name, toolItemId);
-            // Single tool-policy lookup drives kind (renderer routing)
-            // + mode (embodiment / governance) + endState (set on
-            // `done` below). See tool-policy.ts for the registry; it
-            // is the one place tool→slab projection is defined.
+            // Two-source mode resolution: chunk.mode (from
+            // ToolDefinition.embodimentMode at registration time) wins
+            // when present; tool-policy.ts is the safe-floor when the
+            // registered tool didn't declare an embodiment.
+            //
+            // The dispatcher-aware path: apps/web's
+            // `registerWebComputerTool` registers `computer` with
+            // `embodimentMode: "virtual_browser"`; apps/desktop's
+            // `registerComputerTool` registers with `"desktop_drive"`.
+            // Same tool name, different surfaces, correct embodiment
+            // per dispatcher — without forcing surface-aware code into
+            // tool-policy.ts (which is name-keyed and surface-blind).
+            // Doctrine: motebit-computer.md §"v1 implementation status
+            // — Deferred to v1.5+: per-dispatcher mode stamping" —
+            // landed as v1.1 of the virtual_browser arc.
             const policy = toolPolicy(chunk.name);
+            const stampedMode = (chunk.mode ?? policy.mode) as typeof policy.mode;
             this.slab.openItem({
               id: toolItemId,
               kind: policy.kind,
-              mode: policy.mode,
+              mode: stampedMode,
               payload: { name: chunk.name, context: chunk.context, status: "calling" },
             });
           } else if (chunk.status === "done") {

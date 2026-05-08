@@ -3030,6 +3030,7 @@ export interface ToolAuditEntry {
 export interface ToolDefinition {
     // (undocumented)
     description: string;
+    embodimentMode?: string;
     // (undocumented)
     inputSchema: Record<string, unknown>;
     mode?: ToolMode;

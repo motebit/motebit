@@ -499,6 +499,32 @@ export interface ToolDefinition {
    * `check-sensitivity-routing` for the outbound enforcement gate.
    */
   outbound?: boolean;
+  /**
+   * Embodiment mode the slab item should stamp when this tool's
+   * activity lands on the slab. One of: `"mind"` | `"tool_result"` |
+   * `"virtual_browser"` | `"shared_gaze"` | `"desktop_drive"` |
+   * `"peer_viewport"`. The string union is canonically declared as
+   * `EmbodimentMode` in `@motebit/render-engine` (typed as `string`
+   * here to avoid the protocol→render-engine layer break — promoting
+   * the type into `@motebit/protocol` is a separate slice the doctrine
+   * names as deferred).
+   *
+   * Why this lives on the tool definition (not on each chunk): the
+   * embodiment is determined at registration time by the surface
+   * wiring the dispatcher. The `computer` tool's wire format is
+   * surface-agnostic but its embodiment is dispatcher-specific:
+   * `apps/web/src/computer-tool.ts` registers it with
+   * `embodimentMode: "virtual_browser"` (cloud Chromium); the desktop
+   * surface registers the same name with `embodimentMode:
+   * "desktop_drive"` (real OS). The runtime's slab-projection picks
+   * `chunk.mode` (sourced from this field) over `tool-policy.ts`'s
+   * generic floor — so the same tool name produces the right
+   * embodiment per surface without forcing surface-aware code into
+   * the central registry. Doctrine: motebit-computer.md §"v1
+   * implementation status — Deferred to v1.5+: per-dispatcher mode
+   * stamping" — landed as v1.1 of the virtual_browser arc.
+   */
+  embodimentMode?: string;
 }
 
 export interface ToolResult {

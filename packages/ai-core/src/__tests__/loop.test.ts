@@ -711,6 +711,111 @@ describe("runTurnStreaming (agentic loop)", () => {
     expect(historyText).toContain("800");
   });
 
+  it("propagates ToolDefinition.embodimentMode onto every tool_status chunk (calling + done)", async () => {
+    // v1.1 of the virtual_browser arc: the same `computer` tool name
+    // produces different embodiments per dispatcher (cloud-browser →
+    // virtual_browser, desktop → desktop_drive). The mode is carried
+    // on the ToolDefinition at registration time and forwarded onto
+    // every tool_status chunk so the runtime's slab-projection picks
+    // the right mode contract per surface — without forcing
+    // surface-aware code into the central tool-policy registry.
+    const toolRegistry = makeMockToolRegistry(
+      new Map([
+        [
+          "computer",
+          {
+            def: {
+              name: "computer",
+              description: "screenshot/click/type",
+              inputSchema: { type: "object", properties: { action: { type: "object" } } },
+              embodimentMode: "virtual_browser",
+            },
+            result: {
+              ok: true,
+              data: { kind: "screenshot", bytes_base64: "x", width: 1, height: 1 },
+            },
+          },
+        ],
+      ]),
+    );
+
+    const provider = makeMockProvider([
+      {
+        text: "I'll capture.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        tool_calls: [{ id: "tc_shot", name: "computer", args: { action: { kind: "screenshot" } } }],
+      },
+      {
+        text: "Captured.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      },
+    ]);
+
+    const deps = makeDepsWithProvider(provider, toolRegistry);
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "screenshot please")) {
+      chunks.push(chunk);
+    }
+
+    const callingChunk = chunks.find(
+      (c) => c.type === "tool_status" && (c as { status: string }).status === "calling",
+    ) as { type: "tool_status"; mode?: string } | undefined;
+    expect(callingChunk?.mode).toBe("virtual_browser");
+
+    const doneChunk = chunks.find(
+      (c) => c.type === "tool_status" && (c as { status: string }).status === "done",
+    ) as { type: "tool_status"; mode?: string } | undefined;
+    expect(doneChunk?.mode).toBe("virtual_browser");
+  });
+
+  it("emits chunks without `mode` when ToolDefinition does not declare embodimentMode", async () => {
+    // Backward compat: a legacy tool definition without
+    // `embodimentMode` produces chunks with `mode: undefined`. The
+    // runtime's projectSlabForTurn falls through to tool-policy.ts's
+    // safe-floor in that case.
+    const toolRegistry = makeMockToolRegistry(
+      new Map([
+        [
+          "get_weather",
+          {
+            def: {
+              name: "get_weather",
+              description: "Get weather",
+              inputSchema: { type: "object", properties: { location: { type: "string" } } },
+            },
+            result: { ok: true, data: { temp: 70 } },
+          },
+        ],
+      ]),
+    );
+
+    const provider = makeMockProvider([
+      {
+        text: "Checking weather.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        tool_calls: [{ id: "tc_w", name: "get_weather", args: { location: "SF" } }],
+      },
+      { text: "70F.", confidence: 0.8, memory_candidates: [], state_updates: {} },
+    ]);
+
+    const deps = makeDepsWithProvider(provider, toolRegistry);
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "weather?")) {
+      chunks.push(chunk);
+    }
+
+    const callingChunk = chunks.find(
+      (c) => c.type === "tool_status" && (c as { status: string }).status === "calling",
+    ) as { type: "tool_status"; mode?: string } | undefined;
+    expect(callingChunk?.mode).toBeUndefined();
+  });
+
   it("yields approval_request for tools requiring approval", async () => {
     const toolRegistry = makeMockToolRegistry(
       new Map([

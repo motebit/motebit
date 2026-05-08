@@ -205,7 +205,26 @@ export function registerComputerTool(
   // Build the handler from the shared factory + dispatcher adapter.
   // Using the factory from the tools package rather than a fresh handler
   // keeps error-normalization consistent with other surfaces.
-  registry.register(computerDefinition, createComputerHandler({ dispatcher: toolDispatcher }));
+  //
+  // Per-dispatcher embodiment stamp. The desktop surface drives the
+  // user's real OS via the Tauri Rust bridge — that's the
+  // `desktop_drive` embodiment per motebit-computer.md §"Embodiment
+  // modes" (driver: motebit, observer: user, source: real-os, consent:
+  // per-action, sensitivity: all-tiers, lifecycle defaults: [resting,
+  // detached]). Stamping the embodiment here at the registration site
+  // lets the runtime's slab-projection pick the right mode contract
+  // per dispatcher without forcing surface-aware code into the central
+  // tool-policy registry. Doctrine: motebit-computer.md §"v1
+  // implementation status — Deferred to v1.5+: per-dispatcher mode
+  // stamping" — landed as v1.1 of the virtual_browser arc.
+  const computerDefinitionForDesktop = {
+    ...computerDefinition,
+    embodimentMode: "desktop_drive",
+  };
+  registry.register(
+    computerDefinitionForDesktop,
+    createComputerHandler({ dispatcher: toolDispatcher }),
+  );
 
   async function dispose(): Promise<void> {
     if (defaultSession) {

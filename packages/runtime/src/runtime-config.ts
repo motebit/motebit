@@ -298,6 +298,21 @@ export type StreamChunk =
       status: "calling" | "done";
       result?: unknown;
       context?: string;
+      /**
+       * Embodiment mode the slab item should stamp when this tool's
+       * activity lands on the slab. Sourced from
+       * `ToolDefinition.embodimentMode` at the registration site,
+       * carried through `AgenticChunk.tool_status.mode` in ai-core,
+       * mapped here. The runtime's `projectSlabForTurn` picks
+       * `chunk.mode` over the generic `tool-policy.ts` floor — same
+       * tool name produces the right embodiment per surface
+       * (`virtual_browser` for cloud-browser, `desktop_drive` for
+       * the user's real OS, etc.). Doctrine: motebit-computer.md
+       * §"v1 implementation status — Deferred to v1.5+:
+       * per-dispatcher mode stamping" — landed as v1.1 of the
+       * virtual_browser arc.
+       */
+      mode?: string;
     }
   | {
       type: "approval_request";
