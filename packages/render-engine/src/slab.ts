@@ -216,10 +216,22 @@ export class SlabManager {
   private readonly elements = new Map<string, ManagedElement>();
   private readonly core: SlabCore;
   /**
-   * Current soul color. Doctrine mandates the slab's active tint
-   * derives from the creature's interior color — "cyan creature → cyan
-   * slab warmth." The plane's attenuation + emissive lerp toward this
-   * when ambient is active, and back toward neutral when idle.
+   * Current soul color. Body-coherence rule: the slab is an organ of
+   * the motebit, so it carries the soul tint *always* — same as the
+   * creature's iris carries soul color whether the motebit is idle
+   * or working. Two coupled axes:
+   *
+   *   - `soulTint` → `attenuationColor`. Always present. The slab's
+   *     glass takes on the motebit's color at idle just as the
+   *     creature does.
+   *   - `soulGlow` → `emissive`. Modulated by `activeWarmth`: a
+   *     faint baseline at idle (the slab is alive, not extinguished),
+   *     rising to the doctrine's gentle peak when work is happening.
+   *
+   * Earlier implementation lerped attenuationColor between neutral
+   * cool and soulTint based on activeWarmth, so an empty slab
+   * "switched identity" away from the creature's soul. Body
+   * coherence — same body, same soul — restored 2026-05-07.
    */
   private soulTint: [number, number, number] = [0.95, 0.97, 1.0];
   private soulGlow: [number, number, number] = [0.55, 0.78, 1.0];
@@ -355,10 +367,12 @@ export class SlabManager {
   }
 
   /**
-   * Couple the slab's active tint to the creature's soul color. The
-   * plane lerps toward this when items are on the slab and back
-   * toward neutral-cool when idle — "cyan creature → cyan slab
-   * warmth," per motebit-computer.md §"Visual properties."
+   * Couple the slab's tint to the creature's soul color. The slab
+   * is an organ of the motebit; this binding makes that physical.
+   * `attenuationColor` carries the tint *always* (body coherence —
+   * same body, same soul), and `emissive` brightens with activity
+   * but never goes pitch-black. Doctrine: motebit-computer.md
+   * §"Visual properties."
    */
   setInteriorColor(color: InteriorColor): void {
     this.soulTint = [color.tint[0], color.tint[1], color.tint[2]];
@@ -466,16 +480,34 @@ export class SlabManager {
       SLAB_BREATHE_AMPLITUDE_FACTOR *
       0.012;
 
-    // Soul-color coupling — neutral-cool at warmth=0, full soul tint
-    // at warmth=1. Emissive intensity gentle so the plane never
-    // outshines the creature.
+    // Soul coupling — two axes:
+    //
+    //   1. `attenuationColor` ← `soulTint`, always. Body coherence:
+    //      the slab carries the motebit's soul whether it's working
+    //      or idle, the same way the creature's iris does. Earlier
+    //      implementation lerped this with `activeWarmth` so an
+    //      empty slab went neutral cool — that read as "the organ
+    //      switched identity," breaking the one-body register.
+    //
+    //   2. `emissiveIntensity` ← f(`activeWarmth`). Activity is
+    //      visible as light; the slab brightens when the motebit is
+    //      working and sits at a faint baseline when idle (alive,
+    //      not extinguished). The peak is intentionally gentle so
+    //      the slab never outshines the creature.
     const w = frame.activeWarmth;
-    const attR = 0.92 * (1 - w) + this.soulTint[0] * w;
-    const attG = 0.95 * (1 - w) + this.soulTint[1] * w;
-    const attB = 1.0 * (1 - w) + this.soulTint[2] * w;
-    this.planeMaterial.attenuationColor.setRGB(attR, attG, attB);
+    this.planeMaterial.attenuationColor.setRGB(
+      this.soulTint[0],
+      this.soulTint[1],
+      this.soulTint[2],
+    );
     this.planeMaterial.emissive.setRGB(this.soulGlow[0], this.soulGlow[1], this.soulGlow[2]);
-    this.planeMaterial.emissiveIntensity = w * 0.12 * (0.85 + 0.15 * breatheRaw);
+    // Idle baseline 0.015 + activity ramp up to 0.12 at full warmth.
+    // Both modulated by breath so the glow inherits the creature's
+    // sympathetic rhythm rather than reading as flat back-light.
+    const baseline = 0.015;
+    const peak = 0.12;
+    this.planeMaterial.emissiveIntensity =
+      (baseline + (peak - baseline) * w) * (0.85 + 0.15 * breatheRaw);
 
     this.planeMaterial.opacity = frame.planeVisibility;
     const visible = frame.planeVisibility > 0.01;
