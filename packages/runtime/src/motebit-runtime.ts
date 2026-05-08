@@ -1630,6 +1630,31 @@ export class MotebitRuntime {
       outcome = { kind: "failed", error: err instanceof Error ? err.message : String(err) };
       throw err;
     } finally {
+      // Any tool / delegation items still tracked here are leftovers —
+      // the happy path deletes from `toolItemIds` on `tool_status:
+      // "done"` (line ~1587) and `delegation_complete` (line ~1543).
+      // Reaching `finally` with entries still present means the turn
+      // ended (errored, interrupted, or returned without resolution)
+      // before the tool's `done` chunk arrived. Without explicit
+      // dissolve, those items sit in their `calling` payload forever —
+      // witnessed in the 2026-05-07 model-id 404 session, where the
+      // slab kept a phantom in-flight item across the page lifetime.
+      // Doctrine (motebit-computer.md §"Three end states"): failures
+      // and interruptions dissolve — nothing to hold. The turn's
+      // outcome is the most honest description of why the tool didn't
+      // resolve, so propagate it. On `completed` (defensive — the AI
+      // loop today resolves every tool call before the turn ends, but
+      // a future preempt path could leave one open), demote to
+      // `interrupted`: the turn finished but the tool didn't, so
+      // claiming `completed` on the tool would be a lie.
+      const toolOutcome: SlabItemOutcome =
+        outcome.kind === "completed" ? { kind: "interrupted" } : outcome;
+      for (const toolItemId of toolItemIds.values()) {
+        this.slab.endItem(toolItemId, toolOutcome);
+      }
+      toolItemIds.clear();
+      delegationToolNames.clear();
+
       // End the slab stream item. On successful completion, the turn's
       // response is durable working material — the user may still be
       // reading it, may want to refer back to it, may want to compare

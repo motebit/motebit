@@ -430,6 +430,59 @@ describe("sendMessageStreaming", () => {
     expect(runtime.isProcessing).toBe(false);
   });
 
+  it("dissolves in-flight tool slab items when the stream errors mid-tool", async () => {
+    // Bug witnessed on 2026-05-07: AI returned 404 (model-id typo)
+    // after a tool_status: "calling" chunk was already projected onto
+    // the slab. The tool item sat in the "calling" payload across the
+    // page lifetime — a phantom in-flight act with no resolution path.
+    // The fix in projectSlabForTurn's `finally` block dissolves any
+    // tool item still tracked when the turn ends without a matching
+    // `tool_status: "done"` (errored, interrupted, or returned without
+    // tool resolution). This locks that contract.
+    mockRunTurnStreaming.mockReturnValue(
+      (async function* () {
+        yield { type: "tool_status" as const, name: "read_file", status: "calling" as const };
+        throw new Error("model not found");
+      })(),
+    );
+
+    const slabSnapshots: Array<{
+      items: ReadonlyMap<string, { kind: string; phase: string; payload: unknown }>;
+    }> = [];
+    runtime.slab.subscribe((state) => {
+      slabSnapshots.push({ items: state.items });
+    });
+
+    await expect(async () => {
+      await collectChunks(runtime.sendMessageStreaming("read a file"));
+    }).rejects.toThrow("model not found");
+
+    // No item in the final state should still be claiming `status:
+    // "calling"` — that would be the user-visible phantom. The slab
+    // controller's dissolution may keep the item around in the
+    // `dissolving` phase for one tick (animation tail), but the
+    // payload's status field shouldn't change; what changes is the
+    // phase. Assert both (defense in depth):
+    //   1. tool item phase is terminal (dissolving | detached | gone)
+    //   2. no entry in toolItemIds remains after `finally`
+    const finalState = slabSnapshots[slabSnapshots.length - 1];
+    const toolItem = Array.from(finalState.items.values()).find((i) => i.kind === "tool_call");
+    if (toolItem !== undefined) {
+      // If still in state.items, it's animating its dissolution tail.
+      expect(["dissolving", "detached", "gone"]).toContain(toolItem.phase);
+    }
+    // Either way, the active phase ("emerging" / "active") must be left
+    // behind by the time the turn ends — phantom calling state is the
+    // bug.
+    const phantom = Array.from(finalState.items.values()).find(
+      (i) =>
+        i.kind === "tool_call" &&
+        (i.phase === "emerging" || i.phase === "active") &&
+        (i.payload as { status?: string } | null)?.status === "calling",
+    );
+    expect(phantom).toBeUndefined();
+  });
+
   it("clears pending approval at start of new stream", async () => {
     const result = makeTurnResult();
     mockRunTurnStreaming.mockReturnValue(yieldChunks({ type: "result", result }));
