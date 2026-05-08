@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "dev": "sh -c 'set -a; [ -f .env ] && . ./.env; set +a; exec tsx watch src/index.ts'",
+    "dev": "sh -c 'set -a; [ -f .env ] && . ./.env; set +a; exec tsx watch src/server.ts'",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
