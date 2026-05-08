@@ -122,6 +122,44 @@ describe("browser-sandbox routes", () => {
     });
   });
 
+  describe("CORS", () => {
+    // Browser dispatchers cross-origin to this service; without CORS,
+    // OPTIONS preflight 401s and the actual POST never fires. See the
+    // CORS comment block in routes.ts for the security model.
+    it("OPTIONS preflight on /sessions/ensure succeeds without auth (allows POST + Authorization)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const res = await app.request("/sessions/ensure", {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://motebit.com",
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "authorization,content-type",
+        },
+      });
+      // 204 (or 200) — the key contract is that browsers see a
+      // success status with permissive CORS headers, NOT the 401 the
+      // bearer middleware would otherwise emit.
+      expect(res.status).toBeLessThan(300);
+      expect(res.headers.get("access-control-allow-origin")).toBe("*");
+      const allowMethods = res.headers.get("access-control-allow-methods") ?? "";
+      expect(allowMethods).toMatch(/POST/i);
+      expect(allowMethods).toMatch(/OPTIONS/i);
+      const allowHeaders = res.headers.get("access-control-allow-headers") ?? "";
+      expect(allowHeaders.toLowerCase()).toMatch(/authorization/);
+      expect(allowHeaders.toLowerCase()).toMatch(/content-type/);
+    });
+
+    it("non-OPTIONS responses carry Access-Control-Allow-Origin so browsers accept the result", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const res = await app.request("/health", {
+        method: "GET",
+        headers: { Origin: "http://localhost:5173" },
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    });
+  });
+
   describe("auth", () => {
     it("rejects /sessions/ensure without bearer (401 + permission_denied)", async () => {
       const app = buildApp({ config: TEST_CONFIG, pool });

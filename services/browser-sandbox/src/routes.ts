@@ -23,6 +23,7 @@
  */
 
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 
 import type { ComputerAction } from "@motebit/protocol";
 
@@ -39,6 +40,41 @@ export interface BuildAppDeps {
 
 export function buildApp(deps: BuildAppDeps): Hono {
   const app = new Hono();
+
+  // ── CORS ─────────────────────────────────────────────────────────
+  // Browser dispatchers (CloudBrowserDispatcher running in apps/web at
+  // localhost:5173 in dev, motebit.com in prod) hit this service
+  // cross-origin. Without CORS headers the browser blocks the
+  // preflight OPTIONS and never sends the actual POST — the
+  // dispatcher sees a network failure and reports "no active session"
+  // (witnessed 2026-05-07: take-screenshot failed end-to-end despite
+  // sandbox + auth + env vars all working in isolation).
+  //
+  // Origin policy: `*`. The bearer token is the security boundary
+  // (see auth.ts + README §"v1 limits — single-tenant deployment");
+  // CORS only controls which page-context JS can call from a browser,
+  // not what curl can do from anywhere. Tightening to a specific
+  // origin allowlist would add zero security against a leaked token
+  // and would block self-hosted operators who deploy their own
+  // sandbox + web pair on custom domains. The federation-graduation
+  // path that swaps the static token for `aud`-bound signed JWTs
+  // (auth.ts §Federation graduation path) lands at the same time as
+  // any tighter origin policy, since both belong to the same
+  // multi-tenant story.
+  //
+  // OPTIONS handling: hono/cors short-circuits preflight with 204 +
+  // headers BEFORE requireBearer runs, so the browser's auth-less
+  // preflight succeeds and the actual POST (with bearer) reaches
+  // requireBearer normally.
+  app.use(
+    "*",
+    cors({
+      origin: "*",
+      allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+      allowHeaders: ["Authorization", "Content-Type"],
+      maxAge: 86_400,
+    }),
+  );
 
   // ── Unauthenticated ──────────────────────────────────────────────
   app.get("/health", (c) =>
