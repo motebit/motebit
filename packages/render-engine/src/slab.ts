@@ -98,6 +98,20 @@ const SLAB_WIDTH = 0.54;
 const SLAB_HEIGHT = SLAB_WIDTH / GOLDEN_RATIO;
 
 /**
+ * Corner radius for the meniscus silhouette. The plane geometry's
+ * outer ring snaps onto a rounded-rectangle of this radius (see
+ * `createMeniscusPlaneGeometry`); the side-wall geometry samples
+ * the same rounded-rect outline so the perimeter of the front pane,
+ * the back pane, and the side wall all trace the same curve.
+ *
+ * 28% of the shorter side reads as a droplet rather than a softened
+ * rectangle. Doctrine: motebit-computer.md §"Visual properties" —
+ * `Edges: meniscus, no frame, no border, no corner radius. Droplet
+ * family.`
+ */
+const SLAB_CORNER_RADIUS = Math.min(SLAB_WIDTH, SLAB_HEIGHT) * 0.28;
+
+/**
  * Volumetric thickness of the slab. The body is a 3D droplet — eyes,
  * mouth, and soul-glow are *embedded inside* its glass, not painted
  * on. A flat-plane slab read as a "razor-thin paper sticker next to
@@ -176,6 +190,14 @@ export class SlabManager {
    * toward the viewer when an item detaches as an artifact.
    */
   private readonly backPaneMesh: THREE.Mesh;
+  /**
+   * Side-wall mesh wrapping front pane perimeter to back pane
+   * perimeter. Closes the volume so the slab reads as a single
+   * solid glass slate from any angle. Without it, off-axis views
+   * showed two parallel membranes with hollow space between
+   * (the 2026-05-07 19:03 angled-view triage).
+   */
+  private readonly sideWallMesh: THREE.Mesh;
   private readonly planeMaterial: THREE.MeshPhysicalMaterial;
   /**
    * One CSS3DObject anchored at the plane's center, holding a single
@@ -272,6 +294,22 @@ export class SlabManager {
     this.backPaneMesh.rotation.y = Math.PI;
     this.backPaneMesh.visible = false;
     this.group.add(this.backPaneMesh);
+
+    // Side wall — closes the volume. Without this the dual-pane
+    // construction reads as two parallel membranes with hollow space
+    // (visible from off-axis angles); the wall makes the silhouette
+    // continuous so the slab reads as one solid glass tile, the way
+    // the creature reads as one droplet rather than a sphere with
+    // open seams.
+    const sideWallGeo = createSideWallGeometry(
+      SLAB_WIDTH,
+      SLAB_HEIGHT,
+      SLAB_THICKNESS,
+      SLAB_CORNER_RADIUS,
+    );
+    this.sideWallMesh = new THREE.Mesh(sideWallGeo, this.planeMaterial);
+    this.sideWallMesh.visible = false;
+    this.group.add(this.sideWallMesh);
 
     // Items container — one CSS3DObject rooted near the back pane.
     // `CSS3DObject`'s constructor force-sets `pointer-events: auto` and
@@ -443,14 +481,17 @@ export class SlabManager {
     const visible = frame.planeVisibility > 0.01;
     this.planeMesh.visible = visible;
     this.backPaneMesh.visible = visible;
-    // Sympathetic breathing applies to both panes uniformly. Apply
-    // per-mesh (rather than via a wrapper group) so the CSS3D stage
-    // — also a child of `group` — stays at its native scale; if the
-    // stage breathed, text glyphs would jitter along the breathe
-    // axis at 0.3Hz, fighting readability for visual rhythm.
+    this.sideWallMesh.visible = visible;
+    // Sympathetic breathing applies to all three meshes (front, back,
+    // sides) uniformly — the slab inflates as one volume. Per-mesh
+    // (rather than via a wrapper group) so the CSS3D stage — also a
+    // child of `group` — stays at its native scale; if the stage
+    // breathed, text glyphs would jitter along the breathe axis at
+    // 0.3Hz, fighting readability for visual rhythm.
     const breatheScale = 1 + breathe;
     this.planeMesh.scale.set(breatheScale, breatheScale, 1);
     this.backPaneMesh.scale.set(breatheScale, breatheScale, 1);
+    this.sideWallMesh.scale.set(breatheScale, breatheScale, 1);
     if (this.stageEl.style) {
       this.stageEl.style.display = visible ? "block" : "none";
     }
@@ -469,6 +510,8 @@ export class SlabManager {
     this.clearItems();
     this.css3dRenderer.domElement.remove();
     this.planeMesh.geometry.dispose();
+    this.backPaneMesh.geometry.dispose();
+    this.sideWallMesh.geometry.dispose();
     this.planeMaterial.dispose();
   }
 
@@ -675,10 +718,13 @@ function createMeniscusPlaneGeometry(
   const pos = geo.attributes.position;
   if (pos == null) return geo;
 
-  // Corner radius: ~28% of the shorter side. Generous enough to read
-  // as a droplet rather than "a rectangle with softened corners,"
-  // while leaving a flat interior large enough to host items.
-  const r = Math.min(width, height) * 0.28;
+  // Corner radius — sourced from the module-level SLAB_CORNER_RADIUS
+  // constant so the front pane, back pane, and side wall all trace
+  // the same rounded-rectangle outline. Pre-derivation: 28% of the
+  // shorter side reads as a droplet rather than "a rectangle with
+  // softened corners," while leaving a flat interior large enough
+  // to host items.
+  const r = SLAB_CORNER_RADIUS;
   const halfW = width / 2;
   const halfH = height / 2;
   const cx = halfW - r;
@@ -705,6 +751,136 @@ function createMeniscusPlaneGeometry(
   }
   pos.needsUpdate = true;
   geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Build the slab's side-wall geometry — a triangle strip wrapping
+ * the perimeter of the rounded-rectangle outline, connecting the
+ * front pane (at z = +thickness/2) to the back pane (at z =
+ * -thickness/2).
+ *
+ * Without this, the dual-pane construction reads as two parallel
+ * membranes with hollow space (visible from off-axis angles); the
+ * wall closes the silhouette so the slab reads as one solid glass
+ * tile from any viewpoint — same way the creature reads as one
+ * droplet rather than a sphere with open seams.
+ *
+ * The perimeter samples the same rounded-rect outline that the
+ * front + back panes' meniscus snap converges on. Per-side sample
+ * count is generous enough (32) that the wall looks smooth as a
+ * curve, not faceted; doubled at the corner arcs because that's
+ * where curvature is steepest. Outward-facing normals computed per
+ * edge so MeshPhysicalMaterial's sheen + clearcoat read on the
+ * silhouette correctly.
+ */
+function createSideWallGeometry(
+  width: number,
+  height: number,
+  thickness: number,
+  cornerRadius: number,
+): THREE.BufferGeometry {
+  const r = cornerRadius;
+  const halfW = width / 2;
+  const halfH = height / 2;
+  const cx = halfW - r;
+  const cy = halfH - r;
+  const SAMPLES_STRAIGHT = 1; // straight edges don't need subdivision
+  const SAMPLES_CORNER = 32; // smooth arc
+
+  const perimeter: { x: number; y: number }[] = [];
+
+  // Bottom edge: (-cx, -halfH) → (cx, -halfH)
+  for (let i = 0; i <= SAMPLES_STRAIGHT; i++) {
+    const t = i / SAMPLES_STRAIGHT;
+    perimeter.push({ x: -cx + t * 2 * cx, y: -halfH });
+  }
+  // Bottom-right arc: angle -π/2 → 0 around (cx, -cy)
+  for (let i = 1; i <= SAMPLES_CORNER; i++) {
+    const a = -Math.PI / 2 + (i / SAMPLES_CORNER) * (Math.PI / 2);
+    perimeter.push({ x: cx + r * Math.cos(a), y: -cy + r * Math.sin(a) });
+  }
+  // Right edge: (halfW, -cy) → (halfW, cy)
+  for (let i = 1; i <= SAMPLES_STRAIGHT; i++) {
+    const t = i / SAMPLES_STRAIGHT;
+    perimeter.push({ x: halfW, y: -cy + t * 2 * cy });
+  }
+  // Top-right arc: angle 0 → π/2 around (cx, cy)
+  for (let i = 1; i <= SAMPLES_CORNER; i++) {
+    const a = (i / SAMPLES_CORNER) * (Math.PI / 2);
+    perimeter.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+  }
+  // Top edge: (cx, halfH) → (-cx, halfH)
+  for (let i = 1; i <= SAMPLES_STRAIGHT; i++) {
+    const t = i / SAMPLES_STRAIGHT;
+    perimeter.push({ x: cx - t * 2 * cx, y: halfH });
+  }
+  // Top-left arc: angle π/2 → π around (-cx, cy)
+  for (let i = 1; i <= SAMPLES_CORNER; i++) {
+    const a = Math.PI / 2 + (i / SAMPLES_CORNER) * (Math.PI / 2);
+    perimeter.push({ x: -cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+  }
+  // Left edge: (-halfW, cy) → (-halfW, -cy)
+  for (let i = 1; i <= SAMPLES_STRAIGHT; i++) {
+    const t = i / SAMPLES_STRAIGHT;
+    perimeter.push({ x: -halfW, y: cy - t * 2 * cy });
+  }
+  // Bottom-left arc: angle π → 3π/2 around (-cx, -cy). Stop one
+  // sample short so we don't duplicate the perimeter[0] start point.
+  for (let i = 1; i < SAMPLES_CORNER; i++) {
+    const a = Math.PI + (i / SAMPLES_CORNER) * (Math.PI / 2);
+    perimeter.push({ x: -cx + r * Math.cos(a), y: -cy + r * Math.sin(a) });
+  }
+
+  const N = perimeter.length;
+  const halfT = thickness / 2;
+  const positions = new Float32Array(N * 6 * 3); // 6 vertices per quad (2 triangles)
+  const normals = new Float32Array(N * 6 * 3);
+  let p = 0;
+  let n = 0;
+
+  for (let i = 0; i < N; i++) {
+    const a = perimeter[i]!;
+    const b = perimeter[(i + 1) % N]!;
+
+    // Outward normal in the XY plane: rotate edge tangent (b-a) by -90°.
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const len = Math.hypot(ex, ey) || 1;
+    const nx = ey / len;
+    const ny = -ex / len;
+
+    // Triangle 1: front_a → back_a → front_b (CCW from outside).
+    positions[p++] = a.x;
+    positions[p++] = a.y;
+    positions[p++] = halfT;
+    positions[p++] = a.x;
+    positions[p++] = a.y;
+    positions[p++] = -halfT;
+    positions[p++] = b.x;
+    positions[p++] = b.y;
+    positions[p++] = halfT;
+    // Triangle 2: front_b → back_a → back_b.
+    positions[p++] = b.x;
+    positions[p++] = b.y;
+    positions[p++] = halfT;
+    positions[p++] = a.x;
+    positions[p++] = a.y;
+    positions[p++] = -halfT;
+    positions[p++] = b.x;
+    positions[p++] = b.y;
+    positions[p++] = -halfT;
+
+    for (let v = 0; v < 6; v++) {
+      normals[n++] = nx;
+      normals[n++] = ny;
+      normals[n++] = 0;
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
   return geo;
 }
 
