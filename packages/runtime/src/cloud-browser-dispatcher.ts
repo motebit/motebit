@@ -48,7 +48,7 @@
  * anger).
  */
 
-import type { ComputerAction, ComputerFailureReason } from "@motebit/sdk";
+import type { ComputerAction, ComputerFailureReason, ScreencastFrame } from "@motebit/sdk";
 
 import type { ComputerDisplayInfo, ComputerPlatformDispatcher } from "./computer-use.js";
 import { ComputerDispatcherError } from "./computer-use.js";
@@ -192,6 +192,131 @@ export class CloudBrowserDispatcher implements ComputerPlatformDispatcher {
     } finally {
       this.cloudSessionId = null;
     }
+  }
+
+  /**
+   * v1.3 — open a live JPEG screencast on the active cloud session.
+   * Calls the service's `GET /sessions/:id/screencast` endpoint,
+   * reads NDJSON frames, and fires `onFrame` per frame. Returns a
+   * disposer that aborts the stream + tells the service to stop
+   * the CDP screencast (the abort triggers the route's
+   * `ReadableStream.cancel`, which runs the server-side disposer).
+   *
+   * One screencast per cloud session — the service rejects double-
+   * starts with `policy_denied`, which surfaces here as a
+   * `ComputerDispatcherError`. Callers (apps) typically open the
+   * screencast once, after `queryDisplay` returns, and dispose on
+   * `closeSession`.
+   *
+   * Errors (`onError`) fire on transport faults (network drop,
+   * non-2xx response, malformed NDJSON line). The frame-decoding
+   * loop stops on the first error so the consumer doesn't see a
+   * mix of real frames and garbage. The disposer is still safe to
+   * call after an error — it aborts the (already-finished) read
+   * loop and then sends the abort signal.
+   */
+  async openScreencast(callbacks: {
+    onFrame: (frame: ScreencastFrame) => void;
+    onError?: (err: Error) => void;
+  }): Promise<() => Promise<void>> {
+    if (this.cloudSessionId === null) {
+      throw new ComputerDispatcherError(
+        "session_closed",
+        "Cloud browser session not opened — call queryDisplay() first.",
+      );
+    }
+    const cloudId = this.cloudSessionId;
+
+    let token: string;
+    try {
+      token = await this.getAuthToken();
+    } catch (err) {
+      throw new ComputerDispatcherError(
+        "permission_denied",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    const controller = new AbortController();
+    let response: Response;
+    try {
+      response = await this.fetchImpl(
+        `${this.baseUrl}/sessions/${encodeURIComponent(cloudId)}/screencast`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/x-ndjson",
+          },
+          signal: controller.signal,
+        },
+      );
+    } catch (err) {
+      throw new ComputerDispatcherError(
+        "platform_blocked",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    if (!response.ok) {
+      throw await this.errorFromResponse(response);
+    }
+    if (!response.body) {
+      throw new ComputerDispatcherError(
+        "platform_blocked",
+        "screencast response missing body stream",
+      );
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let stopped = false;
+
+    // Read loop — fire-and-forget. The disposer aborts the controller
+    // which cancels the read; the loop exits via the abort error.
+    void (async () => {
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) return;
+          buffer += decoder.decode(value, { stream: true });
+          let nl = buffer.indexOf("\n");
+          while (nl >= 0) {
+            const line = buffer.slice(0, nl);
+            buffer = buffer.slice(nl + 1);
+            if (line.length > 0) {
+              try {
+                const frame = JSON.parse(line) as ScreencastFrame;
+                if (!stopped) callbacks.onFrame(frame);
+              } catch (err) {
+                if (!stopped) {
+                  callbacks.onError?.(err instanceof Error ? err : new Error(String(err)));
+                }
+                return;
+              }
+            }
+            nl = buffer.indexOf("\n");
+          }
+        }
+      } catch (err) {
+        // Aborts surface as DOMException AbortError — that's the
+        // disposer doing its job, not a real error to surface.
+        if (stopped) return;
+        if (err instanceof Error && err.name === "AbortError") return;
+        callbacks.onError?.(err instanceof Error ? err : new Error(String(err)));
+      }
+    })();
+
+    return async () => {
+      if (stopped) return;
+      stopped = true;
+      try {
+        controller.abort();
+      } catch {
+        // Already aborted or controller in a bad state.
+      }
+    };
   }
 
   // ── Internal: signed HTTP roundtrip ────────────────────────────────

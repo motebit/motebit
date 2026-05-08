@@ -2465,6 +2465,18 @@ export const RUNTIME_RETENTION_REGISTRY: Readonly<Record<RuntimeStoreId, Retenti
 export type RuntimeStoreId = "memory" | "event_log" | "conversation_messages" | "tool_audit" | "skill_audit";
 
 // @alpha
+export interface ScreencastFrame {
+    // (undocumented)
+    readonly device_height: number;
+    // (undocumented)
+    readonly device_width: number;
+    // (undocumented)
+    readonly jpeg_base64: string;
+    // (undocumented)
+    readonly timestamp: number;
+}
+
+// @alpha
 export interface ScreenshotAction {
     // (undocumented)
     readonly kind: "screenshot";

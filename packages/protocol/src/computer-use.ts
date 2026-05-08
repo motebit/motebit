@@ -424,6 +424,42 @@ export type ComputerFailureReason = (typeof COMPUTER_FAILURE_REASONS)[number];
 // live in `@motebit/crypto`'s `artifacts.ts` (sibling of
 // `signToolInvocationReceipt`).
 
+// ── Live screencast (v1.3) ───────────────────────────────────────────
+//
+// `virtual_browser` v1 returned per-action screenshots — the slab
+// read as a slideshow of stills. v1.3 swaps that for a continuous
+// JPEG frame stream from CDP `Page.startScreencast`. The wire
+// shape is one frame per NDJSON line on the cloud-browser
+// service's `GET /sessions/:id/screencast` endpoint.
+//
+// Lives at the protocol layer (not buried in the cloud-browser
+// service) because both the dispatcher and the slab renderer
+// consume this shape — keeping the type next to ComputerSession*
+// preserves the wire-format cluster doctrine names ("every spec
+// type lives in @motebit/protocol").
+
+/**
+ * One CDP-decoded screencast frame as it lands on the wire.
+ *
+ * `jpeg_base64` — the image payload, base64-encoded JPEG. Quality is
+ * tuned by the service (60% at v1.3) for slab register, not fidelity.
+ *
+ * `timestamp` — wall-clock ms from CDP's frame metadata (normalized;
+ * CDP returns seconds). Frames may arrive slightly out of order
+ * under load; consumers should latest-wins on `timestamp`.
+ *
+ * `device_width` / `device_height` — logical-pixel dimensions of the
+ * captured viewport. The slab uses these to compute the right
+ * aspect ratio when rendering into a `<canvas>` or `<img>`.
+ * @alpha
+ */
+export interface ScreencastFrame {
+  readonly jpeg_base64: string;
+  readonly timestamp: number;
+  readonly device_width: number;
+  readonly device_height: number;
+}
+
 /**
  * Per-action structural roll-up entry. The runtime appends one of these
  * to the in-session log on every `executeAction` call, regardless of

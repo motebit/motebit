@@ -365,4 +365,56 @@ describe("browser-sandbox routes", () => {
       expect(body.error.message).toContain("Chromium crashed");
     });
   });
+
+  // ---------------------------------------------------------------------
+  // v1.3 — GET /sessions/:id/screencast streams CDP frames as NDJSON.
+  // The screencast helper is mocked so the test exercises the route's
+  // wiring (auth, lifecycle, dispose) without needing a real CDP
+  // session. Each test re-opens a session via the fake pool and binds
+  // a fresh stream.
+  // ---------------------------------------------------------------------
+
+  describe("GET /sessions/:id/screencast", () => {
+    it("rejects without bearer (401 + permission_denied)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const res = await app.request("/sessions/anything/screencast");
+      expect(res.status).toBe(401);
+    });
+
+    it("returns session_closed envelope when session is unknown", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const res = await app.request("/sessions/no-such-session/screencast", {
+        headers: authHeader(),
+      });
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error: { reason: string } };
+      expect(body.error.reason).toBe("session_closed");
+    });
+
+    it("rejects double-start with policy_denied (one screencast per session)", async () => {
+      // Session has a stopScreencast already populated → second open
+      // sees the slot taken and refuses.
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id) as unknown as {
+        stopScreencast: (() => Promise<void>) | null;
+      };
+      session.stopScreencast = async () => undefined; // simulate active stream
+
+      const res = await app.request(`/sessions/${session_id}/screencast`, {
+        headers: authHeader(),
+      });
+      // ServiceError's policy_denied maps to 429 (the dispatcher's
+      // wire taxonomy treats over-quota / can't-allocate as the same
+      // reason class — see errors.ts).
+      expect(res.status).toBe(429);
+      const body = (await res.json()) as { error: { reason: string; message: string } };
+      expect(body.error.reason).toBe("policy_denied");
+      expect(body.error.message).toContain("already has an active screencast");
+    });
+  });
 });

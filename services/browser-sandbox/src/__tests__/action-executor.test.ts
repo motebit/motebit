@@ -83,6 +83,7 @@ function makeMockSession(): {
     lastCursorX: 0,
     lastCursorY: 0,
     inFlight: 0,
+    stopScreencast: null,
   };
 
   return {

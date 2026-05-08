@@ -57,6 +57,17 @@ export interface BrowserSession {
    * executor is still using.
    */
   inFlight: number;
+  /**
+   * v1.3 — disposer for an active CDP screencast on this session, or
+   * null when no consumer is currently streaming. The screencast
+   * route sets this on attach and clears it on detach; `closeSession`
+   * runs the disposer first so the CDP session is torn down before
+   * the BrowserContext is closed (closing the context first leaves
+   * the CDP attempt to `Page.stopScreencast` racing with the
+   * teardown — best-effort either way, but tearing the screencast
+   * down explicitly first avoids spurious teardown errors).
+   */
+  stopScreencast: (() => Promise<void>) | null;
 }
 
 export interface BrowserPoolConfig {
@@ -137,6 +148,7 @@ export class BrowserPool {
       lastCursorX: 0,
       lastCursorY: 0,
       inFlight: 0,
+      stopScreencast: null,
     };
     this.sessions.set(sessionId, session);
     return session;
@@ -182,6 +194,17 @@ export class BrowserPool {
     const s = this.sessions.get(sessionId);
     if (!s) return;
     this.sessions.delete(sessionId);
+    // v1.3 — stop the CDP screencast (if any) before tearing down the
+    // BrowserContext, so the screencast disposer runs against a still-
+    // attached CDP session instead of racing context teardown.
+    if (s.stopScreencast) {
+      try {
+        await s.stopScreencast();
+      } catch {
+        // Best-effort. Already on the close path; the context teardown
+        // below will collect any residue.
+      }
+    }
     try {
       await s.context.close();
     } catch {

@@ -306,4 +306,194 @@ describe("CloudBrowserDispatcher", () => {
       ]);
     });
   });
+
+  // ---------------------------------------------------------------------
+  // v1.3 — `openScreencast` opens an NDJSON-streamed JPEG frame source
+  // and fires onFrame per parsed line. Uses a synthetic ReadableStream
+  // so the test exercises the full reader → newline-split → parse loop
+  // without requiring a real network round-trip.
+  // ---------------------------------------------------------------------
+
+  describe("openScreencast", () => {
+    /** Build a Response whose body is a ReadableStream over the given NDJSON chunks. */
+    function makeNdjsonResponse(chunks: string[]): Response {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const c of chunks) controller.enqueue(encoder.encode(c));
+          controller.close();
+        },
+      });
+      return {
+        ok: true,
+        status: 200,
+        body: stream,
+      } as unknown as Response;
+    }
+
+    async function flushStream(): Promise<void> {
+      // Reader consumes microtasks; let them all run.
+      for (let i = 0; i < 16; i++) await Promise.resolve();
+    }
+
+    it("fails closed when no session is open", async () => {
+      const { fetchImpl } = makeFetch([]);
+      const d = makeDispatcher(fetchImpl);
+      await expect(d.openScreencast({ onFrame: () => {} })).rejects.toBeInstanceOf(
+        ComputerDispatcherError,
+      );
+    });
+
+    it("delivers parsed frames to onFrame in order", async () => {
+      // First call ensures the session; second call returns the
+      // streamed body.
+      const ensureFetch = vi
+        .fn(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session_id: "cs-1",
+            display: { width: 1280, height: 800, scaling_factor: 1 },
+          }),
+        }))
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session_id: "cs-1",
+            display: { width: 1280, height: 800, scaling_factor: 1 },
+          }),
+        }))
+        .mockImplementationOnce(async () =>
+          makeNdjsonResponse([
+            JSON.stringify({
+              jpeg_base64: "aaa",
+              timestamp: 1000,
+              device_width: 1280,
+              device_height: 800,
+            }) + "\n",
+            JSON.stringify({
+              jpeg_base64: "bbb",
+              timestamp: 1100,
+              device_width: 1280,
+              device_height: 800,
+            }) + "\n",
+          ]),
+        );
+
+      const d = makeDispatcher(ensureFetch as unknown as typeof globalThis.fetch);
+      await d.queryDisplay();
+      const frames: Array<{ jpeg_base64: string; timestamp: number }> = [];
+      const stop = await d.openScreencast({
+        onFrame: (f) => frames.push({ jpeg_base64: f.jpeg_base64, timestamp: f.timestamp }),
+      });
+      await flushStream();
+      await stop();
+
+      expect(frames).toEqual([
+        { jpeg_base64: "aaa", timestamp: 1000 },
+        { jpeg_base64: "bbb", timestamp: 1100 },
+      ]);
+    });
+
+    it("handles a frame split across two read chunks", async () => {
+      const ensureFetch = vi
+        .fn()
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session_id: "cs-1",
+            display: { width: 1280, height: 800, scaling_factor: 1 },
+          }),
+        }))
+        .mockImplementationOnce(async () => {
+          // First chunk has half the JSON, second has the rest + newline.
+          const fullLine = JSON.stringify({
+            jpeg_base64: "x",
+            timestamp: 1,
+            device_width: 1,
+            device_height: 1,
+          });
+          const half = Math.floor(fullLine.length / 2);
+          return makeNdjsonResponse([fullLine.slice(0, half), fullLine.slice(half) + "\n"]);
+        });
+
+      const d = makeDispatcher(ensureFetch as unknown as typeof globalThis.fetch);
+      await d.queryDisplay();
+      const frames: Array<{ jpeg_base64: string }> = [];
+      await d.openScreencast({ onFrame: (f) => frames.push({ jpeg_base64: f.jpeg_base64 }) });
+      await flushStream();
+      expect(frames).toEqual([{ jpeg_base64: "x" }]);
+    });
+
+    it("calls onError when the service rejects with a structured envelope", async () => {
+      const ensureFetch = vi
+        .fn()
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session_id: "cs-1",
+            display: { width: 1280, height: 800, scaling_factor: 1 },
+          }),
+        }))
+        .mockImplementationOnce(async () => ({
+          ok: false,
+          status: 429,
+          statusText: "policy denied",
+          json: async () => ({
+            error: { reason: "policy_denied", message: "already streaming" },
+          }),
+        }));
+      const d = makeDispatcher(ensureFetch as unknown as typeof globalThis.fetch);
+      await d.queryDisplay();
+      await expect(d.openScreencast({ onFrame: () => {} })).rejects.toBeInstanceOf(
+        ComputerDispatcherError,
+      );
+    });
+
+    it("disposer aborts the read stream and is idempotent", async () => {
+      const abortSpy = vi.fn();
+      let resolveStream!: (value: unknown) => void;
+      const stallStream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          // Never enqueues — keeps the read pending until the abort
+          // signal fires (the abort closes the controller via the
+          // fetch mock below).
+          new Promise((r) => {
+            resolveStream = r;
+          })
+            .then(() => controller.close())
+            .catch(() => {});
+        },
+      });
+
+      const ensureFetch = vi
+        .fn()
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            session_id: "cs-1",
+            display: { width: 1280, height: 800, scaling_factor: 1 },
+          }),
+        }))
+        .mockImplementationOnce(async (_url: string, init?: RequestInit) => {
+          // Wire the abort signal to close the stream + record.
+          init?.signal?.addEventListener("abort", () => {
+            abortSpy();
+            resolveStream(null);
+          });
+          return { ok: true, status: 200, body: stallStream } as unknown as Response;
+        });
+
+      const d = makeDispatcher(ensureFetch as unknown as typeof globalThis.fetch);
+      await d.queryDisplay();
+      const stop = await d.openScreencast({ onFrame: () => {} });
+      await stop();
+      await stop(); // idempotent — second call is a no-op
+      expect(abortSpy).toHaveBeenCalledTimes(1);
+    });
+  });
 });
