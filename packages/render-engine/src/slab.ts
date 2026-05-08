@@ -4,7 +4,7 @@
  * State machine lives in `slab-core.ts` (Ring 1 — same on every surface
  * that renders a slab). This module owns the desktop / web rendering
  * primitive: a liquid-glass plane floating to the right of the
- * creature, items mounted via `CSS2DObject`, sympathetic breathing,
+ * creature, items mounted via `CSS3DObject`, sympathetic breathing,
  * Rayleigh-Plateau pinch displacement on the plane mesh.
  *
  * One state machine, two renderers (desktop here, spatial in
@@ -18,9 +18,16 @@
  * What this module is:
  *
  *   - A `THREE.Group` containing the liquid-glass plane mesh + a
- *     CSS2DObject anchor for HTML items mounted on its surface. Same
+ *     CSS3DObject anchor for HTML items mounted on its surface. Same
  *     material family as the creature (borosilicate IOR, transmission,
- *     low roughness) — body-adjacent, not a UI element.
+ *     low roughness) — body-adjacent, not a UI element. CSS3D is
+ *     load-bearing here: the plane sits at SLAB_TILT_X (~12° forward)
+ *     and SLAB_TILT_Y (~5° yaw toward creature), and CSS3DObject
+ *     respects that 3D transform — items tilt with the plane the way
+ *     the creature's eyes tilt with the head. The earlier CSS2D
+ *     implementation billboarded items to the camera, which made the
+ *     chrome float off as a flat sticker disconnected from the
+ *     plane's pose (visible in the 2026-05-07 angled-view triage).
  *
  *   - Per-frame DOM animation (emerge / dissolve / pinch) driven from
  *     the core's snapshot — phase + phaseTime in, element transforms
@@ -33,7 +40,7 @@
  */
 
 import * as THREE from "three";
-import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
+import { CSS3DObject, CSS3DRenderer } from "three/addons/renderers/CSS3DRenderer.js";
 import type {
   ArtifactSpec,
   ArtifactHandle,
@@ -90,6 +97,25 @@ const SLAB_TILT_Y = -0.09; // ~5° yaw toward creature (radians) — doctrine
 const SLAB_WIDTH = 0.54;
 const SLAB_HEIGHT = SLAB_WIDTH / GOLDEN_RATIO;
 
+/**
+ * CSS3DObject pixel→world scale. The stage div is sized in CSS pixels
+ * (480×300 from createContainerElement); CSS3D treats those pixels as
+ * world units unless scaled. Map the stage edge-to-edge with the
+ * plane's projected extent so content fills the perceptual organ —
+ * `SLAB_WIDTH / stage_pixel_width = 0.54 / 480 ≈ 0.001125`. Single
+ * scalar holds for both axes because the stage's 480×300 (1.6:1) and
+ * the plane's 0.54×0.334 (φ ≈ 1.618:1) aspect ratios are within 1%.
+ *
+ * `STAGE_PIXEL_WIDTH` mirrors the value in `createContainerElement`
+ * below; if that footprint changes (e.g., for a denser embodiment),
+ * update both. The duplication is intentional — the constant lives
+ * here so the per-pixel scale derivation reads at the construction
+ * site, and `createContainerElement` stays a pure DOM factory the
+ * test fakes can substitute without importing this module's geometry.
+ */
+const STAGE_PIXEL_WIDTH = 480;
+const STAGE_PIXEL_TO_WORLD = SLAB_WIDTH / STAGE_PIXEL_WIDTH;
+
 // ── Renderer-side per-item state ─────────────────────────────────────
 
 interface ManagedElement {
@@ -105,15 +131,18 @@ export class SlabManager {
   private readonly planeMesh: THREE.Mesh;
   private readonly planeMaterial: THREE.MeshPhysicalMaterial;
   /**
-   * One CSS2DObject anchored at the plane's center, holding a single
+   * One CSS3DObject anchored at the plane's center, holding a single
    * "stage" div — the plane renders ONE primary embodiment at a time
    * (doctrine: motebit-computer.md §"Embodiment modes"). Cards-on-
    * glass don't exist; the stage's child is whatever the motebit is
-   * currently working on (browser page, terminal, IDE).
+   * currently working on (browser page, terminal, IDE). CSS3D
+   * (vs. CSS2D) means the stage element follows the plane's tilt
+   * and rotation in 3D space rather than billboarding flat against
+   * the camera — the slab's pose is the content's pose.
    */
-  private readonly stageAnchor: CSS2DObject;
+  private readonly stageAnchor: CSS3DObject;
   private readonly stageEl: HTMLDivElement;
-  private readonly css2dRenderer: CSS2DRenderer;
+  private readonly css3dRenderer: CSS3DRenderer;
   /** Per-id renderer state — DOM element + per-render flags. */
   private readonly elements = new Map<string, ManagedElement>();
   private readonly core: SlabCore;
@@ -174,20 +203,38 @@ export class SlabManager {
     this.planeMesh.visible = false; // skip GL work when truly recessed
     this.group.add(this.planeMesh);
 
-    // Items container — one CSS2DObject rooted at the plane's center.
+    // Items container — one CSS3DObject rooted at the plane's center.
+    // `CSS3DObject`'s constructor force-sets `pointer-events: auto` and
+    // `position: absolute` on the wrapped element; the stage's
+    // pointer-events: none (so empty stage passes camera-control
+    // gestures through) is re-applied AFTER the wrap.
     this.stageEl = createContainerElement();
-    this.stageAnchor = new CSS2DObject(this.stageEl);
+    this.stageAnchor = new CSS3DObject(this.stageEl);
+    this.stageEl.style.pointerEvents = "none";
+    // Sit just in front of the plane's front face. With the current
+    // razor-thin geometry this is a small offset; once the plane
+    // gains volumetric depth (Path A step 2), the stage moves to a
+    // negative-z slot embedded behind the front pane and refracted
+    // through the glass.
     this.stageAnchor.position.set(0, 0, 0.001);
+    // Pixel→world scale so the 480×300 CSS-pixel stage maps to the
+    // plane's 0.54×0.334m extent edge-to-edge. Without this, CSS3D
+    // would render 480 world units across — the stage would be a
+    // building, not a panel.
+    this.stageAnchor.scale.set(STAGE_PIXEL_TO_WORLD, STAGE_PIXEL_TO_WORLD, 1);
     this.group.add(this.stageAnchor);
 
-    this.css2dRenderer = new CSS2DRenderer();
-    this.css2dRenderer.setSize(container.clientWidth, container.clientHeight);
-    this.css2dRenderer.domElement.style.position = "absolute";
-    this.css2dRenderer.domElement.style.top = "0";
-    this.css2dRenderer.domElement.style.left = "0";
-    this.css2dRenderer.domElement.style.zIndex = "2";
-    this.css2dRenderer.domElement.style.pointerEvents = "none";
-    container.appendChild(this.css2dRenderer.domElement);
+    this.css3dRenderer = new CSS3DRenderer();
+    this.css3dRenderer.setSize(container.clientWidth, container.clientHeight);
+    this.css3dRenderer.domElement.style.position = "absolute";
+    this.css3dRenderer.domElement.style.top = "0";
+    this.css3dRenderer.domElement.style.left = "0";
+    this.css3dRenderer.domElement.style.zIndex = "2";
+    // The renderer's container holds CSS3D-transformed children whose
+    // pointer-events are managed per-item; the container itself never
+    // captures input.
+    this.css3dRenderer.domElement.style.pointerEvents = "none";
+    container.appendChild(this.css3dRenderer.domElement);
   }
 
   /** Expose the THREE group so the adapter can position/animate externally. */
@@ -328,16 +375,16 @@ export class SlabManager {
 
   /** Called after WebGL render each frame — syncs CSS overlay. */
   render(scene: THREE.Scene, camera: THREE.Camera): void {
-    this.css2dRenderer.render(scene, camera);
+    this.css3dRenderer.render(scene, camera);
   }
 
   resize(width: number, height: number): void {
-    this.css2dRenderer.setSize(width, height);
+    this.css3dRenderer.setSize(width, height);
   }
 
   dispose(): void {
     this.clearItems();
-    this.css2dRenderer.domElement.remove();
+    this.css3dRenderer.domElement.remove();
     this.planeMesh.geometry.dispose();
     this.planeMaterial.dispose();
   }

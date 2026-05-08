@@ -23,7 +23,7 @@
  *
  * What does NOT live here:
  *   - Three.js meshes, materials, geometry.
- *   - DOM elements, CSS2DObject anchors, element.style mutations.
+ *   - DOM elements, CSS3DObject anchors, element.style mutations.
  *   - Sympathetic-breathing scale application (renderers apply the
  *     amplitude factor to their own surface).
  *

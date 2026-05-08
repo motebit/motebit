@@ -1,19 +1,21 @@
 /**
- * SlabManager tests — headless Three.js + mocked CSS2DRenderer.
+ * SlabManager tests — headless Three.js + mocked CSS3DRenderer.
  *
- * Mirrors artifacts.test.ts — same CSS2DRenderer fake, same minimal
- * HTMLElement stand-in. The manager's phase animations, plane
- * visibility curve, sympathetic breathing, and detach plumbing are
- * pure CPU once CSS2D is stubbed.
+ * Same shape as artifacts.test.ts (which still uses CSS2D for the
+ * artifact display layer); only the slab's stage anchor migrated to
+ * CSS3D so items follow the plane's tilt instead of billboarding to
+ * the camera. The manager's phase animations, plane visibility curve,
+ * sympathetic breathing, and detach plumbing are pure CPU once
+ * CSS3D is stubbed.
  */
 
 import { describe, it, expect, vi } from "vitest";
 import * as THREE from "three";
 
-vi.mock("three/addons/renderers/CSS2DRenderer.js", async () => {
+vi.mock("three/addons/renderers/CSS3DRenderer.js", async () => {
   const THREEmod = await vi.importActual<typeof import("three")>("three");
 
-  class FakeCSS2DObject extends THREEmod.Object3D {
+  class FakeCSS3DObject extends THREEmod.Object3D {
     element: { style: Record<string, string> };
     constructor(element: { style: Record<string, string> }) {
       super();
@@ -21,7 +23,7 @@ vi.mock("three/addons/renderers/CSS2DRenderer.js", async () => {
     }
   }
 
-  class FakeCSS2DRenderer {
+  class FakeCSS3DRenderer {
     domElement: { style: Record<string, string>; remove: () => void };
     constructor() {
       this.domElement = { style: {}, remove: () => {} };
@@ -30,7 +32,7 @@ vi.mock("three/addons/renderers/CSS2DRenderer.js", async () => {
     render(): void {}
   }
 
-  return { CSS2DRenderer: FakeCSS2DRenderer, CSS2DObject: FakeCSS2DObject };
+  return { CSS3DRenderer: FakeCSS3DRenderer, CSS3DObject: FakeCSS3DObject };
 });
 
 import { SlabManager } from "../slab.js";

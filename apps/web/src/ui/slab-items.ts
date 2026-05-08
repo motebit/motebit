@@ -3,7 +3,7 @@
  *
  * Sibling-boundary note: this file mirrors `apps/desktop/src/ui/slab-items.ts`.
  * Both surfaces render HTML cards onto the Three.js slab plane via
- * CSS2DObject and produce identical output. Changes here MUST be
+ * CSS3DObject and produce identical output. Changes here MUST be
  * mirrored to the desktop sibling (and any future HTML-surface
  * sibling) until three consumers exist — at that point, extract to
  * a shared `@motebit/panels`-style render package per the panels-
@@ -49,7 +49,7 @@ import type { SlabItem, SlabItemActions, ArtifactKindForDetach } from "@motebit/
 
 function attachHoverClose(card: HTMLDivElement, actions: SlabItemActions): void {
   // Use a span with role=button rather than an HTMLButtonElement. Inside
-  // a CSS2DRenderer overlay (which applies 3D transforms + positions its
+  // a CSS3DRenderer overlay (which applies 3D transforms + positions its
   // root with `pointer-events: none`), <button>s can swallow the
   // synthesized `click` event inconsistently — the user sees a styled
   // button that doesn't fire. A role=button span with an explicit
@@ -82,7 +82,7 @@ function attachHoverClose(card: HTMLDivElement, actions: SlabItemActions): void 
   close.style.transform = "scale(0.85)";
   close.style.transition = "opacity 120ms ease-out, transform 120ms ease-out";
   // `visibility` (rather than `pointer-events: none`) gates
-  // interactability — avoids a pointer-events race in CSS2DRenderer
+  // interactability — avoids a pointer-events race in CSS3DRenderer
   // where a freshly-revealed button could miss the first click.
   close.style.visibility = "hidden";
   // Always pointer-events: auto so when visible, the span is a
@@ -125,7 +125,7 @@ function attachHoverClose(card: HTMLDivElement, actions: SlabItemActions): void 
     card.style.transform = "scale(0.94)";
     actions.dismiss();
   };
-  // Use pointerup (not click). Click synthesis inside CSS2DRenderer is
+  // Use pointerup (not click). Click synthesis inside CSS3DRenderer is
   // unreliable in some browsers; pointerup fires directly from the
   // input pipeline and is robust.
   close.addEventListener("pointerup", dismiss);
