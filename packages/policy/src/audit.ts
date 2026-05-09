@@ -1,4 +1,12 @@
 import type { ToolAuditEntry, PolicyDecision, InjectionWarning } from "@motebit/protocol";
+import {
+  appendAuditEntry,
+  getChainHead,
+  verifyAuditChain,
+  InMemoryAuditChainStore,
+  type AuditChainStore,
+  type AuditEntry,
+} from "./audit-chain.js";
 
 /**
  * AuditLogger — records every policy decision and tool execution for
@@ -87,6 +95,180 @@ function redactSensitiveArgs(args: Record<string, unknown>): Record<string, unkn
     }
   }
   return redacted;
+}
+
+/**
+ * audit-chain-1 — `AuditLogSink` that pairs an in-memory mirror
+ * (sync query semantics, FIFO eviction) with a hash-chained
+ * `AuditChainStore` (tamper-evident, no eviction). Each appended
+ * entry's hash references the previous entry's hash, forming a
+ * Merkle-like chain — an attacker who compromises the runtime
+ * cannot reorder, remove, or alter a single entry without breaking
+ * the chain past that point.
+ *
+ * **Why this composes two stores instead of replacing the in-memory
+ * sink:** The `AuditLogSink.append` interface is sync; chain hashing
+ * (SHA-256 via `crypto.subtle`) is async. Rather than change the
+ * interface (and break every consumer's call-site), we keep sync
+ * mirror writes for the existing query path AND queue async chain
+ * writes serially in the background. Each chain write awaits the
+ * previous one so the chain stays well-ordered even under fast
+ * append cadence.
+ *
+ * **Closes the `audit_chain_signing_endgame` memory:** the
+ * primitive (`audit-chain.ts`) had zero consumers. This sink is the
+ * first consumer. Surfaces opt in by passing
+ * `new ChainedAuditSink({...})` to the `AuditLogger` constructor;
+ * the default `InMemoryAuditSink` stays in place for surfaces that
+ * don't yet need tamper-evidence (in-tree tests, ephemeral
+ * sandboxes).
+ *
+ * **Receipt-vs-chain layering:** `ToolInvocationReceipt` (per-entry
+ * Ed25519-signed, in `@motebit/crypto`) gives single-entry
+ * verifiability — anyone with the public key can verify that
+ * receipt was produced by that motebit. `ChainedAuditSink` adds
+ * chain-level integrity — any party can verify the entire trail
+ * is internally consistent. Both compose: a chain entry whose
+ * `data.receipt` field carries a signed receipt is BOTH per-entry
+ * authentic AND chain-position authentic.
+ */
+export interface ChainedAuditSinkOptions {
+  /**
+   * Capacity cap for the in-memory mirror (FIFO eviction). The chain
+   * store is uncapped — chain entries persist regardless of mirror
+   * eviction so verification can run against the full history.
+   */
+  readonly maxEntries?: number;
+  /**
+   * Backing store for the hash-chained tail. Defaults to
+   * `InMemoryAuditChainStore`. Production surfaces will pass a
+   * persistent store (SQLite-backed, durable across restarts) when
+   * the audit-chain-2 slice wires durable persistence.
+   */
+  readonly chainStore?: AuditChainStore;
+  /**
+   * Stamped as `actor_id` on each chain entry so verifiers know
+   * which motebit produced the trail. Defaults to a literal
+   * `"motebit"` when unset — visibly-broken so unset surfaces show
+   * up in audit reads as obviously-unconfigured rather than
+   * silently-anonymous.
+   */
+  readonly motebitId?: string;
+}
+
+export class ChainedAuditSink extends InMemoryAuditSink {
+  private readonly chainStore: AuditChainStore;
+  private readonly motebitId: string;
+  /**
+   * Sequenced promise — each chain-append awaits the previous to
+   * preserve hash linkage under concurrent calls. Errors are
+   * caught and logged; subsequent appends still run.
+   */
+  private chainQueue: Promise<void> = Promise.resolve();
+  private chainErrors = 0;
+
+  constructor(opts: ChainedAuditSinkOptions = {}) {
+    super(opts.maxEntries);
+    this.chainStore = opts.chainStore ?? new InMemoryAuditChainStore();
+    this.motebitId = opts.motebitId ?? "motebit";
+  }
+
+  override append(entry: ToolAuditEntry): void {
+    // Sync mirror write — preserves the existing query/getAll
+    // semantics for callers that haven't migrated to async chain
+    // reads.
+    super.append(entry);
+    // Async chain write — queued so order is preserved. Caller
+    // doesn't await; verification consumers call `drainChain()`
+    // before reading.
+    this.chainQueue = this.chainQueue
+      .then(() => this.appendToChain(entry))
+      .catch((err) => {
+        this.chainErrors++;
+        // eslint-disable-next-line no-console -- defensive logging; chain failures shouldn't break the audit logger
+        console.warn("[audit-chain] append failed:", err instanceof Error ? err.message : err);
+      });
+  }
+
+  private async appendToChain(entry: ToolAuditEntry): Promise<void> {
+    // Convert ToolAuditEntry → AuditEntry. The chain entry's `data`
+    // payload includes everything the in-memory mirror tracks, so
+    // post-hoc verification can reproduce the audit row from the
+    // chain alone. Sensitive fields (`args`) were already redacted
+    // at AuditLogger.logDecision time before reaching the sink.
+    const data: Record<string, unknown> = {
+      tool: entry.tool,
+      args: entry.args,
+      decision: entry.decision,
+    };
+    if (entry.result) data["result"] = entry.result;
+    if (entry.injection) data["injection"] = entry.injection;
+    if (entry.runId) data["run_id"] = entry.runId;
+    if (entry.turnId) data["turn_id"] = entry.turnId;
+    await appendAuditEntry(this.chainStore, {
+      entry_id: entry.callId,
+      timestamp: entry.timestamp,
+      event_type: "tool_call",
+      actor_id: this.motebitId,
+      data,
+    });
+  }
+
+  /**
+   * Wait for all pending chain writes to complete. Verification
+   * consumers MUST call this before `getChainEntries` or
+   * `verifyChain` — otherwise reads race ahead of in-flight writes.
+   */
+  async drainChain(): Promise<void> {
+    await this.chainQueue;
+  }
+
+  /** Read the chain entries (drains pending writes first). */
+  async getChainEntries(from?: number, to?: number): Promise<AuditEntry[]> {
+    await this.drainChain();
+    return this.chainStore.getEntries(from, to);
+  }
+
+  /**
+   * Verify the chain's integrity. Returns `{valid: true}` if every
+   * entry's hash matches its computed value AND every link to the
+   * previous entry holds. Returns `{valid: false, brokenAt}` with
+   * the chain index of the first inconsistency.
+   *
+   * Tamper-evidence contract: an attacker who modifies any entry's
+   * `data` field invalidates that entry's hash AND every subsequent
+   * entry's `previous_hash` reference. They can rebuild the tail,
+   * but only if they have the original SHA-256 input shape — which
+   * carries the full canonical entry. Removing entries leaves the
+   * subsequent `previous_hash` references dangling. Reordering
+   * shifts every subsequent `previous_hash` reference. All three
+   * tamper modes are caught.
+   */
+  async verifyChain(): Promise<{ valid: true } | { valid: false; brokenAt: number }> {
+    await this.drainChain();
+    return verifyAuditChain(this.chainStore);
+  }
+
+  /**
+   * Hash of the chain head — the cryptographic commitment to the
+   * entire trail's contents. External anchoring (pinning to a
+   * federation peer, a timestamping service, an L1 transaction —
+   * audit-chain-2 follow-up) commits this single hash and gains
+   * full-chain tamper-evidence as a derived property.
+   */
+  async getChainHead(): Promise<string> {
+    await this.drainChain();
+    return getChainHead(this.chainStore);
+  }
+
+  /**
+   * Count of chain-write failures since construction. Production
+   * surfaces watch this as a telemetry signal — if it ever rises
+   * above zero, the chain has gaps and verification will fail.
+   */
+  get chainAppendErrorCount(): number {
+    return this.chainErrors;
+  }
 }
 
 export class AuditLogger {
@@ -183,5 +365,20 @@ export class AuditLogger {
    */
   getAll(): ToolAuditEntry[] {
     return this.sink.getAll();
+  }
+
+  /**
+   * audit-chain-1 — expose the underlying sink so callers can
+   * access chain-level operations when the sink is a
+   * `ChainedAuditSink`. Returns null when the sink is the default
+   * (un-chained) shape — callers handle absence gracefully.
+   *
+   * Pattern: `const chained = logger.getChainedSink();
+   * if (chained) await chained.verifyChain();` — compile-time-clean
+   * narrow into the chained operations without forcing every
+   * surface to know about chain primitives.
+   */
+  getChainedSink(): ChainedAuditSink | null {
+    return this.sink instanceof ChainedAuditSink ? this.sink : null;
   }
 }
