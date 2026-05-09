@@ -20,7 +20,13 @@ import { describe, it, expect } from "vitest";
 import type { ControlState, UserInputEvent } from "@motebit/sdk";
 import type { CoBrowseControlMachine, UserInputForwardResult } from "@motebit/runtime";
 
-import { renderCoBrowseChrome, normalizeUrl } from "../ui/cobrowse-chrome";
+import {
+  renderCoBrowseChrome,
+  normalizeUrl,
+  pickReceiptAnimation,
+  getReceiptAnimation,
+  animateMarkForReceipt,
+} from "../ui/cobrowse-chrome";
 
 // ── normalizeUrl ────────────────────────────────────────────────────────
 
@@ -457,6 +463,117 @@ describe("renderCoBrowseChrome — chrome-1b pixel-consent eye", () => {
         ".cobrowse-chrome-mark, .cobrowse-chrome-mark-ring-medical, .cobrowse-chrome-mark-eye",
       ),
     ).toHaveLength(3);
+  });
+});
+
+// ── chrome-1c: act-firing animations ───────────────────────────────────
+
+describe("pickReceiptAnimation — tool-name → animation kind", () => {
+  it("read_page → 'read' (outward ripple)", () => {
+    expect(pickReceiptAnimation("read_page")).toBe("read");
+  });
+
+  it("click_element / focus_element → 'click' (inward pulse)", () => {
+    expect(pickReceiptAnimation("click_element")).toBe("click");
+    expect(pickReceiptAnimation("focus_element")).toBe("click");
+  });
+
+  it("type_into → 'type' (keystroke flicker)", () => {
+    expect(pickReceiptAnimation("type_into")).toBe("type");
+  });
+
+  it("computer + action.kind discriminates into the right sub-animation", () => {
+    expect(pickReceiptAnimation("computer", { action: { kind: "screenshot" } })).toBe("look");
+    expect(pickReceiptAnimation("computer", { action: { kind: "click" } })).toBe("click");
+    expect(pickReceiptAnimation("computer", { action: { kind: "double_click" } })).toBe("click");
+    expect(pickReceiptAnimation("computer", { action: { kind: "type" } })).toBe("type");
+    expect(pickReceiptAnimation("computer", { action: { kind: "key" } })).toBe("type");
+    expect(pickReceiptAnimation("computer", { action: { kind: "navigate" } })).toBe("read");
+    expect(pickReceiptAnimation("computer", { action: { kind: "scroll" } })).toBe("generic");
+  });
+
+  it("computer without args falls back to 'click' (most computer actions are click-shaped)", () => {
+    expect(pickReceiptAnimation("computer")).toBe("click");
+  });
+
+  it("unknown tool → 'generic' (soft single beat)", () => {
+    expect(pickReceiptAnimation("web_search")).toBe("generic");
+    expect(pickReceiptAnimation("recall_memories")).toBe("generic");
+    expect(pickReceiptAnimation("custom_mcp_tool")).toBe("generic");
+  });
+});
+
+describe("getReceiptAnimation — keyframes per kind", () => {
+  it("returns distinct keyframes for each kind", () => {
+    const read = getReceiptAnimation("read");
+    const look = getReceiptAnimation("look");
+    const click = getReceiptAnimation("click");
+    const type = getReceiptAnimation("type");
+    const generic = getReceiptAnimation("generic");
+    expect(read.keyframes.length).toBeGreaterThan(0);
+    expect(look.keyframes.length).toBeGreaterThan(0);
+    expect(click.keyframes.length).toBeGreaterThan(0);
+    expect(type.keyframes.length).toBeGreaterThan(0);
+    expect(generic.keyframes.length).toBeGreaterThan(0);
+  });
+
+  it("sub-second durations across all kinds (calm-software register)", () => {
+    for (const kind of ["read", "look", "click", "type", "generic"] as const) {
+      const { options } = getReceiptAnimation(kind);
+      expect(options.duration).toBeLessThanOrEqual(600);
+      expect(options.duration as number).toBeGreaterThan(0);
+    }
+  });
+
+  it("'read' is the longest (outward ripple takes a beat to fade)", () => {
+    const read = getReceiptAnimation("read");
+    const click = getReceiptAnimation("click");
+    expect(read.options.duration as number).toBeGreaterThan(click.options.duration as number);
+  });
+
+  it("'type' uses opacity-flicker (no transform), distinct from scale-based kinds", () => {
+    const type = getReceiptAnimation("type");
+    expect("transform" in type.keyframes[0]!).toBe(false);
+    expect("opacity" in type.keyframes[0]!).toBe(true);
+  });
+});
+
+describe("animateMarkForReceipt — fires on a mark element", () => {
+  it("calls element.animate() when Web Animations API is present", () => {
+    const mark = document.createElement("div");
+    let called = false;
+    let receivedDuration: number | undefined;
+    (mark as unknown as { animate: typeof Element.prototype.animate }).animate = ((
+      _kf: Keyframe[],
+      options: KeyframeAnimationOptions,
+    ): Animation => {
+      called = true;
+      receivedDuration = options.duration as number;
+      return { finished: Promise.resolve() } as unknown as Animation;
+    }) as typeof Element.prototype.animate;
+    animateMarkForReceipt(mark, "read_page");
+    expect(called).toBe(true);
+    expect(receivedDuration).toBe(520); // 'read' kind
+  });
+
+  it("no-ops gracefully when Web Animations API is unavailable (defense-in-depth)", () => {
+    const mark = document.createElement("div");
+    Object.defineProperty(mark, "animate", { value: undefined, writable: true });
+    expect(() => animateMarkForReceipt(mark, "read_page")).not.toThrow();
+  });
+
+  it("computer + screenshot dispatches 'look' animation timing", () => {
+    const mark = document.createElement("div");
+    let receivedDuration: number | undefined;
+    (mark as unknown as { animate: typeof Element.prototype.animate }).animate = ((
+      _kf: Keyframe[],
+      options: KeyframeAnimationOptions,
+    ): Animation => {
+      receivedDuration = options.duration as number;
+      return { finished: Promise.resolve() } as unknown as Animation;
+    }) as typeof Element.prototype.animate;
+    animateMarkForReceipt(mark, "computer", { action: { kind: "screenshot" } });
+    expect(receivedDuration).toBe(320); // 'look' kind
   });
 });
 

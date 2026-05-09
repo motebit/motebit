@@ -596,3 +596,186 @@ function rgb(c: readonly [number, number, number]): string {
 function rgba(c: readonly [number, number, number], a: number): string {
   return `rgba(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(c[2] * 255)}, ${a})`;
 }
+
+// ── chrome-1c: act-firing + receipt-sign animations ────────────────────
+//
+// Closes the felt thesis line "Motebit acts, I supervise" at sub-
+// second granularity. Today the chrome shows session/control state;
+// chrome-1c makes per-action firing visible: every signed
+// `ToolInvocationReceipt` produces a tool-name-keyed Web-Animation
+// pulse on the mark, plus a brief shimmer overlay signaling
+// "this was signed." Same primitive (the mark), three composing
+// triggers (tool fire + tool kind + receipt sign).
+//
+// Receipts bus is the trigger source — subscribing to
+// `runtime.subscribeToolInvocations` fires once per signed receipt
+// after a successful tool call. Failed acts and gate-denied acts
+// don't sign (fail-closed), so the visual feedback is "this
+// completed AND was audited" — not "this was attempted." Honest
+// signal.
+//
+// Animation kinds map to the tool's semantic shape. `read_page` =
+// outward ripple (the AI is reading outward across the page);
+// `screenshot` = inward shutter pulse (the AI is capturing); click
+// kinds = inward pulse (focused, decisive); type kinds = small
+// flicker (rapid keystroke staccato); generic acts (web_search,
+// recall_memories, etc.) = soft scale pulse (something happened,
+// not visually distinguished).
+//
+// Web Animations API (`Element.animate`) is the chosen primitive:
+// per-call instances clean up automatically on finish, no class-
+// state management, no animation queue collisions when receipts
+// fire fast (each call is independent). Pure-function `pickReceipt
+// Animation` is testable under jsdom (no animation runtime
+// required); `animateMarkForReceipt` is the call-site that the
+// browser executes.
+
+/**
+ * Tool-name-keyed animation kind. Closed string-literal — adding a
+ * new kind is additive and lands without breaking call sites.
+ */
+export type ReceiptAnimationKind = "read" | "look" | "click" | "type" | "generic";
+
+/**
+ * Pick the animation kind for a signed receipt. Pure function — the
+ * keyframes/timing themselves are returned by `getReceiptAnimation`
+ * separately so this stays trivially testable. Maps tool names to
+ * intent-shaped animations:
+ *
+ *   read_page                              → "read"   (reading outward)
+ *   computer({screenshot})                 → "look"   (capturing)
+ *   click_element / focus_element /
+ *     computer({click,double_click,...})   → "click"  (decisive)
+ *   type_into / computer({type,key})       → "type"   (rapid keystroke)
+ *   anything else                          → "generic"
+ *
+ * The `args` parameter is a JSON-serializable record matching the
+ * receipt's args (or the activity-bus's args). When `tool_name ===
+ * "computer"` and args includes a discriminating `action.kind`,
+ * the helper differentiates into the right sub-animation. Without
+ * args available (the receipt only carries `args_hash`), the
+ * fallback for `computer` is "click" — most computer actions are
+ * click-shaped acts (per the v1 action taxonomy).
+ */
+export function pickReceiptAnimation(
+  toolName: string,
+  args?: Record<string, unknown>,
+): ReceiptAnimationKind {
+  if (toolName === "read_page") return "read";
+  if (toolName === "click_element" || toolName === "focus_element") return "click";
+  if (toolName === "type_into") return "type";
+  if (toolName === "computer") {
+    // computer has a sub-discriminator — pick by action.kind when
+    // args are available (activity bus). Fallback "click" when only
+    // the receipt envelope is in scope (tool-name + args_hash).
+    const action = (args?.["action"] as { kind?: string } | undefined) ?? null;
+    const kind = action?.kind;
+    if (kind === "screenshot") return "look";
+    if (kind === "type" || kind === "key") return "type";
+    if (kind === "navigate") return "read"; // navigation reveals a page — outward
+    if (kind === "scroll") return "generic";
+    return "click";
+  }
+  return "generic";
+}
+
+/**
+ * Keyframes + timing for a `ReceiptAnimationKind`. Tuned for sub-
+ * second feedback (200–600ms). Each kind has a distinct silhouette
+ * the user can read peripherally — not a labeled icon, a felt
+ * difference. Calm-software register: no flashing, no high-contrast
+ * pulses, just shape-shifts of the existing mark.
+ */
+export function getReceiptAnimation(kind: ReceiptAnimationKind): {
+  keyframes: Keyframe[];
+  options: KeyframeAnimationOptions;
+} {
+  switch (kind) {
+    case "read":
+      // Outward ripple — the mark expands and fades a faint copy.
+      // Reads as "spreading outward" / "looking out."
+      return {
+        keyframes: [
+          { transform: "scale(1)", opacity: 1 },
+          { transform: "scale(1.45)", opacity: 0.0, offset: 1 },
+        ],
+        options: { duration: 520, easing: "ease-out" },
+      };
+    case "look":
+      // Camera shutter — quick scale-in then back, like an iris
+      // closing/opening. Distinct from "click" (which scales but
+      // recovers slower) by the snap timing.
+      return {
+        keyframes: [
+          { transform: "scale(1)" },
+          { transform: "scale(0.88)", offset: 0.5 },
+          { transform: "scale(1)" },
+        ],
+        options: { duration: 320, easing: "ease-in-out" },
+      };
+    case "click":
+      // Inward pulse — decisive, single beat. Same scale shape as
+      // "look" but slower and softer; reads as "I pressed something"
+      // rather than "I captured something."
+      return {
+        keyframes: [
+          { transform: "scale(1)" },
+          { transform: "scale(0.85)", offset: 0.5 },
+          { transform: "scale(1)" },
+        ],
+        options: { duration: 280, easing: "ease-out" },
+      };
+    case "type":
+      // Two-beat opacity flicker — rapid keystroke staccato.
+      // Matches the felt rhythm of typing (multiple characters in
+      // quick succession) without literally one-pulse-per-char,
+      // which would be noisy.
+      return {
+        keyframes: [
+          { opacity: 1 },
+          { opacity: 0.7, offset: 0.25 },
+          { opacity: 1, offset: 0.5 },
+          { opacity: 0.7, offset: 0.75 },
+          { opacity: 1 },
+        ],
+        options: { duration: 240, easing: "linear" },
+      };
+    case "generic":
+      // Soft single beat — anything that isn't a known shape.
+      // Quieter than "click" so it doesn't compete with named acts.
+      return {
+        keyframes: [
+          { transform: "scale(1)" },
+          { transform: "scale(1.08)", offset: 0.5 },
+          { transform: "scale(1)" },
+        ],
+        options: { duration: 320, easing: "ease-out" },
+      };
+  }
+}
+
+/**
+ * Fire the receipt-shimmer + tool-keyed pulse on the current mark
+ * element. Called from the receipts-bus subscription when a signed
+ * `ToolInvocationReceipt` arrives. Looks up the live mark via the
+ * standard class selector (the strip is rebuilt on every state
+ * transition; the mark element is always reachable by class).
+ *
+ * Animations stack on the same element — Web Animations API runs
+ * each call independently and cleans up on finish. Two simultaneous
+ * receipts (rare but possible on parallel tool dispatch) produce
+ * two overlapping pulses; the visual register tolerates this fine.
+ */
+export function animateMarkForReceipt(
+  mark: Element,
+  toolName: string,
+  args?: Record<string, unknown>,
+): void {
+  // Defensive guard for environments without Web Animations API
+  // (older browsers, jsdom). The animation is purely cosmetic — a
+  // missing API should never break anything else on the page.
+  if (typeof (mark as HTMLElement).animate !== "function") return;
+  const kind = pickReceiptAnimation(toolName, args);
+  const { keyframes, options } = getReceiptAnimation(kind);
+  (mark as HTMLElement).animate(keyframes, options);
+}

@@ -18,7 +18,7 @@ import {
   updateSlabItem,
   renderDetachArtifact as renderSlabDetachArtifact,
 } from "./ui/slab-items";
-import { renderCoBrowseChrome } from "./ui/cobrowse-chrome";
+import { renderCoBrowseChrome, animateMarkForReceipt } from "./ui/cobrowse-chrome";
 import type { LiveBrowserElementHandle } from "@motebit/render-engine";
 import type {
   ConversationMessage,
@@ -878,6 +878,31 @@ export class WebApp {
       // routed the band there).
       this.renderer.setSlabControlBand?.(null);
     });
+
+    // chrome-1c — animate the mark on every signed receipt. The
+    // receipts bus fires once per successful + signed tool call;
+    // each fire produces a tool-name-keyed Web-Animation pulse on
+    // the current mark element. Closes the felt thesis line
+    // "Motebit acts, I supervise" at sub-second granularity.
+    //
+    // Uses `subscribeToolActivity` (not `subscribeToolInvocations`)
+    // because the activity bus carries the raw `args` field we
+    // need to discriminate `computer({kind: "screenshot"})` from
+    // `computer({kind: "click"})`. The receipt envelope only
+    // carries `args_hash` — the right fan-out for chrome-1c is the
+    // bus that has the args. The activity bus fires at the same
+    // moment as the receipt bus, so the visual feedback is
+    // semantically equivalent: every act that signs also pulses.
+    const unsubscribeReceiptAnim = this.subscribeToolActivity((event) => {
+      // Find the live mark element. The chrome strip is rebuilt on
+      // every state transition; the mark element is always reachable
+      // via the standard class selector. Robust against null when
+      // the strip hasn't mounted yet (early-init race).
+      const mark = document.querySelector(".cobrowse-chrome-mark");
+      if (!mark) return;
+      animateMarkForReceipt(mark, event.tool_name, event.args);
+    });
+    this.coBrowseDisposers.push(unsubscribeReceiptAnim);
 
     // Slash-command surface — `/grant`, `/deny`, `/reclaim` dispatch
     // CustomEvents (sibling of `motebit:halt` / `motebit:resume`).
