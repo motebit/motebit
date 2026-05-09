@@ -219,16 +219,25 @@ export function buildLiveBrowserElement(
   // Pre-frame placeholder text — replaces with the first frame the
   // moment one arrives. Calm-software: never confirm "loading" once
   // content is visible.
+  //
+  // Layout: takes its own flow space BELOW the chrome strip with an
+  // explicit 16:10 aspect ratio matching the eventual screencast img.
+  // The earlier `position: absolute; inset: 0` covered the full root,
+  // but root's flow height collapses to just the chrome strip when
+  // `img.style.display === "none"` (initial state) — that put the
+  // centered text right at the chrome's vertical center, visibly
+  // overlapping the URL bar. Flow positioning gives the placeholder
+  // its own region, and the centered text lands in the actual body
+  // region of the live_browser element.
   const placeholder = document.createElement("div");
   placeholder.className = "slab-live-browser-placeholder";
   placeholder.textContent = "live browser · waiting for first frame…";
-  placeholder.style.position = "absolute";
-  placeholder.style.inset = "0";
+  placeholder.style.width = "100%";
+  placeholder.style.aspectRatio = "16 / 10";
   placeholder.style.display = "flex";
   placeholder.style.alignItems = "center";
   placeholder.style.justifyContent = "center";
   placeholder.style.opacity = "0.55";
-  root.style.position = "relative";
   root.appendChild(placeholder);
 
   let firstFrameSeen = false;
