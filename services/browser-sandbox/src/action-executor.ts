@@ -54,6 +54,7 @@ import type { Page } from "playwright-core";
 
 import type { BrowserSession } from "./chromium-pool.js";
 import { ServiceError } from "./errors.js";
+import { urlsAreEquivalent } from "./url-equivalence.js";
 
 /**
  * Slice 2h — text bounds for `read_page` results. `text` is the
@@ -310,6 +311,42 @@ async function doNavigate(session: BrowserSession, action: NavigateAction): Prom
   // "looks absolute" is presence of a scheme — anything else is treated
   // as a hostname-leading path and prefixed with `https://`.
   const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(action.url) ? action.url : `https://${action.url}`;
+
+  // Surface-determinism defense at the dispatch layer. The prompt
+  // rule in PERCEPTION_DOCTRINE teaches the AI to read the [Now]
+  // block's browser line and skip request_control + navigate when
+  // the page is already at the requested URL. This is the
+  // belt-and-suspenders guard if the AI ignores the rule (or
+  // doesn't see [Now] freshly enough): we short-circuit the goto
+  // here, return the same envelope shape with `already_there: true`,
+  // and skip the screenshot capture. Same fail-closed structural
+  // floor as `not_in_control` — the runtime is mechanical; the
+  // prompt is the ergonomics. Re-navigating to the URL the page
+  // is already on triggered a control-request prompt, a "waiting
+  // for first frame" reset on the slab, and a redundant render —
+  // all friction for zero outcome change. If the equivalence
+  // semantics here change, update the prompt bullet that
+  // `urlsAreEquivalent` cross-references.
+  //
+  // Cold sessions sit at `about:blank`; the protocol/host/scheme
+  // mismatch returns false from `urlsAreEquivalent` so the first
+  // navigate runs as a real goto. Explicit re-fetch is the user's
+  // "reload" / "refresh" verb (a separate path the AI is taught
+  // about in the same doctrine bullet).
+  if (urlsAreEquivalent(url, session.page.url())) {
+    return {
+      kind: "navigate",
+      ok: true,
+      url: session.page.url(),
+      visual_content_detected: true,
+      blank_page_detected: false,
+      access_denied_detected: false,
+      visual_readiness_timeout: false,
+      slow_load: false,
+      already_there: true,
+    };
+  }
+
   try {
     // Two-phase wait. `domcontentloaded` is the navigation guarantee
     // (DOM exists, scripts can run); the `networkidle` follow-up is

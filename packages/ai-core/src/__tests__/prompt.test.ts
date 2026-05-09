@@ -575,6 +575,26 @@ describe("buildSystemPrompt — [Now] block injection", () => {
     expect(prompt).toMatch(/Do NOT say "didn't load" or "timed out" when `ok: true` came back/);
   });
 
+  it("perception doctrine teaches that already_there: true means the page was unchanged", () => {
+    // Companion to navigate-noop-when-already-there at the prompt
+    // layer: the dispatch in services/browser-sandbox short-circuits
+    // when urlsAreEquivalent(requested, page.url()) returns true, and
+    // the result envelope carries already_there: true with no fresh
+    // screenshot. The AI must read this metadata field and describe
+    // the page as unchanged ("you're already on X") rather than
+    // narrate a fresh navigation. Same shape as slow_load /
+    // visual_content_detected — typed-truth on the result, not
+    // confabulation from conversation memory. Belt-and-suspenders
+    // pairing with the "Before navigating, read the [Now] block"
+    // rule above (the prompt teaches the AI to skip; this teaches
+    // the AI how to interpret the dispatch's structural floor when
+    // it doesn't).
+    const prompt = buildSystemPrompt(makeContextPack());
+    expect(prompt).toContain("already_there");
+    expect(prompt).toMatch(/page was already at the requested URL/);
+    expect(prompt).toMatch(/already on X/);
+  });
+
   it("perception doctrine teaches that bytes_omitted results go stale once the gate flips", () => {
     // Repro: user granted /vision after the AI had already taken a
     // screenshot with bytes omitted under consent_required. Without

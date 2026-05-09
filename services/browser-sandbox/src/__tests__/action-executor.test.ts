@@ -65,7 +65,29 @@ function makeMockSession(): MockSession {
   // heuristic / waitForLoadState branches without rebuilding the
   // whole mock session. Defaults pass everything (DOM ready, no
   // bot-block, content visible).
-  let gotoImpl: (url: string, opts: unknown) => Promise<void> = async () => {};
+  //
+  // The mock simulates real Playwright `page.url()` semantics: a
+  // cold session starts at `about:blank`, and a successful goto
+  // updates the current URL to its destination. Without this, the
+  // navigate-noop short-circuit would fire on every test (whose
+  // default fixture used to return the post-navigate URL on every
+  // call, including pre-goto). Tests that need to force a specific
+  // URL regardless of goto behavior (slow_load paths, no-op tests
+  // where pre-goto URL must match) override via `setPageUrlImpl`.
+  let currentUrl = "about:blank";
+  let gotoImpl: (url: string, opts: unknown) => Promise<void> = async (url) => {
+    // Real Playwright canonicalizes via the URL parser before
+    // committing — `https://motebit.com` lands as
+    // `https://motebit.com/`. Mirror that so result.url
+    // assertions match production. Falls back to the raw URL on
+    // parse failure (lets tests pass non-URL strings if they
+    // need to).
+    try {
+      currentUrl = new URL(url).href;
+    } catch {
+      currentUrl = url;
+    }
+  };
   let waitForLoadStateImpl: (state: string, opts?: unknown) => Promise<void> = async () => {};
   let evaluateImpl: () => Promise<unknown> = async () => ({
     textLength: 1024,
@@ -74,7 +96,7 @@ function makeMockSession(): MockSession {
     blankish: false,
     denied: false,
   });
-  let pageUrlImpl: () => string = () => "https://example.com/";
+  let pageUrlImpl: () => string = () => currentUrl;
 
   const mockPage = {
     goto: vi.fn(async (url: string, opts: unknown) => gotoImpl(url, opts)),
@@ -433,7 +455,6 @@ describe("executeAction", () => {
       m.setGotoImpl(async (url) => {
         gotoUrl = url;
       });
-      m.setPageUrlImpl(() => "https://motebit.com/");
       await executeAction(m.session, { kind: "navigate", url: "motebit.com" }, deps);
       expect(gotoUrl).toBe("https://motebit.com");
     });
@@ -444,14 +465,12 @@ describe("executeAction", () => {
       m.setGotoImpl(async (url) => {
         gotoUrl = url;
       });
-      m.setPageUrlImpl(() => "http://localhost:3000/");
       await executeAction(m.session, { kind: "navigate", url: "http://localhost:3000" }, deps);
       expect(gotoUrl).toBe("http://localhost:3000");
     });
 
     it("returns metadata + inline screenshot bytes on success", async () => {
       const m = makeMockSession();
-      m.setPageUrlImpl(() => "https://motebit.com/");
       const result = (await executeAction(
         m.session,
         { kind: "navigate", url: "motebit.com" },
@@ -477,7 +496,6 @@ describe("executeAction", () => {
       m.setWaitForLoadStateImpl(async () => {
         throw new Error("Timeout 2000ms exceeded");
       });
-      m.setPageUrlImpl(() => "https://example.com/");
       const result = (await executeAction(
         m.session,
         { kind: "navigate", url: "example.com" },
@@ -496,7 +514,6 @@ describe("executeAction", () => {
         blankish: true,
         denied: false,
       }));
-      m.setPageUrlImpl(() => "https://blank.example/");
       const result = (await executeAction(
         m.session,
         { kind: "navigate", url: "blank.example" },
@@ -515,7 +532,6 @@ describe("executeAction", () => {
         blankish: false,
         denied: true,
       }));
-      m.setPageUrlImpl(() => "https://tesla.com/");
       const result = (await executeAction(
         m.session,
         { kind: "navigate", url: "tesla.com" },
@@ -530,7 +546,6 @@ describe("executeAction", () => {
       m.setEvaluateImpl(async () => {
         throw new Error("evaluate boom");
       });
-      m.setPageUrlImpl(() => "https://example.com/");
       const result = (await executeAction(
         m.session,
         { kind: "navigate", url: "example.com" },
@@ -548,7 +563,6 @@ describe("executeAction", () => {
       m.mockPage.screenshot.mockImplementationOnce(async () => {
         throw new Error("screenshot disabled");
       });
-      m.setPageUrlImpl(() => "https://example.com/");
       const result = (await executeAction(
         m.session,
         { kind: "navigate", url: "example.com" },
@@ -588,7 +602,6 @@ describe("executeAction", () => {
       m.setGotoImpl(async () => {
         throw new Error("Timeout 15000ms exceeded.");
       });
-      m.setPageUrlImpl(() => "https://nba.com/");
       const result = (await executeAction(
         m.session,
         { kind: "navigate", url: "nba.com" },
@@ -612,7 +625,6 @@ describe("executeAction", () => {
         err.name = "TimeoutError";
         throw err;
       });
-      m.setPageUrlImpl(() => "https://example.com/");
       const result = (await executeAction(
         m.session,
         { kind: "navigate", url: "example.com" },
@@ -624,7 +636,6 @@ describe("executeAction", () => {
 
     it("does NOT mark slow_load when goto completes within the budget", async () => {
       const m = makeMockSession();
-      m.setPageUrlImpl(() => "https://example.com/");
       const result = (await executeAction(
         m.session,
         { kind: "navigate", url: "example.com" },
@@ -632,6 +643,81 @@ describe("executeAction", () => {
       )) as Record<string, unknown>;
       expect(result.ok).toBe(true);
       expect(result.slow_load).toBe(false);
+    });
+
+    // ── navigate-noop-at-dispatch ────────────────────────────────
+    //
+    // Belt-and-suspenders structural floor under the prompt rule
+    // in PERCEPTION_DOCTRINE that teaches the AI to skip
+    // request_control + navigate when the [Now] block already
+    // reports the browser is at the requested URL. If the AI
+    // ignores the rule, the dispatch returns `already_there: true`
+    // without firing goto or capturing a screenshot — the page
+    // didn't change, so we don't waste a roundtrip pretending it
+    // did. Daniel's three-screenshot repro: typing "open nba.com"
+    // twice triggered a redundant control-request + render the
+    // second time. With this guard, the second navigate short-
+    // circuits at the dispatch.
+
+    it("short-circuits to already_there: true when the page is already at the requested URL", async () => {
+      const m = makeMockSession();
+      m.setPageUrlImpl(() => "https://nba.com/");
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "nba.com" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.kind).toBe("navigate");
+      expect(result.ok).toBe(true);
+      expect(result.already_there).toBe(true);
+      expect(result.url).toBe("https://nba.com/");
+      expect(result.slow_load).toBe(false);
+      // No goto and no screenshot — that's the whole point of the
+      // short-circuit. The page didn't change, the user's slab
+      // still shows it, and we saved a roundtrip.
+      expect(m.mockPage.goto).not.toHaveBeenCalled();
+      expect(m.mockPage.screenshot).not.toHaveBeenCalled();
+      // No bytes either — `already_there` paths return metadata
+      // only. Caller-side AI doctrine reads `already_there` and
+      // describes the page as unchanged, not "freshly loaded."
+      expect(result.bytes_base64).toBeUndefined();
+    });
+
+    it("treats trailing-slash, default-port, and scheme-case differences as already_there", async () => {
+      const m = makeMockSession();
+      m.setPageUrlImpl(() => "https://motebit.com/about");
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "HTTPS://motebit.com:443/about/" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.already_there).toBe(true);
+      expect(m.mockPage.goto).not.toHaveBeenCalled();
+    });
+
+    it("does NOT short-circuit when query strings differ — same path, same host", async () => {
+      const m = makeMockSession();
+      m.setPageUrlImpl(() => "https://google.com/search?q=motebit");
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "https://google.com/search?q=other" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.already_there).toBeUndefined();
+      // Real navigation fired — query change is real navigation.
+      expect(m.mockPage.goto).toHaveBeenCalledOnce();
+    });
+
+    it("does NOT short-circuit when the session is fresh at about:blank", async () => {
+      const m = makeMockSession();
+      m.setPageUrlImpl(() => "about:blank");
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "motebit.com" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.already_there).toBeUndefined();
+      expect(m.mockPage.goto).toHaveBeenCalledOnce();
     });
   });
 
