@@ -449,7 +449,12 @@ export function initSlashCommands(
         if (arg === "" || arg === "status") {
           const consent = runtime.getPixelConsent();
           const tier = runtime.getSessionSensitivity();
-          const elevated = tier !== "none";
+          // Compare via the string-literal cast — `SensitivityLevel`
+          // is a TS enum on the sdk side; the BSL discriminant on
+          // this surface is the string-literal projection. Same
+          // pattern as the elevated-tier check inside the
+          // `/sensitivity` arm (see VALID list above).
+          const elevated = (tier as string) !== "none";
           addMessage(
             "system",
             elevated
