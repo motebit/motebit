@@ -560,7 +560,10 @@ describe("executeAction", () => {
       expect(result.image_format).toBeUndefined();
     });
 
-    it("throws not_supported when goto fails", async () => {
+    it("throws not_supported when goto fails with a non-timeout error", async () => {
+      // Non-timeout errors (DNS failures, connection refused) still
+      // propagate — the navigation didn't commit, the slab has nothing
+      // to show, and the user needs to know it didn't work.
       const m = makeMockSession();
       m.setGotoImpl(async () => {
         throw new Error("net::ERR_NAME_NOT_RESOLVED");
@@ -568,6 +571,67 @@ describe("executeAction", () => {
       await expect(
         executeAction(m.session, { kind: "navigate", url: "doesnotexist.invalid" }, deps),
       ).rejects.toMatchObject({ reason: "not_supported" });
+    });
+
+    it("treats a goto timeout as slow_load (page still loaded), not as failure", async () => {
+      // Repro for Daniel's production /computer bug: nba.com hit goto's
+      // 15s readiness ceiling, the AI got "navigate failed: timeout" and
+      // told the user "didn't load" — while the slab kept streaming
+      // frames showing nba.com fully rendered. Same pattern fired on
+      // google.com when the cloud Chromium was warm-but-busy.
+      //
+      // The fix swallows TimeoutError specifically (other errors still
+      // throw), continues into the heuristic + screenshot path, and
+      // marks `slow_load: true` so the AI can hedge ("loading took
+      // longer than expected") instead of asserting failure.
+      const m = makeMockSession();
+      m.setGotoImpl(async () => {
+        throw new Error("Timeout 15000ms exceeded.");
+      });
+      m.setPageUrlImpl(() => "https://nba.com/");
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "nba.com" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.kind).toBe("navigate");
+      expect(result.ok).toBe(true);
+      expect(result.slow_load).toBe(true);
+      // The default mock heuristic returns content-detected, so a slow
+      // load that ultimately rendered should describe as content-present.
+      expect(result.visual_content_detected).toBe(true);
+    });
+
+    it("treats a Playwright TimeoutError class instance as slow_load", async () => {
+      // Playwright surfaces timeouts via a named TimeoutError class.
+      // Mock with a generic Error whose `name` matches — same regex
+      // gate.
+      const m = makeMockSession();
+      m.setGotoImpl(async () => {
+        const err = new Error("Navigation timeout of 15000 ms exceeded");
+        err.name = "TimeoutError";
+        throw err;
+      });
+      m.setPageUrlImpl(() => "https://example.com/");
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "example.com" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.ok).toBe(true);
+      expect(result.slow_load).toBe(true);
+    });
+
+    it("does NOT mark slow_load when goto completes within the budget", async () => {
+      const m = makeMockSession();
+      m.setPageUrlImpl(() => "https://example.com/");
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "example.com" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.ok).toBe(true);
+      expect(result.slow_load).toBe(false);
     });
   });
 

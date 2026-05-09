@@ -335,7 +335,37 @@ async function doNavigate(session: BrowserSession, action: NavigateAction): Prom
     // 2s — long enough to settle SPAs that finish their mount in the
     // first second after DOMContentLoaded, short enough that
     // analytics-heavy pages don't pin the wait to its ceiling.
-    await session.page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
+    // 2026-05-09: don't fail-fast when goto's readiness signal times
+    // out. The 15s timeout is the DOMContentLoaded ceiling, not the
+    // navigation's actual outcome — heavy SPAs (nba.com, news sites
+    // with many preconnects, anything behind a slow CDN) commonly
+    // commit the navigation, paint partial content, and would finish
+    // a few seconds later. Throwing here told the AI "the page didn't
+    // load" while the user's slab kept streaming frames showing it
+    // had loaded fine.
+    //
+    // Repro Daniel surfaced: nba.com timed out → AI said "timed out,
+    // too heavy" → seconds later the slab showed nba.com fully
+    // rendered. Then google.com hit the same pattern — AI said
+    // "didn't load" while the slab clearly showed Google's homepage.
+    //
+    // The honest fail-faster intent stays: still 15s ceiling on goto.
+    // What changes is what we do at the ceiling — fall through to the
+    // heuristic + capture path so the AI's description matches what
+    // the slab is showing. Mark `slow_load: true` so the AI can hedge
+    // ("loading took longer than expected" rather than asserting
+    // success). Non-timeout errors (ERR_NAME_NOT_RESOLVED,
+    // ERR_CONNECTION_REFUSED) still propagate as real failures.
+    let slowLoad = false;
+    try {
+      await session.page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
+    } catch (gotoErr) {
+      const message = gotoErr instanceof Error ? gotoErr.message : String(gotoErr);
+      if (!/timeout|TimeoutError/i.test(message)) {
+        throw gotoErr;
+      }
+      slowLoad = true;
+    }
     let visualReadinessTimeout = false;
     try {
       await session.page.waitForLoadState("networkidle", { timeout: 2_000 });
@@ -421,6 +451,7 @@ async function doNavigate(session: BrowserSession, action: NavigateAction): Prom
       blank_page_detected: heuristic.blankish,
       access_denied_detected: heuristic.denied,
       visual_readiness_timeout: visualReadinessTimeout,
+      slow_load: slowLoad,
       ...(bytes_base64 !== undefined
         ? { bytes_base64, image_format, width, height, captured_at: Date.now() }
         : {}),
