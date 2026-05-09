@@ -185,9 +185,77 @@ async function doDrag(session: BrowserSession, action: DragAction): Promise<Acti
   return { kind: "drag", ok: true };
 }
 
+/**
+ * Type-action truth feedback — closes the action-truth gap witnessed
+ * 2026-05-08: AI called `type("motebit")` and reported "typed it" but
+ * nothing appeared in the search box. Playwright's
+ * `page.keyboard.type()` fires keystrokes to whatever element has
+ * focus right now — body, address bar, anywhere — and returns
+ * success because the keystroke API itself succeeded. The "typed
+ * it" claim was technically true (keystrokes fired) but
+ * semantically false (nothing landed in a target field).
+ *
+ * Same hallucination class as the other typed-truth slices:
+ *   - bytes_omitted_reason for pixel gates (vision-1)
+ *   - structured ToolResult.reason for `not_in_control` (Slice 2g)
+ *   - [Now] block for runtime state (prompt-1)
+ *   - browser URL for prior-page memory (chrome-1a-fix)
+ *
+ * Pattern: tool result carries semantic-intent truth, not just
+ * API-call truth. The AI reads typed feedback and routes
+ * accordingly. PERCEPTION_DOCTRINE extends to teach the AI:
+ * "if `type` returns `text_appeared: false`, the keystrokes were
+ * swallowed — click the target field first."
+ *
+ * The truth-snapshot runs in-page (Playwright `evaluate`) and
+ * checks:
+ *   - `focused`: is `document.activeElement` a typeable element
+ *     (input / textarea / contenteditable)?
+ *   - `active_element`: tag name (for AI context — body means
+ *     focus is unset, input/textarea means a field caught it)
+ *   - `value`: the current value of the focused field after the
+ *     type call (the actual target-field state)
+ *   - `text_appeared`: derived — did the typed text end up in the
+ *     value? (focused AND value contains text)
+ *
+ * Backward compatibility — extends the `kind: "type"` result with
+ * additive fields. Older callers that only read `ok` keep working;
+ * AI-side perception doctrine reads the new fields.
+ */
 async function doType(session: BrowserSession, action: TypeAction): Promise<ActionResult> {
   await session.page.keyboard.type(action.text, { delay: action.per_char_delay_ms });
-  return { kind: "type", ok: true };
+  // Truth-snapshot AFTER the type. The browser-sandbox runs this
+  // in-page evaluator; the action result carries the structured
+  // outcome back to the runtime, which threads it into the AI's
+  // tool result.
+  const snapshot = await session.page.evaluate((typedText: string) => {
+    const el = document.activeElement;
+    if (!el || el === document.body) {
+      return { focused: false, active_element: "body", value: "", text_appeared: false };
+    }
+    const tag = el.tagName.toLowerCase();
+    const isInput = tag === "input" || tag === "textarea";
+    const isContentEditable = (el as HTMLElement).isContentEditable === true;
+    if (!isInput && !isContentEditable) {
+      // Focus is on a non-typeable element (e.g. button, link,
+      // div). Keystrokes went to that element's keydown handler
+      // but no value-bearing field was the target.
+      return { focused: false, active_element: tag, value: "", text_appeared: false };
+    }
+    const rawValue = isInput
+      ? ((el as HTMLInputElement | HTMLTextAreaElement).value ?? "")
+      : ((el as HTMLElement).textContent ?? "");
+    return {
+      focused: true,
+      active_element: tag,
+      // Cap the value to a reasonable size — large textareas
+      // shouldn't pollute tool results. The AI only needs to
+      // verify the typed text landed.
+      value: rawValue.length > 512 ? rawValue.slice(0, 512) : rawValue,
+      text_appeared: rawValue.includes(typedText),
+    };
+  }, action.text);
+  return { kind: "type", ok: true, ...snapshot };
 }
 
 async function doKey(session: BrowserSession, action: KeyAction): Promise<ActionResult> {

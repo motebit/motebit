@@ -242,6 +242,20 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("don't infer it");
     expect(prompt).toContain("page refreshes");
   });
+
+  // type-truth slice: the perception doctrine teaches the AI that
+  // a `type` action's `ok: true` only means keystrokes fired — it
+  // does NOT mean the text landed in the target field. The AI must
+  // read `text_appeared` and `focused`, and click the target field
+  // first if focus was wrong. Witnessed 2026-05-08: AI typed
+  // "motebit" into Google but nothing appeared in the search bar
+  // (focus was on body); AI confidently reported "Typed it."
+  it("teaches the AI to read text_appeared / focused on type results", () => {
+    const prompt = buildSystemPrompt(makeContextPack());
+    expect(prompt).toContain("text_appeared");
+    expect(prompt).toContain("focused");
+    expect(prompt).toContain("Click the target field FIRST");
+  });
 });
 
 // ---------------------------------------------------------------------------

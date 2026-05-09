@@ -254,11 +254,107 @@ describe("executeAction", () => {
 
   describe("type", () => {
     it("forwards text + per-char delay", async () => {
-      const { session, keyboardCalls } = makeMockSession();
-      await executeAction(session, { kind: "type", text: "Hello", per_char_delay_ms: 50 }, deps);
-      expect(keyboardCalls[0]?.method).toBe("type");
-      expect(keyboardCalls[0]?.arg).toBe("Hello");
-      expect((keyboardCalls[0]?.options as { delay: number }).delay).toBe(50);
+      const mock = makeMockSession();
+      // Default evaluate impl returns the navigate-shape — for type
+      // tests, override to the truth-snapshot shape.
+      mock.setEvaluateImpl(async () => ({
+        focused: true,
+        active_element: "input",
+        value: "Hello",
+        text_appeared: true,
+      }));
+      await executeAction(
+        mock.session,
+        { kind: "type", text: "Hello", per_char_delay_ms: 50 },
+        deps,
+      );
+      expect(mock.keyboardCalls[0]?.method).toBe("type");
+      expect(mock.keyboardCalls[0]?.arg).toBe("Hello");
+      expect((mock.keyboardCalls[0]?.options as { delay: number }).delay).toBe(50);
+    });
+
+    // Truth-feedback slice: the type result must carry semantic-
+    // intent feedback, not just "the keystroke API succeeded."
+    // Witnessed 2026-05-08: AI typed and reported success while the
+    // search box stayed empty. Closes the action-truth gap by
+    // returning whether the typed text actually landed in the
+    // focused element.
+
+    it("returns text_appeared: true when the typed text lands in a focused input", async () => {
+      const mock = makeMockSession();
+      mock.setEvaluateImpl(async () => ({
+        focused: true,
+        active_element: "input",
+        value: "motebit",
+        text_appeared: true,
+      }));
+      const result = (await executeAction(
+        mock.session,
+        { kind: "type", text: "motebit" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.kind).toBe("type");
+      expect(result.ok).toBe(true);
+      expect(result.focused).toBe(true);
+      expect(result.active_element).toBe("input");
+      expect(result.value).toBe("motebit");
+      expect(result.text_appeared).toBe(true);
+    });
+
+    it("returns focused: false when keystrokes go to body (no field focused)", async () => {
+      const mock = makeMockSession();
+      mock.setEvaluateImpl(async () => ({
+        focused: false,
+        active_element: "body",
+        value: "",
+        text_appeared: false,
+      }));
+      const result = (await executeAction(
+        mock.session,
+        { kind: "type", text: "motebit" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.focused).toBe(false);
+      expect(result.text_appeared).toBe(false);
+      expect(result.active_element).toBe("body");
+    });
+
+    it("returns focused: false when active element is non-typeable (button/link/div)", async () => {
+      const mock = makeMockSession();
+      mock.setEvaluateImpl(async () => ({
+        focused: false,
+        active_element: "button",
+        value: "",
+        text_appeared: false,
+      }));
+      const result = (await executeAction(
+        mock.session,
+        { kind: "type", text: "motebit" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.focused).toBe(false);
+      expect(result.active_element).toBe("button");
+      expect(result.text_appeared).toBe(false);
+    });
+
+    it("text_appeared is false when typed text does not appear in the value (race / page replaced focus)", async () => {
+      const mock = makeMockSession();
+      // Focused element is an input but the typed text didn't end
+      // up in its value — race between keystroke and the page
+      // shifting focus, or content-script intercepted keystrokes.
+      mock.setEvaluateImpl(async () => ({
+        focused: true,
+        active_element: "input",
+        value: "something else",
+        text_appeared: false,
+      }));
+      const result = (await executeAction(
+        mock.session,
+        { kind: "type", text: "motebit" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.focused).toBe(true);
+      expect(result.text_appeared).toBe(false);
     });
   });
 
