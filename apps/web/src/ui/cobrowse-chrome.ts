@@ -163,31 +163,87 @@ export function renderCoBrowseChrome(
 
 // ── Layout ─────────────────────────────────────────────────────────────
 
+/**
+ * Two visual registers for the chrome strip — the calm register
+ * (`user`, `motebit`) is the dominant case and recedes to a
+ * near-invisible row; the present register (`handoff_pending`,
+ * `paused`) keeps the glass-blur surround plus the
+ * handoff-specific accent so the user notices when something
+ * needs attention.
+ *
+ * **Why state-aware weight, post implicit-grant.** The original
+ * chrome shipped with uniform styling across all four states,
+ * sized for when `handoff_pending` was common (every motebit-
+ * driven turn started with a Grant/Deny ask). With the
+ * implicit-grant slice (typed-intent auto-grants in-turn) and
+ * the dispatch-layer no-op (same-URL navigates skip request_
+ * control entirely), `handoff_pending` is now an exceptional
+ * state — it fires only on proactive idle work or rare
+ * edge cases. The dominant time the user spends is in `user`
+ * (browsing) or `motebit` (watching motebit drive); the chrome
+ * shouldn't compete with those.
+ *
+ * Architectural rule "strip always present" is preserved — the
+ * element exists in every state, only the outer weight changes.
+ * The mark + middle slot + trail composition is identical
+ * across registers; tests pinning slot structure stay green.
+ *
+ * Calm-software register table (`CLAUDE.md` § UI):
+ *
+ *   user / motebit       → calm:    no glass-blur, no border, no
+ *                                    shadow, tight 4px vertical
+ *                                    padding. The chrome IS the
+ *                                    annotation; the screencast
+ *                                    or URL input is the show.
+ *   handoff_pending      → present: glass-blur + border + shadow
+ *                                    + 3px left accent. The user
+ *                                    needs to notice + decide.
+ *   paused               → present: glass-blur + border + shadow.
+ *                                    State is held; user needs to
+ *                                    see it to know the surface
+ *                                    isn't unresponsive.
+ */
 function baseStrip(stateKind: ControlState["kind"]): HTMLDivElement {
   const strip = document.createElement("div");
   strip.className = `cobrowse-chrome cobrowse-chrome-${stateKind}`;
   strip.style.display = "flex";
   strip.style.alignItems = "center";
   strip.style.gap = "12px";
-  strip.style.padding = "8px 14px";
   strip.style.margin = "8px";
   strip.style.borderRadius = "10px";
-  strip.style.background = "rgba(255, 255, 255, 0.72)";
-  strip.style.backdropFilter = "blur(12px)";
-  // Vendor-prefixed sibling for Safari < 18.
-  (strip.style as unknown as Record<string, string>)["webkitBackdropFilter"] = "blur(12px)";
-  strip.style.border = "1px solid rgba(120, 140, 180, 0.32)";
-  strip.style.boxShadow = "0 2px 8px rgba(40, 55, 90, 0.08)";
   strip.style.font =
     "13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
   strip.style.color = "rgba(40, 55, 90, 0.92)";
   strip.style.pointerEvents = "auto";
-  // The handoff_pending case is the one the chrome owes attention
-  // to — a subtle accent on the left edge keeps the strip calm but
-  // readable as "this needs you." Same shape as the prior band's
-  // doorbell register.
-  if (stateKind === "handoff_pending") {
-    strip.style.borderLeft = "3px solid rgba(80, 130, 200, 0.85)";
+
+  const isPresentRegister = stateKind === "handoff_pending" || stateKind === "paused";
+  if (isPresentRegister) {
+    strip.style.padding = "8px 14px";
+    strip.style.background = "rgba(255, 255, 255, 0.72)";
+    strip.style.backdropFilter = "blur(12px)";
+    // Vendor-prefixed sibling for Safari < 18.
+    (strip.style as unknown as Record<string, string>)["webkitBackdropFilter"] = "blur(12px)";
+    strip.style.border = "1px solid rgba(120, 140, 180, 0.32)";
+    strip.style.boxShadow = "0 2px 8px rgba(40, 55, 90, 0.08)";
+    // Doorbell accent on the one state that truly asks. `paused`
+    // keeps the surround but no accent — the surface is held, not
+    // asking. Same shape as the prior band's doorbell register.
+    if (stateKind === "handoff_pending") {
+      strip.style.borderLeft = "3px solid rgba(80, 130, 200, 0.85)";
+    }
+  } else {
+    // Calm register — minimal padding, no surround. The mark + the
+    // URL input (user) or the lit-mark + Take back link (motebit)
+    // carry the meaning; the chrome itself is just the annotation
+    // row. Background, border, shadow, padding-y all explicitly
+    // unset so a future style consumer can't accidentally inherit
+    // present-register weight from a stale stylesheet.
+    strip.style.padding = "4px 6px";
+    strip.style.background = "transparent";
+    strip.style.backdropFilter = "";
+    (strip.style as unknown as Record<string, string>)["webkitBackdropFilter"] = "";
+    strip.style.border = "none";
+    strip.style.boxShadow = "none";
   }
   return strip;
 }

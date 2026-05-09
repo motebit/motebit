@@ -215,6 +215,95 @@ describe("renderCoBrowseChrome — state structure", () => {
   });
 });
 
+// ── Calm vs present register — visual weight by state ──────────────────
+//
+// Post implicit-grant + dispatch-noop, `handoff_pending` is the rare
+// exception state and `user` / `motebit` are the dominant case. The
+// chrome simplifies asymmetrically: dominant states recede to a
+// minimal register (no glass-blur, no border, no shadow); exception
+// states keep the present register so the user notices when
+// something needs attention. Architectural rule "strip always
+// present" is preserved — only outer styling changes; the slot
+// composition (mark / middle / trail) is identical across registers.
+//
+// These tests pin the split so future style edits can't drift the
+// dominant states back into present-register weight (which would
+// re-introduce the visual competition with the screencast that the
+// simplification removes).
+describe("renderCoBrowseChrome — calm/present register split", () => {
+  it("user state recedes to the calm register — no border, no shadow, transparent surround", () => {
+    const { machine } = makeMockMachine();
+    const { fwd } = makeForwardEvent();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    // `border` shorthand serialization is unreliable across jsdom
+    // versions when set to "none"; assert the substantive shape:
+    // there's no "solid" border anywhere, no shadow, transparent
+    // background. Real browsers render this as no surround.
+    expect(el.style.border).not.toContain("solid");
+    expect(el.style.borderLeft).not.toContain("solid");
+    expect(el.style.boxShadow).toBe("none");
+    expect(el.style.background).toBe("transparent");
+  });
+
+  it("motebit state recedes to the calm register — same shape as user", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "motebit" }, machine, {});
+    expect(el.style.border).not.toContain("solid");
+    expect(el.style.borderLeft).not.toContain("solid");
+    expect(el.style.boxShadow).toBe("none");
+    expect(el.style.background).toBe("transparent");
+  });
+
+  it("handoff_pending keeps the present register — glass-blur surround + doorbell accent", () => {
+    const { machine } = makeMockMachine();
+    const state: ControlState = { kind: "handoff_pending", current: "user", requesting: "motebit" };
+    const el = renderCoBrowseChrome(state, machine, {});
+    // Present-register surround.
+    expect(el.style.background).toContain("rgba(255, 255, 255");
+    expect(el.style.border).toContain("solid");
+    expect(el.style.boxShadow).not.toBe("none");
+    // Doorbell accent — left border is the one register-specific
+    // signal kept from the prior chrome.
+    expect(el.style.borderLeft).toContain("3px solid");
+  });
+
+  it("paused keeps the present register surround — no doorbell accent", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "paused", previousDriver: "user" }, machine, {});
+    expect(el.style.background).toContain("rgba(255, 255, 255");
+    expect(el.style.border).toContain("solid");
+    expect(el.style.boxShadow).not.toBe("none");
+    // Paused is held, not asking — no doorbell accent.
+    expect(el.style.borderLeft).not.toContain("3px solid");
+  });
+
+  it("slot composition is identical across registers — only outer weight differs", () => {
+    // Defense against the slimmer register accidentally dropping
+    // structural pieces. Mark + middle + trail must exist in every
+    // state regardless of visual register.
+    const { machine } = makeMockMachine();
+    const { fwd } = makeForwardEvent();
+    const states: ControlState[] = [
+      { kind: "user" },
+      { kind: "motebit" },
+      { kind: "handoff_pending", current: "user", requesting: "motebit" },
+      { kind: "paused", previousDriver: "user" },
+    ];
+    for (const state of states) {
+      const el = renderCoBrowseChrome(state, machine, { forwardEvent: fwd });
+      expect(el.querySelector(".cobrowse-chrome-mark")).not.toBeNull();
+      // Middle slot — either an input (user), empty spacer (motebit),
+      // or caption (handoff_pending / paused). At least one of the
+      // three middle-slot classes must be present.
+      const middle =
+        el.querySelector(".cobrowse-chrome-middle") ??
+        el.querySelector(".cobrowse-chrome-url-input");
+      expect(middle).not.toBeNull();
+      expect(el.querySelector(".cobrowse-chrome-trail")).not.toBeNull();
+    }
+  });
+});
+
 // ── Direct typed-capability dispatch ───────────────────────────────────
 
 describe("renderCoBrowseChrome — surface-determinism", () => {
