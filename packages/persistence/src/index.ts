@@ -6,6 +6,7 @@ import { PERSISTENCE_MIGRATIONS } from "./migrations-registry.js";
 export type { DatabaseDriver, PreparedStatement, RunResult } from "./driver.js";
 export { SqlJsDriver } from "./sqljs-driver.js";
 export { PERSISTENCE_MIGRATIONS } from "./migrations-registry.js";
+export { SqliteAuditChainStore } from "./sqlite-audit-chain-store.js";
 import type {
   EventLogEntry,
   EventType,
@@ -114,6 +115,32 @@ CREATE TABLE IF NOT EXISTS tool_audit_log (
   -- docs/doctrine/retention-policy.md §"Decision 6b". Migration v34 adds
   -- the column to existing installs.
   sensitivity TEXT
+);
+
+-- audit-chain-2 — durable hash-chained audit trail. Pairs with the
+-- in-memory mirror (tool_audit_log) for sync query semantics. Each
+-- row's hash references the previous row's hash via previous_hash;
+-- tampering with any row breaks every link past it. Verification
+-- (verifyChain) reads ordered by seq and recomputes the hash of
+-- each row.
+--
+-- seq is the insertion order — DESC index for tail reads, ASC
+-- index for chain verification. AUTOINCREMENT preserves monotonicity
+-- even after DELETEs (which the chain doesn't do — append-only).
+--
+-- Doctrine: audit_chain_signing_endgame memory + audit-chain-1
+-- commit (in-memory consumer). audit-chain-2 makes the trail
+-- survive process restart; audit-chain-3 will pin chainHead
+-- externally for inter-device tamper-evidence.
+CREATE TABLE IF NOT EXISTS audit_chain (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  entry_id TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  event_type TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  data TEXT NOT NULL,
+  previous_hash TEXT NOT NULL,
+  hash TEXT NOT NULL UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS devices (
@@ -271,6 +298,12 @@ CREATE INDEX IF NOT EXISTS idx_memory_edges_target ON memory_edges (target_id);
 CREATE INDEX IF NOT EXISTS idx_identities_owner ON identities (owner_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_mote_ts ON audit_log (motebit_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_tool_audit_turn ON tool_audit_log (turn_id);
+-- audit-chain-2 — entry_id is the original tool call_id; we look up
+-- by it occasionally for receipt-cross-references. No PRIMARY KEY
+-- because entry_ids may collide if a chain is migrated from another
+-- store (re-issued ids); seq is the durable monotonic identity.
+CREATE INDEX IF NOT EXISTS idx_audit_chain_entry ON audit_chain (entry_id);
+CREATE INDEX IF NOT EXISTS idx_audit_chain_ts ON audit_chain (timestamp);
 CREATE INDEX IF NOT EXISTS idx_devices_motebit ON devices (motebit_id);
 CREATE INDEX IF NOT EXISTS idx_devices_token ON devices (device_token);
 CREATE INDEX IF NOT EXISTS idx_goals_motebit ON goals (motebit_id);

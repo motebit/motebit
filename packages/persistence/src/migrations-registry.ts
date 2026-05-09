@@ -275,4 +275,28 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE tool_audit_log ADD COLUMN sensitivity TEXT",
     ],
   },
+  {
+    version: 35,
+    description: "audit_chain — durable hash-chained audit trail",
+    statements: [
+      // audit-chain-2 — first durable consumer of the
+      // `audit-chain.ts` primitive. Pairs with the existing
+      // tool_audit_log (in-memory mirror, capacity-FIFO) for sync
+      // query semantics; the chain is the tamper-evident long
+      // tail. Append-only — DELETEs would break the hash linkage.
+      // See `audit_chain_signing_endgame` memory.
+      `CREATE TABLE IF NOT EXISTS audit_chain (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        entry_id TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        data TEXT NOT NULL,
+        previous_hash TEXT NOT NULL,
+        hash TEXT NOT NULL UNIQUE
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_audit_chain_entry ON audit_chain (entry_id)",
+      "CREATE INDEX IF NOT EXISTS idx_audit_chain_timestamp ON audit_chain (timestamp)",
+    ],
+  },
 ];
