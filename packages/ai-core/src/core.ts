@@ -625,6 +625,104 @@ export interface StreamingProvider extends IntelligenceProvider {
   ): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: AIResponse }>;
 }
 
+// === Tool-result image content (vision-2) ===
+
+/**
+ * Convert a tool-result content string to Anthropic's tool_result content
+ * shape, splitting embedded screenshot bytes into a separate `image`
+ * content block when the upstream gate (`projectForAi` —
+ * `packages/ai-core/src/loop.ts`) let bytes pass through.
+ *
+ * **Why this lives here.** `projectForAi` is the AI-perception
+ * boundary — the policy decision about whether bytes reach the AI.
+ * It composes provider mode + sensitivity + pixel consent into a
+ * pass-or-strip decision and writes the result into the
+ * conversation history's `tool_result` content as a JSON-stringified
+ * envelope (`{ ok, data: {...bytes_base64...} }`).
+ *
+ * **The gap vision-2 closes.** A JSON string containing base64 is
+ * not pixels. Anthropic's vision API requires a structured
+ * `image` content block (`{type:"image", source:{type:"base64",
+ * media_type, data}}`). Without this conversion the model receives
+ * a string with a long base64 substring and treats it as text —
+ * the gate authorized passage but the model still couldn't see.
+ *
+ * **What this does.** Parses the tool-result envelope. If the data
+ * carries a `screenshot` or `navigate` kind with `bytes_base64`,
+ * splits the content into two blocks:
+ *
+ *   1. `text` — the JSON envelope WITH `bytes_base64` stripped (the
+ *      metadata, no payload duplication).
+ *   2. `image` — the bytes as a base64 image block in the format
+ *      Anthropic expects.
+ *
+ * If the bytes weren't passed (gate stripped them) or the result
+ * doesn't carry a screenshot, returns the original string unchanged.
+ *
+ * **Provider scope.** Anthropic-only. OpenAI's tool-result content
+ * does not natively accept image blocks (its vision uses image_url
+ * blocks in user messages, not tool_results); OpenAI vision is a
+ * deferred slice. local-server providers go through OpenAIProvider
+ * and inherit the same deferral.
+ *
+ * **Privacy invariants preserved.** This function is a pure
+ * downstream re-shape — it never re-introduces bytes that were
+ * already stripped upstream. The decision about whether bytes are
+ * present at all is the projectForAi gate; this helper only
+ * unflattens what's already in the envelope.
+ */
+function buildToolResultContentForAnthropic(
+  content: string,
+): string | Array<Record<string, unknown>> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return content;
+  }
+  if (parsed === null || typeof parsed !== "object") return content;
+  const envelope = parsed as { data?: unknown };
+  const data = envelope.data;
+  if (data === null || typeof data !== "object") return content;
+  const d = data as Record<string, unknown>;
+  if (
+    (d.kind === "screenshot" || d.kind === "navigate") &&
+    typeof d.bytes_base64 === "string" &&
+    d.bytes_base64.length > 0
+  ) {
+    // Anthropic supports png, jpeg, gif, webp. Default to png; jpeg
+    // when the wire format declares it. The cloud-browser sandbox
+    // emits png today (per services/browser-sandbox); accept jpeg
+    // for forward-compat with future encoders.
+    const formatHint = typeof d.image_format === "string" ? d.image_format : "png";
+    const mediaType =
+      formatHint === "jpeg" || formatHint === "jpg"
+        ? "image/jpeg"
+        : formatHint === "gif"
+          ? "image/gif"
+          : formatHint === "webp"
+            ? "image/webp"
+            : "image/png";
+    // Strip bytes from the text portion — the bytes already live in
+    // the image block; duplicating them would waste tokens (the
+    // base64 string is still ~50KB) and force the model to choose
+    // which copy is canonical.
+    const { bytes_base64: _b, ...metadata } = d;
+    const textEnvelope = JSON.stringify({ ...envelope, data: metadata });
+    return [
+      { type: "text", text: textEnvelope },
+      {
+        type: "image",
+        source: { type: "base64", media_type: mediaType, data: d.bytes_base64 },
+      },
+    ];
+  }
+  return content;
+}
+
+// Exposed for unit tests in the same package.
+export const __test_buildToolResultContentForAnthropic = buildToolResultContentForAnthropic;
+
 // === Anthropic Provider ===
 
 /**
@@ -898,13 +996,14 @@ export class AnthropicProvider implements StreamingProvider {
         // Merge consecutive tool results into a single user message.
         // Anthropic requires ALL tool_results in one message after the assistant's tool_use.
         const prev = messages[messages.length - 1] as Record<string, unknown> | undefined;
+        const resultContent = buildToolResultContentForAnthropic(msg.content);
         if (prev?.role === "user" && Array.isArray(prev.content)) {
           const blocks = prev.content as Record<string, unknown>[];
           if (blocks.length > 0 && blocks[0]?.type === "tool_result") {
             blocks.push({
               type: "tool_result",
               tool_use_id: msg.tool_call_id,
-              content: msg.content,
+              content: resultContent,
             });
             continue;
           }
@@ -915,7 +1014,7 @@ export class AnthropicProvider implements StreamingProvider {
             {
               type: "tool_result",
               tool_use_id: msg.tool_call_id,
-              content: msg.content,
+              content: resultContent,
             },
           ],
         });

@@ -7,6 +7,7 @@ import {
   actionsToStateUpdates,
   stripTags,
 } from "../index";
+import { __test_buildToolResultContentForAnthropic as toAnthropicContent } from "../core";
 import type { AnthropicProviderConfig } from "../index";
 import { TrustMode, BatteryMode, SensitivityLevel } from "@motebit/sdk";
 import type { ContextPack, MotebitState } from "@motebit/sdk";
@@ -344,6 +345,160 @@ describe("AnthropicProvider Anthropic integration", () => {
 // incident was "hello" hanging silently on motebit.com because an upstream
 // stall left the fetch unresolved and the UI showed "…" forever — silent
 // ambiguity violates fail-closed doctrine.
+
+// ---------------------------------------------------------------------------
+// vision-2: tool_result content → Anthropic image content block
+// ---------------------------------------------------------------------------
+//
+// `projectForAi` (in loop.ts) is the AI-perception boundary — when its
+// three-gate composition (provider × sensitivity × consent) lets bytes
+// pass, the conversation history's tool_result content carries a
+// JSON-stringified envelope with `bytes_base64` inside. That string is
+// not pixels. Anthropic's vision API requires a structured `image`
+// content block. `buildToolResultContentForAnthropic` does the
+// downstream re-shape — pure function, no policy decision (the policy
+// lives upstream at projectForAi).
+
+describe("buildToolResultContentForAnthropic (vision-2)", () => {
+  const FAKE_BYTES = "iVBORw0KGgoAAAANSUhEUg".repeat(20);
+
+  it("passes through plain string content unchanged", () => {
+    const content = "just a status string";
+    expect(toAnthropicContent(content)).toBe(content);
+  });
+
+  it("passes through tool errors unchanged (no embedded image)", () => {
+    const content = JSON.stringify({ ok: false, error: "computer: not_in_control" });
+    expect(toAnthropicContent(content)).toBe(content);
+  });
+
+  it("passes through ax-tier read_page results unchanged", () => {
+    const content = JSON.stringify({
+      ok: true,
+      data: {
+        kind: "read_page",
+        url: "https://example.com",
+        title: "Example",
+        text: "body text",
+        text_truncated: false,
+        headings: [],
+        links: [],
+      },
+    });
+    expect(toAnthropicContent(content)).toBe(content);
+  });
+
+  it("passes through stripped screenshot result (bytes already removed by projectForAi)", () => {
+    // When the gate strips bytes, projectForAi swaps in the
+    // bytes_omitted directive. The content has no bytes_base64 left;
+    // helper must NOT try to construct an image block.
+    const content = JSON.stringify({
+      ok: true,
+      data: {
+        kind: "screenshot",
+        bytes_omitted_reason: "consent_required",
+        bytes_omitted: "Image rendered on the user's slab — bytes withheld...",
+        width: 1280,
+        height: 800,
+      },
+    });
+    expect(toAnthropicContent(content)).toBe(content);
+  });
+
+  it("splits passed-bytes screenshot result into text+image blocks", () => {
+    const content = JSON.stringify({
+      ok: true,
+      data: {
+        kind: "screenshot",
+        bytes_base64: FAKE_BYTES,
+        image_format: "png",
+        width: 1280,
+        height: 800,
+        captured_at: 1_000_000,
+      },
+    });
+    const result = toAnthropicContent(content);
+    expect(Array.isArray(result)).toBe(true);
+    const arr = result as Array<Record<string, unknown>>;
+    expect(arr).toHaveLength(2);
+    expect(arr[0]).toMatchObject({ type: "text" });
+    // Text envelope must NOT contain the bytes — they're in the image block.
+    expect(arr[0]!.text as string).not.toContain(FAKE_BYTES);
+    // Metadata fields survive.
+    expect(arr[0]!.text as string).toContain("1280");
+    expect(arr[0]!.text as string).toContain("800");
+    // Image block carries the bytes in Anthropic's format.
+    expect(arr[1]).toEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: FAKE_BYTES },
+    });
+  });
+
+  it("splits passed-bytes navigate result into text+image blocks (v1.3 inline-frame path)", () => {
+    // navigate captures a screenshot inline so the slab gets a frame
+    // without a separate screenshot call. Same image-block treatment.
+    const content = JSON.stringify({
+      ok: true,
+      data: {
+        kind: "navigate",
+        ok: true,
+        url: "https://motebit.com/",
+        bytes_base64: FAKE_BYTES,
+        image_format: "jpeg",
+        width: 1280,
+        height: 800,
+      },
+    });
+    const arr = toAnthropicContent(content) as Array<Record<string, unknown>>;
+    expect(arr).toHaveLength(2);
+    expect(arr[1]).toEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: FAKE_BYTES },
+    });
+  });
+
+  it("maps known image_format values to Anthropic media_type", () => {
+    const make = (format: string) =>
+      toAnthropicContent(
+        JSON.stringify({
+          ok: true,
+          data: { kind: "screenshot", bytes_base64: FAKE_BYTES, image_format: format },
+        }),
+      ) as Array<Record<string, unknown>>;
+    const png = make("png")[1] as { source: { media_type: string } };
+    const jpg = make("jpg")[1] as { source: { media_type: string } };
+    const jpeg = make("jpeg")[1] as { source: { media_type: string } };
+    const gif = make("gif")[1] as { source: { media_type: string } };
+    const webp = make("webp")[1] as { source: { media_type: string } };
+    const unknown = make("avif")[1] as { source: { media_type: string } };
+    expect(png.source.media_type).toBe("image/png");
+    expect(jpg.source.media_type).toBe("image/jpeg");
+    expect(jpeg.source.media_type).toBe("image/jpeg");
+    expect(gif.source.media_type).toBe("image/gif");
+    expect(webp.source.media_type).toBe("image/webp");
+    // Unknown formats default to png — Anthropic accepts; the AI
+    // sees the actual bytes and fails gracefully if rendering breaks.
+    expect(unknown.source.media_type).toBe("image/png");
+  });
+
+  it("returns string unchanged when content is not JSON", () => {
+    expect(toAnthropicContent("not-json {{{")).toBe("not-json {{{");
+  });
+
+  it("returns string unchanged when JSON is null or non-object", () => {
+    expect(toAnthropicContent("null")).toBe("null");
+    expect(toAnthropicContent("42")).toBe("42");
+    expect(toAnthropicContent('"a string"')).toBe('"a string"');
+  });
+
+  it("returns string unchanged when bytes_base64 is empty", () => {
+    const content = JSON.stringify({
+      ok: true,
+      data: { kind: "screenshot", bytes_base64: "", width: 1280, height: 800 },
+    });
+    expect(toAnthropicContent(content)).toBe(content);
+  });
+});
 
 describe("fetchWithConnectionTimeout", () => {
   beforeEach(() => {
