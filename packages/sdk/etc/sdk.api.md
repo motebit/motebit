@@ -53,7 +53,7 @@ export interface AIResponse {
 export const ANTHROPIC_CANONICAL_URL = "https://api.anthropic.com";
 
 // @public
-export const ANTHROPIC_MODELS: readonly ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"];
+export const ANTHROPIC_MODELS: readonly ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"];
 
 // @public (undocumented)
 export type AnthropicModel = (typeof ANTHROPIC_MODELS)[number];
@@ -608,7 +608,7 @@ export type ProviderMode = "on-device" | "motebit-cloud" | "byok";
 export type ProviderSpec = CloudProviderSpec | WebLLMProviderSpec | AppleFoundationModelsSpec | MlxProviderSpec;
 
 // @public
-export const PROXY_MODELS: readonly ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+export const PROXY_MODELS: readonly ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
 
 // @public (undocumented)
 export type ProxyModel = (typeof PROXY_MODELS)[number];

@@ -67,6 +67,17 @@ const CANONICAL: Record<string, string> = {
   DEFAULT_GOVERNANCE_CONFIG: "packages/sdk/src/governance-config.ts",
   DEFAULT_VOICE_CONFIG: "packages/sdk/src/voice-config.ts",
   DEFAULT_APPEARANCE_CONFIG: "packages/sdk/src/appearance-config.ts",
+  // Model registry (packages/sdk/CLAUDE.md § "Model registry"). Slice 2i
+  // — added after settings.ts was caught shadowing ANTHROPIC_MODELS with
+  // a stale literal (claude-opus-4-6 vs canonical 4-7), causing the
+  // dropdown to advertise a model that doesn't exist. Locking the
+  // canonical list here prevents future surfaces from re-shadowing.
+  // OPENAI_MODELS / GOOGLE_MODELS in the SDK describe the proxy-routed
+  // gpt-5.4 / gemini-2.5 family; settings.ts's BYOK dropdowns
+  // intentionally include older models the user may already pay for —
+  // different intent, not a shadow violation. Only Anthropic is
+  // gate-locked because only Anthropic has aligned intent today.
+  ANTHROPIC_MODELS: "packages/sdk/src/models.ts",
 };
 
 // ── Declaration pattern ──────────────────────────────────────────────────

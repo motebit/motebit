@@ -20,7 +20,12 @@ import { rebuildTTSProvider } from "../main";
 import { ELEVENLABS_VOICES, DEEPGRAM_VOICES } from "@motebit/voice";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { ColorPickerAPI } from "./color-picker";
-import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_GOOGLE_MODEL, isLocalServerUrl } from "@motebit/sdk";
+import {
+  ANTHROPIC_MODELS,
+  DEFAULT_ANTHROPIC_MODEL,
+  DEFAULT_GOOGLE_MODEL,
+  isLocalServerUrl,
+} from "@motebit/sdk";
 import { PROXY_BASE_URL } from "../providers";
 
 /** Which provider tab the UI is showing. Maps from `UnifiedProviderConfig.mode`. */
@@ -34,15 +39,33 @@ type ProviderTab = "proxy" | "anthropic" | "openai" | "ollama" | "webllm";
 // or when the live `/v1/models` endpoint is rate-limited or down. When the
 // live fetch succeeds, it overwrites the seed with the up-to-date list.
 
+// UI labels for canonical Anthropic model IDs. The IDs themselves come
+// from `@motebit/sdk`'s `ANTHROPIC_MODELS` (single source of truth);
+// labels are surface-specific UI copy that lives here. A new model
+// added to `ANTHROPIC_MODELS` without a label entry falls back to its
+// raw id — visible-but-unlabeled is preferable to invisible.
+const ANTHROPIC_MODEL_LABELS: Record<string, string> = {
+  "claude-opus-4-7": "Claude Opus 4.7 — most capable",
+  "claude-sonnet-4-6": "Claude Sonnet 4.6 — recommended",
+  "claude-haiku-4-5-20251001": "Claude Haiku 4.5 — fastest",
+};
+
 const FALLBACK_MODELS: Record<
   "anthropic" | "openai" | "google",
   Array<{ id: string; name: string }>
 > = {
-  anthropic: [
-    { id: "claude-opus-4-6", name: "Claude Opus 4.6 — most capable" },
-    { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6 — recommended" },
-    { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5 — fastest" },
-  ],
+  // Anthropic IDs sourced from @motebit/sdk (canonical) so a model-
+  // family bump in the sdk propagates here without a settings.ts
+  // edit. Labels are local UI copy (the sdk shouldn't own user-
+  // facing strings); fall back to id when a new entry hasn't been
+  // labeled yet.
+  anthropic: ANTHROPIC_MODELS.map((id) => ({ id, name: ANTHROPIC_MODEL_LABELS[id] ?? id })),
+  // OpenAI / Google diverge intentionally from the sdk lists. The
+  // sdk's OPENAI_MODELS / GOOGLE_MODELS describe the cost-tiered
+  // family motebit-cloud routes through (gpt-5.4 + minis); BYOK
+  // dropdown is "what your own key can call," which includes
+  // older models the user may already be paying for. Different
+  // intent → no source-of-truth violation; lists stay separate.
   openai: [
     { id: "gpt-5", name: "GPT-5" },
     { id: "gpt-4.1", name: "GPT-4.1" },
