@@ -489,80 +489,112 @@ export async function executeUserInput(
 // only the serialized result. Bounded sizes defend the AI context
 // against pathological pages (huge nav dropdowns, tag clouds).
 
+/**
+ * In-page DOM extractor for `executeReadPage`. Top-level + exported so
+ * it can be unit-tested under jsdom (which provides `document`,
+ * `location`, `Blob`) without a real Chromium roundtrip. When passed
+ * to `page.evaluate`, Playwright serializes the function by name and
+ * runs the SAME code inside the Chromium context — one
+ * implementation, two runtimes.
+ *
+ * Self-contained by construction: no closure references, no module
+ * imports, only browser globals (`document`, `location`, `Blob`).
+ * That's what makes Playwright's serialization work and what makes
+ * jsdom mocking work.
+ */
+export function extractStructuredPageContent(opts: {
+  readonly textMaxBytes: number;
+  readonly headingsMax: number;
+  readonly linksMax: number;
+}): {
+  url: string;
+  title: string;
+  text: string;
+  text_truncated: boolean;
+  headings: Array<{ level: number; text: string }>;
+  links: Array<{ text: string; href: string }>;
+} {
+  const { textMaxBytes, headingsMax, linksMax } = opts;
+  const titleRaw = document.title || "";
+  const bodyRaw = (document.body?.innerText ?? "").trim();
+
+  // Truncate body text by byte length (UTF-8 approximate via
+  // Blob since TextEncoder may not be uniformly available in
+  // every Chromium evaluator context). Falls back to char-count
+  // truncation when Blob is unavailable.
+  const bytesOf = (s: string): number => {
+    try {
+      return new Blob([s]).size;
+    } catch {
+      return s.length;
+    }
+  };
+  let textTruncated = false;
+  let body = bodyRaw;
+  if (bytesOf(body) > textMaxBytes) {
+    // Bisect to find the largest prefix under the cap.
+    let lo = 0;
+    let hi = body.length;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi + 1) / 2);
+      if (bytesOf(body.slice(0, mid)) <= textMaxBytes) lo = mid;
+      else hi = mid - 1;
+    }
+    body = body.slice(0, lo);
+    textTruncated = true;
+  }
+
+  // Heading hierarchy in document order.
+  const headingNodes = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+  const headings: Array<{ level: number; text: string }> = [];
+  for (const node of headingNodes.slice(0, headingsMax)) {
+    const level = Number(node.tagName.slice(1));
+    const text = (node as HTMLElement).innerText.trim();
+    if (text.length > 0) headings.push({ level, text });
+  }
+
+  // Visible links with absolute hrefs. Skip empty text, fragment-
+  // only hrefs, and javascript: URLs (which the AI can't navigate
+  // to anyway). The fragment check reads the RAW `href` attribute —
+  // `anchor.href` returns the resolved absolute URL, so a
+  // `<a href="#section">` resolves to
+  // `https://current.page/path#section` and would defeat a
+  // `startsWith("#")` probe on the resolved form.
+  const linkNodes = Array.from(document.querySelectorAll("a[href]"));
+  const links: Array<{ text: string; href: string }> = [];
+  for (const node of linkNodes) {
+    if (links.length >= linksMax) break;
+    const anchor = node as HTMLAnchorElement;
+    const text = anchor.innerText.trim();
+    const rawHref = anchor.getAttribute("href") ?? "";
+    const href = anchor.href;
+    if (text.length === 0) continue;
+    if (!href || href.startsWith("javascript:")) continue;
+    if (rawHref.startsWith("#")) continue;
+    links.push({ text, href });
+  }
+
+  return {
+    url: location.href,
+    title: titleRaw,
+    text: body,
+    text_truncated: textTruncated,
+    headings,
+    links,
+  };
+}
+
 export async function executeReadPage(session: BrowserSession): Promise<ReadPageResult> {
-  // The in-page evaluator does ALL the DOM walking. Returns plain
-  // JSON-serializable data; no node references cross the bridge.
-  const extracted = await session.page.evaluate(
-    ({ textMaxBytes, headingsMax, linksMax }) => {
-      const titleRaw = document.title || "";
-      const bodyRaw = (document.body?.innerText ?? "").trim();
-
-      // Truncate body text by byte length (UTF-8 approximate via
-      // Blob since TextEncoder may not be uniformly available in
-      // every Chromium evaluator context). Falls back to char-count
-      // truncation when Blob is unavailable.
-      const bytesOf = (s: string): number => {
-        try {
-          return new Blob([s]).size;
-        } catch {
-          return s.length;
-        }
-      };
-      let textTruncated = false;
-      let body = bodyRaw;
-      if (bytesOf(body) > textMaxBytes) {
-        // Bisect to find the largest prefix under the cap.
-        let lo = 0;
-        let hi = body.length;
-        while (lo < hi) {
-          const mid = Math.floor((lo + hi + 1) / 2);
-          if (bytesOf(body.slice(0, mid)) <= textMaxBytes) lo = mid;
-          else hi = mid - 1;
-        }
-        body = body.slice(0, lo);
-        textTruncated = true;
-      }
-
-      // Heading hierarchy in document order.
-      const headingNodes = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6"));
-      const headings: Array<{ level: number; text: string }> = [];
-      for (const node of headingNodes.slice(0, headingsMax)) {
-        const level = Number(node.tagName.slice(1));
-        const text = (node as HTMLElement).innerText.trim();
-        if (text.length > 0) headings.push({ level, text });
-      }
-
-      // Visible links with absolute hrefs. Skip empty text, fragment-
-      // only hrefs, and javascript: URLs (which the AI can't
-      // navigate to anyway).
-      const linkNodes = Array.from(document.querySelectorAll("a[href]"));
-      const links: Array<{ text: string; href: string }> = [];
-      for (const node of linkNodes) {
-        if (links.length >= linksMax) break;
-        const anchor = node as HTMLAnchorElement;
-        const text = anchor.innerText.trim();
-        const href = anchor.href;
-        if (text.length === 0) continue;
-        if (!href || href.startsWith("javascript:")) continue;
-        if (href.startsWith("#")) continue;
-        links.push({ text, href });
-      }
-
-      return {
-        url: location.href,
-        title: titleRaw,
-        text: body,
-        text_truncated: textTruncated,
-        headings,
-        links,
-      };
-    },
-    {
-      textMaxBytes: READ_PAGE_TEXT_MAX_BYTES,
-      headingsMax: READ_PAGE_HEADINGS_MAX,
-      linksMax: READ_PAGE_LINKS_MAX,
-    },
-  );
+  // Playwright serializes the named function and runs it inside the
+  // Chromium context. The same function runs under jsdom in unit
+  // tests, so the in-page logic is honestly covered without a real-
+  // browser harness. Returns plain JSON-serializable data; no node
+  // references cross the bridge.
+  const extracted = await session.page.evaluate(extractStructuredPageContent, {
+    textMaxBytes: READ_PAGE_TEXT_MAX_BYTES,
+    headingsMax: READ_PAGE_HEADINGS_MAX,
+    linksMax: READ_PAGE_LINKS_MAX,
+  });
 
   return {
     kind: "read_page",
