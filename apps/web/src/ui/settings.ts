@@ -20,111 +20,10 @@ import { rebuildTTSProvider } from "../main";
 import { ELEVENLABS_VOICES, DEEPGRAM_VOICES } from "@motebit/voice";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { ColorPickerAPI } from "./color-picker";
-import {
-  ANTHROPIC_MODELS,
-  DEFAULT_ANTHROPIC_MODEL,
-  DEFAULT_GOOGLE_MODEL,
-  isLocalServerUrl,
-} from "@motebit/sdk";
-import { PROXY_BASE_URL } from "../providers";
+import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_GOOGLE_MODEL, isLocalServerUrl } from "@motebit/sdk";
 
 /** Which provider tab the UI is showing. Maps from `UnifiedProviderConfig.mode`. */
 type ProviderTab = "proxy" | "anthropic" | "openai" | "ollama" | "webllm";
-
-// === Model Discovery ===
-//
-// Datalists drive the Model field's autocomplete dropdown. We seed each list
-// with a static fallback (the canonical models for the provider) so the
-// dropdown always has something — including offline, on dev with no proxy,
-// or when the live `/v1/models` endpoint is rate-limited or down. When the
-// live fetch succeeds, it overwrites the seed with the up-to-date list.
-
-// UI labels for canonical Anthropic model IDs. The IDs themselves come
-// from `@motebit/sdk`'s `ANTHROPIC_MODELS` (single source of truth);
-// labels are surface-specific UI copy that lives here. A new model
-// added to `ANTHROPIC_MODELS` without a label entry falls back to its
-// raw id — visible-but-unlabeled is preferable to invisible.
-const ANTHROPIC_MODEL_LABELS: Record<string, string> = {
-  "claude-opus-4-7": "Claude Opus 4.7 — most capable",
-  "claude-sonnet-4-6": "Claude Sonnet 4.6 — recommended",
-  "claude-haiku-4-5-20251001": "Claude Haiku 4.5 — fastest",
-};
-
-const FALLBACK_MODELS: Record<
-  "anthropic" | "openai" | "google",
-  Array<{ id: string; name: string }>
-> = {
-  // Anthropic IDs sourced from @motebit/sdk (canonical) so a model-
-  // family bump in the sdk propagates here without a settings.ts
-  // edit. Labels are local UI copy (the sdk shouldn't own user-
-  // facing strings); fall back to id when a new entry hasn't been
-  // labeled yet.
-  anthropic: ANTHROPIC_MODELS.map((id) => ({ id, name: ANTHROPIC_MODEL_LABELS[id] ?? id })),
-  // OpenAI / Google diverge intentionally from the sdk lists. The
-  // sdk's OPENAI_MODELS / GOOGLE_MODELS describe the cost-tiered
-  // family motebit-cloud routes through (gpt-5.4 + minis); BYOK
-  // dropdown is "what your own key can call," which includes
-  // older models the user may already be paying for. Different
-  // intent → no source-of-truth violation; lists stay separate.
-  openai: [
-    { id: "gpt-5", name: "GPT-5" },
-    { id: "gpt-4.1", name: "GPT-4.1" },
-    { id: "gpt-4o", name: "GPT-4o" },
-    { id: "o3-mini", name: "o3-mini" },
-  ],
-  google: [
-    { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
-    { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
-    { id: "gemini-2.0-flash", name: "Gemini 2.0 Flash" },
-  ],
-};
-
-function writeDatalist(datalistId: string, models: Array<{ id: string; name: string }>): void {
-  const datalist = document.getElementById(datalistId);
-  if (!datalist) return;
-  datalist.innerHTML = models.map((m) => `<option value="${m.id}">${m.name}</option>`).join("");
-}
-
-/**
- * Seed every provider's datalist with a fallback so the Model dropdown is
- * never empty. Idempotent — overwrites the datalist with the same content
- * each call. Called once during settings init.
- */
-export function seedProviderModelLists(): void {
-  writeDatalist("anthropic-models", FALLBACK_MODELS.anthropic);
-  writeDatalist("openai-models", FALLBACK_MODELS.openai);
-  writeDatalist("google-models", FALLBACK_MODELS.google);
-}
-
-let modelFetchTimer: ReturnType<typeof setTimeout> | undefined;
-
-function fetchModelsForProvider(
-  provider: "anthropic" | "openai" | "google",
-  apiKey: string,
-  datalistId: string,
-): void {
-  clearTimeout(modelFetchTimer);
-  modelFetchTimer = setTimeout(
-    () =>
-      void (async () => {
-        if (!apiKey || apiKey.length < 10) return;
-        try {
-          const res = await fetch(`${PROXY_BASE_URL}/v1/models?provider=${provider}`, {
-            headers: { "x-api-key": apiKey },
-          });
-          const json = (await res.json()) as {
-            ok?: boolean;
-            models?: Array<{ id: string; name: string }>;
-          };
-          if (!json.ok || !json.models) return;
-          writeDatalist(datalistId, json.models);
-        } catch {
-          // Silent — datalist keeps its fallback (seedProviderModelLists)
-        }
-      })(),
-    500,
-  );
-}
 
 // === DOM Refs ===
 
@@ -176,9 +75,9 @@ const providerConfigs = {
 
 // Input elements
 const anthropicApiKey = document.getElementById("anthropic-api-key") as HTMLInputElement;
-const anthropicModel = document.getElementById("anthropic-model") as HTMLInputElement;
+const anthropicModel = document.getElementById("anthropic-model") as HTMLSelectElement;
 const openaiApiKey = document.getElementById("openai-api-key") as HTMLInputElement;
-const openaiModel = document.getElementById("openai-model") as HTMLInputElement;
+const openaiModel = document.getElementById("openai-model") as HTMLSelectElement;
 const ollamaBaseUrl = document.getElementById("ollama-base-url") as HTMLInputElement;
 const ollamaModel = document.getElementById("ollama-model") as HTMLSelectElement;
 const ollamaStatus = document.getElementById("ollama-status") as HTMLDivElement;
@@ -282,11 +181,6 @@ function applyGovernanceToRuntime(ctx: WebContext, gov: GovernanceConfig): void 
 export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   const { colorPicker } = deps;
 
-  // Seed model dropdowns immediately — guarantees the Model field has a
-  // working datalist even when the live `/v1/models` proxy is unreachable
-  // (offline, local dev without proxy, prod proxy hiccup).
-  seedProviderModelLists();
-
   // === Tab Switching (Appearance / Intelligence) ===
 
   function switchTab(tabName: string): void {
@@ -306,18 +200,6 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       populateAuditTrail();
     }
   }
-
-  // === Live Model Discovery on API Key Input ===
-  anthropicApiKey.addEventListener("input", () => {
-    fetchModelsForProvider("anthropic", anthropicApiKey.value.trim(), "anthropic-models");
-  });
-  openaiApiKey.addEventListener("input", () => {
-    fetchModelsForProvider("openai", openaiApiKey.value.trim(), "openai-models");
-  });
-  const googleApiKeyEl = document.getElementById("google-api-key") as HTMLInputElement | null;
-  googleApiKeyEl?.addEventListener("input", () => {
-    fetchModelsForProvider("google", googleApiKeyEl.value.trim(), "google-models");
-  });
 
   function populateIdentityFields(): void {
     identityMotebitId.textContent = ctx.app.motebitId || "—";
@@ -1251,20 +1133,16 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
           if (config.vendor === "anthropic") {
             anthropicApiKey.value = config.apiKey;
             if (config.model) anthropicModel.value = config.model;
-            if (config.apiKey)
-              fetchModelsForProvider("anthropic", config.apiKey, "anthropic-models");
           } else if (config.vendor === "openai") {
             openaiApiKey.value = config.apiKey;
             if (config.model) openaiModel.value = config.model;
-            if (config.apiKey) fetchModelsForProvider("openai", config.apiKey, "openai-models");
           } else if (config.vendor === "google") {
             const googleApiKey = document.getElementById(
               "google-api-key",
             ) as HTMLInputElement | null;
-            const googleModel = document.getElementById("google-model") as HTMLInputElement | null;
+            const googleModel = document.getElementById("google-model") as HTMLSelectElement | null;
             if (googleApiKey) googleApiKey.value = config.apiKey;
             if (googleModel) googleModel.value = config.model ?? DEFAULT_GOOGLE_MODEL;
-            if (config.apiKey) fetchModelsForProvider("google", config.apiKey, "google-models");
           }
           break;
         }
@@ -1373,7 +1251,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         // BYOK tab — branch on the active sub-provider
         if (activeByokProvider === "google") {
           const googleApiKey = document.getElementById("google-api-key") as HTMLInputElement | null;
-          const googleModelEl = document.getElementById("google-model") as HTMLInputElement | null;
+          const googleModelEl = document.getElementById("google-model") as HTMLSelectElement | null;
           config = {
             mode: "byok",
             vendor: "google",
