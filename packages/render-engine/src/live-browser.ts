@@ -293,8 +293,13 @@ export function buildLiveBrowserElement(
     // by data URI, so swapping `img.src` to the same URI after decode
     // resolves serves from cache — effectively atomic, no decode-flash
     // on the visible img. jsdom and other test environments don't
-    // implement `decode()`; fall back to direct paint there.
-    if (typeof Image.prototype.decode === "function") {
+    // implement `decode()`; fall back to direct paint there. The
+    // explicit `decode?: () => Promise<void>` cast carries the type
+    // through ESLint's strict-boolean-expressions check — without it,
+    // `Image.prototype.decode` resolves to `any` for the lint pass
+    // even though lib.dom declares it on HTMLImageElement.
+    const proto = Image.prototype as { decode?: () => Promise<void> };
+    if (typeof proto.decode === "function") {
       const preload = new Image();
       preload.decoding = "async";
       preload.src = dataUri;
