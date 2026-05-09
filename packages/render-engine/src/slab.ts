@@ -267,6 +267,22 @@ export class SlabManager {
    */
   private readonly stageAnchor: CSS3DObject;
   private readonly stageEl: HTMLDivElement;
+  /**
+   * Ghost-ready affordance — pulsing mark glyph + caption shown
+   * when the slab has no live content (no items mounted, no
+   * screencast frames). Says "this is a workspace, motebit can
+   * drive, you can drive — start by typing or asking." Apple-grade
+   * empty-state register: never literally blank, always
+   * intentional, always quietly alive.
+   *
+   * Mounted as a child of `stageEl` alongside slab items. Visibility
+   * toggles in lockstep with item lifecycle: hidden when an item
+   * (live_browser, mind, peer_viewport, etc.) mounts; shown when
+   * the last item dissolves. Sympathetic-breathes at the same
+   * 0.3 Hz the creature breathes at, body-coherent per
+   * `liquescentia-as-substrate.md` §"Quiescence rhythm."
+   */
+  private readonly ghostEl: HTMLDivElement;
   private readonly css3dRenderer: CSS3DRenderer;
   /** Per-id renderer state — DOM element + per-render flags. */
   private readonly elements = new Map<string, ManagedElement>();
@@ -575,6 +591,16 @@ export class SlabManager {
     this.stageEl = createContainerElement();
     this.stageAnchor = new CSS3DObject(this.stageEl);
     this.stageEl.style.pointerEvents = "none";
+
+    // Ghost-ready affordance — see the ghostEl field doc for the
+    // architectural rationale. Mounted as a child of stageEl;
+    // visibility toggles in lockstep with the items map (hidden
+    // when any slab item is mounted, shown otherwise). Apple-grade
+    // empty-state: pulsing mark + caption, sympathetic-breathing.
+    this.ghostEl = createGhostElement();
+    if (typeof this.stageEl.appendChild === "function") {
+      this.stageEl.appendChild(this.ghostEl);
+    }
     // Embed the stage inside the slab's glass volume — 1mm in front
     // of the back pane (slab-local z = -SLAB_THICKNESS/2 + offset).
     // Reads as "content rests against the back of the slab and is
@@ -857,19 +883,33 @@ export class SlabManager {
     const slabHidden =
       (spec.element as { dataset?: Record<string, string> }).dataset?.slabHidden === "true";
     if (!slabHidden) {
-      // Replace the current stage content with this new element. Any
-      // previous primary's exit physics continues against its own
-      // element (its dissolve / pinch animation completes even though
-      // it's no longer in the stage), resolving pending promises.
-      if (typeof this.stageEl.replaceChildren === "function") {
-        this.stageEl.replaceChildren(spec.element);
-      } else {
+      // Mount the new element alongside any existing items. Removing
+      // prior items happens on their own dissolve completion (phase
+      // → gone in `update`), so the previous element's exit physics
+      // continues against its own element. Don't `replaceChildren`
+      // the whole stage — that would also wipe the ghost-ready
+      // affordance which lives as a sibling. The ghost is hidden
+      // below; once all items dissolve, it re-shows.
+      if (typeof this.stageEl.appendChild === "function") {
         this.stageEl.appendChild(spec.element);
       }
     }
 
     this.elements.set(spec.id, { element: spec.element, restingApplied: false });
+    // Hide the ghost-ready affordance — the slab now has live
+    // content. The ghost re-shows when the last item dissolves.
+    this.setGhostVisible(false);
     return this.core.addItem({ id: spec.id, kind: spec.kind, slabHidden });
+  }
+
+  /**
+   * Toggle the ghost-ready affordance's visibility. Hidden when
+   * any slab item is mounted; shown when the slab is empty.
+   */
+  private setGhostVisible(visible: boolean): void {
+    if (this.ghostEl.style != null) {
+      this.ghostEl.style.display = visible ? "flex" : "none";
+    }
   }
 
   dissolveItem(id: string): Promise<void> {
@@ -888,6 +928,9 @@ export class SlabManager {
     }
     this.elements.clear();
     this.core.clearItems();
+    // All items gone → restore the ghost-ready affordance so the
+    // slab announces itself again.
+    this.setGhostVisible(true);
   }
 
   /**
@@ -927,6 +970,12 @@ export class SlabManager {
           this.stageEl.removeChild(managed.element);
         }
         this.elements.delete(item.id);
+        // Last item just dissolved → bring the ghost back. The
+        // slab returns to its READY register, announcing itself
+        // until the next item mounts.
+        if (this.elements.size === 0) {
+          this.setGhostVisible(true);
+        }
       }
     }
 
@@ -1482,6 +1531,13 @@ function createContainerElement(): HTMLDivElement {
   el.style.boxSizing = "border-box";
   el.style.display = "block";
   el.style.overflow = "hidden";
+  // Establish a containing block for absolutely-positioned children
+  // (the ghost-ready affordance, future overlays). Without this,
+  // children with `position: absolute` escape stageEl and anchor to
+  // the next positioned ancestor in the CSS3D-renderer's wrapper —
+  // typically body, which makes the affordance float anywhere on
+  // screen instead of inside the slab's stage rect.
+  el.style.position = "relative";
   // Match the slab plane's φ-meniscus corner radius. Pixel value
   // derived from the world-unit constant: the stage scales to world
   // by STAGE_PIXEL_TO_WORLD, so the inverse maps SLAB_CORNER_RADIUS
@@ -1568,6 +1624,115 @@ function createControlBandSlotElement(): HTMLDivElement {
   el.style.zIndex = "3";
   el.style.pointerEvents = "none";
   return el;
+}
+
+/**
+ * Ghost-ready affordance for the slab's empty register. Pulsing
+ * mark glyph + caption that announces "this is a workspace,
+ * motebit can drive, you can drive too" without being chatty.
+ *
+ * Visual register, Apple-grade empty-state:
+ *
+ *   - Centered column, generous breathing room (the affordance is
+ *     surrounded by the slab's stage volume; never edge-to-edge).
+ *   - Mark glyph: 14px circle with a soft inner gradient,
+ *     sympathetic-breathing at 0.3 Hz to inherit the creature's
+ *     rhythm. Its color is set later via setGhostMarkColor when
+ *     the surface knows the soul tint; default is a neutral cool
+ *     so the affordance reads even before identity wires up.
+ *   - Caption: muted 14px system-ui, slightly increased
+ *     letter-spacing for a premium feel. Two affordances named
+ *     side-by-side ("type a URL · or ask motebit"), separated
+ *     by a middle dot — the same calm separator iOS uses in
+ *     "subscribe · save 30%"-style affordance rows.
+ *   - Fade-in on mount: 800ms opacity 0 → 1, no scale. Calm-
+ *     software register: appearance is announced, not arrived.
+ *
+ * Headless test shim mirrors `createContainerElement`'s pattern.
+ */
+function createGhostElement(): HTMLDivElement {
+  if (typeof document === "undefined") {
+    const stub = {
+      className: "slab-ghost-ready",
+      style: new Proxy(
+        {},
+        {
+          get: () => "",
+          set: () => true,
+        },
+      ) as unknown as CSSStyleDeclaration,
+      appendChild: (_child: HTMLElement) => _child,
+      removeChild: (_child: HTMLElement) => _child,
+    };
+    return stub as unknown as HTMLDivElement;
+  }
+
+  const ghostEl = document.createElement("div");
+  ghostEl.className = "slab-ghost-ready";
+  ghostEl.style.position = "absolute";
+  ghostEl.style.inset = "0";
+  ghostEl.style.display = "flex";
+  ghostEl.style.flexDirection = "column";
+  ghostEl.style.alignItems = "center";
+  ghostEl.style.justifyContent = "center";
+  ghostEl.style.gap = "16px";
+  ghostEl.style.pointerEvents = "none";
+  ghostEl.style.opacity = "0";
+  ghostEl.style.animation = "slab-ghost-fade-in 800ms ease-out forwards";
+
+  const mark = document.createElement("div");
+  mark.className = "slab-ghost-ready-mark";
+  mark.style.width = "16px";
+  mark.style.height = "16px";
+  mark.style.borderRadius = "50%";
+  // Default tint — neutral cool. setGhostMarkColor (called from the
+  // adapter when the runtime publishes its interior color) replaces
+  // this with the creature's soul tint so the mark reads as
+  // body-coherent.
+  mark.style.background =
+    "radial-gradient(circle at 30% 30%, rgba(180, 200, 230, 0.95) 0%, rgba(140, 165, 200, 0.85) 70%)";
+  mark.style.boxShadow = "0 0 12px rgba(140, 165, 200, 0.4)";
+  // Sympathetic-breathing at 0.3 Hz (3.33s per cycle). Same rhythm
+  // the creature breathes at; the slab's empty-state affordance
+  // inherits the body's beat. Per `liquescentia-as-substrate.md`
+  // §"Quiescence rhythm" — every motebit element pulses at this
+  // canonical frequency.
+  mark.style.animation = "slab-ghost-mark-breathe 3333ms ease-in-out infinite";
+
+  const caption = document.createElement("div");
+  caption.className = "slab-ghost-ready-caption";
+  caption.textContent = "type a URL · or ask motebit";
+  caption.style.font =
+    '14px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif';
+  caption.style.letterSpacing = "0.01em";
+  caption.style.color = "rgba(40, 55, 90, 0.55)";
+  caption.style.userSelect = "none";
+
+  ghostEl.appendChild(mark);
+  ghostEl.appendChild(caption);
+
+  // Inject the keyframes once per document. Idempotent — uses a
+  // marker class on <head> to avoid re-registering across multiple
+  // SlabManager instances (e.g. test isolation, hot reload).
+  const STYLE_MARKER = "data-slab-ghost-keyframes";
+  const head = document.head;
+  if (head != null && head.querySelector(`style[${STYLE_MARKER}]`) == null) {
+    const styleEl = document.createElement("style");
+    styleEl.setAttribute(STYLE_MARKER, "");
+    styleEl.textContent = `
+      @keyframes slab-ghost-fade-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      @keyframes slab-ghost-mark-breathe {
+        0%, 100% { transform: scale(0.94); opacity: 0.78; }
+        50% { transform: scale(1.06); opacity: 1; }
+      }
+    `;
+    head.appendChild(styleEl);
+  }
+
+  return ghostEl;
 }
 
 function easeOutQuad(t: number): number {

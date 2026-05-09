@@ -846,6 +846,35 @@ export class WebApp {
     });
     this.setupHaltResumeListeners();
     this.setupCoBrowseListeners();
+
+    // Eagerly warm the cloud-browser session at bootstrap. The
+    // /computer route's purpose IS computer-use; lazy session-open
+    // (waiting for the AI's first tool call) leaves the slab silent
+    // and the user with no signal that the workspace is alive. By
+    // pre-warming here, the live_browser slab item mounts via
+    // onSessionLive within 1-2s of page load — chrome strip lands
+    // in its proper home (the live_browser handle's controlBandSlot,
+    // not the legacy viewport-top fallback), screencast streams,
+    // slab announces itself.
+    //
+    // The slab's ghost-ready affordance (pulsing mark + caption
+    // inside stageEl) bridges the cold-start window: while
+    // ensureDefaultSession is in flight, the ghost shows; once
+    // openLiveBrowserSlabItem mounts the slab item, the ghost
+    // hides automatically (item lifecycle hook in
+    // SlabManager.placeItem). Same affordance returns when the
+    // session closes (`/halt`, dispose, transport drop) —
+    // continuous register, never empty-blank.
+    //
+    // Best-effort — failure to open is silent (cloud unreachable,
+    // auth rejection, etc.); the ghost stays, the user can chat
+    // with motebit OR retry by typing a URL. Same fail-soft
+    // posture as the rest of the cobrowse pipeline.
+    void this.computerRegistration?.ensureDefaultSession().catch(() => {
+      // Honest absence — no session, ghost remains. The chat path
+      // still works (user can ask motebit; if motebit calls
+      // computer, ensureDefaultSession runs again).
+    });
   }
 
   /**
@@ -1824,10 +1853,58 @@ export class WebApp {
     this.applyChromeToCurrentState();
   }
 
+  /**
+   * Ready-state forward event. Wraps the lazy session-open path so
+   * the user can navigate from the slab's READY register (URL bar
+   * visible before any cloud session exists). Calls
+   * `ensureDefaultSession` first; once the handle exists,
+   * `onSessionLive` will have fired and `liveBrowserForwardEvent`
+   * is populated — then we forward through it.
+   *
+   * Returns null when no registration exists (cloud-browser
+   * unconfigured) so the caller knows to render a non-functional
+   * input. Calls are idempotent — repeated typing during cold-start
+   * funnel through the same in-flight session-open promise.
+   */
+  private buildReadyStateForwardEvent():
+    | ((
+        event: import("@motebit/sdk").UserInputEvent,
+      ) => Promise<import("@motebit/runtime").UserInputForwardResult>)
+    | null {
+    const reg = this.computerRegistration;
+    if (!reg) return null;
+    return async (event) => {
+      // Open / pre-warm the cloud session. Idempotent — the
+      // registration's ensureDefaultSession returns the existing
+      // handle if one is already open. Triggers onSessionLive
+      // which mounts the live_browser slab item AND sets
+      // this.liveBrowserForwardEvent. Once that's set, forward
+      // through it.
+      await reg.ensureDefaultSession();
+      const live = this.liveBrowserForwardEvent;
+      if (!live) {
+        // ensureDefaultSession resolved but the live forward
+        // didn't get wired (race / surface-error). Honest fail:
+        // return a degraded outcome so the URL bar's caller can
+        // render the "couldn't navigate" register.
+        return {
+          outcome: "denied",
+          reason: "session_unavailable",
+        } as unknown as import("@motebit/runtime").UserInputForwardResult;
+      }
+      return live(event);
+    };
+  }
+
   private applyChromeToCurrentState(): void {
     const handle = this.liveBrowserHandle;
     const machine = this.computerRegistration?.coBrowseControl;
-    const forwardEvent = this.liveBrowserForwardEvent;
+    // Ready-state forward (lazy session-open) when no live handle
+    // yet; production forward (direct dispatch) when handle exists.
+    // Browser convention: URL bar is always functional; whether
+    // typing pre-warms a session or dispatches into an existing
+    // one is internal plumbing.
+    const forwardEvent = this.liveBrowserForwardEvent ?? this.buildReadyStateForwardEvent();
     const state = machine?.getState();
     if (!state || !machine) return;
 

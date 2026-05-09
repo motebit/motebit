@@ -79,6 +79,19 @@ export interface ComputerToolRegistration {
    * re-wire it.
    */
   readonly coBrowseControl: CoBrowseControlMachine;
+  /**
+   * Lazy-open the default cloud-browser session. Surfaces use
+   * this to pre-warm the session in response to user intent that
+   * happens BEFORE the AI loop reaches for `computer` — e.g., the
+   * user types a URL in the slab's READY-state address bar. Calls
+   * are idempotent: if the default session is already open, the
+   * existing handle is returned.
+   *
+   * Returns null when session-open fails (cloud unreachable, auth
+   * rejected, etc.) — same fail-soft posture as the
+   * tool-dispatch path.
+   */
+  ensureDefaultSession: () => Promise<ComputerSessionHandle | null>;
   /** Teardown — closes the default session and disposes the cloud browser. */
   dispose: () => Promise<void>;
 }
@@ -843,5 +856,5 @@ export function registerWebComputerTool(
     sessionManager.dispose();
   }
 
-  return { sessionManager, coBrowseControl, dispose };
+  return { sessionManager, coBrowseControl, ensureDefaultSession, dispose };
 }
