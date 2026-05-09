@@ -363,7 +363,20 @@ export class SlabManager {
       clearcoatRoughness: 0.05,
       color: new THREE.Color(0.98, 0.985, 1.0),
       attenuationColor: new THREE.Color(0.92, 0.95, 1.0),
-      attenuationDistance: 0.15,
+      // Tuning history: 0.15m gave 4cm/15cm = 27% Beer-Lambert
+      // absorption — page-pixels-through-the-glass read as foggy
+      // lavender once the soul tint drove attenuationColor each
+      // frame. 0.4m drops absorption to 4cm/40cm = 10%, so the page
+      // reads cleanly while still picking up the soul tint and the
+      // glass-volume depth feel. Calibrated to the post-2026-05-09
+      // single-pane-transmission shape where the screen mesh is
+      // visible through the front pane and the soul tint shouldn't
+      // wash it out. Creature is `BODY_R * 0.7` ≈ 0.063m for a
+      // 0.27m-diameter sphere; the slab's analog ratio at 4cm
+      // thickness would be ~0.063m, but the slab is content-bearing
+      // (page pixels must read), so the attenuation is gentler than
+      // pure ratio would predict.
+      attenuationDistance: 0.4,
       sheen: 0.15,
       sheenRoughness: 0.9,
       sheenColor: new THREE.Color(0.75, 0.85, 1.0),
@@ -413,9 +426,18 @@ export class SlabManager {
     this.group.add(this.planeMesh);
 
     const backPaneGeo = planeGeo.clone();
-    // Silhouette companion — non-transmissive. See `silhouetteMaterial`
-    // field declaration for the three.js-stack rationale.
-    this.backPaneMesh = new THREE.Mesh(backPaneGeo, this.silhouetteMaterial);
+    // Back pane STAYS transmissive — the user observes the slab from
+    // off-axis (orbiting the creature, viewing from behind through
+    // the body) and that view should still read as glass: page
+    // pixels visible through the back, env light passing through.
+    // The original triple-transmissive failure was specifically about
+    // THREE transmissive surfaces stacking; two transmissive (front +
+    // back) with the screen mesh between them is the canonical
+    // glass-bottle pattern three.js handles cleanly. The sideWall is
+    // the only demoted surface (silhouette), since side-on views are
+    // rare and the wall is what was tipping the stack into the
+    // pathological triple.
+    this.backPaneMesh = new THREE.Mesh(backPaneGeo, this.planeMaterial);
     this.backPaneMesh.position.z = -SLAB_THICKNESS / 2;
     // Back pane faces "outward" relative to the volume — flip it so
     // its normals point away from the camera, letting the sheen and
