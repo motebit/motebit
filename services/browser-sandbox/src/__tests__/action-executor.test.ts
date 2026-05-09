@@ -32,11 +32,14 @@ interface MockSession {
   session: BrowserSession;
   mouseCalls: MouseCall[];
   keyboardCalls: KeyboardCall[];
+  locatorCalls: string[];
+  locatorActions: Array<{ selector: string; action: string; options?: unknown }>;
   screenshotCalls: number;
   setGotoImpl(fn: (url: string, opts: unknown) => Promise<void>): void;
   setWaitForLoadStateImpl(fn: (state: string, opts?: unknown) => Promise<void>): void;
   setEvaluateImpl(fn: () => Promise<unknown>): void;
   setPageUrlImpl(fn: () => string): void;
+  setLocatorCountImpl(fn: (selector: string) => number): void;
   mockPage: {
     goto: ReturnType<typeof vi.fn>;
     waitForLoadState: ReturnType<typeof vi.fn>;
@@ -46,12 +49,16 @@ interface MockSession {
     viewportSize(): { width: number; height: number };
     mouse: BrowserSession["page"]["mouse"];
     keyboard: BrowserSession["page"]["keyboard"];
+    locator: ReturnType<typeof vi.fn>;
   };
 }
 
 function makeMockSession(): MockSession {
   const mouseCalls: MouseCall[] = [];
   const keyboardCalls: KeyboardCall[] = [];
+  const locatorCalls: string[] = [];
+  const locatorActions: Array<{ selector: string; action: string; options?: unknown }> = [];
+  let locatorCountImpl: (selector: string) => number = () => 1;
   let screenshotCalls = 0;
 
   // Navigate-path overrides — tests can replace these to drive the
@@ -109,6 +116,27 @@ function makeMockSession(): MockSession {
         keyboardCalls.push({ method: "press", arg: combo, options });
       }),
     },
+    // element-1 — minimal Playwright Locator mock. Tests stub the
+    // count() return value via setLocatorCountImpl to exercise
+    // present-vs-absent branches; click()/focus() record their
+    // calls so tests can assert dispatch happened.
+    locator: vi.fn((selector: string) => {
+      locatorCalls.push(selector);
+      return {
+        count: vi.fn(async () => locatorCountImpl(selector)),
+        first: vi.fn(() => ({
+          click: vi.fn(async (options?: unknown) => {
+            locatorActions.push({ selector, action: "click", options });
+          }),
+          focus: vi.fn(async (options?: unknown) => {
+            locatorActions.push({ selector, action: "focus", options });
+          }),
+          scrollIntoViewIfNeeded: vi.fn(async () => {
+            locatorActions.push({ selector, action: "scrollIntoViewIfNeeded" });
+          }),
+        })),
+      };
+    }),
   };
 
   const session: BrowserSession = {
@@ -127,6 +155,8 @@ function makeMockSession(): MockSession {
     session,
     mouseCalls,
     keyboardCalls,
+    locatorCalls,
+    locatorActions,
     get screenshotCalls() {
       return screenshotCalls;
     },
@@ -141,6 +171,9 @@ function makeMockSession(): MockSession {
     },
     setPageUrlImpl(fn: typeof pageUrlImpl): void {
       pageUrlImpl = fn;
+    },
+    setLocatorCountImpl(fn: (selector: string) => number): void {
+      locatorCountImpl = fn;
     },
     mockPage,
   } as unknown as MockSession;
@@ -535,6 +568,182 @@ describe("executeAction", () => {
       await expect(
         executeAction(m.session, { kind: "navigate", url: "doesnotexist.invalid" }, deps),
       ).rejects.toMatchObject({ reason: "not_supported" });
+    });
+  });
+
+  // ── element-1: structurally-addressed actions ─────────────────────
+
+  describe("click_element", () => {
+    it("returns ok with truth when element resolves", async () => {
+      const m = makeMockSession();
+      m.setLocatorCountImpl(() => 1);
+      m.setEvaluateImpl(async () => ({
+        clicked_tag: "button",
+        focused_typeable: false,
+      }));
+      m.setPageUrlImpl(() => "https://example.com/");
+      const result = (await executeAction(
+        m.session,
+        { kind: "click_element", element_id: "motebit-3" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.kind).toBe("click_element");
+      expect(result.ok).toBe(true);
+      expect(result.clicked_tag).toBe("button");
+      expect(result.focused_typeable).toBe(false);
+      expect(result.navigation_triggered).toBe(false);
+      // Verify the locator was queried with the stamped attribute
+      // selector — server-resolution, not AI-supplied selectors.
+      expect(m.locatorCalls).toContain('[data-motebit-id="motebit-3"]');
+      // Verify the click flowed through scroll → click.
+      const clickActions = m.locatorActions.filter((a) => a.action === "click");
+      expect(clickActions.length).toBe(1);
+    });
+
+    it("returns navigation_triggered: true when URL changes during click", async () => {
+      const m = makeMockSession();
+      let urlCallCount = 0;
+      m.setPageUrlImpl(() => {
+        urlCallCount++;
+        return urlCallCount === 1 ? "https://example.com/" : "https://example.com/landing";
+      });
+      m.setEvaluateImpl(async () => ({ clicked_tag: "a", focused_typeable: false }));
+      const result = (await executeAction(
+        m.session,
+        { kind: "click_element", element_id: "motebit-1" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.navigation_triggered).toBe(true);
+    });
+
+    it("returns element_not_found when locator resolves to zero elements", async () => {
+      const m = makeMockSession();
+      m.setLocatorCountImpl(() => 0);
+      const result = (await executeAction(
+        m.session,
+        { kind: "click_element", element_id: "motebit-99" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe("element_not_found");
+      expect(typeof result.message).toBe("string");
+    });
+
+    it("rejects malformed element_id (defense against injected selectors)", async () => {
+      const m = makeMockSession();
+      await expect(
+        executeAction(
+          m.session,
+          { kind: "click_element", element_id: 'foo"]; alert(1); //' },
+          deps,
+        ),
+      ).rejects.toMatchObject({ reason: "not_supported" });
+    });
+  });
+
+  describe("focus_element", () => {
+    it("returns ok with truth when element resolves and focuses", async () => {
+      const m = makeMockSession();
+      m.setEvaluateImpl(async () => ({ tag: "input", focused: true }));
+      const result = (await executeAction(
+        m.session,
+        { kind: "focus_element", element_id: "motebit-0" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.kind).toBe("focus_element");
+      expect(result.ok).toBe(true);
+      expect(result.tag).toBe("input");
+      expect(result.focused).toBe(true);
+      const focusActions = m.locatorActions.filter((a) => a.action === "focus");
+      expect(focusActions.length).toBe(1);
+    });
+
+    it("returns element_not_found for missing element", async () => {
+      const m = makeMockSession();
+      m.setLocatorCountImpl(() => 0);
+      const result = (await executeAction(
+        m.session,
+        { kind: "focus_element", element_id: "motebit-x" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe("element_not_found");
+    });
+  });
+
+  describe("type_into", () => {
+    it("clears + types and returns text_appeared on success", async () => {
+      const m = makeMockSession();
+      m.setEvaluateImpl(async () => ({
+        focused: true,
+        active_element: "input",
+        value: "motebit",
+        text_appeared: true,
+      }));
+      const result = (await executeAction(
+        m.session,
+        { kind: "type_into", element_id: "motebit-0", text: "motebit" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.kind).toBe("type_into");
+      expect(result.ok).toBe(true);
+      expect(result.text_appeared).toBe(true);
+      expect(result.value).toBe("motebit");
+      // Verify the focus → clear → type sequence:
+      const focusActions = m.locatorActions.filter((a) => a.action === "focus");
+      expect(focusActions.length).toBe(1);
+      // Clear-first sends ControlOrMeta+a then Delete.
+      const presses = m.keyboardCalls.filter((c) => c.method === "press");
+      expect(presses.map((p) => p.arg)).toEqual(["ControlOrMeta+a", "Delete"]);
+      // Then types the requested text.
+      const types = m.keyboardCalls.filter((c) => c.method === "type");
+      expect(types[0]?.arg).toBe("motebit");
+    });
+
+    it("skips clear when clear_first: false (append intent)", async () => {
+      const m = makeMockSession();
+      m.setEvaluateImpl(async () => ({
+        focused: true,
+        active_element: "input",
+        value: "old motebit",
+        text_appeared: true,
+      }));
+      await executeAction(
+        m.session,
+        { kind: "type_into", element_id: "motebit-0", text: "motebit", clear_first: false },
+        deps,
+      );
+      const presses = m.keyboardCalls.filter((c) => c.method === "press");
+      expect(presses).toHaveLength(0);
+    });
+
+    it("returns element_not_found for missing element", async () => {
+      const m = makeMockSession();
+      m.setLocatorCountImpl(() => 0);
+      const result = (await executeAction(
+        m.session,
+        { kind: "type_into", element_id: "motebit-x", text: "hello" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe("element_not_found");
+    });
+
+    it("text_appeared: false when value doesn't contain typed text after type", async () => {
+      // Page intercepted keystrokes mid-type, focus shifted, etc.
+      const m = makeMockSession();
+      m.setEvaluateImpl(async () => ({
+        focused: true,
+        active_element: "input",
+        value: "something else",
+        text_appeared: false,
+      }));
+      const result = (await executeAction(
+        m.session,
+        { kind: "type_into", element_id: "motebit-0", text: "motebit" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.text_appeared).toBe(false);
     });
   });
 });

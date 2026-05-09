@@ -481,6 +481,14 @@ export interface ClickAction {
 }
 
 // @alpha
+export interface ClickElementAction {
+    // (undocumented)
+    readonly element_id: string;
+    // (undocumented)
+    readonly kind: "click_element";
+}
+
+// @alpha
 export const CO_BROWSE_TRANSITION_KINDS: readonly ["request_control", "grant_control", "deny_control", "reclaim_control", "release_control", "pause", "resume", "disconnect"];
 
 // @alpha
@@ -543,13 +551,13 @@ export interface CollaborativeReceipt {
 export function composeTrustChain(scores: number[]): number;
 
 // @alpha
-export const COMPUTER_ACTION_KINDS: readonly ["screenshot", "cursor_position", "click", "double_click", "mouse_move", "drag", "type", "key", "scroll", "navigate"];
+export const COMPUTER_ACTION_KINDS: readonly ["screenshot", "cursor_position", "click", "double_click", "mouse_move", "drag", "type", "key", "scroll", "navigate", "click_element", "focus_element", "type_into"];
 
 // @alpha
 export const COMPUTER_FAILURE_REASONS: readonly ["policy_denied", "approval_required", "approval_expired", "permission_denied", "session_closed", "target_not_found", "target_obscured", "user_preempted", "platform_blocked", "not_supported", "not_in_control"];
 
 // @alpha
-export type ComputerAction = ScreenshotAction | CursorPositionAction | ClickAction | DoubleClickAction | MouseMoveAction | DragAction | TypeAction | KeyAction | ScrollAction | NavigateAction;
+export type ComputerAction = ScreenshotAction | CursorPositionAction | ClickAction | DoubleClickAction | MouseMoveAction | DragAction | TypeAction | KeyAction | ScrollAction | NavigateAction | ClickElementAction | FocusElementAction | TypeIntoAction;
 
 // @alpha (undocumented)
 export type ComputerActionKind = (typeof COMPUTER_ACTION_KINDS)[number];
@@ -1490,6 +1498,14 @@ export interface FederationGraphAnchor {
     readonly merkle_root: string;
 }
 
+// @alpha
+export interface FocusElementAction {
+    // (undocumented)
+    readonly element_id: string;
+    // (undocumented)
+    readonly kind: "focus_element";
+}
+
 // @public
 export function getSuiteEntry(id: SuiteId): SuiteEntry;
 
@@ -2367,11 +2383,31 @@ export interface PushTokenRegistration {
 export function rankSensitivity(level: SensitivityLevel): number;
 
 // @alpha
+export interface ReadPageButton {
+    // (undocumented)
+    readonly element_id: string;
+    readonly input_type?: string;
+    readonly tag: "button" | "input" | "a";
+    readonly text: string;
+}
+
+// @alpha
 export interface ReadPageHeading {
     // (undocumented)
     readonly level: number;
     // (undocumented)
     readonly text: string;
+}
+
+// @alpha
+export interface ReadPageInput {
+    readonly aria_label?: string;
+    readonly element_id: string;
+    readonly input_type: string;
+    readonly name?: string;
+    readonly placeholder?: string;
+    readonly tag: "input" | "textarea";
+    readonly value?: string;
 }
 
 // @alpha
@@ -2384,10 +2420,12 @@ export interface ReadPageLink {
 
 // @alpha
 export interface ReadPageResult {
+    readonly buttons: ReadonlyArray<ReadPageButton>;
     // (undocumented)
     readonly extracted_at: number;
     // (undocumented)
     readonly headings: ReadonlyArray<ReadPageHeading>;
+    readonly inputs: ReadonlyArray<ReadPageInput>;
     // (undocumented)
     readonly kind: "read_page";
     // (undocumented)
@@ -3376,6 +3414,18 @@ export interface TurnContext {
 export interface TypeAction {
     // (undocumented)
     readonly kind: "type";
+    readonly per_char_delay_ms?: number;
+    // (undocumented)
+    readonly text: string;
+}
+
+// @alpha
+export interface TypeIntoAction {
+    readonly clear_first?: boolean;
+    // (undocumented)
+    readonly element_id: string;
+    // (undocumented)
+    readonly kind: "type_into";
     readonly per_char_delay_ms?: number;
     // (undocumented)
     readonly text: string;

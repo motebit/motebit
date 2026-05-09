@@ -204,6 +204,67 @@ export interface NavigateAction {
 }
 
 /**
+ * element-1 — click on a structurally-addressed element. Server
+ * resolves `element_id` (issued by a prior `read_page` extraction
+ * via the stamped `data-motebit-id` attribute), scrolls into view,
+ * clicks the center of the element's bounding rect.
+ *
+ * Prefer this over coordinate-based `click` when the target was
+ * discovered via `read_page` — durable against viewport, zoom, and
+ * layout shifts. Coordinate `click` remains for purely-visual tasks
+ * (clicking on a position seen in pixels).
+ *
+ * On staleness (page navigated since read_page, page reloaded,
+ * element removed by JS) the result fails with `element_not_found`
+ * and the AI re-reads to refresh the id space.
+ * @alpha
+ */
+export interface ClickElementAction {
+  readonly kind: "click_element";
+  readonly element_id: string;
+}
+
+/**
+ * element-1 — focus a structurally-addressed element without
+ * clicking. Useful for setting up `type` calls without the side-
+ * effects of a click (some fields open dropdowns / dialogs on
+ * click; focus-only avoids them).
+ * @alpha
+ */
+export interface FocusElementAction {
+  readonly kind: "focus_element";
+  readonly element_id: string;
+}
+
+/**
+ * element-1 — semantic-intent type. Server focuses the addressed
+ * element first (so keystrokes can't be swallowed by the page's
+ * focus state), optionally clears existing value, then types. The
+ * result envelope carries `text_appeared` truth-feedback so the AI
+ * doesn't confabulate "I typed it" when the keystrokes went
+ * nowhere.
+ *
+ * Composes the two-step click+type workflow into one semantic
+ * action — closes the action-truth gap from the witnessed
+ * 2026-05-08 smoke (AI typed without focus → keystrokes
+ * swallowed → AI claimed success).
+ * @alpha
+ */
+export interface TypeIntoAction {
+  readonly kind: "type_into";
+  readonly element_id: string;
+  readonly text: string;
+  /** Per-character delay in ms; same shape as the lower-level `type` action. */
+  readonly per_char_delay_ms?: number;
+  /**
+   * If true (default), the field's current value is cleared before
+   * typing. Mirrors the human "type fresh into this box" intent. Set
+   * to false to append to existing text.
+   */
+  readonly clear_first?: boolean;
+}
+
+/**
  * Full action taxonomy. Every concrete action the motebit can request is
  * one of these. Exhaustive discriminated union on `kind`.
  * @alpha
@@ -218,7 +279,10 @@ export type ComputerAction =
   | TypeAction
   | KeyAction
   | ScrollAction
-  | NavigateAction;
+  | NavigateAction
+  | ClickElementAction
+  | FocusElementAction
+  | TypeIntoAction;
 
 /**
  * Discriminator values — useful for JSON Schema enum and runtime validation.
@@ -235,6 +299,9 @@ export const COMPUTER_ACTION_KINDS = [
   "key",
   "scroll",
   "navigate",
+  "click_element",
+  "focus_element",
+  "type_into",
 ] as const;
 
 /** @alpha */
@@ -383,6 +450,88 @@ export interface ReadPageLink {
 }
 
 /**
+ * A single typeable input extracted from the page's DOM —
+ * `<input>` (text-shaped types: text, search, email, url, tel,
+ * number, password) and `<textarea>`. Server stamps a
+ * `data-motebit-id="motebit-N"` attribute during extraction so
+ * subsequent `type_into` / `focus_element` actions can address
+ * the element by `element_id` instead of coordinates.
+ *
+ * **Why element-addressing over coordinates.** Coordinates are
+ * fragile against viewport size, zoom, layout shifts, dynamic
+ * loading. Structural identity is stable for the lifetime of the
+ * page. Production browser-agent platforms (Browserbase, the
+ * Playwright codegen flow, Anthropic's computer-use cookbook)
+ * converge on the same primitive — the AI says "type into this
+ * input" referring to a thing it discovered via read_page, not
+ * "type at (612, 348)."
+ *
+ * The element_id is opaque to the AI — server-issued, server-
+ * resolved. Stamps are scoped to the read_page response that
+ * returned them; a subsequent read_page may issue different ids
+ * for the same elements (the prior stamps are cleared and re-
+ * stamped). Cross-read stability is a future slice.
+ *
+ * Stamps don't survive page navigation; an `element_not_found`
+ * result tells the AI to re-read.
+ * @alpha
+ */
+export interface ReadPageInput {
+  /** Server-issued opaque identifier for subsequent typed actions. */
+  readonly element_id: string;
+  /** DOM tag — `input` or `textarea`. */
+  readonly tag: "input" | "textarea";
+  /**
+   * For `<input>`, the `type` attribute (text, search, email, url,
+   * tel, number, password, …). For `<textarea>`, always `"textarea"`.
+   * Useful to the AI for choosing what to type and whether the
+   * field is sensitive.
+   */
+  readonly input_type: string;
+  /** `name` attribute when present. */
+  readonly name?: string;
+  /** `placeholder` attribute when present. */
+  readonly placeholder?: string;
+  /** `aria-label` when present (or the closest `<label>` text). */
+  readonly aria_label?: string;
+  /**
+   * Current value of the field at extraction time, capped at 256
+   * characters. Lets the AI reason about whether to clear before
+   * typing, and verify intent across turns.
+   */
+  readonly value?: string;
+}
+
+/**
+ * A single button-shaped clickable element — `<button>`,
+ * `<input type="submit">`, `<input type="button">`,
+ * `<input type="reset">`, plus `<a>` tags styled as buttons (when
+ * the element has `role="button"` or carries a button-shaped
+ * accessible name without an href). Server stamps the same
+ * `data-motebit-id` so `click_element({element_id})` resolves
+ * unambiguously.
+ *
+ * `<a>` tags WITH a navigation href stay in `ReadPageLink`. A
+ * single element MAY appear in both `links` and `buttons` if it
+ * has both a navigation href and a button-shaped role; the AI
+ * picks the addressing it needs.
+ * @alpha
+ */
+export interface ReadPageButton {
+  readonly element_id: string;
+  /** DOM tag — `button`, `input`, or `a`. */
+  readonly tag: "button" | "input" | "a";
+  /** Visible label text (innerText or `aria-label` when innerText is empty). */
+  readonly text: string;
+  /**
+   * For `<input>` button variants, the `type` attribute
+   * (`submit` / `button` / `reset`). Absent for `<button>` and
+   * `<a role="button">`.
+   */
+  readonly input_type?: string;
+}
+
+/**
  * Wire format for the `read_page` tool's result. Returned by
  * `services/browser-sandbox`'s `POST /sessions/:id/read-page` and
  * read unchanged by `CloudBrowserDispatcher.readPage()`. Lands in
@@ -410,6 +559,20 @@ export interface ReadPageResult {
   readonly text_truncated: boolean;
   readonly headings: ReadonlyArray<ReadPageHeading>;
   readonly links: ReadonlyArray<ReadPageLink>;
+  /**
+   * element-1 — typeable input fields with server-issued
+   * `element_id` for `focus_element` / `type_into` actions. Capped
+   * at 100 entries server-side. Empty when the page has no
+   * typeable fields.
+   */
+  readonly inputs: ReadonlyArray<ReadPageInput>;
+  /**
+   * element-1 — button-shaped clickable elements with server-
+   * issued `element_id` for `click_element` actions. Capped at
+   * 100 entries server-side. Empty when the page has no button-
+   * shaped elements (text-content pages, document viewers).
+   */
+  readonly buttons: ReadonlyArray<ReadPageButton>;
   readonly extracted_at: number;
 }
 

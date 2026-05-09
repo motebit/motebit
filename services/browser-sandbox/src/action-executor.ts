@@ -34,15 +34,20 @@
 
 import type {
   ClickAction,
+  ClickElementAction,
   ComputerAction,
   DoubleClickAction,
   DragAction,
+  FocusElementAction,
   KeyAction,
   MouseMoveAction,
   NavigateAction,
+  ReadPageButton,
+  ReadPageInput,
   ReadPageResult,
   ScrollAction,
   TypeAction,
+  TypeIntoAction,
   UserInputEvent,
 } from "@motebit/protocol";
 import type { Page } from "playwright-core";
@@ -61,6 +66,24 @@ import { ServiceError } from "./errors.js";
 const READ_PAGE_TEXT_MAX_BYTES = 8 * 1024;
 const READ_PAGE_HEADINGS_MAX = 100;
 const READ_PAGE_LINKS_MAX = 100;
+// element-1 — bounds for the structurally-addressed element arrays
+// returned alongside the existing text/headings/links extraction.
+// Same conservative shape as headings/links — beyond the cap the AI
+// asks for a more targeted observation rather than scrolling
+// through a tag cloud.
+const READ_PAGE_INPUTS_MAX = 100;
+const READ_PAGE_BUTTONS_MAX = 100;
+// Cap stored input value display in the read_page response; the AI
+// only needs enough to confirm a field's current state. Matches the
+// `value` snapshot cap in `doType`.
+const READ_PAGE_INPUT_VALUE_MAX_CHARS = 256;
+// Server-stamped attribute name for element addressing. The
+// extractor walks the DOM, stamps each interactive element with
+// `data-motebit-id="motebit-N"`; subsequent click_element /
+// focus_element / type_into actions resolve via the same
+// attribute. Re-running read_page CLEARS prior stamps and re-
+// stamps fresh — ids are scoped to the response that issued them.
+const ELEMENT_ID_ATTR = "data-motebit-id";
 
 /**
  * Wire-format result the service returns from `POST
@@ -122,6 +145,12 @@ export async function executeAction(
       return doScroll(session, action);
     case "navigate":
       return doNavigate(session, action);
+    case "click_element":
+      return doClickElement(session, action);
+    case "focus_element":
+      return doFocusElement(session, action);
+    case "type_into":
+      return doTypeInto(session, action);
     default: {
       // Exhaustiveness — every `ComputerActionKind` must be handled.
       // If a new kind is added to `@motebit/protocol::ComputerAction`,
@@ -574,6 +603,10 @@ export function extractStructuredPageContent(opts: {
   readonly textMaxBytes: number;
   readonly headingsMax: number;
   readonly linksMax: number;
+  readonly inputsMax: number;
+  readonly buttonsMax: number;
+  readonly inputValueMaxChars: number;
+  readonly elementIdAttr: string;
 }): {
   url: string;
   title: string;
@@ -581,8 +614,31 @@ export function extractStructuredPageContent(opts: {
   text_truncated: boolean;
   headings: Array<{ level: number; text: string }>;
   links: Array<{ text: string; href: string }>;
+  inputs: Array<{
+    element_id: string;
+    tag: "input" | "textarea";
+    input_type: string;
+    name?: string;
+    placeholder?: string;
+    aria_label?: string;
+    value?: string;
+  }>;
+  buttons: Array<{
+    element_id: string;
+    tag: "button" | "input" | "a";
+    text: string;
+    input_type?: string;
+  }>;
 } {
-  const { textMaxBytes, headingsMax, linksMax } = opts;
+  const {
+    textMaxBytes,
+    headingsMax,
+    linksMax,
+    inputsMax,
+    buttonsMax,
+    inputValueMaxChars,
+    elementIdAttr,
+  } = opts;
   const titleRaw = document.title || "";
   const bodyRaw = (document.body?.innerText ?? "").trim();
 
@@ -642,6 +698,149 @@ export function extractStructuredPageContent(opts: {
     links.push({ text, href });
   }
 
+  // element-1 — extract typeable inputs and button-shaped clickable
+  // elements with stamped `data-motebit-id` attributes for
+  // structural addressing.
+  //
+  // Stamp policy: clear ALL existing stamps first (a previous
+  // read_page may have stamped elements that have since changed
+  // state), then walk the DOM in document order and stamp fresh
+  // ids. Per-extraction counter keeps the namespace stable within
+  // a single response.
+  //
+  // Element selection — be inclusive on inputs (any text-shaped
+  // input the user might type into) and conservative on buttons
+  // (only things the user would visually identify as a button:
+  // <button>, <input type="submit/button/reset">). <a> tags with
+  // role="button" or button-shaped aria patterns can be addressed
+  // via `links` (their href flow). Avoiding double-counting <a>
+  // here keeps the AI's mental model clean.
+  const stamped = document.querySelectorAll(`[${elementIdAttr}]`);
+  for (const el of Array.from(stamped)) {
+    el.removeAttribute(elementIdAttr);
+  }
+  let elementCounter = 0;
+  const stamp = (el: Element): string => {
+    const id = `motebit-${elementCounter++}`;
+    el.setAttribute(elementIdAttr, id);
+    return id;
+  };
+
+  // Typeable inputs — text/search/email/url/tel/number/password
+  // <input> types plus <textarea>. Skip hidden, disabled, or
+  // readonly fields (the AI can't usefully type into them).
+  const TYPEABLE_INPUT_TYPES = new Set([
+    "text",
+    "search",
+    "email",
+    "url",
+    "tel",
+    "number",
+    "password",
+    "", // <input> with no type defaults to "text"
+  ]);
+  const inputNodes = Array.from(document.querySelectorAll("input, textarea"));
+  const inputs: Array<{
+    element_id: string;
+    tag: "input" | "textarea";
+    input_type: string;
+    name?: string;
+    placeholder?: string;
+    aria_label?: string;
+    value?: string;
+  }> = [];
+  for (const node of inputNodes) {
+    if (inputs.length >= inputsMax) break;
+    const tag = node.tagName.toLowerCase() as "input" | "textarea";
+    const inputEl = node as HTMLInputElement | HTMLTextAreaElement;
+    if (inputEl.disabled || inputEl.readOnly) continue;
+    if ((inputEl as HTMLElement).hidden) continue;
+    let inputType: string;
+    if (tag === "textarea") {
+      inputType = "textarea";
+    } else {
+      const t = ((inputEl as HTMLInputElement).type ?? "").toLowerCase();
+      if (!TYPEABLE_INPUT_TYPES.has(t)) continue;
+      inputType = t === "" ? "text" : t;
+    }
+    // Skip elements with zero render size — likely hidden via CSS.
+    // getBoundingClientRect() in jsdom returns 0 dimensions for
+    // every element; defense-in-depth so production behavior
+    // matches but tests still see all stamped elements.
+    const rect = node.getBoundingClientRect();
+    const visible = rect.width > 0 && rect.height > 0;
+    // Allow zero-size only if jsdom (test env) — production
+    // Chromium's render geometry is real.
+    const inJsdom = typeof window !== "undefined" && navigator.userAgent.includes("jsdom");
+    if (!visible && !inJsdom) continue;
+    const id = stamp(node);
+    const name = (inputEl.name ?? "").trim();
+    const placeholder = (inputEl.placeholder ?? "").trim();
+    const ariaLabel = (node.getAttribute("aria-label") ?? "").trim();
+    const rawValue = inputEl.value ?? "";
+    const value =
+      rawValue.length > inputValueMaxChars ? rawValue.slice(0, inputValueMaxChars) : rawValue;
+    inputs.push({
+      element_id: id,
+      tag,
+      input_type: inputType,
+      ...(name.length > 0 ? { name } : {}),
+      ...(placeholder.length > 0 ? { placeholder } : {}),
+      ...(ariaLabel.length > 0 ? { aria_label: ariaLabel } : {}),
+      ...(value.length > 0 ? { value } : {}),
+    });
+  }
+
+  // Button-shaped clickables. Includes <button>, <input
+  // type="submit/button/reset">. Anchors styled as buttons stay
+  // in `links`.
+  const BUTTON_INPUT_TYPES = new Set(["submit", "button", "reset"]);
+  const buttonNodes = Array.from(
+    document.querySelectorAll(
+      "button, input[type='submit'], input[type='button'], input[type='reset']",
+    ),
+  );
+  const buttons: Array<{
+    element_id: string;
+    tag: "button" | "input" | "a";
+    text: string;
+    input_type?: string;
+  }> = [];
+  for (const node of buttonNodes) {
+    if (buttons.length >= buttonsMax) break;
+    const tag = node.tagName.toLowerCase() as "button" | "input";
+    const el = node as HTMLButtonElement | HTMLInputElement;
+    if (el.disabled) continue;
+    if ((el as HTMLElement).hidden) continue;
+    const rect = node.getBoundingClientRect();
+    const visible = rect.width > 0 && rect.height > 0;
+    const inJsdom = typeof window !== "undefined" && navigator.userAgent.includes("jsdom");
+    if (!visible && !inJsdom) continue;
+    let text = "";
+    let inputType: string | undefined;
+    if (tag === "button") {
+      text = (el as HTMLButtonElement).innerText.trim();
+    } else {
+      const t = ((el as HTMLInputElement).type ?? "").toLowerCase();
+      if (!BUTTON_INPUT_TYPES.has(t)) continue;
+      inputType = t;
+      text = ((el as HTMLInputElement).value ?? "").trim();
+    }
+    if (text.length === 0) {
+      // Fall back to aria-label when the button has no visible
+      // text (icon-only buttons commonly do this).
+      text = (node.getAttribute("aria-label") ?? "").trim();
+    }
+    if (text.length === 0) continue;
+    const id = stamp(node);
+    buttons.push({
+      element_id: id,
+      tag,
+      text,
+      ...(inputType ? { input_type: inputType } : {}),
+    });
+  }
+
   return {
     url: location.href,
     title: titleRaw,
@@ -649,6 +848,8 @@ export function extractStructuredPageContent(opts: {
     text_truncated: textTruncated,
     headings,
     links,
+    inputs,
+    buttons,
   };
 }
 
@@ -662,6 +863,10 @@ export async function executeReadPage(session: BrowserSession): Promise<ReadPage
     textMaxBytes: READ_PAGE_TEXT_MAX_BYTES,
     headingsMax: READ_PAGE_HEADINGS_MAX,
     linksMax: READ_PAGE_LINKS_MAX,
+    inputsMax: READ_PAGE_INPUTS_MAX,
+    buttonsMax: READ_PAGE_BUTTONS_MAX,
+    inputValueMaxChars: READ_PAGE_INPUT_VALUE_MAX_CHARS,
+    elementIdAttr: ELEMENT_ID_ATTR,
   });
 
   return {
@@ -673,8 +878,198 @@ export async function executeReadPage(session: BrowserSession): Promise<ReadPage
     text_truncated: extracted.text_truncated,
     headings: extracted.headings,
     links: extracted.links,
+    inputs: extracted.inputs as ReadonlyArray<ReadPageInput>,
+    buttons: extracted.buttons as ReadonlyArray<ReadPageButton>,
     extracted_at: Date.now(),
   };
+}
+
+// ── element-1: structurally-addressed actions ────────────────────────
+//
+// `click_element`, `focus_element`, `type_into` resolve a server-
+// stamped `data-motebit-id` attribute (issued by the most recent
+// `read_page` extraction) and act on the resolved element. Durable
+// against viewport / zoom / layout shifts in a way that coordinate-
+// based click/type isn't.
+//
+// All three return the standard `{kind, ok}` envelope with truth-
+// feedback fields (`focused_typeable` / `text_appeared` / `value`)
+// that close the action-truth gap. On staleness — page navigated
+// since read_page, page reloaded, element removed by JS — the
+// element is not found and the action returns `ok: false, reason:
+// "element_not_found"` so the AI re-reads to refresh the id space.
+//
+// Why server-resolution rather than the AI passing CSS selectors:
+//   - Opaque ids prevent the AI from synthesizing brittle/exotic
+//     selectors and from being prompted to produce them.
+//   - The AI never sees the page's structural details (class names,
+//     unstable framework-generated ids); only the server-issued
+//     namespace.
+//   - Selector matching becomes a server concern — exact attribute
+//     match. Trivial, fast, no false positives.
+
+function elementSelector(elementId: string): string {
+  // Defensive escape — only ascii alphanumeric + hyphen are
+  // legal in our stamps (`motebit-N`); reject anything else
+  // before constructing the selector.
+  if (!/^[a-zA-Z0-9_-]+$/.test(elementId)) {
+    throw new ServiceError("not_supported", `invalid element_id: ${elementId}`);
+  }
+  return `[${ELEMENT_ID_ATTR}="${elementId}"]`;
+}
+
+/**
+ * In-page snapshot for `click_element` truth feedback. Top-level +
+ * exported so it can be unit-tested under jsdom directly. Same
+ * one-implementation-two-runtimes pattern as
+ * `extractStructuredPageContent`.
+ */
+export function clickElementTruth(opts: { selector: string }): {
+  clicked_tag: string | null;
+  focused_typeable: boolean;
+} {
+  const el = document.querySelector(opts.selector);
+  const active = document.activeElement;
+  return {
+    clicked_tag: el?.tagName.toLowerCase() ?? null,
+    focused_typeable: !!(
+      active &&
+      (active.tagName === "INPUT" ||
+        active.tagName === "TEXTAREA" ||
+        (active as HTMLElement).isContentEditable)
+    ),
+  };
+}
+
+/** In-page snapshot for `focus_element` truth feedback. */
+export function focusElementTruth(opts: { selector: string }): {
+  tag: string | null;
+  focused: boolean;
+} {
+  const el = document.querySelector(opts.selector);
+  return {
+    tag: el?.tagName.toLowerCase() ?? null,
+    focused: document.activeElement === el,
+  };
+}
+
+/**
+ * In-page snapshot for `type_into` truth feedback. Same shape as
+ * `doType`'s in-line snapshot but addressed by selector — used by
+ * `type_into` to verify the typed text landed in the addressed
+ * element specifically (rather than wherever focus happened to be).
+ */
+export function typeIntoTruth(opts: { selector: string; typedText: string }): {
+  focused: boolean;
+  active_element: string;
+  value: string;
+  text_appeared: boolean;
+} {
+  const el = document.querySelector(opts.selector);
+  if (!el) {
+    return { focused: false, active_element: "none", value: "", text_appeared: false };
+  }
+  const tag = el.tagName.toLowerCase();
+  const isInput = tag === "input" || tag === "textarea";
+  const isContentEditable = (el as HTMLElement).isContentEditable === true;
+  if (!isInput && !isContentEditable) {
+    return { focused: false, active_element: tag, value: "", text_appeared: false };
+  }
+  const rawValue = isInput
+    ? ((el as HTMLInputElement | HTMLTextAreaElement).value ?? "")
+    : ((el as HTMLElement).textContent ?? "");
+  const focused = document.activeElement === el;
+  return {
+    focused,
+    active_element: tag,
+    value: rawValue.length > 512 ? rawValue.slice(0, 512) : rawValue,
+    text_appeared: rawValue.includes(opts.typedText),
+  };
+}
+
+async function doClickElement(
+  session: BrowserSession,
+  action: ClickElementAction,
+): Promise<ActionResult> {
+  const selector = elementSelector(action.element_id);
+  const locator = session.page.locator(selector);
+  const count = await locator.count();
+  if (count === 0) {
+    return {
+      kind: "click_element",
+      ok: false,
+      reason: "element_not_found",
+      message: `element_id "${action.element_id}" not found — page may have navigated. Re-read with read_page.`,
+    };
+  }
+  await locator.first().scrollIntoViewIfNeeded({ timeout: 5_000 });
+  const beforeUrl = session.page.url();
+  await locator.first().click({ timeout: 10_000 });
+  const truth = await session.page.evaluate(clickElementTruth, { selector });
+  const afterUrl = session.page.url();
+  return {
+    kind: "click_element",
+    ok: true,
+    clicked_tag: truth.clicked_tag,
+    focused_typeable: truth.focused_typeable,
+    navigation_triggered: beforeUrl !== afterUrl,
+  };
+}
+
+async function doFocusElement(
+  session: BrowserSession,
+  action: FocusElementAction,
+): Promise<ActionResult> {
+  const selector = elementSelector(action.element_id);
+  const locator = session.page.locator(selector);
+  const count = await locator.count();
+  if (count === 0) {
+    return {
+      kind: "focus_element",
+      ok: false,
+      reason: "element_not_found",
+      message: `element_id "${action.element_id}" not found — page may have navigated. Re-read with read_page.`,
+    };
+  }
+  await locator.first().scrollIntoViewIfNeeded({ timeout: 5_000 });
+  await locator.first().focus({ timeout: 5_000 });
+  const truth = await session.page.evaluate(focusElementTruth, { selector });
+  return {
+    kind: "focus_element",
+    ok: true,
+    tag: truth.tag,
+    focused: truth.focused,
+  };
+}
+
+async function doTypeInto(session: BrowserSession, action: TypeIntoAction): Promise<ActionResult> {
+  const selector = elementSelector(action.element_id);
+  const locator = session.page.locator(selector);
+  const count = await locator.count();
+  if (count === 0) {
+    return {
+      kind: "type_into",
+      ok: false,
+      reason: "element_not_found",
+      message: `element_id "${action.element_id}" not found — page may have navigated. Re-read with read_page.`,
+    };
+  }
+  await locator.first().scrollIntoViewIfNeeded({ timeout: 5_000 });
+  await locator.first().focus({ timeout: 5_000 });
+  const clearFirst = action.clear_first !== false;
+  if (clearFirst) {
+    // Select-all + delete is more reliable than .fill("") which
+    // some frameworks intercept. ControlOrMeta maps to the platform-
+    // correct modifier (Cmd on macOS, Ctrl elsewhere).
+    await session.page.keyboard.press("ControlOrMeta+a");
+    await session.page.keyboard.press("Delete");
+  }
+  await session.page.keyboard.type(action.text, { delay: action.per_char_delay_ms });
+  const snapshot = await session.page.evaluate(typeIntoTruth, {
+    selector,
+    typedText: action.text,
+  });
+  return { kind: "type_into", ok: true, ...snapshot };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

@@ -76,6 +76,35 @@ const ALLOWLIST: ReadonlyArray<{
       "browser to URL'); when that lands the rust dispatcher implements via a " +
       "platform-specific URL handler call, not via xcap/enigo simulation.",
   },
+  {
+    kind: "click_element",
+    missingFrom: "rust",
+    reason:
+      "element-1 — structural element addressing via `element_id` requires DOM " +
+      "introspection (the server stamps `data-motebit-id` during read_page and " +
+      "queries it back on click). OS-level desktop_drive has no DOM; the " +
+      "equivalent primitive there would be accessibility-tree addressing " +
+      "(macOS AXUIElement, Windows UIA, Linux AT-SPI). Deferred until the " +
+      "AX-tier desktop adapter lands — at that point click_element resolves " +
+      "an AX node id instead of a DOM data-attribute. Same wire shape, " +
+      "different resolver.",
+  },
+  {
+    kind: "focus_element",
+    missingFrom: "rust",
+    reason:
+      "element-1 — see click_element. Desktop counterpart pends on the same " +
+      "accessibility-tree adapter.",
+  },
+  {
+    kind: "type_into",
+    missingFrom: "rust",
+    reason:
+      "element-1 — semantic-intent type composes focus_element + clear + type. " +
+      "Desktop counterpart pends on the same accessibility-tree adapter that " +
+      "click_element / focus_element need; the keyboard-driving half (xcap + " +
+      "enigo) already exists for the lower-level `type` action.",
+  },
 ];
 
 interface ParseResult {

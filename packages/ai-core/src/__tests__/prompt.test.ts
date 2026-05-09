@@ -256,6 +256,20 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("focused");
     expect(prompt).toContain("Click the target field FIRST");
   });
+
+  // element-1 slice: AI should prefer element-addressed actions
+  // (click_element, focus_element, type_into) over coordinate-based
+  // click + type when the target was discovered via read_page.
+  // Coordinates are fragile against viewport/zoom/layout; element_id
+  // is server-resolved and durable. Coordinate fallback stays for
+  // purely-visual tasks.
+  it("teaches the AI to prefer element-addressed actions over coordinates", () => {
+    const prompt = buildSystemPrompt(makeContextPack());
+    expect(prompt).toContain("click_element");
+    expect(prompt).toContain("type_into");
+    expect(prompt).toContain("element_id");
+    expect(prompt).toContain("element_not_found");
+  });
 });
 
 // ---------------------------------------------------------------------------
