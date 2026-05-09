@@ -674,6 +674,76 @@ describe("registerWebComputerTool", () => {
     await pending;
   });
 
+  // -------------------------------------------------------------------
+  // Slice 2h — `read_page`, the first ax-tier tool. Fills the
+  // documented middle slot of the hybrid-engine cost hierarchy
+  // (api → ax → pixels). Returns DOM-derived structured text from
+  // the open browser session; no pixels.
+  // -------------------------------------------------------------------
+
+  it("registers `read_page` alongside `computer` and `request_control`", () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+    expect(registry.has("computer")).toBe(true);
+    expect(registry.has("request_control")).toBe(true);
+    expect(registry.has("read_page")).toBe(true);
+  });
+
+  it("`read_page` declares mode: 'ax' (first tool in the middle tier)", () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+    const def = registry.list().find((t) => t.name === "read_page");
+    expect(def).toBeDefined();
+    expect(def?.mode).toBe("ax");
+    // Should also be marked outbound (page text crosses to AI) and
+    // stamped with the virtual_browser embodiment.
+    expect(def?.outbound).toBe(true);
+    expect(def?.embodimentMode).toBe("virtual_browser");
+  });
+
+  it("`read_page` returns the dispatcher's structured result", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    // Extend the mock dispatcher with a readPage method returning
+    // a canonical ReadPageResult shape.
+    (dispatcher as unknown as { readPage: () => Promise<unknown> }).readPage = async () => ({
+      kind: "read_page",
+      session_id: "fake-session-1",
+      url: "https://example.com",
+      title: "Example",
+      text: "Body text.",
+      text_truncated: false,
+      headings: [{ level: 1, text: "Heading" }],
+      links: [],
+      extracted_at: 1,
+    });
+
+    registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+
+    const result = await registry.execute("read_page", {});
+    expect(result.ok).toBe(true);
+    const data = (result as { data: { kind: string; text: string } }).data;
+    expect(data.kind).toBe("read_page");
+    expect(data.text).toBe("Body text.");
+  });
+
   it("dispose reverts control to user (covers the page-unload-equivalent wire shape)", async () => {
     // jsdom doesn't fire beforeunload reliably; the next-best
     // coverage is a direct dispose() call, which exercises the same

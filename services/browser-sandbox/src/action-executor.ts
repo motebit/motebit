@@ -40,6 +40,7 @@ import type {
   KeyAction,
   MouseMoveAction,
   NavigateAction,
+  ReadPageResult,
   ScrollAction,
   TypeAction,
   UserInputEvent,
@@ -48,6 +49,18 @@ import type { Page } from "playwright-core";
 
 import type { BrowserSession } from "./chromium-pool.js";
 import { ServiceError } from "./errors.js";
+
+/**
+ * Slice 2h — text bounds for `read_page` results. `text` is the
+ * single biggest field; capping at 8KB keeps the AI context
+ * reasonable (8KB ≈ 2K tokens vs ~30K for a screenshot). Headings/
+ * links are typically tens of entries even on dense pages, but a
+ * cap at 100 each defends against pathological cases (huge nav
+ * dropdowns, tag clouds).
+ */
+const READ_PAGE_TEXT_MAX_BYTES = 8 * 1024;
+const READ_PAGE_HEADINGS_MAX = 100;
+const READ_PAGE_LINKS_MAX = 100;
 
 /**
  * Wire-format result the service returns from `POST
@@ -461,6 +474,107 @@ export async function executeUserInput(
       return;
     }
   }
+}
+
+// ── Slice 2h: ax-tier `read_page` ─────────────────────────────────────
+//
+// Returns DOM-derived structured text — page title, body innerText
+// (truncated to keep AI context tractable), heading hierarchy in
+// document order, visible links with absolute hrefs. No pixels, no
+// screenshot bytes. The first tool that fills the documented `ax`
+// tier of the hybrid-engine cost hierarchy.
+//
+// All extraction happens in-page via `page.evaluate` so no DOM
+// shape leaks across the Node/Chromium boundary as raw nodes —
+// only the serialized result. Bounded sizes defend the AI context
+// against pathological pages (huge nav dropdowns, tag clouds).
+
+export async function executeReadPage(session: BrowserSession): Promise<ReadPageResult> {
+  // The in-page evaluator does ALL the DOM walking. Returns plain
+  // JSON-serializable data; no node references cross the bridge.
+  const extracted = await session.page.evaluate(
+    ({ textMaxBytes, headingsMax, linksMax }) => {
+      const titleRaw = document.title || "";
+      const bodyRaw = (document.body?.innerText ?? "").trim();
+
+      // Truncate body text by byte length (UTF-8 approximate via
+      // Blob since TextEncoder may not be uniformly available in
+      // every Chromium evaluator context). Falls back to char-count
+      // truncation when Blob is unavailable.
+      const bytesOf = (s: string): number => {
+        try {
+          return new Blob([s]).size;
+        } catch {
+          return s.length;
+        }
+      };
+      let textTruncated = false;
+      let body = bodyRaw;
+      if (bytesOf(body) > textMaxBytes) {
+        // Bisect to find the largest prefix under the cap.
+        let lo = 0;
+        let hi = body.length;
+        while (lo < hi) {
+          const mid = Math.floor((lo + hi + 1) / 2);
+          if (bytesOf(body.slice(0, mid)) <= textMaxBytes) lo = mid;
+          else hi = mid - 1;
+        }
+        body = body.slice(0, lo);
+        textTruncated = true;
+      }
+
+      // Heading hierarchy in document order.
+      const headingNodes = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+      const headings: Array<{ level: number; text: string }> = [];
+      for (const node of headingNodes.slice(0, headingsMax)) {
+        const level = Number(node.tagName.slice(1));
+        const text = (node as HTMLElement).innerText.trim();
+        if (text.length > 0) headings.push({ level, text });
+      }
+
+      // Visible links with absolute hrefs. Skip empty text, fragment-
+      // only hrefs, and javascript: URLs (which the AI can't
+      // navigate to anyway).
+      const linkNodes = Array.from(document.querySelectorAll("a[href]"));
+      const links: Array<{ text: string; href: string }> = [];
+      for (const node of linkNodes) {
+        if (links.length >= linksMax) break;
+        const anchor = node as HTMLAnchorElement;
+        const text = anchor.innerText.trim();
+        const href = anchor.href;
+        if (text.length === 0) continue;
+        if (!href || href.startsWith("javascript:")) continue;
+        if (href.startsWith("#")) continue;
+        links.push({ text, href });
+      }
+
+      return {
+        url: location.href,
+        title: titleRaw,
+        text: body,
+        text_truncated: textTruncated,
+        headings,
+        links,
+      };
+    },
+    {
+      textMaxBytes: READ_PAGE_TEXT_MAX_BYTES,
+      headingsMax: READ_PAGE_HEADINGS_MAX,
+      linksMax: READ_PAGE_LINKS_MAX,
+    },
+  );
+
+  return {
+    kind: "read_page",
+    session_id: session.sessionId,
+    url: extracted.url,
+    title: extracted.title,
+    text: extracted.text,
+    text_truncated: extracted.text_truncated,
+    headings: extracted.headings,
+    links: extracted.links,
+    extracted_at: Date.now(),
+  };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

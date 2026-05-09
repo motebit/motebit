@@ -49,6 +49,12 @@ export {
   type RequestControlOutcome,
   type RequestControlHandlerOptions,
 } from "./request-control.js";
+export {
+  readPageDefinition,
+  createReadPageHandler,
+  type ReadPageDispatcher,
+  type ReadPageHandlerOptions,
+} from "./read-page.js";
 
 import { webSearchDefinition, createWebSearchHandler } from "./web-search.js";
 import { readUrlDefinition, createReadUrlHandler } from "./read-url.js";

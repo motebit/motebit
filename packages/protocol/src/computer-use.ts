@@ -338,6 +338,81 @@ export interface CursorPositionObservation {
   readonly captured_at: number;
 }
 
+// ── ax-tier observation (Slice 2h) ──────────────────────────────────
+//
+// `ReadPageResult` is the wire format for the `read_page` tool, which
+// fills the documented MIDDLE tier of the hybrid-engine cost
+// hierarchy (`api → ax → pixels` per `tool-mode.ts`). Until Slice 2h
+// no tool declared `mode: "ax"`; the AI's only options against an
+// open browser session were pixel screenshots (~30k tokens, crosses
+// the whole-screen privacy surface). `read_page` returns DOM-derived
+// structured text — the page's actual content — without any pixel
+// transmission, completing the tier the doctrine has named since
+// commit 9e1fcab1.
+//
+// Privacy invariant unchanged: pixels remain stripped from the AI's
+// context (`projectForAi` continues to omit `bytes_base64`). The
+// text content here is structured prose the user is already viewing
+// on the slab; it crosses the AI boundary subject to the same
+// outbound + sensitivity gates that govern `read_url` /
+// `web_search`. Sensitive-tier sessions block the call at the
+// runtime gate before any text leaves the device.
+
+/**
+ * A single heading extracted from the page's DOM. `level` is the
+ * HTML heading level 1-6; `text` is the visible text content. The
+ * server returns headings in document order so the AI can rebuild
+ * the page's outline without parsing markup.
+ * @alpha
+ */
+export interface ReadPageHeading {
+  readonly level: number;
+  readonly text: string;
+}
+
+/**
+ * A single visible link extracted from the page's DOM. `text` is
+ * the anchor's visible label (innerText); `href` is the absolute
+ * URL the link points to. Server skips empty-label links and
+ * `javascript:` / fragment-only hrefs.
+ * @alpha
+ */
+export interface ReadPageLink {
+  readonly text: string;
+  readonly href: string;
+}
+
+/**
+ * Wire format for the `read_page` tool's result. Returned by
+ * `services/browser-sandbox`'s `POST /sessions/:id/read-page` and
+ * read unchanged by `CloudBrowserDispatcher.readPage()`. Lands in
+ * the AI loop as the tool result; passes through `projectForAi`
+ * unchanged (no `bytes_base64` field to strip).
+ *
+ * Sizes are bounded server-side to keep the AI context tractable:
+ *   - `text` truncated at 8KB; `text_truncated` set when the cut
+ *     fired so the AI knows it's reading a prefix.
+ *   - `headings` capped at 100 entries.
+ *   - `links` capped at 100 entries.
+ *
+ * The bounds are conservative defaults the surface MAY tune in
+ * future. Beyond a soft cap, `text_truncated: true` tells the AI
+ * to ask for a more targeted observation rather than scrolling
+ * through a 50KB blob.
+ * @alpha
+ */
+export interface ReadPageResult {
+  readonly kind: "read_page";
+  readonly session_id: string;
+  readonly url: string;
+  readonly title: string;
+  readonly text: string;
+  readonly text_truncated: boolean;
+  readonly headings: ReadonlyArray<ReadPageHeading>;
+  readonly links: ReadonlyArray<ReadPageLink>;
+  readonly extracted_at: number;
+}
+
 // ── Session lifecycle events ─────────────────────────────────────────
 
 /**

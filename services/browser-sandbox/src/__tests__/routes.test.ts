@@ -766,6 +766,74 @@ describe("browser-sandbox routes", () => {
     });
   });
 
+  describe("POST /sessions/:id/read-page (Slice 2h — ax tier)", () => {
+    it("returns the structured ReadPageResult shape from page.evaluate", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+      const session = state.sessions.get(session_id)!;
+      // Stub page.evaluate to return the structured shape the
+      // executor wraps. The executor is responsible for sandwiching
+      // `kind` + `session_id` + `extracted_at` around it.
+      (session.page as unknown as { evaluate: typeof vi.fn }).evaluate = vi.fn().mockResolvedValue({
+        url: "https://example.com",
+        title: "Example",
+        text: "Some body text.",
+        text_truncated: false,
+        headings: [{ level: 1, text: "Heading One" }],
+        links: [{ text: "More", href: "https://example.com/more" }],
+      });
+
+      const res = await app.request(`/sessions/${session_id}/read-page`, {
+        method: "POST",
+        headers: authHeader(),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        kind: string;
+        session_id: string;
+        url: string;
+        title: string;
+        text: string;
+        text_truncated: boolean;
+        headings: Array<{ level: number; text: string }>;
+        links: Array<{ text: string; href: string }>;
+        extracted_at: number;
+      };
+      expect(body.kind).toBe("read_page");
+      expect(body.session_id).toBe(session_id);
+      expect(body.url).toBe("https://example.com");
+      expect(body.title).toBe("Example");
+      expect(body.text).toBe("Some body text.");
+      expect(body.text_truncated).toBe(false);
+      expect(body.headings).toEqual([{ level: 1, text: "Heading One" }]);
+      expect(body.links).toEqual([{ text: "More", href: "https://example.com/more" }]);
+      expect(typeof body.extracted_at).toBe("number");
+    });
+
+    it("returns 404 + session_closed for unknown session id", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const res = await app.request("/sessions/nope/read-page", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error: { reason: string } };
+      expect(body.error.reason).toBe("session_closed");
+    });
+
+    it("rejects without bearer (401)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const res = await app.request("/sessions/anything/read-page", {
+        method: "POST",
+      });
+      expect(res.status).toBe(401);
+    });
+  });
+
   describe("global error handler", () => {
     it("maps unstructured errors to platform_blocked", async () => {
       const app = buildApp({ config: TEST_CONFIG, pool });

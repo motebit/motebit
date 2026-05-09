@@ -28,7 +28,7 @@ import { cors } from "hono/cors";
 import type { ComputerAction, UserInputEvent } from "@motebit/protocol";
 
 import { requireBearer } from "./auth.js";
-import { executeAction, executeUserInput } from "./action-executor.js";
+import { executeAction, executeReadPage, executeUserInput } from "./action-executor.js";
 import type { BrowserPool } from "./chromium-pool.js";
 import type { BrowserSandboxConfig } from "./env.js";
 import { ServiceError, isServiceError } from "./errors.js";
@@ -149,6 +149,32 @@ export function buildApp(deps: BuildAppDeps): Hono {
    * Returns 204 on success — no body. Errors flow through `ServiceError`
    * as on `/actions` so the dispatcher's reason taxonomy stays closed.
    */
+  /**
+   * Slice 2h — ax-tier `read_page`. Returns DOM-derived structured
+   * text from the open browser session: title, body innerText
+   * (bounded), heading hierarchy, visible links. No pixels.
+   *
+   * Sibling of `/sessions/:id/actions` but for the structured-read
+   * path (`mode: "ax"` per the hybrid-engine cost hierarchy). The
+   * runtime's CloudBrowserDispatcher.readPage() POSTs here; the
+   * response is the wire-format ReadPageResult.
+   */
+  app.post("/sessions/:id/read-page", async (c) => {
+    const sessionId = c.req.param("id");
+    const session = deps.pool.getSession(sessionId);
+    if (!session) {
+      throw new ServiceError("session_closed", `session not found: ${sessionId}`);
+    }
+    deps.pool.touchSession(sessionId);
+    deps.pool.beginAction(sessionId);
+    try {
+      const result = await executeReadPage(session);
+      return c.json(result);
+    } finally {
+      deps.pool.endAction(sessionId);
+    }
+  });
+
   app.post("/sessions/:id/forward-input", async (c) => {
     const sessionId = c.req.param("id");
     const session = deps.pool.getSession(sessionId);

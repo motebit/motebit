@@ -51,6 +51,7 @@
 import type {
   ComputerAction,
   ComputerFailureReason,
+  ReadPageResult,
   ScreencastFrame,
   UserInputEvent,
 } from "@motebit/sdk";
@@ -184,6 +185,29 @@ export class CloudBrowserDispatcher implements ComputerPlatformDispatcher {
       "POST",
       `/sessions/${encodeURIComponent(this.cloudSessionId)}/actions`,
       { action },
+    );
+  }
+
+  /**
+   * Slice 2h — ax-tier `read_page`. POSTs to `/sessions/:id/read-page`
+   * and returns the wire-format `ReadPageResult` (page title + body
+   * text + heading hierarchy + visible links). No pixels.
+   *
+   * Sibling of `execute()` for the structured-read path. The
+   * `read_page` tool's handler invokes this; the AI receives the
+   * full result through `projectForAi` unchanged (no `bytes_base64`
+   * field to strip).
+   */
+  async readPage(): Promise<ReadPageResult> {
+    if (this.cloudSessionId === null) {
+      throw new ComputerDispatcherError(
+        "session_closed",
+        "Cloud browser session not opened — call queryDisplay() first.",
+      );
+    }
+    return this.request<ReadPageResult>(
+      "POST",
+      `/sessions/${encodeURIComponent(this.cloudSessionId)}/read-page`,
     );
   }
 

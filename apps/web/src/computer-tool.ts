@@ -47,6 +47,8 @@ import {
   createComputerHandler,
   requestControlDefinition,
   createRequestControlHandler,
+  readPageDefinition,
+  createReadPageHandler,
   type ComputerDispatcher,
   type RequestControlOutcome,
   type ToolRegistry,
@@ -618,6 +620,60 @@ export function registerWebComputerTool(
   registry.register(
     requestControlDefinitionForCloud,
     createRequestControlHandler({ flow: requestControlFlow }),
+  );
+
+  // Slice 2h — `read_page`, the first ax-tier tool. Fills the
+  // documented middle slot of the hybrid-engine cost hierarchy
+  // (`api → ax → pixels`). Operates on the same cloud-browser
+  // session as `computer`; returns DOM-derived structured text
+  // (no pixels) so the AI can read what's on the page without
+  // crossing the screen-capture privacy surface. Registry sort
+  // ranks ax (1) above pixels (2), so when the AI is choosing
+  // how to observe an open page this lands ahead of
+  // `computer({kind:"screenshot"})` automatically. Same per-
+  // dispatcher embodiment stamp as `computer`.
+  //
+  // Eager session-open: `read_page` requires an open cloud
+  // session. The handler ensures one via the same lazy path
+  // `computer` uses (first call opens, subsequent calls reuse).
+  // Doctrine: motebit-computer.md §"v1 implementation status —
+  // Deferred to v1.5+: per-dispatcher mode stamping" — landed as
+  // v1.1 of the virtual_browser arc.
+  const readPageDefinitionForCloud = {
+    ...readPageDefinition,
+    embodimentMode: "virtual_browser",
+  };
+  const readPageDispatcher = {
+    async readPage() {
+      // Ensure a session is open BEFORE the dispatcher's readPage
+      // hits the wire — the cloud-browser endpoint requires the
+      // session id and the dispatcher reads it from its internal
+      // state. Mirrors the toolDispatcher.execute() lazy-open
+      // path.
+      const session = await ensureDefaultSession();
+      if (!session) {
+        throw new Error(
+          "no active session — cloud browser failed to open one (check baseUrl + auth token)",
+        );
+      }
+      // Dispatcher must be a CloudBrowserDispatcher to expose
+      // readPage(); test-mock dispatchers MAY omit it. Fail
+      // gracefully so test paths that don't wire a real cloud
+      // dispatcher don't crash on registration-time inspection.
+      if (
+        !(dispatcher instanceof CloudBrowserDispatcher) &&
+        typeof (dispatcher as unknown as { readPage?: () => unknown }).readPage !== "function"
+      ) {
+        throw new Error("dispatcher does not implement readPage");
+      }
+      return (
+        dispatcher as unknown as { readPage: () => Promise<import("@motebit/sdk").ReadPageResult> }
+      ).readPage();
+    },
+  };
+  registry.register(
+    readPageDefinitionForCloud,
+    createReadPageHandler({ dispatcher: readPageDispatcher }),
   );
 
   async function dispose(): Promise<void> {

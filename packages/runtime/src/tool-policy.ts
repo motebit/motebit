@@ -48,6 +48,12 @@ const TOOL_POLICIES: ReadonlyMap<string, ToolPolicy> = new Map<string, ToolPolic
   // the user dismisses it.
   ["read_url", { kind: "fetch", mode: "virtual_browser", endState: "rest" }],
   ["fetch_url", { kind: "fetch", mode: "virtual_browser", endState: "rest" }],
+  // Slice 2h — `read_page` is the first ax-tier tool. Same family as
+  // read_url (motebit's eye on a page) but operates against an open
+  // browser session and returns DOM-derived structured text rather
+  // than fetching a fresh URL. Renders as a `fetch` slab item, rests
+  // so the user can refer back to the extraction.
+  ["read_page", { kind: "fetch", mode: "virtual_browser", endState: "rest" }],
   // computer — Motebit's screenshot/click/type primitive. Renders on
   // the slab as a fetch-kind card so screenshot observations land in
   // the same reader/image-frame surface the user is already watching

@@ -84,6 +84,12 @@ export {
   type RequestControlOutcome,
   type RequestControlHandlerOptions,
 } from "./builtins/request-control.js";
+export {
+  readPageDefinition,
+  createReadPageHandler,
+  type ReadPageDispatcher,
+  type ReadPageHandlerOptions,
+} from "./builtins/read-page.js";
 export { InMemoryToolRegistry } from "./registry.js";
 export type { ToolDefinition, ToolResult, ToolHandler, ToolRegistry } from "@motebit/sdk";
 

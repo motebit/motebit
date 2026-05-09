@@ -2366,6 +2366,44 @@ export interface PushTokenRegistration {
 // @public
 export function rankSensitivity(level: SensitivityLevel): number;
 
+// @alpha
+export interface ReadPageHeading {
+    // (undocumented)
+    readonly level: number;
+    // (undocumented)
+    readonly text: string;
+}
+
+// @alpha
+export interface ReadPageLink {
+    // (undocumented)
+    readonly href: string;
+    // (undocumented)
+    readonly text: string;
+}
+
+// @alpha
+export interface ReadPageResult {
+    // (undocumented)
+    readonly extracted_at: number;
+    // (undocumented)
+    readonly headings: ReadonlyArray<ReadPageHeading>;
+    // (undocumented)
+    readonly kind: "read_page";
+    // (undocumented)
+    readonly links: ReadonlyArray<ReadPageLink>;
+    // (undocumented)
+    readonly session_id: string;
+    // (undocumented)
+    readonly text: string;
+    // (undocumented)
+    readonly text_truncated: boolean;
+    // (undocumented)
+    readonly title: string;
+    // (undocumented)
+    readonly url: string;
+}
+
 // @public
 export function recordSemiring<R extends Record<string, unknown>>(fields: {
     [K in keyof R]: Semiring<R[K]>;
