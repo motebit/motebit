@@ -397,17 +397,24 @@ export class SlabManager {
     // the volume arc."
     const screenGeo = createMeniscusPlaneGeometry(SLAB_WIDTH, SLAB_HEIGHT, 16, 16);
     this.screenMaterial = new THREE.MeshBasicMaterial({
-      transparent: true,
-      side: THREE.DoubleSide,
+      // The screencast JPEG is opaque — no alpha channel. Marking the
+      // material `transparent: true` was a v1 mistake: Three.js's
+      // transmission render path samples a "scene minus transmissive
+      // objects" texture, and transparent screen content competed for
+      // depth with the back pane (the slab's plane material itself
+      // has `transparent: true` for opacity-easing). Opaque material
+      // lands in the opaque pre-pass, gets rendered into the
+      // transmission target cleanly, and the front pane's
+      // `transmission` samples it via the standard refraction shader.
+      // Result: screen pixels show through the glass at face value.
       // Display pixels at face value — tone-mapping (ACES, etc.) on
       // a screencast washes out colors. Same register Three.js
       // recommends for video surfaces (`VideoTexture` examples).
       toneMapped: false,
-      // Transparent objects shouldn't write depth; the front pane's
-      // transmission pass needs the screen mesh in the source-scene
-      // render target, but writing depth competes with the back pane
-      // and can z-fight in tests with tiny offsets.
-      depthWrite: false,
+      // Single-sided: the screen faces +z toward the camera. The back
+      // face would only be visible from behind the slab — the back
+      // pane already occludes that direction.
+      side: THREE.FrontSide,
     });
     this.screenMesh = new THREE.Mesh(screenGeo, this.screenMaterial);
     this.screenMesh.position.z = -SLAB_THICKNESS / 2 + STAGE_Z_OFFSET_FROM_BACK;
