@@ -1,6 +1,5 @@
 ---
 "@motebit/browser-sandbox": patch
-"@motebit/ai-core": patch
 ---
 
 navigate-slow-load-not-failure — fix the AI saying "didn't load"
@@ -45,29 +44,9 @@ shape now matches reality:
   failures — the navigation didn't commit, the slab has
   nothing to show.
 
-**Companion AI-side rule** in `PERCEPTION_DOCTRINE`
-(`packages/ai-core/src/prompt.ts`): a new bullet teaches the
-AI to read the navigate metadata before describing the
-result. Specifically: a `navigate` `ok: true` is the truth —
-do NOT say "didn't load" or "timed out" when ok:true came
-back, because the user's slab is showing the page.
-`slow_load: true` with `visual_content_detected: true` means
-"loaded, took a moment" — not "failed."
-
-**Tests.**
-
-- 3 new tests in
-  `services/browser-sandbox/src/__tests__/action-executor.test.ts`:
-  timeout from goto returns ok:true + slow_load:true;
-  Playwright TimeoutError class instance same shape;
-  successful goto leaves slow_load:false.
-- 1 new regression in
-  `packages/ai-core/src/__tests__/prompt.test.ts` pinning
-  the navigate-doctrine bullet so a future prompt edit
-  can't drop it silently.
-- The existing "throws not_supported when goto fails"
-  test now asserts non-timeout DNS errors still propagate
-  (renamed to `with a non-timeout error` for clarity).
-
-39 action-executor / 402 ai-core tests pass; all 69 drift
-defenses clean.
+3 new tests in `services/browser-sandbox/src/__tests__/action-executor.test.ts`:
+timeout from goto returns ok:true + slow_load:true;
+Playwright TimeoutError class instance same shape;
+successful goto leaves slow_load:false. The companion
+ai-core prompt-doctrine update lives in
+`navigate-slow-load-not-failure-ignored.md`.
