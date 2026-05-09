@@ -99,6 +99,20 @@ export const readPageDefinition: ToolDefinition = {
   // forcing surface-aware code into tool-policy.ts. Same shape as
   // `computer`'s per-dispatcher mode stamping.
   embodimentMode: "virtual_browser",
+  // `read_page` is AI-side perception, not a body act — the user
+  // already sees the page they're sharing with motebit (live
+  // browser frames in the slab body). Opening a `tool_call` slab
+  // item with a "READING" header would render duplicate chrome on
+  // top of the very surface being read, with an empty card body
+  // (the result is text the AI consumes, not an artifact the user
+  // needs presented). Same shape as `request_control` — its
+  // canonical surface is the doorbell band, not a body card.
+  // Doctrine: motebit-computer.md §"slab content (browser, peer
+  // viewport, memory artifact, tool result, desktop surface) vs.
+  // slab chrome (control band, address bar, halt indicator)."
+  // Tools that read what's already on screen are perception, not
+  // act — projection: "none".
+  slabProjection: "none",
 };
 
 /**
@@ -123,7 +137,19 @@ export function createReadPageHandler(opts?: ReadPageHandlerOptions): ToolHandle
       return { ok: true, data };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { ok: false, error: `read_page: ${msg}` };
+      // Propagate structured `reason` from typed errors (e.g.
+      // ComputerDispatcherError) — same pattern as `computer`'s
+      // handler. Downstream slab projection routes on reason, not
+      // on parsed text.
+      const r =
+        err !== null &&
+        typeof err === "object" &&
+        typeof (err as { reason?: unknown }).reason === "string"
+          ? (err as { reason: string }).reason
+          : undefined;
+      return r
+        ? { ok: false, error: `read_page: ${msg}`, reason: r }
+        : { ok: false, error: `read_page: ${msg}` };
     }
   };
 }

@@ -323,6 +323,25 @@ export type StreamChunk =
        * (or omitted) preserves the existing card-per-call behavior.
        */
       slabProjection?: "none" | "tool_call";
+      /**
+       * Structured failure category, sourced from `ToolResult.reason`
+       * (or a typed thrown error's `.reason`) and threaded through
+       * `AgenticChunk.tool_status.reason` in ai-core. Routes the
+       * slab projection by category instead of parsing the human
+       * `result` text.
+       *
+       * v1 carriers:
+       *   - `not_in_control` — Slice 1 co-browse gate denial. The
+       *     projectSlabForTurn dismisses the body item; the control
+       *     band is the canonical surface. Replaces the earlier
+       *     string-prefix probe (which silently broke when the
+       *     handler started wrapping the message as
+       *     `"computer: ${msg}"` — witnessed 2026-05-08).
+       *
+       * Open string-literal — additive. New reasons land without
+       * breaking existing consumers.
+       */
+      reason?: string;
     }
   | {
       type: "approval_request";

@@ -32,6 +32,7 @@
 
 import {
   CloudBrowserDispatcher,
+  ComputerDispatcherError,
   createComputerSessionManager,
   createCoBrowseControlMachine,
   type CoBrowseControlMachine,
@@ -488,7 +489,20 @@ export function registerWebComputerTool(
       if (outcome.reason === "not_in_control") {
         parts.push("call `request_control` to ask the user for control of the isolated browser");
       }
-      throw new Error(parts.join(": "));
+      // Throw the typed `ComputerDispatcherError` (carries `.reason`)
+      // rather than a plain `Error`. The structured reason flows
+      // through the tool handler's catch into `ToolResult.reason`,
+      // through ai-core's chunk emission, into the runtime's
+      // `projectSlabForTurn` — which routes control-state denials to
+      // the slab control band (Slice 2b doorbell) instead of leaking
+      // them into the slab body as a verbose tool_call card.
+      // Witnessed before this fix: the `not_in_control` denial
+      // appearing as a wall of body text on the slab while the band
+      // already showed Grant/Deny — duplicate, confusing, and the
+      // doctrine pre-authorized the graduation
+      // (motebit-runtime.ts §"if more reasons land later, graduate
+      // to a structured failure_reason field").
+      throw new ComputerDispatcherError(outcome.reason, parts.join(": "));
     },
   };
 

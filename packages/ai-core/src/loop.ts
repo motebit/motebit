@@ -193,6 +193,22 @@ export interface LoopPolicyGate {
 }
 
 /**
+ * Duck-typed read of `.reason` from a thrown error. Typed errors
+ * like `ComputerDispatcherError` (in `@motebit/runtime`) carry a
+ * structured failure category alongside their message — when a
+ * tool handler throws one of those instead of returning
+ * `{ok: false, ...}`, this lifts the category onto the chunk so
+ * downstream slab projection can route by category instead of
+ * parsing the human-readable text. Returns `undefined` for plain
+ * `Error` and any value without a string `reason` field.
+ */
+function extractErrorReason(err: unknown): string | undefined {
+  if (err === null || typeof err !== "object") return undefined;
+  const r = (err as { reason?: unknown }).reason;
+  return typeof r === "string" && r.length > 0 ? r : undefined;
+}
+
+/**
  * Minimal memory governance interface for the agentic loop.
  * MemoryGovernor from @motebit/policy satisfies this through structural typing.
  */
@@ -358,6 +374,22 @@ export type AgenticChunk =
        * existing callers).
        */
       slabProjection?: "none" | "tool_call";
+      /**
+       * Structured failure category, sourced from `ToolResult.reason`
+       * (or from a typed error's `.reason` field when the handler
+       * threw). Carried on `done` chunks for failures that should be
+       * routed by category rather than text.
+       *
+       * v1 carriers:
+       *   - `not_in_control` — Slice 1 co-browse gate denial. The
+       *     runtime's slab projection dismisses the body item; the
+       *     control band (Slice 2b doorbell) is the canonical
+       *     surface for the resolution affordance.
+       *
+       * Open string-literal — additive. Consumers either route on a
+       * value they care about or ignore the field.
+       */
+      reason?: string;
     }
   | {
       type: "approval_request";
@@ -692,6 +724,12 @@ export async function* runTurnStreaming(
         } catch (err: unknown) {
           toolCallsFailed++;
           const msg = err instanceof Error ? err.message : String(err);
+          // Thrown errors with a typed `.reason` (e.g.
+          // ComputerDispatcherError) propagate the category onto the
+          // chunk so motebit-runtime's slab projection can route the
+          // failure structurally. Most paths return `{ok:false}` from
+          // the handler; this catch covers handlers that throw.
+          const thrownReason = extractErrorReason(err);
           yield {
             type: "tool_status",
             name: toolCall.name,
@@ -700,6 +738,7 @@ export async function* runTurnStreaming(
             tool_call_id: toolCall.id,
             mode: toolDef.embodimentMode,
             slabProjection: toolDef.slabProjection,
+            ...(thrownReason ? { reason: thrownReason } : {}),
           };
           conversationHistory.push({
             role: "tool",
@@ -808,6 +847,11 @@ export async function* runTurnStreaming(
           tool_call_id: toolCall.id,
           mode: toolDef.embodimentMode,
           slabProjection: toolDef.slabProjection,
+          // Failure category from the handler (e.g.
+          // `not_in_control` from the computer-tool dispatcher's
+          // typed error). Routes the slab projection without parsing
+          // the human `error` text; absent on success.
+          ...(result.reason ? { reason: result.reason } : {}),
         };
 
         conversationHistory.push({
@@ -872,6 +916,7 @@ export async function* runTurnStreaming(
       } catch (err: unknown) {
         toolCallsFailed++;
         const msg = err instanceof Error ? err.message : String(err);
+        const thrownReason = extractErrorReason(err);
         yield {
           type: "tool_status",
           name: toolCall.name,
@@ -879,6 +924,7 @@ export async function* runTurnStreaming(
           result: msg,
           tool_call_id: toolCall.id,
           mode: toolDef?.embodimentMode,
+          ...(thrownReason ? { reason: thrownReason } : {}),
         };
         conversationHistory.push({
           role: "tool",
@@ -895,6 +941,7 @@ export async function* runTurnStreaming(
         result: result.data ?? result.error,
         tool_call_id: toolCall.id,
         mode: toolDef?.embodimentMode,
+        ...(result.reason ? { reason: result.reason } : {}),
       };
 
       // Fallback path: no PolicyGate — wrap in boundaries AND detect injection.

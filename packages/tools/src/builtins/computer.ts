@@ -270,7 +270,24 @@ export function createComputerHandler(opts?: ComputerHandlerOptions): ToolHandle
       return { ok: true, data };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { ok: false, error: `computer: ${msg}` };
+      // Propagate a structured `reason` if the dispatcher threw a
+      // typed error carrying one (e.g. `ComputerDispatcherError`
+      // from `@motebit/runtime`). Duck-typed read keeps the tools
+      // package free of a runtime import — any throw shape with a
+      // string `reason` field flows through. Downstream consumers
+      // (ai-core chunks, motebit-runtime's slab projection) route
+      // on the structured reason instead of parsing the human
+      // `error` text.
+      const reason = extractReason(err);
+      return reason
+        ? { ok: false, error: `computer: ${msg}`, reason }
+        : { ok: false, error: `computer: ${msg}` };
     }
   };
+}
+
+function extractReason(err: unknown): string | undefined {
+  if (err === null || typeof err !== "object") return undefined;
+  const r = (err as { reason?: unknown }).reason;
+  return typeof r === "string" && r.length > 0 ? r : undefined;
 }

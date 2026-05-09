@@ -1713,20 +1713,26 @@ export class MotebitRuntime {
               // records) while suppressing only the control-layer
               // residue.
               //
-              // Detection: string-prefix match on the failure
-              // message. apps/web's computer-tool dispatcher
-              // throws Error("not_in_control: ...") when the gate
-              // denies; ai-core surfaces the message on the
-              // `done` chunk's `result`. This works for v1 with
-              // exactly one control-remediation reason; if more
-              // reasons land later (e.g. a future
-              // `handoff_in_progress` on the gate), graduate to a
-              // structured `failure_reason` field on the tool
-              // result rather than extending the prefix list.
+              // Detection: structured `chunk.reason` from
+              // `ToolResult.reason`. The `not_in_control` denial
+              // bubbles from `executeAction`'s gate (Slice 1) →
+              // apps/web's computer-tool dispatcher (throws
+              // `ComputerDispatcherError(reason, msg)`) → the
+              // tools-package handler's catch (lifts `.reason`
+              // onto the result envelope) → ai-core's `done` chunk
+              // (`{...,reason}`) → here. Earlier prefix-match-on-
+              // message fired correctly until the handler started
+              // wrapping the error as `"computer: ${msg}"`, at
+              // which point the prefix shifted and the
+              // suppression silently broke (witnessed 2026-05-08:
+              // a wall of denial text on the slab body next to an
+              // already-shown Grant/Deny band). The structured
+              // field is graduation-grade — additive new reasons
+              // (e.g. a future `handoff_in_progress`) just add a
+              // case here, no string-pattern fragility.
               // Doctrine: motebit-computer.md — slab acts vs
               // chrome state vs receipts records.
-              const isControlStateFailure =
-                typeof chunk.result === "string" && chunk.result.startsWith("not_in_control");
+              const isControlStateFailure = chunk.reason === "not_in_control";
               if (isControlStateFailure) {
                 this.slab.dismissItem(toolItemId);
               } else if (policy.endState === "rest" && chunk.result != null) {

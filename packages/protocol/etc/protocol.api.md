@@ -3275,6 +3275,7 @@ export interface ToolResult {
     error?: string;
     // (undocumented)
     ok: boolean;
+    reason?: string;
     _sanitized?: boolean;
 }
 

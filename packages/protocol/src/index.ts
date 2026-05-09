@@ -586,6 +586,23 @@ export interface ToolResult {
   ok: boolean;
   data?: unknown;
   error?: string;
+  /**
+   * Optional structured failure category, set by handlers that wrap
+   * a typed error carrying its own `reason` field (e.g.
+   * `ComputerDispatcherError`). Lets downstream consumers route on
+   * category without parsing the human-readable `error` text.
+   *
+   * v1 carriers:
+   *   - `not_in_control` — Slice 1 co-browse gate denial. The
+   *     runtime's slab projection uses this to suppress a body
+   *     `tool_call` item: control-state denials' canonical surface
+   *     is the slab control band (Slice 2b doorbell), not the body.
+   *
+   * Open string-literal — additive. New reason categories land
+   * without breaking existing callers (consumers either route on
+   * the value they care about or ignore the field).
+   */
+  reason?: string;
   /** Set by adapters that already applied boundary wrapping (e.g. MCP client). */
   _sanitized?: boolean;
 }

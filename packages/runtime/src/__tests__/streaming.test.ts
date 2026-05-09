@@ -544,10 +544,16 @@ describe("sendMessageStreaming", () => {
     // mismatch (motebit was forbidden from acting by the co-browse
     // gate). The doorbell band IS the visible surface for that
     // resolution; resting a "READING" card on the slab body
-    // duplicates the message and competes for attention. Slice 2g
-    // narrows the projection to dissolve only on the
-    // `not_in_control` failure-message prefix; other failures still
-    // obey policy.endState.
+    // duplicates the message and competes for attention.
+    //
+    // Detection — graduated 2026-05-08 from a string-prefix probe on
+    // the message to a structured `chunk.reason` field. The handler
+    // wraps the message as `"computer: not_in_control: ..."`, which
+    // broke the prefix probe silently (witnessed: a wall of denial
+    // text on the slab next to an already-shown Grant/Deny band).
+    // The fix is graduation-grade per the doctrine pre-authorization:
+    // ai-core lifts `ToolResult.reason` (or a typed thrown error's
+    // `.reason`) onto the chunk, the projector routes on category.
     mockRunTurnStreaming.mockReturnValue(
       (async function* () {
         yield {
@@ -562,7 +568,8 @@ describe("sendMessageStreaming", () => {
           status: "done" as const,
           mode: "virtual_browser",
           result:
-            "not_in_control: Motebit not in control (state: user); user must grant control before dispatch.",
+            "computer: not_in_control: Motebit not in control (state: user); user must grant control before dispatch.: call `request_control` to ask the user for control of the isolated browser",
+          reason: "not_in_control",
         };
         yield { type: "text" as const, text: "Need control to proceed." };
         yield { type: "result" as const, result: makeTurnResult() };
