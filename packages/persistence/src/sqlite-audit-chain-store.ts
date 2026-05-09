@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await -- Sync SQLite methods implementing the async AuditChainStore interface (sibling pattern: see top of index.ts) */
 /**
  * audit-chain-2 — SQLite-backed `AuditChainStore` adapter.
  *
