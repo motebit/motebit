@@ -10,11 +10,11 @@ A body whose existence is contingent on content is two surfaces stitched togethe
 
 "Body" is a category in motebit's vocabulary, with subtypes:
 
-- **Identity body** — the creature. The motebit IS this body. Persistent, breathing, soul-tinted; renders from app boot regardless of activity. Canonically what "the body" means in [`motebit-computer.md`](motebit-computer.md).
-- **Perceptual body** — a workspace surface where motebit acts and the user perceives those acts. The slab on /computer is the worked instance: the identity body's first-person perceptual field, itself a body in the geometric sense (glass volume, meniscus silhouette, typed content slots, sympathetic-breathing substrate).
-- **Future bodies** — mobile's surface analog, spatial's primitive analog, a peer's slab visible through `peer_viewport`. Each will be its own perceptual body when implemented; each inherits this principle.
+- **Identity body** — the creature. The motebit IS this body. Persistent, breathing at 0.3 Hz, glass-transmissive, gravity-sagged; renders from app boot regardless of activity. Canonically derived in [`DROPLET.md`](../../DROPLET.md) — the chain's first document, where the body's form (sphere), eigenmotions (breathing, gravity sag), and material character (glass that transmits the interior) all derive from the physics of a droplet under surface tension. Every appearance of "the body" in the chain refers to this body.
+- **Perceptual body** — a workspace surface where motebit acts and the user perceives those acts. The slab on /computer is the worked instance — the identity body's first-person perceptual field per [`motebit-computer.md`](motebit-computer.md), itself a body in the geometric sense (glass volume, meniscus silhouette, typed content slots, sympathetic-breathing substrate inheriting DROPLET.md's 0.3 Hz). The perceptual body extends the identity body's physics outward: the same material, the same eigenfrequency, the same glass-transmissive register, scaled to a workspace plane.
+- **Future bodies** — mobile's surface analog, spatial's primitive analog, a peer's slab visible through `peer_viewport`. Each will be its own perceptual body when implemented; each inherits the same physics chain.
 
-The principle below applies to **all** bodies. The slab is the worked instance because it's where the principle was first violated and corrected; the creature already obeyed it (the creature has never been contingent on content). Future bodies inherit the rule.
+The principle below applies to **all** bodies in the category. The slab is the worked instance because it's where the principle was first violated and corrected; the identity body already obeyed it (DROPLET.md §VIII: "It is one because it has not yet outgrown its surface" — the body's existence is sufficient unto itself, not contingent on content). Future bodies inherit the rule.
 
 ## The principle
 
@@ -62,8 +62,9 @@ The body is always-already there. Specifically, on /computer:
 
 ## Cross-cuts
 
-- [`liquescentia-as-substrate.md`](liquescentia-as-substrate.md) — the medium every render surface inherits is always-already present too; the body's substrate is the medium, the medium is the substrate. This doctrine extends liquescentia from "the medium exists" to "the body always-already inhabits the medium."
-- [`motebit-computer.md`](motebit-computer.md) — the slab is the motebit's first-person perceptual field; this doctrine names the slab's temporal property (always-already there) and spatial property (content embeds, never adjacent).
+- [`DROPLET.md`](../../DROPLET.md) — the canonical derivation of the identity body. §II derives the sphere from variational calculus on surface tension; §VI derives the 0.3 Hz Rayleigh eigenmode the perceptual body's READY-register breathing inherits; §V derives glass-transmissive material; §VIII closes with sufficiency ("That is sufficient.") — the body exists in itself, not contingent on content. This doctrine extends sufficiency from the identity body outward to all bodies in the category.
+- [`LIQUESCENTIA.md`](../../LIQUESCENTIA.md) and [`liquescentia-as-substrate.md`](liquescentia-as-substrate.md) — the medium every body inhabits is always-already present too; the body's substrate is the medium, the medium is the substrate. The body always-already inhabits the medium.
+- [`motebit-computer.md`](motebit-computer.md) — the slab is the identity body's first-person perceptual field. This doctrine names the perceptual body's temporal property (always-already there) and spatial property (content embeds, never adjacent).
 - [`records-vs-acts.md`](records-vs-acts.md) — body shows acts; panels hold records. This doctrine adds the empty-act rule: between acts, the body shows the READY register. The body persists between acts, not only during them.
 - [`surface-determinism.md`](surface-determinism.md) — affordances invoke capabilities, not prompts. The ghost-ready caption (`type a URL · or ask motebit`) is a deterministic affordance pair: typing routes through `forwardUserInput`, asking routes through chat. Both are typed paths, never AI-loop-mediated.
 
