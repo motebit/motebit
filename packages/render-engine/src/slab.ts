@@ -357,9 +357,23 @@ export class SlabManager {
       // transparent than the creature so it reads as "slate of the
       // same family" rather than "second creature."
       ior: CANONICAL_MATERIAL.ior,
-      roughness: 0.05,
+      // Tuning history: roughness 0.12 → 0.05 (slate-of-creature-
+      // family) → 0.02 (content-bearing optical glass). The slab
+      // reads readable content through itself; surface scatter at
+      // 0.05 frosted the page slightly. Creature is roughness 0.0;
+      // 0.02 is a faint material reference, not enough to frost
+      // transmitted text.
+      roughness: 0.02,
       thickness: 0.04,
-      clearcoat: 0.4,
+      // Tuning history: 0.4 was sized when the slab differentiated
+      // from the creature via clearcoat sheen rather than content.
+      // Post-2026-05-09 the slab is content-bearing; clearcoat at
+      // 0.4 stacked a glossy top-layer wash on top of transmission
+      // and read as a milky veil over readable content. 0.25
+      // preserves the slate's surface highlight register for the
+      // edges and the soul-tint emissive bloom without veiling
+      // through-pane content.
+      clearcoat: 0.25,
       clearcoatRoughness: 0.05,
       color: new THREE.Color(0.98, 0.985, 1.0),
       attenuationColor: new THREE.Color(0.92, 0.95, 1.0),
@@ -377,7 +391,19 @@ export class SlabManager {
       // (page pixels must read), so the attenuation is gentler than
       // pure ratio would predict.
       attenuationDistance: 0.4,
-      sheen: 0.15,
+      // Tuning history: 0.35 → 0.15 → 0.04. Sheen is the canonical
+      // "satin/fabric veil" surface-reflection layer; the slab's
+      // earlier tunings used it to differentiate from the creature
+      // ("slate of the same family, not a second sphere"). With the
+      // slab content-bearing, the sheen layer stacked on top of the
+      // page's transmitted pixels and read as a milky/satin veil —
+      // exactly the foggy-content register Daniel surfaced
+      // 2026-05-09. 0.04 keeps a faint hint at grazing angles
+      // (slate identity preserved at silhouette edges) without
+      // veiling content read straight-on through the front pane.
+      // Geometry + soul tint + emissive carry the slab's identity
+      // now; sheen is no longer load-bearing for differentiation.
+      sheen: 0.04,
       sheenRoughness: 0.9,
       sheenColor: new THREE.Color(0.75, 0.85, 1.0),
       emissive: new THREE.Color(0, 0, 0),
@@ -388,7 +414,15 @@ export class SlabManager {
     };
     this.planeMaterial = new THREE.MeshPhysicalMaterial({
       ...sharedMaterialConfig,
-      transmission: 0.85,
+      // Tuning history: 0.55 (initial slate-shape) → 0.85 (closed-
+      // volume rebalance) → 0.92 (content-bearing optical glass,
+      // 2026-05-09). Higher transmission means less of the
+      // material's own diffuse contribution stacks on top of the
+      // refracted screen content; 0.92 brings the slab close to the
+      // creature's 0.94 (pure optical-glass register) while leaving
+      // 8% diffuse for the surface to still read as a glass tile
+      // rather than empty space.
+      transmission: 0.92,
     });
     // Non-transmissive companion for the back pane + side wall. See
     // the field declaration above for the architectural why; in short,
