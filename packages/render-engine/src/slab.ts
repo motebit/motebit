@@ -467,19 +467,34 @@ export class SlabManager {
     this.sideWallMesh.visible = false;
     this.group.add(this.sideWallMesh);
 
-    // Screen mesh — third meniscus plane inside the slab volume, sized
-    // edge-to-edge with the front/back panes so its silhouette is the
-    // same droplet curve. Sits at the same z as the stage anchor (just
-    // in front of the back pane), so the front pane's transmission
-    // refracts the texture through the glass. `MeshBasicMaterial`
-    // (unlit) keeps the screen pixels at face value — environment
-    // lighting shouldn't tint a display surface. Initial state hidden
-    // + no map; populated by `setScreencastImage(...)` when a live
-    // screencast is active. Doctrine bind: motebit-computer.md §"v1
-    // implementation status — virtual_browser v1.3 live screencast"
-    // moves from CSS3D-overlay to back-pane-texture register here, the
-    // step the existing comments at line 137 anticipated as "step 3 of
-    // the volume arc."
+    // Screen mesh — third meniscus plane suspended in the slab
+    // volume, sized edge-to-edge with the front/back panes so its
+    // silhouette is the same droplet curve.
+    //
+    // **Centered (z=0), suspended in fluid.** The earlier "press
+    // against the back pane" placement (z = -SLAB_THICKNESS/2 +
+    // STAGE_Z_OFFSET_FROM_BACK) read as "poster behind glass" — a
+    // Model A display register fighting the slab's Model B
+    // liquescentia substrate. liquescentia-as-substrate.md says
+    // pixels embed in the glass volume, and the creature's analog
+    // (eyes suspended in the droplet body, not pressed against the
+    // back of the skull) argues for centered. Symmetric optical
+    // register too: 2cm of glass from front + 2cm from back means
+    // similar Beer-Lambert absorption from any orbit angle, the
+    // slab reading as one uniform glass-volume-with-content rather
+    // than a wall-mounted display.
+    //
+    // **DoubleSide.** The back face shows the same texture mirrored
+    // (text reads backward from behind the slab) — calm-software
+    // acceptance: that's how every real-world glass-from-behind
+    // looks. v1 ships this. A "right-way-round from back" register
+    // (separate texture / shader UV-flip on the back face) is a
+    // future polish if a use-case emerges.
+    //
+    // `MeshBasicMaterial` (unlit) keeps the screen pixels at face
+    // value — environment lighting shouldn't tint a display
+    // surface. Initial state hidden + no map; populated by
+    // `setScreencastImage(...)` when a live screencast is active.
     const screenGeo = createMeniscusPlaneGeometry(SLAB_WIDTH, SLAB_HEIGHT, 16, 16);
     this.screenMaterial = new THREE.MeshBasicMaterial({
       // The screencast JPEG is opaque — no alpha channel. Marking the
@@ -496,13 +511,14 @@ export class SlabManager {
       // a screencast washes out colors. Same register Three.js
       // recommends for video surfaces (`VideoTexture` examples).
       toneMapped: false,
-      // Single-sided: the screen faces +z toward the camera. The back
-      // face would only be visible from behind the slab — the back
-      // pane already occludes that direction.
-      side: THREE.FrontSide,
+      // Visible from front AND back — the slab is a fluid glass
+      // volume observed from any orbit angle (user circling the
+      // creature). Back-face texture mirroring is the natural
+      // glass-physics register; documented above.
+      side: THREE.DoubleSide,
     });
     this.screenMesh = new THREE.Mesh(screenGeo, this.screenMaterial);
-    this.screenMesh.position.z = -SLAB_THICKNESS / 2 + STAGE_Z_OFFSET_FROM_BACK;
+    this.screenMesh.position.z = 0;
     this.screenMesh.visible = false;
     this.screenMesh.name = "slab-screen";
     this.group.add(this.screenMesh);
