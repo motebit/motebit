@@ -1351,6 +1351,21 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
         ),
       ),
   },
+  {
+    script: "check-typed-truth-perception",
+    proves:
+      "flags a registered typed-truth field whose prompt clause has been removed from `packages/ai-core/src/prompt.ts`. The gate scans for each field's `promptText` in the prompt source AND for each field's literal name in at least one dispatch source; removing one half (the prompt clause) trips the bidirectional drift check and proves the doctrine pair (prompt teaches reading + dispatch enforces structurally) cannot be silently severed.",
+    perturb: () =>
+      mutateFile("packages/ai-core/src/prompt.ts", (src) =>
+        // Replace every occurrence of `already_there` so neither the
+        // PERCEPTION_DOCTRINE clause nor any other reference satisfies
+        // the gate's promptText match. The field is still emitted by
+        // services/browser-sandbox (the dispatch half), so the
+        // failure is asymmetric — exactly the prompt-clause-silently-
+        // removed drift the gate exists to catch.
+        src.replace(/already_there/g, "removed_for_probe"),
+      ),
+  },
 ];
 
 /**
