@@ -6,6 +6,16 @@ That was wrong. The realization that closed it: **the body precedes content, con
 
 A body whose existence is contingent on content is two surfaces stitched together — the absence-surface and the presence-surface — held together by stitching the user can perceive. A body whose existence is constant is one surface in two registers (READY and LIVE), no seam.
 
+## What counts as a body
+
+"Body" is a category in motebit's vocabulary, with subtypes:
+
+- **Identity body** — the creature. The motebit IS this body. Persistent, breathing, soul-tinted; renders from app boot regardless of activity. Canonically what "the body" means in [`motebit-computer.md`](motebit-computer.md).
+- **Perceptual body** — a workspace surface where motebit acts and the user perceives those acts. The slab on /computer is the worked instance: the identity body's first-person perceptual field, itself a body in the geometric sense (glass volume, meniscus silhouette, typed content slots, sympathetic-breathing substrate).
+- **Future bodies** — mobile's surface analog, spatial's primitive analog, a peer's slab visible through `peer_viewport`. Each will be its own perceptual body when implemented; each inherits this principle.
+
+The principle below applies to **all** bodies. The slab is the worked instance because it's where the principle was first violated and corrected; the creature already obeyed it (the creature has never been contingent on content). Future bodies inherit the rule.
+
 ## The principle
 
 > **Surfaces precede content. Content composes INTO them, never adjacent. Empty is READY, not absent.**
