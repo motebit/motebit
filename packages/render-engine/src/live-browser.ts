@@ -186,22 +186,31 @@ export function buildLiveBrowserElement(
   // `user-drag` is non-standard but recognized by WebKit/Blink; kept for
   // legacy Safari versions that don't fully honor `draggable=false`.
   img.style.setProperty("-webkit-user-drag", "none");
-  // Visual register moved to the slab's WebGL screen-mesh texture
-  // (renderer.setSlabScreencastImage; see deps.onFrameDecoded below).
-  // The HTML img stays mounted as the input-capture surface — clicks,
-  // keystrokes, paste, and wheel events forward through cobrowse-input-
-  // capture's existing pipeline against this element — but renders
-  // invisibly so the textured mesh is what the user sees. Same
-  // screen-space rect, zero visual contribution. Closes the "doesn't
-  // follow the slab shape" + "punches through the creature on
-  // rotation" seam Daniel surfaced 2026-05-09 04:23 — the visible
-  // pixels now share the WebGL depth buffer with the creature and are
-  // silhouette-clipped by the meniscus geometry.
-  img.style.opacity = "0";
-  img.style.display = "block";
+  // Slice 2g — start hidden so an `<img>` with no `src` doesn't
+  // render the browser's default broken-image glyph + alt text.
+  // The placeholder div below carries the loading UX until the
+  // first frame arrives; `pushFrame` flips this to "block" on
+  // first frame and the placeholder removes itself in the same
+  // tick.
+  //
+  // 2026-05-09 — the parallel WebGL screen-mesh path
+  // (`onFrameDecoded` → `renderer.setSlabScreencastImage`) lives
+  // behind the CSS3D layer. When the texture path renders, you see
+  // the texture; when it doesn't, you see this img. Keeping img
+  // visible at opacity:1 means screencast content is always shown
+  // even if the WebGL transmission path mis-composites under
+  // multi-transmissive-object stacks (slab front + back + sideWall
+  // all share `planeMaterial` with `transmission`, and the
+  // transmission render-target interaction with a non-transmissive
+  // child mesh inside the same group doesn't reliably surface the
+  // texture in current three.js). The depth/silhouette seam Daniel
+  // surfaced will be closed when the transmission interaction is
+  // diagnosed; for now visible-img is the calm-software default —
+  // never lose the user's ability to see the page.
+  img.style.display = "none";
   img.style.width = "100%";
   img.style.aspectRatio = "16 / 10";
-  img.style.background = "transparent";
+  img.style.background = "rgba(255, 255, 255, 0.04)";
   root.appendChild(img);
 
   // Pre-frame placeholder text — replaces with the first frame the
@@ -259,6 +268,11 @@ export function buildLiveBrowserElement(
         if (frame.device_width > 0 && frame.device_height > 0) {
           img.style.aspectRatio = `${frame.device_width} / ${frame.device_height}`;
         }
+        // Slice 2g — flip the img visible only after the first decode-
+        // ready src has been assigned. Pair with the `display: none`
+        // initial state in the constructor; together they suppress the
+        // broken-image fallback glyph during the loading window.
+        img.style.display = "block";
         placeholder.remove();
       }
       // Hand the decoded image to consumers (apps/web routes it to the

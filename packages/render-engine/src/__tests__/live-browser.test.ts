@@ -108,22 +108,27 @@ describe("buildLiveBrowserElement", () => {
     }
   });
 
-  it("renders the input-capture img invisibly (opacity:0) — visuals come from the WebGL screen mesh", () => {
-    // Visual register moved to the slab's screen mesh (textured WebGL
-    // mesh in the scene graph). The HTML img stays mounted so cobrowse-
-    // input-capture's pointer/keyboard pipeline keeps working unchanged
-    // — same screen-space rect, same listeners — but renders invisibly
-    // so the textured mesh is what the user sees. Without opacity:0 the
-    // img would re-appear on top of the texture and the user would see
-    // a doubled / brighter screen.
+  it("renders the input-capture img visibly — visual fallback when the WebGL texture path doesn't composite", () => {
+    // 2026-05-09 — the parallel WebGL screen-mesh texture path
+    // (`onFrameDecoded` → `renderer.setSlabScreencastImage`) is wired
+    // through but not yet visually load-bearing in production: the
+    // multi-transmissive-object interaction in the slab volume
+    // (front + back + sideWall all share `planeMaterial` with
+    // `transmission`) doesn't reliably surface the screen-mesh
+    // texture through the front pane's transmission render-target.
+    // While that's diagnosed, the img stays at opacity:1 / display
+    // toggled by pushFrame so the user always sees the page even
+    // when the texture path is silent. Calm-software default: never
+    // lose the visible content.
     const handle = buildLiveBrowserElement(new StubBus());
     const img = handle.element.querySelector("img.slab-live-browser-frame") as HTMLImageElement;
     expect(img).toBeTruthy();
-    expect(img.style.opacity).toBe("0");
-    // display:block so input-capture's getBoundingClientRect resolves
-    // a real rect — display:none returns 0×0 and would break click-
-    // coordinate translation.
-    expect(img.style.display).toBe("block");
+    // opacity defaults (no explicit override) — visible.
+    expect(img.style.opacity).toBe("");
+    // Initial display:none until first frame; pushFrame flips to
+    // block once the JPEG src is set (Slice 2g — suppresses the
+    // broken-image glyph during the loading window).
+    expect(img.style.display).toBe("none");
   });
 
   it("calls onFrameDecoded with the pre-decoded HTMLImageElement after Image.decode() resolves", async () => {
