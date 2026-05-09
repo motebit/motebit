@@ -1840,7 +1840,21 @@ export function renderSlabItem(item: SlabItem, actions: SlabItemActions): HTMLEl
     // support. Hover-close is the desktop-pointer equivalent
     // (meniscus-dip × instead of a swipe) and routes through the
     // same typed `actions.dismiss`.
-    attachSlabGestures(card, actions);
+    //
+    // Exception: `live_browser` is an interactive embodiment — the
+    // content area IS the cloud browser, not slab chrome. A
+    // click+drag on the screencast collides with input-capture's
+    // forward path (`cobrowse-input-capture` already owns clicks
+    // and keys on the inner img); reading the same drag as
+    // "swipe-to-dismiss" silently unmounts the card the moment a
+    // user drags past 60px (text selection, slider, scrubbing).
+    // Hover-close × stays attached for desktop dismissal; control
+    // transfer + the Take Back chrome button cover the rest.
+    // Mobile force-dissolve for live_browser will need a chrome-
+    // anchored gesture (not content-area), tracked separately.
+    if (item.kind !== "live_browser") {
+      attachSlabGestures(card, actions);
+    }
     attachHoverClose(card, actions);
   }
   return card;
