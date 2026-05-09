@@ -9,6 +9,7 @@ export * from "./surface-options.js";
 export * from "./governance-config.js";
 export * from "./voice-config.js";
 export * from "./appearance-config.js";
+export * from "./pixel-consent.js";
 
 import type {
   SensitivityLevel,

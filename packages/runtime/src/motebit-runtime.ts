@@ -2804,6 +2804,8 @@ export class MotebitRuntime {
         // sessions later. See `getEffectiveSessionSensitivity` and
         // `MotebitLoopDependencies.getEffectiveSensitivity` JSDoc.
         getEffectiveSensitivity: () => this.getEffectiveSessionSensitivity(),
+        getProviderMode: () => this._providerMode,
+        getPixelConsent: () => this._pixelConsent,
       };
     }
   }
@@ -3060,6 +3062,27 @@ export class MotebitRuntime {
    */
   setProviderMode(mode: ProviderMode | null): void {
     this._providerMode = mode;
+  }
+
+  /**
+   * Per-session pixel-passthrough consent. Composed into the loop's
+   * `projectForAi` pixel gate alongside provider mode and effective
+   * sensitivity. Default is `denied` — fail-closed for fresh sessions.
+   * Surfaces grant via `/vision grant` (web slash command) or the
+   * future VisionConsentBand on the slab; revoke via `/vision revoke`.
+   *
+   * Doctrine: `pixel-consent.ts` § "Pixel governance composes three
+   * gates" + `surface-determinism.md` (#90 — consent is a typed
+   * affordance, not an AI prompt).
+   */
+  private _pixelConsent: import("@motebit/sdk").PixelConsentState = "denied";
+
+  setPixelConsent(state: import("@motebit/sdk").PixelConsentState): void {
+    this._pixelConsent = state;
+  }
+
+  getPixelConsent(): import("@motebit/sdk").PixelConsentState {
+    return this._pixelConsent;
   }
 
   /**

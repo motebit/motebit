@@ -212,6 +212,25 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("never as");
   });
 
+  // Vision-1 slice: when a tool result returns `bytes_omitted` with a
+  // structured reason, the AI should surface the typed remediation
+  // affordance verbatim — `/vision grant` for `consent_required`,
+  // `/sensitivity none` for `sensitivity_blocked`, switch-providers
+  // for `no_capability`. Closes the gap between projectForAi (which
+  // returns the structured directive) and the AI's behavior (which
+  // had no instruction on how to read the directive).
+  it("teaches the AI how to route on bytes_omitted_reason", () => {
+    const prompt = buildSystemPrompt(makeContextPack());
+    expect(prompt).toContain("bytes_omitted_reason");
+    expect(prompt).toContain("/vision grant");
+    expect(prompt).toContain("/sensitivity none");
+    // Anti-pattern: don't bridge to "what's typical." The Wikipedia
+    // smoke caught the model saying "biographies of this era almost
+    // always lead with..." — that's training-confidence laundering
+    // wearing a disclaimer. The doctrine names it explicitly.
+    expect(prompt).toContain("what's typical");
+  });
+
   it("uses custom name from config", () => {
     const prompt = buildSystemPrompt(makeContextPack(), { name: "Pebble" });
     expect(prompt).toContain("Your name is Pebble");

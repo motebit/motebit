@@ -110,6 +110,7 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "proposals", description: "List active proposals" },
   { name: "serve", description: "Toggle accepting delegations" },
   { name: "sensitivity", description: "Show or set session sensitivity tier" },
+  { name: "vision", description: "Grant or revoke pixel passthrough for the AI" },
 ];
 
 function filterCommands(partial: string): SlashCommandDef[] {
@@ -425,6 +426,57 @@ export function initSlashCommands(
           elevated
             ? `Session elevated to ${arg} — outbound tools and external AI will fail-close until you switch to a sovereign (on-device) provider.`
             : `Session sensitivity: ${arg}`,
+        );
+        return true;
+      }
+
+      // /vision is the consent affordance for pixel passthrough to
+      // external AI providers. Composes with sensitivity (medical/
+      // financial/secret blocks regardless of consent) and provider
+      // mode (sovereign on-device bypasses the gate entirely — bytes
+      // never leave the device). Surface-determinism (#90): the AI
+      // surfaces a `bytes_omitted: { reason: "consent_required" }`
+      // directive; the user types `/vision grant` to authorize.
+      // Doctrine: pixel-consent.ts.
+      if (name === "vision") {
+        chatInput.value = "";
+        const arg = text.slice("/vision".length).trim().toLowerCase();
+        const runtime = ctx.app.getRuntime();
+        if (!runtime) {
+          addMessage("system", "Runtime not initialized.");
+          return true;
+        }
+        if (arg === "" || arg === "status") {
+          const consent = runtime.getPixelConsent();
+          const tier = runtime.getSessionSensitivity();
+          const elevated = tier !== "none";
+          addMessage(
+            "system",
+            elevated
+              ? `Pixel passthrough: ${consent} (effective: blocked by session sensitivity "${tier}")`
+              : `Pixel passthrough: ${consent}`,
+          );
+          return true;
+        }
+        if (arg === "grant") {
+          runtime.setPixelConsent("session");
+          addMessage(
+            "system",
+            "Pixel passthrough granted for this session. Motebit will receive screenshot bytes when you ask visual questions. Revoke with `/vision revoke`.",
+          );
+          return true;
+        }
+        if (arg === "revoke" || arg === "deny") {
+          runtime.setPixelConsent("denied");
+          addMessage(
+            "system",
+            "Pixel passthrough revoked. Motebit will not see screenshot bytes; it can still capture them for you to view.",
+          );
+          return true;
+        }
+        addMessage(
+          "system",
+          `Usage: /vision [grant|revoke|status] (current: ${runtime.getPixelConsent()})`,
         );
         return true;
       }

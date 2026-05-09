@@ -247,6 +247,9 @@ export const DEFAULT_OLLAMA_MODEL = "llama3.2";
 export const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
 
 // @public
+export const DEFAULT_PIXEL_CONSENT: PixelConsentState;
+
+// @public
 export const DEFAULT_PROXY_MODEL = "claude-sonnet-4-6";
 
 // @public
@@ -592,6 +595,12 @@ export const OPENAI_MODELS: readonly ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"]
 
 // @public (undocumented)
 export type OpenAIModel = (typeof OPENAI_MODELS)[number];
+
+// @public
+export type PixelConsentState = "denied" | "session";
+
+// @public
+export type PixelOmittedReason = "consent_required" | "sensitivity_blocked" | "no_capability";
 
 // @public
 export interface PrecisionWeights {

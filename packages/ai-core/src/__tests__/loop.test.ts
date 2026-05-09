@@ -1254,6 +1254,165 @@ describe("runTurnStreaming (agentic loop)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// projectForAi pixel gate — sovereignty / sensitivity / consent composition
+// ---------------------------------------------------------------------------
+//
+// Pixels are governed evidence, not automatic external context. Three gates
+// compose around byte passthrough — `on-device` provider always receives,
+// elevated sensitivity always strips (regardless of consent), external +
+// none-sensitivity requires explicit `pixelConsent: "session"`. These tests
+// pin each gate combination so the policy doesn't drift silently.
+//
+// Doctrine: `packages/sdk/src/pixel-consent.ts` § "Pixel governance composes
+// three gates" + `motebit-computer.md` §"Mode contract."
+
+describe("runTurnStreaming — pixel gate composition", () => {
+  const fakeBytes = "screenshotBytes_AAAA".repeat(20);
+
+  function makeScreenshotRegistry(): ToolRegistry {
+    return makeMockToolRegistry(
+      new Map([
+        [
+          "computer",
+          {
+            def: {
+              name: "computer",
+              description: "screenshot/click/type",
+              inputSchema: { type: "object", properties: { action: { type: "object" } } },
+            },
+            result: {
+              ok: true,
+              data: {
+                kind: "screenshot",
+                bytes_base64: fakeBytes,
+                image_format: "png",
+                width: 1280,
+                height: 800,
+                captured_at: 1_000_000,
+              },
+            },
+          },
+        ],
+      ]),
+    );
+  }
+
+  function makeShotProvider(capturedContexts: ContextPack[]): StreamingProvider {
+    const responses: AIResponse[] = [
+      {
+        text: "Capturing.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        tool_calls: [{ id: "tc_p", name: "computer", args: { action: { kind: "screenshot" } } }],
+      },
+      { text: "Done.", confidence: 0.8, memory_candidates: [], state_updates: {} },
+    ];
+    let i = 0;
+    return {
+      model: "test-model",
+      setModel: vi.fn(),
+      async generate(ctx: ContextPack): Promise<AIResponse> {
+        capturedContexts.push(ctx);
+        const r = responses[i] ?? responses[responses.length - 1]!;
+        i++;
+        return r;
+      },
+      async *generateStream(ctx: ContextPack) {
+        capturedContexts.push(ctx);
+        const r = responses[i] ?? responses[responses.length - 1]!;
+        i++;
+        if (r.text) yield { type: "text" as const, text: r.text };
+        yield { type: "done" as const, response: r };
+      },
+      estimateConfidence: () => Promise.resolve(0.8),
+      extractMemoryCandidates: (r: AIResponse) => Promise.resolve(r.memory_candidates),
+    };
+  }
+
+  it("sovereign provider (`on-device`): bytes pass to AI regardless of consent — bytes never leave the device", async () => {
+    const captured: ContextPack[] = [];
+    const provider = makeShotProvider(captured);
+    const deps: MotebitLoopDependencies = {
+      ...makeDepsWithProvider(provider, makeScreenshotRegistry()),
+      getProviderMode: () => "on-device",
+      getPixelConsent: () => "denied", // even with denied consent
+    };
+
+    for await (const _ of runTurnStreaming(deps, "shot")) void _;
+    const second = JSON.stringify(captured[captured.length - 1]);
+    expect(second).toContain(fakeBytes);
+    expect(second).not.toContain("bytes_omitted");
+  });
+
+  it("external + sensitivity > none: bytes stripped with reason `sensitivity_blocked` regardless of consent", async () => {
+    const captured: ContextPack[] = [];
+    const provider = makeShotProvider(captured);
+    const deps: MotebitLoopDependencies = {
+      ...makeDepsWithProvider(provider, makeScreenshotRegistry()),
+      getProviderMode: () => "byok",
+      getEffectiveSensitivity: () => SensitivityLevel.Medical,
+      getPixelConsent: () => "session", // even with session consent
+    };
+
+    for await (const _ of runTurnStreaming(deps, "shot")) void _;
+    const second = JSON.stringify(captured[captured.length - 1]);
+    expect(second).not.toContain(fakeBytes);
+    expect(second).toContain("bytes_omitted");
+    expect(second).toContain("sensitivity_blocked");
+  });
+
+  it("external + sensitivity none + consent denied: bytes stripped with reason `consent_required`", async () => {
+    const captured: ContextPack[] = [];
+    const provider = makeShotProvider(captured);
+    const deps: MotebitLoopDependencies = {
+      ...makeDepsWithProvider(provider, makeScreenshotRegistry()),
+      getProviderMode: () => "motebit-cloud",
+      getEffectiveSensitivity: () => SensitivityLevel.None,
+      getPixelConsent: () => "denied",
+    };
+
+    for await (const _ of runTurnStreaming(deps, "shot")) void _;
+    const second = JSON.stringify(captured[captured.length - 1]);
+    expect(second).not.toContain(fakeBytes);
+    expect(second).toContain("bytes_omitted");
+    expect(second).toContain("consent_required");
+  });
+
+  it("external + sensitivity none + consent granted: bytes pass to AI", async () => {
+    const captured: ContextPack[] = [];
+    const provider = makeShotProvider(captured);
+    const deps: MotebitLoopDependencies = {
+      ...makeDepsWithProvider(provider, makeScreenshotRegistry()),
+      getProviderMode: () => "byok",
+      getEffectiveSensitivity: () => SensitivityLevel.None,
+      getPixelConsent: () => "session",
+    };
+
+    for await (const _ of runTurnStreaming(deps, "shot")) void _;
+    const second = JSON.stringify(captured[captured.length - 1]);
+    expect(second).toContain(fakeBytes);
+    expect(second).not.toContain("bytes_omitted");
+  });
+
+  it("default (no getters wired): bytes stripped — fail-closed for surfaces that haven't declared", async () => {
+    const captured: ContextPack[] = [];
+    const provider = makeShotProvider(captured);
+    // No getProviderMode, no getPixelConsent, no getEffectiveSensitivity.
+    // The defaults (null / "denied" / none) compose to: external +
+    // sensitivity none + consent denied → bytes stripped, reason
+    // `consent_required`.
+    const deps = makeDepsWithProvider(provider, makeScreenshotRegistry());
+
+    for await (const _ of runTurnStreaming(deps, "shot")) void _;
+    const second = JSON.stringify(captured[captured.length - 1]);
+    expect(second).not.toContain(fakeBytes);
+    expect(second).toContain("bytes_omitted");
+    expect(second).toContain("consent_required");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Pipeline stage timeouts — regression guard for silent adapter hangs
 // ---------------------------------------------------------------------------
 //

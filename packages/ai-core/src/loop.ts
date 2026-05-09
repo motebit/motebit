@@ -98,58 +98,163 @@ function wrapExternalData(data: unknown, toolName: string): string {
  *   - The slab consumes structured wire shapes by field — it needs
  *     the raw bytes_base64 to render the screenshot iframe.
  *   - The AI consumes the text representation of tool results to
- *     decide its next step — it doesn't gain anything from a 50KB
- *     base64 blob inlined into its context window, and the redaction
- *     pipeline downstream of this would mangle the bytes anyway
- *     (matching base64 against secret-detection regexes lit them up
- *     as `[REDACTED:ENCODED_SECRET]` and made the AI report
- *     "screenshot redacted in transit" when in fact the user could
- *     see the page on the slab — witnessed 2026-05-07 21:30).
+ *     decide its next step. For text content, the AI reads it; for
+ *     pixel content, whether the AI receives bytes depends on a
+ *     three-gate composition (sovereignty, sensitivity, consent).
  *
- * For known byte-payload kinds, swap `bytes_base64` for an explicit
- * `bytes_omitted` marker so the AI can read the result accurately:
- * "the user is looking at this; here's the metadata I have."
+ * **Pixel governance (vision-1 slice).** Pixels are governed evidence,
+ * not automatic external context. Three gates compose around byte
+ * passthrough:
  *
- * Per-kind handling: only screenshot today. Add other kinds (image
- * embedding result, file download result) here when their tools
- * land. The transformation is non-destructive — only fields the AI
- * provably doesn't need text-as-text are swapped.
+ *   1. Provider sovereignty — `on-device` providers always receive
+ *      pixels. The bytes never leave the device, so there is no
+ *      external party for the user to consent to.
+ *   2. Session sensitivity — medical / financial / secret sessions
+ *      with an external provider always strip pixels. Same fail-
+ *      closed shape as `assertSensitivityPermitsAiCall` for outbound
+ *      text. The session-tier elevation is the user's already-
+ *      expressed boundary; the gate composes through.
+ *   3. Pixel consent — for external providers at unelevated
+ *      sensitivity, the user must explicitly grant pixel passthrough
+ *      via the `/vision grant` affordance. Defaults to `denied` for
+ *      every fresh session (fail-closed). Surface-determinism
+ *      (Principle 90) — the consent gate is a typed affordance, not
+ *      an AI prompt asking "may I see?".
+ *
+ * When pixels are stripped, the `bytes_omitted` directive carries a
+ * structured `reason` (`consent_required` / `sensitivity_blocked` /
+ * `no_capability`) so the perception doctrine can route the AI to
+ * the right remediation surface (the affordance), not bridge to
+ * "what's typical from training" — which was the failure mode
+ * witnessed before this slice landed (the model bluffing visual
+ * properties from training memory and confabulating fail-closed
+ * gates that never fired).
+ *
+ * The redactor-mangling concern (witnessed 2026-05-07: base64 strings
+ * matched secret-detection regexes and were wrapped in
+ * `[REDACTED:ENCODED_SECRET]`) stays addressed even when bytes pass
+ * through — the projection happens before sanitization, and the
+ * downstream redactor's content classifier MUST exempt bytes_base64
+ * fields. That guard lives in the redactor, not here.
+ *
+ * Per-kind handling: only screenshot + navigate-frame today. Add
+ * other byte-payload kinds (image embedding result, file download
+ * result) here when their tools land. The transformation is
+ * non-destructive — only fields the AI provably doesn't need
+ * text-as-text are gated.
  */
-function projectForAi(data: unknown): unknown {
+export interface ProjectionContext {
+  /** Provider mode at projection time. `null` = unset, treated as external (fail-closed). */
+  readonly providerMode: import("@motebit/sdk").ProviderMode | null;
+  /** Effective session sensitivity at projection time. */
+  readonly sensitivity: SensitivityLevel;
+  /** Per-session pixel passthrough consent. `denied` strips bytes; `session` allows when other gates permit. */
+  readonly pixelConsent: import("@motebit/sdk").PixelConsentState;
+}
+
+const DEFAULT_PROJECTION_CONTEXT: ProjectionContext = {
+  providerMode: null,
+  sensitivity: SensitivityLevel.None,
+  pixelConsent: "denied",
+};
+
+/**
+ * Compose the three pixel gates and return either `null` (bytes
+ * pass) or the structured strip reason. Pure function over the
+ * context — testable in isolation, no side effects.
+ */
+function decidePixelGate(ctx: ProjectionContext): import("@motebit/sdk").PixelOmittedReason | null {
+  // Gate 1 — sovereignty bypass. On-device providers never cross a
+  // network boundary; the consent gate exists to govern external
+  // disclosure, not the user's own machine.
+  if (ctx.providerMode === "on-device") return null;
+  // Gate 2 — sensitivity fail-closed. Medical / financial / secret
+  // sessions with an external provider strip pixels regardless of
+  // consent. The user's tier choice is the load-bearing signal.
+  if (rankSensitivity(ctx.sensitivity) > rankSensitivity(SensitivityLevel.None)) {
+    return "sensitivity_blocked";
+  }
+  // Gate 3 — explicit pixel consent for external providers at
+  // sensitivity=none. Default `denied` is fail-closed; the surface
+  // routes the user to `/vision grant` when the AI surfaces a
+  // `consent_required` strip.
+  if (ctx.pixelConsent !== "session") return "consent_required";
+  return null;
+}
+
+function projectForAi(data: unknown, ctx: ProjectionContext = DEFAULT_PROJECTION_CONTEXT): unknown {
   if (data == null || typeof data !== "object") return data;
   const r = data as Record<string, unknown>;
-  // Two kinds carry inline screenshot bytes today: the explicit
+  // Two kinds carry inline pixel bytes today: the explicit
   // `screenshot` action and the `navigate` action (v1.3 hardening —
   // navigate captures inline so the slab gets a frame without a
-  // separate screenshot action). Both must strip bytes from the AI's
-  // context with the same self-instructive directive — the privacy
-  // contract is "AI never sees pixel bytes," and that has to hold
-  // regardless of which action produced them.
+  // separate screenshot action). Both compose through the same
+  // gate — the privacy contract is provider-mode + sensitivity +
+  // consent, not "always strip."
   if (
     (r.kind === "screenshot" || r.kind === "navigate") &&
     typeof r.bytes_base64 === "string" &&
     r.bytes_base64.length > 0
   ) {
+    const reason = decidePixelGate(ctx);
+    if (reason === null) {
+      // Gate permitted — bytes pass through to the AI. The redactor
+      // downstream must NOT scan bytes_base64 for secret patterns
+      // (witnessed 2026-05-07: it lit base64 up as encoded secrets
+      // and corrupted screenshots in transit). That guard lives in
+      // the redactor; here we trust the upstream contract.
+      return r;
+    }
     const { bytes_base64: _bytes_base64, ...rest } = r;
     return {
       ...rest,
-      // Self-instructive marker — written as a directive the AI
-      // reads in-context, not as metadata. Witnessed 2026-05-07: a
-      // terse marker ("user-visible-only (N base64 chars)") let the
-      // AI hallucinate page content (claimed "Model Y hero is up
-      // top" when the page was tesla.com's Access Denied splash).
-      // The AI treated the cryptic field as background data and
-      // generated plausible content from training. The directive
-      // form below tells the AI exactly what's true: the user has
-      // the image, you don't, don't describe what you can't see.
-      bytes_omitted:
-        "Image rendered on the user's slab. Bytes withheld from your " +
-        "context to save tokens — you have not seen this image. Do not " +
-        "describe what's visible. If you need information about the page, " +
-        "ask the user or take another action (scroll, click, navigate).",
+      // Structured reason lets the perception doctrine route to the
+      // right remediation surface (slash command / slab band) without
+      // parsing human text. Witnessed 2026-05-08: a terse marker ("you
+      // have not seen this image") let the AI bluff visual details
+      // from training memory ("the little orange Y logo") and
+      // confabulate gates that never fired ("there's a sensitivity
+      // hold I can't clear"). The directive below names the EXACT
+      // remediation per gate so the AI can hand the user a typed
+      // affordance instead of inferring.
+      bytes_omitted_reason: reason,
+      bytes_omitted: pixelOmittedDirective(reason, ctx),
     };
   }
   return data;
+}
+
+function pixelOmittedDirective(
+  reason: import("@motebit/sdk").PixelOmittedReason,
+  ctx: ProjectionContext,
+): string {
+  switch (reason) {
+    case "consent_required":
+      return (
+        "Image rendered on the user's slab — bytes withheld from your context. " +
+        "Reason: pixel passthrough not granted for this session. The user can " +
+        "type `/vision grant` to allow you to see images this session. " +
+        "Until then, you have NOT seen the image. Do not describe what's " +
+        "visible. Do not bridge to 'what's typical' from training. Tell the " +
+        "user the affordance, or ask them to be the witness."
+      );
+    case "sensitivity_blocked":
+      return (
+        "Image rendered on the user's slab — bytes withheld from your context. " +
+        `Reason: session sensitivity is "${ctx.sensitivity}". External AI ` +
+        "providers do not receive pixel bytes at elevated sensitivity tiers. " +
+        "The user can drop sensitivity via `/sensitivity none` if appropriate. " +
+        "Until then, you have NOT seen the image. Do not describe what's " +
+        "visible. Do not bridge to 'what's typical' from training."
+      );
+    case "no_capability":
+      return (
+        "Image rendered on the user's slab — bytes withheld from your context. " +
+        "Reason: the active AI provider does not support vision input. " +
+        "You have NOT seen the image. Ask the user to switch providers if " +
+        "visual perception is essential, or ask them to be the witness."
+      );
+  }
 }
 
 // === Types ===
@@ -251,6 +356,28 @@ export interface MotebitLoopDependencies {
    * production wiring threads `runtime.getEffectiveSessionSensitivity`.
    */
   getEffectiveSensitivity?: () => SensitivityLevel;
+  /**
+   * Provider mode at projection time — composed into `projectForAi`'s
+   * pixel gate. `on-device` bypasses pixel stripping entirely (bytes
+   * never leave the device); external modes flow through the
+   * sensitivity + consent gates. `null` (or omitted getter) is treated
+   * as external — fail-closed for surfaces that haven't declared.
+   *
+   * Doctrine: `pixel-consent.ts` § "Pixel governance composes three
+   * gates." Production wiring threads `runtime.getProviderMode`.
+   */
+  getProviderMode?: () => import("@motebit/sdk").ProviderMode | null;
+  /**
+   * Per-session pixel passthrough consent — composed into
+   * `projectForAi`'s pixel gate. Default `denied` strips bytes for
+   * external providers regardless of sensitivity tier. Granted via
+   * the `/vision grant` slash command on web (and the future
+   * VisionConsentBand on the slab).
+   *
+   * Doctrine: `pixel-consent.ts` + `surface-determinism.md` (#90 —
+   * consent is a typed affordance, not an AI prompt).
+   */
+  getPixelConsent?: () => import("@motebit/sdk").PixelConsentState;
 }
 
 export interface TurnResult {
@@ -750,13 +877,21 @@ export async function* runTurnStreaming(
         turnCtx = deps.policyGate.recordToolCall(turnCtx);
 
         // Project the tool result into the AI-visible shape BEFORE
-        // sanitization. Byte-payload kinds (screenshots) get their
-        // bytes_base64 swapped for an explicit `bytes_omitted` marker
-        // — the AI doesn't gain from a 50KB base64 blob in its
-        // context, and the downstream redactor would mangle the bytes
-        // as encoded secrets. The slab's chunk path (yielded above)
-        // still gets the raw `result.data`.
-        const aiProjectedResult: ToolResult = { ...result, data: projectForAi(result.data) };
+        // sanitization. Byte-payload kinds (screenshots) compose
+        // through the three pixel gates (sovereignty / sensitivity /
+        // consent) — bytes pass when all gates permit, otherwise the
+        // result carries a `bytes_omitted` directive with a structured
+        // reason naming the right remediation surface. The slab's
+        // chunk path (yielded above) still gets the raw `result.data`.
+        const projectionCtx: ProjectionContext = {
+          providerMode: deps.getProviderMode?.() ?? null,
+          sensitivity: deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None,
+          pixelConsent: deps.getPixelConsent?.() ?? "denied",
+        };
+        const aiProjectedResult: ToolResult = {
+          ...result,
+          data: projectForAi(result.data, projectionCtx),
+        };
 
         // Use sanitizeAndCheck if available (duck-typed), otherwise fall back
         let sanitized: ToolResult;
@@ -945,9 +1080,14 @@ export async function* runTurnStreaming(
       };
 
       // Fallback path: no PolicyGate — wrap in boundaries AND detect injection.
-      // Same projection as the PolicyGate path: byte-payload kinds get
-      // their bytes swapped for a marker before the AI sees them.
-      const aiProjectedData = projectForAi(result.data);
+      // Same projection as the PolicyGate path: byte-payload kinds compose
+      // through the three pixel gates before the AI sees them.
+      const fallbackProjectionCtx: ProjectionContext = {
+        providerMode: deps.getProviderMode?.() ?? null,
+        sensitivity: deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None,
+        pixelConsent: deps.getPixelConsent?.() ?? "denied",
+      };
+      const aiProjectedData = projectForAi(result.data, fallbackProjectionCtx);
       let wrappedResult = result;
       if (aiProjectedData != null) {
         const dataStr =
