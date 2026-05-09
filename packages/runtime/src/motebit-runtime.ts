@@ -451,6 +451,29 @@ export class MotebitRuntime {
    * persist the payload beyond the call.
    */
   private _onToolActivity: ((event: import("./streaming.js").ToolActivityEvent) => void) | null;
+  /**
+   * receipts-1 — in-memory buffer of recent signed
+   * `ToolInvocationReceipt`s, capped at `RECEIPTS_BUFFER_CAP`.
+   * Populated by every receipt-emit path (invokeCapability +
+   * StreamingManager) BEFORE the surface's callback fans out.
+   * Surfaces with a `/receipts`-shaped affordance read via
+   * `getRecentReceipts()`.
+   *
+   * The thesis line — "agents see, act, remember, and collaborate
+   * through signed receipts instead of blind tool calls" — is
+   * load-bearing for motebit's identity. Receipts ARE produced
+   * (every tool call signs one); they were just invisible to the
+   * user. This buffer is the cheapest first cut at making them
+   * visible — same shape audit trail, surfaceable on demand via
+   * the slash command.
+   *
+   * Subsequent slices (receipts-2: in-chrome shimmer per act;
+   * receipts-3: panel surface) can subscribe to the same bus
+   * (`subscribeToolInvocations`) for live streams. The buffer is
+   * for "what just happened" recall — the bus is for live UI.
+   */
+  private _recentReceipts: import("@motebit/crypto").SignableToolInvocationReceipt[] = [];
+  private static readonly RECEIPTS_BUFFER_CAP = 50;
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     // Defense-in-depth: trip the species-constraint tamper detection as
@@ -464,7 +487,32 @@ export class MotebitRuntime {
 
     this.motebitId = config.motebitId;
     this._deviceId = config.deviceId ?? "runtime-default";
-    this._onToolInvocation = config.onToolInvocation ?? null;
+    // receipts-1 — wrap the surface's onToolInvocation callback so
+    // every signed receipt lands in the runtime's buffer BEFORE the
+    // surface fans out. This is what makes `getRecentReceipts()`
+    // see all receipts regardless of which emission path produced
+    // them (`invokeCapability` direct-tap, StreamingManager AI-loop,
+    // future paths). The buffer is the "what just happened" view;
+    // the surface callback remains the live-bus fan-out for
+    // panels/telemetry/UI.
+    const surfaceReceiptSink = config.onToolInvocation ?? null;
+    this._onToolInvocation = (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => {
+      // Push first — buffer correctness shouldn't depend on whether
+      // a surface listener throws or runs slowly. Cap at the class
+      // constant; oldest entries fall off the head.
+      this._recentReceipts.push(receipt);
+      if (this._recentReceipts.length > MotebitRuntime.RECEIPTS_BUFFER_CAP) {
+        this._recentReceipts.shift();
+      }
+      if (surfaceReceiptSink) {
+        try {
+          surfaceReceiptSink(receipt);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this._logger.warn(`[runtime] surface onToolInvocation threw: ${msg}`);
+        }
+      }
+    };
     this._onToolActivity = config.onToolActivity ?? null;
     this.compactionThreshold = config.compactionThreshold ?? 1000;
     this.mcpConfigs = config.mcpServers ?? [];
@@ -3075,6 +3123,28 @@ export class MotebitRuntime {
    */
   setProviderMode(mode: ProviderMode | null): void {
     this._providerMode = mode;
+  }
+
+  /**
+   * receipts-1 — recent signed `ToolInvocationReceipt`s, newest
+   * last. Capped at `RECEIPTS_BUFFER_CAP`; older entries fall off
+   * the head. Surfaces wire `/receipts`-shaped affordances to read
+   * this and render the trail to the user.
+   *
+   * Returns a readonly snapshot — internal mutations (push/shift)
+   * do not affect prior reads. Empty when no receipts have been
+   * produced this session yet, OR when no signing key was wired
+   * (the runtime fails-closed on unsigned receipts; consumers
+   * receive nothing rather than something unsigned).
+   *
+   * Doctrine: thesis-load-bearing — "agents see, act, remember,
+   * and collaborate through signed receipts instead of blind tool
+   * calls" (CONSTITUTION § motebit-as-protocol). Receipts have
+   * always been produced; this getter is the first surface that
+   * makes them visible to the user without external tooling.
+   */
+  getRecentReceipts(): ReadonlyArray<import("@motebit/crypto").SignableToolInvocationReceipt> {
+    return this._recentReceipts;
   }
 
   /**

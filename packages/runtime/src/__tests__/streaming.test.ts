@@ -1433,6 +1433,159 @@ describe("onToolInvocation — signed per-tool-call receipts", () => {
     expect(hexToBytes(r.public_key)).toEqual(kp.publicKey);
   });
 
+  // ── receipts-1: getRecentReceipts buffer ────────────────────────────
+
+  it("receipts-1: getRecentReceipts() collects every emitted receipt for /receipts surface", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const surfaceReceived: unknown[] = [];
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "rcpts-buf",
+        tickRateHz: 0,
+        deviceId: "device-buf",
+        signingKeys: { privateKey: kp.privateKey, publicKey: kp.publicKey },
+        // Surface callback also fires — buffer + fan-out compose,
+        // they don't replace each other.
+        onToolInvocation: (r) => surfaceReceived.push(r),
+      },
+      createAdapters(createMockProvider()),
+    );
+
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "tool_status",
+          name: "web_search",
+          status: "calling",
+          tool_call_id: "tc_b",
+          args: { q: "first" },
+          started_at: Date.now(),
+        },
+        {
+          type: "tool_status",
+          name: "web_search",
+          status: "done",
+          result: { hits: 1 },
+          tool_call_id: "tc_b",
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    await collectChunks(runtime.sendMessageStreaming("first"));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const buffered = runtime.getRecentReceipts();
+    expect(buffered.length).toBe(1);
+    expect(buffered[0]?.tool_name).toBe("web_search");
+    // Surface callback received the same receipt — buffer doesn't
+    // displace fan-out.
+    expect(surfaceReceived.length).toBe(1);
+    expect(surfaceReceived[0]).toEqual(buffered[0]);
+  });
+
+  it("receipts-1: buffer is empty when no receipts have been produced", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "rcpts-empty",
+        tickRateHz: 0,
+        deviceId: "device-empty",
+        signingKeys: { privateKey: kp.privateKey, publicKey: kp.publicKey },
+      },
+      createAdapters(createMockProvider()),
+    );
+    expect(runtime.getRecentReceipts()).toEqual([]);
+  });
+
+  it("receipts-1: buffer cap is enforced — oldest entries fall off the head", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "rcpts-cap",
+        tickRateHz: 0,
+        deviceId: "device-cap",
+        signingKeys: { privateKey: kp.privateKey, publicKey: kp.publicKey },
+      },
+      createAdapters(createMockProvider()),
+    );
+    // Reach into the wrapped sink to simulate 60 receipts — the
+    // signing path is exercised by the sibling test above; this test
+    // pins the cap-and-shift behavior in isolation.
+    const wrapped = (
+      runtime as unknown as {
+        _onToolInvocation: (r: { tool_name: string; signature: string }) => void;
+      }
+    )._onToolInvocation;
+    for (let i = 0; i < 60; i++) {
+      wrapped({
+        // Minimal shape — the buffer doesn't validate fields, just
+        // stores. The signing path produces the real shape.
+        invocation_id: `inv-${i}`,
+        task_id: `inv-${i}`,
+        motebit_id: "rcpts-cap",
+        device_id: "device-cap",
+        tool_name: `tool-${i}`,
+        started_at: i,
+        completed_at: i,
+        status: "completed",
+        args_hash: "hash",
+        result_hash: "hash",
+        suite: "motebit-jcs-ed25519-b64-v1",
+        signature: `sig-${i}`,
+      } as unknown as Parameters<typeof wrapped>[0]);
+    }
+    const buffered = runtime.getRecentReceipts();
+    expect(buffered.length).toBe(50); // RECEIPTS_BUFFER_CAP
+    // Newest at the tail; oldest 10 fell off.
+    expect(buffered[0]?.tool_name).toBe("tool-10");
+    expect(buffered[buffered.length - 1]?.tool_name).toBe("tool-59");
+  });
+
+  it("receipts-1: surface callback throw doesn't break buffering or other listeners", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "rcpts-throw",
+        tickRateHz: 0,
+        deviceId: "device-throw",
+        signingKeys: { privateKey: kp.privateKey, publicKey: kp.publicKey },
+        onToolInvocation: () => {
+          throw new Error("surface listener exploded");
+        },
+      },
+      createAdapters(createMockProvider()),
+    );
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "tool_status",
+          name: "web_search",
+          status: "calling",
+          tool_call_id: "tc_t",
+          args: { q: "x" },
+          started_at: Date.now(),
+        },
+        {
+          type: "tool_status",
+          name: "web_search",
+          status: "done",
+          result: { hits: 1 },
+          tool_call_id: "tc_t",
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    await collectChunks(runtime.sendMessageStreaming("x"));
+    await new Promise((r) => setTimeout(r, 10));
+    // Buffer captured the receipt despite the surface listener
+    // throwing — push happens BEFORE the fan-out call.
+    expect(runtime.getRecentReceipts().length).toBe(1);
+  });
+
   it("drops silently (fail-closed) when signing keys aren't configured", async () => {
     vi.clearAllMocks();
     const received: unknown[] = [];

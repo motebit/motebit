@@ -111,6 +111,7 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "serve", description: "Toggle accepting delegations" },
   { name: "sensitivity", description: "Show or set session sensitivity tier" },
   { name: "vision", description: "Grant or revoke pixel passthrough for the AI" },
+  { name: "receipts", description: "Show recent signed audit receipts" },
 ];
 
 function filterCommands(partial: string): SlashCommandDef[] {
@@ -486,9 +487,86 @@ export function initSlashCommands(
         return true;
       }
 
+      // /receipts — show the user the trail of signed
+      // ToolInvocationReceipts the runtime has been producing.
+      // Closes the thesis line — "agents see, act, remember, and
+      // collaborate through signed receipts instead of blind tool
+      // calls" — by making the previously-invisible audit trail
+      // visible on demand. Calm-software register: one line per
+      // receipt, terse, monospace-friendly. No timestamps in
+      // wall-clock since the relative-time format mirrors the
+      // existing chat-message footer style.
+      //
+      // Future slices (receipts-2 in-chrome shimmer, receipts-3
+      // permanent panel) read from the same `getRecentReceipts()`
+      // getter; this slash command is the cheapest surface and
+      // the discoverability anchor.
+      if (name === "receipts") {
+        chatInput.value = "";
+        const arg = text.slice("/receipts".length).trim().toLowerCase();
+        const runtime = ctx.app.getRuntime();
+        if (!runtime) {
+          addMessage("system", "Runtime not initialized.");
+          return true;
+        }
+        const receipts = runtime.getRecentReceipts();
+        if (receipts.length === 0) {
+          addMessage(
+            "system",
+            "No signed receipts yet. Receipts are produced when motebit (or you) take actions through the runtime — try a tool call, then `/receipts` again.",
+          );
+          return true;
+        }
+        const requestedCount = arg === "" ? 10 : Math.max(1, Math.min(50, Number(arg) || 10));
+        const slice = receipts.slice(-requestedCount);
+        const lines = slice.map(formatReceiptLine);
+        addMessage(
+          "system",
+          `Recent signed receipts (${slice.length} of ${receipts.length}):\n${lines.join("\n")}`,
+        );
+        return true;
+      }
+
       chatInput.value = "/" + cmd.name;
       selectCommand(cmd);
       return true;
     },
   };
+}
+
+/**
+ * Format a single signed `ToolInvocationReceipt` into a calm one-
+ * line summary for `/receipts`. Apple-grade restraint: tool name,
+ * status, relative time, signature prefix, status check. No
+ * cryptographic verbosity in the visible line — the full receipt
+ * (including the ed25519 signature, args/result hashes) lives in
+ * the audit log; this is the at-a-glance "what motebit just
+ * signed" view.
+ *
+ *   type_into        ✓  just now      sig:abc1…def9
+ *   click_element    ✓  12 sec ago    sig:def4…ghi2
+ *   navigate         ✓  1 min ago     sig:ghi5…jkl7
+ *
+ * Padded tool-name column for visual alignment in monospace; the
+ * chat surface renders system messages in a similar register.
+ */
+function formatReceiptLine(
+  receipt: import("@motebit/crypto").SignableToolInvocationReceipt,
+): string {
+  const status = receipt.status === "completed" ? "✓" : receipt.status === "failed" ? "✗" : "⊘";
+  const ago = relativeTime(receipt.completed_at);
+  // Signature is base64; show first 4 + last 4 chars for at-a-
+  // glance identity without the full 88-char string.
+  const sig = receipt.signature;
+  const sigPrefix = sig.length > 12 ? `${sig.slice(0, 4)}…${sig.slice(-4)}` : sig;
+  return `${receipt.tool_name.padEnd(16)} ${status}  ${ago.padEnd(12)} sig:${sigPrefix}`;
+}
+
+function relativeTime(unixMs: number): string {
+  const delta = Date.now() - unixMs;
+  if (delta < 5_000) return "just now";
+  if (delta < 60_000) return `${Math.floor(delta / 1000)} sec ago`;
+  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} min ago`;
+  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} hr ago`;
+  return `${Math.floor(delta / 86_400_000)} day ago`;
 }
