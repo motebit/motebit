@@ -299,3 +299,22 @@ describe("SpatialSlabManager — dispose detaches from the scene graph", () => {
     expect(slabGroup.parent).toBeNull();
   });
 });
+
+describe("SpatialSlabManager — Phase 1B no-op hooks", () => {
+  // The spatial slab's render() and resize() are reserved for Phase
+  // 1B (CSS3D / WebXR-panel HTML surfaces). For Phase 1A they're
+  // structural no-ops; the tests pin "must not throw" rather than
+  // behavior. Keeping the hooks coverage-traced means the adapter
+  // contract holds even before Phase 1B fills them in.
+  it("render(scene, camera) is a no-op that does not throw", () => {
+    const mgr = makeManager();
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera();
+    expect(() => mgr.render(scene, camera)).not.toThrow();
+  });
+
+  it("resize(width, height) is a no-op that does not throw", () => {
+    const mgr = makeManager();
+    expect(() => mgr.resize(1280, 800)).not.toThrow();
+  });
+});
