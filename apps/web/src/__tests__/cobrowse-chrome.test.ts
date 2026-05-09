@@ -369,6 +369,97 @@ describe("renderCoBrowseChrome — mark color reads from interiorColor", () => {
   });
 });
 
+// ── chrome-1b: sensitivity ring + pixel-consent eye ───────────────────
+
+describe("renderCoBrowseChrome — chrome-1b sensitivity ring", () => {
+  it("renders no ring at sensitivity none (calm baseline)", () => {
+    const { machine } = makeMockMachine();
+    // SensitivityLevel.None at runtime — value "none".
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      sensitivity: "none" as import("@motebit/sdk").SensitivityLevel,
+    });
+    expect(el.querySelector(".cobrowse-chrome-mark-ring")).toBeNull();
+  });
+
+  it("renders no ring at sensitivity personal (too common to mark permanently)", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      sensitivity: "personal" as import("@motebit/sdk").SensitivityLevel,
+    });
+    expect(el.querySelector(".cobrowse-chrome-mark-ring")).toBeNull();
+  });
+
+  it("renders a warm-coral ring at sensitivity medical", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      sensitivity: "medical" as import("@motebit/sdk").SensitivityLevel,
+    });
+    const ring = el.querySelector(".cobrowse-chrome-mark-ring-medical") as HTMLElement;
+    expect(ring).not.toBeNull();
+    // Coral tones — red-dominant RGB (220, 130, 110).
+    expect(ring.style.border).toContain("220");
+  });
+
+  it("renders a muted-green ring at sensitivity financial", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      sensitivity: "financial" as import("@motebit/sdk").SensitivityLevel,
+    });
+    const ring = el.querySelector(".cobrowse-chrome-mark-ring-financial") as HTMLElement;
+    expect(ring).not.toBeNull();
+    // Green tones — green-dominant RGB (110, 165, 130).
+    expect(ring.style.border).toContain("165");
+  });
+
+  it("renders a cool-gray ring at sensitivity secret", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      sensitivity: "secret" as import("@motebit/sdk").SensitivityLevel,
+    });
+    const ring = el.querySelector(".cobrowse-chrome-mark-ring-secret") as HTMLElement;
+    expect(ring).not.toBeNull();
+  });
+});
+
+describe("renderCoBrowseChrome — chrome-1b pixel-consent eye", () => {
+  it("renders no eye glyph when consent is denied (calm default)", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      pixelConsent: "denied",
+    });
+    expect(el.querySelector(".cobrowse-chrome-mark-eye")).toBeNull();
+  });
+
+  it("renders the eye glyph when consent is session (granted)", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      pixelConsent: "session",
+    });
+    const eye = el.querySelector(".cobrowse-chrome-mark-eye") as HTMLElement;
+    expect(eye).not.toBeNull();
+    // Eye-glyph is a small inset circle inside the mark wrap.
+    expect(eye.style.borderRadius).toBe("50%");
+  });
+
+  it("composes ring + eye when both elevated state and granted consent are present", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      sensitivity: "medical" as import("@motebit/sdk").SensitivityLevel,
+      pixelConsent: "session",
+    });
+    expect(el.querySelector(".cobrowse-chrome-mark-ring-medical")).not.toBeNull();
+    expect(el.querySelector(".cobrowse-chrome-mark-eye")).not.toBeNull();
+    // Both decorations live inside the same mark-wrap container —
+    // single positioning context, no layout collision.
+    const wrap = el.querySelector(".cobrowse-chrome-mark-wrap") as HTMLElement;
+    expect(
+      wrap.querySelectorAll(
+        ".cobrowse-chrome-mark, .cobrowse-chrome-mark-ring-medical, .cobrowse-chrome-mark-eye",
+      ),
+    ).toHaveLength(3);
+  });
+});
+
 // ── Defensive guards ───────────────────────────────────────────────────
 
 describe("renderCoBrowseChrome — defensive guards", () => {

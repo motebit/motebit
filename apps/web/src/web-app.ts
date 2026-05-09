@@ -1755,6 +1755,18 @@ export class WebApp {
    * `setSlabControlBand`. Logged as a warning — it's the visible
    * symptom of a session-open failure, not the success path.
    */
+  /**
+   * chrome-1b — public refresh hook. Called by surfaces (e.g. the
+   * `/sensitivity` and `/vision` slash commands) after they mutate
+   * runtime state, so the strip's sensitivity ring + pixel-consent
+   * eye reflect the truth without waiting for the next control-
+   * state transition. Cheap — just rebuilds the strip element from
+   * current state and replaces it in the slot.
+   */
+  refreshSlabChrome(): void {
+    this.applyChromeToCurrentState();
+  }
+
   private applyChromeToCurrentState(): void {
     const handle = this.liveBrowserHandle;
     const machine = this.computerRegistration?.coBrowseControl;
@@ -1764,10 +1776,14 @@ export class WebApp {
 
     // Unified chrome strip — always present, content shifts with
     // state. The mark reads from the runtime's interior color so
-    // the tiny glyph mirrors the main creature.
+    // the tiny glyph mirrors the main creature; chrome-1b adds
+    // sensitivity ring + pixel-consent eye decorations sourced
+    // from runtime state.
     const chrome = renderCoBrowseChrome(state, machine, {
       forwardEvent,
       interiorColor: this._interiorColor,
+      sensitivity: this.runtime?.getSessionSensitivity(),
+      pixelConsent: this.runtime?.getPixelConsent(),
     });
 
     if (handle) {

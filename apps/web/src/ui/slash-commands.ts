@@ -428,6 +428,10 @@ export function initSlashCommands(
             ? `Session elevated to ${arg} — outbound tools and external AI will fail-close until you switch to a sovereign (on-device) provider.`
             : `Session sensitivity: ${arg}`,
         );
+        // chrome-1b — refresh the slab strip so the mark's
+        // sensitivity ring reflects the new tier without waiting
+        // for the next control-state transition.
+        ctx.app.refreshSlabChrome?.();
         return true;
       }
 
@@ -470,6 +474,8 @@ export function initSlashCommands(
             "system",
             "Pixel passthrough granted for this session when policy permits. Elevated sensitivity still blocks external pixel disclosure. Revoke with `/vision revoke`.",
           );
+          // chrome-1b — eye glyph appears on the mark.
+          ctx.app.refreshSlabChrome?.();
           return true;
         }
         if (arg === "revoke" || arg === "deny") {
@@ -478,6 +484,8 @@ export function initSlashCommands(
             "system",
             "Pixel passthrough revoked. Motebit will not see screenshot bytes; it can still capture them for you to view.",
           );
+          // chrome-1b — eye glyph disappears.
+          ctx.app.refreshSlabChrome?.();
           return true;
         }
         addMessage(

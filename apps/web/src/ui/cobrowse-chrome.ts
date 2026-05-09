@@ -55,21 +55,39 @@
  *     module — call sites move from `cobrowse-address-bar` to
  *     `cobrowse-chrome` in a single search-and-replace.
  *
- * **What chrome-1a does NOT yet do** (deferred to chrome-1b/c):
+ * **chrome-1b additions** (shipped alongside chrome-1a in the
+ * cobrowse-chrome arc):
  *
- *   - Sensitivity ring around the mark (chrome-1b: colored
- *     outline keyed off `runtime.getSessionSensitivity()` when
- *     tier > none).
- *   - Pixel-consent eye-shape on the mark (chrome-1b: keyed off
- *     `runtime.getPixelConsent()`).
+ *   - Sensitivity ring around the mark — faint colored outer
+ *     border when `runtime.getSessionSensitivity()` returns a tier
+ *     above `personal`. Three intentional hues: warm coral
+ *     (medical), muted green (financial), cool gray (secret).
+ *     Calm baseline (`none` / `personal`) renders no ring — the
+ *     gate doesn't fire on those tiers.
+ *   - Pixel-consent eye glyph inside the mark when
+ *     `runtime.getPixelConsent()` is `"session"` (consent granted).
+ *     Default `"denied"` renders nothing — calm default.
+ *   - URL display (via the chrome-1a-fix surface tracking)
+ *     already feeds prompt-1's `[Now]` block; the chrome strip's
+ *     middle slot stays bare on motebit-driving by design (the
+ *     live screencast is the destination view).
+ *
+ * **What's still deferred to chrome-1c:**
+ *
  *   - Transient act animations — read_page ripple, screenshot
- *     shutter, click pulse (chrome-1c: hooks into the existing
- *     tool_status chunk stream).
- *   - URL display when motebit drives (chrome-1b: needs surface-
- *     side URL tracking via navigate-result events).
+ *     shutter, click pulse (hooks into the existing tool_status
+ *     chunk stream + receipts-1 bus).
+ *   - Receipt-shimmer on the mark when each act signs (composes
+ *     with chrome-1c — same primitive, different trigger).
  */
 
-import type { ControlState, InteriorColor, UserInputEvent } from "@motebit/sdk";
+import type {
+  ControlState,
+  InteriorColor,
+  PixelConsentState,
+  SensitivityLevel,
+  UserInputEvent,
+} from "@motebit/sdk";
 import type { CoBrowseControlMachine, UserInputForwardResult } from "@motebit/runtime";
 
 /** Direct typed-capability dispatch — same shape as cobrowse-input-capture's forwardEvent. */
@@ -94,6 +112,27 @@ export interface RenderCoBrowseChromeOpts {
    * coherence with the main creature.
    */
   readonly interiorColor?: InteriorColor | null;
+  /**
+   * chrome-1b — effective session sensitivity tier. When `> none`,
+   * the mark gets a faint colored outer ring (warm for medical,
+   * green for financial, gray for secret). Calm-software register:
+   * the ring only appears when there's something to say. Default
+   * `none` means no ring is rendered.
+   *
+   * Closes the visible-state side of "nothing sensitive crosses
+   * boundaries silently" — vision-1's gates and prompt-1's `[Now]`
+   * block already make the AI aware; this makes the USER aware
+   * without parsing chat or running `/sensitivity status`.
+   */
+  readonly sensitivity?: SensitivityLevel;
+  /**
+   * chrome-1b — per-session pixel-passthrough consent. When granted
+   * (`session`), an eye-shape glyph appears inside the mark. Calm
+   * default: no glyph when denied. The glyph maps directly to the
+   * vision-1 gate state — the user reads the mark and knows whether
+   * motebit can currently see images.
+   */
+  readonly pixelConsent?: PixelConsentState;
 }
 
 /**
@@ -108,7 +147,12 @@ export function renderCoBrowseChrome(
   opts: RenderCoBrowseChromeOpts = {},
 ): HTMLElement {
   const strip = baseStrip(state.kind);
-  strip.appendChild(buildMark(state, opts.interiorColor ?? null));
+  strip.appendChild(
+    buildMark(state, opts.interiorColor ?? null, {
+      sensitivity: opts.sensitivity,
+      pixelConsent: opts.pixelConsent,
+    }),
+  );
   // Normalize `null` → `undefined` for the slot builders so their
   // signatures don't have to accept both shapes.
   const forwardEvent = opts.forwardEvent ?? undefined;
@@ -150,15 +194,32 @@ function baseStrip(stateKind: ControlState["kind"]): HTMLDivElement {
 
 // ── Lead — the living mark ─────────────────────────────────────────────
 
-function buildMark(state: ControlState, color: InteriorColor | null): HTMLElement {
+function buildMark(
+  state: ControlState,
+  color: InteriorColor | null,
+  decorations: {
+    readonly sensitivity?: SensitivityLevel;
+    readonly pixelConsent?: PixelConsentState;
+  } = {},
+): HTMLElement {
+  // chrome-1b — wrap the mark in a positioned container so the
+  // sensitivity ring (outer absolute pseudo-glyph) and pixel eye
+  // (inner pseudo-glyph) layer cleanly without leaking into the
+  // strip's flex layout. The wrapper takes the lead slot's
+  // dimensions; the inner mark is the gradient circle as before.
+  const wrap = document.createElement("div");
+  wrap.className = "cobrowse-chrome-mark-wrap";
+  wrap.setAttribute("aria-hidden", "true");
+  wrap.style.flex = "0 0 auto";
+  wrap.style.position = "relative";
+  wrap.style.width = "14px";
+  wrap.style.height = "14px";
+
   const mark = document.createElement("div");
   mark.className = `cobrowse-chrome-mark cobrowse-chrome-mark-${state.kind}`;
-  mark.setAttribute("aria-hidden", "true");
-  mark.style.flex = "0 0 auto";
-  mark.style.width = "14px";
-  mark.style.height = "14px";
+  mark.style.position = "absolute";
+  mark.style.inset = "0";
   mark.style.borderRadius = "50%";
-  mark.style.position = "relative";
   // Identity coherence — mark color reads from the user's chosen
   // interior preset so the tiny glyph mirrors the main creature.
   // Phase 1a uses a static gradient; phase 1c will share the
@@ -209,7 +270,86 @@ function buildMark(state: ControlState, color: InteriorColor | null): HTMLElemen
   // bindings exist for readability and would-be-future use.
   void tintCss;
   void glowCss;
-  return mark;
+
+  wrap.appendChild(mark);
+
+  // chrome-1b — sensitivity ring: a faint colored outer halo
+  // around the mark when the session tier is elevated above
+  // `none`. Three tiers, three intentional hues:
+  //   - medical     → warm coral (medical context, calm but
+  //                    distinct from "warning")
+  //   - financial   → muted green (the universal money signifier
+  //                    without being garish)
+  //   - secret      → cool gray (most restrained — when sensitive
+  //                    enough to need full sovereign isolation,
+  //                    the chrome whispers, doesn't shout)
+  // The ring is a positioned ::after-shaped div outside the mark.
+  // Stays subtle — calm-software register, not a notification dot.
+  const sensitivity = decorations.sensitivity;
+  const ringColor = sensitivity ? sensitivityRingColor(sensitivity) : null;
+  if (ringColor) {
+    const ring = document.createElement("div");
+    ring.className = `cobrowse-chrome-mark-ring cobrowse-chrome-mark-ring-${sensitivity}`;
+    ring.style.position = "absolute";
+    ring.style.inset = "-3px";
+    ring.style.borderRadius = "50%";
+    ring.style.border = `1.5px solid ${ringColor}`;
+    ring.style.pointerEvents = "none";
+    wrap.appendChild(ring);
+  }
+
+  // chrome-1b — pixel-consent eye: a small inner glyph on the
+  // mark when pixel passthrough is granted. Eye-open shape is the
+  // signal "motebit can currently see images." Default `denied`
+  // renders nothing — calm default, no glyph clutter when the
+  // common case (no pixel sharing) is in effect.
+  if (decorations.pixelConsent === "session") {
+    const eye = document.createElement("div");
+    eye.className = "cobrowse-chrome-mark-eye";
+    // Small darker inner dot — reads as "pupil," signals "eye is
+    // open / can see." Position at center using absolute inset.
+    eye.style.position = "absolute";
+    eye.style.top = "50%";
+    eye.style.left = "50%";
+    eye.style.transform = "translate(-50%, -50%)";
+    eye.style.width = "5px";
+    eye.style.height = "5px";
+    eye.style.borderRadius = "50%";
+    // Use the creature's tint at high alpha for the pupil — same
+    // identity-coherence rule as the mark's gradient. Looks like
+    // the creature's eye, scaled down.
+    eye.style.background = rgba(tint, 0.9);
+    eye.style.boxShadow = `0 0 3px ${rgba(glow, 0.6)}`;
+    eye.style.pointerEvents = "none";
+    wrap.appendChild(eye);
+  }
+
+  return wrap;
+}
+
+/**
+ * Map sensitivity tier → ring color. Returns null for `none` and
+ * `personal` (calm baseline; `personal` is common enough that a
+ * permanent ring would be visual noise). Elevated tiers
+ * (`medical` / `financial` / `secret`) get distinct hues so the
+ * user can read the mark at a glance.
+ *
+ * Hues are restrained — soft, not warning-grade. Calm software:
+ * the ring is a presence indicator, not an alarm.
+ */
+function sensitivityRingColor(level: SensitivityLevel): string | null {
+  switch (level) {
+    case "medical" as SensitivityLevel:
+      return "rgba(220, 130, 110, 0.62)"; // warm coral
+    case "financial" as SensitivityLevel:
+      return "rgba(110, 165, 130, 0.62)"; // muted green
+    case "secret" as SensitivityLevel:
+      return "rgba(140, 145, 165, 0.62)"; // cool gray
+    default:
+      // `none` and `personal` — no ring. Personal is too common to
+      // mark permanently; the gate doesn't fire on personal alone.
+      return null;
+  }
 }
 
 // ── Middle — the destination ───────────────────────────────────────────
