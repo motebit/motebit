@@ -42,6 +42,24 @@ describe("buildLiveBrowserElement", () => {
     expect(img).toBeTruthy();
   });
 
+  it("disables native HTML image drag on the frame img — no native drag-ghost, no drop-handler hijack", () => {
+    // Repro for the production /computer bug: click+hold+drag on the
+    // screencast triggered the browser's native image-drag. On release,
+    // apps/web's document-level drop handler classified the data: URI
+    // src as `kind: "url"` and `feedPerception` opened a fetch slab item,
+    // which displaced the live_browser card. Pinning `draggable=false`
+    // closes the bug at the source — an interactive screencast is NOT
+    // a saveable image.
+    const handle = buildLiveBrowserElement(new StubBus());
+    const img = handle.element.querySelector("img.slab-live-browser-frame") as HTMLImageElement;
+    expect(img).toBeTruthy();
+    expect(img.draggable).toBe(false);
+    // Legacy WebKit fallback — `-webkit-user-drag: none` covers Safari
+    // versions that don't fully honor `draggable=false` on data: URIs.
+    expect(img.style.getPropertyValue("-webkit-user-drag")).toBe("none");
+    expect(img.style.userSelect).toBe("none");
+  });
+
   it("subscribes to the frame source on construction", () => {
     const bus = new StubBus();
     const subscribe = vi.spyOn(bus, "subscribe");

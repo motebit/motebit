@@ -148,6 +148,22 @@ export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrow
   img.className = "slab-live-browser-frame";
   img.alt = "live browser";
   img.decoding = "async";
+  // Disable native HTML image drag. `<img>` defaults to `draggable=true`,
+  // so click+hold on the screencast triggers a native drag operation —
+  // the browser shows the frame as a drag-ghost ("captures the image"),
+  // then on release fires a `drop` event whose `dataTransfer.text/uri-list`
+  // is the frame's data: URI. apps/web's document-level drop handler
+  // (`apps/web/src/ui/drop.ts`) classifies that as `kind: "url"`,
+  // `feedPerception` opens a new `fetch` slab item, and the live_browser
+  // card vanishes. The screencast IS an interactive surface, NOT a
+  // saveable image — `draggable=false` aligns the platform default with
+  // our usage. Companion CSS properties cover legacy WebKit. Closes the
+  // "click+hold+drag → screen disappears" bug end-to-end at the source.
+  img.draggable = false;
+  img.style.userSelect = "none";
+  // `user-drag` is non-standard but recognized by WebKit/Blink; kept for
+  // legacy Safari versions that don't fully honor `draggable=false`.
+  img.style.setProperty("-webkit-user-drag", "none");
   // Slice 2g — start hidden so an `<img>` with no `src` doesn't
   // render the browser's default broken-image glyph + alt text.
   // The placeholder div below carries the loading UX until the
