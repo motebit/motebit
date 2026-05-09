@@ -462,7 +462,7 @@ export function initSlashCommands(
           runtime.setPixelConsent("session");
           addMessage(
             "system",
-            "Pixel passthrough granted for this session. Motebit will receive screenshot bytes when you ask visual questions. Revoke with `/vision revoke`.",
+            "Pixel passthrough granted for this session when policy permits. Elevated sensitivity still blocks external pixel disclosure. Revoke with `/vision revoke`.",
           );
           return true;
         }
