@@ -681,6 +681,96 @@ describe("registerWebComputerTool", () => {
     await first;
   });
 
+  // ---------------------------------------------------------------
+  // Implicit-grant fast path. When the AI's reach for `computer`
+  // happens inside a user-typed turn, `request_control` skips the
+  // slab-band prompt and grants directly. Re-confirming what the
+  // user can already see they did violates the calm-software
+  // doctrine; consent flows through the same gesture as the
+  // request. Three tests cover the contract:
+  //   1. fresh typed-intent → granted (no prompt)
+  //   2. null typed-intent → falls through to the existing prompt
+  //      flow (proactive idle work, fail-closed by default)
+  //   3. paused/pending states still short-circuit BEFORE the
+  //      typed-intent check — implicit grant must not bypass the
+  //      session-paused / request-pending guards.
+  // ---------------------------------------------------------------
+
+  it("request_control auto-grants when typed-intent is fresh (no slab-band prompt)", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const typedIntent = {
+      kind: "user-typed-intent" as const,
+      timestamp: Date.now(),
+      surface: "web" as const,
+    };
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      getCurrentTypedIntent: () => typedIntent,
+    });
+
+    const result = await registry.execute("request_control", {});
+    expect((result as { data: unknown }).data).toEqual({ kind: "granted" });
+    // Both transitions committed synchronously; final state is motebit.
+    expect(reg!.coBrowseControl.getState()).toEqual({ kind: "motebit" });
+  });
+
+  it("request_control falls through to prompt when typed-intent is null (proactive idle work)", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      // Proactive path returns null — fail-closed default. The
+      // flow MUST open the explicit prompt band; we resolve it
+      // via a denial here to keep the test fast and prove the
+      // prompt path is the one that ran (granted would also pass
+      // the auto-grant test, so we use deny to discriminate).
+      getCurrentTypedIntent: () => null,
+    });
+
+    const pending = registry.execute("request_control", {});
+    await waitForState(reg!.coBrowseControl, "handoff_pending");
+    reg!.coBrowseControl.denyControl("user");
+
+    const result = await pending;
+    expect((result as { data: unknown }).data).toEqual({ kind: "denied" });
+    expect(reg!.coBrowseControl.getState()).toEqual({ kind: "user" });
+  });
+
+  it("request_control respects session_paused before checking typed-intent", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const typedIntent = {
+      kind: "user-typed-intent" as const,
+      timestamp: Date.now(),
+      surface: "web" as const,
+    };
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      // Implicit grant is set, but the session is paused — the
+      // pause guard must short-circuit the auto-grant. Pausing is
+      // a user-floor primitive (`/halt`); even a fresh typed
+      // intent does not authorize the AI to silently route around
+      // it. The user must resume first.
+      getCurrentTypedIntent: () => typedIntent,
+    });
+    reg!.coBrowseControl.pause("user");
+    expect(reg!.coBrowseControl.getState().kind).toBe("paused");
+
+    const result = await registry.execute("request_control", {});
+    expect((result as { data: unknown }).data).toEqual({ kind: "session_paused" });
+    expect(reg!.coBrowseControl.getState().kind).toBe("paused");
+  });
+
   it("request_control times out and reverts to user when no verdict arrives", async () => {
     const registry = new InMemoryToolRegistry();
     const { dispatcher } = makeMockDispatcher();

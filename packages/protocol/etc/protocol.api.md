@@ -3462,16 +3462,16 @@ export interface TypeIntoAction {
 }
 
 // @public
-export interface UserActionAttestation {
-    // (undocumented)
-    readonly contentHashSha256?: string;
-    // (undocumented)
+export type UserActionAttestation = {
     readonly kind: "user-drag";
-    // (undocumented)
-    readonly surface: "web" | "desktop" | "mobile" | "spatial" | "cli";
-    // (undocumented)
     readonly timestamp: number;
-}
+    readonly surface: "web" | "desktop" | "mobile" | "spatial" | "cli";
+    readonly contentHashSha256?: string;
+} | {
+    readonly kind: "user-typed-intent";
+    readonly timestamp: number;
+    readonly surface: "web" | "desktop" | "mobile" | "spatial" | "cli";
+};
 
 // @alpha
 export type UserInputEvent =

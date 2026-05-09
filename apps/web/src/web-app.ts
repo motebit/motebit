@@ -795,6 +795,16 @@ export class WebApp {
         onNavigateResult: (url) => {
           this._currentBrowserUrl = url;
         },
+        // Implicit-grant fast path — let `request_control` skip the
+        // slab-band prompt when the AI's reach for `computer` came
+        // from a user-typed turn. Reads the runtime's per-turn
+        // typed-intent attestation (set in `sendMessageStreaming`
+        // start, cleared in its `finally`); proactive paths
+        // (`generateActivation`, idle-tick) never run through that
+        // method, so this returns null during their tool calls and
+        // the prompt band fires as before. Doctrine: `CLAUDE.md`
+        // § UI — "do not confirm what the user can already see."
+        getCurrentTypedIntent: () => runtime.currentTypedIntent(),
       });
 
       // Prompt-1 — wire the browser-session info provider so the
@@ -1222,7 +1232,11 @@ export class WebApp {
   async *sendMessageStreaming(
     text: string,
     runId?: string,
-    options?: { delegationScope?: string; suppressHistory?: boolean },
+    options?: {
+      delegationScope?: string;
+      suppressHistory?: boolean;
+      userActionAttestation?: import("@motebit/sdk").UserActionAttestation;
+    },
   ): AsyncGenerator<StreamChunk> {
     if (!this.runtime) throw new Error("Runtime not initialized");
     if (!this.runtime.isAIReady) throw new Error("No provider connected");

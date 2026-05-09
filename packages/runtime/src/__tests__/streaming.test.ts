@@ -430,6 +430,81 @@ describe("sendMessageStreaming", () => {
     expect(runtime.isProcessing).toBe(false);
   });
 
+  // Implicit-grant fast path. The runtime stamps the surface-supplied
+  // typed-intent attestation onto the in-flight turn so tools that
+  // need consent (e.g. `request_control`) can distinguish a
+  // user-driven turn from proactive idle work. Lifecycle invariants:
+  //   - null before any turn runs (fresh runtime)
+  //   - non-null DURING a turn started with the option
+  //   - null after the turn completes (success OR error)
+  //   - never set when the option is omitted (default = fail-closed)
+  it("threads userActionAttestation through the in-flight turn and clears in finally", async () => {
+    const result = makeTurnResult("ok");
+    let observedDuringTurn: ReturnType<typeof runtime.currentTypedIntent> = null;
+    mockRunTurnStreaming.mockImplementation(() =>
+      (async function* () {
+        observedDuringTurn = runtime.currentTypedIntent();
+        yield { type: "text" as const, text: "ok" };
+        yield { type: "result" as const, result };
+      })(),
+    );
+
+    expect(runtime.currentTypedIntent()).toBeNull();
+    const attestation = {
+      kind: "user-typed-intent" as const,
+      timestamp: 1234567,
+      surface: "web" as const,
+    };
+    await collectChunks(
+      runtime.sendMessageStreaming("hello", undefined, {
+        userActionAttestation: attestation,
+      }),
+    );
+    expect(observedDuringTurn).toEqual(attestation);
+    expect(runtime.currentTypedIntent()).toBeNull();
+  });
+
+  it("clears userActionAttestation on error so a stale grant does not leak past the turn", async () => {
+    mockRunTurnStreaming.mockReturnValue(
+      (async function* () {
+        yield { type: "text" as const, text: "" };
+        throw new Error("stream failed");
+      })(),
+    );
+
+    await expect(async () => {
+      await collectChunks(
+        runtime.sendMessageStreaming("hello", undefined, {
+          userActionAttestation: {
+            kind: "user-typed-intent",
+            timestamp: 42,
+            surface: "web",
+          },
+        }),
+      );
+    }).rejects.toThrow("stream failed");
+    expect(runtime.currentTypedIntent()).toBeNull();
+  });
+
+  it("leaves currentTypedIntent null when the surface omits the attestation (proactive path default)", async () => {
+    const result = makeTurnResult();
+    let observedDuringTurn: ReturnType<typeof runtime.currentTypedIntent> = {
+      kind: "user-typed-intent",
+      timestamp: 1,
+      surface: "web",
+    };
+    mockRunTurnStreaming.mockImplementation(() =>
+      (async function* () {
+        observedDuringTurn = runtime.currentTypedIntent();
+        yield { type: "result" as const, result };
+      })(),
+    );
+
+    await collectChunks(runtime.sendMessageStreaming("hello"));
+    expect(observedDuringTurn).toBeNull();
+    expect(runtime.currentTypedIntent()).toBeNull();
+  });
+
   it("dissolves in-flight tool slab items when the stream errors mid-tool", async () => {
     // Bug witnessed on 2026-05-07: AI returned 404 (model-id typo)
     // after a tool_status: "calling" chunk was already projected onto

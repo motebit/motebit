@@ -136,18 +136,40 @@ export type DropTarget = "slab" | "creature" | "ambient";
  * identity key; that path is deferred until per-tier signing UX
  * lands.
  *
- * `contentHashSha256` is optional and present for binary kinds
- * (`image`, `file`, `artifact`) where a hash gives the audit trail
- * something to bind against. The hash binds delivery to a specific
- * byte sequence; it does not, on its own, attest to content
+ * Discriminated union of attestation kinds:
+ *
+ *   - `user-drag` — physical drag gesture delivered a payload to the
+ *     surface. Carries optional `contentHashSha256` for binary kinds
+ *     (`image`, `file`, `artifact`) where a hash gives the audit
+ *     trail something to bind against.
+ *
+ *   - `user-typed-intent` — user submitted a chat message. The
+ *     gesture is the typing-and-send itself; consent flows through
+ *     the same channel as the request. Used by the runtime to
+ *     auto-grant control handoffs that originate inside the same
+ *     turn as the typed message — re-confirming a typed instruction
+ *     would violate the doctrine "do not confirm what the user can
+ *     already see." Proactive idle work has no typed-intent
+ *     attestation, so it always falls back to the explicit prompt
+ *     band — fail-closed by default.
+ *
+ * `contentHashSha256` is optional and only meaningful on `user-drag`
+ * (typed text isn't byte-bound). The hash binds delivery to a
+ * specific byte sequence; it does not, on its own, attest to content
  * authenticity.
  */
-export interface UserActionAttestation {
-  readonly kind: "user-drag";
-  readonly timestamp: number;
-  readonly surface: "web" | "desktop" | "mobile" | "spatial" | "cli";
-  readonly contentHashSha256?: string;
-}
+export type UserActionAttestation =
+  | {
+      readonly kind: "user-drag";
+      readonly timestamp: number;
+      readonly surface: "web" | "desktop" | "mobile" | "spatial" | "cli";
+      readonly contentHashSha256?: string;
+    }
+  | {
+      readonly kind: "user-typed-intent";
+      readonly timestamp: number;
+      readonly surface: "web" | "desktop" | "mobile" | "spatial" | "cli";
+    };
 
 /**
  * Discriminated union over the categorical kinds. Every surface produces

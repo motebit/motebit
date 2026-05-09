@@ -61,6 +61,7 @@ import type {
   ComputerSessionOpened,
   ComputerSessionReceipt,
   EventStoreAdapter,
+  UserActionAttestation,
 } from "@motebit/sdk";
 import { EventType } from "@motebit/sdk";
 
@@ -220,6 +221,25 @@ export interface RegisterWebComputerToolOptions {
    * deterministically.
    */
   readonly requestControlTimeoutMs?: number;
+  /**
+   * Implicit-grant fast path. Returns the typed-intent attestation
+   * for the in-flight user turn, or null when no turn is running OR
+   * the surface didn't supply one. When non-null, `request_control`
+   * skips the slab-band prompt and grants directly — typing the
+   * message that triggered the AI's reach for `computer` IS the
+   * consent gesture; re-confirming it would violate the doctrine
+   * "do not confirm what the user can already see" (`CLAUDE.md`
+   * § UI). Wired by the web app to `runtime.currentTypedIntent()`.
+   *
+   * Proactive paths (`generateActivation`, idle-tick consolidation)
+   * do not run through `sendMessageStreaming`, so this returns null
+   * during their tool calls — the prompt band fires as before
+   * (fail-closed default for non-user-driven work).
+   *
+   * Optional precisely so tests + non-runtime-bound registrations
+   * keep working. When omitted, the flow always opens the band.
+   */
+  readonly getCurrentTypedIntent?: () => UserActionAttestation | null;
 }
 
 /**
@@ -606,6 +626,57 @@ export function registerWebComputerTool(
     // Graceful-degrade-not-fail-closed; same shape as the
     // surface's transport-error handling.
     await ensureDefaultSession();
+
+    // Re-read state after the await — ensureDefaultSession can take
+    // 1-2s and the user could /halt or hit the slab-halt gesture in
+    // that window, transitioning to paused. Without this re-check
+    // we'd fire requestControl from paused, hit invalid_from_state,
+    // and surface the wrong outcome to the AI. Cheap defensive read.
+    const stateAfterEnsure = coBrowseControl.getState();
+    if (stateAfterEnsure.kind === "paused") return { kind: "session_paused" };
+    if (stateAfterEnsure.kind === "motebit") return { kind: "already_in_control" };
+    if (stateAfterEnsure.kind === "handoff_pending") return { kind: "request_pending" };
+
+    // Implicit-grant fast path. The user typed-and-sent the message
+    // that's driving this AI turn; the consent flowed in the same
+    // gesture as the request. Asking them to tap Grant on the slab
+    // band would re-confirm what they can already see they did,
+    // which the calm-software doctrine forbids. Both transitions
+    // (request_control + grant) still emit on the audit log, so the
+    // signed event chain reads identically to a band-tap grant —
+    // initiator: motebit then initiator: user — preserving the
+    // protocol-level audit shape. The differentiator (typed-intent
+    // vs band-tap) lives in the surface's chat history alongside
+    // the message timestamp; deferring a "grant_reason" field on
+    // the transition until a forensic consumer asks for it.
+    //
+    // Two synchronous transitions inside one JS task: the band's
+    // subscribers see handoff_pending → motebit back-to-back before
+    // the browser repaints, so no visible band flicker.
+    //
+    // Failure modes:
+    //   - requestControl returns !ok — race lost (state changed
+    //     under us); fall through to the prompt path below, which
+    //     re-reads state.
+    //   - grantControl returns !ok — defensive; fall through.
+    //     Should be impossible: requestControl just succeeded so
+    //     state is handoff_pending, and grantControl from
+    //     handoff_pending with by="user" is always valid.
+    //
+    // Doctrine: `CLAUDE.md` § UI ("do not confirm what the user can
+    // already see"); surface-determinism § typed-intent (typed
+    // submit IS the consent gesture).
+    const typedIntent = opts.getCurrentTypedIntent?.() ?? null;
+    if (typedIntent !== null) {
+      const reqResult = coBrowseControl.requestControl("motebit");
+      if (reqResult.ok) {
+        const grantResult = coBrowseControl.grantControl("user");
+        if (grantResult.ok) {
+          return { kind: "granted" };
+        }
+      }
+      // Fall through — explicit prompt path covers any race.
+    }
 
     return new Promise<RequestControlOutcome>((resolve) => {
       let resolved = false;

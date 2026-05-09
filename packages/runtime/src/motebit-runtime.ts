@@ -45,6 +45,7 @@ import type {
   DropPayloadKind,
   SensitivityGateEntry,
   SensitivityGateFiredPayload,
+  UserActionAttestation,
 } from "@motebit/sdk";
 import { resolveDropTarget } from "@motebit/sdk";
 import { EMBODIMENT_MODE_CONTRACTS } from "@motebit/render-engine";
@@ -321,6 +322,21 @@ export class MotebitRuntime {
   private _idleTick: IdleTickController | null = null;
   /** Unix ms timestamp of the last user-sent message, or null. */
   private _lastUserMessageAt: number | null = null;
+  /**
+   * The user-typed-intent attestation accompanying the in-flight
+   * `sendMessageStreaming` turn, if any. Set when the surface
+   * passes `options.userActionAttestation` (typed-and-sent chat
+   * messages on web/desktop/mobile), cleared in the turn's
+   * `finally` block. Read by tools that need to distinguish
+   * user-driven turns from proactive idle work — `request_control`
+   * uses it to auto-grant control handoffs that originate inside
+   * the same gesture as the user's message, since re-confirming
+   * what the user just typed violates the doctrine "do not confirm
+   * what the user can already see" (`CLAUDE.md` § UI). Proactive
+   * paths (`generateActivation`, idle-tick consolidation) never
+   * set this, so they fail closed to the explicit prompt band.
+   */
+  private _currentTypedIntent: UserActionAttestation | null = null;
   policy: PolicyGate;
   memoryGovernor: MemoryGovernor;
 
@@ -1875,7 +1891,21 @@ export class MotebitRuntime {
   async *sendMessageStreaming(
     text: string,
     runId?: string,
-    options?: { delegationScope?: string; suppressHistory?: boolean },
+    options?: {
+      delegationScope?: string;
+      suppressHistory?: boolean;
+      /**
+       * Attestation that the user typed-and-sent this message
+       * themselves. Surfaces stamp this on every chat-input submit
+       * (kind: "user-typed-intent"); the runtime threads it through
+       * the turn so tools that need consent (e.g. `request_control`)
+       * can distinguish a user-driven turn from proactive idle work.
+       * Cleared in this method's `finally` block — proactive paths
+       * (`generateActivation`, idle-tick consolidation) never set it,
+       * so they fail closed to the explicit prompt band.
+       */
+      userActionAttestation?: UserActionAttestation;
+    },
   ): AsyncGenerator<StreamChunk> {
     // Privacy doctrine gate. See `assertSensitivityPermitsAiCall` /
     // `SovereignTierRequiredError` for the contract. Fires before the
@@ -1895,6 +1925,7 @@ export class MotebitRuntime {
     // user-initiated turns — not on `generateActivation`, which is
     // system-triggered and should not reset the quiet window.
     this._lastUserMessageAt = Date.now();
+    this._currentTypedIntent = options?.userActionAttestation ?? null;
     this.streaming.clearPendingApproval();
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
     this.behavior.setSpeaking(true);
@@ -1981,11 +2012,32 @@ export class MotebitRuntime {
       this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
+      // Typed-intent consent dies with the turn. Carrying it past the
+      // turn boundary would let proactive idle work (which fires
+      // through `generateActivation`, never `sendMessageStreaming`)
+      // catch a stale grant — so we clear here unconditionally,
+      // including on the catch-block rethrow.
+      this._currentTypedIntent = null;
       // Return presence to idle so the next idle-tick can fire. enterIdle
       // is unconditional here — if a cycle is still unwinding, its
       // finally's exitTending will see mode!=tending and no-op.
       this.presence.enterIdle();
     }
+  }
+
+  /**
+   * The user-typed-intent attestation for the in-flight turn, or
+   * null when no `sendMessageStreaming` is running OR the surface
+   * didn't supply one. Tools that need to distinguish a user-driven
+   * turn from proactive idle work read this — `request_control`
+   * uses it to auto-grant control handoffs that originate inside
+   * the same gesture as the user's typed message. Proactive paths
+   * (`generateActivation`, idle-tick consolidation) never run
+   * through `sendMessageStreaming`, so the value is always null
+   * during their tool calls — which is the fail-closed default.
+   */
+  currentTypedIntent(): UserActionAttestation | null {
+    return this._currentTypedIntent;
   }
 
   /**

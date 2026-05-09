@@ -647,7 +647,23 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     let capturedReceipt: ExecutionReceipt | null = null;
 
     try {
-      for await (const chunk of ctx.app.sendMessageStreaming(text)) {
+      // Stamp the typed-intent attestation onto this turn. The
+      // runtime threads it to tools that need to distinguish a
+      // user-driven turn from proactive idle work — chiefly
+      // `request_control`, which auto-grants control handoffs that
+      // originate inside the same gesture as a user-typed message
+      // instead of opening the slab band's doorbell. The attestation
+      // proves intentional delivery (the user typed and submitted
+      // this); content authenticity is not implied. Doctrine:
+      // `CLAUDE.md` § UI ("do not confirm what the user can already
+      // see") + perception.ts on attestation semantics.
+      for await (const chunk of ctx.app.sendMessageStreaming(text, undefined, {
+        userActionAttestation: {
+          kind: "user-typed-intent",
+          timestamp: Date.now(),
+          surface: "web",
+        },
+      })) {
         switch (chunk.type) {
           case "text": {
             if (!firstChunkReceived) {
