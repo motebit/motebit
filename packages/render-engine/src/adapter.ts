@@ -271,6 +271,23 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.slab?.setControlBand(element);
   }
 
+  /**
+   * Forward a decoded screencast frame onto the slab's screen mesh.
+   * Sibling of `setSlabControlBand` — non-item slab content, owned by
+   * the slab core. Pair with `clearSlabScreencast` at session close.
+   */
+  setSlabScreencastImage(source: HTMLImageElement | ImageBitmap): void {
+    this.slab?.setScreencastImage(source);
+  }
+
+  /**
+   * Tear down the slab's screencast texture. Sibling of
+   * `setSlabScreencastImage`; idempotent.
+   */
+  clearSlabScreencast(): void {
+    this.slab?.clearScreencast();
+  }
+
   setBackground(color: number | null): void {
     if (this.scene) {
       this.scene.background = color === null ? null : new THREE.Color(color);

@@ -218,6 +218,30 @@ export interface RenderAdapter {
    * to the canvas's controls.
    */
   setSlabControlBand?(element: HTMLElement | null): void;
+  /**
+   * Upload a decoded screencast frame as the slab's screen-mesh
+   * texture. The slab maintains a third meniscus-shaped plane inside
+   * the glass volume; this method lights it up with the cloud
+   * browser's JPEG bitstream (one frame at a time, replace-in-place).
+   *
+   * Pass `HTMLImageElement` (current path — `live-browser.ts`
+   * pre-decodes via `Image.decode()` and hands the decoded element)
+   * or `ImageBitmap` (if a future surface uses `createImageBitmap`).
+   * Both are valid `THREE.Texture.image` sources.
+   *
+   * Replaces the prior CSS3DObject `<img>` overlay path. WebGL render
+   * means shared depth buffer with the creature (no through-punch on
+   * rotation) and silhouette-clip by the meniscus (the screen follows
+   * the slab's droplet shape, not a hard rectangle). Pair with
+   * `clearSlabScreencast()` on session close.
+   */
+  setSlabScreencastImage?(source: HTMLImageElement | ImageBitmap): void;
+  /**
+   * Hide the slab's screen mesh and dispose its texture. Sibling of
+   * `setSlabScreencastImage`; called when the cloud-browser session
+   * closes or the live_browser slab item dissolves. Idempotent.
+   */
+  clearSlabScreencast?(): void;
 }
 
 // === Slab ("Motebit Computer") — scene primitive types ===

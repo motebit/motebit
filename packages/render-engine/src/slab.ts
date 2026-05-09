@@ -203,6 +203,22 @@ export class SlabManager {
    * (the 2026-05-07 19:03 angled-view triage).
    */
   private readonly sideWallMesh: THREE.Mesh;
+  /**
+   * Texture surface for the live screencast — a third meniscus-shaped
+   * plane embedded inside the slab volume (same z as the stage,
+   * 1mm in front of the back pane), carrying the cloud browser's
+   * JPEG frames as a `MeshBasicMaterial.map`. Sibling to the front
+   * + back panes; lives in the WebGL scene graph so it shares the
+   * depth buffer with the creature and is naturally clipped by the
+   * slab's meniscus silhouette. Replaces the prior
+   * `<img>`-via-`CSS3DObject` path, which had no shared depth (HTML
+   * overlay punched through the creature on rotation) and no
+   * silhouette-clip (rectangular img on a rounded slab — Daniel's
+   * "doesn't follow the slab shape" / 2026-05-09 04:23 triage).
+   */
+  private readonly screenMesh: THREE.Mesh;
+  private readonly screenMaterial: THREE.MeshBasicMaterial;
+  private screenTexture: THREE.Texture | null = null;
   private readonly planeMaterial: THREE.MeshPhysicalMaterial;
   /**
    * One CSS3DObject anchored at the plane's center, holding a single
@@ -365,6 +381,39 @@ export class SlabManager {
     this.sideWallMesh = new THREE.Mesh(sideWallGeo, this.planeMaterial);
     this.sideWallMesh.visible = false;
     this.group.add(this.sideWallMesh);
+
+    // Screen mesh — third meniscus plane inside the slab volume, sized
+    // edge-to-edge with the front/back panes so its silhouette is the
+    // same droplet curve. Sits at the same z as the stage anchor (just
+    // in front of the back pane), so the front pane's transmission
+    // refracts the texture through the glass. `MeshBasicMaterial`
+    // (unlit) keeps the screen pixels at face value — environment
+    // lighting shouldn't tint a display surface. Initial state hidden
+    // + no map; populated by `setScreencastImage(...)` when a live
+    // screencast is active. Doctrine bind: motebit-computer.md §"v1
+    // implementation status — virtual_browser v1.3 live screencast"
+    // moves from CSS3D-overlay to back-pane-texture register here, the
+    // step the existing comments at line 137 anticipated as "step 3 of
+    // the volume arc."
+    const screenGeo = createMeniscusPlaneGeometry(SLAB_WIDTH, SLAB_HEIGHT, 16, 16);
+    this.screenMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      side: THREE.DoubleSide,
+      // Display pixels at face value — tone-mapping (ACES, etc.) on
+      // a screencast washes out colors. Same register Three.js
+      // recommends for video surfaces (`VideoTexture` examples).
+      toneMapped: false,
+      // Transparent objects shouldn't write depth; the front pane's
+      // transmission pass needs the screen mesh in the source-scene
+      // render target, but writing depth competes with the back pane
+      // and can z-fight in tests with tiny offsets.
+      depthWrite: false,
+    });
+    this.screenMesh = new THREE.Mesh(screenGeo, this.screenMaterial);
+    this.screenMesh.position.z = -SLAB_THICKNESS / 2 + STAGE_Z_OFFSET_FROM_BACK;
+    this.screenMesh.visible = false;
+    this.screenMesh.name = "slab-screen";
+    this.group.add(this.screenMesh);
 
     // Items container — one CSS3DObject rooted near the back pane.
     // `CSS3DObject`'s constructor force-sets `pointer-events: auto` and
@@ -543,6 +592,79 @@ export class SlabManager {
     if (element != null) {
       slot.appendChild(element);
     }
+  }
+
+  /**
+   * Upload a decoded screencast frame as the slab's screen-mesh
+   * texture. The mesh becomes visible on first frame; subsequent
+   * frames replace the texture image in place (`needsUpdate = true`)
+   * so per-frame allocation is bounded.
+   *
+   * Accepts `HTMLImageElement` (current path — `live-browser.ts`
+   * pre-decodes via `Image.decode()` and hands the decoded element
+   * directly) or `ImageBitmap` (future path if we move to
+   * `createImageBitmap`). Both are valid `THREE.Texture.image`
+   * sources.
+   *
+   * Replaces the CSS3DObject-mounted `<img>` rendering register: the
+   * screencast now lives in the WebGL scene graph, depth-tested with
+   * the creature and silhouette-clipped by the meniscus geometry.
+   * Closes the "doesn't follow the slab shape" + "punches through the
+   * creature on rotation" seam Daniel surfaced 2026-05-09. Doctrine:
+   * motebit-computer.md §"v1.3 live screencast", `liquescentia-as-
+   * substrate.md` §"Cohesive permeability" (the slab is glass; pixels
+   * embed in it, they don't sit in a parallel layer in front of it).
+   */
+  setScreencastImage(source: HTMLImageElement | ImageBitmap): void {
+    if (this.screenTexture == null) {
+      this.screenTexture = new THREE.Texture();
+      // `flipY = true` matches Three.js convention for HTMLImageElement
+      // and default-orientation ImageBitmap; the texture renders
+      // upright on the mesh. SRGBColorSpace matches the JPEG source's
+      // color space so the screencast displays at face value rather
+      // than gamma-shifted.
+      this.screenTexture.colorSpace = THREE.SRGBColorSpace;
+      this.screenTexture.minFilter = THREE.LinearFilter;
+      this.screenTexture.magFilter = THREE.LinearFilter;
+      this.screenTexture.generateMipmaps = false;
+      this.screenMaterial.map = this.screenTexture;
+      this.screenMaterial.needsUpdate = true;
+    }
+    // Release the previous frame's GPU resources when the source is an
+    // ImageBitmap (HTMLImageElement is GC'd by the browser).
+    const prev = this.screenTexture.image as
+      | (ImageBitmap & { close?: () => void })
+      | HTMLImageElement
+      | null;
+    if (prev != null && "close" in prev && typeof prev.close === "function") {
+      prev.close();
+    }
+    this.screenTexture.image = source;
+    this.screenTexture.needsUpdate = true;
+    this.screenMesh.visible = true;
+  }
+
+  /**
+   * Tear down the screencast texture and hide the screen mesh. Called
+   * when the cloud-browser session closes or the live_browser slab
+   * item dissolves. Idempotent — clears state cleanly even if
+   * `setScreencastImage` was never called.
+   */
+  clearScreencast(): void {
+    this.screenMesh.visible = false;
+    if (this.screenTexture != null) {
+      const bitmap = this.screenTexture.image as
+        | (ImageBitmap & { close?: () => void })
+        | HTMLImageElement
+        | null;
+      if (bitmap != null && "close" in bitmap && typeof bitmap.close === "function") {
+        bitmap.close();
+      }
+      this.screenTexture.dispose();
+      this.screenTexture = null;
+    }
+    this.screenMaterial.map = null;
+    this.screenMaterial.needsUpdate = true;
   }
 
   /**

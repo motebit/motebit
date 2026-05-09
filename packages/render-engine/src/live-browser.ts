@@ -112,7 +112,29 @@ export interface LiveBrowserElementHandle {
   dispose(): void;
 }
 
-export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrowserElementHandle {
+/**
+ * Optional consumer hooks. The most-load-bearing today is
+ * `onFrameDecoded`: each pre-decoded frame is delivered upstream so
+ * the surface can route it to the slab's WebGL screen-mesh texture
+ * (`renderer.setSlabScreencastImage`) — the screencast lives in the
+ * scene graph, depth-tested with the creature, silhouette-clipped by
+ * the meniscus. The HTML `<img>` stays mounted with `opacity: 0` so
+ * cobrowse-input-capture's existing pointer + keyboard pipeline keeps
+ * working unchanged; it's the input surface, the texture is the visual.
+ *
+ * Decoupled by design: live-browser doesn't import `@motebit/render-
+ * engine`'s adapter. The surface chooses what to do with each decoded
+ * frame (slab texture, an artifact preview, telemetry); we just hand
+ * it the decoded `HTMLImageElement` after `Image.decode()` resolves.
+ */
+export interface BuildLiveBrowserDeps {
+  readonly onFrameDecoded?: (image: HTMLImageElement, frame: ScreencastFrame) => void;
+}
+
+export function buildLiveBrowserElement(
+  source: ScreencastFrameSource,
+  deps: BuildLiveBrowserDeps = {},
+): LiveBrowserElementHandle {
   const root = document.createElement("div");
   root.className = "slab-live-browser";
 
@@ -164,18 +186,22 @@ export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrow
   // `user-drag` is non-standard but recognized by WebKit/Blink; kept for
   // legacy Safari versions that don't fully honor `draggable=false`.
   img.style.setProperty("-webkit-user-drag", "none");
-  // Slice 2g — start hidden so an `<img>` with no `src` doesn't
-  // render the browser's default broken-image glyph + alt text.
-  // The placeholder div below carries the loading UX until the
-  // first frame arrives; `pushFrame` flips this to "block" on
-  // first frame and the placeholder removes itself in the same
-  // tick. Without this hide-then-show, users see a broken-image
-  // icon labeled "live browser" stacked above the placeholder
-  // — debug-looking, witnessed in the post-Slice-2f smoke.
-  img.style.display = "none";
+  // Visual register moved to the slab's WebGL screen-mesh texture
+  // (renderer.setSlabScreencastImage; see deps.onFrameDecoded below).
+  // The HTML img stays mounted as the input-capture surface — clicks,
+  // keystrokes, paste, and wheel events forward through cobrowse-input-
+  // capture's existing pipeline against this element — but renders
+  // invisibly so the textured mesh is what the user sees. Same
+  // screen-space rect, zero visual contribution. Closes the "doesn't
+  // follow the slab shape" + "punches through the creature on
+  // rotation" seam Daniel surfaced 2026-05-09 04:23 — the visible
+  // pixels now share the WebGL depth buffer with the creature and are
+  // silhouette-clipped by the meniscus geometry.
+  img.style.opacity = "0";
+  img.style.display = "block";
   img.style.width = "100%";
   img.style.aspectRatio = "16 / 10";
-  img.style.background = "rgba(255, 255, 255, 0.04)";
+  img.style.background = "transparent";
   root.appendChild(img);
 
   // Pre-frame placeholder text — replaces with the first frame the
@@ -218,7 +244,7 @@ export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrow
     const myGen = ++pendingGeneration;
     const dataUri = `data:image/jpeg;base64,${frame.jpeg_base64}`;
 
-    const paint = (): void => {
+    const paint = (decoded?: HTMLImageElement): void => {
       if (disposed) return;
       // Drop if a newer frame already painted while we were decoding.
       // Prevents back-and-forth churn when frames arrive in bursts.
@@ -226,18 +252,21 @@ export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrow
       lastPaintedGeneration = myGen;
       img.src = dataUri;
       // Lock the element's aspect ratio to the captured viewport on
-      // first frame so it stops billboarding as the placeholder ratio.
+      // first frame so the input-capture's `getBoundingClientRect`
+      // math against the screencast natural-dimensions stays honest.
       if (!firstFrameSeen) {
         firstFrameSeen = true;
         if (frame.device_width > 0 && frame.device_height > 0) {
           img.style.aspectRatio = `${frame.device_width} / ${frame.device_height}`;
         }
-        // Slice 2g — flip the img visible only after the first decode-
-        // ready src has been assigned. Pair with the `display: none`
-        // initial state in the constructor; together they suppress the
-        // broken-image fallback glyph during the loading window.
-        img.style.display = "block";
         placeholder.remove();
+      }
+      // Hand the decoded image to consumers (apps/web routes it to the
+      // slab's WebGL screen-mesh texture). When `decoded` is absent
+      // (jsdom path with no `Image.decode`), fall back to the visible
+      // img — by this point its `src` is set, so consumers can read it.
+      if (deps.onFrameDecoded != null) {
+        deps.onFrameDecoded(decoded ?? img, frame);
       }
     };
 
@@ -250,7 +279,10 @@ export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrow
       const preload = new Image();
       preload.decoding = "async";
       preload.src = dataUri;
-      preload.decode().then(paint, paint);
+      preload.decode().then(
+        () => paint(preload),
+        () => paint(),
+      );
     } else {
       paint();
     }

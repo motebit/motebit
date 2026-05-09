@@ -108,6 +108,85 @@ describe("buildLiveBrowserElement", () => {
     }
   });
 
+  it("renders the input-capture img invisibly (opacity:0) — visuals come from the WebGL screen mesh", () => {
+    // Visual register moved to the slab's screen mesh (textured WebGL
+    // mesh in the scene graph). The HTML img stays mounted so cobrowse-
+    // input-capture's pointer/keyboard pipeline keeps working unchanged
+    // — same screen-space rect, same listeners — but renders invisibly
+    // so the textured mesh is what the user sees. Without opacity:0 the
+    // img would re-appear on top of the texture and the user would see
+    // a doubled / brighter screen.
+    const handle = buildLiveBrowserElement(new StubBus());
+    const img = handle.element.querySelector("img.slab-live-browser-frame") as HTMLImageElement;
+    expect(img).toBeTruthy();
+    expect(img.style.opacity).toBe("0");
+    // display:block so input-capture's getBoundingClientRect resolves
+    // a real rect — display:none returns 0×0 and would break click-
+    // coordinate translation.
+    expect(img.style.display).toBe("block");
+  });
+
+  it("calls onFrameDecoded with the pre-decoded HTMLImageElement after Image.decode() resolves", async () => {
+    // The surface (apps/web) wires this callback to
+    // `renderer.setSlabScreencastImage(image)` so the slab's WebGL
+    // screen-mesh texture lights up. Without the callback, the texture
+    // never updates and the screencast is invisible (img is opacity:0,
+    // texture is empty) — load-bearing for the new render path.
+    const bus = new StubBus();
+    const originalDecode = (Image.prototype as { decode?: () => Promise<void> }).decode;
+    const resolvers: Array<() => void> = [];
+    (Image.prototype as { decode?: () => Promise<void> }).decode =
+      function decode(): Promise<void> {
+        return new Promise<void>((resolve) => {
+          resolvers.push(resolve);
+        });
+      };
+    try {
+      const decoded: Array<{ image: HTMLImageElement; timestamp: number }> = [];
+      buildLiveBrowserElement(bus, {
+        onFrameDecoded: (image, frame) => {
+          decoded.push({ image, timestamp: frame.timestamp });
+        },
+      });
+
+      bus.publish(makeFrame({ jpeg_base64: "FRAME-A", timestamp: 1_000 }));
+      // Decode in-flight — no callback yet.
+      expect(decoded).toHaveLength(0);
+
+      resolvers.forEach((r) => r());
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(decoded).toHaveLength(1);
+      expect(decoded[0]!.image).toBeInstanceOf(HTMLImageElement);
+      expect(decoded[0]!.image.src).toContain("FRAME-A");
+      expect(decoded[0]!.timestamp).toBe(1_000);
+    } finally {
+      if (originalDecode) {
+        (Image.prototype as { decode?: () => Promise<void> }).decode = originalDecode;
+      } else {
+        delete (Image.prototype as { decode?: () => Promise<void> }).decode;
+      }
+    }
+  });
+
+  it("falls back to passing the visible img when Image.decode is unavailable (jsdom path)", () => {
+    // jsdom doesn't define Image.prototype.decode. The fallback path
+    // should still fire onFrameDecoded with whatever's available — the
+    // visible img after src is set — so the slab texture path doesn't
+    // silently drop frames in test environments.
+    const bus = new StubBus();
+    const decoded: HTMLImageElement[] = [];
+    const handle = buildLiveBrowserElement(bus, {
+      onFrameDecoded: (image) => {
+        decoded.push(image);
+      },
+    });
+    bus.publish(makeFrame({ jpeg_base64: "JSDOM", timestamp: 5 }));
+    expect(decoded).toHaveLength(1);
+    // In the fallback path the visible img IS what's passed.
+    expect(decoded[0]).toBe(handle.element.querySelector("img"));
+  });
+
   it("disables native HTML image drag on the frame img — no native drag-ghost, no drop-handler hijack", () => {
     // Repro for the production /computer bug: click+hold+drag on the
     // screencast triggered the browser's native image-drag. On release,

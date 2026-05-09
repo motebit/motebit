@@ -1949,6 +1949,15 @@ function renderLiveBrowser(item: SlabItem): HTMLElement {
     displayWidth?: number;
     displayHeight?: number;
     onLiveBrowserMount?: (handle: LiveBrowserElementHandle) => void;
+    /**
+     * Surface-supplied frame router. Fires on every pre-decoded
+     * screencast frame; apps/web wires this to
+     * `renderer.setSlabScreencastImage(image)` so the slab's WebGL
+     * screen-mesh texture lights up. Without it, the HTML img path
+     * still runs (input capture stays functional) but the screencast
+     * is invisible — opacity:0 on the img.
+     */
+    onFrameDecoded?: (image: HTMLImageElement) => void;
   };
   const source = payload.frameSource;
   if (!source || typeof source.subscribe !== "function") {
@@ -1963,7 +1972,12 @@ function renderLiveBrowser(item: SlabItem): HTMLElement {
     fallback.style.opacity = "0.55";
     return fallback;
   }
-  const handle = buildLiveBrowserElement(source);
+  const handle = buildLiveBrowserElement(source, {
+    onFrameDecoded:
+      typeof payload.onFrameDecoded === "function"
+        ? (image) => payload.onFrameDecoded?.(image)
+        : undefined,
+  });
   let detachInput: (() => void) | null = null;
   if (typeof payload.forwardUserInput === "function") {
     detachInput = attachInputCapture({

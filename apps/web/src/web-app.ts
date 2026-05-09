@@ -1753,6 +1753,16 @@ export class WebApp {
           // clears the legacy slot.
           this.applyChromeToCurrentState();
         },
+        // 2026-05-09 — route every pre-decoded frame onto the slab's
+        // WebGL screen-mesh texture. Replaces the prior CSS3D-overlay
+        // visual register: pixels now live in the scene graph, share
+        // depth with the creature, and clip to the meniscus
+        // silhouette. The HTML img stays mounted (opacity:0) for the
+        // existing input-capture pipeline — same screen-space rect,
+        // zero visual contribution.
+        onFrameDecoded: (image: HTMLImageElement) => {
+          this.renderer.setSlabScreencastImage?.(image);
+        },
       },
     });
   }
@@ -1890,6 +1900,10 @@ export class WebApp {
     // previous session's dispatcher.
     this.liveBrowserHandle = null;
     this.liveBrowserForwardEvent = null;
+    // 2026-05-09 — release the slab's WebGL screen-mesh texture so a
+    // subsequent session opens against a clean slate. Sibling of
+    // setSlabScreencastImage.
+    this.renderer.clearSlabScreencast?.();
     try {
       // Live screencast does not detach as an artifact — it's a
       // continuous surface, not a durable output. `kind: "completed"`

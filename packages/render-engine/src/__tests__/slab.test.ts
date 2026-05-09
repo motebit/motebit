@@ -581,3 +581,91 @@ describe("SlabManager — co-browse control band slot", () => {
     expect(() => mgr.setControlBand(null)).not.toThrow();
   });
 });
+
+describe("SlabManager — screencast WebGL texture (v1.3 → texture register)", () => {
+  // The slab carries a third meniscus-shaped plane inside the glass
+  // volume that the cloud-browser screencast paints onto. Exposed via
+  // setScreencastImage / clearScreencast on the SlabManager (forwarded
+  // through the renderer adapter as setSlabScreencastImage /
+  // clearSlabScreencast). This test set pins the visibility +
+  // texture-state contract.
+
+  function findScreenMesh(mgr: SlabManager): {
+    visible: boolean;
+    material: { map: unknown; needsUpdate: boolean };
+  } | null {
+    const group = (
+      mgr as unknown as { group: { children: Array<{ name?: string; visible?: boolean }> } }
+    ).group;
+    const mesh = group.children.find((c) => c.name === "slab-screen") as unknown as
+      | { visible: boolean; material: { map: unknown; needsUpdate: boolean } }
+      | undefined;
+    return mesh ?? null;
+  }
+
+  it("ships with a hidden screen mesh until the first frame lands", () => {
+    const mgr = makeManager();
+    const screen = findScreenMesh(mgr);
+    expect(screen).not.toBeNull();
+    expect(screen!.visible).toBe(false);
+    expect(screen!.material.map).toBeNull();
+  });
+
+  it("setScreencastImage(image) populates the material's map and shows the screen mesh", () => {
+    const mgr = makeManager();
+    const fakeImage = { width: 1280, height: 800 } as unknown as HTMLImageElement;
+    mgr.setScreencastImage(fakeImage);
+    const screen = findScreenMesh(mgr)!;
+    expect(screen.visible).toBe(true);
+    expect(screen.material.map).not.toBeNull();
+    // Texture's image points at what we passed in — the next frame
+    // will replace `.image` in place rather than allocating a new
+    // texture per frame.
+    const map = screen.material.map as { image: unknown };
+    expect(map.image).toBe(fakeImage);
+  });
+
+  it("subsequent setScreencastImage calls replace the texture's image in place (no per-frame allocation)", () => {
+    const mgr = makeManager();
+    const a = { width: 1280, height: 800 } as unknown as HTMLImageElement;
+    const b = { width: 1280, height: 800 } as unknown as HTMLImageElement;
+    mgr.setScreencastImage(a);
+    const screen = findScreenMesh(mgr)!;
+    const firstTexture = screen.material.map;
+    mgr.setScreencastImage(b);
+    // Same texture object — only `.image` swapped.
+    expect(screen.material.map).toBe(firstTexture);
+    expect((screen.material.map as { image: unknown }).image).toBe(b);
+  });
+
+  it("clearScreencast() hides the mesh, releases the texture, and clears the material map", () => {
+    const mgr = makeManager();
+    mgr.setScreencastImage({ width: 1280, height: 800 } as unknown as HTMLImageElement);
+    mgr.clearScreencast();
+    const screen = findScreenMesh(mgr)!;
+    expect(screen.visible).toBe(false);
+    expect(screen.material.map).toBeNull();
+  });
+
+  it("clearScreencast() on a never-painted slab is a no-op (no throw, idempotent)", () => {
+    const mgr = makeManager();
+    expect(() => mgr.clearScreencast()).not.toThrow();
+    expect(() => mgr.clearScreencast()).not.toThrow();
+    const screen = findScreenMesh(mgr)!;
+    expect(screen.visible).toBe(false);
+  });
+
+  it("closes ImageBitmap on replacement so GPU-side bitmap memory doesn't leak", () => {
+    const mgr = makeManager();
+    let aClosed = false;
+    const a = {
+      close: () => {
+        aClosed = true;
+      },
+    } as unknown as ImageBitmap;
+    const b = { close: () => {} } as unknown as ImageBitmap;
+    mgr.setScreencastImage(a);
+    mgr.setScreencastImage(b);
+    expect(aClosed).toBe(true);
+  });
+});
