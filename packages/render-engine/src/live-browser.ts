@@ -197,6 +197,17 @@ export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrow
   let lastTimestamp = 0;
   let disposed = false;
 
+  // Per-frame paint coordination. The naive `img.src = newDataURI`
+  // pattern triggers a synchronous decode on the visible img, and
+  // produces a brief tear/blank during the decode of every frame —
+  // perceptible as "flashing" on heavy auto-animating pages
+  // (cookie-modal slides, hero-video carousels, ad rotation). World-
+  // class screen-share clients pre-decode each frame on a hidden
+  // Image, then swap atomically once decode resolves. Generation
+  // counter drops stale frames so a burst paints only the latest.
+  let pendingGeneration = 0;
+  let lastPaintedGeneration = 0;
+
   function pushFrame(frame: ScreencastFrame): void {
     if (disposed) return;
     // Drop out-of-order frames. CDP frames generally arrive in order
@@ -204,20 +215,44 @@ export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrow
     // render-thread paint queue honest.
     if (frame.timestamp < lastTimestamp) return;
     lastTimestamp = frame.timestamp;
-    img.src = `data:image/jpeg;base64,${frame.jpeg_base64}`;
-    // Lock the element's aspect ratio to the captured viewport on
-    // first frame so it stops billboarding as the placeholder ratio.
-    if (!firstFrameSeen) {
-      firstFrameSeen = true;
-      if (frame.device_width > 0 && frame.device_height > 0) {
-        img.style.aspectRatio = `${frame.device_width} / ${frame.device_height}`;
+    const myGen = ++pendingGeneration;
+    const dataUri = `data:image/jpeg;base64,${frame.jpeg_base64}`;
+
+    const paint = (): void => {
+      if (disposed) return;
+      // Drop if a newer frame already painted while we were decoding.
+      // Prevents back-and-forth churn when frames arrive in bursts.
+      if (myGen <= lastPaintedGeneration) return;
+      lastPaintedGeneration = myGen;
+      img.src = dataUri;
+      // Lock the element's aspect ratio to the captured viewport on
+      // first frame so it stops billboarding as the placeholder ratio.
+      if (!firstFrameSeen) {
+        firstFrameSeen = true;
+        if (frame.device_width > 0 && frame.device_height > 0) {
+          img.style.aspectRatio = `${frame.device_width} / ${frame.device_height}`;
+        }
+        // Slice 2g — flip the img visible only after the first decode-
+        // ready src has been assigned. Pair with the `display: none`
+        // initial state in the constructor; together they suppress the
+        // broken-image fallback glyph during the loading window.
+        img.style.display = "block";
+        placeholder.remove();
       }
-      // Slice 2g — flip the img visible only after the first decode-
-      // ready src has been assigned. Pair with the `display: none`
-      // initial state in the constructor; together they suppress the
-      // broken-image fallback glyph during the loading window.
-      img.style.display = "block";
-      placeholder.remove();
+    };
+
+    // Pre-decode on a hidden Image when supported; the browser caches
+    // by data URI, so swapping `img.src` to the same URI after decode
+    // resolves serves from cache — effectively atomic, no decode-flash
+    // on the visible img. jsdom and other test environments don't
+    // implement `decode()`; fall back to direct paint there.
+    if (typeof Image.prototype.decode === "function") {
+      const preload = new Image();
+      preload.decoding = "async";
+      preload.src = dataUri;
+      preload.decode().then(paint, paint);
+    } else {
+      paint();
     }
   }
 
