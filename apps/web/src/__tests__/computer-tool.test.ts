@@ -281,6 +281,103 @@ describe("registerWebComputerTool", () => {
   });
 
   // -------------------------------------------------------------------
+  // live_browser slab item lifecycle stability across navigations.
+  //
+  // The architectural claim: across N navigates within one
+  // registration, the cloud session is opened ONCE and reused for
+  // every action. The web app's `onSessionLive` mounts the
+  // live_browser slab item at session-open and `onSessionEnding`
+  // dissolves it at session-close — both are wired one-to-one with
+  // session lifecycle. So if openSession fires once and closeSession
+  // fires once (at dispose), the slab item mounts once and dissolves
+  // once. The dissolve+remount-mid-session failure mode (which would
+  // break controlBandSlot host continuity, the screencast img's
+  // texture state, and the user's "one continuous browser surface"
+  // mental model) cannot happen as long as this invariant holds.
+  //
+  // We pin the underlying invariant — `dispatcher.queryDisplay` (the
+  // single observable inside the openSession path) fires exactly
+  // once across many navigates — and the surface invariant
+  // (`onSessionEnding` fires zero times during navigation, exactly
+  // once at dispose). Future drift that introduces a per-navigate
+  // session reopen would trip both halves of this test.
+  //
+  // Pairs with: navigate-noop-at-dispatch (the no-op short-circuit
+  // means a same-URL navigate isn't even a roundtrip) and the
+  // implicit-grant slice (which removed the request_control prompt
+  // from typed-intent turns). Together: typed → grant → dispatch
+  // (no-op or real) → same slab item, no flicker.
+  // -------------------------------------------------------------------
+
+  it("opens the cloud session once across N navigates and dissolves only at dispose", async () => {
+    const registry = new InMemoryToolRegistry();
+    const calls: MockDispatcherCalls = { queryDisplay: 0, execute: [], dispose: 0 };
+    const dispatcher: ComputerPlatformDispatcher = {
+      async queryDisplay() {
+        calls.queryDisplay++;
+        return { width: 1280, height: 800, scaling_factor: 1 };
+      },
+      async execute(action) {
+        calls.execute.push({ kind: action.kind });
+        if (action.kind === "navigate") {
+          return {
+            kind: "navigate",
+            ok: true,
+            url: (action as { url: string }).url,
+            visual_content_detected: true,
+            blank_page_detected: false,
+            access_denied_detected: false,
+            visual_readiness_timeout: false,
+          };
+        }
+        return { kind: action.kind, ok: true };
+      },
+      async dispose() {
+        calls.dispose++;
+      },
+    };
+
+    const sessionEndingCalls: string[] = [];
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      onSessionEnding: (sessionId) => sessionEndingCalls.push(sessionId),
+    });
+    grantMotebit(reg!);
+
+    // Three navigates to different URLs — the same shape the web
+    // app would produce when the user typed three separate "open X"
+    // intents. Each navigate goes through the session manager's
+    // executeAction, which routes via the cached defaultSession.
+    await registry.execute("computer", { action: { kind: "navigate", url: "https://nba.com" } });
+    await registry.execute("computer", {
+      action: { kind: "navigate", url: "https://news.ycombinator.com" },
+    });
+    await registry.execute("computer", { action: { kind: "navigate", url: "https://google.com" } });
+
+    // queryDisplay is the single observable inside openSession — the
+    // session manager's `openSession` calls it once on the dispatcher
+    // to seed display dimensions. If the registration ever
+    // re-opened the session per-navigate, this would be 3, and the
+    // live_browser slab item would have unmounted+remounted 3 times.
+    expect(calls.queryDisplay).toBe(1);
+    expect(calls.execute).toHaveLength(3);
+    // No dissolve mid-session — onSessionEnding is paired with
+    // closeAndEmit, which only fires on dispose / transport-fault.
+    expect(sessionEndingCalls).toEqual([]);
+
+    // Dispose closes the session AND fires onSessionEnding exactly
+    // once with the session id — the surface's signal to dissolve
+    // the slab item. Pairs with onSessionLive at the open side
+    // (also one-to-one with session lifecycle).
+    await reg!.dispose();
+    expect(calls.dispose).toBe(1);
+    expect(sessionEndingCalls).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------
   // v1.5 — close emits a signed `ComputerSessionSummarized` event when
   // the registration has the runtime's signing path wired.
   // -------------------------------------------------------------------
