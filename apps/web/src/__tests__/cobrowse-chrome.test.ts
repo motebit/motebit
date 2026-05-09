@@ -235,7 +235,7 @@ describe("renderCoBrowseChrome — always-present chrome surround", () => {
     const { machine } = makeMockMachine();
     const { fwd } = makeForwardEvent();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
-    expect(el.style.background).toContain("rgba(255, 255, 255");
+    expect(el.style.background).toMatch(/rgba\(\s*\d+,\s*\d+,\s*\d+\s*,\s*0\.[89]/);
     expect(el.style.border).toContain("solid");
     expect(el.style.boxShadow).not.toBe("none");
     // No doorbell accent in user state — surround is present, but
@@ -246,7 +246,7 @@ describe("renderCoBrowseChrome — always-present chrome surround", () => {
   it("motebit state has the present surround — same as user, browser convention", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "motebit" }, machine, {});
-    expect(el.style.background).toContain("rgba(255, 255, 255");
+    expect(el.style.background).toMatch(/rgba\(\s*\d+,\s*\d+,\s*\d+\s*,\s*0\.[89]/);
     expect(el.style.border).toContain("solid");
     expect(el.style.boxShadow).not.toBe("none");
     expect(el.style.borderLeft).not.toContain("3px solid");
@@ -256,7 +256,7 @@ describe("renderCoBrowseChrome — always-present chrome surround", () => {
     const { machine } = makeMockMachine();
     const state: ControlState = { kind: "handoff_pending", current: "user", requesting: "motebit" };
     const el = renderCoBrowseChrome(state, machine, {});
-    expect(el.style.background).toContain("rgba(255, 255, 255");
+    expect(el.style.background).toMatch(/rgba\(\s*\d+,\s*\d+,\s*\d+\s*,\s*0\.[89]/);
     expect(el.style.border).toContain("solid");
     expect(el.style.boxShadow).not.toBe("none");
     // Doorbell accent — only fires when the user needs to decide.
@@ -266,7 +266,7 @@ describe("renderCoBrowseChrome — always-present chrome surround", () => {
   it("paused has the present surround — no doorbell accent", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "paused", previousDriver: "user" }, machine, {});
-    expect(el.style.background).toContain("rgba(255, 255, 255");
+    expect(el.style.background).toMatch(/rgba\(\s*\d+,\s*\d+,\s*\d+\s*,\s*0\.[89]/);
     expect(el.style.border).toContain("solid");
     expect(el.style.boxShadow).not.toBe("none");
     // Paused is held, not asking — no doorbell accent.

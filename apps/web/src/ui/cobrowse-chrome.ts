@@ -133,6 +133,16 @@ export interface RenderCoBrowseChromeOpts {
    * motebit can currently see images.
    */
   readonly pixelConsent?: PixelConsentState;
+  /**
+   * Current URL of the cloud-browser session. When set AND the
+   * state is `user`, the URL input renders this as its `value` so
+   * the user sees what page they're on (browser convention — Chrome,
+   * Safari, Firefox always show the current URL in the address bar).
+   * Null/undefined → input renders empty with the "type a URL"
+   * placeholder. Wired by the surface from
+   * `runtime.setBrowserSessionProvider` / `_currentBrowserUrl`.
+   */
+  readonly currentUrl?: string | null;
 }
 
 /**
@@ -156,7 +166,7 @@ export function renderCoBrowseChrome(
   // Normalize `null` → `undefined` for the slot builders so their
   // signatures don't have to accept both shapes.
   const forwardEvent = opts.forwardEvent ?? undefined;
-  strip.appendChild(buildMiddle(state, forwardEvent));
+  strip.appendChild(buildMiddle(state, forwardEvent, opts.currentUrl ?? null));
   strip.appendChild(buildTrail(state, machine, forwardEvent));
   return strip;
 }
@@ -195,16 +205,23 @@ function baseStrip(stateKind: ControlState["kind"]): HTMLDivElement {
   strip.style.padding = "8px 14px";
   strip.style.margin = "8px";
   strip.style.borderRadius = "10px";
-  // Opaque-enough surround so page content beneath the chrome
-  // doesn't bleed through. 0.85 alpha with backdrop blur reads
-  // as glass-frosted but doesn't let the page text show through
-  // and compete with URL input / caption / buttons.
-  strip.style.background = "rgba(255, 255, 255, 0.85)";
-  strip.style.backdropFilter = "blur(14px)";
-  // Vendor-prefixed sibling for Safari < 18.
-  (strip.style as unknown as Record<string, string>)["webkitBackdropFilter"] = "blur(14px)";
-  strip.style.border = "1px solid rgba(120, 140, 180, 0.32)";
-  strip.style.boxShadow = "0 2px 8px rgba(40, 55, 90, 0.08)";
+  // Fully opaque surround so page content beneath the chrome
+  // does NOT bleed through. The prior 0.85 alpha + backdrop blur
+  // still let page pixels show, breaking the "real browser top
+  // bar" register the user expects. Solid white at 0.97 alpha
+  // (just shy of pure white so the slab's soul tint shows
+  // faintly under it, body-coherent) reads as a real browser
+  // chrome row — content stops at the chrome's bottom edge,
+  // exactly like Chrome / Safari / Firefox.
+  strip.style.background = "rgba(252, 253, 255, 0.97)";
+  // Backdrop blur stays for the soul-tint pickup at the seam
+  // between chrome and slab body — gives the chrome a slight
+  // material depth rather than reading as a flat sticker.
+  strip.style.backdropFilter = "blur(20px) saturate(1.4)";
+  (strip.style as unknown as Record<string, string>)["webkitBackdropFilter"] =
+    "blur(20px) saturate(1.4)";
+  strip.style.border = "1px solid rgba(120, 140, 180, 0.22)";
+  strip.style.boxShadow = "0 1px 0 rgba(40, 55, 90, 0.04), 0 4px 14px rgba(40, 55, 90, 0.08)";
   strip.style.font =
     "13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
   strip.style.color = "rgba(40, 55, 90, 0.92)";
@@ -382,21 +399,27 @@ function sensitivityRingColor(level: SensitivityLevel): string | null {
 
 // ── Middle — the destination ───────────────────────────────────────────
 
-function buildMiddle(state: ControlState, forwardEvent: ForwardEventFn | undefined): HTMLElement {
+function buildMiddle(
+  state: ControlState,
+  forwardEvent: ForwardEventFn | undefined,
+  currentUrl: string | null,
+): HTMLElement {
   switch (state.kind) {
     case "user":
       // The URL input — editable, only visible to the user when
-      // they're driving. Empty input is the resting state; typing
-      // a URL and pressing Enter dispatches navigate via the wire
-      // event. Address-bar typing belongs to the bar, not Chromium
-      // below — keydown events stop propagation so the input-
-      // capture module's document-level handler doesn't ALSO see
-      // them.
-      return forwardEvent ? buildUrlInput(forwardEvent) : buildEmptyMiddle();
+      // they're driving. Pre-populated with the current URL so
+      // the user sees what page they're on (browser convention).
+      // Typing a URL and pressing Enter dispatches navigate via
+      // the wire event. Address-bar typing belongs to the bar,
+      // not Chromium below — keydown events stop propagation so
+      // the input-capture module's document-level handler doesn't
+      // ALSO see them.
+      return forwardEvent ? buildUrlInput(forwardEvent, currentUrl) : buildEmptyMiddle();
     case "motebit":
-      // Motebit drives — empty middle. The mark says state, the
-      // page below shows the destination. Restraint: don't repeat.
-      return buildEmptyMiddle();
+      // Motebit drives — show current URL as a read-only display
+      // so the user sees where motebit has navigated to. Same
+      // shape as Safari's URL bar when a tab is loading.
+      return currentUrl ? buildUrlDisplay(currentUrl) : buildEmptyMiddle();
     case "handoff_pending":
       return buildCaption("asks to drive");
     case "paused":
@@ -427,7 +450,40 @@ function buildCaption(text: string): HTMLDivElement {
   return caption;
 }
 
-function buildUrlInput(forwardEvent: ForwardEventFn): HTMLInputElement {
+/**
+ * Read-only URL display for `motebit`-driving state. Same pill
+ * shape as the user-driving input but non-editable — shows where
+ * motebit has navigated to. Browser convention is the URL bar
+ * always shows the current URL regardless of who's driving.
+ */
+function buildUrlDisplay(url: string): HTMLDivElement {
+  const display = document.createElement("div");
+  display.className = "cobrowse-chrome-middle cobrowse-chrome-url-display";
+  display.textContent = formatUrlForDisplay(url);
+  display.style.flex = "1 1 auto";
+  display.style.minWidth = "0";
+  display.style.padding = "6px 12px";
+  display.style.borderRadius = "8px";
+  display.style.background = "rgba(240, 242, 248, 0.92)";
+  display.style.border = "1px solid rgba(120, 140, 180, 0.18)";
+  display.style.color = "rgba(40, 55, 90, 0.86)";
+  display.style.font = "inherit";
+  display.style.overflow = "hidden";
+  display.style.textOverflow = "ellipsis";
+  display.style.whiteSpace = "nowrap";
+  return display;
+}
+
+/**
+ * Strip the `https://` / `http://` scheme for display when present,
+ * since the URL bar's primary register is "what site am I on" not
+ * "what's the literal URL." Same convention as Safari's URL bar.
+ */
+function formatUrlForDisplay(url: string): string {
+  return url.replace(/^https?:\/\//i, "");
+}
+
+function buildUrlInput(forwardEvent: ForwardEventFn, currentUrl: string | null): HTMLInputElement {
   const input = document.createElement("input");
   input.className = "cobrowse-chrome-middle cobrowse-chrome-url-input";
   input.type = "url";
@@ -435,14 +491,35 @@ function buildUrlInput(forwardEvent: ForwardEventFn): HTMLInputElement {
   input.autocomplete = "off";
   input.autocapitalize = "off";
   input.placeholder = "type a URL";
+  // Pre-populate with the current URL — Chrome / Safari / Firefox
+  // all show the current URL in the address bar by default; users
+  // expect to see where they are. Edit-to-navigate replaces the
+  // value as they type.
+  if (currentUrl) {
+    input.value = formatUrlForDisplay(currentUrl);
+  }
   input.style.flex = "1 1 auto";
   input.style.minWidth = "0";
-  input.style.background = "transparent";
-  input.style.border = "none";
+  // Pill-shaped input — Apple Safari register. Same shape as the
+  // motebit-driving display so the URL bar's register is consistent
+  // across states; only the editability changes.
+  input.style.padding = "6px 12px";
+  input.style.borderRadius = "8px";
+  input.style.background = "rgba(240, 242, 248, 0.92)";
+  input.style.border = "1px solid rgba(120, 140, 180, 0.18)";
   input.style.outline = "none";
   input.style.font = "inherit";
-  input.style.color = "inherit";
+  input.style.color = "rgba(40, 55, 90, 0.92)";
   input.style.pointerEvents = "auto";
+  // Focus styling — subtle blue ring on focus, calm-software register.
+  input.addEventListener("focus", () => {
+    input.style.borderColor = "rgba(80, 130, 200, 0.55)";
+    input.style.background = "rgba(255, 255, 255, 0.98)";
+  });
+  input.addEventListener("blur", () => {
+    input.style.borderColor = "rgba(120, 140, 180, 0.18)";
+    input.style.background = "rgba(240, 242, 248, 0.92)";
+  });
   input.addEventListener("keydown", (e) => {
     // Stop propagation — address-bar typing must NOT reach the
     // input-capture module's document-level keydown handler that

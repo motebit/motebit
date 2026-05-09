@@ -794,6 +794,10 @@ export class WebApp {
         // `liveBrowserForwardEvent` below.
         onNavigateResult: (url) => {
           this._currentBrowserUrl = url;
+          // Re-render chrome so the URL bar reflects the new URL.
+          // Browser convention: address bar updates on every
+          // navigation, not just on control-state change.
+          this.applyChromeToCurrentState();
         },
         // Implicit-grant fast path — let `request_control` skip the
         // slab-band prompt when the AI's reach for `computer` came
@@ -1736,6 +1740,10 @@ export class WebApp {
           // tracking lands.
           if (event.kind === "navigate" && result.outcome === "forwarded") {
             this._currentBrowserUrl = event.url;
+            // Re-render chrome so the URL bar shows the new URL —
+            // browser convention. Sibling of the motebit-driven
+            // path's onNavigateResult callback above.
+            this.applyChromeToCurrentState();
           }
           return result;
         }
@@ -1833,6 +1841,11 @@ export class WebApp {
       interiorColor: this._interiorColor,
       sensitivity: this.runtime?.getSessionSensitivity(),
       pixelConsent: this.runtime?.getPixelConsent(),
+      // Real browser convention: URL bar shows current URL. We
+      // surface this whenever the surface knows it, regardless of
+      // who's driving — `motebit`-driving renders read-only
+      // display, `user`-driving renders pre-populated input.
+      currentUrl: this._currentBrowserUrl,
     });
 
     if (handle) {
