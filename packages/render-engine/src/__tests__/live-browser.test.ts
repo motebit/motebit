@@ -108,26 +108,35 @@ describe("buildLiveBrowserElement", () => {
     }
   });
 
-  it("renders the input-capture img visibly — visual fallback when the WebGL texture path doesn't composite", () => {
-    // 2026-05-09 — the parallel WebGL screen-mesh texture path
-    // (`onFrameDecoded` → `renderer.setSlabScreencastImage`) is wired
-    // through but not yet visually load-bearing in production: the
-    // multi-transmissive-object interaction in the slab volume
-    // (front + back + sideWall all share `planeMaterial` with
-    // `transmission`) doesn't reliably surface the screen-mesh
-    // texture through the front pane's transmission render-target.
-    // While that's diagnosed, the img stays at opacity:1 / display
-    // toggled by pushFrame so the user always sees the page even
-    // when the texture path is silent. Calm-software default: never
-    // lose the visible content.
+  it("keeps the img invisible — the WebGL screen-mesh texture is the visible register, the img is input-capture geometry only", () => {
+    // 2026-05-09 — single-pane transmission landed (slab.ts now uses
+    // `planeMaterial` for front pane + `silhouetteMaterial` for back
+    // pane + sideWall, transmission:0 on the silhouette companion).
+    // Three.js's transmission feature is built for one transmissive
+    // surface plus an opaque backdrop; the prior triple-transmissive
+    // stack was three.js's design boundary, not a fixable shader
+    // interaction. With single-pane transmission the screen mesh
+    // inside the volume composites cleanly through the front pane,
+    // so the texture path is the visible register again — pixels
+    // embedded in the glass volume, sharing depth with the creature,
+    // clipped to the meniscus silhouette.
+    //
+    // The img stays in the DOM as the input-capture geometry: the
+    // address-bar slot + click/keystroke forwarders read
+    // `getBoundingClientRect()` against this element to translate
+    // viewport coords to logical-pixel actions on the cloud
+    // Chromium. opacity:0 keeps its visual contribution at zero;
+    // display:none initial → block on first frame so
+    // getBoundingClientRect returns real pixels for the input
+    // translation.
     const handle = buildLiveBrowserElement(new StubBus());
     const img = handle.element.querySelector("img.slab-live-browser-frame") as HTMLImageElement;
     expect(img).toBeTruthy();
-    // opacity defaults (no explicit override) — visible.
-    expect(img.style.opacity).toBe("");
+    // Invisible — texture is the visible register.
+    expect(img.style.opacity).toBe("0");
     // Initial display:none until first frame; pushFrame flips to
-    // block once the JPEG src is set (Slice 2g — suppresses the
-    // broken-image glyph during the loading window).
+    // block once the JPEG src is set so getBoundingClientRect can
+    // measure the rect for input-capture translation.
     expect(img.style.display).toBe("none");
   });
 

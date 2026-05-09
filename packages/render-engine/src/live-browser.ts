@@ -186,28 +186,31 @@ export function buildLiveBrowserElement(
   // `user-drag` is non-standard but recognized by WebKit/Blink; kept for
   // legacy Safari versions that don't fully honor `draggable=false`.
   img.style.setProperty("-webkit-user-drag", "none");
-  // Slice 2g — start hidden so an `<img>` with no `src` doesn't
-  // render the browser's default broken-image glyph + alt text.
-  // The placeholder div below carries the loading UX until the
-  // first frame arrives; `pushFrame` flips this to "block" on
-  // first frame and the placeholder removes itself in the same
-  // tick.
+  // The img is invisible by design — the WebGL screen-mesh texture
+  // (driven by `onFrameDecoded` → `renderer.setSlabScreencastImage`)
+  // is the visible register. The img stays in the DOM as the
+  // input-capture geometry: address-bar slot + click/keystroke
+  // forwarders read `getBoundingClientRect()` against this element
+  // to translate viewport coords to logical-pixel actions on the
+  // cloud Chromium. Both `display: none` initial AND `opacity: 0`:
+  // display:none suppresses the browser's broken-image glyph during
+  // the loading window; the on-first-frame flip below bumps it to
+  // `display: block` so getBoundingClientRect returns real pixels,
+  // and opacity:0 keeps the visual contribution at zero so the
+  // texture is the only register the user sees.
   //
-  // 2026-05-09 — the parallel WebGL screen-mesh path
-  // (`onFrameDecoded` → `renderer.setSlabScreencastImage`) lives
-  // behind the CSS3D layer. When the texture path renders, you see
-  // the texture; when it doesn't, you see this img. Keeping img
-  // visible at opacity:1 means screencast content is always shown
-  // even if the WebGL transmission path mis-composites under
-  // multi-transmissive-object stacks (slab front + back + sideWall
-  // all share `planeMaterial` with `transmission`, and the
-  // transmission render-target interaction with a non-transmissive
-  // child mesh inside the same group doesn't reliably surface the
-  // texture in current three.js). The depth/silhouette seam Daniel
-  // surfaced will be closed when the transmission interaction is
-  // diagnosed; for now visible-img is the calm-software default —
-  // never lose the user's ability to see the page.
+  // 2026-05-09 — the slab's transmission stack landed in
+  // `planeMaterial` (front pane only) + `silhouetteMaterial` (back
+  // pane + sideWall, transmission:0). Three.js's transmission renders
+  // ONE transmissive surface plus an opaque backdrop reliably; the
+  // earlier multi-transmissive stack was three.js's design boundary,
+  // not a fixable shader interaction. With single-pane transmission,
+  // the screen mesh inside the volume composites cleanly through the
+  // front pane — pixels embedded in the glass volume, sharing depth
+  // with the creature, clipped to the meniscus silhouette
+  // (`liquescentia-as-substrate.md`).
   img.style.display = "none";
+  img.style.opacity = "0";
   img.style.width = "100%";
   img.style.aspectRatio = "16 / 10";
   img.style.background = "rgba(255, 255, 255, 0.04)";
@@ -268,10 +271,12 @@ export function buildLiveBrowserElement(
         if (frame.device_width > 0 && frame.device_height > 0) {
           img.style.aspectRatio = `${frame.device_width} / ${frame.device_height}`;
         }
-        // Slice 2g — flip the img visible only after the first decode-
-        // ready src has been assigned. Pair with the `display: none`
-        // initial state in the constructor; together they suppress the
-        // broken-image fallback glyph during the loading window.
+        // Flip the img to `display: block` (kept at `opacity: 0`) so
+        // `getBoundingClientRect()` returns real pixels for the
+        // input-capture coordinate translation. Pair with the
+        // `display: none` + `opacity: 0` initial state in the
+        // constructor; the texture is the visible register, this
+        // is just the input-capture geometry made measurable.
         img.style.display = "block";
         placeholder.remove();
       }

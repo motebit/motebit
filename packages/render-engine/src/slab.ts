@@ -221,6 +221,41 @@ export class SlabManager {
   private screenTexture: THREE.Texture | null = null;
   private readonly planeMaterial: THREE.MeshPhysicalMaterial;
   /**
+   * Silhouette companion to `planeMaterial`. Same `MeshPhysicalMaterial`
+   * family — same `ior` / `clearcoat` / `sheen` / `color` /
+   * `attenuation` / `opacity` — but with `transmission: 0`, so the back
+   * pane and side wall keep their glassy shading register without
+   * trying to refract a backbuffer.
+   *
+   * Why two materials, not one. Three.js's `MeshPhysicalMaterial`
+   * transmission renders by capturing a backbuffer that excludes ALL
+   * transmissive meshes, then refracting that buffer through the
+   * transmissive surface. With three transmissive panes (front + back
+   * + sideWall) all sharing one material, every pane's backbuffer
+   * excluded the other two — and the screen mesh inside the volume
+   * never composited reliably through the front pane's transmission.
+   * Witnessed 2026-05-09: opening yahoo.com / google.com showed slab
+   * chrome but no page interior; the texture path uploaded per frame
+   * but the front pane refracted a backbuffer that didn't reliably
+   * include the inner screen mesh.
+   *
+   * Three.js's transmission is designed for ONE transmissive surface
+   * + opaque backdrop (every official glass demo — jewelry, bottles,
+   * wine glasses — uses this pattern). Keeping the front pane
+   * transmissive and demoting back+sideWall to a non-transmissive
+   * silhouette companion follows the design boundary instead of
+   * fighting it. From the user's typical front-on POV
+   * (slab pinned in front of the creature), the visual register is
+   * indistinguishable; off-axis, the back+side now shade glassy
+   * without seeing through env light, a perceptual register the user
+   * mostly doesn't observe in normal use.
+   *
+   * Both materials share the same opacity-easing + soul-tint +
+   * emissive driver below — the silhouette is the front pane's twin
+   * in every dimension except the one three.js can't reliably stack.
+   */
+  private readonly silhouetteMaterial: THREE.MeshPhysicalMaterial;
+  /**
    * One CSS3DObject anchored at the plane's center, holding a single
    * "stage" div — the plane renders ONE primary embodiment at a time
    * (doctrine: motebit-computer.md §"Embodiment modes"). Cards-on-
@@ -305,7 +340,7 @@ export class SlabManager {
       const restPositions = posAttr.array.slice();
       (planeGeo.userData as { restPositions?: ArrayLike<number> }).restPositions = restPositions;
     }
-    this.planeMaterial = new THREE.MeshPhysicalMaterial({
+    const sharedMaterialConfig = {
       // Same material family as the creature — same IOR, same
       // clearcoat chemistry. The slab is body-adjacent.
       //
@@ -323,7 +358,6 @@ export class SlabManager {
       // same family" rather than "second creature."
       ior: CANONICAL_MATERIAL.ior,
       roughness: 0.05,
-      transmission: 0.85,
       thickness: 0.04,
       clearcoat: 0.4,
       clearcoatRoughness: 0.05,
@@ -338,6 +372,30 @@ export class SlabManager {
       transparent: true,
       opacity: 0,
       side: THREE.DoubleSide,
+    };
+    this.planeMaterial = new THREE.MeshPhysicalMaterial({
+      ...sharedMaterialConfig,
+      transmission: 0.85,
+    });
+    // Non-transmissive companion for the back pane + side wall. See
+    // the field declaration above for the architectural why; in short,
+    // three.js's transmission is single-surface-plus-opaque-backdrop
+    // by design, and stacking three transmissive meshes around an
+    // inner opaque screen mesh prevented the front pane from
+    // refracting the screen reliably. The silhouette material reads
+    // glassy in shading (same ior + clearcoat + sheen + attenuation)
+    // but doesn't pretend to transmit — making the front pane the
+    // sole transmissive surface, which is the pattern three.js's
+    // physical-glass shader was built for. Independent THREE.Color
+    // instances so per-frame setRGB writes (soul tint, emissive)
+    // don't alias across the two materials.
+    this.silhouetteMaterial = new THREE.MeshPhysicalMaterial({
+      ...sharedMaterialConfig,
+      transmission: 0,
+      attenuationColor: new THREE.Color(0.92, 0.95, 1.0),
+      color: new THREE.Color(0.98, 0.985, 1.0),
+      emissive: new THREE.Color(0, 0, 0),
+      sheenColor: new THREE.Color(0.75, 0.85, 1.0),
     });
     // Front + back panes form the slab volume. Front holds the
     // pinch-displacement geometry (its restPositions live in
@@ -355,7 +413,9 @@ export class SlabManager {
     this.group.add(this.planeMesh);
 
     const backPaneGeo = planeGeo.clone();
-    this.backPaneMesh = new THREE.Mesh(backPaneGeo, this.planeMaterial);
+    // Silhouette companion — non-transmissive. See `silhouetteMaterial`
+    // field declaration for the three.js-stack rationale.
+    this.backPaneMesh = new THREE.Mesh(backPaneGeo, this.silhouetteMaterial);
     this.backPaneMesh.position.z = -SLAB_THICKNESS / 2;
     // Back pane faces "outward" relative to the volume — flip it so
     // its normals point away from the camera, letting the sheen and
@@ -378,7 +438,10 @@ export class SlabManager {
       SLAB_THICKNESS,
       SLAB_CORNER_RADIUS,
     );
-    this.sideWallMesh = new THREE.Mesh(sideWallGeo, this.planeMaterial);
+    // Silhouette companion — non-transmissive. The wall closes the
+    // volume visually; see `silhouetteMaterial` field for the
+    // single-transmissive-surface rationale.
+    this.sideWallMesh = new THREE.Mesh(sideWallGeo, this.silhouetteMaterial);
     this.sideWallMesh.visible = false;
     this.group.add(this.sideWallMesh);
 
@@ -813,12 +876,24 @@ export class SlabManager {
     //      not extinguished). The peak is intentionally gentle so
     //      the slab never outshines the creature.
     const w = frame.activeWarmth;
+    // Both materials are driven in lockstep: soul tint flows through
+    // attenuationColor on the front pane (refracted through the
+    // transmission) AND on the silhouette companion (so back+side
+    // pick up the same identity tint in their non-transmissive
+    // shading). Emissive is the same — body-coherence reads as one
+    // glass tile, not two materials with different identity signals.
     this.planeMaterial.attenuationColor.setRGB(
       this.soulTint[0],
       this.soulTint[1],
       this.soulTint[2],
     );
+    this.silhouetteMaterial.attenuationColor.setRGB(
+      this.soulTint[0],
+      this.soulTint[1],
+      this.soulTint[2],
+    );
     this.planeMaterial.emissive.setRGB(this.soulGlow[0], this.soulGlow[1], this.soulGlow[2]);
+    this.silhouetteMaterial.emissive.setRGB(this.soulGlow[0], this.soulGlow[1], this.soulGlow[2]);
     // Idle baseline 0.020 + activity ramp up to 0.20 at full warmth.
     // 10× range between idle and peak — the slab whispers identity at
     // rest and announces work when active, calm-software meaningful
@@ -847,8 +922,10 @@ export class SlabManager {
       emissiveIntensity = Math.max(emissiveIntensity, peak * 0.5);
     }
     this.planeMaterial.emissiveIntensity = emissiveIntensity;
+    this.silhouetteMaterial.emissiveIntensity = emissiveIntensity;
 
     this.planeMaterial.opacity = frame.planeVisibility;
+    this.silhouetteMaterial.opacity = frame.planeVisibility;
     const visible = frame.planeVisibility > 0.01;
     this.planeMesh.visible = visible;
     this.backPaneMesh.visible = visible;
@@ -886,6 +963,7 @@ export class SlabManager {
     this.backPaneMesh.geometry.dispose();
     this.sideWallMesh.geometry.dispose();
     this.planeMaterial.dispose();
+    this.silhouetteMaterial.dispose();
   }
 
   // ── Internal: per-item DOM animation ──────────────────────────────
