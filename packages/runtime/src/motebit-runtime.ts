@@ -1474,6 +1474,9 @@ export class MotebitRuntime {
         precisionContext: selfAwareness || undefined,
         firstConversation: this._isFirstConversation || undefined,
         selectedSkills,
+        // Prompt-1 — runtime session-state snapshot. Same shape as
+        // the streaming path; non-streaming sendMessage parity.
+        sessionState: this.getSessionStateSnapshot(),
       });
       this.conversation.pushExchange(text, result.response);
       // First-conversation guidance fades after a few exchanges
@@ -1867,6 +1870,11 @@ export class MotebitRuntime {
         firstConversation: this._isFirstConversation || undefined,
         deferMemoryFormation: this._deferMemoryFormation,
         selectedSkills,
+        // Prompt-1 — session-state snapshot threaded into the AI's
+        // prompt every turn. Closes the runtime-state-confabulation
+        // hallucination class (witnessed 2026-05-08: AI claimed
+        // browser was open after a refresh closed the session).
+        sessionState: this.getSessionStateSnapshot(),
       });
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();
@@ -1939,6 +1947,11 @@ export class MotebitRuntime {
         runId,
         firstConversation: true,
         activationPrompt,
+        // Prompt-1 — activation turns also get the session-state
+        // snapshot so the AI's first system-triggered response
+        // doesn't confabulate runtime state from training memory
+        // either.
+        sessionState: this.getSessionStateSnapshot(),
       });
       const slabTurnId = `slab-activation-${runId ?? crypto.randomUUID()}`;
       const processed = this.streaming.processStream(stream, "", runId, { activationOnly: true });
@@ -3083,6 +3096,53 @@ export class MotebitRuntime {
 
   getPixelConsent(): import("@motebit/sdk").PixelConsentState {
     return this._pixelConsent;
+  }
+
+  /**
+   * Prompt-1 — surface-supplied browser-session info provider. The
+   * runtime composes this with its own sensitivity + consent fields
+   * to build the `[Session]` block in the system prompt's dynamic
+   * suffix. Web's `registerWebComputerTool` calls
+   * `setBrowserSessionProvider` after registering the dispatcher;
+   * surfaces without a virtual_browser embodiment leave it null and
+   * the snapshot reports `browser: { status: "closed" }` (the
+   * default — surfaces without computer-use don't reason about
+   * browser sessions).
+   *
+   * The provider is a CALLBACK rather than a state field because
+   * browser status changes asynchronously (session opens lazily on
+   * first computer call; closes on dispose) and the runtime
+   * composes the snapshot at AI-call time, not at registration.
+   *
+   * Doctrine: `packages/sdk/src/session-state.ts`. Closes the
+   * runtime-state-confabulation hallucination class (witnessed
+   * 2026-05-08 — AI claimed "browser is already open on Hacker
+   * News" after page refresh when the actual session was closed).
+   */
+  private _browserSessionProvider: (() => import("@motebit/sdk").BrowserSessionInfo) | null = null;
+
+  setBrowserSessionProvider(
+    provider: (() => import("@motebit/sdk").BrowserSessionInfo) | null,
+  ): void {
+    this._browserSessionProvider = provider;
+  }
+
+  /**
+   * Compose the runtime session-state snapshot. Reads the surface-
+   * supplied browser provider (or returns the closed default when
+   * unset) and stamps the runtime's own sensitivity + consent. Pure
+   * function over current state; no side effects. Called once per
+   * AI turn from `sendMessageStreaming` and friends; threaded into
+   * `runTurnStreaming` options so the prompt builder can emit
+   * `[Session]`.
+   */
+  getSessionStateSnapshot(): import("@motebit/sdk").SessionStateSnapshot {
+    const browser = this._browserSessionProvider?.() ?? { status: "closed" as const };
+    return {
+      browser,
+      sensitivity: this.getEffectiveSessionSensitivity(),
+      pixelConsent: this._pixelConsent,
+    };
   }
 
   /**

@@ -10,6 +10,7 @@ export * from "./governance-config.js";
 export * from "./voice-config.js";
 export * from "./appearance-config.js";
 export * from "./pixel-consent.js";
+export * from "./session-state.js";
 
 import type {
   SensitivityLevel,
@@ -39,6 +40,7 @@ import type {
   MotebitIdentity,
   AuditRecord,
 } from "@motebit/protocol";
+import type { SessionStateSnapshot } from "./session-state.js";
 
 // === Relation Types (product — graph semantics for memory edges) ===
 
@@ -224,6 +226,28 @@ export interface ContextPack {
    * `curiosityHints`.
    */
   selectedSkills?: SkillInjection[];
+  /**
+   * Prompt-1 — runtime session-state snapshot, formatted into a
+   * `[Session]` block in the system prompt's dynamic suffix.
+   *
+   * Surfaces the truth the AI tends to confabulate: whether a
+   * cloud-browser session is open, who holds control, what
+   * sensitivity tier the session operates at, whether pixel
+   * passthrough is granted. Composed by the runtime from a
+   * surface-supplied `BrowserSessionInfo` plus its own sensitivity
+   * + consent fields.
+   *
+   * Absent when the runtime hasn't wired a session-state provider
+   * (in-tree tests, surfaces without computer-use). Absence means
+   * "no session-state context" — the prompt omits the block
+   * entirely rather than emitting a misleading "Browser: unknown"
+   * default.
+   *
+   * Doctrine: `packages/sdk/src/session-state.ts` + the
+   * PERCEPTION_DOCTRINE block in `packages/ai-core/src/prompt.ts`
+   * (runtime gates / state arrive as typed signal, never inference).
+   */
+  sessionState?: SessionStateSnapshot;
 }
 
 /**

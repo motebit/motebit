@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildSystemPrompt, derivePersonalityNote, formatBodyAwareness } from "../prompt";
-import { TrustMode, BatteryMode } from "@motebit/sdk";
+import { TrustMode, BatteryMode, SensitivityLevel } from "@motebit/sdk";
 import type { ContextPack, MotebitState, BehaviorCues } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
@@ -229,6 +229,154 @@ describe("buildSystemPrompt", () => {
     // always lead with..." — that's training-confidence laundering
     // wearing a disclaimer. The doctrine names it explicitly.
     expect(prompt).toContain("what's typical");
+  });
+
+  // Prompt-1 slice: the perception doctrine references the
+  // [Now] block — typed truth about runtime state instead of
+  // inference from conversation memory. Block named [Now] (not
+  // [Session]) to avoid collision with the conversation-continuity
+  // [Session] block that already exists in the prompt.
+  it("teaches the AI to read runtime state from the [Now] block", () => {
+    const prompt = buildSystemPrompt(makeContextPack());
+    expect(prompt).toContain("[Now] block");
+    expect(prompt).toContain("don't infer it");
+    expect(prompt).toContain("page refreshes");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatSessionState — Prompt-1
+// ---------------------------------------------------------------------------
+
+describe("formatSessionState — runtime session-state block", () => {
+  it("emits 'Browser: closed' for a fresh session", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+    });
+    expect(out).toBe("[Now] Browser: closed");
+  });
+
+  it("emits Browser: open with URL when known", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: {
+        status: "open",
+        url: "https://news.ycombinator.com/",
+        control: { kind: "user" },
+      },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+    });
+    expect(out).toContain("Browser: open at https://news.ycombinator.com/");
+    expect(out).toContain("Control: user driving");
+  });
+
+  it("describes motebit driving", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "open", control: { kind: "motebit" } },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+    });
+    expect(out).toContain("Control: motebit driving");
+  });
+
+  it("describes handoff_pending with parties", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: {
+        status: "open",
+        control: { kind: "handoff_pending", current: "user", requesting: "motebit" },
+      },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+    });
+    expect(out).toContain("motebit requesting control from user");
+  });
+
+  it("describes paused with previousDriver", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "open", control: { kind: "paused", previousDriver: "motebit" } },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+    });
+    expect(out).toContain("paused (was motebit)");
+  });
+
+  // Restraint: only show non-default sensitivity / consent. The
+  // calm baseline (none + denied) shouldn't pollute every prompt.
+  it("omits Sensitivity line when tier is 'none'", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+    });
+    expect(out).not.toContain("Sensitivity:");
+  });
+
+  it("emits Sensitivity line when elevated", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.Medical,
+      pixelConsent: "denied",
+    });
+    expect(out).toContain("Sensitivity: medical");
+  });
+
+  it("omits Pixel passthrough line when 'denied' (default)", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+    });
+    expect(out).not.toContain("Pixel passthrough");
+  });
+
+  it("emits Pixel passthrough line when 'session' (granted)", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "session",
+    });
+    expect(out).toContain("Pixel passthrough: session");
+  });
+});
+
+describe("buildSystemPrompt — [Now] block injection", () => {
+  it("injects [Now] block when contextPack.sessionState is provided", () => {
+    const pack = makeContextPack();
+    const withSession = {
+      ...pack,
+      sessionState: {
+        browser: { status: "open" as const, control: { kind: "motebit" as const } },
+        sensitivity: SensitivityLevel.None,
+        pixelConsent: "session" as const,
+      },
+    };
+    const prompt = buildSystemPrompt(withSession);
+    expect(prompt).toContain("[Now]");
+    expect(prompt).toContain("Browser: open");
+    expect(prompt).toContain("Control: motebit driving");
+    expect(prompt).toContain("Pixel passthrough: session");
+  });
+
+  it("omits [Now] block when sessionState is absent", () => {
+    const prompt = buildSystemPrompt(makeContextPack());
+    // The PERCEPTION_DOCTRINE references "[Now]" by name — that
+    // reference is in the static prefix and is expected. The
+    // dynamic [Now] block (with browser/control/etc lines)
+    // should be absent. Detect by absence of the actual block
+    // body lines.
+    expect(prompt).not.toContain("Browser: open");
+    expect(prompt).not.toContain("Browser: closed");
   });
 
   it("uses custom name from config", () => {

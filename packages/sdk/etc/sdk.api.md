@@ -12,6 +12,7 @@ import type { AuditLogSink } from '@motebit/protocol';
 import type { AuditRecord } from '@motebit/protocol';
 import type { BatteryMode } from '@motebit/protocol';
 import type { BudgetAllocationStoreAdapter } from '@motebit/protocol';
+import { ControlState } from '@motebit/protocol';
 import type { ConversationStoreAdapter } from '@motebit/protocol';
 import type { CredentialStoreAdapter } from '@motebit/protocol';
 import type { EventLogEntry } from '@motebit/protocol';
@@ -24,7 +25,7 @@ import type { MotebitId } from '@motebit/protocol';
 import type { MotebitIdentity } from '@motebit/protocol';
 import type { NodeId } from '@motebit/protocol';
 import type { PlanStoreAdapter } from '@motebit/protocol';
-import type { SensitivityLevel } from '@motebit/protocol';
+import { SensitivityLevel } from '@motebit/protocol';
 import type { ServiceListingStoreAdapter } from '@motebit/protocol';
 import type { SettlementStoreAdapter } from '@motebit/protocol';
 import type { StateSnapshotAdapter } from '@motebit/protocol';
@@ -117,6 +118,13 @@ export interface BehaviorCues {
 }
 
 // @public
+export interface BrowserSessionInfo {
+    readonly control?: ControlState;
+    readonly status: "closed" | "open";
+    readonly url?: string;
+}
+
+// @public
 export interface ByokProviderConfig {
     // (undocumented)
     apiKey: string;
@@ -185,6 +193,7 @@ export interface ContextPack {
         continued: boolean;
         lastActiveAt: number;
     };
+    sessionState?: SessionStateSnapshot;
     // (undocumented)
     tools?: ToolDefinition[];
     // (undocumented)
@@ -678,6 +687,13 @@ export interface ServerVerifier {
         trusted?: boolean;
         tlsCertFingerprint?: string;
     }, tools: ToolDefinition[]): Promise<VerificationResult>;
+}
+
+// @public
+export interface SessionStateSnapshot {
+    readonly browser: BrowserSessionInfo;
+    readonly pixelConsent: PixelConsentState;
+    readonly sensitivity: SensitivityLevel;
 }
 
 // @public

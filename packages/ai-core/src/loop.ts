@@ -438,6 +438,16 @@ export interface TurnOptions {
    * matching, same shape as `memoryIndex` / `curiosityHints`.
    */
   selectedSkills?: import("@motebit/sdk").SkillInjection[];
+  /**
+   * Prompt-1 — runtime session-state snapshot composed by
+   * `runtime.getSessionStateSnapshot()`. Threaded into the
+   * `contextPack.sessionState` field so the prompt builder can emit
+   * a `[Session]` block. Populated on every iteration (state can
+   * change between tool-loop continuations — pixel consent could be
+   * granted mid-turn via `/vision grant`, sensitivity could
+   * elevate, the browser could open or close).
+   */
+  sessionState?: import("@motebit/sdk").SessionStateSnapshot;
 }
 
 export type AgenticChunk =
@@ -734,6 +744,12 @@ export async function* runTurnStreaming(
       // Skills selected for this turn — first iteration only, same
       // rationale as memoryIndex.
       selectedSkills: iteration === 1 ? options?.selectedSkills : undefined,
+      // Prompt-1 — session-state snapshot threaded on EVERY
+      // iteration. State can shift mid-turn: `/vision grant` flips
+      // consent, control transitions land via the band, the
+      // browser opens lazily on first `computer` call. The AI
+      // needs the truth on each iteration, not just the first.
+      sessionState: options?.sessionState,
     };
 
     // On continuation turns, the conversation history carries the context

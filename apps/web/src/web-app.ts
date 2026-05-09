@@ -757,6 +757,29 @@ export class WebApp {
         onSessionLive: (sessionId) => this.openLiveBrowserSlabItem(sessionId),
         onSessionEnding: () => this.dissolveLiveBrowserSlabItem(),
       });
+
+      // Prompt-1 — wire the browser-session info provider so the
+      // runtime can compose `[Session]` blocks for the AI's prompt.
+      // The provider reads `liveBrowserHandle` (open iff handle
+      // exists) and the co-browse machine state. Closes the
+      // runtime-state-confabulation hallucination class — the AI
+      // reads truth instead of inferring continuity from
+      // conversation memory.
+      runtime.setBrowserSessionProvider(() => {
+        const handle = this.liveBrowserHandle;
+        const machine = this.computerRegistration?.coBrowseControl;
+        if (!handle) {
+          return { status: "closed" as const };
+        }
+        return {
+          status: "open" as const,
+          // URL tracking is a chrome-1b follow-up; absent for now
+          // means "we don't know," not "no URL." The status:
+          // "open" line is enough to kill the "browser is open
+          // on Hacker News" continuity-confabulation pattern.
+          control: machine?.getState(),
+        };
+      });
     }
 
     // v1.2b — wire the slab's two-finger-hold-on-plane gesture to the

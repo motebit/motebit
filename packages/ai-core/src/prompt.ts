@@ -49,6 +49,7 @@ You do not have eyes. "What you see" means what a tool returned this turn — no
 - When asked about visual properties and you have only text, say "I haven't seen the pixels" and offer the right remediation. Don't bluff from training even when the page is famous. Knowing what Hacker News looks like in training is memory, not perception. **Don't bridge to "what's typical" either** ("biographies of this era almost always lead with a black-and-white portrait") — that's the same training-confidence laundering, just dressed up as inference.
 - When a tool result returns a \`bytes_omitted\` directive, the structured \`bytes_omitted_reason\` names the exact remediation: \`consent_required\` → "the user can type \`/vision grant\` to allow you to see images this session"; \`sensitivity_blocked\` → "this session is at sensitivity \`<tier>\` — the user can type \`/sensitivity none\` if appropriate"; \`no_capability\` → "the active provider doesn't support vision; the user can switch providers." Surface the affordance verbatim. Do NOT ask "may I see?" in chat — pixel consent is granted via the typed slash command, not by asking.
 - Trust your own prior tool results in this conversation. If you called read_page or computer earlier in this turn or a recent turn and it returned content, that content was real. Do not later say "the URL didn't land" or "the tool failed" if the conversation history shows a successful result. Re-read the prior tool_result before claiming a tool failed.
+- Runtime state is in the [Now] block — read it, don't infer it. The block tells you whether a cloud-browser session is open, who holds control, the current sensitivity tier, and pixel-passthrough state. Do NOT claim "the browser is already open" or "we're on Hacker News" from conversation memory after a session resumption — page refreshes, runtime restarts, and explicit dispose calls all close sessions while leaving conversation history intact. The [Now] block is the truth this turn.
 - Runtime gates (sensitivity holds, control denials, approval blocks) arrive as typed errors on a tool call — never as "a feeling" or an inference. If you didn't see a structured error from a tool, no gate fired. Don't say "I'm being gated" or "there's a hold I can't clear" unless an actual tool result said so. The runtime is mechanical; if it stops you, you'll know explicitly.
 - "I don't know without looking" is a complete answer when no tool result is available. Confabulation is the failure mode this rule exists to prevent.`;
 
@@ -219,6 +220,63 @@ export function formatBodyAwareness(cues: BehaviorCues): string {
   return `[Body] You are currently ${descriptions.join(", ")}.`;
 }
 
+/**
+ * Format the runtime session-state snapshot into a `[Now]` block
+ * for the system prompt's dynamic suffix. Same shape as `[Body]` and
+ * `[State]` — typed truth the AI reads instead of inferring.
+ *
+ * Block named `[Now]` (not `[Session]`) because the prompt's
+ * existing `[Session]` block describes conversation continuity (when
+ * the user last spoke). Two different concepts collided on the
+ * same name in an earlier draft — `[Now]` distinguishes runtime
+ * state ("what's true this turn") from conversation continuity.
+ *
+ * Restraint: only emit lines that have something to say. Default
+ * states (sensitivity = none, consent = denied with closed browser,
+ * no control machine) collapse to a minimal `Browser: closed`
+ * line. Elevated tiers, granted consent, control transitions get
+ * their own lines.
+ */
+export function formatSessionState(snapshot: import("@motebit/sdk").SessionStateSnapshot): string {
+  const lines: string[] = [];
+  // Browser line — always present when the snapshot exists, even
+  // for `closed`. The AI needs the typed signal to NOT confabulate
+  // continuity from conversation memory; an absent block could be
+  // read as "no signal" when actually the truth is "closed."
+  if (snapshot.browser.status === "open") {
+    lines.push(`Browser: open${snapshot.browser.url ? ` at ${snapshot.browser.url}` : ""}`);
+    if (snapshot.browser.control) {
+      lines.push(`Control: ${describeControl(snapshot.browser.control)}`);
+    }
+  } else {
+    lines.push("Browser: closed");
+  }
+  // Sensitivity / consent lines only when non-default — restraint.
+  // Default `none` + `denied` are the calm baseline; surfacing them
+  // every turn would be noise. Elevated tiers and granted consent
+  // are real signals the AI should know about.
+  if (snapshot.sensitivity !== ("none" as typeof snapshot.sensitivity)) {
+    lines.push(`Sensitivity: ${snapshot.sensitivity}`);
+  }
+  if (snapshot.pixelConsent !== "denied") {
+    lines.push(`Pixel passthrough: ${snapshot.pixelConsent}`);
+  }
+  return `[Now] ${lines.join(" · ")}`;
+}
+
+function describeControl(control: import("@motebit/sdk").ControlState): string {
+  switch (control.kind) {
+    case "user":
+      return "user driving";
+    case "motebit":
+      return "motebit driving";
+    case "handoff_pending":
+      return `${control.requesting} requesting control from ${control.current}`;
+    case "paused":
+      return `paused (was ${control.previousDriver})`;
+  }
+}
+
 // ── Static system prompt prefix ──────────────────────────────────────
 // Identical across turns. Cacheable via Anthropic prompt caching when
 // sent as a structured content block with cache_control.
@@ -347,6 +405,20 @@ function buildDynamicSuffix(contextPack: ContextPack, config?: MotebitPersonalit
     const bodyLine = formatBodyAwareness(contextPack.behavior_cues);
     if (bodyLine) {
       sections.push(bodyLine);
+    }
+  }
+
+  // Prompt-1 — runtime session-state snapshot. Closes the
+  // confabulation hallucination class (witnessed 2026-05-08:
+  // AI claimed "browser is already open on Hacker News" after a
+  // refresh when the session was actually closed). The block is
+  // the AI's read of what's true RIGHT NOW about the cloud-browser
+  // session, control state, sensitivity tier, and pixel consent —
+  // not what conversation memory remembers from a prior turn.
+  if (contextPack.sessionState) {
+    const sessionLines = formatSessionState(contextPack.sessionState);
+    if (sessionLines) {
+      sections.push(sessionLines);
     }
   }
 
