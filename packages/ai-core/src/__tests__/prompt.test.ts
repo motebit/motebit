@@ -171,6 +171,47 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("[State]");
   });
 
+  // The model has very strong training priors for popular pages
+  // (Hacker News, Wikipedia, GitHub) and was caught silently
+  // describing visual properties — "the little orange Y logo in
+  // the top-left corner" — when only read_page (text) had been
+  // called. This rule names the boundary so training-confidence
+  // stops laundering itself as perception. Witnessed 2026-05-08
+  // during the co-browse Slice 2 smoke.
+  it("includes the perception doctrine — visual claims require pixel tools", () => {
+    const prompt = buildSystemPrompt(makeContextPack());
+    expect(prompt).toContain("[How you perceive]");
+    expect(prompt).toContain("read_page returns text");
+    expect(prompt).toContain("haven't seen the pixels");
+  });
+
+  // Companion rule: trust prior tool results in the conversation.
+  // Witnessed same session as the perception bluff: a turn after
+  // a successful read_page on a Wikipedia article, the model said
+  // "That URL was a guess and didn't land" — confabulating a
+  // failure when the conversation history showed real content.
+  it("includes the trust-prior-tool-results rule under perception doctrine", () => {
+    const prompt = buildSystemPrompt(makeContextPack());
+    expect(prompt).toContain("Trust your own prior tool results");
+    expect(prompt).toContain("Re-read the prior tool_result");
+  });
+
+  // Same-session sibling: the model confabulated a sensitivity
+  // gate firing on a Wikipedia article about death/dying,
+  // claiming "there's a sensitivity hold I can't clear from my
+  // side." classifyToolResult only runs inside the slab-item
+  // tagging path, and read_page is slabProjection: "none" — so
+  // the gate never actually fired. The model pattern-matched
+  // training-notion-of-sensitive-content with runtime-gate-fired
+  // and generated a plausible obstacle. The runtime is mechanical:
+  // if a gate fires, the AI gets a typed error, not a vibe.
+  it("includes the runtime-gates-are-mechanical rule under perception doctrine", () => {
+    const prompt = buildSystemPrompt(makeContextPack());
+    expect(prompt).toContain("Runtime gates");
+    expect(prompt).toContain("typed errors");
+    expect(prompt).toContain("never as");
+  });
+
   it("uses custom name from config", () => {
     const prompt = buildSystemPrompt(makeContextPack(), { name: "Pebble" });
     expect(prompt).toContain("Your name is Pebble");

@@ -612,9 +612,30 @@ export function registerWebComputerTool(
   // Doctrine: motebit-computer.md §"v1 implementation status —
   // Deferred to v1.5+: per-dispatcher mode stamping" — landed as
   // v1.1 of the virtual_browser arc.
+  // Stamp `slabProjection: "none"` on the cloud-browser path —
+  // every `computer` act is already visible in the live screencast
+  // body of the slab (navigate makes the page change, click moves
+  // the cursor crosshair, screenshot feeds the AI without changing
+  // what the user sees). Opening a separate `tool_call` card on
+  // top of the screencast is duplicate chrome competing with the
+  // surface that already shows the act. Witnessed 2026-05-08: an
+  // empty "READING" card overlaying live HN frames during a
+  // screenshot call — the chrome's URL-fallback label
+  // (`hostEl = parsed.host || (status === "calling" ? "reading" : "")`)
+  // showed because the screenshot action has no URL context.
+  // Suppressing the projection at registration is the endgame:
+  // the slab body IS the act surface for virtual_browser.
+  //
+  // Same shape as `request_control` (none because the doorbell band
+  // is the surface) and `read_page` (none because live frames ARE
+  // what's being read). Desktop's `registerComputerTool` registers
+  // `desktop_drive` WITHOUT this override — desktop has no live
+  // body surface, so the tool_call card IS the user's only signal
+  // an action fired.
   const computerDefinitionForCloud = {
     ...computerDefinition,
     embodimentMode: "virtual_browser",
+    slabProjection: "none" as const,
   };
   registry.register(
     computerDefinitionForCloud,
