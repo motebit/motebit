@@ -56,13 +56,13 @@ Default state (closed browser, none sensitivity, denied consent)
 collapses to `[Now] Browser: closed`. Elevated tiers and granted
 consent get their own `·`-separated lines.
 
-The PERCEPTION_DOCTRINE block in `packages/ai-core/src/prompt.ts`
-extends with a rule: _"Runtime state is in the [Now] block — read
+The PERCEPTION*DOCTRINE block in `packages/ai-core/src/prompt.ts`
+extends with a rule: *"Runtime state is in the [Now] block — read
 it, don't infer it. Do NOT claim 'the browser is already open' or
 'we're on Hacker News' from conversation memory after a session
 resumption — page refreshes, runtime restarts, and explicit
 dispose calls all close sessions while leaving conversation
-history intact. The [Now] block is the truth this turn."_
+history intact. The [Now] block is the truth this turn."\_
 
 Block named `[Now]` (not `[Session]`) to avoid collision with the
 existing `[Session]` block, which describes conversation
