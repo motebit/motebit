@@ -215,59 +215,55 @@ describe("renderCoBrowseChrome — state structure", () => {
   });
 });
 
-// ── Calm vs present register — visual weight by state ──────────────────
+// ── Always-present URL-bar register — visual surround across all states ──
 //
-// Post implicit-grant + dispatch-noop, `handoff_pending` is the rare
-// exception state and `user` / `motebit` are the dominant case. The
-// chrome simplifies asymmetrically: dominant states recede to a
-// minimal register (no glass-blur, no border, no shadow); exception
-// states keep the present register so the user notices when
-// something needs attention. Architectural rule "strip always
-// present" is preserved — only outer styling changes; the slot
-// composition (mark / middle / trail) is identical across registers.
+// Browser convention is a persistent address bar — it's the user's
+// primary navigation affordance. The chrome surround stays present
+// (glass-blur, border, shadow) on every state so the URL bar
+// occludes page content beneath it cleanly. The differentiator
+// across states is content (URL input vs caption vs Grant/Deny) and
+// the doorbell accent for handoff_pending — not the surround.
 //
-// These tests pin the split so future style edits can't drift the
-// dominant states back into present-register weight (which would
-// re-introduce the visual competition with the screencast that the
-// simplification removes).
-describe("renderCoBrowseChrome — calm/present register split", () => {
-  it("user state recedes to the calm register — no border, no shadow, transparent surround", () => {
+// Architectural correction (2026-05-09): the prior calm/present
+// split made user+motebit transparent ("calm"), which caused the
+// URL bar to overlap page content (no occluding background). Real
+// browsers always have an opaque chrome row. These tests pin the
+// always-present rule so future edits can't fade the URL bar
+// chrome into the page again.
+describe("renderCoBrowseChrome — always-present chrome surround", () => {
+  it("user state has the present surround — glass-blur, border, shadow (occludes page)", () => {
     const { machine } = makeMockMachine();
     const { fwd } = makeForwardEvent();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
-    // `border` shorthand serialization is unreliable across jsdom
-    // versions when set to "none"; assert the substantive shape:
-    // there's no "solid" border anywhere, no shadow, transparent
-    // background. Real browsers render this as no surround.
-    expect(el.style.border).not.toContain("solid");
-    expect(el.style.borderLeft).not.toContain("solid");
-    expect(el.style.boxShadow).toBe("none");
-    expect(el.style.background).toBe("transparent");
-  });
-
-  it("motebit state recedes to the calm register — same shape as user", () => {
-    const { machine } = makeMockMachine();
-    const el = renderCoBrowseChrome({ kind: "motebit" }, machine, {});
-    expect(el.style.border).not.toContain("solid");
-    expect(el.style.borderLeft).not.toContain("solid");
-    expect(el.style.boxShadow).toBe("none");
-    expect(el.style.background).toBe("transparent");
-  });
-
-  it("handoff_pending keeps the present register — glass-blur surround + doorbell accent", () => {
-    const { machine } = makeMockMachine();
-    const state: ControlState = { kind: "handoff_pending", current: "user", requesting: "motebit" };
-    const el = renderCoBrowseChrome(state, machine, {});
-    // Present-register surround.
     expect(el.style.background).toContain("rgba(255, 255, 255");
     expect(el.style.border).toContain("solid");
     expect(el.style.boxShadow).not.toBe("none");
-    // Doorbell accent — left border is the one register-specific
-    // signal kept from the prior chrome.
+    // No doorbell accent in user state — surround is present, but
+    // not asking for a decision.
+    expect(el.style.borderLeft).not.toContain("3px solid");
+  });
+
+  it("motebit state has the present surround — same as user, browser convention", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "motebit" }, machine, {});
+    expect(el.style.background).toContain("rgba(255, 255, 255");
+    expect(el.style.border).toContain("solid");
+    expect(el.style.boxShadow).not.toBe("none");
+    expect(el.style.borderLeft).not.toContain("3px solid");
+  });
+
+  it("handoff_pending has the present surround + doorbell accent", () => {
+    const { machine } = makeMockMachine();
+    const state: ControlState = { kind: "handoff_pending", current: "user", requesting: "motebit" };
+    const el = renderCoBrowseChrome(state, machine, {});
+    expect(el.style.background).toContain("rgba(255, 255, 255");
+    expect(el.style.border).toContain("solid");
+    expect(el.style.boxShadow).not.toBe("none");
+    // Doorbell accent — only fires when the user needs to decide.
     expect(el.style.borderLeft).toContain("3px solid");
   });
 
-  it("paused keeps the present register surround — no doorbell accent", () => {
+  it("paused has the present surround — no doorbell accent", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "paused", previousDriver: "user" }, machine, {});
     expect(el.style.background).toContain("rgba(255, 255, 255");
@@ -277,7 +273,7 @@ describe("renderCoBrowseChrome — calm/present register split", () => {
     expect(el.style.borderLeft).not.toContain("3px solid");
   });
 
-  it("slot composition is identical across registers — only outer weight differs", () => {
+  it("slot composition is identical across states — only the doorbell accent differs", () => {
     // Defense against the slimmer register accidentally dropping
     // structural pieces. Mark + middle + trail must exist in every
     // state regardless of visual register.
