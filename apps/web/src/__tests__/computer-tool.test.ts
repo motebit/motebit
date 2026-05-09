@@ -164,6 +164,105 @@ describe("registerWebComputerTool", () => {
     expect(typeof (result as { error: unknown }).error).toBe("string");
   });
 
+  // -------------------------------------------------------------------
+  // chrome-1a-fix / prompt-1 — onNavigateResult fires the URL after a
+  // successful motebit-driven `computer({kind: "navigate"})` so the
+  // surface can feed it into runtime.setBrowserSessionProvider →
+  // [Now] Browser: open at <url>.
+  // -------------------------------------------------------------------
+
+  it("fires onNavigateResult with the resolved URL after motebit-driven navigate succeeds", async () => {
+    const registry = new InMemoryToolRegistry();
+    const calls: MockDispatcherCalls = { queryDisplay: 0, execute: [], dispose: 0 };
+    const dispatcher: ComputerPlatformDispatcher = {
+      async queryDisplay() {
+        calls.queryDisplay++;
+        return { width: 1280, height: 800, scaling_factor: 1 };
+      },
+      async execute(action) {
+        calls.execute.push({ kind: action.kind });
+        // Browser-sandbox returns `data.url = session.page.url()`
+        // after Playwright commit; reproduce that shape here.
+        if (action.kind === "navigate") {
+          return {
+            kind: "navigate",
+            ok: true,
+            url: "https://example.com/landing",
+            visual_content_detected: true,
+            blank_page_detected: false,
+            access_denied_detected: false,
+            visual_readiness_timeout: false,
+          };
+        }
+        return { kind: action.kind, ok: true };
+      },
+      async dispose() {
+        calls.dispose++;
+      },
+    };
+
+    const navigated: string[] = [];
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      onNavigateResult: (url) => navigated.push(url),
+    });
+    grantMotebit(reg!);
+
+    await registry.execute("computer", {
+      action: { kind: "navigate", url: "https://example.com" },
+    });
+    expect(navigated).toEqual(["https://example.com/landing"]);
+  });
+
+  it("does NOT fire onNavigateResult on non-navigate actions", async () => {
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    const navigated: string[] = [];
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      onNavigateResult: (url) => navigated.push(url),
+    });
+    grantMotebit(reg!);
+
+    await registry.execute("computer", { action: { kind: "screenshot" } });
+    await registry.execute("computer", { action: { kind: "cursor_position" } });
+    expect(navigated).toEqual([]);
+  });
+
+  it("does NOT fire onNavigateResult when navigate fails (gate denial / dispatcher error)", async () => {
+    const registry = new InMemoryToolRegistry();
+    const dispatcher: ComputerPlatformDispatcher = {
+      async queryDisplay() {
+        return { width: 1280, height: 800, scaling_factor: 1 };
+      },
+      async execute() {
+        throw new Error("dispatcher error");
+      },
+      async dispose() {},
+    };
+    const navigated: string[] = [];
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+      onNavigateResult: (url) => navigated.push(url),
+    });
+    grantMotebit(reg!);
+
+    const result = await registry.execute("computer", {
+      action: { kind: "navigate", url: "https://example.com" },
+    });
+    expect(result.ok).toBe(false);
+    expect(navigated).toEqual([]);
+  });
+
   it("dispose is idempotent (subsequent calls are no-ops)", async () => {
     const registry = new InMemoryToolRegistry();
     const { dispatcher, calls } = makeMockDispatcher();

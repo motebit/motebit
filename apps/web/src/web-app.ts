@@ -195,6 +195,32 @@ export class WebApp {
   private liveBrowserForwardEvent:
     | ((event: UserInputEvent) => Promise<UserInputForwardResult>)
     | null = null;
+  /**
+   * chrome-1a-fix / prompt-1 — surface-tracked current URL for the
+   * open cloud-browser session. Exposed via
+   * `runtime.setBrowserSessionProvider(...)` so the AI's prompt's
+   * `[Now] Browser: open at <url>` line reads the truth instead of
+   * confabulating from conversation memory.
+   *
+   * Updated from two paths:
+   *   1. Motebit-driven navigates — via the
+   *      `registerWebComputerTool` `onNavigateResult` callback,
+   *      after a successful `computer({kind: "navigate"})` returns
+   *      its resolved URL.
+   *   2. User-driven navigates — inside
+   *      `liveBrowserForwardEvent` after `forwardUserInput` resolves
+   *      cleanly on a `{kind: "navigate", url}` event.
+   *
+   * Reset to `null` on session-ending so a stale URL from a closed
+   * session doesn't leak into a fresh session's `[Now]` block.
+   *
+   * v1 limitation: SPA-style URL changes (in-page click follows a
+   * link without an explicit navigate) are NOT tracked. Adding
+   * Playwright `framenavigated` events from browser-sandbox is a
+   * follow-up slice. Today: explicit-navigate tracking is enough
+   * to kill the "browser is on HN" memory-confabulation pattern.
+   */
+  private _currentBrowserUrl: string | null = null;
   private _motebitId = "";
   private _deviceId = "";
   private _publicKeyHex = "";
@@ -755,16 +781,29 @@ export class WebApp {
         // dissolves it before the bus stops publishing.
         screencastBus: this.screencastBus,
         onSessionLive: (sessionId) => this.openLiveBrowserSlabItem(sessionId),
-        onSessionEnding: () => this.dissolveLiveBrowserSlabItem(),
+        onSessionEnding: () => {
+          // chrome-1a-fix — clear tracked URL on session close so a
+          // stale URL from a prior session doesn't leak into the
+          // next `[Now]` block before the new session navigates.
+          this._currentBrowserUrl = null;
+          this.dissolveLiveBrowserSlabItem();
+        },
+        // chrome-1a-fix / prompt-1 — capture resolved URL on every
+        // motebit-driven `computer({ kind: "navigate" })`. Sibling
+        // of the user-driven capture path inside
+        // `liveBrowserForwardEvent` below.
+        onNavigateResult: (url) => {
+          this._currentBrowserUrl = url;
+        },
       });
 
       // Prompt-1 — wire the browser-session info provider so the
-      // runtime can compose `[Session]` blocks for the AI's prompt.
+      // runtime can compose `[Now]` blocks for the AI's prompt.
       // The provider reads `liveBrowserHandle` (open iff handle
-      // exists) and the co-browse machine state. Closes the
-      // runtime-state-confabulation hallucination class — the AI
-      // reads truth instead of inferring continuity from
-      // conversation memory.
+      // exists), the co-browse machine state, and the surface-
+      // tracked current URL. Closes the runtime-state-
+      // confabulation hallucination class — the AI reads truth
+      // instead of inferring continuity from conversation memory.
       runtime.setBrowserSessionProvider(() => {
         const handle = this.liveBrowserHandle;
         const machine = this.computerRegistration?.coBrowseControl;
@@ -773,10 +812,7 @@ export class WebApp {
         }
         return {
           status: "open" as const,
-          // URL tracking is a chrome-1b follow-up; absent for now
-          // means "we don't know," not "no URL." The status:
-          // "open" line is enough to kill the "browser is open
-          // on Hacker News" continuity-confabulation pattern.
+          ...(this._currentBrowserUrl ? { url: this._currentBrowserUrl } : {}),
           control: machine?.getState(),
         };
       });
@@ -1652,6 +1688,16 @@ export class WebApp {
           // happens here (single-source-of-truth for event log).
           const result = await reg.sessionManager.forwardUserInput(sessionId, event);
           await this.emitUserInputAudit(result.audit);
+          // chrome-1a-fix / prompt-1 — capture the user-typed URL
+          // when a user-driven navigate forwards cleanly. Sibling
+          // of the motebit-driven path's `onNavigateResult`
+          // callback. The wire URL from the event is what
+          // browser-sandbox will commit to (after re-normalizing);
+          // close enough for the AI's `[Now]` block until SPA
+          // tracking lands.
+          if (event.kind === "navigate" && result.outcome === "forwarded") {
+            this._currentBrowserUrl = event.url;
+          }
           return result;
         }
       : undefined;

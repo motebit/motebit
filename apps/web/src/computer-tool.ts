@@ -183,6 +183,34 @@ export interface RegisterWebComputerToolOptions {
    */
   readonly onSessionEnding?: (cloudSessionId: string) => void;
   /**
+   * chrome-1a-fix / prompt-1 — fired after a successful motebit-
+   * driven `computer({ kind: "navigate" })` with the resolved URL
+   * (the navigate result envelope's `data.url`, which is
+   * `session.page.url()` after Playwright's commit).
+   *
+   * The surface stores this and exposes it via
+   * `runtime.setBrowserSessionProvider(...)` so the
+   * `[Now] Browser: open at <url>` line in the AI's prompt reads
+   * the truth instead of letting the model confabulate from
+   * conversation memory (witnessed 2026-05-08: the AI claimed
+   * "HN doesn't have a search bar" while the actual page was
+   * google.com — the AI had no URL signal in `[Now]` so it
+   * pattern-matched off prior turns).
+   *
+   * v1 limitation: SPA-style URL changes via in-page clicks (no
+   * explicit navigate action) do NOT fire this callback. Adding
+   * Playwright's `framenavigated` events from browser-sandbox is
+   * a follow-up slice. Today's coverage is "explicit navigate
+   * actions are tracked" — sufficient for the [Now]-block
+   * confabulation fix.
+   *
+   * Sibling of the user-driven navigate tracking in
+   * `apps/web/src/web-app.ts#liveBrowserForwardEvent`, which
+   * captures URLs from user-typed address-bar submits at
+   * dispatch time.
+   */
+  readonly onNavigateResult?: (url: string) => void;
+  /**
    * Co-browse Slice 2c-prerequisite — how long the `request_control`
    * tool waits for the user's Grant/Deny on the slab band before
    * timing out and reverting to user. Default 60s — long enough for
@@ -476,6 +504,31 @@ export function registerWebComputerTool(
 
       const outcome = await sessionManager.executeAction(sessionId, action);
       if (outcome.outcome === "success") {
+        // chrome-1a-fix / prompt-1 — capture the resolved URL on
+        // every motebit-driven navigate so the surface can feed it
+        // into `runtime.setBrowserSessionProvider(...)` →
+        // `[Now] Browser: open at <url>` in the AI's prompt.
+        // Browser-sandbox returns `data.url = session.page.url()`
+        // after Playwright commits; we trust that as the
+        // authoritative current URL.
+        if (
+          opts.onNavigateResult &&
+          outcome.data !== null &&
+          typeof outcome.data === "object" &&
+          (outcome.data as { kind?: unknown }).kind === "navigate"
+        ) {
+          const url = (outcome.data as { url?: unknown }).url;
+          if (typeof url === "string" && url.length > 0) {
+            try {
+              opts.onNavigateResult(url);
+            } catch {
+              // Callback faults must not break the tool result —
+              // URL tracking is observability, not correctness.
+              // Same fail-soft posture as `onSessionLive` /
+              // `onSessionEnding` higher in this file.
+            }
+          }
+        }
         return outcome.data;
       }
       const parts = [outcome.reason, outcome.message].filter(
