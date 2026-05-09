@@ -73,7 +73,7 @@ The slab is always-already there. Specifically, on /computer:
 
 The principle generalizes when other act-surfaces ship — mobile's surface analog, spatial's primitive analog, the viewport-grade rendering of `peer_viewport`. They will inherit the same physics through the same lineage: the substrate (always-already-present medium) carries the body's sufficiency outward; act-surfaces inherit by being IN the substrate.
 
-This is generalization through inheritance, not through categorization. The substrate is the universal; the slab is one instance of an act-surface IN the substrate; future act-surfaces are other instances. None of them are bodies; they are all carried by the substrate the body inhabits.
+This is generalization through inheritance, not through categorization. The substrate is the canonical inheritance medium — surfaces become act-surfaces by inhabiting it, not by being reclassified as bodies. Body remains singular; substrate propagates outward; act-surfaces are what the substrate carries.
 
 ## How this lands as code review
 
