@@ -85,4 +85,18 @@ describe("loadConfig", () => {
     // eslint-disable-next-line no-console
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("malformed config"));
   });
+
+  // Covers the ?? branch when configPath is omitted — the function
+  // should fall through to ~/.motebit/config.json. We don't assert
+  // the contents (the user's actual config file is environment-
+  // dependent); we just exercise the default-path branch so the
+  // ?? operator's right side runs in coverage.
+  it("uses default ~/.motebit/config.json path when no argument provided", () => {
+    const result = loadConfig();
+    // Must return a valid config shape regardless of whether the
+    // user has a real ~/.motebit/config.json — file-missing falls
+    // through to DEFAULT_CONFIG, file-present parses it.
+    expect(typeof result).toBe("object");
+    expect(typeof result.name).toBe("string");
+  });
 });

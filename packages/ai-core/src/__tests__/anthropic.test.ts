@@ -498,6 +498,42 @@ describe("buildToolResultContentForAnthropic (vision-2)", () => {
     });
     expect(toAnthropicContent(content)).toBe(content);
   });
+
+  it("defaults to image/png when image_format is omitted", () => {
+    // Covers the `typeof d.image_format === "string" ? ... : "png"`
+    // branch where image_format is undefined.
+    const content = JSON.stringify({
+      ok: true,
+      data: { kind: "screenshot", bytes_base64: FAKE_BYTES, width: 1280, height: 800 },
+    });
+    const arr = toAnthropicContent(content) as Array<Record<string, unknown>>;
+    expect((arr[1] as { source: { media_type: string } }).source.media_type).toBe("image/png");
+  });
+
+  it("defaults to image/png when image_format is a non-string value", () => {
+    // Covers the `typeof d.image_format === "string"` branch on the
+    // false side where image_format is present but wrong-typed.
+    const content = JSON.stringify({
+      ok: true,
+      data: {
+        kind: "screenshot",
+        bytes_base64: FAKE_BYTES,
+        image_format: 42, // wrong type
+      },
+    });
+    const arr = toAnthropicContent(content) as Array<Record<string, unknown>>;
+    expect((arr[1] as { source: { media_type: string } }).source.media_type).toBe("image/png");
+  });
+
+  it("returns string when envelope is malformed (data field missing)", () => {
+    // Covers the `data === null || typeof data !== "object"` branch
+    // when the envelope shape doesn't match.
+    expect(toAnthropicContent(JSON.stringify({ ok: true }))).toBe(JSON.stringify({ ok: true }));
+    expect(toAnthropicContent(JSON.stringify({ ok: false, data: null }))).toContain("null");
+    expect(toAnthropicContent(JSON.stringify({ ok: true, data: "string-not-object" }))).toContain(
+      "string-not-object",
+    );
+  });
 });
 
 describe("fetchWithConnectionTimeout", () => {
