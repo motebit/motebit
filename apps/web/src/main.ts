@@ -311,9 +311,11 @@ async function autoInitLocalInference(): Promise<boolean> {
   const probes = DEFAULT_LOCAL_ENDPOINTS.map((ep) => probeLocalModels(ep.url, ep.type));
   const results = await Promise.allSettled(probes);
 
-  // Find the first successful probe
+  // Find the first ok outcome. Non-ok kinds (unreachable / cors_blocked /
+  // server_up_no_models) don't bootstrap the auto-connect path; settings
+  // surfaces the kind-specific remediation when the user opens it.
   for (const result of results) {
-    if (result.status === "fulfilled" && result.value) {
+    if (result.status === "fulfilled" && result.value.kind === "ok") {
       const { baseUrl, models } = result.value;
       const model = pickBestModel(models);
       // Both "ollama" and generic OpenAI-compat local servers collapse to the

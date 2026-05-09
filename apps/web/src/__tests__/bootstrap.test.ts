@@ -10,12 +10,13 @@ import {
   pickBestModel,
   resolveProviderFromSaved,
   configFromProbeResult,
+  classifyProbeFailure,
   isConfigValid,
   isConfigReachable,
   cleanConversationHistory,
   DEFAULT_LOCAL_ENDPOINTS,
 } from "../bootstrap.js";
-import type { ProbeResult } from "../bootstrap.js";
+import type { ProbeOutcome } from "../bootstrap.js";
 
 // === pickBestModel ===
 
@@ -164,6 +165,7 @@ describe("probeLocalModels", () => {
 
     const result = await probeLocalModels("http://localhost:11434", "ollama", mockFetch);
     expect(result).toEqual({
+      kind: "ok",
       baseUrl: "http://localhost:11434",
       type: "ollama",
       models: ["llama3:latest", "phi-3:latest"],
@@ -188,6 +190,7 @@ describe("probeLocalModels", () => {
 
     const result = await probeLocalModels("http://localhost:11434", "ollama", mockFetch);
     expect(result).toEqual({
+      kind: "ok",
       baseUrl: "http://localhost:11434",
       type: "openai",
       models: ["llama3"],
@@ -202,34 +205,101 @@ describe("probeLocalModels", () => {
 
     const result = await probeLocalModels("http://localhost:1234", "openai", mockFetch);
     expect(result).toEqual({
+      kind: "ok",
       baseUrl: "http://localhost:1234",
       type: "openai",
       models: ["lmstudio-model-1"],
     });
   });
 
-  it("returns null when endpoint is unreachable (fetch throws)", async () => {
+  it("returns kind: 'unreachable' when fetch throws a generic Error (not TypeError)", async () => {
     mockFetch.mockRejectedValue(new Error("Connection refused"));
 
-    const result = await probeLocalModels("http://localhost:11434", "ollama", mockFetch);
-    expect(result).toBeNull();
+    const result = await probeLocalModels(
+      "http://localhost:11434",
+      "ollama",
+      mockFetch,
+      2000,
+      "https:",
+    );
+    expect(result).toEqual({ kind: "unreachable", baseUrl: "http://localhost:11434" });
   });
 
-  it("returns null when endpoint returns non-OK status", async () => {
+  it("returns kind: 'cors_blocked' on TypeError when HTTPS origin probes http://localhost", async () => {
+    // The browser surfaces CORS-rejected fetches as TypeError "Failed
+    // to fetch" — same shape as a network failure. The origin
+    // heuristic distinguishes: HTTPS page + http://localhost target
+    // is the canonical CORS shape (the user has Ollama running but
+    // hasn't set OLLAMA_ORIGINS for motebit.com).
+    mockFetch.mockRejectedValue(new TypeError("Failed to fetch"));
+
+    const result = await probeLocalModels(
+      "http://localhost:11434",
+      "ollama",
+      mockFetch,
+      2000,
+      "https:",
+    );
+    expect(result).toEqual({ kind: "cors_blocked", baseUrl: "http://localhost:11434" });
+  });
+
+  it("returns kind: 'unreachable' on TypeError when HTTP origin probes localhost (CORS heuristic doesn't fire)", async () => {
+    // Local desktop dev (HTTP origin) doesn't have a CORS asymmetry
+    // with localhost. A TypeError there really is a network-level
+    // failure, not CORS.
+    mockFetch.mockRejectedValue(new TypeError("Failed to fetch"));
+
+    const result = await probeLocalModels(
+      "http://localhost:11434",
+      "ollama",
+      mockFetch,
+      2000,
+      "http:",
+    );
+    expect(result).toEqual({ kind: "unreachable", baseUrl: "http://localhost:11434" });
+  });
+
+  it("returns kind: 'unreachable' when endpoint returns non-OK status", async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
 
     const result = await probeLocalModels("http://localhost:1234", "openai", mockFetch);
-    expect(result).toBeNull();
+    expect(result).toEqual({ kind: "unreachable", baseUrl: "http://localhost:1234" });
   });
 
-  it("returns null when endpoint returns empty model list", async () => {
+  it("returns kind: 'server_up_no_models' when openai endpoint returns 200 with empty model list", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ data: [] }),
     });
 
     const result = await probeLocalModels("http://localhost:1234", "openai", mockFetch);
-    expect(result).toBeNull();
+    expect(result).toEqual({
+      kind: "server_up_no_models",
+      baseUrl: "http://localhost:1234",
+      type: "openai",
+    });
+  });
+
+  it("returns kind: 'server_up_no_models' when ollama path is empty AND openai fallback is also empty", async () => {
+    // First Ollama /api/tags returns 200 + empty models — server is
+    // up, just no models pulled. The OpenAI fallback also returns
+    // empty (no OpenAI shim either). The actionable signal to the
+    // user is "pull a model," not "no server found."
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ models: [] }),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ data: [] }),
+    });
+
+    const result = await probeLocalModels("http://localhost:11434", "ollama", mockFetch);
+    expect(result).toEqual({
+      kind: "server_up_no_models",
+      baseUrl: "http://localhost:11434",
+      type: "openai",
+    });
   });
 
   it("respects configurable timeout", async () => {
@@ -247,6 +317,40 @@ describe("probeLocalModels", () => {
   });
 });
 
+// === classifyProbeFailure ===
+
+describe("classifyProbeFailure (CORS-vs-unreachable heuristic)", () => {
+  it("returns cors_blocked for HTTPS origin probing http://localhost", () => {
+    expect(classifyProbeFailure("http://localhost:11434", "https:")).toEqual({
+      kind: "cors_blocked",
+    });
+  });
+
+  it("returns cors_blocked for HTTPS origin probing http://127.0.0.1", () => {
+    expect(classifyProbeFailure("http://127.0.0.1:11434", "https:")).toEqual({
+      kind: "cors_blocked",
+    });
+  });
+
+  it("returns unreachable for HTTPS origin probing https://example.com (not localhost)", () => {
+    expect(classifyProbeFailure("https://example.com:11434", "https:")).toEqual({
+      kind: "unreachable",
+    });
+  });
+
+  it("returns unreachable for HTTP origin probing http://localhost (no CORS asymmetry)", () => {
+    expect(classifyProbeFailure("http://localhost:11434", "http:")).toEqual({
+      kind: "unreachable",
+    });
+  });
+
+  it("treats scheme matching case-insensitively (defensive)", () => {
+    expect(classifyProbeFailure("HTTP://localhost:11434", "https:")).toEqual({
+      kind: "cors_blocked",
+    });
+  });
+});
+
 // === detectLocalInference ===
 
 describe("detectLocalInference", () => {
@@ -256,7 +360,7 @@ describe("detectLocalInference", () => {
     mockFetch = vi.fn();
   });
 
-  it("returns first successful probe (Ollama)", async () => {
+  it("returns kind: 'ok' for first successful probe (Ollama)", async () => {
     // Ollama responds
     mockFetch.mockImplementation(async (url: string) => {
       if (url === "http://localhost:11434/api/tags") {
@@ -267,20 +371,60 @@ describe("detectLocalInference", () => {
 
     const result = await detectLocalInference(DEFAULT_LOCAL_ENDPOINTS, mockFetch);
     expect(result).toEqual({
+      kind: "ok",
       baseUrl: "http://localhost:11434",
       type: "ollama",
       models: ["llama3"],
     });
   });
 
-  it("returns null when all probes fail", async () => {
+  it("returns kind: 'unreachable' when all probes throw generic errors", async () => {
     mockFetch.mockRejectedValue(new Error("Connection refused"));
 
-    const result = await detectLocalInference(DEFAULT_LOCAL_ENDPOINTS, mockFetch);
-    expect(result).toBeNull();
+    const result = await detectLocalInference(DEFAULT_LOCAL_ENDPOINTS, mockFetch, 2000, "https:");
+    expect(result.kind).toBe("unreachable");
   });
 
-  it("skips failed endpoints and returns next successful one", async () => {
+  it("prefers cors_blocked over unreachable when at least one probe is CORS-blocked (HTTPS origin)", async () => {
+    // Half throw TypeError (could be CORS for HTTPS+localhost),
+    // half throw plain Error (definitely unreachable). The
+    // detection layer surfaces the most actionable kind so the
+    // user sees the OLLAMA_ORIGINS remediation rather than a
+    // generic "no server found" — they probably DO have a server
+    // running, just need to whitelist motebit.com.
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.startsWith("http://localhost:11434")) {
+        throw new TypeError("Failed to fetch");
+      }
+      throw new Error("Connection refused");
+    });
+
+    const result = await detectLocalInference(DEFAULT_LOCAL_ENDPOINTS, mockFetch, 2000, "https:");
+    expect(result.kind).toBe("cors_blocked");
+  });
+
+  it("prefers server_up_no_models over cors_blocked over unreachable", async () => {
+    // 11434 responds 200 + empty (server up, no models)
+    // 1234 throws TypeError on HTTPS (CORS heuristic)
+    // others throw generic (unreachable)
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url === "http://localhost:11434/api/tags") {
+        return { ok: true, json: async () => ({ models: [] }) };
+      }
+      if (url === "http://localhost:11434/v1/models") {
+        return { ok: true, json: async () => ({ data: [] }) };
+      }
+      if (url.startsWith("http://localhost:1234")) {
+        throw new TypeError("Failed to fetch");
+      }
+      throw new Error("Connection refused");
+    });
+
+    const result = await detectLocalInference(DEFAULT_LOCAL_ENDPOINTS, mockFetch, 2000, "https:");
+    expect(result.kind).toBe("server_up_no_models");
+  });
+
+  it("skips failed endpoints and returns first ok outcome", async () => {
     mockFetch.mockImplementation(async (url: string) => {
       // Ollama fails, LM Studio succeeds
       if (url === "http://localhost:1234/v1/models") {
@@ -291,6 +435,7 @@ describe("detectLocalInference", () => {
 
     const result = await detectLocalInference(DEFAULT_LOCAL_ENDPOINTS, mockFetch);
     expect(result).toEqual({
+      kind: "ok",
       baseUrl: "http://localhost:1234",
       type: "openai",
       models: ["model-x"],
@@ -308,6 +453,7 @@ describe("detectLocalInference", () => {
       mockFetch,
     );
     expect(result).toEqual({
+      kind: "ok",
       baseUrl: "http://localhost:9999",
       type: "openai",
       models: ["custom-model"],
@@ -319,7 +465,8 @@ describe("detectLocalInference", () => {
 
 describe("configFromProbeResult", () => {
   it("builds on-device/local-server from ollama probe", () => {
-    const probe: ProbeResult = {
+    const probe: Extract<ProbeOutcome, { kind: "ok" }> = {
+      kind: "ok",
       baseUrl: "http://localhost:11434",
       type: "ollama",
       models: ["llama3:8b", "llama3:70b"],
@@ -334,7 +481,8 @@ describe("configFromProbeResult", () => {
   });
 
   it("builds on-device/local-server from openai-compatible probe", () => {
-    const probe: ProbeResult = {
+    const probe: Extract<ProbeOutcome, { kind: "ok" }> = {
+      kind: "ok",
       baseUrl: "http://localhost:1234",
       type: "openai",
       models: ["phi-3"],

@@ -852,26 +852,75 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     }
   }
 
+  /**
+   * Render a `ProbeOutcome` into the settings status row. Each
+   * non-ok kind carries a specific user remediation — the typed-
+   * truth-perception doctrine applied to the local-server probe:
+   * the wire signal IS the kind, the surface reads it, the user
+   * sees the action they need to take.
+   *
+   *   ok                  → "<server name> — N models" (connected)
+   *   server_up_no_models → "Server is up but has no models. Pull
+   *                          one (e.g. `ollama pull llama3`)."
+   *   cors_blocked        → red text + the OLLAMA_ORIGINS copy-
+   *                          paste command keyed to the current
+   *                          origin, so the user can fix it in one
+   *                          terminal command.
+   *   unreachable         → "Start your server" hint.
+   *
+   * Pre-doctrine, all three failures collapsed to "no models found"
+   * and the user couldn't tell which remediation applied.
+   */
+  function renderProbeOutcome(outcome: import("../bootstrap").ProbeOutcome): void {
+    if (outcome.kind === "ok") {
+      ollamaBaseUrl.value = outcome.baseUrl;
+      const name = friendlyServerName(outcome.baseUrl, outcome.type);
+      ollamaStatus.textContent = `${name} — ${outcome.models.length} model${outcome.models.length !== 1 ? "s" : ""}`;
+      ollamaStatus.className = "ollama-status connected";
+      populateModelList(outcome.models);
+      return;
+    }
+    populateModelList([]);
+    if (outcome.kind === "server_up_no_models") {
+      const name = friendlyServerName(outcome.baseUrl, outcome.type);
+      ollamaStatus.textContent = `${name} is running but has no models. Pull one (e.g. \`ollama pull llama3\`).`;
+      ollamaStatus.className = "ollama-status error";
+      return;
+    }
+    if (outcome.kind === "cors_blocked") {
+      // The user is on HTTPS (motebit.com) probing http://localhost.
+      // The browser fired the request, the server received it, but
+      // the response was dropped because Ollama's default
+      // Access-Control-Allow-Origin is localhost-only. The
+      // remediation is one shell command. Keep the message tight —
+      // calm-software register, not a wall of debug text.
+      const origin =
+        typeof globalThis !== "undefined" && "location" in globalThis
+          ? (globalThis as { location?: { origin?: string } }).location?.origin
+          : undefined;
+      const cmd = origin
+        ? `OLLAMA_ORIGINS="${origin}" ollama serve`
+        : `OLLAMA_ORIGINS="https://motebit.com" ollama serve`;
+      ollamaStatus.textContent = `Server reachable but blocking the browser. Restart with: ${cmd}`;
+      ollamaStatus.className = "ollama-status error";
+      return;
+    }
+    // unreachable
+    ollamaStatus.textContent =
+      "No local server detected. Start Ollama, LM Studio, or llama.cpp on localhost.";
+    ollamaStatus.className = "ollama-status error";
+  }
+
   /** Initial detection — probe all known endpoints and populate UI with the first hit. */
   async function detectAndPopulateLocalServer(): Promise<void> {
     ollamaStatus.textContent = "Detecting local servers...";
     ollamaStatus.className = "ollama-status";
 
-    const result = await detectLocalInference(DEFAULT_LOCAL_ENDPOINTS);
-    if (!result) {
-      ollamaStatus.textContent =
-        "No local server detected. Start Ollama, LM Studio, or llama.cpp on localhost.";
-      ollamaStatus.className = "ollama-status error";
-      if (!ollamaBaseUrl.value) ollamaBaseUrl.value = DEFAULT_OLLAMA_URL;
-      populateModelList([]);
-      return;
+    const outcome = await detectLocalInference(DEFAULT_LOCAL_ENDPOINTS);
+    if (outcome.kind !== "ok" && !ollamaBaseUrl.value) {
+      ollamaBaseUrl.value = DEFAULT_OLLAMA_URL;
     }
-
-    ollamaBaseUrl.value = result.baseUrl;
-    const name = friendlyServerName(result.baseUrl, result.type);
-    ollamaStatus.textContent = `${name} — ${result.models.length} model${result.models.length !== 1 ? "s" : ""}`;
-    ollamaStatus.className = "ollama-status connected";
-    populateModelList(result.models);
+    renderProbeOutcome(outcome);
   }
 
   /** Re-probe a specific endpoint when the user edits the URL manually. */
@@ -881,21 +930,19 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     ollamaStatus.textContent = "Probing...";
     ollamaStatus.className = "ollama-status";
 
-    // Try Ollama API first, then OpenAI-compatible
-    let result = await probeLocalModels(url, "ollama");
-    if (!result) result = await probeLocalModels(url, "openai");
-
-    if (!result) {
-      ollamaStatus.textContent = "No server found at this endpoint";
-      ollamaStatus.className = "ollama-status error";
-      populateModelList([]);
-      return;
+    // Try Ollama API first; fall back to OpenAI shape ONLY when the
+    // first probe surfaced as unreachable. cors_blocked +
+    // server_up_no_models are server-up signals — the second probe
+    // would ride the same wire (and the same blockage), so the
+    // actionable kind from the first call is the right one to
+    // surface. This prevents clobbering "set OLLAMA_ORIGINS" with a
+    // generic "no server found" when the second probe also threw.
+    let outcome = await probeLocalModels(url, "ollama");
+    if (outcome.kind === "unreachable") {
+      const fallback = await probeLocalModels(url, "openai");
+      if (fallback.kind !== "unreachable") outcome = fallback;
     }
-
-    const name = friendlyServerName(result.baseUrl, result.type);
-    ollamaStatus.textContent = `${name} — ${result.models.length} model${result.models.length !== 1 ? "s" : ""}`;
-    ollamaStatus.className = "ollama-status connected";
-    populateModelList(result.models);
+    renderProbeOutcome(outcome);
   }
 
   // Re-detect when base URL changes
