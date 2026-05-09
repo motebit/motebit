@@ -53,7 +53,7 @@ import { createWebComputerApprovalFlow } from "./computer-approval.js";
 import { registerWebComputerTool, type ComputerToolRegistration } from "./computer-tool.js";
 import type { ComputerSessionReceipt } from "@motebit/sdk";
 import { ScreencastFrameBus } from "./screencast-bus.js";
-import { releaseLiveBrowserItem, setLiveBrowserSuppressionPredicate } from "./ui/slab-items.js";
+import { setLiveBrowserSuppressionPredicate } from "./ui/slab-items.js";
 import {
   bootstrapIdentity,
   rotateIdentityKeys,
@@ -173,28 +173,44 @@ export class WebApp {
    */
   private readonly screencastBus = new ScreencastFrameBus();
   /**
-   * v1.3 — id of the slab item showing the live screencast for the
-   * currently-open cloud session. Tracked here so `onSessionEnding`
-   * can dissolve it deterministically.
+   * Stable id of the `live_browser` slab item. The shell mounts ONCE
+   * at WebApp boot (right after the cloud-browser registration is
+   * built) and lives for the WebApp's lifetime — sessions populate
+   * the shell's screencast slot, they don't create the shell.
+   * Doctrine: `always-already-slab.md` §"Affirmative shape" — the
+   * slab's primary embodiment shell precedes content, just like the
+   * slab itself precedes acts. `null` only before mount, after
+   * dispose, or when the cloud-browser tool isn't configured.
    */
   private liveBrowserItemId: string | null = null;
+  /** Stable id used for the shell — not session-suffixed. */
+  private static readonly LIVE_BROWSER_SHELL_ID = "live-browser-shell";
   /**
    * Slice 2d/2f — handle to the mounted live_browser element.
    * Captured via the `onLiveBrowserMount` payload callback. Used
    * by `applyChromeToCurrentState` to mount/clear BOTH the
    * control band and the address bar based on coBrowseControl
-   * state. Cleared when the slab item dissolves.
+   * state. Cleared on WebApp dispose.
    */
   private liveBrowserHandle: LiveBrowserElementHandle | null = null;
   /**
-   * Slice 2d — the forward-event callback bound to the active
-   * cloud session. Stashed so the address bar can reuse the same
-   * dispatch + audit pipeline as input capture without duplicating
-   * the wiring.
+   * Stable session-aware forward closure mounted on the shell at
+   * boot. Reads `_activeBrowserSessionId` lazily so a single closure
+   * can serve every transition: pre-session (lazy session-open from
+   * URL bar), session-live (direct dispatch), post-session
+   * (denied with `session_unavailable`). Mounted ONCE per WebApp.
    */
   private liveBrowserForwardEvent:
     | ((event: UserInputEvent) => Promise<UserInputForwardResult>)
     | null = null;
+  /**
+   * Cloud-browser session currently attached to the shell, or `null`
+   * when no session is live. Set by `attachSessionToLiveBrowser`,
+   * cleared by `detachSessionFromLiveBrowser`. The shell's stable
+   * forward closure reads this each call so dispatch routes to
+   * whatever session is active.
+   */
+  private _activeBrowserSessionId: string | null = null;
   /**
    * chrome-1a-fix / prompt-1 — surface-tracked current URL for the
    * open cloud-browser session. Exposed via
@@ -776,17 +792,20 @@ export class WebApp {
         // v1.3 — live screencast wiring. Bus is constructed once on
         // the WebApp; computer-tool starts the dispatcher's
         // openScreencast right after openSession and pipes frames
-        // here. The `onSessionLive` hook mounts the live_browser
-        // slab item (so the user sees motion); `onSessionEnding`
-        // dissolves it before the bus stops publishing.
+        // here. The `live_browser` shell is mounted ONCE at boot
+        // (see `mountLiveBrowserShell` below); `onSessionLive`
+        // attaches a session to the existing shell and `onSessionEnding`
+        // detaches it. The shell itself never dissolves on session
+        // boundaries — that's the always-already-slab principle:
+        // the embodiment shell precedes content, sessions populate it.
         screencastBus: this.screencastBus,
-        onSessionLive: (sessionId) => this.openLiveBrowserSlabItem(sessionId),
+        onSessionLive: (sessionId) => this.attachSessionToLiveBrowser(sessionId),
         onSessionEnding: () => {
           // chrome-1a-fix — clear tracked URL on session close so a
           // stale URL from a prior session doesn't leak into the
           // next `[Now]` block before the new session navigates.
           this._currentBrowserUrl = null;
-          this.dissolveLiveBrowserSlabItem();
+          this.detachSessionFromLiveBrowser();
         },
         // chrome-1a-fix / prompt-1 — capture resolved URL on every
         // motebit-driven `computer({ kind: "navigate" })`. Sibling
@@ -847,33 +866,37 @@ export class WebApp {
     this.setupHaltResumeListeners();
     this.setupCoBrowseListeners();
 
-    // Eagerly warm the cloud-browser session at bootstrap. The
-    // /computer route's purpose IS computer-use; lazy session-open
-    // (waiting for the AI's first tool call) leaves the slab silent
-    // and the user with no signal that the workspace is alive. By
-    // pre-warming here, the live_browser slab item mounts via
-    // onSessionLive within 1-2s of page load — chrome strip lands
-    // in its proper home (the live_browser handle's controlBandSlot,
-    // not the legacy viewport-top fallback), screencast streams,
-    // slab announces itself.
-    //
-    // The slab's ghost-ready affordance (pulsing mark + caption
-    // inside stageEl) bridges the cold-start window: while
-    // ensureDefaultSession is in flight, the ghost shows; once
-    // openLiveBrowserSlabItem mounts the slab item, the ghost
-    // hides automatically (item lifecycle hook in
-    // SlabManager.placeItem). Same affordance returns when the
-    // session closes (`/halt`, dispose, transport drop) —
-    // continuous register, never empty-blank.
-    //
-    // Best-effort — failure to open is silent (cloud unreachable,
-    // auth rejection, etc.); the ghost stays, the user can chat
-    // with motebit OR retry by typing a URL. Same fail-soft
-    // posture as the rest of the cobrowse pipeline.
-    void this.computerRegistration?.ensureDefaultSession().catch(() => {
-      // Honest absence — no session, ghost remains. The chat path
-      // still works (user can ask motebit; if motebit calls
-      // computer, ensureDefaultSession runs again).
+    // Bootstrap stops here. The slab + live_browser shell + cloud
+    // session are NOT eagerly mounted — the body is the show, the
+    // slab is a tool. Mounting is gated on intent: `/computer` slash
+    // command, AI computer tool call, or other affordances all
+    // route through `invokeComputer()`. "Always-already" means
+    // instantiation has no cold-start cost when invoked, NOT that
+    // the slab is always rendered. Doctrine: `always-already-slab.md`
+    // §"Affirmative shape" — empty register is the slab's READY
+    // state ONCE invoked, not the surface's default.
+  }
+
+  /**
+   * Intent-gated entry point that mounts the live_browser shell and
+   * warms a cloud-browser session. Idempotent — safe to call from
+   * every invocation path: `/computer` slash command, AI computer
+   * tool call, drop-URL affordance, future surfaces. The shell mount
+   * is the load-bearing precondition (the AI's `attachSessionToLive
+   * Browser` hook expects a handle to attach to); session warming is
+   * best-effort.
+   *
+   * Doctrine: a body-first surface only mounts the slab on intent.
+   * Calling this from bootstrap is a doctrine violation — see the
+   * `bootstrapComputer` close-out comment.
+   */
+  invokeComputer(): void {
+    if (!this.computerRegistration) return;
+    this.mountLiveBrowserShell();
+    void this.computerRegistration.ensureDefaultSession().catch(() => {
+      // Honest absence — no session, shell stays in READY register.
+      // The chat path still works; a subsequent `computer` tool call
+      // (motebit-driven) re-tries `ensureDefaultSession`.
     });
   }
 
@@ -916,10 +939,6 @@ export class WebApp {
       // Clear chrome on teardown. The live_browser handle may
       // already be gone; chrome-applier no-ops in that case.
       this.applyChromeToCurrentState();
-      // Also clear the legacy outer-container slot for the
-      // degraded-fallback path (when no live_browser exists and we
-      // routed the band there).
-      this.renderer.setSlabControlBand?.(null);
     });
 
     // chrome-1c — animate the mark on every signed receipt. The
@@ -1746,76 +1765,93 @@ export class WebApp {
    * session manager (registry not configured), the payload omits
    * forwarding and the slab is read-only — same shape as before.
    */
-  private openLiveBrowserSlabItem(sessionId: string): void {
+  /**
+   * Mount the `live_browser` shell at WebApp boot. Called ONCE per
+   * WebApp lifetime, right after the cloud-browser registration is
+   * built. The shell carries:
+   *
+   *   - The screencast bus subscription (publishes frames once a
+   *     session opens; the shell waits silently until then).
+   *   - A stable session-aware forward-event closure that reads
+   *     `_activeBrowserSessionId` lazily, so URL-bar typing works
+   *     in every register (pre-session via lazy session-open,
+   *     session-live via direct dispatch).
+   *   - Default display dims (1280×800) — fallback for input-
+   *     coordinate translation before the first frame's
+   *     naturalWidth/Height take over.
+   *   - The `onLiveBrowserMount` callback that captures the handle
+   *     and applies chrome immediately, so the URL bar + breathing
+   *     placeholder are visible at frame zero.
+   *
+   * The shell never dissolves on session boundaries; sessions
+   * attach via `attachSessionToLiveBrowser` and detach via
+   * `detachSessionFromLiveBrowser`. This is the always-already-slab
+   * principle's deepest expression: empty IS READY because the
+   * shell precedes content.
+   */
+  private mountLiveBrowserShell(): void {
     if (this.liveBrowserItemId !== null) return;
     if (!this.runtime) return;
-    const id = `live-browser-${sessionId}`;
+    // Headless guard — the shell is a DOM-rooted element. Sibling
+    // pattern of `emergeSessionReceipt` and `removeArtifact`'s
+    // typeof document checks; in a Node test environment there's no
+    // document to mount into and the renderer is a no-op anyway.
+    if (typeof document === "undefined") return;
+    const id = WebApp.LIVE_BROWSER_SHELL_ID;
     this.liveBrowserItemId = id;
-    const reg = this.computerRegistration;
-    const handle = reg?.sessionManager.getSession(sessionId);
-    const forwardUserInput = reg
-      ? async (event: UserInputEvent): Promise<UserInputForwardResult> => {
-          // Manager call: gates on coBrowseControl, dispatches via
-          // CloudBrowserDispatcher, returns audit. Audit emission
-          // happens here (single-source-of-truth for event log).
-          const result = await reg.sessionManager.forwardUserInput(sessionId, event);
-          await this.emitUserInputAudit(result.audit);
-          // chrome-1a-fix / prompt-1 — capture the user-typed URL
-          // when a user-driven navigate forwards cleanly. Sibling
-          // of the motebit-driven path's `onNavigateResult`
-          // callback. The wire URL from the event is what
-          // browser-sandbox will commit to (after re-normalizing);
-          // close enough for the AI's `[Now]` block until SPA
-          // tracking lands.
-          if (event.kind === "navigate" && result.outcome === "forwarded") {
-            this._currentBrowserUrl = event.url;
-            // Re-render chrome so the URL bar shows the new URL —
-            // browser convention. Sibling of the motebit-driven
-            // path's onNavigateResult callback above.
-            this.applyChromeToCurrentState();
-          }
-          return result;
-        }
-      : undefined;
-    // Stash the forward callback so the address bar (Slice 2d) can
-    // use the same dispatch + audit pipeline without re-deriving it.
-    this.liveBrowserForwardEvent = forwardUserInput ?? null;
+    const forwardUserInput = this.buildSessionAwareForwardEvent();
+    this.liveBrowserForwardEvent = forwardUserInput;
     this.runtime.slab.openItem({
       id,
       kind: "live_browser",
       mode: "virtual_browser",
       payload: {
         frameSource: this.screencastBus,
-        sessionId,
         forwardUserInput,
-        displayWidth: handle?.display.width,
-        displayHeight: handle?.display.height,
-        // Slice 2d — capture the handle when the slab item mounts so
-        // we can reach into `addressBarSlot` from coBrowseControl
-        // state changes. Mount fires synchronously inside the slab
-        // bridge's renderItem path; by the time openItem returns,
-        // `liveBrowserHandle` is set.
+        // Default dims — input-capture's fallback path uses these
+        // before the first screencast frame's naturalWidth/Height
+        // take over. Pre-frame clicks land on a hidden img with
+        // zero rect, so these only ever matter as defensive
+        // defaults.
+        displayWidth: 1280,
+        displayHeight: 800,
         onLiveBrowserMount: (h: LiveBrowserElementHandle) => {
           this.liveBrowserHandle = h;
-          // Slice 2f — apply BOTH band and address bar at mount so
-          // chrome lands at frame zero, not a tick later. If the
-          // band was on the legacy slot (degraded fallback), this
-          // call also lifts it to the live_browser surface and
-          // clears the legacy slot.
+          // Apply chrome immediately so the URL bar + control band
+          // land in their proper slots at frame zero, not a tick
+          // later. The shell's chrome reads the current control
+          // state and the (possibly null) session URL — both
+          // honest representations of the READY register.
           this.applyChromeToCurrentState();
         },
         // 2026-05-09 — route every pre-decoded frame onto the slab's
-        // WebGL screen-mesh texture. Replaces the prior CSS3D-overlay
-        // visual register: pixels now live in the scene graph, share
-        // depth with the creature, and clip to the meniscus
-        // silhouette. The HTML img stays mounted (opacity:0) for the
-        // existing input-capture pipeline — same screen-space rect,
-        // zero visual contribution.
+        // WebGL screen-mesh texture. Pixels live in the scene graph,
+        // share depth with the creature, and clip to the meniscus
+        // silhouette. The HTML img stays mounted (opacity:0) for
+        // the existing input-capture pipeline — same screen-space
+        // rect, zero visual contribution.
         onFrameDecoded: (image: HTMLImageElement) => {
           this.renderer.setSlabScreencastImage?.(image);
         },
       },
     });
+  }
+
+  /**
+   * Attach a freshly-opened cloud session to the live_browser shell.
+   * Called from `onSessionLive`. Mounts the shell first if it isn't
+   * up yet (idempotent) so the AI computer-tool path also counts as
+   * an invocation: when the AI calls `computer({...})`, the session
+   * opens, this fires, and the shell materializes around it.
+   */
+  private attachSessionToLiveBrowser(sessionId: string): void {
+    this.mountLiveBrowserShell();
+    this._activeBrowserSessionId = sessionId;
+    // Re-render chrome — the strip's URL bar may have been in the
+    // pre-session ready register; with a live session it transitions
+    // to the session-bound register (URL bar shows live URL, control
+    // band shows live state).
+    this.applyChromeToCurrentState();
   }
 
   /**
@@ -1835,11 +1871,12 @@ export class WebApp {
    * its content. The slot itself stays in render-engine for
    * compatibility; removing it cleanly is a follow-up slice.
    *
-   * Degraded fallback: if the live_browser handle isn't mounted yet
-   * (race between `request_control` and the eager session open), the
-   * strip routes to the legacy outer-container slot via
-   * `setSlabControlBand`. Logged as a warning — it's the visible
-   * symptom of a session-open failure, not the success path.
+   * No live_browser handle = no chrome. If the handle isn't mounted,
+   * there's no session to control — the slab's empty register (the
+   * always-already breathing mark) is the doctrine-aligned visual,
+   * not an off-slab control band. Removing the off-slab fallback
+   * also closes the slab/chrome lifecycle desync where the band
+   * lingered after `/computer` toggle.
    */
   /**
    * chrome-1b — public refresh hook. Called by surfaces (e.g. the
@@ -1854,19 +1891,29 @@ export class WebApp {
   }
 
   /**
-   * Ready-state forward event. Wraps the lazy session-open path so
-   * the user can navigate from the slab's READY register (URL bar
-   * visible before any cloud session exists). Calls
-   * `ensureDefaultSession` first; once the handle exists,
-   * `onSessionLive` will have fired and `liveBrowserForwardEvent`
-   * is populated — then we forward through it.
+   * Stable session-aware forward closure mounted on the shell at
+   * boot. Routes every URL-bar / input-capture event the same way:
    *
-   * Returns null when no registration exists (cloud-browser
-   * unconfigured) so the caller knows to render a non-functional
-   * input. Calls are idempotent — repeated typing during cold-start
-   * funnel through the same in-flight session-open promise.
+   *   - Reads `_activeBrowserSessionId` lazily on each call so a
+   *     single closure serves pre-session, session-live, and
+   *     post-session registers.
+   *   - Pre-session: triggers `ensureDefaultSession` to lazy-open
+   *     a cloud session, then dispatches through the freshly-
+   *     attached session id. URL-bar typing in the READY register
+   *     pre-warms the session.
+   *   - Session-live: dispatches directly through
+   *     `sessionManager.forwardUserInput`.
+   *   - Post-session (cloud unreachable): returns a degraded
+   *     outcome so the chrome can render a "couldn't navigate"
+   *     register.
+   *
+   * Returns null when no cloud-browser registration exists —
+   * surfaces without the cloud tool render a non-functional input,
+   * but the shell still mounts (chrome reads as ready, URL-bar
+   * typing is no-op). Captured ONCE per WebApp at shell-mount
+   * time; reads instance state on every call.
    */
-  private buildReadyStateForwardEvent():
+  private buildSessionAwareForwardEvent():
     | ((
         event: import("@motebit/sdk").UserInputEvent,
       ) => Promise<import("@motebit/runtime").UserInputForwardResult>)
@@ -1874,37 +1921,44 @@ export class WebApp {
     const reg = this.computerRegistration;
     if (!reg) return null;
     return async (event) => {
-      // Open / pre-warm the cloud session. Idempotent — the
-      // registration's ensureDefaultSession returns the existing
-      // handle if one is already open. Triggers onSessionLive
-      // which mounts the live_browser slab item AND sets
-      // this.liveBrowserForwardEvent. Once that's set, forward
-      // through it.
-      await reg.ensureDefaultSession();
-      const live = this.liveBrowserForwardEvent;
-      if (!live) {
-        // ensureDefaultSession resolved but the live forward
-        // didn't get wired (race / surface-error). Honest fail:
-        // return a degraded outcome so the URL bar's caller can
-        // render the "couldn't navigate" register.
-        return {
-          outcome: "denied",
-          reason: "session_unavailable",
-        } as unknown as import("@motebit/runtime").UserInputForwardResult;
+      let sessionId = this._activeBrowserSessionId;
+      if (!sessionId) {
+        // READY register typing — lazy-open the session.
+        // Idempotent: in-flight calls funnel through the same
+        // `ensureDefaultSession` promise. On success,
+        // `onSessionLive` fires synchronously inside this await
+        // and sets `_activeBrowserSessionId`; we re-read it to
+        // dispatch.
+        const handle = await reg.ensureDefaultSession();
+        sessionId = handle?.session_id ?? this._activeBrowserSessionId;
+        if (!sessionId) {
+          return {
+            outcome: "denied",
+            reason: "session_unavailable",
+          } as unknown as import("@motebit/runtime").UserInputForwardResult;
+        }
       }
-      return live(event);
+      const result = await reg.sessionManager.forwardUserInput(sessionId, event);
+      await this.emitUserInputAudit(result.audit);
+      // chrome-1a-fix / prompt-1 — capture the user-typed URL when a
+      // user-driven navigate forwards cleanly. Sibling of the
+      // motebit-driven path's `onNavigateResult` callback.
+      if (event.kind === "navigate" && result.outcome === "forwarded") {
+        this._currentBrowserUrl = event.url;
+        this.applyChromeToCurrentState();
+      }
+      return result;
     };
   }
 
   private applyChromeToCurrentState(): void {
     const handle = this.liveBrowserHandle;
     const machine = this.computerRegistration?.coBrowseControl;
-    // Ready-state forward (lazy session-open) when no live handle
-    // yet; production forward (direct dispatch) when handle exists.
-    // Browser convention: URL bar is always functional; whether
-    // typing pre-warms a session or dispatches into an existing
-    // one is internal plumbing.
-    const forwardEvent = this.liveBrowserForwardEvent ?? this.buildReadyStateForwardEvent();
+    // The shell's stable session-aware forward closure handles every
+    // register (pre-session lazy-open, session-live direct dispatch,
+    // unreachable degraded). One closure, one entry point —
+    // no per-register branching here.
+    const forwardEvent = this.liveBrowserForwardEvent;
     const state = machine?.getState();
     if (!state || !machine) return;
 
@@ -1925,34 +1979,19 @@ export class WebApp {
       currentUrl: this._currentBrowserUrl,
     });
 
-    if (handle) {
-      handle.controlBandSlot.replaceChildren(chrome);
-      // The address-bar slot is now empty by design — the unified
-      // strip in controlBandSlot absorbs its content. Clear in case
-      // a prior render left an element behind.
-      handle.addressBarSlot.replaceChildren();
-      // Slice 2g — recess the "waiting for first frame" placeholder
-      // during handoff_pending. The chrome strip IS the message;
-      // the placeholder is noise that competes with Grant/Deny for
-      // attention. The placeholder auto-removes on first frame
-      // regardless of this toggle (live-browser.ts pushFrame), so
-      // we're only managing the visible-while-loading window.
-      if (state.kind === "handoff_pending") {
-        handle.placeholderEl.style.display = "none";
-      } else {
-        handle.placeholderEl.style.display = "";
-      }
-      // Ensure the legacy outer-container slot is empty if we ever
-      // fell back before the handle existed.
-      this.renderer.setSlabControlBand?.(null);
-      return;
-    }
+    // No live_browser handle = no session = nothing to control.
+    // The slab is gated on intent (`invokeComputer` mounts the
+    // shell on `/computer` slash command, AI tool call, etc.); if
+    // a co-browse state fires before the shell mounts, drop the
+    // chrome on the floor — the next state transition after mount
+    // will reapply it.
+    if (!handle) return;
 
-    // Degraded path: no live_browser yet. The strip routes to the
-    // outer-container slot — visible but mispositioned. This should
-    // only fire when ensureDefaultSession failed before
-    // request_control; if it fires often, that's a real signal.
-    this.renderer.setSlabControlBand?.(chrome);
+    handle.controlBandSlot.replaceChildren(chrome);
+    // The address-bar slot is now empty by design — the unified
+    // strip in controlBandSlot absorbs its content. Clear in case
+    // a prior render left an element behind.
+    handle.addressBarSlot.replaceChildren();
   }
 
   /**
@@ -1989,34 +2028,27 @@ export class WebApp {
   }
 
   /**
-   * v1.3 — dissolve the active `live_browser` slab item and release
-   * its frame-source subscription. Pairs with
-   * `openLiveBrowserSlabItem`. Order matters: the slab item must
-   * dissolve before the bus stops publishing so the dispose path
-   * runs while the subscription is still alive.
+   * Detach the active cloud session from the shell. Pairs with
+   * `attachSessionToLiveBrowser`. The shell itself stays mounted —
+   * only the session-bound state clears. After this call the chrome
+   * returns to its READY register: empty URL bar, control band
+   * shows the post-session control state.
+   *
+   * Frame source (the bus) keeps its subscription. Once a future
+   * `ensureDefaultSession` opens a new session and the dispatcher
+   * publishes new frames, they flow through the existing
+   * `onFrameDecoded` path without re-mounting anything.
    */
-  private dissolveLiveBrowserSlabItem(): void {
-    if (this.liveBrowserItemId === null || !this.runtime) return;
-    const id = this.liveBrowserItemId;
-    this.liveBrowserItemId = null;
-    // Slice 2d — drop the handle + forward callback so a re-open
-    // re-derives them. Stale references would point at the
-    // previous session's dispatcher.
-    this.liveBrowserHandle = null;
-    this.liveBrowserForwardEvent = null;
-    // 2026-05-09 — release the slab's WebGL screen-mesh texture so a
-    // subsequent session opens against a clean slate. Sibling of
-    // setSlabScreencastImage.
+  private detachSessionFromLiveBrowser(): void {
+    this._activeBrowserSessionId = null;
+    // Release the slab's WebGL screen-mesh texture so the body
+    // returns to its empty register. Sibling of setSlabScreencastImage;
+    // a subsequent session's first frame re-allocates cleanly.
     this.renderer.clearSlabScreencast?.();
-    try {
-      // Live screencast does not detach as an artifact — it's a
-      // continuous surface, not a durable output. `kind: "completed"`
-      // without `detachAs` routes through the default dissolve.
-      this.runtime.slab.endItem(id, { kind: "completed" });
-    } catch {
-      // best-effort
-    }
-    releaseLiveBrowserItem(id);
+    // Re-render chrome — the strip transitions back to the
+    // pre-session register (URL bar empty, control band reads the
+    // post-session control state).
+    this.applyChromeToCurrentState();
   }
 
   /**

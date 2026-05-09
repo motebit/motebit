@@ -56,12 +56,12 @@ export interface LiveBrowserElementHandle {
    * navigation; the slot is just a generic mounting point for
    * surface-built browser chrome.
    *
-   * Why above the img and not as separate slab chrome (parallel to
-   * `setSlabControlBand`): the address bar is part of the
-   * "browser-inside-the-slab," not chrome of the slab itself. Same
-   * way Chrome's address bar is part of Chrome's window, not
-   * separate from it. Visually + semantically belongs with the
-   * live_browser item.
+   * The address bar is part of the "browser-inside-the-slab," not
+   * chrome of the slab itself. Same way Chrome's address bar is
+   * part of Chrome's window, not separate from it. Visually +
+   * semantically belongs with the live_browser item, and rides
+   * inside `stageEl` so the slab's lifecycle (visibility, fade)
+   * carries the chrome with it.
    */
   readonly addressBarSlot: HTMLElement;
   /**
@@ -85,25 +85,6 @@ export interface LiveBrowserElementHandle {
    * `controlBandSlot.replaceChildren(...)`.
    */
   readonly controlBandSlot: HTMLElement;
-  /**
-   * Slice 2g — expose the "waiting for first frame" placeholder so
-   * surfaces can recess it during state transitions where the
-   * doorbell band is the load-bearing UI. When state is
-   * `handoff_pending` and no first frame has arrived, three pieces
-   * of UI compete for the same volume: the broken-img glyph
-   * (suppressed by Slice 2g's display:none-until-first-frame), the
-   * "live browser · waiting for first frame…" placeholder, and the
-   * Grant/Deny band. The band is the message; the placeholder is
-   * noise. Surface code hides the placeholder
-   * (`placeholderEl.style.display = "none"`) when state is
-   * handoff_pending and reveals it otherwise.
-   *
-   * Auto-removal on first frame is unchanged — `pushFrame` calls
-   * `placeholder.remove()` regardless of whether the surface had
-   * temporarily hidden it. The display-toggle is purely
-   * presentational; lifecycle stays render-engine-owned.
-   */
-  readonly placeholderEl: HTMLElement;
   /**
    * Stop the subscription and clear the rendered frame. Idempotent —
    * a second call is a no-op. The element itself is left in the DOM
@@ -137,6 +118,22 @@ export function buildLiveBrowserElement(
 ): LiveBrowserElementHandle {
   const root = document.createElement("div");
   root.className = "slab-live-browser";
+  // Fill the slab stage — `stageEl` (slab.ts) is 480×300 by design;
+  // root is its single child and must adopt those dimensions so the
+  // flex-column layout below has a real height to distribute. Without
+  // this, root collapses to content-height (~40px = chrome strip),
+  // the placeholder's `flex: 1` has no remainder to grow into, the
+  // breathing-dot mark hangs out of a zero-height placeholder right
+  // under the chrome instead of centered in the body. Doctrine
+  // single-stage discipline (motebit-computer.md §"Embodiment modes
+  // — the plane renders ONE primary embodiment at a time") makes
+  // 100%/100% the right shape: the live_browser shell IS the slab's
+  // primary embodiment, so it's correct that it owns the whole
+  // stage.
+  root.style.width = "100%";
+  root.style.height = "100%";
+  root.style.display = "flex";
+  root.style.flexDirection = "column";
 
   // Slice 2f — control-band mount slot. Sits ABOVE the address bar
   // because it carries the consent decisions (doorbell,
@@ -216,30 +213,6 @@ export function buildLiveBrowserElement(
   img.style.background = "rgba(255, 255, 255, 0.04)";
   root.appendChild(img);
 
-  // Pre-frame placeholder text — replaces with the first frame the
-  // moment one arrives. Calm-software: never confirm "loading" once
-  // content is visible.
-  //
-  // Layout: takes its own flow space BELOW the chrome strip with an
-  // explicit 16:10 aspect ratio matching the eventual screencast img.
-  // The earlier `position: absolute; inset: 0` covered the full root,
-  // but root's flow height collapses to just the chrome strip when
-  // `img.style.display === "none"` (initial state) — that put the
-  // centered text right at the chrome's vertical center, visibly
-  // overlapping the URL bar. Flow positioning gives the placeholder
-  // its own region, and the centered text lands in the actual body
-  // region of the live_browser element.
-  const placeholder = document.createElement("div");
-  placeholder.className = "slab-live-browser-placeholder";
-  placeholder.textContent = "live browser · waiting for first frame…";
-  placeholder.style.width = "100%";
-  placeholder.style.aspectRatio = "16 / 10";
-  placeholder.style.display = "flex";
-  placeholder.style.alignItems = "center";
-  placeholder.style.justifyContent = "center";
-  placeholder.style.opacity = "0.55";
-  root.appendChild(placeholder);
-
   let firstFrameSeen = false;
   let lastTimestamp = 0;
   let disposed = false;
@@ -287,7 +260,6 @@ export function buildLiveBrowserElement(
         // constructor; the texture is the visible register, this
         // is just the input-capture geometry made measurable.
         img.style.display = "block";
-        placeholder.remove();
       }
       // Hand the decoded image to consumers (apps/web routes it to the
       // slab's WebGL screen-mesh texture). When `decoded` is absent
@@ -328,7 +300,6 @@ export function buildLiveBrowserElement(
     frameElement: img,
     addressBarSlot,
     controlBandSlot,
-    placeholderEl: placeholder,
     dispose(): void {
       if (disposed) return;
       disposed = true;

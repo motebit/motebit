@@ -226,14 +226,11 @@ describe("buildLiveBrowserElement", () => {
     expect(subscribe).toHaveBeenCalledTimes(1);
   });
 
-  it("first frame replaces the placeholder and sets img.src to the JPEG data URL", () => {
+  it("first frame sets img.src to the JPEG data URL", () => {
     const bus = new StubBus();
     const handle = buildLiveBrowserElement(bus);
-    expect(handle.element.querySelector(".slab-live-browser-placeholder")).toBeTruthy();
-
     bus.publish(makeFrame({ jpeg_base64: "FIRST" }));
 
-    expect(handle.element.querySelector(".slab-live-browser-placeholder")).toBeFalsy();
     const img = handle.element.querySelector("img") as HTMLImageElement;
     expect(img.src).toBe("data:image/jpeg;base64,FIRST");
   });

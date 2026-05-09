@@ -87,7 +87,7 @@ export const SLAB_BREATHE_AMPLITUDE_FACTOR = 0.3;
  * rest; 0.85 (the legacy value) read as "still working" and made
  * every empty held slab fight the active register.
  */
-const MEMBRANE_OPACITY = 0.2;
+export const MEMBRANE_OPACITY = 0.2;
 /**
  * Drag-hover lift target. When the user drags content over the slab's
  * screen-space rect, the membrane lifts to this opacity so it signals
@@ -181,8 +181,23 @@ export class SlabCore {
   private planeVisibility = 0;
   /** Eased active warmth, 0..1. */
   private activeWarmth = 0;
-  /** User-held override (Option+C / `/computer`). */
+  /**
+   * Legacy "force-show empty plane" override. Pre-shell-mounted-on-boot,
+   * Option+C / `/computer` would set this so the empty plane appeared at
+   * `MEMBRANE_OPACITY` (the recessed "present, ready" register). Surfaces
+   * that don't mount a `live_browser` shell still rely on it.
+   */
   private userHeldVisible = false;
+  /**
+   * Force-hide override. Set when the user dismisses the slab via
+   * Option+C / `/computer` — takes precedence over active items and
+   * drag-hover so the user can hide the plane even when the live_browser
+   * shell is mounted (the always-already-slab affirmative shape that
+   * makes the legacy "force-show empty plane" semantic redundant on
+   * shell-equipped surfaces). Doctrine: motebit-computer.md §"Ambient
+   * states — User-held visibility (orthogonal)."
+   */
+  private userHeldHidden = false;
   /**
    * Drag-hover override (slab-honesty membrane work). When the user is
    * dragging content over the slab's surface, the membrane lifts from
@@ -273,22 +288,69 @@ export class SlabCore {
   }
 
   setUserVisible(visible: boolean): void {
+    // Two state bits move in lockstep:
+    //   userHeldHidden — force-hide override (precedence over items
+    //     + drag-hover); the new lever for shell-mounted surfaces.
+    //   userHeldVisible — legacy "force-show empty plane" (only
+    //     matters when no items are mounted; preserved for surfaces
+    //     that don't mount a live_browser shell).
+    this.userHeldHidden = !visible;
     this.userHeldVisible = visible;
-    // Pre-warm the visibility so the user sees the surface materialize
-    // immediately on open; `tick()` then eases to the right target.
-    // Pre-warm to MEMBRANE_OPACITY (the empty-held target) instead of
-    // the legacy 0.85 so opening an empty slab lands at the membrane
-    // register, not the active register. The doctrine asymmetry —
-    // "present" vs "active" — depends on this being recessed by
-    // default.
+    // Symmetric snap. The slab is rendered via TWO compositors —
+    // WebGL (plane material.opacity) and CSS3D (stage element with
+    // backdrop-filter chrome). They only stay in visual lockstep
+    // through a transition when that transition is instant. Any
+    // easing in `tick()` creates the "URL bar persists past slab
+    // body" desync because the chrome's white-panel mass starts at
+    // ~97% perceived opacity while the glass plane starts at 20%.
+    // Same proportional decay, very different perceived presence.
+    // Snap on both edges: pre-warm up to the empty-held target on
+    // reveal, pre-warm down to 0 on hide. Both registers cross the
+    // visibility threshold in the same frame and the slab moves as
+    // one piece. Reveal-intact == hide-intact.
     if (visible && this.planeVisibility < MEMBRANE_OPACITY) {
       this.planeVisibility = MEMBRANE_OPACITY;
+    } else if (!visible) {
+      this.planeVisibility = 0;
     }
   }
 
+  /**
+   * Flip the user's visibility intent and return the new visible
+   * state. The toggle inspects whether the slab is currently shown
+   * to the user — items present (and not force-hidden), or the
+   * legacy "user-held visible" register active — and inverts.
+   *
+   *   - Shell-mounted surface, default state: items always present
+   *     → first toggle hides (returns `false`), second shows.
+   *   - Shell-less surface, default state: no items, no hold →
+   *     first toggle reveals at MEMBRANE_OPACITY (returns `true`),
+   *     second dismisses.
+   *
+   * Surfaces that display a toast / indicator can mirror the return
+   * value directly without re-querying state.
+   */
   toggleUserVisible(): boolean {
-    this.setUserVisible(!this.userHeldVisible);
-    return this.userHeldVisible;
+    const currentlyShown = !this.userHeldHidden && (this.hasVisibleItem() || this.userHeldVisible);
+    this.setUserVisible(!currentlyShown);
+    return !this.userHeldHidden;
+  }
+
+  /**
+   * Whether at least one non-hidden, non-terminal item is on the
+   * slab. Mirrors the active-count loop in `tick()` — kept private
+   * because this signal is meaningful only for the toggle's
+   * "currently shown" check.
+   */
+  private hasVisibleItem(): boolean {
+    for (const item of this.items.values()) {
+      if (item.slabHidden) continue;
+      if (item.phase === "dissolving" || item.phase === "detached" || item.phase === "gone") {
+        continue;
+      }
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -342,24 +404,32 @@ export class SlabCore {
       activeCount++;
     }
 
-    // Plane visibility easing — three states + one override.
+    // Plane visibility easing — one force-hide override + three
+    // present-states.
     //
-    //   1. Items present  → snap toward 1.0 fast (rate 3). Active
-    //      register; warmth rises with it.
-    //   2. Drag-hover     → ease to DRAG_HOVER_OPACITY. The user is
-    //      asking the surface to receive a gesture; the slab lifts
-    //      to signal "I can take this," whether or not it was held
-    //      open before the drag started. Drag-summoned membrane.
-    //   3. User-held      → ease to MEMBRANE_OPACITY (faint
-    //      "present" register; doctrine: the slab acknowledges the
-    //      `/computer` invocation by becoming recessed-but-real,
-    //      not by lighting up).
-    //   4. Otherwise      → ease to 0 (full dissolve).
+    //   0. User-toggled hidden → ease to 0. Takes precedence over
+    //      everything else so Option+C / `/computer` can dismiss
+    //      the always-mounted shell. This is the lever the
+    //      shell-mounted-on-boot architecture needs (item count is
+    //      always > 0 once the live_browser shell is up).
+    //   1. Items present       → snap toward 1.0 fast (rate 3).
+    //      Active register; warmth rises with it.
+    //   2. Drag-hover          → ease to DRAG_HOVER_OPACITY. The
+    //      user is asking the surface to receive a gesture; the
+    //      slab lifts to signal "I can take this," whether or not
+    //      it was held open before the drag started.
+    //   3. User-held visible   → ease to MEMBRANE_OPACITY (faint
+    //      "present" register; legacy lever for shell-less
+    //      surfaces).
+    //   4. Otherwise           → ease to 0 (full dissolve).
     //
-    // Order matters: drag-hover overrides user-held because the
-    // user's active gesture is the strongest signal of intent.
+    // Drag-hover overrides user-held-visible (active gesture beats
+    // passive hold). userHeldHidden overrides everything (explicit
+    // dismiss beats every other signal).
     let warmthTarget = 0;
-    if (activeCount > 0) {
+    if (this.userHeldHidden) {
+      this.planeVisibility = smoothToward(this.planeVisibility, 0, deltaTime, 4);
+    } else if (activeCount > 0) {
       this.planeVisibility = Math.min(1, this.planeVisibility + deltaTime * 3);
       warmthTarget = 1;
     } else if (this.dragHover) {

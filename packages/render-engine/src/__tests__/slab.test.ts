@@ -533,55 +533,6 @@ describe("SlabManager — halt-gesture wiring (v1.2b)", () => {
   });
 });
 
-// Co-browse Slice 2b — the control-band slot is generic chrome
-// plumbing. The render engine knows nothing about ControlState; the
-// surface (apps/web) builds the band element. These tests assert the
-// slot's mount/clear/replace contract — that the surface's element
-// actually lands in the slab's chrome layer and gets cleared on null.
-describe("SlabManager — co-browse control band slot", () => {
-  function fakeBandElement(label: string) {
-    return {
-      style: {} as Record<string, string>,
-      _label: label,
-      parentNode: null as unknown,
-    } as unknown as HTMLElement;
-  }
-
-  it("setControlBand(element) mounts the element on the slab's chrome slot", () => {
-    const mgr = makeManager();
-    const band = fakeBandElement("doorbell");
-    mgr.setControlBand(band);
-    // The stub's appendChild sets parentNode on the element when it
-    // lands in the slot. Real DOM mirrors this — the band has been
-    // attached.
-    expect((band as unknown as { parentNode: unknown }).parentNode).not.toBeNull();
-  });
-
-  it("setControlBand(null) clears the slot — the previously mounted band is detached", () => {
-    const mgr = makeManager();
-    const band = fakeBandElement("doorbell");
-    mgr.setControlBand(band);
-    mgr.setControlBand(null);
-    expect((band as unknown as { parentNode: unknown }).parentNode).toBeNull();
-  });
-
-  it("setControlBand(newElement) replaces the previous element wholesale", () => {
-    const mgr = makeManager();
-    const first = fakeBandElement("doorbell");
-    const second = fakeBandElement("driving");
-    mgr.setControlBand(first);
-    mgr.setControlBand(second);
-    expect((first as unknown as { parentNode: unknown }).parentNode).toBeNull();
-    expect((second as unknown as { parentNode: unknown }).parentNode).not.toBeNull();
-  });
-
-  it("setControlBand(null) on an empty slot is a no-op (no throw)", () => {
-    const mgr = makeManager();
-    expect(() => mgr.setControlBand(null)).not.toThrow();
-    expect(() => mgr.setControlBand(null)).not.toThrow();
-  });
-});
-
 describe("SlabManager — screencast WebGL texture (v1.3 → texture register)", () => {
   // The slab carries a third meniscus-shaped plane inside the glass
   // volume that the cloud-browser screencast paints onto. Exposed via

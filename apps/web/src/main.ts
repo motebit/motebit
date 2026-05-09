@@ -182,7 +182,15 @@ const slashCommands = initSlashCommands(ctx, {
   openMemory: (auditNodeIds) => gatedPanels.openMemory(auditNodeIds),
   openGoals: () => gatedPanels.openGoals(),
   openAgents: () => gatedPanels.openAgents(),
-  toggleSlab: () => app.getRenderer().toggleSlabVisible?.() ?? false,
+  toggleSlab: () => {
+    // Intent-gated invocation — the body is the show, the slab is
+    // a tool. First press mounts the live_browser shell + warms a
+    // session; subsequent presses toggle visibility on the existing
+    // slab. `invokeComputer` is idempotent so this is safe to call
+    // every press.
+    app.invokeComputer();
+    return app.getRenderer().toggleSlabVisible?.() ?? false;
+  },
   newConversation: () => {
     app.resetConversation();
     const chatLog = document.getElementById("chat-log") as HTMLDivElement;
@@ -262,9 +270,11 @@ document.addEventListener("keydown", (e) => {
   }
   // Motebit Computer toggle: Option+C (Alt+C). `e.code === "KeyC"`
   // avoids the macOS `Option+C → ç` remap that would silently break
-  // matching on `e.key`.
+  // matching on `e.key`. Mirrors the `/computer` slash command: an
+  // intent-gated invocation that mounts the slab on first press.
   if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyC") {
     e.preventDefault();
+    app.invokeComputer();
     app.getRenderer().toggleSlabVisible?.();
   }
 });

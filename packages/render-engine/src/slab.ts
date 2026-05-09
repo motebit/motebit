@@ -59,6 +59,7 @@ import {
   SLAB_PINCH_PHASE2_END,
   SLAB_BREATHE_FREQUENCY_HZ,
   SLAB_BREATHE_AMPLITUDE_FACTOR,
+  MEMBRANE_OPACITY,
   type DetachArtifactHandler,
   type SlabCoreItemSnapshot,
 } from "./slab-core.js";
@@ -267,22 +268,6 @@ export class SlabManager {
    */
   private readonly stageAnchor: CSS3DObject;
   private readonly stageEl: HTMLDivElement;
-  /**
-   * Ghost-ready affordance — pulsing mark glyph + caption shown
-   * when the slab has no live content (no items mounted, no
-   * screencast frames). Says "this is a workspace, motebit can
-   * drive, you can drive — start by typing or asking." Apple-grade
-   * empty-state register: never literally blank, always
-   * intentional, always quietly alive.
-   *
-   * Mounted as a child of `stageEl` alongside slab items. Visibility
-   * toggles in lockstep with item lifecycle: hidden when an item
-   * (live_browser, mind, peer_viewport, etc.) mounts; shown when
-   * the last item dissolves. Sympathetic-breathes at the same
-   * 0.3 Hz the creature breathes at, body-coherent per
-   * `liquescentia-as-substrate.md` §"Quiescence rhythm."
-   */
-  private readonly ghostEl: HTMLDivElement;
   private readonly css3dRenderer: CSS3DRenderer;
   /** Per-id renderer state — DOM element + per-render flags. */
   private readonly elements = new Map<string, ManagedElement>();
@@ -323,15 +308,6 @@ export class SlabManager {
   private haltGestureHandler: (() => void) | null = null;
   private holdProgress = 0;
   private halted = false;
-  /**
-   * Co-browse Slice 2b — chrome slot for the surface-built control
-   * band. 2D overlay pinned to the slab's screen-space rect (NOT
-   * CSS3D — chrome stays readable regardless of slab tilt). Holds
-   * zero or one element at a time; replaced wholesale on each
-   * `setControlBand(...)` call. Sibling of the halted state and the
-   * drag-hover register — non-item chrome owned by the slab core.
-   */
-  private readonly controlBandSlotEl: HTMLDivElement;
 
   constructor(
     creatureGroup: THREE.Group,
@@ -592,15 +568,14 @@ export class SlabManager {
     this.stageAnchor = new CSS3DObject(this.stageEl);
     this.stageEl.style.pointerEvents = "none";
 
-    // Ghost-ready affordance — see the ghostEl field doc for the
-    // architectural rationale. Mounted as a child of stageEl;
-    // visibility toggles in lockstep with the items map (hidden
-    // when any slab item is mounted, shown otherwise). Apple-grade
-    // empty-state: pulsing mark + caption, sympathetic-breathing.
-    this.ghostEl = createGhostElement();
-    if (typeof this.stageEl.appendChild === "function") {
-      this.stageEl.appendChild(this.ghostEl);
-    }
+    // Empty register: the slab's primary embodiment shell (the
+    // `live_browser` item mounted on `WebApp.bootstrap`) IS the
+    // empty state. The shell's chrome strip + breathing pre-frame
+    // placeholder render here. There is no slab-level ghost
+    // affordance — that would be a second empty register stitched
+    // onto the shell. Doctrine: `always-already-slab.md`
+    // §"Affirmative shape" — one slab in two registers
+    // (READY = shell-empty-body; LIVE = shell-with-screencast).
     // Embed the stage inside the slab's glass volume — 1mm in front
     // of the back pane (slab-local z = -SLAB_THICKNESS/2 + offset).
     // Reads as "content rests against the back of the slab and is
@@ -629,21 +604,6 @@ export class SlabManager {
     // captures input.
     this.css3dRenderer.domElement.style.pointerEvents = "none";
     container.appendChild(this.css3dRenderer.domElement);
-
-    // Co-browse Slice 2b — chrome slot. The slab plane is the
-    // surface; the band is its frame. Positioned absolute at the
-    // top of the slab's screen rect; pointer-events: none on the
-    // slot itself so children opt in (the surface-supplied band
-    // sets pointer-events: auto on its interactive controls). One
-    // child at a time; null clears it.
-    //
-    // 2D overlay rather than CSS3D: chrome must stay readable
-    // regardless of slab tilt — `setSlabHalted` is the same shape
-    // (a state-aware visual that the slab carries always). The slab
-    // plane's own pose handles content; the band's pose follows the
-    // viewport.
-    this.controlBandSlotEl = createControlBandSlotElement();
-    container.appendChild(this.controlBandSlotEl);
 
     // Plane gesture detector — two-finger hold for ~700ms fires
     // `halt()` on whatever handler the app has wired. The attach
@@ -734,42 +694,6 @@ export class SlabManager {
 
   isHalted(): boolean {
     return this.halted;
-  }
-
-  /**
-   * Co-browse Slice 2b — mount or clear the control band. The
-   * render engine has no notion of `ControlState`; the surface
-   * (`apps/web`) subscribes to its `CoBrowseControlMachine` and
-   * builds the state-appropriate element. Passing `null` clears the
-   * slot — that's the `{kind: "user"}` register (don't announce what
-   * the user already sees).
-   *
-   * Replace semantics: each call swaps the slot's single child.
-   * `replaceChildren` is preferred when present (real DOM); falls
-   * back to remove-then-append for headless test shims.
-   */
-  setControlBand(element: HTMLElement | null): void {
-    const slot = this.controlBandSlotEl;
-    if (typeof slot.replaceChildren === "function") {
-      if (element == null) {
-        slot.replaceChildren();
-      } else {
-        slot.replaceChildren(element);
-      }
-      return;
-    }
-    // Headless / minimal-shim path. The shim's appendChild +
-    // removeChild manage the children array; iterate via the
-    // exposed children if present.
-    const children = (slot as unknown as { children?: HTMLElement[] }).children;
-    if (children) {
-      for (const child of [...children]) {
-        slot.removeChild(child);
-      }
-    }
-    if (element != null) {
-      slot.appendChild(element);
-    }
   }
 
   /**
@@ -886,30 +810,14 @@ export class SlabManager {
       // Mount the new element alongside any existing items. Removing
       // prior items happens on their own dissolve completion (phase
       // → gone in `update`), so the previous element's exit physics
-      // continues against its own element. Don't `replaceChildren`
-      // the whole stage — that would also wipe the ghost-ready
-      // affordance which lives as a sibling. The ghost is hidden
-      // below; once all items dissolve, it re-shows.
+      // continues against its own element.
       if (typeof this.stageEl.appendChild === "function") {
         this.stageEl.appendChild(spec.element);
       }
     }
 
     this.elements.set(spec.id, { element: spec.element, restingApplied: false });
-    // Hide the ghost-ready affordance — the slab now has live
-    // content. The ghost re-shows when the last item dissolves.
-    this.setGhostVisible(false);
     return this.core.addItem({ id: spec.id, kind: spec.kind, slabHidden });
-  }
-
-  /**
-   * Toggle the ghost-ready affordance's visibility. Hidden when
-   * any slab item is mounted; shown when the slab is empty.
-   */
-  private setGhostVisible(visible: boolean): void {
-    if (this.ghostEl.style != null) {
-      this.ghostEl.style.display = visible ? "flex" : "none";
-    }
   }
 
   dissolveItem(id: string): Promise<void> {
@@ -928,9 +836,6 @@ export class SlabManager {
     }
     this.elements.clear();
     this.core.clearItems();
-    // All items gone → restore the ghost-ready affordance so the
-    // slab announces itself again.
-    this.setGhostVisible(true);
   }
 
   /**
@@ -970,12 +875,6 @@ export class SlabManager {
           this.stageEl.removeChild(managed.element);
         }
         this.elements.delete(item.id);
-        // Last item just dissolved → bring the ghost back. The
-        // slab returns to its READY register, announcing itself
-        // until the next item mounts.
-        if (this.elements.size === 0) {
-          this.setGhostVisible(true);
-        }
       }
     }
 
@@ -1071,9 +970,32 @@ export class SlabManager {
     this.planeMesh.scale.set(breatheScale, breatheScale, 1);
     this.backPaneMesh.scale.set(breatheScale, breatheScale, 1);
     this.sideWallMesh.scale.set(breatheScale, breatheScale, 1);
-    if (this.stageEl.style) {
-      this.stageEl.style.display = visible ? "block" : "none";
-    }
+    // Hide the CSS3D-mounted stage (chrome strip, breathing
+    // placeholder, live-browser body) in lockstep with the WebGL
+    // plane meshes. CSS3DRenderer.render() OVERWRITES the wrapped
+    // element's `display` property on every frame based on the
+    // CSS3DObject's `.visible` flag — setting `stageEl.style.display`
+    // directly is silently reverted to `""` on the next render. We
+    // must flip `stageAnchor.visible` instead so the renderer's
+    // built-in display toggle does the work. Without this, /computer
+    // toggle hides the WebGL glass volume but leaves the chrome
+    // strip + breathing dot floating in 3D space without their
+    // substrate (the bug Daniel hit 2026-05-09 on /computer toggle).
+    this.stageAnchor.visible = visible;
+    // Sympathetic chrome fade — bind CSS3D stage opacity to plane
+    // visibility so chrome (URL bar, breathing dot, live-browser
+    // shell) fades alongside the WebGL glass volume rather than
+    // hanging at full opacity through the plane's ease-out and then
+    // snapping off at the visibility threshold. The snap-off was
+    // visible as ~750ms of orphaned chrome after the plane had
+    // visibly left (second instance of the slab/chrome desync, after
+    // the `stageAnchor.visible` fix above). CSS3DRenderer writes
+    // `transform` and `display` per frame but not `opacity`, so the
+    // assignment sticks. Mapping: chrome at full opacity once the
+    // plane reaches MEMBRANE_OPACITY (the empty-register floor) — at
+    // or above that, the chrome reads as content on glass; below it,
+    // chrome fades proportionally with the glass leaving.
+    this.stageEl.style.opacity = String(Math.min(1, frame.planeVisibility / MEMBRANE_OPACITY));
   }
 
   /** Called after WebGL render each frame — syncs CSS overlay. */
@@ -1559,180 +1481,6 @@ function createContainerElement(): HTMLDivElement {
   // rotate/zoom controls — the bug fixed by commit 89467720.
   el.style.pointerEvents = "none";
   return el;
-}
-
-/**
- * Co-browse Slice 2b — build the chrome slot for the control band.
- * Position: absolute, pinned to top of the slab's container. Calm
- * chrome — `pointer-events: none` on the slot itself so unoccupied
- * area passes through; surface-supplied band content opts in to
- * `pointer-events: auto` on its own interactive controls.
- *
- * z-index 3 to render above the CSS3D layer (z-index 2). Background
- * stays transparent so the slab membrane shows through; the
- * surface's element decides its own visual register (translucent
- * card, doorbell pulse, etc.).
- *
- * Headless test shim returns the same `appendChild`/`removeChild`/
- * `replaceChildren`-capable stand-in `createContainerElement` uses,
- * with a `children` array exposed for the iteration fallback in
- * `SlabManager.setControlBand`.
- */
-function createControlBandSlotElement(): HTMLDivElement {
-  if (typeof document === "undefined") {
-    const children: HTMLElement[] = [];
-    const stub = {
-      className: "slab-control-band-slot",
-      children,
-      style: new Proxy(
-        {},
-        {
-          get: () => "",
-          set: () => true,
-        },
-      ) as unknown as CSSStyleDeclaration,
-      appendChild: (child: HTMLElement) => {
-        children.push(child);
-        (child as unknown as { parentNode: unknown }).parentNode = stub;
-        return child;
-      },
-      removeChild: (child: HTMLElement) => {
-        const i = children.indexOf(child);
-        if (i >= 0) children.splice(i, 1);
-        (child as unknown as { parentNode: unknown }).parentNode = null;
-        return child;
-      },
-      replaceChildren: (...newChildren: HTMLElement[]) => {
-        for (const c of children) {
-          (c as unknown as { parentNode: unknown }).parentNode = null;
-        }
-        children.length = 0;
-        for (const c of newChildren) {
-          children.push(c);
-          (c as unknown as { parentNode: unknown }).parentNode = stub;
-        }
-      },
-    };
-    return stub as unknown as HTMLDivElement;
-  }
-  const el = document.createElement("div");
-  el.className = "slab-control-band-slot";
-  el.style.position = "absolute";
-  el.style.top = "0";
-  el.style.left = "0";
-  el.style.right = "0";
-  el.style.zIndex = "3";
-  el.style.pointerEvents = "none";
-  return el;
-}
-
-/**
- * Ghost-ready affordance for the slab's empty register. Pulsing
- * mark glyph + caption that announces "this is a workspace,
- * motebit can drive, you can drive too" without being chatty.
- *
- * Visual register, Apple-grade empty-state:
- *
- *   - Centered column, generous breathing room (the affordance is
- *     surrounded by the slab's stage volume; never edge-to-edge).
- *   - Mark glyph: 14px circle with a soft inner gradient,
- *     sympathetic-breathing at 0.3 Hz to inherit the creature's
- *     rhythm. Its color is set later via setGhostMarkColor when
- *     the surface knows the soul tint; default is a neutral cool
- *     so the affordance reads even before identity wires up.
- *   - Caption: muted 14px system-ui, slightly increased
- *     letter-spacing for a premium feel. Two affordances named
- *     side-by-side ("type a URL · or ask motebit"), separated
- *     by a middle dot — the same calm separator iOS uses in
- *     "subscribe · save 30%"-style affordance rows.
- *   - Fade-in on mount: 800ms opacity 0 → 1, no scale. Calm-
- *     software register: appearance is announced, not arrived.
- *
- * Headless test shim mirrors `createContainerElement`'s pattern.
- */
-function createGhostElement(): HTMLDivElement {
-  if (typeof document === "undefined") {
-    const stub = {
-      className: "slab-ghost-ready",
-      style: new Proxy(
-        {},
-        {
-          get: () => "",
-          set: () => true,
-        },
-      ) as unknown as CSSStyleDeclaration,
-      appendChild: (_child: HTMLElement) => _child,
-      removeChild: (_child: HTMLElement) => _child,
-    };
-    return stub as unknown as HTMLDivElement;
-  }
-
-  const ghostEl = document.createElement("div");
-  ghostEl.className = "slab-ghost-ready";
-  ghostEl.style.position = "absolute";
-  ghostEl.style.inset = "0";
-  ghostEl.style.display = "flex";
-  ghostEl.style.flexDirection = "column";
-  ghostEl.style.alignItems = "center";
-  ghostEl.style.justifyContent = "center";
-  ghostEl.style.gap = "16px";
-  ghostEl.style.pointerEvents = "none";
-  ghostEl.style.opacity = "0";
-  ghostEl.style.animation = "slab-ghost-fade-in 800ms ease-out forwards";
-
-  const mark = document.createElement("div");
-  mark.className = "slab-ghost-ready-mark";
-  mark.style.width = "16px";
-  mark.style.height = "16px";
-  mark.style.borderRadius = "50%";
-  // Default tint — neutral cool. setGhostMarkColor (called from the
-  // adapter when the runtime publishes its interior color) replaces
-  // this with the creature's soul tint so the mark reads as
-  // body-coherent.
-  mark.style.background =
-    "radial-gradient(circle at 30% 30%, rgba(180, 200, 230, 0.95) 0%, rgba(140, 165, 200, 0.85) 70%)";
-  mark.style.boxShadow = "0 0 12px rgba(140, 165, 200, 0.4)";
-  // Sympathetic-breathing at 0.3 Hz (3.33s per cycle). Same rhythm
-  // the creature breathes at; the slab's empty-state affordance
-  // inherits the body's beat. Per `liquescentia-as-substrate.md`
-  // §"Quiescence rhythm" — every motebit element pulses at this
-  // canonical frequency.
-  mark.style.animation = "slab-ghost-mark-breathe 3333ms ease-in-out infinite";
-
-  const caption = document.createElement("div");
-  caption.className = "slab-ghost-ready-caption";
-  caption.textContent = "type a URL · or ask motebit";
-  caption.style.font =
-    '14px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif';
-  caption.style.letterSpacing = "0.01em";
-  caption.style.color = "rgba(40, 55, 90, 0.55)";
-  caption.style.userSelect = "none";
-
-  ghostEl.appendChild(mark);
-  ghostEl.appendChild(caption);
-
-  // Inject the keyframes once per document. Idempotent — uses a
-  // marker class on <head> to avoid re-registering across multiple
-  // SlabManager instances (e.g. test isolation, hot reload).
-  const STYLE_MARKER = "data-slab-ghost-keyframes";
-  const head = document.head;
-  if (head != null && head.querySelector(`style[${STYLE_MARKER}]`) == null) {
-    const styleEl = document.createElement("style");
-    styleEl.setAttribute(STYLE_MARKER, "");
-    styleEl.textContent = `
-      @keyframes slab-ghost-fade-in {
-        from { opacity: 0; }
-        to { opacity: 1; }
-      }
-      @keyframes slab-ghost-mark-breathe {
-        0%, 100% { transform: scale(0.94); opacity: 0.78; }
-        50% { transform: scale(1.06); opacity: 1; }
-      }
-    `;
-    head.appendChild(styleEl);
-  }
-
-  return ghostEl;
 }
 
 function easeOutQuad(t: number): number {
