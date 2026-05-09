@@ -276,6 +276,36 @@ export function asProposalId(id: string): ProposalId;
 // @public
 export function asSettlementId(id: string): SettlementId;
 
+// @public
+export interface AuditChainEntry {
+    // (undocumented)
+    readonly actor_id: string;
+    // (undocumented)
+    readonly data: Record<string, unknown>;
+    // (undocumented)
+    readonly entry_id: string;
+    // (undocumented)
+    readonly event_type: string;
+    // (undocumented)
+    readonly hash: string;
+    // (undocumented)
+    readonly previous_hash: string;
+    // (undocumented)
+    readonly timestamp: number;
+}
+
+// @public
+export interface AuditChainStoreAdapter {
+    // (undocumented)
+    append(entry: AuditChainEntry): Promise<void>;
+    // (undocumented)
+    count(): Promise<number>;
+    // (undocumented)
+    getEntries(from?: number, to?: number): Promise<AuditChainEntry[]>;
+    // (undocumented)
+    getHead(): Promise<AuditChainEntry | undefined>;
+}
+
 // @public (undocumented)
 export interface AuditLogAdapter {
     // (undocumented)

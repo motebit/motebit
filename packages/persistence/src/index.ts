@@ -6,7 +6,8 @@ import { PERSISTENCE_MIGRATIONS } from "./migrations-registry.js";
 export type { DatabaseDriver, PreparedStatement, RunResult } from "./driver.js";
 export { SqlJsDriver } from "./sqljs-driver.js";
 export { PERSISTENCE_MIGRATIONS } from "./migrations-registry.js";
-export { SqliteAuditChainStore } from "./sqlite-audit-chain-store.js";
+import { SqliteAuditChainStore } from "./sqlite-audit-chain-store.js";
+export { SqliteAuditChainStore };
 import type {
   EventLogEntry,
   EventType,
@@ -2637,6 +2638,14 @@ export interface MotebitDatabase {
   auditLog: SqliteAuditLog;
   stateSnapshot: SqliteStateSnapshot;
   toolAuditSink: SqliteToolAuditSink;
+  /**
+   * audit-chain-2 — durable hash-chained audit store. Wires into
+   * `StorageAdapters.auditChainStore` so the runtime auto-wraps
+   * the tool-audit sink in `ChainedAuditSink` for tamper-evidence.
+   * Surface code passes both `toolAuditSink` and `auditChainStore`
+   * through to `runtime` adapters; the runtime composes.
+   */
+  auditChainStore: SqliteAuditChainStore;
   goalStore: SqliteGoalStore;
   goalOutcomeStore: SqliteGoalOutcomeStore;
   approvalStore: SqliteApprovalStore;
@@ -2671,6 +2680,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const auditLog = new SqliteAuditLog(driver);
   const stateSnapshot = new SqliteStateSnapshot(driver);
   const toolAuditSink = new SqliteToolAuditSink(driver);
+  const auditChainStore = new SqliteAuditChainStore(driver);
   const goalStore = new SqliteGoalStore(driver);
   const goalOutcomeStore = new SqliteGoalOutcomeStore(driver);
   const approvalStore = new SqliteApprovalStore(driver);
@@ -2692,6 +2702,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     auditLog,
     stateSnapshot,
     toolAuditSink,
+    auditChainStore,
     goalStore,
     goalOutcomeStore,
     approvalStore,

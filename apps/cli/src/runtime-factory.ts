@@ -126,6 +126,11 @@ export function buildStorageAdapters(moteDb: MotebitDatabase): StorageAdapters {
     auditLog,
     stateSnapshot: moteDb.stateSnapshot,
     toolAuditSink: moteDb.toolAuditSink,
+    // audit-chain-1+2 — runtime wraps `toolAuditSink` in
+    // `ChainedAuditSink` when both are present. Tamper-evident
+    // hash chain persists across CLI restarts via the same SQLite
+    // driver as `toolAuditSink`.
+    auditChainStore: moteDb.auditChainStore,
     conversationStore: moteDb.conversationStore,
     planStore: moteDb.planStore,
     // SqliteGradientStore.latest() returns Record<string, unknown> stats; runtime expects typed stats.

@@ -44,34 +44,16 @@ async function sha256hex(data: string): Promise<string> {
 
 export const GENESIS_HASH = "genesis";
 
-export interface AuditEntry {
-  /** Unique entry identifier. */
-  entry_id: string;
-  /** Unix timestamp (ms). */
-  timestamp: number;
-  /** Event classification. */
-  event_type: string;
-  /** Identity of the acting agent or system. */
-  actor_id: string;
-  /** Arbitrary structured payload. */
-  data: Record<string, unknown>;
-  /** Hash of the previous entry, or "genesis" for the first entry. */
-  previous_hash: string;
-  /** SHA-256(previous_hash + canonical(entry data)). */
-  hash: string;
-}
-
-/** Minimal storage interface — adapters implement this. */
-export interface AuditChainStore {
-  /** Append an entry to the chain. */
-  append(entry: AuditEntry): Promise<void>;
-  /** Return entries ordered by insertion (ascending). Optional range by index. */
-  getEntries(from?: number, to?: number): Promise<AuditEntry[]>;
-  /** Return the last entry, or undefined if empty. */
-  getHead(): Promise<AuditEntry | undefined>;
-  /** Total number of entries. */
-  count(): Promise<number>;
-}
+/**
+ * audit-chain entry shape. The wire-format interface lives in
+ * `@motebit/protocol` (`AuditChainEntry` / `AuditChainStoreAdapter`)
+ * so `@motebit/sdk` can reference it from `StorageAdapters`
+ * without crossing the permissive-floor / BSL boundary. Re-
+ * exported here as `AuditEntry` / `AuditChainStore` for backward
+ * compatibility with existing in-package callers.
+ */
+export type AuditEntry = import("@motebit/protocol").AuditChainEntry;
+export type AuditChainStore = import("@motebit/protocol").AuditChainStoreAdapter;
 
 // === In-memory adapter ===
 

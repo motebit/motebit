@@ -114,7 +114,7 @@ describe("AuditChain", () => {
 
       // Tamper with the second entry's data
       const entries = await store.getEntries();
-      entries[1]!.data = { action: "TAMPERED" };
+      (entries[1] as { data: Record<string, unknown> }).data = { action: "TAMPERED" };
       // Replace the store contents with tampered data
       const tamperedStore = new InMemoryAuditChainStore();
       for (const e of entries) {
@@ -132,7 +132,8 @@ describe("AuditChain", () => {
 
       // Tamper with the first entry's hash
       const entries = await store.getEntries();
-      entries[0]!.hash = "0000000000000000000000000000000000000000000000000000000000000000";
+      (entries[0] as { hash: string }).hash =
+        "0000000000000000000000000000000000000000000000000000000000000000";
       const tamperedStore = new InMemoryAuditChainStore();
       for (const e of entries) {
         await tamperedStore.append(e);
@@ -187,7 +188,7 @@ describe("AuditChain", () => {
 
       // Tamper with the third entry's previous_hash
       const entries = await store.getEntries();
-      entries[2]!.previous_hash = "wrong_previous_hash";
+      (entries[2] as { previous_hash: string }).previous_hash = "wrong_previous_hash";
       const tamperedStore = new InMemoryAuditChainStore();
       for (const e of entries) {
         await tamperedStore.append(e);
@@ -314,7 +315,7 @@ describe("AuditChain", () => {
       await appendAuditEntry(store, makeEntry("e1"));
 
       const entries = await store.getEntries();
-      entries[0]!.data = { tampered: true };
+      (entries[0] as { data: Record<string, unknown> }).data = { tampered: true };
 
       // Verify original is unchanged
       const result = await verifyAuditChain(store);

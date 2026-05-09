@@ -98,30 +98,34 @@ function redactSensitiveArgs(args: Record<string, unknown>): Record<string, unkn
 }
 
 /**
- * audit-chain-1 — `AuditLogSink` that pairs an in-memory mirror
- * (sync query semantics, FIFO eviction) with a hash-chained
- * `AuditChainStore` (tamper-evident, no eviction). Each appended
+ * audit-chain-1 — `AuditLogSink` wrapper that adds a hash-chained
+ * tamper-evident layer on top of any inner sink. Each appended
  * entry's hash references the previous entry's hash, forming a
  * Merkle-like chain — an attacker who compromises the runtime
  * cannot reorder, remove, or alter a single entry without breaking
  * the chain past that point.
  *
- * **Why this composes two stores instead of replacing the in-memory
- * sink:** The `AuditLogSink.append` interface is sync; chain hashing
- * (SHA-256 via `crypto.subtle`) is async. Rather than change the
- * interface (and break every consumer's call-site), we keep sync
- * mirror writes for the existing query path AND queue async chain
- * writes serially in the background. Each chain write awaits the
- * previous one so the chain stays well-ordered even under fast
- * append cadence.
+ * **Composes with existing surface sinks.** Each platform already
+ * has its own `AuditLogSink` (`SqliteToolAuditSink` for cli/web,
+ * `TauriToolAuditSink` for desktop, `ExpoToolAuditSink` for mobile)
+ * that handles persistence + sync queries. ChainedAuditSink WRAPS
+ * one of those — the inner sink keeps doing what it does
+ * (persistence, queries, stats, retention), and the chain layer
+ * runs in parallel for tamper-evidence. Append delegates to inner
+ * synchronously; chain write is queued asynchronously so hash
+ * linkage stays well-ordered even under fast append cadence.
  *
- * **Closes the `audit_chain_signing_endgame` memory:** the
- * primitive (`audit-chain.ts`) had zero consumers. This sink is the
- * first consumer. Surfaces opt in by passing
- * `new ChainedAuditSink({...})` to the `AuditLogger` constructor;
- * the default `InMemoryAuditSink` stays in place for surfaces that
- * don't yet need tamper-evidence (in-tree tests, ephemeral
- * sandboxes).
+ * **Inner-sink agnostic.** ChainedAuditSink doesn't know whether
+ * the inner sink is in-memory, SQLite, Tauri-bridge, or anything
+ * else — it just calls `inner.append(...)` and then chains. Same
+ * primitive works across every surface.
+ *
+ * **Closes the `audit_chain_signing_endgame` memory:** the chain
+ * primitive (`audit-chain.ts`) had zero consumers; the wrap-style
+ * sink is the first one. Runtime auto-wraps when an
+ * `auditChainStore` adapter is supplied alongside the existing
+ * `toolAuditSink` — every surface inherits tamper-evidence the
+ * moment it provides a chain store.
  *
  * **Receipt-vs-chain layering:** `ToolInvocationReceipt` (per-entry
  * Ed25519-signed, in `@motebit/crypto`) gives single-entry
@@ -134,16 +138,24 @@ function redactSensitiveArgs(args: Record<string, unknown>): Record<string, unkn
  */
 export interface ChainedAuditSinkOptions {
   /**
-   * Capacity cap for the in-memory mirror (FIFO eviction). The chain
-   * store is uncapped — chain entries persist regardless of mirror
-   * eviction so verification can run against the full history.
+   * The wrapped sink — receives every `append` synchronously
+   * (preserving existing query semantics + persistence). Optional;
+   * defaults to a fresh `InMemoryAuditSink` when omitted (useful
+   * for in-tree tests and ephemeral sandboxes that just want
+   * tamper-evidence without a backing store).
+   */
+  readonly inner?: AuditLogSink;
+  /**
+   * Capacity cap for the default inner sink — only used when
+   * `inner` is not supplied. Ignored when wrapping a caller-
+   * supplied sink (capacity is that sink's concern).
    */
   readonly maxEntries?: number;
   /**
    * Backing store for the hash-chained tail. Defaults to
-   * `InMemoryAuditChainStore`. Production surfaces will pass a
-   * persistent store (SQLite-backed, durable across restarts) when
-   * the audit-chain-2 slice wires durable persistence.
+   * `InMemoryAuditChainStore`. Production surfaces pass a
+   * persistent store (`SqliteAuditChainStore`) so the chain
+   * survives process restart.
    */
   readonly chainStore?: AuditChainStore;
   /**
@@ -156,7 +168,8 @@ export interface ChainedAuditSinkOptions {
   readonly motebitId?: string;
 }
 
-export class ChainedAuditSink extends InMemoryAuditSink {
+export class ChainedAuditSink implements AuditLogSink {
+  private readonly inner: AuditLogSink;
   private readonly chainStore: AuditChainStore;
   private readonly motebitId: string;
   /**
@@ -168,16 +181,20 @@ export class ChainedAuditSink extends InMemoryAuditSink {
   private chainErrors = 0;
 
   constructor(opts: ChainedAuditSinkOptions = {}) {
-    super(opts.maxEntries);
+    this.inner = opts.inner ?? new InMemoryAuditSink(opts.maxEntries);
     this.chainStore = opts.chainStore ?? new InMemoryAuditChainStore();
     this.motebitId = opts.motebitId ?? "motebit";
   }
 
-  override append(entry: ToolAuditEntry): void {
-    // Sync mirror write — preserves the existing query/getAll
-    // semantics for callers that haven't migrated to async chain
-    // reads.
-    super.append(entry);
+  /** The wrapped sink — exposed for surfaces that need direct access. */
+  get innerSink(): AuditLogSink {
+    return this.inner;
+  }
+
+  append(entry: ToolAuditEntry): void {
+    // Sync delegation — inner sink handles persistence + sync
+    // queries. ChainedAuditSink doesn't duplicate that work.
+    this.inner.append(entry);
     // Async chain write — queued so order is preserved. Caller
     // doesn't await; verification consumers call `drainChain()`
     // before reading.
@@ -188,6 +205,28 @@ export class ChainedAuditSink extends InMemoryAuditSink {
         // eslint-disable-next-line no-console -- defensive logging; chain failures shouldn't break the audit logger
         console.warn("[audit-chain] append failed:", err instanceof Error ? err.message : err);
       });
+  }
+
+  // === AuditLogSink methods — delegate to inner ===
+
+  query(turnId: string): ToolAuditEntry[] {
+    return this.inner.query(turnId);
+  }
+
+  getAll(): ToolAuditEntry[] {
+    return this.inner.getAll();
+  }
+
+  queryStatsSince(afterTimestamp: number): AuditStatsSince {
+    return this.inner.queryStatsSince(afterTimestamp);
+  }
+
+  queryByRunId(runId: string): ToolAuditEntry[] {
+    return this.inner.queryByRunId?.(runId) ?? [];
+  }
+
+  enumerateForFlush(beforeTimestamp: number): ToolAuditEntry[] {
+    return this.inner.enumerateForFlush?.(beforeTimestamp) ?? [];
   }
 
   private async appendToChain(entry: ToolAuditEntry): Promise<void> {

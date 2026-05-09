@@ -436,6 +436,22 @@ export interface StorageAdapters {
   auditLog: AuditLogAdapter;
   stateSnapshot?: StateSnapshotAdapter;
   toolAuditSink?: AuditLogSink;
+  /**
+   * audit-chain-2 — durable hash-chained audit store. When provided
+   * alongside `toolAuditSink`, the runtime wraps the sink in a
+   * `ChainedAuditSink` so every appended entry lands in the chain
+   * with a `previous_hash`-linked SHA-256 — tamper-evident trail
+   * across restart. Surfaces with a SQLite driver pass
+   * `new SqliteAuditChainStore(driver)`; surfaces without omit it
+   * (the runtime still gets per-entry signed receipts via the
+   * existing crypto path; chain-level integrity is the optional
+   * upgrade).
+   *
+   * Doctrine: `audit_chain_signing_endgame` memory + audit-chain-1
+   * (`ChainedAuditSink` in `@motebit/policy`) + audit-chain-2
+   * (`SqliteAuditChainStore` in `@motebit/persistence`).
+   */
+  auditChainStore?: import("@motebit/protocol").AuditChainStoreAdapter;
   conversationStore?: ConversationStoreAdapter;
   planStore?: PlanStoreAdapter;
   gradientStore?: GradientStoreAdapter;

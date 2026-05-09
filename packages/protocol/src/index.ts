@@ -2193,6 +2193,43 @@ export interface AuditStatsSince {
   failed: number;
 }
 
+/**
+ * audit-chain — single entry in the hash-linked tamper-evident
+ * audit trail. Each entry's `hash` is `SHA-256(canonical({
+ * previous_hash, entry_id, timestamp, event_type, actor_id, data
+ * }))`; `previous_hash` references the prior entry's `hash` (or
+ * `"genesis"` for the first entry). The runtime computes hashes on
+ * append; verifiers recompute and compare.
+ *
+ * Lives in protocol (permissive-floor wire-format type) so
+ * `StorageAdapters.auditChainStore` can reference it without sdk
+ * importing the BSL `@motebit/policy` package. The concrete
+ * primitives (`appendAuditEntry`, `verifyAuditChain`, the
+ * `crypto.subtle` hashing) live in `@motebit/policy`'s
+ * `audit-chain.ts` — that's where the algorithm runs.
+ */
+export interface AuditChainEntry {
+  readonly entry_id: string;
+  readonly timestamp: number;
+  readonly event_type: string;
+  readonly actor_id: string;
+  readonly data: Record<string, unknown>;
+  readonly previous_hash: string;
+  readonly hash: string;
+}
+
+/**
+ * audit-chain — minimal storage interface adapters implement.
+ * Append-only — the chain breaks if entries are deleted or
+ * reordered, which is the whole tamper-evidence point.
+ */
+export interface AuditChainStoreAdapter {
+  append(entry: AuditChainEntry): Promise<void>;
+  getEntries(from?: number, to?: number): Promise<AuditChainEntry[]>;
+  getHead(): Promise<AuditChainEntry | undefined>;
+  count(): Promise<number>;
+}
+
 export interface AuditLogSink {
   append(entry: ToolAuditEntry): void;
   query(turnId: string): ToolAuditEntry[];

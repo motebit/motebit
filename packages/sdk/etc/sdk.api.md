@@ -7,6 +7,7 @@
 import type { AgentTrustRecord } from '@motebit/protocol';
 import type { AgentTrustStoreAdapter } from '@motebit/protocol';
 import type { ApprovalStoreAdapter } from '@motebit/protocol';
+import { AuditChainStoreAdapter } from '@motebit/protocol';
 import type { AuditLogAdapter } from '@motebit/protocol';
 import type { AuditLogSink } from '@motebit/protocol';
 import type { AuditRecord } from '@motebit/protocol';
@@ -729,6 +730,7 @@ export interface StorageAdapters {
     agentTrustStore?: AgentTrustStoreAdapter;
     // (undocumented)
     approvalStore?: ApprovalStoreAdapter;
+    auditChainStore?: AuditChainStoreAdapter;
     // (undocumented)
     auditLog: AuditLogAdapter;
     // (undocumented)

@@ -190,7 +190,7 @@ import type {
 } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import type { DeviceCapability } from "@motebit/sdk";
-import { PolicyGate, MemoryGovernor } from "@motebit/policy";
+import { PolicyGate, MemoryGovernor, ChainedAuditSink } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { createSolanaWalletRail, deriveSolanaAddress } from "@motebit/wallet-solana";
 import {
@@ -707,7 +707,31 @@ export class MotebitRuntime {
     });
 
     // Policy & memory governance
-    this.toolAuditSink = adapters.storage.toolAuditSink;
+    //
+    // audit-chain-1 wire-up — when the surface supplies BOTH a
+    // tool-audit sink AND a chain store, wrap the sink in a
+    // `ChainedAuditSink` so every appended entry lands in the
+    // tamper-evident hash chain. The inner sink keeps doing what
+    // it does (persistence, queries, retention); the chain layer
+    // runs in parallel for tamper-evidence.
+    //
+    // When the chain store is absent (in-tree tests, surfaces that
+    // haven't migrated yet), the sink stays unchained — same
+    // behavior as before this slice.
+    //
+    // Doctrine: `audit_chain_signing_endgame` memory + the
+    // ChainedAuditSink doctrine block in @motebit/policy/audit.ts.
+    const innerSink = adapters.storage.toolAuditSink;
+    const chainStore = adapters.storage.auditChainStore;
+    if (innerSink && chainStore) {
+      this.toolAuditSink = new ChainedAuditSink({
+        inner: innerSink,
+        chainStore,
+        motebitId: this.motebitId,
+      });
+    } else {
+      this.toolAuditSink = innerSink;
+    }
     this.policy = new PolicyGate(config.policy, this.toolAuditSink);
     this.memoryGovernor = new MemoryGovernor(config.memoryGovernance);
 
