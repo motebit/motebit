@@ -18,8 +18,7 @@ import {
   updateSlabItem,
   renderDetachArtifact as renderSlabDetachArtifact,
 } from "./ui/slab-items";
-import { renderCoBrowseBand } from "./ui/cobrowse-band";
-import { renderCoBrowseAddressBar } from "./ui/cobrowse-address-bar";
+import { renderCoBrowseChrome } from "./ui/cobrowse-chrome";
 import type { LiveBrowserElementHandle } from "@motebit/render-engine";
 import type {
   ConversationMessage,
@@ -1670,16 +1669,20 @@ export class WebApp {
    * mounted on the live_browser slab item; both clear when the state
    * doesn't ask for them.
    *
-   * - Control band (`controlBandSlot`): mounted on every state EXCEPT
-   *   `user` (handoff_pending → doorbell, motebit → reclaim, paused
-   *   → resume). Cleared on `user` because nothing to surface.
+   * Chrome-1 — one unified strip mounted in `controlBandSlot` on
+   * every state. The mark in the lead expresses control state; the
+   * middle holds the URL input (user state) or a state caption
+   * (handoff_pending / paused) or empty (motebit driving — page
+   * below shows destination). The trail holds the contextual
+   * affordance (take back / grant + deny / nav arrows / resume).
    *
-   * - Address bar (`addressBarSlot`): mounted ONLY on `user`. Cleared
-   *   otherwise (motebit has its own navigate tool when driving).
+   * `addressBarSlot` is always cleared — the unified strip absorbs
+   * its content. The slot itself stays in render-engine for
+   * compatibility; removing it cleanly is a follow-up slice.
    *
    * Degraded fallback: if the live_browser handle isn't mounted yet
    * (race between `request_control` and the eager session open), the
-   * band routes to the legacy outer-container slot via
+   * strip routes to the legacy outer-container slot via
    * `setSlabControlBand`. Logged as a warning — it's the visible
    * symptom of a session-open failure, not the success path.
    */
@@ -1690,50 +1693,42 @@ export class WebApp {
     const state = machine?.getState();
     if (!state || !machine) return;
 
-    // Build the band element (or null on user-state). The renderer's
-    // null-on-user contract is unchanged from Slice 2b — calm
-    // chrome.
-    const band = renderCoBrowseBand(state, machine);
+    // Unified chrome strip — always present, content shifts with
+    // state. The mark reads from the runtime's interior color so
+    // the tiny glyph mirrors the main creature.
+    const chrome = renderCoBrowseChrome(state, machine, {
+      forwardEvent,
+      interiorColor: this._interiorColor,
+    });
 
     if (handle) {
-      // Live-browser-mounted path: chrome lives ON the browser
-      // surface. This is the correct placement after Slice 2f.
-      if (band) {
-        handle.controlBandSlot.replaceChildren(band);
-      } else {
-        handle.controlBandSlot.replaceChildren();
-      }
-      if (state.kind === "user" && forwardEvent) {
-        const bar = renderCoBrowseAddressBar({ forwardEvent });
-        handle.addressBarSlot.replaceChildren(bar);
-      } else {
-        handle.addressBarSlot.replaceChildren();
-      }
+      handle.controlBandSlot.replaceChildren(chrome);
+      // The address-bar slot is now empty by design — the unified
+      // strip in controlBandSlot absorbs its content. Clear in case
+      // a prior render left an element behind.
+      handle.addressBarSlot.replaceChildren();
       // Slice 2g — recess the "waiting for first frame" placeholder
-      // during handoff_pending. The band IS the message; the
-      // placeholder is noise that competes with Grant/Deny for
+      // during handoff_pending. The chrome strip IS the message;
+      // the placeholder is noise that competes with Grant/Deny for
       // attention. The placeholder auto-removes on first frame
       // regardless of this toggle (live-browser.ts pushFrame), so
       // we're only managing the visible-while-loading window.
       if (state.kind === "handoff_pending") {
         handle.placeholderEl.style.display = "none";
       } else {
-        // Reveal again on any other state. If first frame already
-        // arrived, the placeholder is already removed from the DOM
-        // and this is a no-op.
         handle.placeholderEl.style.display = "";
       }
-      // Make sure the legacy slot is empty if we ever fell back
-      // before the handle existed.
+      // Ensure the legacy outer-container slot is empty if we ever
+      // fell back before the handle existed.
       this.renderer.setSlabControlBand?.(null);
       return;
     }
 
-    // Degraded path: no live_browser yet. The band routes to the
+    // Degraded path: no live_browser yet. The strip routes to the
     // outer-container slot — visible but mispositioned. This should
     // only fire when ensureDefaultSession failed before
     // request_control; if it fires often, that's a real signal.
-    this.renderer.setSlabControlBand?.(band);
+    this.renderer.setSlabControlBand?.(chrome);
   }
 
   /**
