@@ -1,6 +1,5 @@
 ---
 "@motebit/protocol": minor
-"@motebit/ai-core": minor
 ---
 
 Co-browse Slice 2f — slab control-chrome cleanup. Smoke test surfaced

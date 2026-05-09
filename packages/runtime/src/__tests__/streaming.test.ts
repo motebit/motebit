@@ -485,6 +485,158 @@ describe("sendMessageStreaming", () => {
     expect(phantom).toBeUndefined();
   });
 
+  it("Slice 2f — slabProjection: 'none' suppresses the tool_call slab item", async () => {
+    // request_control declares slabProjection: "none" because it's
+    // state chrome (the doorbell band), not a body act. The
+    // runtime's projection MUST NOT open a slab item for it —
+    // otherwise the user sees a duplicate "REQUEST_CONTROL /
+    // calling…" card competing with the doorbell band for
+    // attention. Witnessed in the post-Slice-2c smoke; pinned by
+    // Slice 2f.
+    mockRunTurnStreaming.mockReturnValue(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "request_control",
+          status: "calling" as const,
+          slabProjection: "none" as const,
+        };
+        yield {
+          type: "tool_status" as const,
+          name: "request_control",
+          status: "done" as const,
+          slabProjection: "none" as const,
+          result: { kind: "granted" },
+        };
+        yield { type: "text" as const, text: "Granted." };
+        yield { type: "result" as const, result: makeTurnResult() };
+      })(),
+    );
+
+    const slabSnapshots: Array<{
+      items: ReadonlyMap<string, { kind: string; phase: string; payload: unknown }>;
+    }> = [];
+    runtime.slab.subscribe((state) => {
+      slabSnapshots.push({ items: state.items });
+    });
+
+    await collectChunks(runtime.sendMessageStreaming("ask for control"));
+
+    // Across every snapshot, no `tool_call` item ever existed for
+    // `request_control`. The stream item (kind: "stream") opens
+    // for the turn itself; that's allowed. State chrome is the
+    // band, not a card.
+    const everSawRequestControlCard = slabSnapshots.some((snap) =>
+      Array.from(snap.items.values()).some(
+        (item) =>
+          item.kind === "tool_call" &&
+          (item.payload as { name?: string } | null)?.name === "request_control",
+      ),
+    );
+    expect(everSawRequestControlCard).toBe(false);
+  });
+
+  it("Slice 2g — not_in_control failure dissolves instead of resting (control-state residue)", async () => {
+    // computer's tool-policy entry has `endState: "rest"` — successful
+    // computer calls (or content-failure modes like target_not_found)
+    // legitimately rest as cards on the slab. But a `not_in_control`
+    // failure isn't a content outcome; it's a control-layer state
+    // mismatch (motebit was forbidden from acting by the co-browse
+    // gate). The doorbell band IS the visible surface for that
+    // resolution; resting a "READING" card on the slab body
+    // duplicates the message and competes for attention. Slice 2g
+    // narrows the projection to dissolve only on the
+    // `not_in_control` failure-message prefix; other failures still
+    // obey policy.endState.
+    mockRunTurnStreaming.mockReturnValue(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "computer",
+          status: "calling" as const,
+          mode: "virtual_browser",
+        };
+        yield {
+          type: "tool_status" as const,
+          name: "computer",
+          status: "done" as const,
+          mode: "virtual_browser",
+          result:
+            "not_in_control: Motebit not in control (state: user); user must grant control before dispatch.",
+        };
+        yield { type: "text" as const, text: "Need control to proceed." };
+        yield { type: "result" as const, result: makeTurnResult() };
+      })(),
+    );
+
+    const slabSnapshots: Array<{
+      items: ReadonlyMap<string, { kind: string; phase: string; payload: unknown }>;
+    }> = [];
+    runtime.slab.subscribe((state) => {
+      slabSnapshots.push({ items: state.items });
+    });
+
+    await collectChunks(runtime.sendMessageStreaming("open hacker news"));
+
+    // Final slab state should NOT have a resting computer slab item.
+    // It either dissolved cleanly (gone) or is animating its
+    // dissolution tail.
+    const finalState = slabSnapshots[slabSnapshots.length - 1];
+    expect(finalState).toBeDefined();
+    if (!finalState) return;
+    const restingComputerCard = Array.from(finalState.items.values()).find(
+      (i) =>
+        i.kind === "fetch" && // tool-policy maps `computer` to kind: "fetch"
+        i.phase === "resting" &&
+        (i.payload as { name?: string } | null)?.name === "computer",
+    );
+    expect(restingComputerCard).toBeUndefined();
+  });
+
+  it("Slice 2g — content-failure on a rest-policy tool still rests (read_url 404 is useful record)", async () => {
+    // Inverse of the above: a content-failure (here: a non-string
+    // result that doesn't match the not_in_control prefix) on a
+    // rest-policy tool MUST still rest. The user benefits from
+    // seeing what motebit tried and why it didn't find what it
+    // expected. Only control-state failures dissolve.
+    mockRunTurnStreaming.mockReturnValue(
+      (async function* () {
+        yield { type: "tool_status" as const, name: "read_url", status: "calling" as const };
+        yield {
+          type: "tool_status" as const,
+          name: "read_url",
+          status: "done" as const,
+          result: "404 Not Found",
+        };
+        yield { type: "text" as const, text: "That page doesn't exist." };
+        yield { type: "result" as const, result: makeTurnResult() };
+      })(),
+    );
+
+    const slabSnapshots: Array<{
+      items: ReadonlyMap<string, { kind: string; phase: string; payload: unknown }>;
+    }> = [];
+    runtime.slab.subscribe((state) => {
+      slabSnapshots.push({ items: state.items });
+    });
+
+    await collectChunks(runtime.sendMessageStreaming("read example.com"));
+
+    // The read_url card SHOULD rest — a 404 is a content outcome,
+    // not a control-state mismatch. The tool's policy.endState is
+    // "rest" and we honor it.
+    const finalState = slabSnapshots[slabSnapshots.length - 1];
+    expect(finalState).toBeDefined();
+    if (!finalState) return;
+    const restingReadUrl = Array.from(finalState.items.values()).find(
+      (i) =>
+        i.kind === "fetch" &&
+        i.phase === "resting" &&
+        (i.payload as { name?: string } | null)?.name === "read_url",
+    );
+    expect(restingReadUrl).toBeDefined();
+  });
+
   it("clears pending approval at start of new stream", async () => {
     const result = makeTurnResult();
     mockRunTurnStreaming.mockReturnValue(yieldChunks({ type: "result", result }));

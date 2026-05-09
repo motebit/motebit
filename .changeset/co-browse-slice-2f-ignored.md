@@ -1,6 +1,7 @@
 ---
 "@motebit/runtime": minor
 "@motebit/tools": patch
+"@motebit/ai-core": minor
 ---
 
 Co-browse Slice 2f — runtime projection respects `slabProjection:

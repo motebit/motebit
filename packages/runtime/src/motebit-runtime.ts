@@ -1697,7 +1697,39 @@ export class MotebitRuntime {
               // plumbing. Policy comes from the canonical registry.
               // Doctrine: motebit-computer.md §"Three end states."
               const policy = toolPolicy(chunk.name);
-              if (policy.endState === "rest" && chunk.result != null) {
+              // Slice 2g — narrow override: control-state failures
+              // dissolve regardless of the tool's policy.endState.
+              // A `not_in_control` failure isn't an *act outcome* —
+              // motebit didn't fail at acting; it was *forbidden*
+              // from acting by the co-browse control state. The
+              // doorbell band is the visible surface for that
+              // resolution; a resting card on the slab body is
+              // duplicate noise (witnessed in the post-Slice-2f
+              // smoke as a "READING" card lingering through a
+              // handoff_pending window). This narrow check
+              // preserves the rest-on-success path for content
+              // outcomes (read_url 404, web_search empty results,
+              // shell_exec non-zero exit — those ARE useful
+              // records) while suppressing only the control-layer
+              // residue.
+              //
+              // Detection: string-prefix match on the failure
+              // message. apps/web's computer-tool dispatcher
+              // throws Error("not_in_control: ...") when the gate
+              // denies; ai-core surfaces the message on the
+              // `done` chunk's `result`. This works for v1 with
+              // exactly one control-remediation reason; if more
+              // reasons land later (e.g. a future
+              // `handoff_in_progress` on the gate), graduate to a
+              // structured `failure_reason` field on the tool
+              // result rather than extending the prefix list.
+              // Doctrine: motebit-computer.md — slab acts vs
+              // chrome state vs receipts records.
+              const isControlStateFailure =
+                typeof chunk.result === "string" && chunk.result.startsWith("not_in_control");
+              if (isControlStateFailure) {
+                this.slab.dismissItem(toolItemId);
+              } else if (policy.endState === "rest" && chunk.result != null) {
                 this.slab.restItem(toolItemId, {
                   name: chunk.name,
                   context: chunk.context,

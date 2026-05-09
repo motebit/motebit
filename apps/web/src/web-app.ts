@@ -1709,6 +1709,20 @@ export class WebApp {
       } else {
         handle.addressBarSlot.replaceChildren();
       }
+      // Slice 2g — recess the "waiting for first frame" placeholder
+      // during handoff_pending. The band IS the message; the
+      // placeholder is noise that competes with Grant/Deny for
+      // attention. The placeholder auto-removes on first frame
+      // regardless of this toggle (live-browser.ts pushFrame), so
+      // we're only managing the visible-while-loading window.
+      if (state.kind === "handoff_pending") {
+        handle.placeholderEl.style.display = "none";
+      } else {
+        // Reveal again on any other state. If first frame already
+        // arrived, the placeholder is already removed from the DOM
+        // and this is a no-op.
+        handle.placeholderEl.style.display = "";
+      }
       // Make sure the legacy slot is empty if we ever fell back
       // before the handle existed.
       this.renderer.setSlabControlBand?.(null);

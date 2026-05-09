@@ -193,12 +193,18 @@ export interface RegisterWebComputerToolOptions {
 
 /**
  * Default timeout for the `request_control` tool's user-verdict
- * wait. 60 seconds — calibrated for "user reads the doorbell and
- * answers." A longer wait would risk an AI loop that's idled
- * indefinitely; a shorter wait would fight inattentive users. Tests
- * override via `requestControlTimeoutMs`.
+ * wait. 5 minutes — recalibrated in Slice 2g after the smoke test
+ * showed 60s timing out before the user finished reading the
+ * doorbell + deciding (especially when interrupted by a
+ * notification or context-switch). 5 minutes is long enough that
+ * the AI loop never wins the timeout race against an attentive
+ * user, short enough that an abandoned tab doesn't pin a stuck
+ * pending request indefinitely. Fail-closed semantics preserved:
+ * timeout still calls `coBrowseControl.disconnect()` to revert to
+ * user. Tests override via `requestControlTimeoutMs` (the timeout-
+ * branch test passes 30ms to keep the suite fast).
  */
-const DEFAULT_REQUEST_CONTROL_TIMEOUT_MS = 60_000;
+const DEFAULT_REQUEST_CONTROL_TIMEOUT_MS = 300_000;
 
 /**
  * Register the `computer` tool on the web surface. Returns a

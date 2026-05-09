@@ -86,6 +86,25 @@ export interface LiveBrowserElementHandle {
    */
   readonly controlBandSlot: HTMLElement;
   /**
+   * Slice 2g — expose the "waiting for first frame" placeholder so
+   * surfaces can recess it during state transitions where the
+   * doorbell band is the load-bearing UI. When state is
+   * `handoff_pending` and no first frame has arrived, three pieces
+   * of UI compete for the same volume: the broken-img glyph
+   * (suppressed by Slice 2g's display:none-until-first-frame), the
+   * "live browser · waiting for first frame…" placeholder, and the
+   * Grant/Deny band. The band is the message; the placeholder is
+   * noise. Surface code hides the placeholder
+   * (`placeholderEl.style.display = "none"`) when state is
+   * handoff_pending and reveals it otherwise.
+   *
+   * Auto-removal on first frame is unchanged — `pushFrame` calls
+   * `placeholder.remove()` regardless of whether the surface had
+   * temporarily hidden it. The display-toggle is purely
+   * presentational; lifecycle stays render-engine-owned.
+   */
+  readonly placeholderEl: HTMLElement;
+  /**
    * Stop the subscription and clear the rendered frame. Idempotent —
    * a second call is a no-op. The element itself is left in the DOM
    * for the slab's dissolve animation to take it the rest of the way.
@@ -129,10 +148,15 @@ export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrow
   img.className = "slab-live-browser-frame";
   img.alt = "live browser";
   img.decoding = "async";
-  // Block-level layout + intrinsic aspect ratio from the first
-  // frame's dimensions; until then a 16:10 placeholder so the slot
-  // doesn't collapse to zero height.
-  img.style.display = "block";
+  // Slice 2g — start hidden so an `<img>` with no `src` doesn't
+  // render the browser's default broken-image glyph + alt text.
+  // The placeholder div below carries the loading UX until the
+  // first frame arrives; `pushFrame` flips this to "block" on
+  // first frame and the placeholder removes itself in the same
+  // tick. Without this hide-then-show, users see a broken-image
+  // icon labeled "live browser" stacked above the placeholder
+  // — debug-looking, witnessed in the post-Slice-2f smoke.
+  img.style.display = "none";
   img.style.width = "100%";
   img.style.aspectRatio = "16 / 10";
   img.style.background = "rgba(255, 255, 255, 0.04)";
@@ -172,6 +196,11 @@ export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrow
       if (frame.device_width > 0 && frame.device_height > 0) {
         img.style.aspectRatio = `${frame.device_width} / ${frame.device_height}`;
       }
+      // Slice 2g — flip the img visible only after the first decode-
+      // ready src has been assigned. Pair with the `display: none`
+      // initial state in the constructor; together they suppress the
+      // broken-image fallback glyph during the loading window.
+      img.style.display = "block";
       placeholder.remove();
     }
   }
@@ -183,6 +212,7 @@ export function buildLiveBrowserElement(source: ScreencastFrameSource): LiveBrow
     frameElement: img,
     addressBarSlot,
     controlBandSlot,
+    placeholderEl: placeholder,
     dispose(): void {
       if (disposed) return;
       disposed = true;
