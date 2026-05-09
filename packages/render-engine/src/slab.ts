@@ -364,7 +364,17 @@ export class SlabManager {
       // 0.02 is a faint material reference, not enough to frost
       // transmitted text.
       roughness: 0.02,
-      thickness: 0.04,
+      // Tuning history: 0.04 (matched SLAB_THICKNESS literally) →
+      // 0.02 (matches actual screen-to-front-pane distance).
+      // Three.js's transmission shader uses `thickness` to compute
+      // the refraction UV offset — `thickness * (1 / ior) *
+      // viewDir`. With the screen mesh centered (z=0), the actual
+      // glass-distance from the screen to the front pane is 2cm,
+      // not 4cm. The shader was computing 4cm of refraction for
+      // 2cm of physical glass; the page rendered with overshoot
+      // refraction and read as blurry. 0.02 matches the actual
+      // path length so the refraction lands where the screen is.
+      thickness: 0.02,
       // Tuning history: 0.4 was sized when the slab differentiated
       // from the creature via clearcoat sheen rather than content.
       // Post-2026-05-09 the slab is content-bearing; clearcoat at

@@ -95,8 +95,22 @@ export class ThreeJSAdapter implements RenderAdapter {
     const canvas = target;
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.2;
+    // NeutralToneMapping: three.js r167+ tone mapper designed for
+    // content-bearing scenes (UI, web pages, anything sRGB-source).
+    // The prior ACESFilmicToneMapping was film-grade HDR
+    // compression — accurate for HDR scenes (sun, sky, fire) but
+    // it slightly desaturates whites and shifts the color register
+    // for sRGB content. The slab now refracts a live web page
+    // through the front pane via transmission; the refracted color
+    // goes through whatever tone mapper the renderer has set, so
+    // ACES was tone-mapping Google's logo into a muted register.
+    // Neutral preserves source colors faithfully with mild
+    // highlight compression — creature still reads as glass with
+    // its emissive bloom, page reads at face value. Exposure 1.0
+    // is the canonical neutral baseline; 1.2 was over-brightening
+    // before ACES compressed, which compounded the desaturation.
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
 
@@ -480,8 +494,22 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
     this.renderer.xr.enabled = true;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.2;
+    // NeutralToneMapping: three.js r167+ tone mapper designed for
+    // content-bearing scenes (UI, web pages, anything sRGB-source).
+    // The prior ACESFilmicToneMapping was film-grade HDR
+    // compression — accurate for HDR scenes (sun, sky, fire) but
+    // it slightly desaturates whites and shifts the color register
+    // for sRGB content. The slab now refracts a live web page
+    // through the front pane via transmission; the refracted color
+    // goes through whatever tone mapper the renderer has set, so
+    // ACES was tone-mapping Google's logo into a muted register.
+    // Neutral preserves source colors faithfully with mild
+    // highlight compression — creature still reads as glass with
+    // its emissive bloom, page reads at face value. Exposure 1.0
+    // is the canonical neutral baseline; 1.2 was over-brightening
+    // before ACES compressed, which compounded the desaturation.
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
 
