@@ -396,15 +396,63 @@ export function buildProxiedBody(
   return proxied;
 }
 
+// Sibling of the inline decoder in `packages/tools/src/builtins/read-url.ts`.
+// Two engines, same intent — keep the entity tables aligned in the same pass.
+// `nbsp` decodes to U+0020 so the whitespace-collapse step downstream
+// treats it uniformly across runtimes; unknown entities pass through
+// verbatim so a stray "&" never breaks a fetch.
+const HTML_NAMED_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  copy: "©",
+  reg: "®",
+  trade: "™",
+  mdash: "—",
+  ndash: "–",
+  hellip: "…",
+  lsquo: "‘",
+  rsquo: "’",
+  ldquo: "“",
+  rdquo: "”",
+  laquo: "«",
+  raquo: "»",
+  bull: "•",
+  middot: "·",
+  times: "×",
+  divide: "÷",
+};
+
+function decodeHtmlEntities(s: string): string {
+  return s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]+);/g, (match, ref: string) => {
+    if (ref.startsWith("#x") || ref.startsWith("#X")) {
+      const code = parseInt(ref.slice(2), 16);
+      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : match;
+    }
+    if (ref.startsWith("#")) {
+      const code = parseInt(ref.slice(1), 10);
+      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : match;
+    }
+    return HTML_NAMED_ENTITIES[ref] ?? match;
+  });
+}
+
 /**
- * Strip HTML tags, scripts, and styles from raw text.
- * Used by the fetch proxy to return clean text content.
+ * Strip HTML tags, scripts, and styles from raw text and decode the
+ * entities (`&nbsp;`, `&copy;`, numeric `&#NN;` / `&#xHH;`) the model
+ * would otherwise see as escape codes. Used by the fetch proxy to return
+ * clean prose to the AI.
  */
 export function stripHtml(text: string): string {
-  return text
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
+  return decodeHtmlEntities(
+    text
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+      .replace(/<[^>]+>/g, " "),
+  )
     .replace(/\s{2,}/g, " ")
     .trim();
 }

@@ -52,6 +52,51 @@ const defaultFetcher: ReadUrlFetcher = async (url) => {
   return { status: res.status, contentType, body };
 };
 
+// HTML entity decoder — covers the entities real web pages actually emit.
+// Unknown entities pass through verbatim so a stray "&" never crashes a
+// fetch. `nbsp` decodes to U+0020 (not U+00A0) so the whitespace-collapse
+// pass below treats it uniformly across engines. Sibling site:
+// `services/proxy/src/app/v1/fetch/route.ts` (proxy fetch route) — keep
+// the entity table aligned in the same pass.
+const HTML_NAMED_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  copy: "©",
+  reg: "®",
+  trade: "™",
+  mdash: "—",
+  ndash: "–",
+  hellip: "…",
+  lsquo: "‘",
+  rsquo: "’",
+  ldquo: "“",
+  rdquo: "”",
+  laquo: "«",
+  raquo: "»",
+  bull: "•",
+  middot: "·",
+  times: "×",
+  divide: "÷",
+};
+
+function decodeHtmlEntities(s: string): string {
+  return s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]+);/g, (match, ref: string) => {
+    if (ref.startsWith("#x") || ref.startsWith("#X")) {
+      const code = parseInt(ref.slice(2), 16);
+      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : match;
+    }
+    if (ref.startsWith("#")) {
+      const code = parseInt(ref.slice(1), 10);
+      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : match;
+    }
+    return HTML_NAMED_ENTITIES[ref] ?? match;
+  });
+}
+
 export function createReadUrlHandler(opts?: {
   proxyUrl?: string;
   fetcher?: ReadUrlFetcher;
@@ -97,10 +142,12 @@ export function createReadUrlHandler(opts?: {
         return { ok: true, data: body.slice(0, 64_000) };
       }
 
-      const cleaned = body
-        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-        .replace(/<[^>]+>/g, " ")
+      const cleaned = decodeHtmlEntities(
+        body
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+          .replace(/<[^>]+>/g, " "),
+      )
         .replace(/\s{2,}/g, " ")
         .trim();
       return { ok: true, data: cleaned.slice(0, 8000) };

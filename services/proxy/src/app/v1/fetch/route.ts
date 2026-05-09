@@ -44,6 +44,8 @@ async function checkRateLimit(
   }
 }
 
+import { stripHtml } from "../../../validation";
+
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
   "https://www.motebit.com",
@@ -149,13 +151,7 @@ export async function POST(request: Request): Promise<Response> {
       data = JSON.stringify(json, null, 2).slice(0, MAX_RESPONSE_SIZE);
     } else {
       const text = await res.text();
-      data = text
-        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s{2,}/g, " ")
-        .trim()
-        .slice(0, MAX_RESPONSE_SIZE);
+      data = stripHtml(text).slice(0, MAX_RESPONSE_SIZE);
     }
 
     return new Response(JSON.stringify({ ok: true, data }), {

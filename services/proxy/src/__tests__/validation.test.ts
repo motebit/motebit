@@ -249,6 +249,24 @@ describe("stripHtml", () => {
   it("handles plain text (no tags)", () => {
     expect(stripHtml("Just plain text")).toBe("Just plain text");
   });
+
+  it("decodes named HTML entities so the model reads prose, not escape codes", () => {
+    expect(stripHtml("<p>Sign in&nbsp;Advanced search</p>")).toBe("Sign in Advanced search");
+    expect(stripHtml("<p>About Google &copy; 2026 - Privacy &amp; Terms</p>")).toBe(
+      "About Google © 2026 - Privacy & Terms",
+    );
+    expect(stripHtml("<p>x &mdash; y &lsquo;quote&rsquo;</p>")).toBe("x — y ‘quote’");
+  });
+
+  it("decodes numeric entities (decimal and hex)", () => {
+    expect(stripHtml("<p>&#65; &#x42; &#8212;</p>")).toBe("A B —");
+  });
+
+  it("leaves unknown entities verbatim instead of crashing", () => {
+    expect(stripHtml("<p>kept: &nopesuchthing; bare-amp: a & b</p>")).toBe(
+      "kept: &nopesuchthing; bare-amp: a & b",
+    );
+  });
 });
 
 // --- Constants ---

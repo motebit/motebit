@@ -356,6 +356,52 @@ describe("read_url", () => {
     expect(result.error).toContain("HTTP 404");
   });
 
+  it("decodes HTML entities so the model reads prose, not escape codes", async () => {
+    // Without entity decoding the model sees "&nbsp;Advanced search", "&copy;",
+    // "&amp;", which a small local model parses as something broken. After the
+    // fix the read_url result reads as plain prose. Sibling: the same decode
+    // pass lives in services/proxy/src/app/v1/fetch/route.ts.
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "content-type": "text/html" }),
+      text: async () =>
+        "<html><body><p>Google Gmail Images Sign in&nbsp;Advanced search</p>" +
+        "<p>About Google &copy; 2026 - Privacy &amp; Terms</p>" +
+        "<p>x &mdash; y &lsquo;quote&rsquo; &#65; &#x42;</p></body></html>",
+    }) as unknown as typeof fetch;
+
+    const handler = createReadUrlHandler();
+    const result = await handler({ url: "https://google.com" });
+
+    expect(result.ok).toBe(true);
+    const data = result.data as string;
+    expect(data).not.toContain("&nbsp;");
+    expect(data).not.toContain("&copy;");
+    expect(data).not.toContain("&amp;");
+    expect(data).not.toContain("&mdash;");
+    expect(data).not.toContain("&#65;");
+    expect(data).not.toContain("&#x42;");
+    expect(data).toContain("Google Gmail Images Sign in Advanced search");
+    expect(data).toContain("© 2026");
+    expect(data).toContain("Privacy & Terms");
+    expect(data).toContain("x — y ‘quote’ A B");
+  });
+
+  it("leaves unknown entities verbatim instead of crashing", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "content-type": "text/html" }),
+      text: async () => "<html><body><p>kept: &nopesuchthing; bare-amp: a & b</p></body></html>",
+    }) as unknown as typeof fetch;
+
+    const handler = createReadUrlHandler();
+    const result = await handler({ url: "https://example.com" });
+
+    expect(result.ok).toBe(true);
+    expect(result.data as string).toContain("&nopesuchthing;");
+    expect(result.data as string).toContain("a & b");
+  });
+
   it("returns text/plain content verbatim, preserving newlines", async () => {
     // HTML-stripping would collapse "\n" to " " and destroy a diff's line
     // structure. Plain text is passed through so callers (code-review →
