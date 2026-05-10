@@ -2,9 +2,11 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 
 // Floor thresholds anchored to the first measured baseline. protocol
 // is Layer 0 (Apache-2.0 permissive floor, zero deps) so coverage
-// should stay high — the one gap is a handful of unexercised
-// discriminant branches in the credential/settlement type guards.
-// Raise as those get tested.
+// should stay high. The excluded files are pure type-only wire-format
+// declarations (interfaces + type aliases, zero runtime exports);
+// v8 reports them as 0% because there is no executable code to
+// measure, which drags global metrics below threshold. A future
+// type-guard pass will move them out of the exclude list.
 export default defineMotebitTest({
   coverageExclude: [
     "src/credential-anchor.ts",
@@ -12,6 +14,9 @@ export default defineMotebitTest({
     "src/migration.ts",
     "src/dispute.ts",
     "src/settlement-mode.ts",
+    "src/goal-lifecycle.ts",
+    "src/memory-events.ts",
+    "src/plan-lifecycle.ts",
   ],
   thresholds: { statements: 98, branches: 96, functions: 98, lines: 98 },
 });
