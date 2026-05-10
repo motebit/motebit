@@ -162,9 +162,14 @@ export class MemoryGovernor {
       case SensitivityLevel.Financial:
         parts.push("about financial information");
         break;
-      default:
+      case SensitivityLevel.None:
+      case SensitivityLevel.Secret:
         parts.push("from conversation");
         break;
+      default: {
+        const _exhaustive: never = candidate.sensitivity;
+        return _exhaustive;
+      }
     }
 
     return parts.join(" ") + ".";
