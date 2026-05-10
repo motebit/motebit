@@ -37,7 +37,7 @@
  *   - Network error → propagated.
  */
 
-import { BROWSER_SANDBOX_GRANT_AUDIENCE } from "@motebit/protocol";
+import { BROWSER_SANDBOX_GRANT_AUDIENCE } from "@motebit/sdk";
 
 /**
  * Safety margin before token expiry. The cached token is treated as
@@ -166,4 +166,6 @@ export type { CachedToken as _RelayBackedCachedToken };
 
 // Re-export the audience constant so consumers wiring this from
 // runtime see the canonical value alongside the fetcher itself.
+// Sourced from `@motebit/sdk` (the developer-contract surface that
+// re-exports `*` from `@motebit/protocol`).
 export { BROWSER_SANDBOX_GRANT_AUDIENCE };

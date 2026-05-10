@@ -6,6 +6,7 @@ import {
   PLANNING_TASK_ROUTER,
   resolveProactiveAnchor,
   bindSlabControllerToRenderer,
+  createRelayBackedSandboxTokenSource,
 } from "@motebit/runtime";
 import type {
   StreamChunk,
@@ -28,7 +29,7 @@ import type {
   UserInputEvent,
   UserInputForwardedPayload,
 } from "@motebit/sdk";
-import { DeviceCapability, EventType } from "@motebit/sdk";
+import { DeviceCapability, EventType, BROWSER_SANDBOX_GRANT_AUDIENCE } from "@motebit/sdk";
 import { ThreeJSAdapter, buildComputerSessionReceiptArtifact } from "@motebit/render-engine";
 import type { AudioReactivity } from "@motebit/render-engine";
 import type { StreamingProvider } from "@motebit/ai-core/browser";
@@ -760,20 +761,59 @@ export class WebApp {
     );
 
     // Cloud-browser `computer` tool (virtual_browser embodiment).
-    // Registered ONLY when `VITE_BROWSER_SANDBOX_URL` is configured —
-    // explicit-not-configured beats silent-not-supported. Per
-    // services/browser-sandbox/README.md, v1 is a single-tenant
-    // deployment boundary: the token in the bundle is acceptable
-    // only when the operator controls bundle distribution.
-    // Multi-tenant production exposure is gated on per-motebit
-    // signed JWTs, not on this wiring.
+    // Two auth paths: relay-mediated audience-bound tokens (production)
+    // or legacy shared bearer (local-dev). Either OR both can be
+    // configured; if neither, the tool is not registered (explicit-
+    // not-configured beats silent-not-supported).
+    //
+    // Relay-mediated path (preferred, production-safe):
+    //   1. Web app signs a grant token with the motebit's identity
+    //      key (existing `createSyncToken` primitive, parameterized
+    //      with `BROWSER_SANDBOX_GRANT_AUDIENCE`).
+    //   2. Token-source POSTs grant to relay's
+    //      `/api/v1/browser-sandbox/token`; receives a relay-signed
+    //      sandbox token bound to `BROWSER_SANDBOX_AUDIENCE`.
+    //   3. Browser-sandbox verifies signature against pinned relay
+    //      pubkey. Single trust anchor, no bundled secret.
+    //
+    // Legacy path (`VITE_BROWSER_SANDBOX_TOKEN`): shared bearer in
+    // the bundle. Acceptable for local-dev where the bundle is not
+    // public. NEVER set on motebit.com's Vercel env — would expose
+    // the bearer to anyone visiting the page.
     const env = (import.meta as unknown as Record<string, Record<string, string> | undefined>).env;
     const browserSandboxUrl = env?.VITE_BROWSER_SANDBOX_URL ?? "";
     const browserSandboxToken = env?.VITE_BROWSER_SANDBOX_TOKEN ?? "";
-    if (browserSandboxUrl && browserSandboxToken) {
+    const relayUrl = loadSyncUrl();
+
+    let getAuthToken: (() => Promise<string> | string) | null = null;
+    if (browserSandboxToken) {
+      // Local-dev / single-tenant deployment path. The bundled token
+      // matches the sandbox's `MOTEBIT_API_TOKEN` legacy bearer. The
+      // sandbox's `dualAuth` accepts this OR a relay-signed token,
+      // so the same sandbox deployment can serve both paths during
+      // the transition window.
+      getAuthToken = (): string => browserSandboxToken;
+    } else if (relayUrl != null && relayUrl !== "") {
+      // Production / federation-grade path. The grant signer is the
+      // existing `createSyncToken` primitive — already audience-
+      // parameterized, already routes through suite-dispatch, secure-
+      // erases the private key after signing. No new crypto here.
+      getAuthToken = createRelayBackedSandboxTokenSource({
+        relayUrl,
+        getGrantToken: async (): Promise<string> => {
+          const grant = await this.createSyncToken(BROWSER_SANDBOX_GRANT_AUDIENCE);
+          if (grant === null) {
+            throw new Error("cannot mint browser-sandbox grant — motebit identity key unavailable");
+          }
+          return grant;
+        },
+      });
+    }
+
+    if (browserSandboxUrl && getAuthToken !== null) {
       this.computerRegistration = registerWebComputerTool(registry, {
         baseUrl: browserSandboxUrl,
-        getAuthToken: () => browserSandboxToken,
+        getAuthToken,
         motebitId: runtime.motebitId,
         approvalFlow: createWebComputerApprovalFlow(),
         events: runtime.events,

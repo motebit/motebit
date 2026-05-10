@@ -185,14 +185,17 @@ export function requireAuth(opts: RequireAuthOptions): MiddlewareHandler {
 }
 
 /**
- * @deprecated since: 2026-05-10, removed in: 2.0.0. Reason: the v1
- * shared-bearer model has been superseded by the relay-mediated
- * `aud`-bound signed-token flow (see file header). New code uses
- * `requireAuth({ legacyApiToken, trustedRelayPublicKeyHex })`. This
- * shim is preserved for the dualAuth transition window — when both
- * paths are off and only `MOTEBIT_API_TOKEN` is set, behavior is
- * unchanged. Removed in 2.0.0 once `MOTEBIT_TRUSTED_RELAY_PUBKEY` is
- * the sole production auth path.
+ * @deprecated Use `requireAuth({ legacyApiToken, trustedRelayPublicKeyHex })` instead.
+ *
+ * Reason: the v1 shared-bearer model has been superseded by the
+ * relay-mediated `aud`-bound signed-token flow (see file header).
+ * This shim is preserved for the dualAuth transition window — when
+ * both paths are off and only `MOTEBIT_API_TOKEN` is set, behavior is
+ * unchanged. Removed once `MOTEBIT_TRUSTED_RELAY_PUBKEY` is the sole
+ * production auth path.
+ *
+ * (No `since`/`removed in` semver — `0.0.0-private` package per
+ * `docs/doctrine/deprecation-lifecycle.md` § Private packages.)
  */
 export function requireBearer(expectedToken: string): MiddlewareHandler {
   return requireAuth({ legacyApiToken: expectedToken, trustedRelayPublicKeyHex: null });
