@@ -1817,8 +1817,20 @@ function renderGeneric(item: SlabItem): HTMLElement {
  * closures per the surface-determinism doctrine.
  *
  * Caller (slab-bridge) mounts the returned element on the slab.
+ *
+ * Headless guard: in a Node test environment without `document`,
+ * the slab-bridge still calls this for every item the runtime opens
+ * (stream tokens during a chat test, tool_call cards during a tool
+ * test, etc.). Returning a stub element keeps the bridge's
+ * `mountedElements` bookkeeping intact without crashing on a
+ * `document.createElement` call. The renderer adapter's
+ * `addSlabItem` is already optional/no-op in headless adapters, so
+ * the stub is never visibly mounted.
  */
 export function renderSlabItem(item: SlabItem, actions: SlabItemActions): HTMLElement {
+  if (typeof document === "undefined") {
+    return createHeadlessSlabItemStub(item);
+  }
   // Mind-mode items (stream tokens, memory surfacing, plan steps,
   // embeddings) don't render on the plane — they live in chat and
   // in the creature's own animations. The plane is for external
@@ -2040,6 +2052,10 @@ export function releaseLiveBrowserItem(itemId: string): void {
 
 /** In-place updater for payload-only changes. */
 export function updateSlabItem(item: SlabItem, element: HTMLElement): void {
+  // Headless guard — pairs with the same guard in `renderSlabItem`.
+  // The element handed in is a stub from `createHeadlessSlabItemStub`;
+  // every per-kind updater touches DOM. No-op in this environment.
+  if (typeof document === "undefined") return;
   switch (item.kind) {
     case "stream":
       updateStream(item, element);
@@ -2094,6 +2110,13 @@ export function renderDetachArtifact(
   item: SlabItem,
   artifactKind: ArtifactKindForDetach,
 ): { id: string; kind: ArtifactKindForDetach; element: HTMLElement } {
+  if (typeof document === "undefined") {
+    return {
+      id: `slab-artifact-${item.id}`,
+      kind: artifactKind,
+      element: createHeadlessSlabItemStub(item),
+    };
+  }
   const card = baseCard();
   card.classList.add("slab-detach-artifact", `slab-detach-${artifactKind}`);
   card.style.maxWidth = "320px";
@@ -2118,4 +2141,61 @@ export function renderDetachArtifact(
     kind: artifactKind,
     element: card,
   };
+}
+
+/**
+ * Build a minimal HTMLElement-shaped object for headless test
+ * environments where `document` is undefined. The slab-bridge holds
+ * a reference in its `mountedElements` map and the headless render
+ * adapter's `addSlabItem?.(...)` is a no-op, so the stub never
+ * needs to be a real DOM node — it only needs to look like one to
+ * TypeScript and to the slab core's defensive readers
+ * (`spec.element.style.transform = ...`,
+ * `spec.element.dataset?.slabHidden`).
+ *
+ * Mirrors the same Proxy-style stub pattern `slab.ts` uses for its
+ * `createContainerElement` headless path. Mind-mode items are
+ * pre-tagged with `slabHidden: "true"` so
+ * the slab core's `addItem` reads them as not-on-the-stage even in
+ * the unlikely event a headless renderer adapter does have an
+ * `addSlabItem` method.
+ */
+function createHeadlessSlabItemStub(item: SlabItem): HTMLElement {
+  const dataset: Record<string, string> = {};
+  if (item.mode === "mind") {
+    dataset.slabHidden = "true";
+  }
+  const stub = {
+    className: `slab-item slab-item-${item.kind}`,
+    dataset,
+    style: new Proxy(
+      {},
+      {
+        get: () => "",
+        set: () => true,
+      },
+    ) as unknown as CSSStyleDeclaration,
+    classList: {
+      add: () => {},
+      remove: () => {},
+      toggle: () => false,
+      contains: () => false,
+    },
+    appendChild: <T extends Node>(child: T): T => child,
+    removeChild: <T extends Node>(child: T): T => child,
+    replaceChildren: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    getBoundingClientRect: () => ({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+    }),
+  };
+  return stub as unknown as HTMLElement;
 }

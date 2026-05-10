@@ -1803,6 +1803,14 @@ function renderGeneric(item: SlabItem): HTMLElement {
  * Caller (slab-bridge) mounts the returned element on the slab.
  */
 export function renderSlabItem(item: SlabItem, actions: SlabItemActions): HTMLElement {
+  // Headless guard: see the same guard in apps/web/src/ui/slab-items.ts
+  // for the full rationale. Tests run the runtime → bridge →
+  // renderItem path even in Node-without-DOM; returning a stub keeps
+  // the bridge bookkeeping intact without crashing on
+  // `document.createElement`.
+  if (typeof document === "undefined") {
+    return createHeadlessSlabItemStub(item);
+  }
   // Mind-mode items (stream tokens, memory surfacing, plan steps,
   // embeddings) don't render on the plane — they live in chat and
   // in the creature's own animations. The plane is for external
@@ -1853,6 +1861,8 @@ function buildCardForKind(item: SlabItem, actions: SlabItemActions): HTMLElement
 
 /** In-place updater for payload-only changes. */
 export function updateSlabItem(item: SlabItem, element: HTMLElement): void {
+  // Headless guard — pairs with the same guard in `renderSlabItem`.
+  if (typeof document === "undefined") return;
   switch (item.kind) {
     case "stream":
       updateStream(item, element);
@@ -1897,6 +1907,13 @@ export function renderDetachArtifact(
   item: SlabItem,
   artifactKind: ArtifactKindForDetach,
 ): { id: string; kind: ArtifactKindForDetach; element: HTMLElement } {
+  if (typeof document === "undefined") {
+    return {
+      id: `slab-artifact-${item.id}`,
+      kind: artifactKind,
+      element: createHeadlessSlabItemStub(item),
+    };
+  }
   const card = baseCard();
   card.classList.add("slab-detach-artifact", `slab-detach-${artifactKind}`);
   card.style.maxWidth = "320px";
@@ -1921,4 +1938,53 @@ export function renderDetachArtifact(
     kind: artifactKind,
     element: card,
   };
+}
+
+/**
+ * Headless stub element. Mirrors apps/web/src/ui/slab-items.ts —
+ * sibling-discipline note at the top of this file mandates byte-aligned
+ * rendering across web and desktop. Same pattern: minimal HTMLElement-
+ * shaped object the slab-bridge can hold in `mountedElements` without
+ * crashing on `document.createElement`. Mind-mode items pre-tag
+ * `dataset.slabHidden = "true"` so the slab core's `addItem` reads
+ * them as not-on-the-stage.
+ */
+function createHeadlessSlabItemStub(item: SlabItem): HTMLElement {
+  const dataset: Record<string, string> = {};
+  if (item.mode === "mind") {
+    dataset.slabHidden = "true";
+  }
+  const stub = {
+    className: `slab-item slab-item-${item.kind}`,
+    dataset,
+    style: new Proxy(
+      {},
+      {
+        get: () => "",
+        set: () => true,
+      },
+    ) as unknown as CSSStyleDeclaration,
+    classList: {
+      add: () => {},
+      remove: () => {},
+      toggle: () => false,
+      contains: () => false,
+    },
+    appendChild: <T extends Node>(child: T): T => child,
+    removeChild: <T extends Node>(child: T): T => child,
+    replaceChildren: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    getBoundingClientRect: () => ({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+    }),
+  };
+  return stub as unknown as HTMLElement;
 }
