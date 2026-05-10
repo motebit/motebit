@@ -119,17 +119,16 @@ export function buildLiveBrowserElement(
   const root = document.createElement("div");
   root.className = "slab-live-browser";
   // Fill the slab stage — `stageEl` (slab.ts) is 480×300 by design;
-  // root is its single child and must adopt those dimensions so the
-  // flex-column layout below has a real height to distribute. Without
-  // this, root collapses to content-height (~40px = chrome strip),
-  // the placeholder's `flex: 1` has no remainder to grow into, the
-  // breathing-dot mark hangs out of a zero-height placeholder right
-  // under the chrome instead of centered in the body. Doctrine
-  // single-stage discipline (motebit-computer.md §"Embodiment modes
-  // — the plane renders ONE primary embodiment at a time") makes
-  // 100%/100% the right shape: the live_browser shell IS the slab's
-  // primary embodiment, so it's correct that it owns the whole
-  // stage.
+  // root adopts those dimensions so the flex-column layout below has
+  // a real height to distribute. The chrome strip takes its natural
+  // height at top; the body wrapper takes `flex: 1` and letterboxes
+  // the screencast img to fit. Without `height: 100%`, root would
+  // collapse to chrome-height and the body wrapper would have
+  // nothing to fill. Doctrine single-stage discipline
+  // (motebit-computer.md §"Embodiment modes — the plane renders ONE
+  // primary embodiment at a time") makes 100%/100% the right shape:
+  // the live_browser shell IS the slab's primary embodiment, so it
+  // owns the whole stage.
   root.style.width = "100%";
   root.style.height = "100%";
   root.style.display = "flex";
@@ -208,10 +207,39 @@ export function buildLiveBrowserElement(
   // (`liquescentia-as-substrate.md`).
   img.style.display = "none";
   img.style.opacity = "0";
-  img.style.width = "100%";
+  // Letterbox the screencast within the body wrapper. `aspectRatio`
+  // (initially 16/10; updated to the cloud Chromium's actual
+  // device ratio on first frame) drives the visible rect, and
+  // `max-width: 100%` + `max-height: 100%` constrain it to the body
+  // wrapper's flex-1 area. The img's bounding-rect equals the
+  // visible screencast rect — input-capture's coord translation
+  // (`getBoundingClientRect()` against this element) stays honest
+  // without having to compute letterbox offsets. Whatever space the
+  // letterbox leaves around the img reads as the slab's body glass
+  // — calm-software register, not a black bar.
+  img.style.maxWidth = "100%";
+  img.style.maxHeight = "100%";
   img.style.aspectRatio = "16 / 10";
   img.style.background = "rgba(255, 255, 255, 0.04)";
-  root.appendChild(img);
+
+  // Body wrapper — takes the remainder of the stage after the
+  // chrome strip + address-bar slot, and centers the screencast
+  // img within. `flex: 1 1 0` claims the remainder; `min-height: 0`
+  // lets the wrapper actually shrink so its content can fit (the
+  // default `min-height: auto` of flex items would force the
+  // wrapper to its content's intrinsic size and overflow the
+  // stage). `overflow: hidden` is a safety net against any
+  // pixel-rounding edge case.
+  const body = document.createElement("div");
+  body.className = "slab-live-browser-body";
+  body.style.flex = "1 1 0";
+  body.style.minHeight = "0";
+  body.style.display = "flex";
+  body.style.alignItems = "center";
+  body.style.justifyContent = "center";
+  body.style.overflow = "hidden";
+  body.appendChild(img);
+  root.appendChild(body);
 
   let firstFrameSeen = false;
   let lastTimestamp = 0;

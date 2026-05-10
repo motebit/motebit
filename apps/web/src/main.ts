@@ -183,13 +183,28 @@ const slashCommands = initSlashCommands(ctx, {
   openGoals: () => gatedPanels.openGoals(),
   openAgents: () => gatedPanels.openAgents(),
   toggleSlab: () => {
-    // Intent-gated invocation — the body is the show, the slab is
-    // a tool. First press mounts the live_browser shell + warms a
-    // session; subsequent presses toggle visibility on the existing
-    // slab. `invokeComputer` is idempotent so this is safe to call
-    // every press.
+    // Presence gate — NOT a toggle. Reads current visibility BEFORE
+    // any mount, then routes:
+    //   - shown → dismiss (setSlabVisible(false))
+    //   - not shown → invoke + show
+    //
+    // Naively `invokeComputer() + toggleSlabVisible()` is wrong on
+    // the first press: invokeComputer mounts the live_browser item,
+    // which makes `hasVisibleItem()` true the same frame, which
+    // makes `toggleUserVisible()` interpret "currently shown" and
+    // snap-hide the slab the user expected to summon. The gate
+    // queries `isSlabVisible()` PRE-mount so the decision reflects
+    // what the user perceived, not what the data model says
+    // microseconds later.
+    const renderer = app.getRenderer();
+    const isShown = renderer.isSlabVisible?.() ?? false;
+    if (isShown) {
+      renderer.setSlabVisible?.(false);
+      return false;
+    }
     app.invokeComputer();
-    return app.getRenderer().toggleSlabVisible?.() ?? false;
+    renderer.setSlabVisible?.(true);
+    return true;
   },
   newConversation: () => {
     app.resetConversation();
@@ -270,12 +285,20 @@ document.addEventListener("keydown", (e) => {
   }
   // Motebit Computer toggle: Option+C (Alt+C). `e.code === "KeyC"`
   // avoids the macOS `Option+C → ç` remap that would silently break
-  // matching on `e.key`. Mirrors the `/computer` slash command: an
-  // intent-gated invocation that mounts the slab on first press.
+  // matching on `e.key`. Mirrors the `/computer` slash command's
+  // presence-gate logic: read current visibility, route to dismiss
+  // or invoke+show. See `toggleSlab` callback above for why naive
+  // `invokeComputer + toggleSlabVisible` snap-hides on first press.
   if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyC") {
     e.preventDefault();
-    app.invokeComputer();
-    app.getRenderer().toggleSlabVisible?.();
+    const renderer = app.getRenderer();
+    const isShown = renderer.isSlabVisible?.() ?? false;
+    if (isShown) {
+      renderer.setSlabVisible?.(false);
+    } else {
+      app.invokeComputer();
+      renderer.setSlabVisible?.(true);
+    }
   }
 });
 

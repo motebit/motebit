@@ -171,6 +171,13 @@ export interface RenderAdapter {
    */
   toggleSlabVisible?(): boolean;
   /**
+   * Whether the slab is currently shown to the user. Truth condition
+   * for surface-side presence gates: `/computer` reads this BEFORE
+   * invoking to decide dismiss-vs-summon. Returns false when no
+   * adapter exists or the slab hasn't been initialized.
+   */
+  isSlabVisible?(): boolean;
+  /**
    * Drag-hover signal — true while the user is dragging content over
    * the slab's screen-space rect, false on drop / dragleave. The slab's
    * empty-membrane register lifts to a drop-target opacity during an

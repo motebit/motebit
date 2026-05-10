@@ -316,6 +316,26 @@ export class SlabCore {
   }
 
   /**
+   * Whether the slab is currently shown to the user. True iff the
+   * user hasn't force-hidden AND (items are present OR the user-
+   * held register is active). The truth condition for the slash-
+   * command presence gate — `/computer` reads this to decide
+   * whether to dismiss (true) or invoke + show (false).
+   *
+   * Note: under intent-gated mount, an item can appear in the data
+   * model microseconds before the user has seen the slab visually;
+   * `isUserVisible()` returns true at that moment, so callers that
+   * just mounted an item should not query this in the same frame
+   * unless they want "is the slab plumbed" rather than "has the
+   * user seen the slab." For the slash-command gate, querying
+   * BEFORE invokeComputer is correct: it reflects the pre-press
+   * state.
+   */
+  isUserVisible(): boolean {
+    return !this.userHeldHidden && (this.hasVisibleItem() || this.userHeldVisible);
+  }
+
+  /**
    * Flip the user's visibility intent and return the new visible
    * state. The toggle inspects whether the slab is currently shown
    * to the user — items present (and not force-hidden), or the

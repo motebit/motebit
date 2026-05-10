@@ -153,6 +153,10 @@ export class SpatialSlabManager {
     return this.core.toggleUserVisible();
   }
 
+  isUserVisible(): boolean {
+    return this.core.isUserVisible();
+  }
+
   addItem(spec: SlabItemSpec): SlabItemHandle {
     // `slabHidden` carries the same meaning as on desktop: mind-mode
     // items (stream tokens, embeddings, memory surfacing) are tracked

@@ -247,6 +247,10 @@ export class ThreeJSAdapter implements RenderAdapter {
     return this.slab?.toggleUserVisible() ?? false;
   }
 
+  isSlabVisible(): boolean {
+    return this.slab?.isUserVisible() ?? false;
+  }
+
   /**
    * Forward the drag-hover signal from app drop handlers to the slab
    * core. Slab honesty work: the membrane lifts to a drop-target
@@ -732,6 +736,10 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
 
   toggleSlabVisible(): boolean {
     return this.slab?.toggleUserVisible() ?? false;
+  }
+
+  isSlabVisible(): boolean {
+    return this.slab?.isUserVisible() ?? false;
   }
 
   dispose(): void {

@@ -138,7 +138,7 @@ export interface RenderCoBrowseChromeOpts {
    * state is `user`, the URL input renders this as its `value` so
    * the user sees what page they're on (browser convention — Chrome,
    * Safari, Firefox always show the current URL in the address bar).
-   * Null/undefined → input renders empty with the "type a URL"
+   * Null/undefined → input renders empty with the "Anywhere."
    * placeholder. Wired by the surface from
    * `runtime.setBrowserSessionProvider` / `_currentBrowserUrl`.
    */
@@ -490,7 +490,7 @@ function buildUrlInput(forwardEvent: ForwardEventFn, currentUrl: string | null):
   input.spellcheck = false;
   input.autocomplete = "off";
   input.autocapitalize = "off";
-  input.placeholder = "type a URL";
+  input.placeholder = "Anywhere.";
   // Pre-populate with the current URL — Chrome / Safari / Firefox
   // all show the current URL in the address bar by default; users
   // expect to see where they are. Edit-to-navigate replaces the
@@ -536,7 +536,17 @@ function buildUrlInput(forwardEvent: ForwardEventFn, currentUrl: string | null):
         error: err instanceof Error ? err.message : String(err),
       });
     });
-    input.value = "";
+    // Apple-grade: keep the typed value visible through submission,
+    // release focus so the editing register ends. The chrome's
+    // natural re-render on `_currentBrowserUrl` update refines the
+    // displayed value to its canonical form (typed `google.com` →
+    // resolved `https://google.com/`) — same transition Safari
+    // shows. Clearing the input synchronously here used to flash
+    // the placeholder ("Anywhere.") between Enter and resolution
+    // because the navigate result is async; the user perceived the
+    // bar going blank then their URL coming back. Blur ends the
+    // edit register without the flash.
+    input.blur();
   });
   // Same propagation discipline for the other typing events.
   input.addEventListener("keypress", (e) => e.stopPropagation());

@@ -134,10 +134,14 @@ const SLAB_CORNER_RADIUS = Math.min(SLAB_WIDTH, SLAB_HEIGHT) * 0.28;
  *
  * The slab is built as a front pane + back pane separated by this
  * thickness; the open volume between them is where embodiment
- * content lives (see `STAGE_Z_OFFSET_FROM_BACK`). Step 3 of the
- * volume arc renders content as a back-pane texture so it refracts
- * through the front; step 2 (this) gets the geometry depth in place
- * first so the perceptual register changes.
+ * content lives — both the WebGL `screenMesh` (screencast pixels)
+ * and the CSS3D `stageAnchor` (chrome, address-bar slot,
+ * input-capture geometry) co-locate at the volume's center plane
+ * (z=0), composing as one window plane suspended in the glass.
+ * Step 3 of the volume arc renders content as a back-pane texture
+ * so it refracts through the front; step 2 (this) gets the
+ * geometry depth in place first so the perceptual register
+ * changes.
  */
 const SLAB_THICKNESS = 0.04;
 
@@ -160,16 +164,48 @@ const SLAB_THICKNESS = 0.04;
 const STAGE_PIXEL_WIDTH = 480;
 const STAGE_PIXEL_TO_WORLD = SLAB_WIDTH / STAGE_PIXEL_WIDTH;
 
+// Stage z-position is `0` — same plane as the WebGL screen mesh.
+// In `virtual_browser` mode the chrome (URL bar, nav arrows) and
+// the content (screencast) are ONE browser window; they belong on
+// one plane. Earlier designs split them across z-depths (chrome at
+// front face, content at volume center) which produced a visible
+// depth split at angles — chrome read as floating in front of the
+// glass while content read as recessed into the volume, fragmenting
+// a unified concept into two registers. CSS3DRenderer composites
+// above the WebGL canvas regardless of 3D position, so chrome still
+// visually layers above content via DOM stacking; the only thing
+// that changed is the geometry, which now agrees with the concept:
+// one window plane, suspended in the volume per liquescentia-as-
+// substrate's "pixels embed in glass volume" principle. From any
+// angle, chrome and content read as the same surface.
+
 /**
- * Stage z-position relative to the back pane. Content sits 1mm in
- * front of the back glass — close enough to read as "embedded
- * against the rear surface" rather than floating in the middle of
- * the volume, and far enough that pinch deformation on the front
- * pane (which arcs forward toward the camera) doesn't intersect
- * the stage's CSS3D plane. The full stage z in slab-local space is
- * `(-SLAB_THICKNESS / 2) + STAGE_Z_OFFSET_FROM_BACK`.
+ * Chrome region — top fraction of the slab reserved for the
+ * `live_browser` shell's chrome strip (URL bar + nav arrows). The
+ * WebGL `screenMesh` occupies only the BODY region below this so
+ * page content never renders behind chrome. Closes the click-
+ * stealing bug where chrome's compositor-stacking obscured AND
+ * intercepted clicks for the top portion of the page.
+ *
+ * 0.18 derives from the chrome strip's natural CSS-pixel height
+ * (~54px in `cobrowse-chrome.ts`'s URL bar + margins) divided by
+ * the stage's pixel height (~300). The alignment between the
+ * WebGL body-region top edge and the DOM chrome strip's bottom
+ * edge is visual, not structurally enforced — if the chrome strip
+ * height drifts (added controls, taller font), update this
+ * constant to match. Drift is visible: chrome would either spill
+ * onto body region (overlap returns) or leave a sliver of empty
+ * glass between chrome and screencast.
  */
-const STAGE_Z_OFFSET_FROM_BACK = 0.001;
+const CHROME_REGION_FRACTION = 0.18;
+const BODY_REGION_HEIGHT = SLAB_HEIGHT * (1 - CHROME_REGION_FRACTION);
+/**
+ * Body region center y in slab-local coords — shifted down from
+ * slab center by half the chrome region's height. Body region top
+ * edge sits at slab-local y = +SLAB_HEIGHT/2 - chrome_height,
+ * bottom edge at y = -SLAB_HEIGHT/2 (the slab's bottom).
+ */
+const BODY_REGION_CENTER_Y = -SLAB_HEIGHT * (CHROME_REGION_FRACTION / 2);
 
 // ── Renderer-side per-item state ─────────────────────────────────────
 
@@ -503,22 +539,35 @@ export class SlabManager {
     this.sideWallMesh.visible = false;
     this.group.add(this.sideWallMesh);
 
-    // Screen mesh — third meniscus plane suspended in the slab
-    // volume, sized edge-to-edge with the front/back panes so its
-    // silhouette is the same droplet curve.
+    // Screen mesh — meniscus plane occupying the slab's BODY region
+    // only. Page content lives below the chrome region; the chrome
+    // strip (CSS3D, in `stageEl`) occupies the top of the slab. The
+    // mesh's top edge is FLAT (where chrome ends); its bottom
+    // corners are rounded to match the slab's silhouette curvature.
+    // Chrome region above the mesh shows empty glass (front + back
+    // panes only), giving the chrome a clean translucent backdrop
+    // and ensuring page pixels never render behind chrome.
     //
-    // **Centered (z=0), suspended in fluid.** The earlier "press
-    // against the back pane" placement (z = -SLAB_THICKNESS/2 +
-    // STAGE_Z_OFFSET_FROM_BACK) read as "poster behind glass" — a
-    // Model A display register fighting the slab's Model B
-    // liquescentia substrate. liquescentia-as-substrate.md says
-    // pixels embed in the glass volume, and the creature's analog
-    // (eyes suspended in the droplet body, not pressed against the
-    // back of the skull) argues for centered. Symmetric optical
-    // register too: 2cm of glass from front + 2cm from back means
-    // similar Beer-Lambert absorption from any orbit angle, the
-    // slab reading as one uniform glass-volume-with-content rather
-    // than a wall-mounted display.
+    // **Suspended in fluid (z=0).** The earlier "press against the
+    // back pane" placement read as "poster behind glass" — a Model
+    // A display register fighting the slab's Model B liquescentia
+    // substrate. liquescentia-as-substrate.md says pixels embed in
+    // the glass volume, and the creature's analog (eyes suspended
+    // in the droplet body, not pressed against the back of the
+    // skull) argues for centered. Symmetric optical register too:
+    // 2cm of glass from front + 2cm from back means similar
+    // Beer-Lambert absorption from any orbit angle, the slab
+    // reading as one uniform glass-volume-with-content rather than
+    // a wall-mounted display.
+    //
+    // **Body region (y-offset).** Shifted down from slab center by
+    // `BODY_REGION_CENTER_Y` so the mesh's top edge aligns with the
+    // chrome strip's bottom edge. The body-meniscus geometry has
+    // flat top + rounded bottom corners; the slab's full silhouette
+    // is the union of (chrome region: stage's rounded top corners
+    // via `borderRadius` on `stageEl`) + (body region: this mesh's
+    // rounded bottom corners). Closes the click-stealing bug — page
+    // content cannot render in the chrome region anymore.
     //
     // **DoubleSide.** The back face shows the same texture mirrored
     // (text reads backward from behind the slab) — calm-software
@@ -531,7 +580,7 @@ export class SlabManager {
     // value — environment lighting shouldn't tint a display
     // surface. Initial state hidden + no map; populated by
     // `setScreencastImage(...)` when a live screencast is active.
-    const screenGeo = createMeniscusPlaneGeometry(SLAB_WIDTH, SLAB_HEIGHT, 16, 16);
+    const screenGeo = createBodyMeniscusGeometry(SLAB_WIDTH, BODY_REGION_HEIGHT, 16, 16);
     this.screenMaterial = new THREE.MeshBasicMaterial({
       // The screencast JPEG is opaque — no alpha channel. Marking the
       // material `transparent: true` was a v1 mistake: Three.js's
@@ -554,7 +603,7 @@ export class SlabManager {
       side: THREE.DoubleSide,
     });
     this.screenMesh = new THREE.Mesh(screenGeo, this.screenMaterial);
-    this.screenMesh.position.z = 0;
+    this.screenMesh.position.set(0, BODY_REGION_CENTER_Y, 0);
     this.screenMesh.visible = false;
     this.screenMesh.name = "slab-screen";
     this.group.add(this.screenMesh);
@@ -568,24 +617,10 @@ export class SlabManager {
     this.stageAnchor = new CSS3DObject(this.stageEl);
     this.stageEl.style.pointerEvents = "none";
 
-    // Empty register: the slab's primary embodiment shell (the
-    // `live_browser` item mounted on `WebApp.bootstrap`) IS the
-    // empty state. The shell's chrome strip + breathing pre-frame
-    // placeholder render here. There is no slab-level ghost
-    // affordance — that would be a second empty register stitched
-    // onto the shell. Doctrine: `always-already-slab.md`
-    // §"Affirmative shape" — one slab in two registers
-    // (READY = shell-empty-body; LIVE = shell-with-screencast).
-    // Embed the stage inside the slab's glass volume — 1mm in front
-    // of the back pane (slab-local z = -SLAB_THICKNESS/2 + offset).
-    // Reads as "content rests against the back of the slab and is
-    // viewed *through* the front glass," parallel to how the
-    // creature's eyes sit inside the droplet and are viewed through
-    // the front of the sphere. Step 3 of the volume arc makes that
-    // viewing literally refractive (canvas-textured back pane); for
-    // step 2 the registry depth alone is the visible win — content
-    // recedes into the volume instead of floating on top of paper.
-    this.stageAnchor.position.set(0, 0, -SLAB_THICKNESS / 2 + STAGE_Z_OFFSET_FROM_BACK);
+    // Stage at z=0, same plane as the WebGL screen mesh. Chrome and
+    // content compose as ONE window plane suspended in the volume.
+    // See the stage-position comment block above for the rationale.
+    this.stageAnchor.position.set(0, 0, 0);
     // Pixel→world scale so the 480×300 CSS-pixel stage maps to the
     // plane's 0.54×0.334m extent edge-to-edge. Without this, CSS3D
     // would render 480 world units across — the stage would be a
@@ -779,6 +814,10 @@ export class SlabManager {
 
   toggleUserVisible(): boolean {
     return this.core.toggleUserVisible();
+  }
+
+  isUserVisible(): boolean {
+    return this.core.isUserVisible();
   }
 
   /**
@@ -1243,6 +1282,67 @@ function createMeniscusPlaneGeometry(
     if (absX <= cx || absY <= cy) continue;
     const ax = Math.sign(x) * cx;
     const ay = Math.sign(y) * cy;
+    const dx = x - ax;
+    const dy = y - ay;
+    const d = Math.hypot(dx, dy);
+    if (d === 0) continue;
+    if (d > r) {
+      const scale = r / d;
+      arr[i] = ax + dx * scale;
+      arr[i + 1] = ay + dy * scale;
+    }
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Body-region variant of the meniscus plane — flat top edge,
+ * rounded BOTTOM corners only. Used by the screen mesh so the
+ * screencast occupies the slab's body region (below chrome) while
+ * its bottom-corner curvature still matches the slab's silhouette.
+ *
+ * Top corners are intentionally squared because the body region's
+ * top edge sits internally inside the slab volume (where chrome
+ * ends); above it is the chrome region rendered via CSS3D, and
+ * the slab's actual rounded TOP corners are part of the front/back
+ * pane silhouette, not part of the screen mesh. Squaring the top
+ * corners keeps the screencast's full width visible right up to
+ * the chrome's bottom edge.
+ *
+ * Bottom corner radius matches `SLAB_CORNER_RADIUS` so the screen
+ * mesh's bottom edge traces the same curve as the slab's front
+ * and back panes — no visible offset between mesh silhouette and
+ * slab silhouette at the bottom.
+ */
+function createBodyMeniscusGeometry(
+  width: number,
+  height: number,
+  segX: number,
+  segY: number,
+): THREE.PlaneGeometry {
+  const geo = new THREE.PlaneGeometry(width, height, segX, segY);
+  const pos = geo.attributes.position;
+  if (pos == null) return geo;
+
+  const r = SLAB_CORNER_RADIUS;
+  const halfW = width / 2;
+  const halfH = height / 2;
+  const cx = halfW - r;
+
+  const arr = pos.array as Float32Array;
+  for (let i = 0; i < arr.length; i += 3) {
+    const x = arr[i]!;
+    const y = arr[i + 1]!;
+    // Round only the BOTTOM corners (y at or below -(halfH - r)).
+    // Top corners stay squared — the body region's top edge is the
+    // chrome boundary, not part of the slab's outer silhouette.
+    if (y >= -(halfH - r)) continue;
+    const absX = Math.abs(x);
+    if (absX <= cx) continue;
+    const ax = Math.sign(x) * cx;
+    const ay = -(halfH - r);
     const dx = x - ax;
     const dy = y - ay;
     const d = Math.hypot(dx, dy);

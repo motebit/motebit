@@ -362,8 +362,12 @@ describe("renderCoBrowseChrome — user state input wiring", () => {
     // Microtask flush — forwardEvent is async.
     await Promise.resolve();
     expect(events).toEqual([{ kind: "navigate", url: "https://example.com" }]);
-    // Input clears after submit — calm chrome.
-    expect(input.value).toBe("");
+    // Apple-grade: typed value persists through submission. Clearing
+    // synchronously flashed the placeholder between Enter and the
+    // async navigate result; blur() ends the edit register without
+    // the flash, and the chrome's natural re-render on
+    // `_currentBrowserUrl` update refines to the canonical URL.
+    expect(input.value).toBe("example.com");
   });
 
   it("empty URL input is a no-op on Enter", async () => {
