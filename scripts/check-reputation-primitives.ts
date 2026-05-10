@@ -126,7 +126,7 @@ function scan(): Violation[] {
           violations.push({
             file: rel,
             detail:
-              "inline reputation scoring — file references trust-record success/failure, interaction volume, AND recency decay. Import `computeReputationScore` from `@motebit/policy` (basic formula) or `computeServiceReputation` from `@motebit/market` (receipt-history composite) instead.",
+              "inline reputation scoring — file references trust-record success/failure, interaction volume, AND recency decay. Import `computeReputationScore` from `@motebit/policy` (basic formula) or `computeServiceReputation` from `@motebit/market` (composite over `ReputationSample[]` — `{submitted_at, completed_at, status}` shape; project this from receipts or settlements at the consumer) instead.",
           });
         }
       }
@@ -153,7 +153,7 @@ function main(): void {
     console.error(`    ${v.detail}\n`);
   }
   console.error(
-    "Fix: replace the inline formula with `computeReputationScore(record)` from `@motebit/policy` (if you only have an AgentTrustRecord) or `computeServiceReputation(record, receipts, ...)` from `@motebit/market` (if you also have receipt history).",
+    "Fix: replace the inline formula with `computeReputationScore(record)` from `@motebit/policy` (if you only have an AgentTrustRecord) or `computeServiceReputation(motebitId, samples, record)` from `@motebit/market` (if you also have execution history — `samples: ReputationSample[]` carries only `{submitted_at, completed_at, status}`).",
   );
   console.error(
     "If the file legitimately needs inline scoring that can't be expressed via the canonical formulas, add it to ALLOWLIST in scripts/check-reputation-primitives.ts with the reason + follow-up pass named.",

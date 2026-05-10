@@ -14,8 +14,9 @@ import {
 } from "@motebit/encryption";
 import type { VerifiableCredential } from "@motebit/encryption";
 import { asMotebitId, AgentTrustLevel } from "@motebit/sdk";
-import type { ExecutionReceipt, MotebitId, DeviceId, AgentTrustRecord } from "@motebit/sdk";
+import type { AgentTrustRecord } from "@motebit/sdk";
 import { computeServiceReputation } from "@motebit/market";
+import type { ReputationSample } from "@motebit/market";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { Hono } from "hono";
@@ -85,21 +86,16 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
       )
       .all(motebitId) as Array<{ latency_ms: number; recorded_at: number }>;
 
-    // Build minimal ExecutionReceipt[] from settlement + latency data
-    const receipts: ExecutionReceipt[] = settlements.map((s, i) => ({
-      task_id: s.task_id,
-      motebit_id: s.motebit_id as unknown as MotebitId,
-      device_id: "" as unknown as DeviceId,
+    // Project the minimal reputation-input shape directly from
+    // settlements + latency. Pre-refactor, this site synthesized full
+    // ExecutionReceipt objects with 10 fake/sentinel fields (including
+    // `device_id: "" as unknown as DeviceId`) just to satisfy the old
+    // wider parameter type — a category error the new `ReputationSample`
+    // shape eliminates. Take what the algorithm consumes, nothing more.
+    const samples: ReputationSample[] = settlements.map((s, i) => ({
       submitted_at: s.settled_at - (latencies[i]?.latency_ms ?? 5000),
       completed_at: s.settled_at,
       status: s.status as "completed" | "failed" | "denied",
-      result: "",
-      tools_used: [],
-      memories_formed: 0,
-      prompt_hash: "",
-      result_hash: "",
-      suite: "motebit-jcs-ed25519-b64-v1",
-      signature: "",
     }));
 
     // Query trust record
@@ -123,7 +119,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
 
     // Compute reputation using the market package's proper algorithm
     // (Beta-binomial prior, coefficient-of-variation consistency, exponential recency decay)
-    const reputation = computeServiceReputation(motebitId, receipts, trustRecord);
+    const reputation = computeServiceReputation(motebitId, samples, trustRecord);
 
     // Look up agent's public key for did:key subject
     const identity = await identityManager.load(motebitId);

@@ -54,7 +54,7 @@ export type {
 export { allocateBudget, allocateCollaborativeBudget, estimateCost } from "./budget.js";
 export type { AllocationRequest } from "./budget.js";
 export { computeServiceReputation } from "./reputation.js";
-export type { ReputationSnapshot } from "./reputation.js";
+export type { ReputationSnapshot, ReputationSample } from "./reputation.js";
 export {
   settleOnReceipt,
   validateAllocation,

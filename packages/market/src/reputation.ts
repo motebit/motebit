@@ -1,4 +1,4 @@
-import type { AgentTrustRecord, ExecutionReceipt, MotebitId } from "@motebit/protocol";
+import type { AgentTrustRecord, MotebitId } from "@motebit/protocol";
 import { trustLevelToScore } from "@motebit/semiring";
 
 export interface ReputationSnapshot {
@@ -15,12 +15,36 @@ export interface ReputationSnapshot {
   sample_size: number;
 }
 
+/**
+ * The minimal shape `computeServiceReputation` consumes — three fields
+ * out of `ExecutionReceipt`'s thirteen. Defining the algorithm's input
+ * shape explicitly removes the prior anti-pattern where callers
+ * synthesized fake-shape `ExecutionReceipt[]` (with `device_id: "" as
+ * unknown as DeviceId` and `signature: ""` sentinels) just to satisfy
+ * a too-wide type. Take what you consume; nothing more.
+ *
+ * Construction sites build this directly from settlement summaries or
+ * project from real receipts — either way, the type makes the
+ * algorithm's data dependency explicit and the brand-empty bypass
+ * impossible.
+ *
+ * `status` mirrors `ExecutionReceipt.status` (`"completed" | "failed"
+ * | "denied"`) so projections from real receipts assign without a
+ * cast, and synthetic constructors fail at compile time if they
+ * widen the discriminator.
+ */
+export interface ReputationSample {
+  readonly submitted_at: number;
+  readonly completed_at: number;
+  readonly status: "completed" | "failed" | "denied";
+}
+
 const DEFAULT_TIME_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-/** Pure: historical receipts + trust → reputation snapshot */
+/** Pure: historical samples + trust → reputation snapshot */
 export function computeServiceReputation(
   motebitId: MotebitId,
-  receipts: ExecutionReceipt[],
+  samples: ReputationSample[],
   trustRecord: AgentTrustRecord | null,
   timeWindowMs?: number,
 ): ReputationSnapshot {
@@ -29,7 +53,7 @@ export function computeServiceReputation(
   const cutoff = now - window;
 
   // Filter to window
-  const recent = receipts.filter((r) => r.completed_at >= cutoff);
+  const recent = samples.filter((r) => r.completed_at >= cutoff);
 
   if (recent.length === 0) {
     const trustScore = trustRecord ? trustLevelToScore(trustRecord.trust_level) : 0.1;

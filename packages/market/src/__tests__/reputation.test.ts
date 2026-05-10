@@ -1,26 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { computeServiceReputation } from "../reputation.js";
+import { computeServiceReputation, type ReputationSample } from "../reputation.js";
 import { AgentTrustLevel, asMotebitId } from "@motebit/protocol";
-import type { AgentTrustRecord, ExecutionReceipt } from "@motebit/protocol";
+import type { AgentTrustRecord } from "@motebit/protocol";
 
 const MID = asMotebitId("agent-1");
 
-function makeReceipt(overrides: Partial<ExecutionReceipt> = {}): ExecutionReceipt {
+function makeSample(overrides: Partial<ReputationSample> = {}): ReputationSample {
   const now = Date.now();
   return {
-    task_id: "task-1",
-    motebit_id: "agent-1",
-    device_id: "device-1",
     submitted_at: now - 2000,
     completed_at: now,
     status: "completed",
-    result: "done",
-    tools_used: ["web_search"],
-    memories_formed: 0,
-    prompt_hash: "abc",
-    result_hash: "def",
-    suite: "motebit-jcs-ed25519-b64-v1",
-    signature: "sig-123",
     ...overrides,
   };
 }
@@ -39,7 +29,7 @@ function makeTrust(overrides: Partial<AgentTrustRecord> = {}): AgentTrustRecord 
 
 describe("computeServiceReputation", () => {
   it("computes reputation from successful receipts", () => {
-    const receipts = Array.from({ length: 10 }, () => makeReceipt());
+    const receipts = Array.from({ length: 10 }, () => makeSample());
     const rep = computeServiceReputation(MID, receipts, makeTrust());
     expect(rep.composite).toBeGreaterThan(0);
     expect(rep.composite).toBeLessThanOrEqual(1);
@@ -49,9 +39,9 @@ describe("computeServiceReputation", () => {
 
   it("penalizes failures in reliability", () => {
     const receipts = [
-      makeReceipt(),
-      makeReceipt({ status: "failed" }),
-      makeReceipt({ status: "failed" }),
+      makeSample(),
+      makeSample({ status: "failed" }),
+      makeSample({ status: "failed" }),
     ];
     const rep = computeServiceReputation(MID, receipts, makeTrust());
     expect(rep.sub_scores.reliability).toBeCloseTo(2 / 5); // Beta-binomial: (1+1)/(2+3)
@@ -71,8 +61,8 @@ describe("computeServiceReputation", () => {
   });
 
   it("filters receipts by time window", () => {
-    const old = makeReceipt({ completed_at: Date.now() - 100 * 24 * 60 * 60 * 1000 });
-    const recent = makeReceipt();
+    const old = makeSample({ completed_at: Date.now() - 100 * 24 * 60 * 60 * 1000 });
+    const recent = makeSample();
     const rep = computeServiceReputation(MID, [old, recent], makeTrust(), 7 * 24 * 60 * 60 * 1000);
     expect(rep.sample_size).toBe(1); // only recent
   });
@@ -80,21 +70,21 @@ describe("computeServiceReputation", () => {
   it("reflects trust level in sub_scores", () => {
     const rep = computeServiceReputation(
       MID,
-      [makeReceipt()],
+      [makeSample()],
       makeTrust({ trust_level: AgentTrustLevel.Trusted }),
     );
     expect(rep.sub_scores.trust_level).toBe(0.9);
   });
 
   it("high recency for very recent receipts", () => {
-    const rep = computeServiceReputation(MID, [makeReceipt()], makeTrust());
+    const rep = computeServiceReputation(MID, [makeSample()], makeTrust());
     expect(rep.sub_scores.recency).toBeGreaterThan(0.9);
   });
 
   it("consistency is high for uniform durations", () => {
     const now = Date.now();
     const receipts = Array.from({ length: 5 }, () =>
-      makeReceipt({ submitted_at: now - 2000, completed_at: now }),
+      makeSample({ submitted_at: now - 2000, completed_at: now }),
     );
     const rep = computeServiceReputation(MID, receipts, makeTrust());
     expect(rep.sub_scores.consistency).toBeGreaterThan(0.9);
@@ -103,7 +93,7 @@ describe("computeServiceReputation", () => {
   it("consistency defaults to 0.5 when fewer than 2 valid durations", () => {
     const now = Date.now();
     // Single receipt → only 1 duration → consistency stays at default 0.5
-    const receipts = [makeReceipt({ submitted_at: now - 2000, completed_at: now })];
+    const receipts = [makeSample({ submitted_at: now - 2000, completed_at: now })];
     const rep = computeServiceReputation(MID, receipts, makeTrust());
     expect(rep.sub_scores.consistency).toBe(0.5);
   });
@@ -111,10 +101,10 @@ describe("computeServiceReputation", () => {
   it("consistency is low for highly variable durations", () => {
     const now = Date.now();
     const receipts = [
-      makeReceipt({ submitted_at: now - 1000, completed_at: now }), // 1s
-      makeReceipt({ submitted_at: now - 20000, completed_at: now }), // 20s
-      makeReceipt({ submitted_at: now - 500, completed_at: now }), // 0.5s
-      makeReceipt({ submitted_at: now - 30000, completed_at: now }), // 30s
+      makeSample({ submitted_at: now - 1000, completed_at: now }), // 1s
+      makeSample({ submitted_at: now - 20000, completed_at: now }), // 20s
+      makeSample({ submitted_at: now - 500, completed_at: now }), // 0.5s
+      makeSample({ submitted_at: now - 30000, completed_at: now }), // 30s
     ];
     const rep = computeServiceReputation(MID, receipts, makeTrust());
     // High CV (coefficient of variation) → low consistency
@@ -125,8 +115,8 @@ describe("computeServiceReputation", () => {
     const now = Date.now();
     // Receipts where completed_at == submitted_at → no valid duration → avgDuration = 10000 default
     const receipts = [
-      makeReceipt({ submitted_at: now, completed_at: now }),
-      makeReceipt({ submitted_at: now, completed_at: now }),
+      makeSample({ submitted_at: now, completed_at: now }),
+      makeSample({ submitted_at: now, completed_at: now }),
     ];
     const rep = computeServiceReputation(MID, receipts, makeTrust());
     // avgDuration = 10000 → speed = 1 - 10000 / (10000 + 5000) = 1/3
@@ -136,8 +126,8 @@ describe("computeServiceReputation", () => {
   it("handles receipts where completed_at equals submitted_at (zero duration filtered)", () => {
     const now = Date.now();
     const receipts = [
-      makeReceipt({ submitted_at: now, completed_at: now }), // 0 → filtered out
-      makeReceipt({ submitted_at: now - 3000, completed_at: now }), // 3s → valid
+      makeSample({ submitted_at: now, completed_at: now }), // 0 → filtered out
+      makeSample({ submitted_at: now - 3000, completed_at: now }), // 3s → valid
     ];
     const rep = computeServiceReputation(MID, receipts, makeTrust());
     // Only the 3s receipt contributes to speed
@@ -145,7 +135,7 @@ describe("computeServiceReputation", () => {
   });
 
   it("uses 0.1 trust when trustRecord is null and recent receipts exist", () => {
-    const rep = computeServiceReputation(MID, [makeReceipt()], null);
+    const rep = computeServiceReputation(MID, [makeSample()], null);
     expect(rep.sub_scores.trust_level).toBe(0.1);
     expect(rep.sample_size).toBe(1);
   });
