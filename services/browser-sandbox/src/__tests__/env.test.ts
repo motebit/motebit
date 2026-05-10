@@ -16,9 +16,13 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { loadConfig } from "../env.js";
 
 const STRONG_TOKEN = "x".repeat(32);
+// 32-byte Ed25519 public key in hex = 64 chars. Real-shape value is
+// crucial — `loadConfig()` rejects malformed pubkeys.
+const STRONG_RELAY_PUBKEY = "a".repeat(64);
 
 const CONFIG_KEYS = [
   "MOTEBIT_API_TOKEN",
+  "MOTEBIT_TRUSTED_RELAY_PUBKEY",
   "MOTEBIT_PORT",
   "BROWSER_SANDBOX_MAX_SESSIONS",
   "BROWSER_SANDBOX_IDLE_MS",
@@ -48,25 +52,52 @@ describe("loadConfig", () => {
     }
   });
 
-  describe("MOTEBIT_API_TOKEN validation", () => {
-    it("throws when the token env var is absent", () => {
-      expect(() => loadConfig()).toThrowError(/MOTEBIT_API_TOKEN/);
+  describe("auth path validation (MOTEBIT_API_TOKEN | MOTEBIT_TRUSTED_RELAY_PUBKEY)", () => {
+    it("throws when neither auth path is set", () => {
+      expect(() => loadConfig()).toThrowError(/at least one of/i);
     });
 
-    it("throws when the token is empty", () => {
+    it("throws when both auth paths are empty", () => {
       process.env["MOTEBIT_API_TOKEN"] = "";
-      expect(() => loadConfig()).toThrowError(/MOTEBIT_API_TOKEN/);
+      process.env["MOTEBIT_TRUSTED_RELAY_PUBKEY"] = "";
+      expect(() => loadConfig()).toThrowError(/at least one of/i);
     });
 
-    it("throws when the token is shorter than 16 chars", () => {
+    it("throws when MOTEBIT_API_TOKEN is set but shorter than 16 chars", () => {
       process.env["MOTEBIT_API_TOKEN"] = "x".repeat(15);
-      expect(() => loadConfig()).toThrowError(/>= 16 chars/);
+      expect(() => loadConfig()).toThrowError(/shorter than 16 chars/);
     });
 
-    it("accepts a 16-char token (boundary)", () => {
+    it("throws when MOTEBIT_TRUSTED_RELAY_PUBKEY is set but malformed", () => {
+      process.env["MOTEBIT_TRUSTED_RELAY_PUBKEY"] = "not-hex";
+      expect(() => loadConfig()).toThrowError(/64-char hex/);
+    });
+
+    it("accepts MOTEBIT_API_TOKEN alone (legacy single-tenant)", () => {
       process.env["MOTEBIT_API_TOKEN"] = "x".repeat(16);
       const config = loadConfig();
       expect(config.apiToken).toBe("x".repeat(16));
+      expect(config.trustedRelayPublicKeyHex).toBeNull();
+    });
+
+    it("accepts MOTEBIT_TRUSTED_RELAY_PUBKEY alone (federation-grade)", () => {
+      process.env["MOTEBIT_TRUSTED_RELAY_PUBKEY"] = STRONG_RELAY_PUBKEY;
+      const config = loadConfig();
+      expect(config.apiToken).toBeNull();
+      expect(config.trustedRelayPublicKeyHex).toBe(STRONG_RELAY_PUBKEY);
+    });
+
+    it("accepts both — dualAuth transition", () => {
+      process.env["MOTEBIT_API_TOKEN"] = STRONG_TOKEN;
+      process.env["MOTEBIT_TRUSTED_RELAY_PUBKEY"] = STRONG_RELAY_PUBKEY;
+      const config = loadConfig();
+      expect(config.apiToken).toBe(STRONG_TOKEN);
+      expect(config.trustedRelayPublicKeyHex).toBe(STRONG_RELAY_PUBKEY);
+    });
+
+    it("normalizes pubkey hex to lowercase", () => {
+      process.env["MOTEBIT_TRUSTED_RELAY_PUBKEY"] = "A".repeat(64);
+      expect(loadConfig().trustedRelayPublicKeyHex).toBe("a".repeat(64));
     });
   });
 

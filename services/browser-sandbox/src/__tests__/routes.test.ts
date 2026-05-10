@@ -39,6 +39,7 @@ const TEST_TOKEN = "test-token-1234567890abcdef";
 
 const TEST_CONFIG: BrowserSandboxConfig = {
   apiToken: TEST_TOKEN,
+  trustedRelayPublicKeyHex: null,
   port: 0,
   maxConcurrentSessions: 4,
   sessionIdleMs: 60_000,

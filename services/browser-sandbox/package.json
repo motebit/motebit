@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.19.12",
+    "@motebit/crypto": "workspace:*",
     "@motebit/protocol": "workspace:*",
     "hono": "^4.6.0",
     "playwright-core": "^1.49.0",

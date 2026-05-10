@@ -1,17 +1,27 @@
 /**
  * Bearer-token verification middleware for the browser-sandbox.
  *
- * v1 model: a single shared API token (`MOTEBIT_API_TOKEN` env var)
- * gates every endpoint. The relay holds the same token and signs
- * dispatcher-bound bearer headers for the motebit; the service
- * validates constant-time. Same shape as `services/research`,
- * `services/code-review`, and the relay's static-master-token.
+ * v1 model (now legacy): a single shared API token (`MOTEBIT_API_TOKEN`
+ * env var) gated every endpoint. v1.5 (federation graduation): adds
+ * the relay-mediated `aud`-bound signed-token path. Both can be
+ * enabled simultaneously (dualAuth pattern, mirroring the relay's own
+ * `dualAuth` for `task:submit` / `account:*`).
  *
- * Federation graduation path: when a second operator runs a
- * browser-sandbox, swap the static check for `aud`-bound signed
- * tokens (the relay's `bearerAuth({ token })` graduates to
- * `verifySignedTokenForDevice` with `aud: "browser-sandbox"`). The
- * route shape stays identical — only this file changes.
+ * The relay-signed path:
+ *   1. Motebit fetches a short-lived sandbox token from
+ *      `POST /api/v1/browser-sandbox/token` on the relay
+ *      (`services/relay/src/browser-sandbox.ts:mintBrowserSandboxToken`).
+ *   2. Token is signed by the RELAY's identity key and audience-bound
+ *      to `BROWSER_SANDBOX_AUDIENCE` (`@motebit/protocol`).
+ *   3. Motebit attaches it as `Authorization: Bearer …` on every
+ *      browser-sandbox request.
+ *   4. This service verifies the signature against the pinned
+ *      `MOTEBIT_TRUSTED_RELAY_PUBKEY` env var, checks `aud` + `exp` +
+ *      `suite`, and extracts `mid` for audit attribution.
+ *
+ * Single trust anchor (one pinned relay pubkey) means browser-sandbox
+ * never needs any motebit's identity directly. Same broker shape as
+ * `THE_ACTOR_PRINCIPLE.md`.
  *
  * On a missing or wrong header the middleware emits a
  * `ServiceErrorBody` with `reason: "permission_denied"` so the
@@ -20,6 +30,8 @@
  */
 
 import type { Context, MiddlewareHandler } from "hono";
+import { verifySignedToken } from "@motebit/crypto";
+import { BROWSER_SANDBOX_AUDIENCE } from "@motebit/protocol";
 import { ServiceError } from "./errors.js";
 
 /**
@@ -49,20 +61,139 @@ export function extractBearer(header: string | undefined): string | null {
   return match ? match[1]!.trim() : null;
 }
 
+/** Decode a hex-encoded public key into bytes. */
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
 /**
- * Build a Hono middleware that requires `Authorization: Bearer
- * <expectedToken>` on every request. Throws a `ServiceError` with
- * `permission_denied` when the header is absent or the token doesn't
- * match — caught by the global error handler in `routes.ts` and
- * serialized into the wire envelope.
+ * Result of a successful relay-signed-token verification. The `mid`
+ * claim is what audit logs and per-motebit usage attribution read.
  */
-export function requireBearer(expectedToken: string): MiddlewareHandler {
+export interface VerifiedRelaySandboxToken {
+  /** The motebit_id the token authorizes — read from the `mid` claim. */
+  readonly motebitId: string;
+  /** Token's `jti` for replay defenses (sandbox does not yet enforce). */
+  readonly jti: string | undefined;
+  /** Absolute expiry (ms epoch). */
+  readonly expiresAt: number;
+}
+
+/**
+ * Verify a relay-signed sandbox token against the pinned relay public
+ * key. Returns the decoded subject claims on success, `null` on any
+ * failure (malformed, signature mismatch, wrong audience, expired,
+ * wrong suite).
+ *
+ * Fail-closed: every rejection returns `null` rather than throwing.
+ * The middleware maps that to `permission_denied`.
+ */
+export async function verifyRelaySandboxToken(
+  token: string,
+  trustedRelayPublicKeyBytes: Uint8Array,
+): Promise<VerifiedRelaySandboxToken | null> {
+  const payload = await verifySignedToken(token, trustedRelayPublicKeyBytes);
+  if (payload === null) return null;
+  // Cross-endpoint replay defense — token must be audience-bound to
+  // this service exactly.
+  if (payload.aud !== BROWSER_SANDBOX_AUDIENCE) return null;
+  // Subject claim — required for attribution.
+  if (typeof payload.mid !== "string" || payload.mid === "") return null;
+  // exp is enforced inside `verifySignedToken`; return the value for
+  // the caller's audit context.
+  return {
+    motebitId: payload.mid,
+    jti: payload.jti,
+    expiresAt: payload.exp,
+  };
+}
+
+/**
+ * Build a Hono middleware that requires `Authorization: Bearer <token>`
+ * on every request. Accepts EITHER:
+ *   - a relay-signed audience-bound token (preferred, when
+ *     `trustedRelayPublicKeyHex` is configured), OR
+ *   - the legacy shared bearer (when `legacyApiToken` is configured).
+ *
+ * At least one path must be configured (`loadConfig()` enforces this
+ * at boot). The middleware tries the relay-signed path first when
+ * available — its strong shape (signed JWT) is harder to confuse with
+ * the legacy opaque-token shape (a 64+ char hex string vs a JWT-shaped
+ * `xxx.yyy`), and the JWT-shape early-out (no dot in the token →
+ * skip to legacy) means a legacy bearer that happens to contain a dot
+ * still flows through the legacy path on signature failure.
+ *
+ * On both paths failing, throws `ServiceError("permission_denied",
+ * …)` — caught by the global error handler.
+ *
+ * Side-channel: the verified motebit_id is set on the Hono context as
+ * `c.var.motebitId` for downstream handlers (audit logs, future
+ * per-motebit policy). Legacy bearer leaves `motebitId` unset.
+ */
+export interface RequireAuthOptions {
+  /** Legacy shared bearer (`MOTEBIT_API_TOKEN`). Null when not configured. */
+  readonly legacyApiToken: string | null;
+  /** Pinned relay public key in hex (`MOTEBIT_TRUSTED_RELAY_PUBKEY`). Null when not configured. */
+  readonly trustedRelayPublicKeyHex: string | null;
+}
+
+export function requireAuth(opts: RequireAuthOptions): MiddlewareHandler {
+  const { legacyApiToken, trustedRelayPublicKeyHex } = opts;
+  if (!legacyApiToken && !trustedRelayPublicKeyHex) {
+    // Defensive: loadConfig should have caught this. Throwing here
+    // means a hand-constructed deployment that bypassed loadConfig
+    // still fails fast.
+    throw new Error(
+      "browser-sandbox/auth: at least one of legacyApiToken or trustedRelayPublicKeyHex must be set",
+    );
+  }
+  const trustedRelayPubkeyBytes =
+    trustedRelayPublicKeyHex !== null ? hexToBytes(trustedRelayPublicKeyHex) : null;
+
   return async (c: Context, next) => {
     const header = c.req.header("Authorization");
     const presented = extractBearer(header);
-    if (presented === null || !constantTimeEqual(presented, expectedToken)) {
+    if (presented === null) {
       throw new ServiceError("permission_denied", "missing or invalid bearer token");
     }
-    await next();
+
+    // Relay-signed path first — JWT-shape (`xxx.yyy`) and a configured
+    // pinned key. Falls through to legacy on shape mismatch or
+    // verification failure so a legacy-shape bearer still works during
+    // the transition window.
+    if (trustedRelayPubkeyBytes !== null && presented.includes(".")) {
+      const verified = await verifyRelaySandboxToken(presented, trustedRelayPubkeyBytes);
+      if (verified !== null) {
+        c.set("motebitId" as never, verified.motebitId as never);
+        await next();
+        return;
+      }
+    }
+
+    // Legacy shared-bearer path.
+    if (legacyApiToken !== null && constantTimeEqual(presented, legacyApiToken)) {
+      await next();
+      return;
+    }
+
+    throw new ServiceError("permission_denied", "missing or invalid bearer token");
   };
+}
+
+/**
+ * @deprecated since: 2026-05-10, removed in: 2.0.0. Reason: the v1
+ * shared-bearer model has been superseded by the relay-mediated
+ * `aud`-bound signed-token flow (see file header). New code uses
+ * `requireAuth({ legacyApiToken, trustedRelayPublicKeyHex })`. This
+ * shim is preserved for the dualAuth transition window — when both
+ * paths are off and only `MOTEBIT_API_TOKEN` is set, behavior is
+ * unchanged. Removed in 2.0.0 once `MOTEBIT_TRUSTED_RELAY_PUBKEY` is
+ * the sole production auth path.
+ */
+export function requireBearer(expectedToken: string): MiddlewareHandler {
+  return requireAuth({ legacyApiToken: expectedToken, trustedRelayPublicKeyHex: null });
 }

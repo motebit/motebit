@@ -9,7 +9,7 @@
  *
  * Plus `GET /health` (unauth) for Fly's health-check loop.
  *
- * Every authed route uses `requireBearer` from `auth.ts`. Errors flow
+ * Every authed route uses `requireAuth` from `auth.ts`. Errors flow
  * through `ServiceError` and the global `app.onError` handler so the
  * dispatcher always receives the structured `{ error: { reason,
  * message } }` envelope it knows how to map.
@@ -27,7 +27,7 @@ import { cors } from "hono/cors";
 
 import type { ComputerAction, UserInputEvent } from "@motebit/protocol";
 
-import { requireBearer } from "./auth.js";
+import { requireAuth } from "./auth.js";
 import { executeAction, executeReadPage, executeUserInput } from "./action-executor.js";
 import type { BrowserPool } from "./chromium-pool.js";
 import type { BrowserSandboxConfig } from "./env.js";
@@ -64,9 +64,9 @@ export function buildApp(deps: BuildAppDeps): Hono {
   // multi-tenant story.
   //
   // OPTIONS handling: hono/cors short-circuits preflight with 204 +
-  // headers BEFORE requireBearer runs, so the browser's auth-less
+  // headers BEFORE requireAuth runs, so the browser's auth-less
   // preflight succeeds and the actual POST (with bearer) reaches
-  // requireBearer normally.
+  // requireAuth normally.
   app.use(
     "*",
     cors({
@@ -83,7 +83,17 @@ export function buildApp(deps: BuildAppDeps): Hono {
   );
 
   // ── Authenticated routes ────────────────────────────────────────
-  app.use("/sessions/*", requireBearer(deps.config.apiToken));
+  // dualAuth: accepts either the legacy shared bearer (MOTEBIT_API_TOKEN)
+  // or a relay-signed audience-bound token verified against the pinned
+  // MOTEBIT_TRUSTED_RELAY_PUBKEY. At least one MUST be configured —
+  // env.ts asserts at boot. See auth.ts header for the migration story.
+  app.use(
+    "/sessions/*",
+    requireAuth({
+      legacyApiToken: deps.config.apiToken,
+      trustedRelayPublicKeyHex: deps.config.trustedRelayPublicKeyHex,
+    }),
+  );
 
   app.post("/sessions/ensure", async (c) => {
     const session = await deps.pool.openSession();

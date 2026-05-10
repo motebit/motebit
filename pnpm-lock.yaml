@@ -2148,6 +2148,9 @@ importers:
       '@hono/node-server':
         specifier: '>=1.19.10 <2.0.0'
         version: 1.19.12(hono@4.12.9)
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@motebit/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
