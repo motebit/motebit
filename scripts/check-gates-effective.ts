@@ -1366,6 +1366,45 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
         src.replace(/already_there/g, "removed_for_probe"),
       ),
   },
+  {
+    script: "check-money-boundary",
+    proves:
+      "flags an inline `Math.round(amount * 1_000_000)` outside the canonical `packages/protocol/src/money.ts` — the converter formula is a primitive, not a snippet, and a sibling-rolled copy is the drift class the gate exists to catch.",
+    perturb: () =>
+      // Drop a settlement-rails-shaped file with the inline formula
+      // and a money-shaped variable name (`amount`) so the gate's
+      // money-token filter catches it. Out-of-canonical-home means
+      // the gate must exit non-zero.
+      writeFixture(
+        `packages/settlement-rails/src/${PROBE_PREFIX}inline-converter.ts`,
+        `// Probe-only file that re-rolls the toMicro formula inline.
+// If check-money-boundary is working, it refuses to accept this file.
+export function probeConvert(amount: number): number {
+  return Math.round(amount * 1_000_000);
+}
+`,
+      ),
+  },
+  {
+    script: "check-ha-not-a-gate",
+    proves:
+      "flags a hardware-attestation threshold compare in routing/scoring/policy/runtime — `attestation_score < N` converts the additive scoring axis into an admission criterion, silently excluding the software-only-identity floor. Negative invariant + waiver mechanism per `docs/doctrine/hardware-attestation.md`.",
+    perturb: () =>
+      // Drop a market-scoped file with the canonical numeric-threshold
+      // shape (`attestation_score [<>] N`). Scope hits packages/market/src
+      // (one of the gate's scan roots); no waiver comment present.
+      writeFixture(
+        `packages/market/src/${PROBE_PREFIX}admission-gate.ts`,
+        `// Probe-only file that admission-gates on attestation_score.
+// If check-ha-not-a-gate is working, it refuses to accept this file.
+interface PeerProfile { readonly hardware_attestation_aggregate?: { readonly attestation_score: number } }
+export function probeAdmit(peer: PeerProfile): boolean {
+  if (peer.hardware_attestation_aggregate!.attestation_score < 0.5) return false;
+  return true;
+}
+`,
+      ),
+  },
 ];
 
 /**
