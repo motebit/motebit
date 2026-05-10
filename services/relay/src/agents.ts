@@ -330,6 +330,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // adapter, and then issue their own peer credential about the subject
     // for routing aggregation.
     const hardwareAttestations = devices
+      // hardware-attestation: intentional-threshold — response-projection filter, not routing admission. Devices without an HA credential have nothing to publish in the `hardware_attestations` array; the agent itself is always returned.
       .filter((d) => d.hardware_attestation_credential != null)
       .map((d) => ({
         device_id: d.device_id,

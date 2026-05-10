@@ -539,6 +539,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-computer-dispatcher-modes",
   },
   {
+    name: "check-ha-not-a-gate",
+    defends:
+      "hardware attestation raises the `HardwareAttestationSemiring` score — never admits or rejects (CLAUDE.md `Hardware-rooted identity is additive`; doctrine `docs/doctrine/hardware-attestation.md`). The software-only-identity floor is part of the protocol promise; converting the additive scoring axis into an admission criterion silently excludes software-floor users at the moat layer. Gate forbids four shapes in `services/relay/src` + `packages/{policy,market,runtime}/src`: (1) numeric threshold compares on `attestation_score`, (2) HA-property-chain `score`/`level` threshold compares, (3) exclusionary `.filter(…hardware_attestation…)` calls, (4) `if (…hardware_attestation…)` followed within 3 lines by reject/throw/skip. Waiver `// hardware-attestation: intentional-threshold — <reason>` for legitimate exceptions (one shipping today: `services/relay/src/agents.ts:334` — projection filter for response payload, not routing admission). Same negative-invariant + waiver shape as `check-suite-dispatch` (#11): closed-by-construction with explicit, audited exits.",
+    script: "check-ha-not-a-gate",
+  },
+  {
     name: "check-money-boundary",
     defends:
       "every API-boundary money conversion (dollars float → integer micro/cents) routes through the canonical converter family in `@motebit/protocol/money.ts` (`toMicro` / `fromMicro` / `toCents` / `fromCents`); inline `Math.round(amount * 100|1_000_000|MICRO|CENTS)` outside that one file is a CI failure. Why: prior to this gate, `packages/settlement-rails/src/{stripe,x402}-rail.ts` re-rolled both formulas inline despite `@motebit/virtual-accounts` already exporting `toMicro`. Two siblings, one canonical source — exactly the synchronization-invariants meta-principle shape. Doctrine: CLAUDE.md § Money model. Same closure pattern as cryptosuite agility (#11) and consolidation primitives (#34): one home, one converter family per precision, additive — adding a third precision (RWA, JPY) is a new function in the same file, not a third inline copy.",
