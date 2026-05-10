@@ -10,6 +10,7 @@
  * client interface. Does not reimplement the protocol.
  */
 
+import { toMicro } from "@motebit/protocol";
 import type { GuestRail, PaymentProof, WithdrawalResult } from "@motebit/sdk";
 import { type RailLogger, NOOP_LOGGER } from "./logger.js";
 
@@ -105,7 +106,7 @@ export class X402SettlementRail implements GuestRail {
         authorization: {
           from: this.payToAddress,
           to: destination,
-          value: String(Math.round(amount * 1_000_000)), // USDC 6 decimals
+          value: String(toMicro(amount)), // USDC 6 decimals
           validAfter: 0,
           validBefore: Math.floor(Date.now() / 1000) + 3600,
           nonce: idempotencyKey,
@@ -116,7 +117,7 @@ export class X402SettlementRail implements GuestRail {
     const paymentRequirements = {
       scheme: "exact",
       network: this.network,
-      maxAmountRequired: String(Math.round(amount * 1_000_000)),
+      maxAmountRequired: String(toMicro(amount)),
       payTo: destination,
       asset: currency.toUpperCase() === "USDC" ? "USDC" : currency,
       maxTimeoutSeconds: 60,

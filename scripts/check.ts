@@ -539,6 +539,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-computer-dispatcher-modes",
   },
   {
+    name: "check-money-boundary",
+    defends:
+      "every API-boundary money conversion (dollars float → integer micro/cents) routes through the canonical converter family in `@motebit/protocol/money.ts` (`toMicro` / `fromMicro` / `toCents` / `fromCents`); inline `Math.round(amount * 100|1_000_000|MICRO|CENTS)` outside that one file is a CI failure. Why: prior to this gate, `packages/settlement-rails/src/{stripe,x402}-rail.ts` re-rolled both formulas inline despite `@motebit/virtual-accounts` already exporting `toMicro`. Two siblings, one canonical source — exactly the synchronization-invariants meta-principle shape. Doctrine: CLAUDE.md § Money model. Same closure pattern as cryptosuite agility (#11) and consolidation primitives (#34): one home, one converter family per precision, additive — adding a third precision (RWA, JPY) is a new function in the same file, not a third inline copy.",
+    script: "check-money-boundary",
+  },
+  {
     name: "check-typed-truth-perception",
     defends:
       "every typed-truth field the AI branches on (`already_there`, `not_in_control`, `text_appeared`, `slow_load`, `bytes_omitted_reason`, `visual_content_detected` / `blank_page_detected` / `access_denied_detected`) appears in BOTH the AI's `PERCEPTION_DOCTRINE` clause (`packages/ai-core/src/prompt.ts`) AND at least one dispatch source. Closes the doctrine drift class where one half quietly disappears: prompt teaches a field nothing emits (confabulation), or dispatch emits a field the AI doesn't know to read (silent typed truth). Closed-registry shape with bidirectional drift check, same as `check-tool-modes` / `check-mode-contract-readers` / `check-drop-handlers` — adding a typed-truth field MUST update the registry plus both halves. Doctrine: `docs/doctrine/typed-truth-perception.md`; CLAUDE.md root principle `Typed truth on results, prompt for interpretation`. (Invariant #80, added 2026-05-09 with six instances already shipping in production: `already_there` / `slow_load` / `visual_content_detected` / `blank_page_detected` / `access_denied_detected` from the navigate-noop + slow-load slices, `text_appeared` from the type-action truth slice, `bytes_omitted_reason` from the pixel-consent gate, and `not_in_control` from co-browse Slice 1 — the shape is stable enough to mechanize.)",

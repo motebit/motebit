@@ -2580,6 +2580,14 @@ export { resolveDropTarget } from "./perception.js";
 // change at the protocol layer. Doctrine: see ./sensitivity.ts header.
 export { rankSensitivity, maxSensitivity, sensitivityPermits } from "./sensitivity.js";
 
+// Money primitives — interop law for integer-unit accounting. Pure
+// algebra over numbers; the two reference precisions (micro-units for
+// USDC-grade ledger work, cents for the fiat rail family) are the
+// canonical converter family every consumer routes through. Inline
+// `Math.round(amount * 100|1_000_000)` is a category error gated by
+// `scripts/check-money-boundary.ts`.
+export { MICRO, CENTS, toMicro, fromMicro, toCents, fromCents } from "./money.js";
+
 import type { ToolMode } from "./tool-mode.js";
 
 // ── Skill manifest + envelope (spec/skills-v1.md) ────────────────

@@ -1,6 +1,7 @@
 import type { InvokeFn } from "../index";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
+import { toMicro } from "@motebit/sdk";
 import {
   createSovereignController,
   type CredentialEntry,
@@ -455,10 +456,7 @@ function renderBudget(
             return;
           }
           const needsAddress = balance.settlement_address !== address;
-          void commitSweepAndRender(
-            Math.round(dollars * 1_000_000),
-            needsAddress ? address : undefined,
-          );
+          void commitSweepAndRender(toMicro(dollars), needsAddress ? address : undefined);
         };
 
         saveBtn.addEventListener("click", save);

@@ -189,6 +189,16 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "sensitivityPermits",
     // Drag-drop perception — pure default-target resolver over a closed union
     "resolveDropTarget",
+    // Money primitives — interop law for integer-unit accounting. Pure
+    // algebra over numbers (Math.round + multiply/divide); two
+    // reference precisions cover USDC-grade ledger work and Stripe-grade
+    // fiat. The canonical converter family every motebit ledger and
+    // settlement rail routes through; `scripts/check-money-boundary.ts`
+    // forbids inline copies in money-touching packages.
+    "toMicro",
+    "fromMicro",
+    "toCents",
+    "fromCents",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)

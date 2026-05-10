@@ -6,6 +6,7 @@
 // web-specific affordances (Fund sovereign onramp, top-up hint).
 
 import type { WebContext } from "../types";
+import { toMicro } from "@motebit/sdk";
 import { loadSyncUrl } from "../storage";
 import { fetchSolanaBalanceUsdc, openSovereignFundingFlow } from "./wallet-balance";
 import {
@@ -79,7 +80,7 @@ function createWebAdapter(ctx: WebContext): SovereignFetchAdapter {
       // web uses fetchSolanaBalanceUsdc (shared with settings); convert back to
       // micro so the controller's state.sovereignBalanceUsdc is uniform.
       const usdc = await fetchSolanaBalanceUsdc(ctx.app.getRuntime());
-      return usdc != null ? Math.round(usdc * 1_000_000) : null;
+      return usdc != null ? toMicro(usdc) : null;
     },
     getLocalCredentials: () => {
       const runtime = ctx.app.getRuntime();
@@ -503,10 +504,7 @@ function renderBudget(
             return;
           }
           const needsAddress = balance.settlement_address !== address;
-          void commitSweepAndRender(
-            Math.round(dollars * 1_000_000),
-            needsAddress ? address : undefined,
-          );
+          void commitSweepAndRender(toMicro(dollars), needsAddress ? address : undefined);
         };
 
         saveBtn.addEventListener("click", save);

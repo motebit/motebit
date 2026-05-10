@@ -468,6 +468,9 @@ export interface CapabilityPrice {
 }
 
 // @public
+export const CENTS = 100;
+
+// @public
 export interface ChainAnchorSubmitter {
     readonly chain: string;
     isAvailable(): Promise<boolean>;
@@ -1537,6 +1540,12 @@ export interface FocusElementAction {
 }
 
 // @public
+export function fromCents(cents: number): number;
+
+// @public
+export function fromMicro(micro: number): number;
+
+// @public
 export function getSuiteEntry(id: SuiteId): SuiteEntry;
 
 // @public (undocumented)
@@ -1983,6 +1992,9 @@ export interface MerkleInclusionProof {
     // (undocumented)
     readonly siblings: string[];
 }
+
+// @public
+export const MICRO = 1000000;
 
 // @public
 export interface MigrationPresentation {
@@ -3240,6 +3252,12 @@ export interface SyncPlanStep {
     // (undocumented)
     updated_at: number;
 }
+
+// @public
+export function toCents(dollars: number): number;
+
+// @public
+export function toMicro(dollars: number): number;
 
 // @public
 export const TOOL_MODES: readonly ["api", "ax", "pixels"];

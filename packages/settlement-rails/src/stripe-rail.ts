@@ -7,6 +7,7 @@
  */
 
 import type Stripe from "stripe";
+import { toCents } from "@motebit/protocol";
 import type {
   DepositableGuestRail,
   PaymentProof,
@@ -97,7 +98,7 @@ export class StripeSettlementRail implements DepositableGuestRail {
               product_data: {
                 name: `Motebit Agent Deposit (${motebitId.slice(0, 8)}...)`,
               },
-              unit_amount: Math.round(amount * 100), // Stripe uses cents
+              unit_amount: toCents(amount),
             },
             quantity: 1,
           },

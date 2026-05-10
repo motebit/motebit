@@ -1,10 +1,11 @@
 /**
  * Micro-unit accounting — the only math the ledger does.
  *
- * All money is stored and compared as INTEGER micro-units: 1 USD =
- * 1_000_000 units. This matches USDC on-chain precision (6 decimals)
- * exactly and eliminates IEEE-754 drift from every ledger operation.
- * No rounding, no tolerance, no "close enough."
+ * The canonical converters (`MICRO`, `toMicro`, `fromMicro`) live in
+ * `@motebit/protocol` as permissive-floor algebra; every motebit
+ * implementation, in any language, uses the same formula. This module
+ * re-exports them so consumers importing from `@motebit/virtual-accounts`
+ * (the reference ledger) keep working unchanged.
  *
  * The API boundary converts:
  *   - `toMicro(dollars)` on ingest (API / webhook payload → ledger).
@@ -15,18 +16,7 @@
  * function. Everything else speaks micro-units.
  */
 
-/** 1 USD = 1,000,000 micro-units. USDC on-chain is 6 decimals. */
-export const MICRO = 1_000_000;
-
-/** API dollars (float) → integer micro-units. */
-export function toMicro(dollars: number): number {
-  return Math.round(dollars * MICRO);
-}
-
-/** Integer micro-units → API dollars (float). */
-export function fromMicro(micro: number): number {
-  return micro / MICRO;
-}
+export { MICRO, toMicro, fromMicro } from "@motebit/protocol";
 
 /** 24-hour dispute window — matches `dispute-v1.md §4.5`. */
 export const DISPUTE_WINDOW_MS = 24 * 60 * 60 * 1000;

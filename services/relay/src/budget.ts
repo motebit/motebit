@@ -5,6 +5,7 @@
 import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
+import { toCents } from "@motebit/protocol";
 import { bytesToHex, hash as sha256Hash } from "@motebit/encryption";
 import { createVerify } from "node:crypto";
 import type { RelayIdentity } from "./federation.js";
@@ -823,7 +824,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
             price_data: {
               currency: stripeConfig!.currency ?? "usd",
               product_data: { name: `Motebit Agent Deposit (${motebitId.slice(0, 8)}...)` },
-              unit_amount: Math.round(body.amount * 100),
+              unit_amount: toCents(body.amount),
             },
             quantity: 1,
           },
