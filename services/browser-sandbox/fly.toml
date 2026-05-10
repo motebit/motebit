@@ -17,9 +17,17 @@ kill_timeout = 10
 [http_service]
   internal_port = 3500
   force_https = true
+  # Keep one machine always running. Cold-start on this service is
+  # ~25s (Chromium boot + Playwright init + Node runtime), which
+  # blocks the user's first `/computer` invocation in a session for
+  # a quarter-minute. Fly.io shared-CPU 1GB ≈ $2/mo for always-on,
+  # cheap insurance against the UX cliff. Auto-start stays on so a
+  # second concurrent session still wakes a second machine on
+  # demand; auto-stop stays on so machines beyond the floor spin
+  # down when idle.
   auto_stop_machines = "stop"
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [http_service.concurrency]
     type = "connections"
