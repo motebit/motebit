@@ -656,6 +656,16 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
     await next();
   });
 
+  // POST /api/v1/browser-sandbox/token — exchange a motebit-signed grant
+  // token for a relay-signed sandbox token. Verifies the request under
+  // the `browser-sandbox-grant` audience; the response is a token bound
+  // to the `browser-sandbox` audience (minted by the route handler with
+  // the relay's identity key). See ./browser-sandbox.ts.
+  app.use("/api/v1/browser-sandbox/token", async (c, next) => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+    return dualAuth(c, next, "browser-sandbox-grant");
+  });
+
   // Auth middleware for ledger and settlement routes — master token required
   app.use("/agent/*/ledger", bearerAuth({ token: apiToken }));
   app.use("/agent/*/ledger/*", bearerAuth({ token: apiToken }));

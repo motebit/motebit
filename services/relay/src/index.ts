@@ -148,6 +148,7 @@ import { registerTrustGraphRoutes } from "./trust-graph.js";
 import { registerListingsRoutes } from "./listings.js";
 import { registerProposalRoutes } from "./proposals.js";
 import { registerKeyRotationRoutes } from "./key-rotation.js";
+import { registerBrowserSandboxRoutes } from "./browser-sandbox.js";
 import { registerBudgetRoutes } from "./budget.js";
 import { startSweepLoop } from "./sweep.js";
 import { startBatchWithdrawalLoop, getPendingWithdrawalsSummary } from "./batch-withdrawals.js";
@@ -1053,6 +1054,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Key rotation, revocation & approval routes ---
   registerKeyRotationRoutes({ app, moteDb, relayIdentity });
+
+  // --- Browser-sandbox dispatcher-token endpoint ---
+  // Mints relay-signed audience-bound tokens that motebits attach to
+  // their `services/browser-sandbox` requests. Replaces the v1
+  // shared-bearer model. See ./browser-sandbox.ts header.
+  registerBrowserSandboxRoutes({ app, relayIdentity });
 
   // --- Data sync routes (conversations, messages, plans, plan steps) ---
   registerDataSyncRoutes({ db: moteDb.db, app, connections });
