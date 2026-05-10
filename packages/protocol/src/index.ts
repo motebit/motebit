@@ -2588,6 +2588,14 @@ export { rankSensitivity, maxSensitivity, sensitivityPermits } from "./sensitivi
 // `scripts/check-money-boundary.ts`.
 export { MICRO, CENTS, toMicro, fromMicro, toCents, fromCents } from "./money.js";
 
+// Token audiences — `aud` claim values for the audience-bound signed-
+// token primitive. Cross-endpoint replay prevention; every signed
+// bearer carries `aud` and verifiers reject unexpected values fail-
+// closed. The two browser-sandbox audiences ship the relay-mediated
+// dispatcher-token flow that replaces the v1 shared-bearer model.
+// See `./audience.ts` header for the full rationale.
+export { BROWSER_SANDBOX_GRANT_AUDIENCE, BROWSER_SANDBOX_AUDIENCE } from "./audience.js";
+
 import type { ToolMode } from "./tool-mode.js";
 
 // ── Skill manifest + envelope (spec/skills-v1.md) ────────────────

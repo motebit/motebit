@@ -425,6 +425,12 @@ export const BooleanSemiring: Semiring<boolean>;
 // @public
 export const BottleneckSemiring: Semiring<number>;
 
+// @public
+export const BROWSER_SANDBOX_AUDIENCE: "browser-sandbox";
+
+// @public
+export const BROWSER_SANDBOX_GRANT_AUDIENCE: "browser-sandbox-grant";
+
 // @public (undocumented)
 export interface BudgetAllocation {
     // (undocumented)
