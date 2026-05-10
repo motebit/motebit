@@ -14,6 +14,7 @@
  */
 
 import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
+import { TASK_SUBMIT_AUDIENCE } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "./plan-engine.js";
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -298,7 +299,7 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
           iat: Date.now(),
           exp: Date.now() + 5 * 60 * 1000,
           jti: crypto.randomUUID(),
-          aud: "task:submit",
+          aud: TASK_SUBMIT_AUDIENCE,
         },
         signingKeys.privateKey,
       );

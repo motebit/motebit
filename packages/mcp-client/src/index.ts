@@ -16,6 +16,7 @@ export type {
   VerificationResult,
   ServerVerifier,
 } from "@motebit/sdk";
+import { TASK_SUBMIT_AUDIENCE } from "@motebit/sdk";
 import { createSignedToken, verifyKeySuccession } from "@motebit/encryption";
 import type { KeySuccessionRecord } from "@motebit/encryption";
 import { InMemoryToolRegistry } from "@motebit/tools";
@@ -697,7 +698,7 @@ export class McpClientAdapter {
           iat: Date.now(),
           exp: Date.now() + 5 * 60 * 1000, // 5 minute expiry
           jti: crypto.randomUUID(),
-          aud: "task:submit",
+          aud: TASK_SUBMIT_AUDIENCE,
         },
         this.config.callerPrivateKey,
       );

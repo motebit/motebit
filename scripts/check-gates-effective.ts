@@ -1405,6 +1405,26 @@ export function probeAdmit(peer: PeerProfile): boolean {
 `,
       ),
   },
+  {
+    script: "check-audience-canonical",
+    proves:
+      'flags an audience literal that is not a member of the closed `TokenAudience` registry. Same drift class the registry exists to catch — a typo at a signing site (`aud: "task:sumbit"`) that pre-registry was a runtime 401 at the verifier.',
+    perturb: () =>
+      // Drop a relay-scoped file with a canonical-shaped signing-site
+      // literal that is NOT in ALL_TOKEN_AUDIENCES. Scope hits
+      // services/relay/src (one of the gate's roots); the literal is
+      // close enough to a real audience to read like a typo.
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}unknown-audience.ts`,
+        `// Probe-only file that mints a token with an unknown audience.
+// If check-audience-canonical is working, it refuses to accept this file.
+declare function fakeSign(payload: { aud: string }): Promise<string>;
+export async function probeMint(): Promise<string> {
+  return fakeSign({ aud: "task:sumbit" });
+}
+`,
+      ),
+  },
 ];
 
 /**

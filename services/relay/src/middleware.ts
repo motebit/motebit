@@ -10,6 +10,15 @@ import { secureHeaders } from "hono/secure-headers";
 import { bearerAuth } from "hono/bearer-auth";
 import { HTTPException } from "hono/http-exception";
 import type { IdentityManager } from "@motebit/core-identity";
+import {
+  TASK_SUBMIT_AUDIENCE,
+  BROWSER_SANDBOX_GRANT_AUDIENCE,
+  ACCOUNT_DEPOSIT_AUDIENCE,
+  ACCOUNT_BALANCE_AUDIENCE,
+  ACCOUNT_WITHDRAW_AUDIENCE,
+  ACCOUNT_WITHDRAWALS_AUDIENCE,
+  ACCOUNT_CHECKOUT_AUDIENCE,
+} from "@motebit/protocol";
 import { FixedWindowLimiter } from "./rate-limiter.js";
 import type { verifySignedTokenForDevice, parseTokenPayloadUnsafe } from "./auth.js";
 import { createLogger } from "./logger.js";
@@ -651,7 +660,7 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
     // Only apply auth to POST (submit) requests, not to /result sub-routes
     if (c.req.method === "POST" && !c.req.url.includes("/result")) {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
-      return dualAuth(c, next, "task:submit");
+      return dualAuth(c, next, TASK_SUBMIT_AUDIENCE);
     }
     await next();
   });
@@ -663,7 +672,7 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   // the relay's identity key). See ./browser-sandbox.ts.
   app.use("/api/v1/browser-sandbox/token", async (c, next) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
-    return dualAuth(c, next, "browser-sandbox-grant");
+    return dualAuth(c, next, BROWSER_SANDBOX_GRANT_AUDIENCE);
   });
 
   // Auth middleware for ledger and settlement routes — master token required
@@ -674,23 +683,23 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   // Auth middleware for virtual account routes — master token or signed device token
   app.use("/api/v1/agents/*/deposit", async (c, next) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
-    return dualAuth(c, next, "account:deposit");
+    return dualAuth(c, next, ACCOUNT_DEPOSIT_AUDIENCE);
   });
   app.use("/api/v1/agents/*/balance", async (c, next) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
-    return dualAuth(c, next, "account:balance");
+    return dualAuth(c, next, ACCOUNT_BALANCE_AUDIENCE);
   });
   app.use("/api/v1/agents/*/withdraw", async (c, next) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
-    return dualAuth(c, next, "account:withdraw");
+    return dualAuth(c, next, ACCOUNT_WITHDRAW_AUDIENCE);
   });
   app.use("/api/v1/agents/*/withdrawals", async (c, next) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
-    return dualAuth(c, next, "account:withdrawals");
+    return dualAuth(c, next, ACCOUNT_WITHDRAWALS_AUDIENCE);
   });
   app.use("/api/v1/agents/*/checkout", async (c, next) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
-    return dualAuth(c, next, "account:checkout");
+    return dualAuth(c, next, ACCOUNT_CHECKOUT_AUDIENCE);
   });
   // Note: /api/v1/stripe/webhook has NO auth middleware — Stripe calls it directly.
   // Verification is done via the webhook signature.
