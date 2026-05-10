@@ -108,15 +108,7 @@ export interface BrowserSandboxRoutesDeps {
 export function registerBrowserSandboxRoutes(deps: BrowserSandboxRoutesDeps): void {
   const { app, relayIdentity } = deps;
 
-  /**
-   * @internal
-   *
-   * Consumed only by `@motebit/runtime`'s
-   * `createRelayBackedSandboxTokenSource`. Promotes to a spec
-   * annotation once the wire-format binding lands in
-   * `spec/computer-use-v1.md` (browser-sandbox dispatcher-token
-   * section).
-   */
+  /** @spec motebit/computer-use@1.0 */
   app.post("/api/v1/browser-sandbox/token", async (c) => {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     if (!callerMotebitId) {

@@ -498,6 +498,116 @@ The same wire format drives a second physical executor: an isolated cloud-browse
 
 **Promotion path:** this is the second producer the @alpha annotations on `packages/protocol/src/computer-use.ts` are gating on (the protocol release-status block names "cloud-browser surface" or "federation peer replaying an audit log"). When `services/browser-sandbox` is exercising the format in anger, `@alpha` promotes to `@beta`; `@public` follows when a federation peer also replays an audit log.
 
+### 8.2 — Browser-sandbox dispatcher token (relay-mediated auth)
+
+`services/browser-sandbox` accepts two auth shapes for backwards compatibility, but the federation-grade path is the relay-mediated audience-bound token defined here.
+
+**Trust shape:**
+
+A motebit and a `services/browser-sandbox` deployment share **one** trust anchor: the public key of a `services/relay` they both pin. The browser-sandbox knows the relay's public key (operator-set env var); the motebit holds an existing audience-bound auth path to the same relay (the `sync` audience flow). Browser-sandbox does not have a directory of motebit identities — it trusts the relay to vouch via the `mid` claim on every issued token.
+
+This is the broker pattern of [`THE_ACTOR_PRINCIPLE.md`](../THE_ACTOR_PRINCIPLE.md): relay is the broker, the receipt-shape (audit log on browser-sandbox keyed by `mid`) is the causal log.
+
+#### Routes (foundation law)
+
+- `POST /api/v1/browser-sandbox/token` (relay)
+
+#### Wire format (foundation law)
+
+Two audience-bound tokens, both `SignedTokenPayload` (suite `motebit-jwt-ed25519-v1` per `@motebit/protocol`). Audiences:
+
+```text
+BROWSER_SANDBOX_GRANT_AUDIENCE = "browser-sandbox-grant"  // motebit → relay
+BROWSER_SANDBOX_AUDIENCE       = "browser-sandbox"        // relay → motebit → browser-sandbox
+```
+
+**1. Grant request — motebit → relay:**
+
+```text
+POST /api/v1/browser-sandbox/token
+Authorization: Bearer <token>
+
+token = base64url(payload).base64url(signature)
+payload = {
+  mid:   "<motebit_id>",                 // signing motebit's id
+  did:   "<device_id>",                  // signing device's id
+  iat:   <ms since epoch>,               // issued-at
+  exp:   <ms since epoch>,               // expiry, ≤ 5 minutes
+  jti:   "<random uuid v4>",             // replay nonce
+  aud:   "browser-sandbox-grant",        // the audience binding for THIS token
+  suite: "motebit-jwt-ed25519-v1"
+}
+signature = ed25519(canonical_payload_bytes, motebit_identity_private_key)
+```
+
+The relay verifies via `verifySignedTokenForDevice` (existing primitive) under audience `"browser-sandbox-grant"`. Same dualAuth treatment as `task:submit` and `account:*`: the master token also satisfies, but only motebit-signed paths populate `callerMotebitId`.
+
+**2. Sandbox token — relay → motebit:**
+
+```text
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "token":      "<base64url(payload).base64url(signature)>",
+  "expires_in": <seconds remaining>,
+  "expires_at": <ms since epoch>
+}
+
+token payload = {
+  mid:   "<motebit_id>",                 // SUBJECT — motebit being authorized
+  did:   "<relay's did>",                // ISSUER self-description
+  iat:   <ms since epoch>,
+  exp:   <ms since epoch>,               // ≤ 5 minutes from iat (`DEFAULT_SANDBOX_TOKEN_TTL_SEC`)
+  jti:   "<random uuid v4>",
+  aud:   "browser-sandbox",              // the audience binding the dispatcher attaches it to
+  suite: "motebit-jwt-ed25519-v1"
+}
+signature = ed25519(canonical_payload_bytes, RELAY_identity_private_key)
+```
+
+`mid` is the SUBJECT (motebit being authorized), `did` is the ISSUER's DID (relay's identity, self-describing). The browser-sandbox's verifier reads `mid` for audit attribution; the signature is what's authoritative.
+
+**3. Dispatcher request — motebit → browser-sandbox:**
+
+The motebit attaches the sandbox token verbatim:
+
+```text
+POST /sessions/ensure
+Authorization: Bearer <sandbox token from step 2>
+```
+
+The browser-sandbox verifies:
+
+1. Decode `token = base64url(payload).base64url(signature)`.
+2. Parse `payload`. Reject if `payload.suite !== "motebit-jwt-ed25519-v1"`, `payload.aud !== "browser-sandbox"`, `payload.exp < now`, or `typeof payload.mid !== "string" || payload.mid === ""`.
+3. Verify `signature` against the pinned relay public key (`MOTEBIT_TRUSTED_RELAY_PUBKEY` env var) via `verifyBySuite`.
+4. On success, set `c.var.motebitId = payload.mid` for the request's audit context.
+
+Any rejection step returns `{ error: { reason: "permission_denied", message: "..." } }` — same envelope as every other auth failure on this service.
+
+#### Lifecycle invariants
+
+1. **Single trust anchor.** Browser-sandbox pins exactly one relay public key. Multi-relay = future work.
+2. **No directory lookup at verification time.** The pinned key is enough; browser-sandbox never queries the relay during verification. A relay key rotation requires re-deploying browser-sandbox with the new pinned key — declared in `services/browser-sandbox/.env.example` with rotation notes.
+3. **Short token lifetime.** 5 minutes default. The dispatcher caches each sandbox token until 30s before expiry, then mints a new grant and exchanges it. Concurrent cache misses dedupe to a single in-flight request (`createRelayBackedSandboxTokenSource`).
+4. **Audit attribution by `mid`.** Every authenticated request carries the motebit_id in the verified token; browser-sandbox logs include it. Per-motebit usage caps and revocation graduate cleanly when needed (the directory becomes a per-`mid` policy table; trust anchor unchanged).
+5. **Cross-endpoint replay defense.** A token minted with `aud: "sync"` is rejected by browser-sandbox; a `"browser-sandbox-grant"` token is rejected by browser-sandbox (it's the grant request shape, not the dispatch shape); a `"browser-sandbox"` token is rejected by the relay's grant endpoint.
+
+#### Implementing packages
+
+- `@motebit/protocol` — `BROWSER_SANDBOX_GRANT_AUDIENCE`, `BROWSER_SANDBOX_AUDIENCE` constants; `SignedTokenPayload`, `SIGNED_TOKEN_SUITE`.
+- `@motebit/crypto` — `createSignedToken`, `verifySignedToken` (existing primitives).
+- `@motebit/runtime` — `createRelayBackedSandboxTokenSource` (the dispatcher-side fetcher + cache).
+- `services/relay` — `mintBrowserSandboxToken` helper + `POST /api/v1/browser-sandbox/token` route.
+- `services/browser-sandbox` — `verifyRelaySandboxToken` + `requireAuth` middleware.
+
+#### Migration from v1 shared bearer
+
+v1 used `MOTEBIT_API_TOKEN` as a single shared secret across all callers. v1.5 keeps the legacy bearer functional alongside the relay-mediated path (`dualAuth` shape), so existing local-dev setups continue to work. Production deployments running on a public surface (e.g. motebit.com) MUST set `MOTEBIT_TRUSTED_RELAY_PUBKEY` and SHOULD NOT set `MOTEBIT_API_TOKEN` (the bundled-secret risk the relay-mediated path exists to eliminate).
+
+The legacy bearer is `@deprecated`; removal is gated on a graduation criterion ("no consumer relies on it") rather than a fixed version.
+
 ---
 
 ## 9. Known Gaps
