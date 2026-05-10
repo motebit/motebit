@@ -5,6 +5,21 @@
 ```ts
 
 // @public
+export const ACCOUNT_BALANCE_AUDIENCE: TokenAudience;
+
+// @public
+export const ACCOUNT_CHECKOUT_AUDIENCE: TokenAudience;
+
+// @public
+export const ACCOUNT_DEPOSIT_AUDIENCE: TokenAudience;
+
+// @public
+export const ACCOUNT_WITHDRAW_AUDIENCE: TokenAudience;
+
+// @public
+export const ACCOUNT_WITHDRAWALS_AUDIENCE: TokenAudience;
+
+// @public
 export interface AdjudicatorVote {
     dispute_id: string;
     peer_id: string;
@@ -14,6 +29,9 @@ export interface AdjudicatorVote {
     suite: "motebit-jcs-ed25519-b64-v1";
     vote: DisputeOutcome;
 }
+
+// @public
+export const ADMIN_QUERY_AUDIENCE: TokenAudience;
 
 // @public (undocumented)
 export interface AgentCapabilities {
@@ -222,6 +240,9 @@ export interface AgentTrustStoreAdapter {
 // @public
 export const ALL_SUITE_IDS: readonly SuiteId[];
 
+// @public
+export const ALL_TOKEN_AUDIENCES: readonly TokenAudience[];
+
 // Warning: (ae-forgotten-export) The symbol "Brand" needs to be exported by the entry point index.d.ts
 //
 // @public (undocumented)
@@ -426,10 +447,10 @@ export const BooleanSemiring: Semiring<boolean>;
 export const BottleneckSemiring: Semiring<number>;
 
 // @public
-export const BROWSER_SANDBOX_AUDIENCE: "browser-sandbox";
+export const BROWSER_SANDBOX_AUDIENCE: TokenAudience;
 
 // @public
-export const BROWSER_SANDBOX_GRANT_AUDIENCE: "browser-sandbox-grant";
+export const BROWSER_SANDBOX_GRANT_AUDIENCE: TokenAudience;
 
 // @public (undocumented)
 export interface BudgetAllocation {
@@ -1064,6 +1085,9 @@ export interface DepositResult {
     currency: string;
     proof: PaymentProof;
 }
+
+// @public
+export const DEVICE_AUTH_AUDIENCE: TokenAudience;
 
 // @public (undocumented)
 export enum DeviceCapability {
@@ -1774,6 +1798,9 @@ export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail
 export function isSuiteId(value: unknown): value is SuiteId;
 
 // @public
+export function isTokenAudience(value: unknown): value is TokenAudience;
+
+// @public
 export function joinParallelRoutes(scores: number[]): number;
 
 // @alpha
@@ -2115,6 +2142,9 @@ export interface P2pPaymentProof {
 }
 
 // @public
+export const PAIR_AUDIENCE: TokenAudience;
+
+// @public
 export interface PaymentProof {
     confirmedAt: number;
     network?: string;
@@ -2344,6 +2374,9 @@ export interface PolicyDecision {
 // @public
 export function productSemiring<A, B>(sa: Semiring<A>, sb: Semiring<B>): Semiring<readonly [A, B]>;
 
+// @public
+export const PROPOSAL_AUDIENCE: TokenAudience;
+
 // @public (undocumented)
 export type ProposalId = Brand<string, "ProposalId">;
 
@@ -2412,6 +2445,9 @@ export interface ProposalStepCounter {
     // (undocumented)
     reason: string;
 }
+
+// @public
+export const PUSH_REGISTER_AUDIENCE: TokenAudience;
 
 // @public
 export type PushPlatform = "fcm" | "apns" | "expo";
@@ -2626,6 +2662,9 @@ export enum RiskLevel {
     // (undocumented)
     R4_MONEY = 4
 }
+
+// @public
+export const ROTATE_KEY_AUDIENCE: TokenAudience;
 
 // @public (undocumented)
 export interface RouteScore {
@@ -3141,6 +3180,9 @@ export type SuiteSignatureEncoding = "base64url" | "hex" | "multibase-base58btc"
 export type SuiteStatus = "preferred" | "allowed" | "legacy";
 
 // @public
+export const SYNC_AUDIENCE: TokenAudience;
+
+// @public
 export interface SyncConversation {
     // (undocumented)
     conversation_id: ConversationId;
@@ -3260,7 +3302,13 @@ export interface SyncPlanStep {
 }
 
 // @public
+export const TASK_SUBMIT_AUDIENCE: TokenAudience;
+
+// @public
 export function toCents(dollars: number): number;
+
+// @public
+export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "admin:query" | "proposal" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "browser-sandbox-grant" | "browser-sandbox";
 
 // @public
 export function toMicro(dollars: number): number;

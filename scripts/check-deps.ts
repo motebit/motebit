@@ -199,6 +199,9 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "fromMicro",
     "toCents",
     "fromCents",
+    // Token audiences — pure type guard over a frozen closed-union
+    // registry. Same shape as `isSuiteId` above.
+    "isTokenAudience",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)
