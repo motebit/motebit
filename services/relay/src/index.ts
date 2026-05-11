@@ -1041,7 +1041,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- State export routes (read-only agent state queries) ---
-  registerStateExportRoutes({ app, moteDb, eventStore, identityManager, redactSensitiveEvents });
+  // `relayIdentity` signs the outer content-artifact manifest on
+  // `/api/v1/execution/:motebitId/:goalId` — relay-asserted
+  // witness-composition layered with the spec-1.0-compliant inner
+  // ledger body. See `state-export.ts` header.
+  registerStateExportRoutes({
+    app,
+    moteDb,
+    eventStore,
+    identityManager,
+    relayIdentity,
+    redactSensitiveEvents,
+  });
 
   // --- Trust graph routes ---
   registerTrustGraphRoutes({ app, moteDb, taskRouter });

@@ -3,6 +3,18 @@
  *
  * Pure reads: state vector, memory graph, goals, conversations, devices,
  * audit trail, plans, gradient history, execution ledger reconstruction.
+ *
+ * Layered content-provenance on `/api/v1/execution/:motebitId/:goalId` —
+ * the reconstructive ledger is wrapped in a relay-asserted
+ * `ContentArtifactManifest` transported via the
+ * `X-Motebit-Content-Manifest` HTTP header (C2PA-shape sidecar). The
+ * inner `motebit/execution-ledger@1.0` body is unchanged — the spec's
+ * §6 explicitly omits the agent-signature field for relay-reconstructed
+ * ledgers because the relay does not hold the agent's private key.
+ * The outer manifest attests "this is what the relay assembled from
+ * its event log at time T," signed by `relayIdentity`. Each party
+ * signs only what they witnessed (zero-trust witness-composition);
+ * verifier composes against pinned public keys.
  */
 
 import type { Hono } from "hono";
@@ -12,19 +24,38 @@ import type { EventStore } from "@motebit/event-log";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { EventLogEntry, ToolAuditEntry } from "@motebit/sdk";
 import { asMotebitId, asNodeId, asConversationId, asPlanId } from "@motebit/sdk";
-import { canonicalJson, bytesToHex } from "@motebit/encryption";
+import { canonicalJson, bytesToHex, toBase64Url } from "@motebit/encryption";
+import { signContentArtifact } from "@motebit/crypto";
+import { EXECUTION_LEDGER_ARTIFACT } from "@motebit/protocol";
+import type { RelayIdentity } from "./federation.js";
+
+/**
+ * Self-identification claim embedded in the outer
+ * `ContentArtifactManifest.claim_generator` field. Mirrors the relay
+ * version string used by `transparency.ts` so a verifier reading the
+ * manifest sees the same producing-software identifier the operator-
+ * transparency declaration advertises.
+ */
+const MOTEBIT_RELAY_CLAIM_GENERATOR = "motebit-relay/0.5.2";
 
 export interface StateExportDeps {
   app: Hono;
   moteDb: MotebitDatabase;
   eventStore: EventStore;
   identityManager: IdentityManager;
+  /**
+   * The relay's signing identity. Used to sign the outer content-
+   * artifact manifest on `/api/v1/execution/:motebitId/:goalId` so a
+   * third party can verify the relay-assembled reconstruction without
+   * trusting the relay's word — only the relay's pinned public key.
+   */
+  relayIdentity: RelayIdentity;
   /** Redact sensitive events before returning to callers. */
   redactSensitiveEvents: (events: EventLogEntry[]) => EventLogEntry[];
 }
 
 export function registerStateExportRoutes(deps: StateExportDeps): void {
-  const { app, moteDb, eventStore, identityManager, redactSensitiveEvents } = deps;
+  const { app, moteDb, eventStore, identityManager, relayIdentity, redactSensitiveEvents } = deps;
 
   // --- State vector snapshot ---
   /** @internal */
@@ -413,7 +444,10 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
       active: "active",
     };
 
-    return c.json({
+    // Inner artifact — `motebit/execution-ledger@1.0` body. Per spec §6,
+    // the agent-signature field is omitted for relay-reconstructed
+    // ledgers (the relay does not hold the agent's private key).
+    const body = {
       spec: "motebit/execution-ledger@1.0",
       motebit_id: motebitId,
       goal_id: goalId,
@@ -425,6 +459,36 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
       steps: stepSummaries,
       delegation_receipts: delegationReceipts,
       content_hash: contentHash,
+    };
+
+    // Outer envelope — relay-asserted content-artifact manifest.
+    // Witness-composition: relay attests "this is what I assembled
+    // from my event log at time T," signed by `relayIdentity`. The
+    // inner motebit signatures (on delegation_receipts.signature_prefix,
+    // tracked back to `relay_receipts.receipt_json` via task_id) are
+    // independently verifiable; the relay's signature is bounded to
+    // what the relay witnessed (its own database state at assembly
+    // time), never claims authority over the agent's actions.
+    //
+    // Body serialization is JCS-canonical so the bytes are deterministic
+    // across motebit implementations — a verifier hashes the response
+    // bytes verbatim and compares to `manifest.content_hash`, no
+    // recanonicalization required. Same wire-format discipline as
+    // `relay_receipts.receipt_json` (Rule 11): the bytes signed are
+    // the bytes returned.
+    const bodyJson = canonicalJson(body);
+    const bodyBytes = new TextEncoder().encode(bodyJson);
+    const manifest = await signContentArtifact(bodyBytes, {
+      artifactType: EXECUTION_LEDGER_ARTIFACT,
+      producer: relayIdentity.did,
+      producerPublicKey: relayIdentity.publicKey,
+      producerPrivateKey: relayIdentity.privateKey,
+      claimGenerator: MOTEBIT_RELAY_CLAIM_GENERATOR,
     });
+    c.header(
+      "X-Motebit-Content-Manifest",
+      toBase64Url(new TextEncoder().encode(canonicalJson(manifest))),
+    );
+    return c.body(bodyJson, 200, { "Content-Type": "application/json" });
   });
 }

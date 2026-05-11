@@ -2,6 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
 import { EventType, PlanStatus, StepStatus, asMotebitId, asGoalId, asPlanId } from "@motebit/sdk";
 import type { EventLogEntry, Plan, PlanStep } from "@motebit/sdk";
+import { fromBase64Url } from "@motebit/encryption";
+import {
+  verifyContentArtifact,
+  CONTENT_ARTIFACT_SUITE,
+  type ContentArtifactManifest,
+} from "@motebit/crypto";
 import { AUTH_HEADER, createTestRelay as _createTestRelay } from "./test-helpers.js";
 
 // === Helpers ===
@@ -709,5 +715,149 @@ describe("Execution Ledger Reconstruction — GET /api/v1/execution/:motebitId/:
     expect(body.steps).toHaveLength(1);
     const step = body.steps[0]!;
     expect(step.tools_used).toEqual(["file_read"]);
+  });
+});
+
+// === Layered content-provenance — relay-asserted outer manifest =============
+//
+// The reconstructive endpoint wraps the spec-1.0-compliant inner body in a
+// `ContentArtifactManifest` signed by the relay's identity, transported via
+// the `X-Motebit-Content-Manifest` HTTP header (C2PA-shape sidecar).
+//
+// Witness-composition: relay attests "this is what I assembled from my
+// event log at time T," signed by `relayIdentity`. Each rejection mode
+// below pins one of the layered invariants — body tamper, header tamper,
+// producer-key swap.
+
+function decodeManifestHeader(headerValue: string | null): ContentArtifactManifest {
+  if (headerValue == null || headerValue === "") {
+    throw new Error("X-Motebit-Content-Manifest header missing");
+  }
+  const manifestBytes = fromBase64Url(headerValue);
+  const manifestJson = new TextDecoder().decode(manifestBytes);
+  return JSON.parse(manifestJson) as ContentArtifactManifest;
+}
+
+describe("Execution Ledger — relay-asserted outer manifest (X-Motebit-Content-Manifest)", () => {
+  let relay: SyncRelay;
+
+  beforeEach(async () => {
+    relay = await createTestRelay();
+  });
+
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  async function fetchLedgerWithManifest(): Promise<{
+    bodyBytes: Uint8Array;
+    manifest: ContentArtifactManifest;
+  }> {
+    savePlan(relay);
+    saveStep(relay, 0);
+    await pushEvents(relay, MOTEBIT_ID, [
+      makeEvent(MOTEBIT_ID, 1, EventType.GoalCreated, { goal_id: GOAL_ID }),
+      makeEvent(MOTEBIT_ID, 2, EventType.PlanCreated, {
+        plan_id: PLAN_ID,
+        goal_id: GOAL_ID,
+        total_steps: 1,
+      }),
+      makeEvent(MOTEBIT_ID, 3, EventType.PlanStepCompleted, {
+        plan_id: PLAN_ID,
+        step_id: "step-0",
+        ordinal: 0,
+        tool_calls_made: 1,
+      }),
+      makeEvent(MOTEBIT_ID, 4, EventType.GoalCompleted, { goal_id: GOAL_ID }),
+    ]);
+
+    const res = await relay.app.request(`/api/v1/execution/${MOTEBIT_ID}/${GOAL_ID}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+
+    const bodyBytes = new Uint8Array(await res.arrayBuffer());
+    const manifest = decodeManifestHeader(res.headers.get("X-Motebit-Content-Manifest"));
+    return { bodyBytes, manifest };
+  }
+
+  it("emits a manifest header that round-trips verify against the response body", async () => {
+    const { bodyBytes, manifest } = await fetchLedgerWithManifest();
+
+    expect(manifest.suite).toBe(CONTENT_ARTIFACT_SUITE);
+    expect(manifest.artifact_type).toBe("execution-ledger");
+    expect(manifest.claim_generator).toMatch(/^motebit-relay\//);
+    expect(manifest.producer).toMatch(/^did:key:/);
+    expect(manifest.producer_public_key).toMatch(/^[0-9a-f]{64}$/);
+    expect(manifest.signature).toMatch(/^[A-Za-z0-9_-]+$/);
+
+    const result = await verifyContentArtifact(manifest, bodyBytes);
+    expect(result.valid).toBe(true);
+    expect(result.reason).toBeUndefined();
+  });
+
+  it("rejects with content_hash_mismatch when the response body is tampered", async () => {
+    const { bodyBytes, manifest } = await fetchLedgerWithManifest();
+    // Flip one byte in the body — verifier hashes the received bytes,
+    // computed hash diverges from manifest.content_hash, fail-closed.
+    const tampered = new Uint8Array(bodyBytes);
+    tampered[0] = tampered[0]! ^ 0x01;
+    const result = await verifyContentArtifact(manifest, tampered);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe("content_hash_mismatch");
+  });
+
+  it("rejects with signature_invalid when the manifest claim is tampered", async () => {
+    const { bodyBytes, manifest } = await fetchLedgerWithManifest();
+    // Mutate the claim_generator — content_hash still matches (we
+    // didn't touch the body) but the signature was over the original
+    // manifest body.
+    const tamperedManifest: ContentArtifactManifest = {
+      ...manifest,
+      claim_generator: "motebit-relay/9.9.9-evil",
+    };
+    const result = await verifyContentArtifact(tamperedManifest, bodyBytes);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe("signature_invalid");
+  });
+
+  it("rejects with signature_invalid when the declared producer key is swapped", async () => {
+    const { bodyBytes, manifest } = await fetchLedgerWithManifest();
+    // Replace the producer key with a different all-zeros key —
+    // verifyBySuite computes against the wrong key and fails.
+    const swapped: ContentArtifactManifest = {
+      ...manifest,
+      producer_public_key: "0".repeat(64),
+    };
+    const result = await verifyContentArtifact(swapped, bodyBytes);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe("signature_invalid");
+  });
+
+  it("inner spec-1.0 body remains parseable as JSON alongside the outer manifest", async () => {
+    const { bodyBytes } = await fetchLedgerWithManifest();
+    // Reading the body as JSON must still work — the manifest is in
+    // the header, not the payload. Existing consumers that only read
+    // the body are unaffected by the layered signing.
+    const parsed = JSON.parse(new TextDecoder().decode(bodyBytes)) as ExecutionLedgerResponse;
+    expect(parsed.spec).toBe("motebit/execution-ledger@1.0");
+    expect(parsed.motebit_id).toBe(MOTEBIT_ID);
+    expect(parsed.content_hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("response Content-Type stays application/json (no breaking transport change)", async () => {
+    savePlan(relay);
+    saveStep(relay, 0);
+    await pushEvents(relay, MOTEBIT_ID, [
+      makeEvent(MOTEBIT_ID, 1, EventType.GoalCreated, { goal_id: GOAL_ID }),
+      makeEvent(MOTEBIT_ID, 2, EventType.GoalCompleted, { goal_id: GOAL_ID }),
+    ]);
+    const res = await relay.app.request(`/api/v1/execution/${MOTEBIT_ID}/${GOAL_ID}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toMatch(/application\/json/);
   });
 });
