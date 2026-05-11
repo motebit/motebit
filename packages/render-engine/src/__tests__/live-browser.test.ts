@@ -219,9 +219,9 @@ describe("buildLiveBrowserElement", () => {
     const originalFetch = g.fetch;
     const decodeCalls: Array<{ type: string; dataLen: number }> = [];
     const fakeVideoFrame = { close: vi.fn(), __kind: "VideoFrame" as const };
-    g.fetch = (async (input: RequestInfo | URL) =>
+    g.fetch = (async () =>
       ({
-        arrayBuffer: async () => new ArrayBuffer(String(input).length),
+        arrayBuffer: async () => new ArrayBuffer(16),
         blob: async () => new Blob([]),
       }) as Response) as typeof fetch;
     class FakeImageDecoder {
