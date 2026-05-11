@@ -238,6 +238,9 @@ export interface AgentTrustStoreAdapter {
 }
 
 // @public
+export const ALL_CONTENT_ARTIFACT_TYPES: readonly ContentArtifactType[];
+
+// @public
 export const ALL_SUITE_IDS: readonly SuiteId[];
 
 // @public
@@ -296,6 +299,9 @@ export function asProposalId(id: string): ProposalId;
 
 // @public
 export function asSettlementId(id: string): SettlementId;
+
+// @public
+export const AUDIT_TRAIL_ARTIFACT: ContentArtifactType;
 
 // @public
 export interface AuditChainEntry {
@@ -754,6 +760,9 @@ export interface ConsolidationReceipt {
         flushed_tool_audits?: number;
     };
 }
+
+// @public
+export type ContentArtifactType = "audit-trail" | "memory-export" | "execution-ledger";
 
 // @alpha
 export type ControlHolder = "user" | "motebit";
@@ -1466,6 +1475,9 @@ export enum EventType {
     UserInputForwarded = "user_input_forwarded"
 }
 
+// @public
+export const EXECUTION_LEDGER_ARTIFACT: ContentArtifactType;
+
 // @public (undocumented)
 export interface ExecutionReceipt {
     // (undocumented)
@@ -1792,6 +1804,9 @@ export type IntentOrigin = "user-tap" | "ai-loop" | "scheduled" | "agent-to-agen
 export function isBatchableRail(rail: GuestRail): rail is BatchableGuestRail;
 
 // @public
+export function isContentArtifactType(value: unknown): value is ContentArtifactType;
+
+// @public
 export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail;
 
 // @public
@@ -1922,6 +1937,9 @@ export const MaxProductLogSemiring: Semiring<number>;
 
 // @public
 export function maxSensitivity(a: SensitivityLevel, b: SensitivityLevel): SensitivityLevel;
+
+// @public
+export const MEMORY_EXPORT_ARTIFACT: ContentArtifactType;
 
 // @public
 export interface MemoryAccessedPayload {
