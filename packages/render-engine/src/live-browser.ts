@@ -98,7 +98,8 @@ export interface LiveBrowserElementHandle {
    * session has navigated to a meaningful URL (cold-start, post-
    * dismiss, post-`about:blank`), the slot is visible and the
    * surface populates it with forward affordances or a breathing
-   * mark fallback. Toggle via `setHomeVisible(bool)`.
+   * mark fallback. Toggle via `setHomeState("hidden" | "register" |
+   * "overlay")`.
    *
    * Doctrine: `motebit-computer.md` §"What appears on the slab"
    * names the slab as the surface showing what the motebit is, has
@@ -111,13 +112,28 @@ export interface LiveBrowserElementHandle {
    */
   readonly bodySlot: HTMLElement;
   /**
-   * Toggle the body-slot home view's visibility. Pairs with the
-   * surface's URL-state observation: hide when the chrome's
-   * `currentUrl` is a real navigation target, show otherwise.
-   * Visibility is via CSS `display`; the slot's mounted content is
-   * preserved across toggles so re-show is cheap.
+   * Tri-state for the body-slot home view, replacing the earlier
+   * boolean `setHomeVisible`:
+   *
+   *   - `"hidden"`: bodySlot is `display: none`. Screencast occupies
+   *     the body alone (real-URL session register).
+   *   - `"register"`: bodySlot is `display: flex` with no backdrop.
+   *     Home view IS the body's primary content (cold-start / no
+   *     session / post-dismiss). Screen mesh is hidden via the
+   *     per-frame visibility binding (no texture installed).
+   *   - `"overlay"`: bodySlot is `display: flex` WITH backdrop-blur +
+   *     low-alpha background. Home view sits ON TOP of the
+   *     screencast which keeps streaming behind, faintly visible.
+   *     The user is mid-decision — URL bar focused, picking the
+   *     next destination — and the session waits behind the
+   *     overlay rather than being torn down.
+   *
+   * Pairs with the surface's URL-state + focus-state observation:
+   * URL state drives session/home, focus state drives overlay on
+   * top of session. Both transitions are calm — backdrop-blur fades
+   * via the slot's CSS transition; no scene-graph mutation needed.
    */
-  setHomeVisible(visible: boolean): void;
+  setHomeState(state: "hidden" | "register" | "overlay"): void;
   /**
    * Stop the subscription and clear the rendered frame. Idempotent —
    * a second call is a no-op. The element itself is left in the DOM
@@ -482,28 +498,54 @@ export function buildLiveBrowserElement(
   body.appendChild(bodySlot);
   root.appendChild(body);
 
-  // Track home visibility so setHomeVisible can flip display without
-  // touching the slot's mounted children. Default visible — the slab
-  // boots into the empty register and surfaces hide on URL navigate.
-  let homeVisible = true;
-  const setHomeVisible = (visible: boolean): void => {
-    if (homeVisible === visible) return;
-    homeVisible = visible;
-    bodySlot.style.display = visible ? "flex" : "none";
-    // When visible, the slot's contents may include interactive
-    // tiles — re-enable pointer-events on the slot so children can
-    // receive clicks. When hidden, the slot is display:none which
-    // also defeats hit testing.
-    bodySlot.style.pointerEvents = visible ? "auto" : "none";
-  };
-  // Start in the canonical empty-register pointer state — slot is
-  // visible (display:flex per CSS above) but pointer-events:none
-  // until a surface mounts interactive content, at which point the
-  // surface's setHomeVisible(true) (or initial true→true call) will
-  // bump pointer-events to auto. The initial assignment below makes
-  // the no-content default safe: empty slot doesn't block input
-  // capture geometry on the img layer.
+  // Track home tri-state so setHomeState can update display/backdrop
+  // without touching the slot's mounted children. Default register —
+  // the slab boots into the empty register and surfaces transition
+  // out on URL navigate / focus.
+  let homeState: "hidden" | "register" | "overlay" = "register";
+  // CSS transition on the overlay backdrop fades in/out smoothly
+  // rather than snapping. Set once; the value flips on state change.
+  bodySlot.style.transition = "background-color 200ms ease, backdrop-filter 200ms ease";
   bodySlot.style.pointerEvents = "auto";
+  // Initial state marker — keeps the dataset honest from the
+  // moment of construction so tests / introspection can read the
+  // truth without waiting for the first setHomeState call.
+  bodySlot.dataset.homeState = "register";
+
+  const setHomeState = (state: "hidden" | "register" | "overlay"): void => {
+    if (homeState === state) return;
+    homeState = state;
+    if (state === "hidden") {
+      bodySlot.style.display = "none";
+      bodySlot.style.pointerEvents = "none";
+      bodySlot.style.background = "";
+      bodySlot.style.backdropFilter = "";
+      bodySlot.style.setProperty("-webkit-backdrop-filter", "");
+      bodySlot.dataset.homeState = "hidden";
+    } else if (state === "register") {
+      bodySlot.style.display = "flex";
+      bodySlot.style.pointerEvents = "auto";
+      bodySlot.style.background = "";
+      bodySlot.style.backdropFilter = "";
+      bodySlot.style.setProperty("-webkit-backdrop-filter", "");
+      bodySlot.dataset.homeState = "register";
+    } else {
+      // overlay — bodySlot composites OVER the screencast layer.
+      // Backdrop-blur + low-alpha background dim the live screencast
+      // behind without touching its WebGL material; the screencast
+      // keeps streaming so the user feels the session waiting, not
+      // gone. Backdrop alpha + blur tuned to "session faintly
+      // visible, decision-space readable" — not opaque (Safari iOS
+      // pattern) and not just dim (which would feel modal). The
+      // overlay reads as glass-on-glass with the slab.
+      bodySlot.style.display = "flex";
+      bodySlot.style.pointerEvents = "auto";
+      bodySlot.style.background = "rgba(255, 255, 255, 0.18)";
+      bodySlot.style.backdropFilter = "blur(16px) saturate(1.2)";
+      bodySlot.style.setProperty("-webkit-backdrop-filter", "blur(16px) saturate(1.2)");
+      bodySlot.dataset.homeState = "overlay";
+    }
+  };
 
   let firstFrameSeen = false;
   let lastTimestamp = 0;
@@ -634,7 +676,7 @@ export function buildLiveBrowserElement(
     addressBarSlot,
     controlBandSlot,
     bodySlot,
-    setHomeVisible,
+    setHomeState,
     dispose(): void {
       if (disposed) return;
       disposed = true;

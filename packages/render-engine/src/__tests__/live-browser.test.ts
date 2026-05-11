@@ -34,6 +34,64 @@ function makeFrame(overrides: Partial<ScreencastFrame> = {}): ScreencastFrame {
   };
 }
 
+describe("buildLiveBrowserElement — bodySlot tri-state (Session/Home/Overlay)", () => {
+  it("starts in the register state — slot visible without backdrop, ready for the empty-register content", () => {
+    const handle = buildLiveBrowserElement(new StubBus());
+    expect(handle.bodySlot.dataset.homeState).toBe("register");
+    expect(handle.bodySlot.style.display).toBe("flex");
+    // No background or backdrop-filter in register mode — the home
+    // view is the body's primary content, not an overlay. jsdom
+    // returns undefined for never-set style properties (real browsers
+    // return ""); accept both as "unset."
+    expect(handle.bodySlot.style.background || "").toBe("");
+    expect(handle.bodySlot.style.backdropFilter || "").toBe("");
+  });
+
+  it("setHomeState('hidden') → display:none, no backdrop", () => {
+    const handle = buildLiveBrowserElement(new StubBus());
+    handle.setHomeState("hidden");
+    expect(handle.bodySlot.dataset.homeState).toBe("hidden");
+    expect(handle.bodySlot.style.display).toBe("none");
+    expect(handle.bodySlot.style.pointerEvents).toBe("none");
+  });
+
+  it("setHomeState('overlay') → display:flex WITH backdrop-blur + low-alpha background — composites over screencast", () => {
+    // Locks the Session → Home transition contract: overlay mode
+    // makes the slot visible WHILE the screencast keeps streaming
+    // behind, dimmed via backdrop-filter. Different from register
+    // (no backdrop) and different from hidden (display:none).
+    const handle = buildLiveBrowserElement(new StubBus());
+    handle.setHomeState("overlay");
+    expect(handle.bodySlot.dataset.homeState).toBe("overlay");
+    expect(handle.bodySlot.style.display).toBe("flex");
+    expect(handle.bodySlot.style.background).toContain("rgba");
+    // Backdrop-blur is the load-bearing visual register that makes
+    // the overlay glass-on-glass with the slab, not modal-on-page.
+    expect(handle.bodySlot.style.backdropFilter).toContain("blur");
+  });
+
+  it("setHomeState is idempotent — no-op on same-state calls", () => {
+    const handle = buildLiveBrowserElement(new StubBus());
+    handle.setHomeState("overlay");
+    const bgAfterFirst = handle.bodySlot.style.background;
+    handle.setHomeState("overlay");
+    expect(handle.bodySlot.style.background).toBe(bgAfterFirst);
+  });
+
+  it("transitions between all three states cleanly — register → overlay → register restores no-backdrop", () => {
+    const handle = buildLiveBrowserElement(new StubBus());
+    handle.setHomeState("register");
+    handle.setHomeState("overlay");
+    expect(handle.bodySlot.style.backdropFilter).toContain("blur");
+    handle.setHomeState("register");
+    // Returning to register clears the overlay's backdrop register
+    // — the home view becomes the body's primary content again,
+    // no glass-on-glass effect needed.
+    expect(handle.bodySlot.style.backdropFilter || "").toBe("");
+    expect(handle.bodySlot.style.background || "").toBe("");
+  });
+});
+
 describe("buildLiveBrowserElement", () => {
   it("returns an HTMLElement with the slab-live-browser class + an img child", () => {
     const handle = buildLiveBrowserElement(new StubBus());

@@ -245,17 +245,29 @@ export class WebApp {
    */
   private _currentBrowserUrl: string | null = null;
   /**
-   * Slab home-register state. True when the body should show the
-   * home view (forward-framed affordances + empty-empty fallback);
-   * false when the screencast occupies the body with a real URL's
-   * content. Derived from `_currentBrowserUrl` — null or "about:blank"
-   * → home register. Composes with the screencast frame-routing in
-   * `onFrameDecoded`: incoming frames are dropped when on the home
-   * register so `about:blank` whitescreens don't compete with the
-   * home view for the body. Pairs with `LiveBrowserElementHandle
-   * .setHomeVisible()` for the DOM side.
+   * Effective slab-body state machine — two orthogonal axes
+   * (URL-derived base + focus-derived overlay) composed into the
+   * tri-state the body slot renders:
+   *
+   *   - `_onHomeRegister`: URL-derived. True when the URL is null
+   *     or `about:blank` → body shows the home view as primary
+   *     content; screen-mesh visibility derives false (no texture).
+   *     False when a real URL is being browsed → screencast occupies
+   *     the body.
+   *
+   *   - `_homeOverlayActive`: focus-derived. True when the URL bar
+   *     has focus on top of an active session → home view composites
+   *     OVER the screencast (backdrop-blurred, session faintly
+   *     visible behind). Esc / blur exits; navigate-commit also
+   *     exits naturally because URL state flips to a new real value.
+   *
+   * Composition: `_onHomeRegister=true` always wins (no overlay
+   * needed if home IS the body). `_onHomeRegister=false +
+   * _homeOverlayActive=true` is the new transient state for
+   * Session→Home transitions without tearing down the session.
    */
   private _onHomeRegister = true;
+  private _homeOverlayActive = false;
   private _motebitId = "";
   private _deviceId = "";
   private _publicKeyHex = "";
@@ -2156,6 +2168,19 @@ export class WebApp {
    * on home register — `about:blank` whitescreens don't compete with
    * the home view for the body.
    */
+  /**
+   * Compose `_onHomeRegister` + `_homeOverlayActive` into the
+   * effective bodySlot tri-state and apply via setHomeState.
+   * Single source of truth for the slot's display register —
+   * called from both the URL-state applier and the overlay
+   * focus/blur path.
+   */
+  private effectiveHomeState(): "hidden" | "register" | "overlay" {
+    if (this._onHomeRegister) return "register";
+    if (this._homeOverlayActive) return "overlay";
+    return "hidden";
+  }
+
   private applyHomeRegisterToCurrentState(): void {
     const handle = this.liveBrowserHandle;
     if (!handle) return;
@@ -2163,44 +2188,111 @@ export class WebApp {
     const onHome = url == null || url === "" || url === "about:blank";
     const wasOnHome = this._onHomeRegister;
     this._onHomeRegister = onHome;
-    handle.setHomeVisible(onHome);
+    // Real URL navigated → overlay collapses (commit-navigate path);
+    // overlay only makes sense while a session is active AND the user
+    // is focused. The blur listener also clears this on cancel; the
+    // navigate-commit clears it via this branch.
+    if (!onHome && this._homeOverlayActive) {
+      this._homeOverlayActive = false;
+    }
+    const state = this.effectiveHomeState();
+    handle.setHomeState(state);
     if (onHome) {
       // Releasing the texture lets the screen-mesh visibility binding
       // (cd98aa8f / 41e28ead) derive false on the next render tick.
       this.renderer.clearSlabScreencast?.();
-      // Async-build affordances and mount into the slot. The slot
-      // shows whatever's currently in it during the async window
-      // (initial empty, or stale tiles from a prior open); fine, it
-      // just refreshes when the query lands.
-      void this.getSlabHomeAffordances().then((affordances) => {
-        // Re-check the handle + register state — the user may have
-        // dismissed or navigated during the await window.
-        if (this.liveBrowserHandle !== handle) return;
-        if (!this._onHomeRegister) return;
-        const view = buildSlabHomeView(affordances, {
-          onAffordanceTap: (aff) => {
-            const targetUrl = `${aff.scheme}://${aff.host}`;
-            // Dispatch as a navigate forward event through the same
-            // path the URL bar uses — `forwardUserInput({kind:
-            // "navigate", url})`. The forward closure handles
-            // session warming, audit logging, and URL state update.
-            void this.liveBrowserForwardEvent?.({
-              kind: "navigate",
-              url: targetUrl,
-            });
-          },
-          soulTint: this._interiorColor ? this.tintToHex(this._interiorColor.tint) : undefined,
-        });
-        handle.bodySlot.replaceChildren(view);
-      });
+      this.mountHomeViewIntoBodySlot();
     } else if (wasOnHome) {
-      // Leaving home — clear the slot so prior tiles don't linger
-      // behind the screencast. The slot is display:none now but the
-      // children are still in the DOM; replaceChildren keeps memory
-      // tidy and prevents stale tap handlers from firing on a
+      // Leaving home register → clear the slot so prior tiles don't
+      // linger behind the screencast. The slot is display:none now
+      // but the children are still in the DOM; replaceChildren keeps
+      // memory tidy and prevents stale tap handlers from firing on a
       // re-show with different affordances.
       handle.bodySlot.replaceChildren();
     }
+  }
+
+  /**
+   * Build affordances and mount the home view into the body slot.
+   * Used by BOTH the home-register path (slot shows home view as
+   * primary content) AND the overlay path (slot shows home view
+   * over a dimmed live session). Same DOM; different backdrop.
+   *
+   * Async — affordances come from `getSlabHomeAffordances` which
+   * queries the audit log. During the await window the slot shows
+   * whatever's currently in it (empty on first mount, stale tiles
+   * on re-show); refreshes once the query lands. Re-checks the
+   * handle + state-machine flags after the await so a concurrent
+   * dismiss / navigate / blur doesn't race the mount.
+   */
+  private mountHomeViewIntoBodySlot(): void {
+    const handle = this.liveBrowserHandle;
+    if (!handle) return;
+    void this.getSlabHomeAffordances().then((affordances) => {
+      // Re-check the handle + slot-visibility — the user may have
+      // dismissed, navigated, or blurred-out during the await window.
+      if (this.liveBrowserHandle !== handle) return;
+      if (!this._onHomeRegister && !this._homeOverlayActive) return;
+      const view = buildSlabHomeView(affordances, {
+        onAffordanceTap: (aff) => {
+          const targetUrl = `${aff.scheme}://${aff.host}`;
+          // Dispatch as a navigate forward event through the same
+          // path the URL bar uses — `forwardUserInput({kind:
+          // "navigate", url})`. The forward closure handles
+          // session warming, audit logging, and URL state update.
+          // For overlay-mode tap: the URL bar already has focus, so
+          // moving focus to the tile button triggers blur on the
+          // input → blur handler exits the overlay → navigate
+          // proceeds → new URL state flips off the overlay
+          // (idempotent). Single dispatcher, one outcome.
+          void this.liveBrowserForwardEvent?.({
+            kind: "navigate",
+            url: targetUrl,
+          });
+        },
+        soulTint: this._interiorColor ? this.tintToHex(this._interiorColor.tint) : undefined,
+      });
+      handle.bodySlot.replaceChildren(view);
+    });
+  }
+
+  /**
+   * Enter the home-overlay register from an active session — the
+   * Session → Home transition Apple's Safari closes via URL-bar
+   * focus. Composites the home view over the still-streaming
+   * screencast with a backdrop-blur dim. Session keeps running
+   * behind; the user is mid-decision, not mid-teardown.
+   *
+   * Idempotent. No-op if there's no active live_browser shell
+   * (overlay requires a session to overlay), or if already on the
+   * home register (where the home view is already the primary
+   * content), or if already in overlay.
+   */
+  private enterHomeOverlay(): void {
+    if (!this.liveBrowserHandle) return;
+    if (this._onHomeRegister) return;
+    if (this._homeOverlayActive) return;
+    this._homeOverlayActive = true;
+    this.liveBrowserHandle.setHomeState(this.effectiveHomeState());
+    this.mountHomeViewIntoBodySlot();
+  }
+
+  /**
+   * Exit the home-overlay register — restores the session register.
+   * Fired by URL-bar blur (Esc, tap-outside, focus-leave), or by the
+   * commit-navigate path inside `applyHomeRegisterToCurrentState`
+   * which also clears the flag idempotently. The slot's home view
+   * gets cleared so it doesn't render under the screencast on the
+   * next overlay open (stale tile flash).
+   */
+  private exitHomeOverlay(): void {
+    if (!this.liveBrowserHandle) return;
+    if (!this._homeOverlayActive) return;
+    this._homeOverlayActive = false;
+    this.liveBrowserHandle.setHomeState(this.effectiveHomeState());
+    // Clear the slot so the next overlay-open rebuilds fresh tiles
+    // (in case the audit log got new entries between opens).
+    this.liveBrowserHandle.bodySlot.replaceChildren();
   }
 
   /**
@@ -2309,6 +2401,41 @@ export class WebApp {
     // strip in controlBandSlot absorbs its content. Clear in case
     // a prior render left an element behind.
     handle.addressBarSlot.replaceChildren();
+
+    // URL-bar focus → Session→Home transition. Wire focus/blur on
+    // the (just-mounted) URL input so URL-bar focus mid-session
+    // surfaces the home-overlay register. The input is rebuilt on
+    // every chrome render (apps/web mounts chrome state-machine-
+    // driven), so listeners are attached per render — old DOM gets
+    // GC'd with the old listeners.
+    const urlInput = chrome.querySelector("input");
+    if (urlInput) {
+      urlInput.addEventListener("focus", () => this.enterHomeOverlay());
+      urlInput.addEventListener("blur", () => {
+        // Defer overlay exit by one task. When the user clicks a
+        // tile, focus moves to the button → input fires blur
+        // synchronously. If we hide the slot here (display:none),
+        // some browsers won't dispatch the click on the now-hidden
+        // button child between mousedown and mouseup. setTimeout(0)
+        // queues the exit after the current event-loop tick so the
+        // click completes first; the navigate-commit path then
+        // clears the overlay idempotently via the URL-state applier.
+        setTimeout(() => this.exitHomeOverlay(), 0);
+      });
+      // Esc on the URL input → blur it. The deferred blur handler
+      // above exits the overlay. Browser default Esc-on-input
+      // cancels IME composition but doesn't blur, so we do both:
+      // blur the input (which exits overlay) AND restore the
+      // input's value to the current URL so edits are discarded.
+      urlInput.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && this._homeOverlayActive) {
+          if (this._currentBrowserUrl != null) {
+            urlInput.value = this._currentBrowserUrl;
+          }
+          urlInput.blur();
+        }
+      });
+    }
   }
 
   /**
