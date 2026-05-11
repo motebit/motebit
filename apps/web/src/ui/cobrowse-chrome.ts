@@ -101,6 +101,28 @@ export type ForwardEventFn = (event: UserInputEvent) => Promise<UserInputForward
  */
 const urlInputBreathing = new WeakMap<HTMLInputElement, Animation>();
 
+/**
+ * Per-mark animation registry — phase 1c. The mark IS the creature's
+ * attention in the UI layer per motebit-computer.md; making it breathe
+ * sympathetically with the body it represents ties the character on
+ * the left to the surface on the right. Same WeakMap pattern as the
+ * URL input breathing registry — handle GCs with the DOM element.
+ *
+ * State-coupled amplitude (calm-software register):
+ *
+ *   - `user`             — soft pulse, low amplitude (dimmed register; motebit watches)
+ *   - `motebit`          — gentle pulse, mid amplitude (focused register; motebit acts)
+ *   - `handoff_pending`  — faster pulse, higher amplitude (asking; needs decision)
+ *   - `paused`           — no pulse (paused is held per doctrine, not pulsing)
+ *
+ * Rhythm is the slab's 0.3 Hz Rayleigh-eigenmode breath (`handoff_pending`
+ * accelerates to ~0.67 Hz so the "asking" register reads as more present
+ * than ambient). The asymmetry is intentional — paused is the only
+ * non-breathing state because paused is fundamentally a held register
+ * across the doctrine (see motebit-computer.md §"Ambient states").
+ */
+const markBreathing = new WeakMap<HTMLElement, Animation>();
+
 export interface RenderCoBrowseChromeOpts {
   /**
    * User-input forwarder. Required when `state.kind === "user"`
@@ -290,8 +312,8 @@ function buildMark(
   mark.style.borderRadius = "50%";
   // Identity coherence — mark color reads from the user's chosen
   // interior preset so the tiny glyph mirrors the main creature.
-  // Phase 1a uses a static gradient; phase 1c will share the
-  // creature's breathing primitive.
+  // Phase 1c (this commit) attaches the creature's 0.3 Hz breathing
+  // rhythm to the mark via `startMarkBreathing` below.
   const tint = color?.tint ?? [0.78, 0.78, 0.92];
   const glow = color?.glow ?? [0.55, 0.55, 0.85];
   const tintCss = rgb(tint);
@@ -317,8 +339,11 @@ function buildMark(
       break;
     }
     case "handoff_pending": {
-      // Asking. Bright, with a softened pulse intent — phase 1a is
-      // a static "alert" coloring; phase 1c will animate.
+      // Asking. Bright with a faster breathing pulse — `startMarkBreathing`
+      // below attaches a 1500ms period (≈0.67 Hz) animation in this
+      // state so the chrome's "I need a decision" register reads as
+      // more present than ambient. Static fallback values here are
+      // what jsdom + non-Animation environments render.
       mark.style.background = `radial-gradient(circle at 30% 30%, ${rgba(glow, 1)} 0%, ${rgba(tint, 0.96)} 70%)`;
       mark.style.boxShadow = `0 0 10px ${rgba(glow, 0.7)}`;
       mark.style.opacity = "1";
@@ -338,6 +363,12 @@ function buildMark(
   // bindings exist for readability and would-be-future use.
   void tintCss;
   void glowCss;
+
+  // Phase 1c — sympathetic breathing per state. The mark inherits
+  // the creature's 0.3 Hz Rayleigh-eigenmode rhythm at low amplitude;
+  // paused holds; handoff_pending accelerates to signal "asking."
+  // Calm fallback when Element.animate isn't available (jsdom).
+  startMarkBreathing(mark, state.kind);
 
   wrap.appendChild(mark);
 
@@ -418,6 +449,43 @@ function sensitivityRingColor(level: SensitivityLevel): string | null {
       // mark permanently; the gate doesn't fire on personal alone.
       return null;
   }
+}
+
+/**
+ * Phase 1c — sympathetic breathing on the chrome's lead mark. The
+ * mark is the creature's tiny mirror; making it breathe at the same
+ * 0.3 Hz Rayleigh-eigenmode rhythm the slab and creature share
+ * (`liquescentia-as-substrate.md` §"Quiescence") couples the
+ * character on the left to the surface on the right at the rhythm
+ * level. Sibling primitive to the URL input's empty-register
+ * breathing (`startBreathing` in `buildUrlInput`); same WeakMap
+ * registry pattern, same Web Animations API entry, same jsdom-safe
+ * fallback.
+ *
+ * State coupling (calm-software register, never warning-grade):
+ *
+ *   - `user`             low amplitude (0.55 → 0.70) — dimmed register; motebit watches
+ *   - `motebit`          mid amplitude (0.88 → 1.00) — focused register; motebit acts
+ *   - `handoff_pending`  higher amplitude + faster period (0.70 → 1.00 at ~0.67 Hz) — asking
+ *   - `paused`           NO animation — paused is held per doctrine (motebit-computer.md §"Ambient states")
+ */
+function startMarkBreathing(mark: HTMLElement, stateKind: ControlState["kind"]): void {
+  if (markBreathing.has(mark)) return;
+  if (typeof mark.animate !== "function") return;
+  if (stateKind === "paused") return;
+
+  const profile =
+    stateKind === "handoff_pending"
+      ? { from: "0.70", to: "1.00", durationMs: 1500 }
+      : stateKind === "motebit"
+        ? { from: "0.88", to: "1.00", durationMs: 3333 }
+        : { from: "0.55", to: "0.70", durationMs: 3333 }; // `user` default
+
+  const anim = mark.animate(
+    [{ opacity: profile.from }, { opacity: profile.to }, { opacity: profile.from }],
+    { duration: profile.durationMs, iterations: Infinity, easing: "ease-in-out" },
+  );
+  markBreathing.set(mark, anim);
 }
 
 // ── Middle — the destination ───────────────────────────────────────────
