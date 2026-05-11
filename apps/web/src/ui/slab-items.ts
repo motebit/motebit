@@ -1964,6 +1964,14 @@ function renderLiveBrowser(item: SlabItem): HTMLElement {
     forwardUserInput?: (event: UserInputEvent) => Promise<UserInputForwardResult>;
     displayWidth?: number;
     displayHeight?: number;
+    /**
+     * Soul-tinted CSS color (e.g., `#a9b8d0`) for the local input-
+     * feedback layer (cursor halo, click ripple, scroll indicator).
+     * Forwarded to `attachInputCapture` so the feedback primitives
+     * share the slab's chromatic family rather than reading as
+     * generic web hover states.
+     */
+    soulTintHex?: string;
     onLiveBrowserMount?: (handle: LiveBrowserElementHandle) => void;
     /**
      * Surface-supplied frame router. Fires on every pre-decoded
@@ -2001,6 +2009,7 @@ function renderLiveBrowser(item: SlabItem): HTMLElement {
       forwardEvent: payload.forwardUserInput,
       fallbackWidth: payload.displayWidth ?? 1280,
       fallbackHeight: payload.displayHeight ?? 800,
+      soulTint: payload.soulTintHex,
     });
   }
   // Track the handle so `updateLiveBrowser` (rare; payload swap)

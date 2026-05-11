@@ -70,6 +70,14 @@ export interface AttachInputCaptureDeps {
   readonly fallbackWidth: number;
   readonly fallbackHeight: number;
   /**
+   * Optional soul-tinted CSS color for the local input-feedback layer
+   * (cursor halo, click ripple, scroll indicator). Pass the
+   * creature's current interior color so the feedback primitives
+   * share the slab's chromatic family. Defaults to a neutral blue
+   * if unset.
+   */
+  readonly soulTint?: string;
+  /**
    * Optional logger for transport / capture warnings. Keeps the
    * capture module surface-agnostic — apps/web wires its own logger.
    */
@@ -83,10 +91,20 @@ export interface AttachInputCaptureDeps {
  */
 export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
   const { img, forwardEvent, fallbackWidth, fallbackHeight } = deps;
+  const soulTint = deps.soulTint ?? "rgb(80, 130, 200)";
   const logger = deps.logger ?? {
     // eslint-disable-next-line no-console -- fail-soft default; real surfaces wire a logger
     warn: (msg, ctx) => console.warn(msg, ctx),
   };
+
+  // Local input-feedback layer — 0ms-response primitives that
+  // overlay the screencast img with cursor halo / click ripple /
+  // scroll indicator. Separates input acknowledgment (local, instant)
+  // from page response (remote, RTT-bound) — the cloud-gaming /
+  // visionOS pattern that makes ~200ms RTT feel responsive enough.
+  // The tabIndex=0 below (line ~116) makes the img focusable for
+  // the wheel handler's `document.activeElement === img` check.
+  const cursorHalo = mountCursorHalo(img, soulTint);
 
   // Make the img focusable so it can receive keyboard events. Save
   // the prior value so detach restores faithfully (the slab item
@@ -119,9 +137,10 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
     if (!coords) return; // out-of-bounds (defensive — clicks on the img should always be in-bounds)
     // Slice 2e — local click-ripple feedback. Pure DOM animation;
     // no wire involvement. Confirms "my click registered there"
-    // before the next screencast frame arrives (which can be up
-    // to ~67ms later at 15fps).
-    spawnClickRipple(img, e);
+    // before the next screencast frame arrives. Soul-tinted so
+    // the feedback feels native to the slab, not a generic web
+    // hover state.
+    spawnClickRipple(img, e, soulTint);
     dispatch({
       kind: "click",
       x: coords.x,
@@ -211,6 +230,13 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
     e.preventDefault();
     const coords = translateClick(img, e, fallbackWidth, fallbackHeight);
     if (!coords) return; // out-of-bounds — defensive
+    // Local scroll-indicator feedback — 0ms response so the user
+    // sees "scroll registered" even before the ~200ms RTT delivers
+    // the new frame. Direction-aware: down (dy > 0) shows a
+    // downward arrow, up shows upward. Cancels and re-spawns on
+    // each wheel event so continuous scrolling reads as one
+    // sustained indicator, not a stutter of separate spawns.
+    spawnScrollIndicator(img, e, soulTint);
     if (wheelAccum) {
       wheelAccum.x = coords.x;
       wheelAccum.y = coords.y;
@@ -227,6 +253,16 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
       count: 1,
     };
     wheelFlushTimer = setTimeout(flushWheel, WHEEL_COALESCE_MS);
+  }
+
+  function onMouseMove(e: MouseEvent): void {
+    moveCursorHalo(cursorHalo, img, e);
+  }
+  function onMouseEnter(): void {
+    showCursorHalo(cursorHalo);
+  }
+  function onMouseLeave(): void {
+    hideCursorHalo(cursorHalo);
   }
 
   // ── Paste capture ──────────────────────────────────────────────
@@ -246,6 +282,13 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
   // can suppress the page-level scroll. Modern browsers default
   // wheel listeners to passive — we need active.
   img.addEventListener("wheel", onWheel, { passive: false });
+  // Cursor-halo lifecycle — local 0ms-feedback ring that tracks the
+  // OS cursor over the screencast. Enter shows; leave hides; move
+  // tracks. Mouse-driven only; touch surfaces use the click ripple
+  // alone (no hover state on touch).
+  img.addEventListener("mousemove", onMouseMove);
+  img.addEventListener("mouseenter", onMouseEnter);
+  img.addEventListener("mouseleave", onMouseLeave);
   // Keydown attaches on document so we catch keys regardless of which
   // ancestor element the focus event reports — but we ALSO check
   // `document.activeElement === img` inside the handler, so the
@@ -262,8 +305,12 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
     flushWheel();
     img.removeEventListener("click", onClick);
     img.removeEventListener("wheel", onWheel);
+    img.removeEventListener("mousemove", onMouseMove);
+    img.removeEventListener("mouseenter", onMouseEnter);
+    img.removeEventListener("mouseleave", onMouseLeave);
     document.removeEventListener("keydown", onKeydown, true);
     document.removeEventListener("paste", onPaste, true);
+    cursorHalo.dispose();
     // Restore pre-attach state.
     img.tabIndex = priorTabIndex;
     img.style.outline = priorOutline;
@@ -336,7 +383,7 @@ function mouseButton(button: number): "left" | "right" | "middle" {
  * ripple is silently skipped — feedback is best-effort UX, never
  * load-bearing for the click forwarding itself.
  */
-function spawnClickRipple(img: HTMLImageElement, e: MouseEvent): void {
+function spawnClickRipple(img: HTMLImageElement, e: MouseEvent, soulTint: string): void {
   const parent = img.parentElement;
   if (!parent) return;
   // Compute click position relative to the img's own bounding rect,
@@ -363,25 +410,186 @@ function spawnClickRipple(img: HTMLImageElement, e: MouseEvent): void {
   // its size at any given animation frame.
   ripple.style.transform = "translate(-50%, -50%)";
   ripple.style.borderRadius = "50%";
-  ripple.style.background = "rgba(80, 130, 200, 0.42)";
+  // Soul-tinted with a soft outline ring — the previous flat 30px
+  // disc was too subtle against busy pages. Now: filled center with
+  // a brighter ring outside, both expanding + fading. Reads as a
+  // pulse "you clicked here" against any page background.
+  ripple.style.background = colorWithAlpha(soulTint, 0.32);
+  ripple.style.boxShadow = `0 0 0 2px ${colorWithAlpha(soulTint, 0.55)}`;
   ripple.style.pointerEvents = "none";
-  ripple.style.opacity = "0.6";
-  ripple.style.transition = `width ${RIPPLE_DURATION_MS}ms ease-out, height ${RIPPLE_DURATION_MS}ms ease-out, opacity ${RIPPLE_DURATION_MS}ms ease-out`;
+  ripple.style.opacity = "0.85";
+  ripple.style.transition = `width ${RIPPLE_DURATION_MS}ms ease-out, height ${RIPPLE_DURATION_MS}ms ease-out, opacity ${RIPPLE_DURATION_MS}ms ease-out, box-shadow ${RIPPLE_DURATION_MS}ms ease-out`;
   parent.appendChild(ripple);
-  // Force a reflow so the transition starts from the initial 0/0.6
-  // state rather than collapsing to the final 30/0 with no visible
+  // Force a reflow so the transition starts from the initial 0/0.85
+  // state rather than collapsing to the final size/0 with no visible
   // animation.
   void ripple.offsetWidth;
   ripple.style.width = `${RIPPLE_SIZE_PX}px`;
   ripple.style.height = `${RIPPLE_SIZE_PX}px`;
   ripple.style.opacity = "0";
+  ripple.style.boxShadow = `0 0 0 8px ${colorWithAlpha(soulTint, 0)}`;
   setTimeout(() => {
     ripple.remove();
   }, RIPPLE_DURATION_MS + 16);
 }
 
-const RIPPLE_DURATION_MS = 400;
-const RIPPLE_SIZE_PX = 30;
+// Click ripple: larger and longer than v1 so it's discoverable
+// against busy page content. 60px max + 600ms gives a clear
+// "registered there" pulse without lingering.
+const RIPPLE_DURATION_MS = 600;
+const RIPPLE_SIZE_PX = 60;
+
+/**
+ * Cursor halo — a soul-tinted ring that tracks the OS cursor over
+ * the screencast at 0ms latency. The local input-feedback layer's
+ * load-bearing primitive: it provides constant visual confirmation
+ * that the surface is alive + controllable while the page response
+ * (200ms RTT away) catches up. visionOS Safari's gaze cursor pattern
+ * applied to a desktop pointer.
+ *
+ * Mounted to the img's parent (live_browser body wrapper, which has
+ * position: relative) so the halo positions absolutely against the
+ * same coordinate space the screencast occupies. Hidden by default;
+ * shown on mouseenter, moved on mousemove, hidden on mouseleave.
+ */
+interface CursorHaloHandle {
+  readonly element: HTMLDivElement;
+  dispose(): void;
+}
+
+function mountCursorHalo(img: HTMLImageElement, soulTint: string): CursorHaloHandle {
+  const parent = img.parentElement;
+  if (!parent) {
+    // Defensive — return a no-op handle if the img isn't mounted.
+    const el = document.createElement("div");
+    return { element: el, dispose: () => undefined };
+  }
+  const halo = document.createElement("div");
+  halo.className = "cobrowse-cursor-halo";
+  halo.style.position = "absolute";
+  halo.style.left = "0";
+  halo.style.top = "0";
+  halo.style.width = `${CURSOR_HALO_SIZE_PX}px`;
+  halo.style.height = `${CURSOR_HALO_SIZE_PX}px`;
+  halo.style.borderRadius = "50%";
+  halo.style.transform = "translate(-50%, -50%) scale(0.85)";
+  halo.style.background = "transparent";
+  halo.style.border = `1.5px solid ${colorWithAlpha(soulTint, 0.55)}`;
+  halo.style.boxShadow = `0 0 8px ${colorWithAlpha(soulTint, 0.35)}, inset 0 0 4px ${colorWithAlpha(soulTint, 0.25)}`;
+  halo.style.opacity = "0";
+  halo.style.pointerEvents = "none";
+  halo.style.transition = "opacity 140ms ease-out, transform 80ms ease-out, left 0ms, top 0ms";
+  halo.style.willChange = "transform, left, top, opacity";
+  parent.appendChild(halo);
+  return {
+    element: halo,
+    dispose(): void {
+      halo.remove();
+    },
+  };
+}
+
+function moveCursorHalo(handle: CursorHaloHandle, img: HTMLImageElement, e: MouseEvent): void {
+  const rect = img.getBoundingClientRect();
+  const lx = e.clientX - rect.left;
+  const ly = e.clientY - rect.top;
+  // Same coordinate-space pattern as the click ripple — parent-local
+  // (img.offsetLeft + lx, img.offsetTop + ly) so the halo follows
+  // the cursor regardless of parent padding/margin around the img.
+  const cx = img.offsetLeft + lx;
+  const cy = img.offsetTop + ly;
+  handle.element.style.left = `${cx}px`;
+  handle.element.style.top = `${cy}px`;
+}
+
+function showCursorHalo(handle: CursorHaloHandle): void {
+  handle.element.style.opacity = "0.9";
+  handle.element.style.transform = "translate(-50%, -50%) scale(1)";
+}
+
+function hideCursorHalo(handle: CursorHaloHandle): void {
+  handle.element.style.opacity = "0";
+  handle.element.style.transform = "translate(-50%, -50%) scale(0.85)";
+}
+
+const CURSOR_HALO_SIZE_PX = 28;
+
+/**
+ * Scroll indicator — brief soul-tinted directional bar that spawns
+ * on every wheel event, anchored near the cursor. Visual proof that
+ * the wheel was registered, even though the page response will only
+ * arrive ~200ms later. Direction-aware: dy>0 (down-scroll) shows a
+ * downward bar below the cursor; dy<0 shows upward; horizontal
+ * scroll suppressed for now (the cloud Chromium mostly scrolls
+ * vertically).
+ *
+ * Re-spawning per wheel event is intentional — continuous scrolling
+ * reads as a sustained sequence of indicators rather than one
+ * stretched animation, which matches the discrete wheel-tick
+ * register the user is feeling on their input device.
+ */
+function spawnScrollIndicator(img: HTMLImageElement, e: WheelEvent, soulTint: string): void {
+  const parent = img.parentElement;
+  if (!parent) return;
+  // Suppress on micro-deltas to avoid spawning indicators for
+  // accidental trackpad jitter — only show when the user clearly
+  // intended a scroll gesture.
+  if (Math.abs(e.deltaY) < 4) return;
+  const rect = img.getBoundingClientRect();
+  const lx = e.clientX - rect.left;
+  const ly = e.clientY - rect.top;
+  const cx = img.offsetLeft + lx;
+  const cy = img.offsetTop + ly;
+  const direction = e.deltaY > 0 ? 1 : -1;
+  const indicator = document.createElement("div");
+  indicator.className = "cobrowse-scroll-indicator";
+  indicator.style.position = "absolute";
+  indicator.style.left = `${cx}px`;
+  indicator.style.top = `${cy + direction * 18}px`;
+  indicator.style.width = "3px";
+  indicator.style.height = `${SCROLL_INDICATOR_HEIGHT_PX}px`;
+  indicator.style.background = colorWithAlpha(soulTint, 0.72);
+  indicator.style.borderRadius = "2px";
+  indicator.style.transform = "translate(-50%, -50%)";
+  indicator.style.pointerEvents = "none";
+  indicator.style.opacity = "0";
+  indicator.style.transition = `opacity ${SCROLL_INDICATOR_DURATION_MS / 3}ms ease-out, transform ${SCROLL_INDICATOR_DURATION_MS}ms ease-out`;
+  parent.appendChild(indicator);
+  void indicator.offsetWidth;
+  indicator.style.opacity = "0.85";
+  // Animate the bar drifting in the scroll direction during its
+  // visible window — reads as "scroll energy flowing down (or up)"
+  // rather than a static mark.
+  indicator.style.transform = `translate(-50%, calc(-50% + ${direction * 14}px))`;
+  setTimeout(() => {
+    indicator.style.opacity = "0";
+  }, SCROLL_INDICATOR_DURATION_MS - 80);
+  setTimeout(() => {
+    indicator.remove();
+  }, SCROLL_INDICATOR_DURATION_MS + 16);
+}
+
+const SCROLL_INDICATOR_DURATION_MS = 280;
+const SCROLL_INDICATOR_HEIGHT_PX = 22;
+
+/**
+ * Parse a CSS color string (hex or rgb/rgba) and emit an `rgba(...)`
+ * with the supplied alpha. Handles the canonical forms; falls back
+ * to a soul-tint-neutral default on unparseable input so feedback
+ * primitives degrade gracefully rather than disappearing.
+ */
+function colorWithAlpha(color: string, alpha: number): string {
+  const hex = color.match(/^#?([0-9a-f]{6})$/i);
+  if (hex) {
+    const n = parseInt(hex[1]!, 16);
+    return `rgba(${(n >> 16) & 0xff}, ${(n >> 8) & 0xff}, ${n & 0xff}, ${alpha})`;
+  }
+  const rgb = color.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (rgb) {
+    return `rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, ${alpha})`;
+  }
+  return `rgba(80, 130, 200, ${alpha})`;
+}
 
 const PURE_MODIFIER_KEYS: ReadonlySet<string> = new Set([
   "Shift",

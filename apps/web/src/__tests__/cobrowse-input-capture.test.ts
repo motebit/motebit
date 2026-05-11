@@ -317,8 +317,10 @@ describe("attachInputCapture — click-ripple feedback", () => {
     img.dispatchEvent(new MouseEvent("click", { clientX: 1, clientY: 1, button: 0 }));
     expect(parent.querySelectorAll(".cobrowse-click-ripple").length).toBe(1);
 
-    // Wait beyond the 400ms animation duration.
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    // Wait beyond the 600ms animation duration — bumped from 400ms
+    // in the local-input-feedback-layer chapter so the ripple
+    // reads against busy page content.
+    await new Promise((resolve) => setTimeout(resolve, 650));
     expect(parent.querySelectorAll(".cobrowse-click-ripple").length).toBe(0);
   });
 

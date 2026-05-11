@@ -2000,6 +2000,11 @@ export class WebApp {
         // defaults.
         displayWidth: 1280,
         displayHeight: 800,
+        // Soul-tinted local input-feedback layer — cursor halo,
+        // click ripple, scroll indicator all share the creature's
+        // current interior color so feedback reads as native to
+        // the slab rather than a generic web hover state.
+        soulTintHex: this._interiorColor ? this.tintToHex(this._interiorColor.tint) : undefined,
         onLiveBrowserMount: (h: LiveBrowserElementHandle) => {
           this.liveBrowserHandle = h;
           // Apply chrome immediately so the URL bar + control band
