@@ -26,6 +26,8 @@
 
 import type { Hono } from "hono";
 import { canonicalJson, sign, bytesToHex, sha256 } from "@motebit/encryption";
+import type { SignedTransparencyDeclaration } from "@motebit/protocol";
+import { TRANSPARENCY_SPEC_ID, TRANSPARENCY_SUITE } from "@motebit/protocol";
 import type { RelayIdentity } from "./federation.js";
 
 // ---------------------------------------------------------------------------
@@ -33,15 +35,16 @@ import type { RelayIdentity } from "./federation.js";
 // ---------------------------------------------------------------------------
 
 /**
- * Pre-spec version identifier. Once `spec/relay-transparency-v1.md` lands,
- * this becomes `motebit/relay-transparency@1.0`. Until then, the draft
- * marker signals to readers that the wire format is operator convention,
- * not protocol law.
+ * Spec version identifier. The wire format is codified in
+ * `spec/relay-transparency-v1.md` (Stage 2b-i, shipped 2026-05-11);
+ * the declaration shape is the canonical
+ * `SignedTransparencyDeclaration` from `@motebit/protocol`. Operators
+ * MAY bump the draft suffix when the spec's wire format breaks.
  */
-const SPEC_DRAFT_ID = "motebit-transparency/draft-2026-04-14" as const;
+const SPEC_DRAFT_ID = TRANSPARENCY_SPEC_ID;
 
-/** Cryptosuite for the declaration signature — same as identity files. */
-const SIGNATURE_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+/** Cryptosuite for the declaration signature — pinned by spec/relay-transparency-v1.md §3.1. */
+const SIGNATURE_SUITE = TRANSPARENCY_SUITE;
 
 /**
  * The canonical declaration content. Edit here and both the markdown and
@@ -252,16 +255,17 @@ export const DECLARATION_CONTENT = {
 // Build, sign, render
 // ---------------------------------------------------------------------------
 
-export interface SignedDeclaration {
-  spec: typeof SPEC_DRAFT_ID;
-  declared_at: number;
-  relay_id: string;
-  relay_public_key: string;
-  content: typeof DECLARATION_CONTENT;
-  hash: string;
-  suite: typeof SIGNATURE_SUITE;
-  signature: string;
-}
+/**
+ * Reference-relay narrowing of `SignedTransparencyDeclaration` from
+ * `@motebit/protocol`. The protocol surface treats `content` as
+ * `unknown` (operator-extensible per `spec/relay-transparency-v1.md`
+ * §3.1); the reference relay narrows `content` to its specific
+ * `DECLARATION_CONTENT` shape so call sites that consume the relay's
+ * declaration get the full content type without casting.
+ */
+export type SignedDeclaration = Omit<SignedTransparencyDeclaration, "content"> & {
+  readonly content: typeof DECLARATION_CONTENT;
+};
 
 /**
  * Build the canonical signed declaration. Hash and signature cover the

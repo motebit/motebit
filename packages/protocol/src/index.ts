@@ -2643,6 +2643,26 @@ export {
   EXECUTION_LEDGER_ARTIFACT,
 } from "./artifact-type.js";
 
+// Operator-transparency declaration — the trust-anchor primitive
+// (spec/relay-transparency-v1.md, Stage 2b-i). The relay publishes a
+// signed declaration at /.well-known/motebit-transparency.json; the
+// declaration's `relay_public_key` is the trust anchor every motebit
+// verifier pins for content-artifact manifests, settlement receipts,
+// and federation handshakes. The optional onchain anchor (Solana memo
+// `motebit:transparency:v1:{hash}`) closes the TOFU savant gap on the
+// first fetch. See `./transparency.ts` header.
+export type {
+  SignedTransparencyDeclaration,
+  TransparencySignedPayload,
+  TransparencyAnchorRecord,
+} from "./transparency.js";
+export {
+  TRANSPARENCY_SUITE,
+  TRANSPARENCY_ANCHOR_MEMO_PREFIX,
+  TRANSPARENCY_SPEC_ID,
+  isSignedTransparencyDeclaration,
+} from "./transparency.js";
+
 import type { ToolMode } from "./tool-mode.js";
 
 // ── Skill manifest + envelope (spec/skills-v1.md) ────────────────

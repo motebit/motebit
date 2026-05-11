@@ -23,6 +23,7 @@ import {
   buildCredentialAnchorBatchJsonSchema,
   buildCredentialAnchorProofJsonSchema,
 } from "../src/credential-anchor.js";
+import { buildSignedTransparencyDeclarationJsonSchema } from "../src/transparency-declaration.js";
 import {
   buildAgentSettlementAnchorBatchJsonSchema,
   buildAgentSettlementAnchorProofJsonSchema,
@@ -152,6 +153,10 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   },
   { filename: "credential-anchor-batch-v1.json", build: buildCredentialAnchorBatchJsonSchema },
   { filename: "credential-anchor-proof-v1.json", build: buildCredentialAnchorProofJsonSchema },
+  {
+    filename: "signed-transparency-declaration-v1.json",
+    build: buildSignedTransparencyDeclarationJsonSchema,
+  },
   {
     filename: "agent-settlement-anchor-batch-v1.json",
     build: buildAgentSettlementAnchorBatchJsonSchema,

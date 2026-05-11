@@ -126,6 +126,11 @@ export {
   buildCredentialAnchorProofJsonSchema,
 } from "./credential-anchor.js";
 export {
+  SignedTransparencyDeclarationSchema,
+  SIGNED_TRANSPARENCY_DECLARATION_SCHEMA_ID,
+  buildSignedTransparencyDeclarationJsonSchema,
+} from "./transparency-declaration.js";
+export {
   AgentSettlementAnchorBatchSchema,
   AGENT_SETTLEMENT_ANCHOR_BATCH_SCHEMA_ID,
   buildAgentSettlementAnchorBatchJsonSchema,

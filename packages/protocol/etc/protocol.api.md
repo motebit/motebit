@@ -1825,6 +1825,9 @@ export function isContentArtifactType(value: unknown): value is ContentArtifactT
 export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail;
 
 // @public
+export function isSignedTransparencyDeclaration(value: unknown): value is SignedTransparencyDeclaration;
+
+// @public
 export function isSuiteId(value: unknown): value is SuiteId;
 
 // @public
@@ -2944,6 +2947,18 @@ export interface SignableComputerSessionReceipt {
 }
 
 // @public
+export interface SignedTransparencyDeclaration {
+    readonly content: unknown;
+    readonly declared_at: number;
+    readonly hash: string;
+    readonly relay_id: string;
+    readonly relay_public_key: string;
+    readonly signature: string;
+    readonly spec: string;
+    readonly suite: SuiteId;
+}
+
+// @public
 export const SKILL_AUTO_LOADABLE_TIERS: readonly SkillSensitivity[];
 
 // @public
@@ -3478,6 +3493,25 @@ export interface ToolRiskProfile {
 
 // @public
 export function transitiveClosure<T>(graph: WeightedDigraph<T>): Map<string, Map<string, T>>;
+
+// @public
+export const TRANSPARENCY_ANCHOR_MEMO_PREFIX: "motebit:transparency:v1:";
+
+// @public
+export const TRANSPARENCY_SPEC_ID: "motebit-transparency/draft-2026-04-14";
+
+// @public
+export const TRANSPARENCY_SUITE: SuiteId;
+
+// @public
+export interface TransparencyAnchorRecord {
+    readonly anchor_address: string;
+    readonly anchored_hash_hex: string;
+    readonly tx_hash: string;
+}
+
+// @public
+export type TransparencySignedPayload = Pick<SignedTransparencyDeclaration, "spec" | "declared_at" | "relay_id" | "relay_public_key" | "content">;
 
 // @public
 export const TRUST_LEVEL_SCORES: Record<string, number>;

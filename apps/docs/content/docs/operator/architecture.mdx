@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **50 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 23 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **50 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 24 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -122,10 +122,11 @@ motebit/
 │   ├── browser-sandbox/       [atom]        Playwright-driven Chromium for the virtual_browser embodiment — second computer-use-v1 producer.
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
-├── spec/                      # 23 open specifications, each motebit/<name>@1.0
+├── spec/                      # 24 open specifications, each motebit/<name>@1.0
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
 │   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
+│   ├── relay-transparency-v1.md             Signed operator-transparency declaration — the trust-anchor primitive every motebit verifier pins.
 │   ├── market-v1.md                         Budget, settlement, fees, trust, routing scores.
 │   ├── credential-v1.md                     W3C VC 2.0, issuance, weighting, revocation.
 │   ├── settlement-v1.md                     Foundation law, rail taxonomy, sovereign rail, security.

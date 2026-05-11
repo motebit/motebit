@@ -23,7 +23,13 @@
  */
 
 import { canonicalJson, hexToBytes, sha256, bytesToHex, verifyBySuite } from "@motebit/crypto";
-import type { SuiteId } from "@motebit/protocol";
+import type { SignedTransparencyDeclaration } from "@motebit/protocol";
+
+// Re-export the canonical wire type so consumers of this package can
+// import it from one path. Per spec/relay-transparency-v1.md §3.1 the
+// type lives in `@motebit/protocol` as the binding machine-readable
+// form; this package consumes it.
+export type { SignedTransparencyDeclaration } from "@motebit/protocol";
 
 /**
  * The pinned trust anchor — what a verifier carries forward after a
@@ -39,24 +45,6 @@ export interface TransparencyAnchor {
   readonly relayId: string;
   /** ISO timestamp of the declaration. */
   readonly declaredAt: number;
-}
-
-/**
- * Wire shape of `/.well-known/motebit-transparency.json`. Matches
- * `SignedDeclaration` in `services/relay/src/transparency.ts` — the
- * canonical reference implementation. Stage 2's wire-format spec
- * (`spec/relay-transparency-v1.md`) will pin this shape; until then,
- * the client mirrors the relay's emit shape.
- */
-export interface SignedTransparencyDeclaration {
-  readonly spec: string;
-  readonly declared_at: number;
-  readonly relay_id: string;
-  readonly relay_public_key: string;
-  readonly content: unknown;
-  readonly hash: string;
-  readonly suite: SuiteId;
-  readonly signature: string;
 }
 
 export interface FetchTransparencyAnchorOptions {
