@@ -1969,7 +1969,7 @@ function renderLiveBrowser(item: SlabItem): HTMLElement {
      * still runs (input capture stays functional) but the screencast
      * is invisible — opacity:0 on the img.
      */
-    onFrameDecoded?: (image: HTMLImageElement | ImageBitmap | VideoFrame) => void;
+    onFrameDecoded?: (image: HTMLImageElement | ImageBitmap) => void;
   };
   const source = payload.frameSource;
   if (!source || typeof source.subscribe !== "function") {

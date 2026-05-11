@@ -201,37 +201,49 @@ describe("buildLiveBrowserElement", () => {
     expect(decoded[0]).toBe(handle.element.querySelector("img"));
   });
 
-  it("prefers the WebCodecs ImageDecoder tier when the global is present (hero-surface decode path)", async () => {
+  it("tier-1 path uses WebCodecs ImageDecoder + createImageBitmap bridge — the WebGL-safe end-game decode", async () => {
     // The end-game decode pipeline is tiered: WebCodecs ImageDecoder
-    // → createImageBitmap → HTMLImage.decode. When ImageDecoder is
-    // present, that tier MUST be the one we take — it's the only path
-    // that produces a `VideoFrame` (the unified WebCodecs frame type
-    // the future H.264 `VideoDecoder` end-game will also produce) and
-    // the only path with hardware-accelerated decode + off-main-thread
-    // execution. Stub the global, publish a frame, assert the
-    // ImageDecoder constructor + .decode() were called and the
-    // produced VideoFrame is what got handed to onFrameDecoded.
+    // (with a createImageBitmap bridge) → createImageBitmap-direct →
+    // HTMLImage.decode. When ImageDecoder is present, tier-1 MUST run
+    // AND MUST bridge through createImageBitmap before handoff —
+    // returning the raw VideoFrame to Three.js's WebGL texImage2D
+    // races with the decoder's lifecycle (closed buffers in Chrome →
+    // black texture upload, the slab-renders-as-dark-rectangle bug).
+    //
+    // Contract pinned: (1) ImageDecoder is constructed + decoded;
+    // (2) the resulting VideoFrame is fed to createImageBitmap;
+    // (3) the ImageBitmap from the bridge — not the VideoFrame — is
+    // what reaches onFrameDecoded. When WebGPU + importExternalTexture
+    // lands, the bridge step gets replaced and this test moves with
+    // the renderer migration.
     const g = globalThis as unknown as {
       ImageDecoder?: unknown;
+      createImageBitmap?: typeof createImageBitmap;
       fetch?: typeof fetch;
     };
     const originalImageDecoder = g.ImageDecoder;
+    const originalCreateImageBitmap = g.createImageBitmap;
     const originalFetch = g.fetch;
-    const decodeCalls: Array<{ type: string; dataLen: number }> = [];
+    const decodeCalls: Array<{ type: string }> = [];
+    const bridgeCalls: Array<{ source: unknown }> = [];
     const fakeVideoFrame = { close: vi.fn(), __kind: "VideoFrame" as const };
+    const fakeBitmap = { close: vi.fn(), __kind: "ImageBitmap" as const };
     g.fetch = (async () =>
       ({
         arrayBuffer: async () => new ArrayBuffer(16),
         blob: async () => new Blob([]),
       }) as Response) as typeof fetch;
+    g.createImageBitmap = (async (source: unknown) => {
+      bridgeCalls.push({ source });
+      return fakeBitmap as unknown as ImageBitmap;
+    }) as typeof createImageBitmap;
     class FakeImageDecoder {
       private readonly init: { type: string; data: BufferSource };
       constructor(init: { type: string; data: BufferSource }) {
         this.init = init;
       }
       async decode(): Promise<{ image: unknown }> {
-        const data = this.init.data as ArrayBuffer;
-        decodeCalls.push({ type: this.init.type, dataLen: data.byteLength });
+        decodeCalls.push({ type: this.init.type });
         return { image: fakeVideoFrame };
       }
       close(): void {}
@@ -249,19 +261,25 @@ describe("buildLiveBrowserElement", () => {
         },
       });
       bus.publish(makeFrame({ jpeg_base64: "WEBCODECS", timestamp: 1 }));
-      // Tier-1 decode is async — wait one microtask + macrotask flush.
+      // Tier-1 decode is async — wait microtask + macrotask flush.
       await new Promise((r) => setTimeout(r, 0));
       await new Promise((r) => setTimeout(r, 0));
       expect(decodeCalls).toHaveLength(1);
       expect(decodeCalls[0]!.type).toBe("image/jpeg");
+      expect(bridgeCalls).toHaveLength(1);
+      // The VideoFrame from decode() flows into createImageBitmap as
+      // its source — the bridge step is what makes the WebGL upload
+      // race-free.
+      expect(bridgeCalls[0]!.source).toBe(fakeVideoFrame);
       expect(decoded).toHaveLength(1);
-      // The handed-off surface IS the VideoFrame the ImageDecoder
-      // produced — not a re-decoded HTMLImageElement. This is the
-      // architectural pin: the slab receives a VideoFrame whenever
-      // the environment supports the WebCodecs tier.
-      expect(decoded[0]).toBe(fakeVideoFrame);
+      // The handoff surface is the bridge output, not the raw frame.
+      expect(decoded[0]).toBe(fakeBitmap);
+      // The source VideoFrame is closed after the bridge takes its
+      // snapshot — lifecycle hygiene confirmed.
+      expect(fakeVideoFrame.close).toHaveBeenCalledTimes(1);
     } finally {
       g.ImageDecoder = originalImageDecoder;
+      g.createImageBitmap = originalCreateImageBitmap;
       g.fetch = originalFetch;
     }
   });

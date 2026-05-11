@@ -208,18 +208,22 @@ export interface RenderAdapter {
    * the glass volume; this method lights it up with the cloud
    * browser's JPEG bitstream (one frame at a time, replace-in-place).
    *
-   * Accepts any of the three texture-uploadable surfaces the
-   * `live-browser.ts` decode pipeline produces:
+   * Accepts the two texture-uploadable surfaces the `live-browser.ts`
+   * decode pipeline produces:
    *
-   *   VideoFrame       — WebCodecs `ImageDecoder` output (Chrome 94+,
-   *                      Safari 17+, Edge 94+). Hardware-accelerated,
-   *                      off-main-thread, same type the H.264 end-game
-   *                      will produce.
-   *   ImageBitmap      — `createImageBitmap(blob)` output (universal
-   *                      modern fallback).
-   *   HTMLImageElement — `<img>.decode()` output (jsdom + ancient).
+   *   ImageBitmap      — both tier-1 (WebCodecs `ImageDecoder` →
+   *                      `createImageBitmap(VideoFrame)` bridge) and
+   *                      tier-2 (`createImageBitmap(blob)` direct).
+   *                      Lifecycle-independent of any decoder, safe
+   *                      to upload via WebGL `texImage2D`.
+   *   HTMLImageElement — tier-3 fallback for jsdom + ancient browsers.
    *
-   * Three.js r150+ uploads all three identically via `Texture.image`.
+   * `VideoFrame` is intentionally absent: WebGL's `texImage2D
+   * (VideoFrame)` upload races with the `ImageDecoder`'s decoder
+   * lifecycle on Chrome. The canonical zero-copy `VideoFrame → GPU`
+   * path is WebGPU's `importExternalTexture`; this type widens to
+   * include `VideoFrame` when the renderer promotes
+   * (`liquescentia-as-substrate.md` §"Renderer promotion").
    *
    * Replaces the prior CSS3DObject `<img>` overlay path. WebGL render
    * means shared depth buffer with the creature (no through-punch on
@@ -227,7 +231,7 @@ export interface RenderAdapter {
    * the slab's droplet shape, not a hard rectangle). Pair with
    * `clearSlabScreencast()` on session close.
    */
-  setSlabScreencastImage?(source: HTMLImageElement | ImageBitmap | VideoFrame): void;
+  setSlabScreencastImage?(source: HTMLImageElement | ImageBitmap): void;
   /**
    * Hide the slab's screen mesh and dispose its texture. Sibling of
    * `setSlabScreencastImage`; called when the cloud-browser session

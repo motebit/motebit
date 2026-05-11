@@ -94,24 +94,36 @@ export interface LiveBrowserElementHandle {
 }
 
 /**
- * Texture-uploadable frame surfaces. The decode pipeline picks the
- * sharpest path available in the environment (see `decodeFrameForTexture`):
+ * Texture-uploadable frame surfaces handed off to the slab. The decode
+ * pipeline picks the sharpest tier available (see `decodeFrameForTexture`):
  *
- *   VideoFrame       — WebCodecs `ImageDecoder.decode()` output. Hardware-
- *                      accelerated JPEG decode, off-main-thread, the same
- *                      type the H.264 end-game (`VideoDecoder`) will
- *                      produce. Chrome 94+, Safari 17+, Edge 94+.
- *   ImageBitmap      — `createImageBitmap(blob)` output. Browser-native
- *                      off-main-thread decode. Universal modern fallback
- *                      including Firefox.
+ *   ImageBitmap      — produced by either WebCodecs `ImageDecoder` →
+ *                      `createImageBitmap(VideoFrame)` bridge (tier 1)
+ *                      OR `createImageBitmap(blob)` direct (tier 2).
+ *                      Both routes converge on the same texture-uploadable
+ *                      type. Universal across modern browsers.
  *   HTMLImageElement — `<img>.decode()` output. Last-resort path for
  *                      jsdom and ancient browsers.
  *
- * Three.js Texture accepts all three directly (Three.js r150+ has
- * explicit VideoFrame support in WebGLTextures). Same architectural
- * seam in every tier — the next codec migration is a single-tier swap.
+ * Three.js Texture accepts both directly via `Texture.image`. The
+ * architectural seam: every tier produces an `ImageBitmap` (or
+ * equivalent texture-uploadable surface), so the upload path is
+ * tier-agnostic. When WebGPU + `importExternalTexture` lands, tier-1
+ * graduates from "decode → bridge → ImageBitmap → texImage2D" to
+ * "decode → VideoFrame → importExternalTexture" — single tier swap,
+ * no consumer change.
+ *
+ * Why ImageBitmap as the bridge target rather than VideoFrame:
+ * Chrome's WebGL `texImage2D(VideoFrame)` upload path has a decoder-
+ * lifecycle race — `ImageDecoder.close()` shares backing buffers with
+ * the produced `VideoFrame` in some Chrome versions, invalidating the
+ * frame before the next render tick can upload it. `createImageBitmap
+ * (videoFrame)` takes a GPU-side snapshot into an independently-
+ * lifecycled `ImageBitmap`, sidestepping the race. The canonical zero-
+ * copy path is `importExternalTexture` (WebGPU); WebGL doesn't have a
+ * race-free equivalent, so the bridge IS the WebGL-tier answer.
  */
-export type DecodedScreencastFrame = HTMLImageElement | ImageBitmap | VideoFrame;
+export type DecodedScreencastFrame = HTMLImageElement | ImageBitmap;
 
 /**
  * Optional consumer hooks. The most-load-bearing today is
@@ -150,20 +162,29 @@ type ImageDecoderStatic = ImageDecoderCtor & {
  * Decode one JPEG frame onto a texture-uploadable surface, picking
  * the sharpest tier available.
  *
- * Tier 1 — WebCodecs `ImageDecoder`. Hardware-accelerated decode
- * (CoreVideo on Apple, libvpx/libjpeg-turbo via Chromium codec layer
- * on others). Output is `VideoFrame`, the unified WebCodecs frame
- * type — when the H.264 end-game lands (`VideoDecoder` over
- * WebSocket), this tier swaps its decoder and the rest of the
- * pipeline is identical.
+ * Tier 1 — WebCodecs `ImageDecoder` + `createImageBitmap` bridge.
+ * Hardware-accelerated JPEG decode (CoreVideo on Apple, libjpeg-turbo
+ * via Chromium codec layer on others), off-main-thread. Decodes to
+ * `VideoFrame`, then `createImageBitmap(videoFrame)` takes a GPU-side
+ * snapshot into a lifecycle-independent `ImageBitmap`. The bridge is
+ * mandatory on WebGL — Chrome's `texImage2D(VideoFrame)` upload races
+ * with `ImageDecoder.close()` (shared backing buffers), invalidating
+ * the frame before the next render tick can upload it. The canonical
+ * zero-copy path is WebGPU's `importExternalTexture`; until the
+ * renderer promotes, the bridge IS the right answer. When WebGPU
+ * lands, this tier graduates from "decode → bridge → ImageBitmap →
+ * texImage2D" to "decode → VideoFrame → importExternalTexture" — a
+ * single tier-internal change, the slab's upload path doesn't move.
  *
- * Tier 2 — `createImageBitmap(blob)`. The browser's native image
- * decoder, runs off-main-thread, produces `ImageBitmap`. Universal
- * across modern browsers including Firefox. `colorSpaceConversion:
- * "none"` preserves the JPEG's sRGB encoding so the slab's
- * `SRGBColorSpace` texture tag decodes it correctly (the alternative
- * — "default" — would convert to the display color space pre-upload,
- * double-correcting the gamma when Three.js applies sRGB decode).
+ * Tier 2 — `createImageBitmap(blob)` direct. The browser's native
+ * image decoder, runs off-main-thread, produces `ImageBitmap`.
+ * Universal across modern browsers including Firefox. Same texture-
+ * uploadable output type as tier 1 — the slab's upload path doesn't
+ * branch on tier. `colorSpaceConversion: "none"` preserves the JPEG's
+ * sRGB encoding so the slab's `SRGBColorSpace` texture tag decodes it
+ * correctly (the alternative — "default" — would convert to the
+ * display color space pre-upload, double-correcting the gamma when
+ * Three.js applies sRGB decode).
  *
  * Tier 3 — `HTMLImageElement` + `.decode()`. Last resort for jsdom
  * and ancient browsers without `createImageBitmap`.
@@ -199,8 +220,18 @@ async function decodeFrameForTexture(dataUri: string): Promise<DecodedScreencast
     fetch?: typeof fetch;
   };
 
-  // Tier 1 — WebCodecs ImageDecoder.
-  if (typeof g.ImageDecoder === "function" && typeof g.fetch === "function") {
+  // Tier 1 — WebCodecs ImageDecoder + createImageBitmap bridge.
+  // The bridge is mandatory on WebGL — see the doc comment above.
+  // Without it, the produced VideoFrame is invalidated by the
+  // decoder's close() before Three.js's texImage2D fires, and the
+  // slab uploads a black/empty texture (the slab-renders-as-dark-
+  // rectangle bug, caught 2026-05-11 on the first live-browser test
+  // after the WebCodecs pipeline shipped).
+  if (
+    typeof g.ImageDecoder === "function" &&
+    typeof g.createImageBitmap === "function" &&
+    typeof g.fetch === "function"
+  ) {
     try {
       const supported =
         typeof g.ImageDecoder.isTypeSupported === "function"
@@ -209,10 +240,21 @@ async function decodeFrameForTexture(dataUri: string): Promise<DecodedScreencast
       if (supported) {
         const buffer = await g.fetch(dataUri).then((r) => r.arrayBuffer());
         const decoder = new g.ImageDecoder({ type: "image/jpeg", data: buffer });
+        let frame: VideoFrame | null = null;
         try {
           const result = await decoder.decode();
-          return result.image;
+          frame = result.image;
+          // createImageBitmap takes a GPU-side snapshot of the
+          // VideoFrame's pixel data into a lifecycle-independent
+          // ImageBitmap. Once this resolves, the source VideoFrame
+          // and the decoder are both safe to close; the returned
+          // bitmap remains valid for texture upload.
+          return await g.createImageBitmap(frame as unknown as ImageBitmapSource, {
+            colorSpaceConversion: "none",
+            premultiplyAlpha: "default",
+          });
         } finally {
+          if (frame != null) frame.close();
           decoder.close();
         }
       }
