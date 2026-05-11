@@ -93,6 +93,14 @@ import type { CoBrowseControlMachine, UserInputForwardResult } from "@motebit/ru
 /** Direct typed-capability dispatch — same shape as cobrowse-input-capture's forwardEvent. */
 export type ForwardEventFn = (event: UserInputEvent) => Promise<UserInputForwardResult>;
 
+/**
+ * Per-input animation registry. Tracks the breathing `Animation`
+ * handle so focus/blur/input listeners can start/stop without
+ * stacking duplicate animations on the same element. `WeakMap` so
+ * the entry GCs naturally when the input is removed from the DOM.
+ */
+const urlInputBreathing = new WeakMap<HTMLInputElement, Animation>();
+
 export interface RenderCoBrowseChromeOpts {
   /**
    * User-input forwarder. Required when `state.kind === "user"`
@@ -521,13 +529,71 @@ function buildUrlInput(forwardEvent: ForwardEventFn, currentUrl: string | null):
   input.style.font = "inherit";
   input.style.color = "rgba(40, 55, 90, 0.92)";
   input.style.pointerEvents = "auto";
+
+  // Empty-register breathing per motebit-computer.md §"Visual
+  // properties" — the URL input IS the slab's empty state, and the
+  // doctrine pins it to breathe at the slab's 30% creature
+  // amplitude when empty + unfocused. The body breathes at 0.3 Hz
+  // (Rayleigh eigenmode, see DROPLET.md); the slab inherits at 30%
+  // amplitude; this register inherits the same rhythm so the empty
+  // slab pulses sympathetically with the body that owns it.
+  //
+  // 0.3 Hz = 3333ms period. Opacity range 0.7 → 0.85 → 0.7 — a calm
+  // pulse, not a flash. Web Animations API lets us start/stop
+  // cleanly on focus/value changes without injecting a stylesheet.
+  // Animates the whole input, but since the input is empty +
+  // unfocused, only the placeholder is visible — the placeholder
+  // is what breathes.
+  const startBreathing = () => {
+    if (urlInputBreathing.has(input)) return;
+    // jsdom: Element.animate may not exist in the test environment.
+    // Calm fallback: no breathing in environments without the API.
+    if (typeof input.animate !== "function") return;
+    const anim = input.animate([{ opacity: "0.7" }, { opacity: "0.85" }, { opacity: "0.7" }], {
+      duration: 3333,
+      iterations: Infinity,
+      easing: "ease-in-out",
+    });
+    urlInputBreathing.set(input, anim);
+  };
+  const stopBreathing = () => {
+    const anim = urlInputBreathing.get(input);
+    if (!anim) return;
+    anim.cancel();
+    urlInputBreathing.delete(input);
+    input.style.opacity = "";
+  };
+
+  // Start breathing iff the input is currently empty. When the
+  // surface pre-populates with a current URL (currentUrl != null),
+  // the value is the visible register and breathing would oscillate
+  // the user's URL — wrong. Stay solid in that case.
+  if (input.value === "") startBreathing();
+
   // Focus styling — barely-there tint at the seam, no border ring.
   // Calm-software register: focus is a hint, not an alarm.
   input.addEventListener("focus", () => {
     input.style.background = "rgba(255, 255, 255, 0.12)";
+    // Stop breathing on focus — the user's about to type; the
+    // placeholder shouldn't pulse while a caret is sitting in it.
+    stopBreathing();
   });
   input.addEventListener("blur", () => {
     input.style.background = "transparent";
+    // Resume breathing on blur if still empty. If the user typed
+    // and submitted, the value is set and breathing stays off
+    // (handled in the `input` listener below).
+    if (input.value === "") startBreathing();
+  });
+  input.addEventListener("input", () => {
+    // Any keystroke that makes the value non-empty stops the
+    // breathing — the placeholder is gone, the user's content is
+    // the visible register, breathing would oscillate it. Resume
+    // if the user backspaces back to empty AND the input has lost
+    // focus (handled in `blur`).
+    if (input.value !== "" && urlInputBreathing.has(input)) {
+      stopBreathing();
+    }
   });
   input.addEventListener("keydown", (e) => {
     // Stop propagation — address-bar typing must NOT reach the
