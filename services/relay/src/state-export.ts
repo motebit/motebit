@@ -17,7 +17,7 @@
  * verifier composes against pinned public keys.
  */
 
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { EventStore } from "@motebit/event-log";
@@ -26,7 +26,7 @@ import type { EventLogEntry, ToolAuditEntry } from "@motebit/sdk";
 import { asMotebitId, asNodeId, asConversationId, asPlanId } from "@motebit/sdk";
 import { canonicalJson, bytesToHex, toBase64Url } from "@motebit/encryption";
 import { signContentArtifact } from "@motebit/crypto";
-import { EXECUTION_LEDGER_ARTIFACT } from "@motebit/protocol";
+import type { ContentArtifactType } from "@motebit/protocol";
 import type { RelayIdentity } from "./federation.js";
 
 /**
@@ -57,20 +57,56 @@ export interface StateExportDeps {
 export function registerStateExportRoutes(deps: StateExportDeps): void {
   const { app, moteDb, eventStore, identityManager, relayIdentity, redactSensitiveEvents } = deps;
 
+  /**
+   * Sign a relay-asserted export body and emit it with the outer
+   * `ContentArtifactManifest` in the `X-Motebit-Content-Manifest`
+   * header. Single canonical emit path for every state-export GET —
+   * the drift gate `check-state-export-signed` requires every
+   * `app.get(...)` registration in this file to terminate through
+   * this helper. Witness-composition: relay attests "this is what I
+   * assembled at time T" via `relayIdentity`; verifier hashes the
+   * received bytes and verifies the signature against the manifest's
+   * declared key.
+   *
+   * Body serialization is JCS-canonical so the bytes are
+   * deterministic across implementations — no recanonicalization
+   * required at verify time.
+   */
+  async function emitSignedExport(
+    c: Context,
+    artifactType: ContentArtifactType,
+    body: Record<string, unknown>,
+  ): Promise<Response> {
+    const bodyJson = canonicalJson(body);
+    const bodyBytes = new TextEncoder().encode(bodyJson);
+    const manifest = await signContentArtifact(bodyBytes, {
+      artifactType,
+      producer: relayIdentity.did,
+      producerPublicKey: relayIdentity.publicKey,
+      producerPrivateKey: relayIdentity.privateKey,
+      claimGenerator: MOTEBIT_RELAY_CLAIM_GENERATOR,
+    });
+    c.header(
+      "X-Motebit-Content-Manifest",
+      toBase64Url(new TextEncoder().encode(canonicalJson(manifest))),
+    );
+    return c.body(bodyJson, 200, { "Content-Type": "application/json" });
+  }
+
   // --- State vector snapshot ---
   /** @internal */
-  app.get("/api/v1/state/:motebitId", (c) => {
+  app.get("/api/v1/state/:motebitId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const json = moteDb.stateSnapshot.loadState(motebitId);
-    if (json == null || json === "") {
-      return c.json({ motebit_id: motebitId, state: null });
+    let state: Record<string, unknown> | null = null;
+    if (json != null && json !== "") {
+      try {
+        state = JSON.parse(json) as Record<string, unknown>;
+      } catch {
+        state = null;
+      }
     }
-    try {
-      const state = JSON.parse(json) as Record<string, unknown>;
-      return c.json({ motebit_id: motebitId, state });
-    } catch {
-      return c.json({ motebit_id: motebitId, state: null });
-    }
+    return emitSignedExport(c, "state-snapshot", { motebit_id: motebitId, state });
   });
 
   // --- Memory graph ---
@@ -88,7 +124,12 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
         ? allMemories
         : allMemories.filter((m) => DISPLAY_ALLOWED.has(m.sensitivity ?? "none"));
     const redacted = allMemories.length - memories.length;
-    return c.json({ motebit_id: motebitId, memories, edges, redacted });
+    return emitSignedExport(c, "memory-export", {
+      motebit_id: motebitId,
+      memories,
+      edges,
+      redacted,
+    });
   });
 
   // --- Memory tombstone ---
@@ -112,25 +153,28 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
 
   // --- Goals ---
   /** @internal */
-  app.get("/api/v1/goals/:motebitId", (c) => {
+  app.get("/api/v1/goals/:motebitId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const goals = moteDb.goalStore.list(motebitId);
-    return c.json({ motebit_id: motebitId, goals });
+    return emitSignedExport(c, "goal-list", { motebit_id: motebitId, goals });
   });
 
   // --- Conversations ---
   /** @internal */
-  app.get("/api/v1/conversations/:motebitId", (c) => {
+  app.get("/api/v1/conversations/:motebitId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const conversations = moteDb.db
       .prepare(`SELECT * FROM sync_conversations WHERE motebit_id = ? ORDER BY last_active_at DESC`)
       .all(motebitId) as Array<Record<string, unknown>>;
-    return c.json({ motebit_id: motebitId, conversations });
+    return emitSignedExport(c, "conversation-list", {
+      motebit_id: motebitId,
+      conversations,
+    });
   });
 
   // --- Conversation messages ---
   /** @internal */
-  app.get("/api/v1/conversations/:motebitId/:conversationId/messages", (c) => {
+  app.get("/api/v1/conversations/:motebitId/:conversationId/messages", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const conversationId = asConversationId(c.req.param("conversationId"));
     const messages = moteDb.db
@@ -138,7 +182,11 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
         `SELECT * FROM sync_conversation_messages WHERE conversation_id = ? AND motebit_id = ? ORDER BY created_at ASC`,
       )
       .all(conversationId, motebitId) as Array<Record<string, unknown>>;
-    return c.json({ motebit_id: motebitId, conversation_id: conversationId, messages });
+    return emitSignedExport(c, "conversation-messages", {
+      motebit_id: motebitId,
+      conversation_id: conversationId,
+      messages,
+    });
   });
 
   // --- Devices ---
@@ -146,12 +194,12 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
   app.get("/api/v1/devices/:motebitId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const devices = await identityManager.listDevices(motebitId);
-    return c.json({ motebit_id: motebitId, devices });
+    return emitSignedExport(c, "device-list", { motebit_id: motebitId, devices });
   });
 
   // --- Tool audit trail ---
   /** @internal */
-  app.get("/api/v1/audit/:motebitId", (c) => {
+  app.get("/api/v1/audit/:motebitId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const turnId = c.req.query("turn_id");
     let entries: ToolAuditEntry[] = [];
@@ -161,23 +209,23 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
           ? moteDb.toolAuditSink.query(turnId)
           : moteDb.toolAuditSink.getAll();
     }
-    return c.json({ motebit_id: motebitId, entries });
+    return emitSignedExport(c, "audit-trail", { motebit_id: motebitId, entries });
   });
 
   // --- Plans ---
   /** @internal */
-  app.get("/api/v1/plans/:motebitId", (c) => {
+  app.get("/api/v1/plans/:motebitId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const plans = moteDb.planStore.listPlans(motebitId);
     const plansWithSteps = plans.map((plan) => ({
       ...plan,
       steps: moteDb.planStore.getStepsForPlan(plan.plan_id),
     }));
-    return c.json({ motebit_id: motebitId, plans: plansWithSteps });
+    return emitSignedExport(c, "plan-list", { motebit_id: motebitId, plans: plansWithSteps });
   });
 
   /** @internal */
-  app.get("/api/v1/plans/:motebitId/:planId", (c) => {
+  app.get("/api/v1/plans/:motebitId/:planId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const planId = asPlanId(c.req.param("planId"));
     const plan = moteDb.planStore.getPlan(planId);
@@ -185,12 +233,15 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
       throw new HTTPException(404, { message: "Plan not found" });
     }
     const steps = moteDb.planStore.getStepsForPlan(planId);
-    return c.json({ motebit_id: motebitId, plan: { ...plan, steps } });
+    return emitSignedExport(c, "plan-detail", {
+      motebit_id: motebitId,
+      plan: { ...plan, steps },
+    });
   });
 
   // --- Intelligence gradient history ---
   /** @internal */
-  app.get("/api/v1/gradient/:motebitId", (c) => {
+  app.get("/api/v1/gradient/:motebitId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
     const limit = Number(c.req.query("limit") ?? "100");
     const rows = moteDb.db
@@ -217,7 +268,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
       ...r,
       stats: JSON.parse(r.stats) as Record<string, unknown>,
     }));
-    return c.json({
+    return emitSignedExport(c, "gradient-history", {
       motebit_id: motebitId,
       current: snapshots[0] ?? null,
       history: snapshots,
@@ -233,7 +284,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
       motebit_id: motebitId,
       after_version_clock: afterClock,
     });
-    return c.json({
+    return emitSignedExport(c, "sync-pull", {
       motebit_id: motebitId,
       events: redactSensitiveEvents(events),
       after_clock: afterClock,
@@ -446,8 +497,10 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
 
     // Inner artifact — `motebit/execution-ledger@1.0` body. Per spec §6,
     // the agent-signature field is omitted for relay-reconstructed
-    // ledgers (the relay does not hold the agent's private key).
-    const body = {
+    // ledgers (the relay does not hold the agent's private key); the
+    // outer relay-asserted manifest emitted by `emitSignedExport`
+    // attests to bundle assembly, never to the agent's actions.
+    return emitSignedExport(c, "execution-ledger", {
       spec: "motebit/execution-ledger@1.0",
       motebit_id: motebitId,
       goal_id: goalId,
@@ -459,36 +512,6 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
       steps: stepSummaries,
       delegation_receipts: delegationReceipts,
       content_hash: contentHash,
-    };
-
-    // Outer envelope — relay-asserted content-artifact manifest.
-    // Witness-composition: relay attests "this is what I assembled
-    // from my event log at time T," signed by `relayIdentity`. The
-    // inner motebit signatures (on delegation_receipts.signature_prefix,
-    // tracked back to `relay_receipts.receipt_json` via task_id) are
-    // independently verifiable; the relay's signature is bounded to
-    // what the relay witnessed (its own database state at assembly
-    // time), never claims authority over the agent's actions.
-    //
-    // Body serialization is JCS-canonical so the bytes are deterministic
-    // across motebit implementations — a verifier hashes the response
-    // bytes verbatim and compares to `manifest.content_hash`, no
-    // recanonicalization required. Same wire-format discipline as
-    // `relay_receipts.receipt_json` (Rule 11): the bytes signed are
-    // the bytes returned.
-    const bodyJson = canonicalJson(body);
-    const bodyBytes = new TextEncoder().encode(bodyJson);
-    const manifest = await signContentArtifact(bodyBytes, {
-      artifactType: EXECUTION_LEDGER_ARTIFACT,
-      producer: relayIdentity.did,
-      producerPublicKey: relayIdentity.publicKey,
-      producerPrivateKey: relayIdentity.privateKey,
-      claimGenerator: MOTEBIT_RELAY_CLAIM_GENERATOR,
     });
-    c.header(
-      "X-Motebit-Content-Manifest",
-      toBase64Url(new TextEncoder().encode(canonicalJson(manifest))),
-    );
-    return c.body(bodyJson, 200, { "Content-Type": "application/json" });
   });
 }

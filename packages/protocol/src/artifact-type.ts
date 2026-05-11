@@ -32,20 +32,60 @@
 
 /**
  * The closed set of content-artifact categories motebit currently
- * signs. Today's set covers the three concrete consumers shipped or
- * pending in this commit series; the rest of the state-export
- * surface migrates as endpoints are wired.
+ * signs. Today's set covers the twelve state-export endpoints at
+ * `services/relay/src/state-export.ts`, each wrapped in a
+ * relay-asserted `ContentArtifactManifest` per the doctrine §8
+ * recognition note (`docs/doctrine/nist-alignment.md`).
  *
- *   - `audit-trail` — relay-assembled `ToolAuditEntry[]` for a
- *     motebit's session window
- *   - `memory-export` — relay-assembled memory-graph snapshot
- *     (nodes + edges) for a motebit
- *   - `execution-ledger` — relay-assembled execution timeline for a
- *     goal, including inner motebit-signed delegation receipts
- *     (the canonical layered-signing consumer; see
- *     `services/relay/src/state-export.ts` `/api/v1/execution/:motebitId/:goalId`)
+ *   - `state-snapshot` — relay's stored state vector for a motebit
+ *     (`/api/v1/state/:motebitId`)
+ *   - `memory-export` — memory-graph snapshot (nodes + edges) with
+ *     optional sensitivity redaction (`/api/v1/memory/:motebitId`)
+ *   - `goal-list` — motebit's declared goals
+ *     (`/api/v1/goals/:motebitId`)
+ *   - `conversation-list` — conversation index for a motebit
+ *     (`/api/v1/conversations/:motebitId`)
+ *   - `conversation-messages` — message history for a specific
+ *     conversation
+ *     (`/api/v1/conversations/:motebitId/:conversationId/messages`)
+ *   - `device-list` — registered devices for a motebit
+ *     (`/api/v1/devices/:motebitId`)
+ *   - `audit-trail` — `ToolAuditEntry[]` for a motebit's session
+ *     window (`/api/v1/audit/:motebitId`)
+ *   - `plan-list` — plans for a motebit, each carrying its steps
+ *     (`/api/v1/plans/:motebitId`)
+ *   - `plan-detail` — a single plan with its steps
+ *     (`/api/v1/plans/:motebitId/:planId`)
+ *   - `gradient-history` — intelligence-gradient snapshots
+ *     (`/api/v1/gradient/:motebitId`)
+ *   - `sync-pull` — event-log pull beyond a clock cursor
+ *     (`/api/v1/sync/:motebitId/pull`)
+ *   - `execution-ledger` — execution timeline for a goal, including
+ *     inner motebit-signed delegation receipt summaries; the
+ *     canonical layered-signing consumer
+ *     (`/api/v1/execution/:motebitId/:goalId`)
+ *
+ * Adding an endpoint is intentional protocol-level work: a new
+ * `ContentArtifactType` entry here, a new named constant, a new
+ * `ALL_CONTENT_ARTIFACT_TYPES` member, gate-side `CANONICAL_ARTIFACT_TYPES`
+ * update in `scripts/check-artifact-type-canonical.ts`. Drift gate
+ * `check-state-export-signed` enforces that every new `app.get(...)`
+ * in `services/relay/src/state-export.ts` emits a manifest before
+ * returning.
  */
-export type ContentArtifactType = "audit-trail" | "memory-export" | "execution-ledger";
+export type ContentArtifactType =
+  | "state-snapshot"
+  | "memory-export"
+  | "goal-list"
+  | "conversation-list"
+  | "conversation-messages"
+  | "device-list"
+  | "audit-trail"
+  | "plan-list"
+  | "plan-detail"
+  | "gradient-history"
+  | "sync-pull"
+  | "execution-ledger";
 
 // === Named constants — same value, narrower type ============================
 //
@@ -55,11 +95,38 @@ export type ContentArtifactType = "audit-trail" | "memory-export" | "execution-l
 // grep affordance, or inline the literal — the union narrowing catches typos
 // in either case.
 
-/** Relay-assembled tool-audit-trail export. */
-export const AUDIT_TRAIL_ARTIFACT: ContentArtifactType = "audit-trail";
+/** Relay's stored state-vector snapshot for a motebit. */
+export const STATE_SNAPSHOT_ARTIFACT: ContentArtifactType = "state-snapshot";
 
 /** Relay-assembled memory-graph snapshot (nodes + edges). */
 export const MEMORY_EXPORT_ARTIFACT: ContentArtifactType = "memory-export";
+
+/** Relay-assembled goal list for a motebit. */
+export const GOAL_LIST_ARTIFACT: ContentArtifactType = "goal-list";
+
+/** Relay-assembled conversation index for a motebit. */
+export const CONVERSATION_LIST_ARTIFACT: ContentArtifactType = "conversation-list";
+
+/** Relay-assembled message history for a specific conversation. */
+export const CONVERSATION_MESSAGES_ARTIFACT: ContentArtifactType = "conversation-messages";
+
+/** Relay-assembled list of devices registered to a motebit. */
+export const DEVICE_LIST_ARTIFACT: ContentArtifactType = "device-list";
+
+/** Relay-assembled tool-audit-trail export. */
+export const AUDIT_TRAIL_ARTIFACT: ContentArtifactType = "audit-trail";
+
+/** Relay-assembled list of plans for a motebit, each with embedded steps. */
+export const PLAN_LIST_ARTIFACT: ContentArtifactType = "plan-list";
+
+/** Relay-assembled single-plan export with its steps. */
+export const PLAN_DETAIL_ARTIFACT: ContentArtifactType = "plan-detail";
+
+/** Relay-assembled intelligence-gradient-history export. */
+export const GRADIENT_HISTORY_ARTIFACT: ContentArtifactType = "gradient-history";
+
+/** Relay-assembled event-log pull beyond a `version_clock` cursor. */
+export const SYNC_PULL_ARTIFACT: ContentArtifactType = "sync-pull";
 
 /**
  * Relay-assembled execution-timeline export with embedded motebit-signed
@@ -77,8 +144,17 @@ export const EXECUTION_LEDGER_ARTIFACT: ContentArtifactType = "execution-ledger"
  * union rather than `string[]`.
  */
 export const ALL_CONTENT_ARTIFACT_TYPES: readonly ContentArtifactType[] = Object.freeze([
-  "audit-trail",
+  "state-snapshot",
   "memory-export",
+  "goal-list",
+  "conversation-list",
+  "conversation-messages",
+  "device-list",
+  "audit-trail",
+  "plan-list",
+  "plan-detail",
+  "gradient-history",
+  "sync-pull",
   "execution-ledger",
 ]);
 

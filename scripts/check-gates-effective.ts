@@ -1461,6 +1461,30 @@ export async function probeMint(): Promise<string> {
 `,
       ),
   },
+  {
+    script: "check-state-export-signed",
+    proves:
+      "flags an `app.get(...)` registration in `services/relay/src/state-export.ts` whose handler returns without calling `emitSignedExport(...)`. Drift class: the doctrine §8 coherency gap where state-export endpoints emit unsigned bodies while the doctrine claims signed-by-default.",
+    perturb: () =>
+      // Inject a synthetic app.get registration just after the helper
+      // declaration in state-export.ts. The gate scans the file
+      // directly and rejects any app.get whose body lacks the canonical
+      // emit-path call. mutateFile restores the original on cleanup.
+      mutateFile(`services/relay/src/state-export.ts`, (src) => {
+        const probe = `
+  // PROBE: synthetic unsigned route — check-state-export-signed must
+  // reject this. Reverted by the gate-effective harness on cleanup.
+  app.get("/api/v1/__probe-unsigned", (c) => c.json({ probe: true }));
+`;
+        // Anchor just after the helper's closing brace so the probe
+        // sits inside registerStateExportRoutes alongside the real
+        // handlers. Anchor string is unique enough to be stable.
+        const anchor = `  // --- State vector snapshot ---`;
+        const idx = src.indexOf(anchor);
+        if (idx === -1) throw new Error("probe anchor missing in state-export.ts");
+        return src.slice(0, idx) + probe + "\n" + src.slice(idx);
+      }),
+  },
 ];
 
 /**

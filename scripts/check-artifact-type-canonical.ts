@@ -59,8 +59,17 @@ const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
  * update without a gate update is itself a CI failure.
  */
 const CANONICAL_ARTIFACT_TYPES = new Set<string>([
-  "audit-trail",
+  "state-snapshot",
   "memory-export",
+  "goal-list",
+  "conversation-list",
+  "conversation-messages",
+  "device-list",
+  "audit-trail",
+  "plan-list",
+  "plan-detail",
+  "gradient-history",
+  "sync-pull",
   "execution-ledger",
 ]);
 

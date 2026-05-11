@@ -762,7 +762,7 @@ export interface ConsolidationReceipt {
 }
 
 // @public
-export type ContentArtifactType = "audit-trail" | "memory-export" | "execution-ledger";
+export type ContentArtifactType = "state-snapshot" | "memory-export" | "goal-list" | "conversation-list" | "conversation-messages" | "device-list" | "audit-trail" | "plan-list" | "plan-detail" | "gradient-history" | "sync-pull" | "execution-ledger";
 
 // @alpha
 export type ControlHolder = "user" | "motebit";
@@ -780,6 +780,12 @@ export type ControlState = {
     readonly kind: "paused";
     readonly previousDriver: ControlHolder;
 };
+
+// @public
+export const CONVERSATION_LIST_ARTIFACT: ContentArtifactType;
+
+// @public
+export const CONVERSATION_MESSAGES_ARTIFACT: ContentArtifactType;
 
 // @public (undocumented)
 export type ConversationId = Brand<string, "ConversationId">;
@@ -1097,6 +1103,9 @@ export interface DepositResult {
 
 // @public
 export const DEVICE_AUTH_AUDIENCE: TokenAudience;
+
+// @public
+export const DEVICE_LIST_ARTIFACT: ContentArtifactType;
 
 // @public (undocumented)
 export enum DeviceCapability {
@@ -1594,6 +1603,9 @@ export function getSuiteEntry(id: SuiteId): SuiteEntry;
 export function getSuiteEntry(id: string): SuiteEntry | undefined;
 
 // @public
+export const GOAL_LIST_ARTIFACT: ContentArtifactType;
+
+// @public
 export interface GoalCompletedPayload {
     // (undocumented)
     readonly goal_id: string;
@@ -1669,6 +1681,9 @@ export interface GoalRemovedPayload {
     readonly reason?: string;
     readonly routine_id?: string;
 }
+
+// @public
+export const GRADIENT_HISTORY_ARTIFACT: ContentArtifactType;
 
 // @public (undocumented)
 export interface GradientCredentialSubject {
@@ -2198,6 +2213,12 @@ export interface Plan {
     // (undocumented)
     updated_at: number;
 }
+
+// @public
+export const PLAN_DETAIL_ARTIFACT: ContentArtifactType;
+
+// @public
+export const PLAN_LIST_ARTIFACT: ContentArtifactType;
 
 // @public
 export interface PlanCompletedPayload {
@@ -3101,6 +3122,9 @@ export interface SovereignRail extends SettlementRail {
     getBalance(): Promise<bigint>;
 }
 
+// @public
+export const STATE_SNAPSHOT_ARTIFACT: ContentArtifactType;
+
 // @public (undocumented)
 export interface StateSnapshotAdapter {
     getSnapshotClock?(motebitId: string): number;
@@ -3199,6 +3223,9 @@ export type SuiteStatus = "preferred" | "allowed" | "legacy";
 
 // @public
 export const SYNC_AUDIENCE: TokenAudience;
+
+// @public
+export const SYNC_PULL_ARTIFACT: ContentArtifactType;
 
 // @public
 export interface SyncConversation {
