@@ -551,6 +551,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-audience-canonical",
   },
   {
+    name: "check-artifact-type-canonical",
+    defends:
+      'every `artifact_type: "<literal>"`, `artifactType: "<literal>"`, and equality-check site in `packages/`, `services/`, `apps/` carries a literal that is a member of the closed `ContentArtifactType` registry in `@motebit/protocol/src/artifact-type.ts` (3 types today: `audit-trail`, `memory-export`, `execution-ledger` — grows as the state-export surface in `services/relay/src/state-export.ts` migrates from unsigned to relay-signed C2PA-shape manifests). Pre-registry, `artifact_type` on `ContentArtifactManifest` was a free string and the manifest JSDoc carried three example values; a producer-site typo (`artifact_type: "audit_trail"`) was a verifier-side classification miss with no compile-time signal. Same closure pattern as `TokenAudience` (`check-audience-canonical`) and `SuiteId` (`check-suite-declared` + `check-suite-dispatch`). Sibling-alignment check verifies `CANONICAL_ARTIFACT_TYPES` mirrors `ALL_CONTENT_ARTIFACT_TYPES`; a registry update without a gate update is itself a CI failure. Adding a type: union entry + named constant + `ALL_CONTENT_ARTIFACT_TYPES` + `CANONICAL_ARTIFACT_TYPES` in this gate + doctrine update at `docs/doctrine/nist-alignment.md` §8.',
+    script: "check-artifact-type-canonical",
+  },
+  {
     name: "check-ha-not-a-gate",
     defends:
       "hardware attestation raises the `HardwareAttestationSemiring` score — never admits or rejects (CLAUDE.md `Hardware-rooted identity is additive`; doctrine `docs/doctrine/hardware-attestation.md`). The software-only-identity floor is part of the protocol promise; converting the additive scoring axis into an admission criterion silently excludes software-floor users at the moat layer. Gate forbids four shapes in `services/relay/src` + `packages/{policy,market,runtime}/src`: (1) numeric threshold compares on `attestation_score`, (2) HA-property-chain `score`/`level` threshold compares, (3) exclusionary `.filter(…hardware_attestation…)` calls, (4) `if (…hardware_attestation…)` followed within 3 lines by reject/throw/skip. Waiver `// hardware-attestation: intentional-threshold — <reason>` for legitimate exceptions (one shipping today: `services/relay/src/agents.ts:334` — projection filter for response payload, not routing admission). Same negative-invariant + waiver shape as `check-suite-dispatch` (#11): closed-by-construction with explicit, audited exits.",

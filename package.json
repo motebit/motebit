@@ -83,6 +83,7 @@
     "check-money-boundary": "npx tsx scripts/check-money-boundary.ts",
     "check-ha-not-a-gate": "npx tsx scripts/check-ha-not-a-gate.ts",
     "check-audience-canonical": "npx tsx scripts/check-audience-canonical.ts",
+    "check-artifact-type-canonical": "npx tsx scripts/check-artifact-type-canonical.ts",
     "check-doctrine-citations": "npx tsx scripts/check-doctrine-citations.ts",
     "check-readme-bin-claims": "npx tsx scripts/check-readme-bin-claims.ts",
     "check-docs-cli-claims": "npx tsx scripts/check-docs-cli-claims.ts",

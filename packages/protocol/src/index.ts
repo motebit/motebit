@@ -2616,6 +2616,24 @@ export {
   BROWSER_SANDBOX_AUDIENCE,
 } from "./audience.js";
 
+// Content-artifact types — closed registry of `artifact_type` claim
+// values for the C2PA-shape content-provenance primitive
+// (`ContentArtifactManifest` in `@motebit/crypto`). Producer-declared
+// category for routing / audit / display; drift gate
+// `check-artifact-type-canonical` scans every `artifact_type:
+// "<literal>"` and `artifactType: "<literal>"` site against
+// `ALL_CONTENT_ARTIFACT_TYPES`. Same closure pattern as `TokenAudience`,
+// `SuiteId`, `SettlementRail`. See `./artifact-type.ts` header and
+// `docs/doctrine/nist-alignment.md` §8.
+export type { ContentArtifactType } from "./artifact-type.js";
+export {
+  ALL_CONTENT_ARTIFACT_TYPES,
+  isContentArtifactType,
+  AUDIT_TRAIL_ARTIFACT,
+  MEMORY_EXPORT_ARTIFACT,
+  EXECUTION_LEDGER_ARTIFACT,
+} from "./artifact-type.js";
+
 import type { ToolMode } from "./tool-mode.js";
 
 // ── Skill manifest + envelope (spec/skills-v1.md) ────────────────

@@ -41,7 +41,7 @@ import {
   sha256,
 } from "./signing.js";
 import { signBySuite, verifyBySuite } from "./suite-dispatch.js";
-import type { SuiteId } from "@motebit/protocol";
+import type { ContentArtifactType, SuiteId } from "@motebit/protocol";
 
 /**
  * Pinned cryptosuite for content-artifact manifests. JCS canonicalization
@@ -72,8 +72,13 @@ export interface ContentArtifactManifest {
   readonly producer: string;
   /** Producer's public key in lowercase hex (32 bytes / 64 chars for Ed25519). */
   readonly producer_public_key: string;
-  /** Artifact category — e.g. `"audit-trail"`, `"memory-export"`, `"plan"`. */
-  readonly artifact_type: string;
+  /**
+   * Artifact category from the closed `ContentArtifactType` registry in
+   * `@motebit/protocol`. Producer-declared; drift gate
+   * `check-artifact-type-canonical` enforces every literal at a
+   * signing site is a registry member.
+   */
+  readonly artifact_type: ContentArtifactType;
   /** SHA-256 of the canonical content bytes, lowercase hex. */
   readonly content_hash: string;
   /** Optional cross-reference into motebit's execution ledger. */
@@ -92,8 +97,8 @@ export interface ContentArtifactManifest {
  * key.
  */
 export interface SignContentArtifactOptions {
-  /** Artifact category — embedded in the manifest. */
-  readonly artifactType: string;
+  /** Artifact category — embedded in the manifest. Closed registry in `@motebit/protocol`. */
+  readonly artifactType: ContentArtifactType;
   /** Producer's DID (e.g. `did:key:zXXX`). */
   readonly producer: string;
   /** Producer's Ed25519 public key (32 bytes). */

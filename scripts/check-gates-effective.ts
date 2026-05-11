@@ -1441,6 +1441,26 @@ export async function probeMint(): Promise<string> {
 `,
       ),
   },
+  {
+    script: "check-artifact-type-canonical",
+    proves:
+      'flags an artifact-type literal that is not a member of the closed `ContentArtifactType` registry. Same drift class the registry exists to catch — a typo at a producer site (`artifact_type: "audit_trail"`) that pre-registry was a verifier-side classification miss with no compile-time signal.',
+    perturb: () =>
+      // Drop a relay-scoped file with a canonical-shaped producer-site
+      // literal that is NOT in ALL_CONTENT_ARTIFACT_TYPES. Scope hits
+      // services/relay/src (one of the gate's roots); the literal is
+      // close enough to a real type to read like a typo.
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}unknown-artifact-type.ts`,
+        `// Probe-only file that builds a manifest with an unknown artifact type.
+// If check-artifact-type-canonical is working, it refuses to accept this file.
+declare function fakeManifest(payload: { artifact_type: string }): Promise<string>;
+export async function probeMint(): Promise<string> {
+  return fakeManifest({ artifact_type: "audit_trail" });
+}
+`,
+      ),
+  },
 ];
 
 /**

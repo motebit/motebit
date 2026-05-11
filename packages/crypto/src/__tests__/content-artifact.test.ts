@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
+import type { ContentArtifactType } from "@motebit/protocol";
 import {
   signContentArtifact,
   verifyContentArtifact,
@@ -53,7 +54,7 @@ beforeAll(async () => {
 async function signSample(
   content: Uint8Array,
   overrides: Partial<{
-    artifactType: string;
+    artifactType: ContentArtifactType;
     invocation: { task_id?: string; receipt_id?: string };
     producedAt: string;
   }> = {},
