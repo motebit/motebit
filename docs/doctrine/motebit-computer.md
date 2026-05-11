@@ -361,7 +361,7 @@ Three caveats survive the research:
 
 Triggers — independent from the renderer migration:
 
-1. **Measured throughput ceiling** — telemetry shows frame-upload jank correlating with page complexity or screencast resolution.
+1. **Measured throughput or thermal ceiling** — desktop telemetry shows frame-upload jank correlating with page complexity or screencast resolution; **on mobile (iOS / iPadOS sustained sessions on battery), the symptom flips to warm chassis + faster battery drain before frame jank appears** because iOS will throttle CPU frequency to hold FPS, hiding the throughput signal while the thermal/power cost stays real. Same root cause (JPEG decode + RGBA upload as the hot path), different observability surface. Hardware-decoded H.264/VP9 through `importExternalTexture` routes through Apple's dedicated media engine — materially cheaper per frame than the JPEG path on battery-budgeted runtime.
 2. **Higher fidelity required** — operator-grade browsing where 60% JPEG is no longer acceptable (multi-stream surfaces, peer_viewport screencasts, demo-quality recording).
 3. **Multi-stream futures** — when several screencasts compose on one slab (federated peer_viewport overlays, comparison views), per-stream decode CPU at JPEG rates blows past the budget.
 
