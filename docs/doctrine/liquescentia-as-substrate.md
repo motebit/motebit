@@ -58,6 +58,8 @@ The architecture names this endgame in `packages/render-engine/src/adapter.ts`'s
 
 **Current state:** the adapter uses `ENV_LIGHT` unconditionally as both today's behavior and the eventual fallback. Promotion to real-world spectrum (via `XRSession.requestLightProbe()` / `WebXRManager.getEstimatedLight()`) is endgame work blocked on a real-device test surface (Vision Pro AR mode / Quest passthrough rig). The code's comment names the gap; this doctrine pins what closing it requires.
 
+**Renderer promotion — WebGL → WebGPU.** Alongside the light-source promotion, the spatial surface promotes the renderer itself from WebGL (Three.js `WebGLRenderer`) to WebGPU (`WebGPURenderer` in the `three/webgpu` namespace). Apple shipped WebGPU in Safari 26 (June 2025) on visionOS; it is the canonical visionOS WebXR rendering API going forward. Same scene graph, swap the renderer at the `RenderAdapter` seam, same physics — the slab's contract (Ring 1) is identical across both renderers. The trigger isn't aesthetic; the trigger is `apps/spatial` landing on real Vision Pro hardware, where alignment with the platform's WebXR canonical API is forced. Until then, WebGL stays the working renderer everywhere and WebGPU is a future backend on the existing adapter, not a parallel interface (see [`motebit-computer.md`](motebit-computer.md) §"Compositing — content vs chrome split").
+
 ## Operational consequences
 
 1. **Every surface inherits Liquescentia.** Don't reinvent the chromatic gradient, don't redefine the breathing rhythm, don't substitute the material. `CANONICAL_MATERIAL`, `ENV_LIGHT`, the 0.3 Hz oscillation — doctrine, not preferences.
