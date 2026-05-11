@@ -137,6 +137,8 @@ const PATH_ALLOWLIST: Record<string, string> = {
     "anticipated future spec (stage 2 of retention-policy doctrine) — same deferral shape as operator-transparency; lands when a second store family forces field standardization.",
   "packages/runtime/src/housekeeping.ts":
     "historical reference — proactive-interior doctrine describes the file's deletion in past tense ('Net: housekeeping.ts deleted'). The narrative wouldn't read coherently without the cited name.",
+  "docs/ops/SECRETS.md":
+    "operator-private gitignored file per the operator-transparency split — treasury-custody.md §Phase 1 names the path operators MUST keep privately (hardware-wallet device, Fly.io secrets, treasury address). Present on the operator's local filesystem, intentionally absent from the repo. The citation is shape-only.",
 };
 
 interface Finding {
