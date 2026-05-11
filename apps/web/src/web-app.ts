@@ -18,6 +18,7 @@ import {
   renderSlabItem,
   updateSlabItem,
   renderDetachArtifact as renderSlabDetachArtifact,
+  releaseLiveBrowserItem,
 } from "./ui/slab-items";
 import { renderCoBrowseChrome, animateMarkForReceipt } from "./ui/cobrowse-chrome";
 import type { LiveBrowserElementHandle } from "@motebit/render-engine";
@@ -576,6 +577,22 @@ export class WebApp {
       renderItem: renderSlabItem,
       updateItem: updateSlabItem,
       renderDetachArtifact: renderSlabDetachArtifact,
+      // Kind-specific cleanup at item end. Closes the lifecycle-
+      // binding gap from 2026-05-11 — the renderer removed the DOM
+      // on phase=gone but per-kind disposers (WebSocket subscription
+      // unbind, input-capture detach) were never fired. Each kind
+      // dispatches to its own teardown; adding a new kind with
+      // resources to release means adding one case below.
+      onItemGone: (item) => {
+        switch (item.kind) {
+          case "live_browser":
+            releaseLiveBrowserItem(item.id);
+            break;
+          default:
+            // No per-kind teardown for other kinds today.
+            break;
+        }
+      },
     });
 
     // Register web-safe tools
@@ -938,6 +955,58 @@ export class WebApp {
       // The chat path still works; a subsequent `computer` tool call
       // (motebit-driven) re-tries `ensureDefaultSession`.
     });
+  }
+
+  /**
+   * Counterpart to `invokeComputer`. Ends the live_browser slab item
+   * (triggers the bridge's `onItemGone` → `releaseLiveBrowserItem`
+   * cascade for WebSocket/input-capture cleanup), closes the cloud
+   * Chromium session (releases the fly.io concurrency slot
+   * immediately rather than waiting for idle-timeout), and resets
+   * local mount state so a subsequent `invokeComputer()` rebuilds
+   * clean.
+   *
+   * Idempotent: safe to call when nothing is mounted. The /computer
+   * slash command's toggle-off path is the canonical caller; the AI
+   * computer-tool path keeps using `closeSession` directly because
+   * it owns its own session lifecycle.
+   *
+   * Closes the lifecycle-binding gap that produced (a) the rate-
+   * limit pain Daniel hit in dev (orphan sessions consuming the
+   * 4-concurrent fly.io pool), (b) the bandwidth/decode-CPU leak
+   * (screencast bus subscription kept flowing into a hidden slab),
+   * and (c) the never-fired `releaseLiveBrowserItem` disposer.
+   */
+  dismissComputer(): void {
+    // End the slab item — bridge fires onItemGone → kind dispatcher
+    // routes to releaseLiveBrowserItem which closes the live-browser
+    // handle (frame-source unsubscribe, input-capture detach). The
+    // outcome `{kind: "dismissed"}` flows through the default detach
+    // policy which dissolves rather than emerging an artifact (the
+    // user's gesture is "put this away," not "save this").
+    if (this.liveBrowserItemId !== null && this.runtime != null) {
+      try {
+        this.runtime.slab.dismissItem(this.liveBrowserItemId);
+      } catch {
+        // Controller may already have cleared this id (race with a
+        // concurrent endItem from another path); best-effort.
+      }
+      this.liveBrowserItemId = null;
+      this.liveBrowserHandle = null;
+    }
+    // Close the cloud session — releases the fly.io concurrency slot
+    // immediately. Without this, the slot sits idle until the
+    // browser-sandbox's idle-timeout fires, which can be minutes.
+    const sessionId = this._activeBrowserSessionId;
+    if (sessionId != null && this.computerRegistration != null) {
+      void this.computerRegistration.sessionManager
+        .closeSession(sessionId, "user_dismissed_slab")
+        .catch(() => {
+          // Session may have already closed (server-initiated) or
+          // never registered; cleanup must not throw upward.
+        });
+    }
+    this._activeBrowserSessionId = null;
   }
 
   /**

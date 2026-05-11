@@ -185,7 +185,7 @@ const slashCommands = initSlashCommands(ctx, {
   toggleSlab: () => {
     // Presence gate — NOT a toggle. Reads current visibility BEFORE
     // any mount, then routes:
-    //   - shown → dismiss (setSlabVisible(false))
+    //   - shown → full dismiss (slab item ends + cloud session closes)
     //   - not shown → invoke + show
     //
     // Naively `invokeComputer() + toggleSlabVisible()` is wrong on
@@ -196,9 +196,20 @@ const slashCommands = initSlashCommands(ctx, {
     // queries `isSlabVisible()` PRE-mount so the decision reflects
     // what the user perceived, not what the data model says
     // microseconds later.
+    //
+    // Dismiss path calls `app.dismissComputer()`, not just
+    // `setSlabVisible(false)` — the visibility-only hide was the
+    // architectural break that left WebSocket subscriptions live,
+    // input-capture listeners attached, and the cloud Chromium slot
+    // occupied until idle-timeout. `dismissComputer` ends the slab
+    // item (bridge fires `onItemGone` → live-browser disposer),
+    // closes the cloud session, and resets local mount state. Visual
+    // fade still happens because `dismissItem` runs the dissolve
+    // physics on the way out.
     const renderer = app.getRenderer();
     const isShown = renderer.isSlabVisible?.() ?? false;
     if (isShown) {
+      app.dismissComputer();
       renderer.setSlabVisible?.(false);
       return false;
     }

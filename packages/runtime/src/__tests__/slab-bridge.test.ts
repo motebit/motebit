@@ -83,6 +83,7 @@ function setupBridge(overrides?: {
     item: SlabItem,
     kind: ArtifactKindForDetach,
   ) => { id: string; kind: ArtifactKindForDetach; element: HTMLElement };
+  onItemGone?: (item: SlabItem) => void;
 }) {
   const sched = makeSyntheticScheduler();
   // Use a monotonic synthetic `now` that increments on every read so
@@ -102,6 +103,7 @@ function setupBridge(overrides?: {
     renderItem,
     updateItem: overrides?.updateItem,
     renderDetachArtifact: overrides?.renderDetachArtifact,
+    onItemGone: overrides?.onItemGone,
     logger: { warn: vi.fn() },
   });
   return { controller, ...targets, unsubscribe, sched };
@@ -132,6 +134,57 @@ describe("bindSlabControllerToRenderer — mount + unmount", () => {
     sched.advance(300); // past the dissolve tail — item drops from state
     controller.openItem({ id: "s1", kind: "stream" });
     expect(addCalls).toHaveLength(2);
+  });
+
+  it("fires onItemGone exactly once per item after it leaves state — kind-specific cleanup hook for surfaces", () => {
+    // Locks the lifecycle-binding contract that closes the
+    // 2026-05-11 gap: per-kind cleanup (WebSocket subscription
+    // unbind, input-capture detach, cloud-session close) must
+    // run on every item end, not just on dissolve animation
+    // completion. The renderer already cleared the DOM by this
+    // point; this is the hook surfaces use to release their own
+    // per-item resources.
+    const goneCalls: Array<{ id: string; kind: string }> = [];
+    const { controller, sched } = setupBridge({
+      onItemGone: (item) => {
+        goneCalls.push({ id: item.id, kind: item.kind });
+      },
+    });
+    controller.openItem({ id: "a", kind: "live_browser" });
+    controller.openItem({ id: "b", kind: "stream" });
+    expect(goneCalls).toHaveLength(0);
+
+    controller.dismissItem("a");
+    sched.advance(300); // past dissolve tail
+    expect(goneCalls).toEqual([{ id: "a", kind: "live_browser" }]);
+
+    controller.endItem("b", { kind: "interrupted" });
+    sched.advance(300);
+    expect(goneCalls).toEqual([
+      { id: "a", kind: "live_browser" },
+      { id: "b", kind: "stream" },
+    ]);
+
+    // Idempotent — additional ticks don't re-fire.
+    sched.advance(1000);
+    expect(goneCalls).toHaveLength(2);
+  });
+
+  it("isolates onItemGone exceptions — bridge bookkeeping stays clean even when the hook throws", () => {
+    // Surfaces' per-kind disposers can fault (network teardown,
+    // cleanup races). A faulting hook must not corrupt the
+    // bridge's internal state or block subsequent item lifecycles.
+    const { controller, sched } = setupBridge({
+      onItemGone: () => {
+        throw new Error("hook fault");
+      },
+    });
+    controller.openItem({ id: "x", kind: "stream" });
+    controller.endItem("x", { kind: "interrupted" });
+    expect(() => sched.advance(300)).not.toThrow();
+    // Bridge still works — opening a new item under the same id
+    // succeeds (bookkeeping was cleaned despite the hook fault).
+    expect(() => controller.openItem({ id: "x", kind: "stream" })).not.toThrow();
   });
 
   it("isolates renderItem exceptions — state consistency preserved", () => {

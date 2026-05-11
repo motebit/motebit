@@ -131,6 +131,31 @@ export interface SlabBridgeDeps {
     artifactKind: ArtifactKindForDetach,
   ) => { id: string; kind: ArtifactKindForDetach; element: HTMLElement };
 
+  /**
+   * Optional. Called once per item AFTER the controller has fully
+   * released it from `state.items` (i.e., the item has cycled through
+   * its terminal phase tail and is now absent from the next state
+   * snapshot). The bridge fires this from its item-left-state cleanup
+   * block — the same hook that drops local bookkeeping for the item.
+   *
+   * Used by surfaces to invoke kind-specific cleanup that the
+   * renderer doesn't know about: WebSocket subscription unbind,
+   * input-capture detach, cloud-resource release. Generic enough that
+   * adding a new slab-item kind with its own teardown is a single
+   * dispatch addition in the surface's handler, not a new bridge
+   * concept.
+   *
+   * Closes the lifecycle-binding gap caught 2026-05-11: the renderer
+   * already removed the DOM element on phase=gone, but kind-specific
+   * disposers (e.g., live_browser's frame-source subscription) were
+   * never fired. Sessions, sockets, and input-capture listeners
+   * lingered until process teardown — the rate-limit pain Daniel hit
+   * was downstream of this. Hook owners must be idempotent: the
+   * bridge fires exactly once per item life, but defensive
+   * implementations cost nothing.
+   */
+  onItemGone?: (item: SlabItem) => void;
+
   /** Defaults to `console.warn`. */
   logger?: { warn(message: string, context?: Record<string, unknown>): void };
 }
@@ -156,7 +181,7 @@ function readDetachMarker(payload: unknown): SlabDetachMarker | null {
  * teardown. Idempotent on unsubscribe.
  */
 export function bindSlabControllerToRenderer(deps: SlabBridgeDeps): () => void {
-  const { controller, renderer, renderItem, updateItem, renderDetachArtifact } = deps;
+  const { controller, renderer, renderItem, updateItem, renderDetachArtifact, onItemGone } = deps;
   const warn = deps.logger?.warn.bind(deps.logger) ?? ((msg, ctx) => console.warn(msg, ctx));
 
   // Element the renderer currently holds for each live slab item —
@@ -283,12 +308,29 @@ export function bindSlabControllerToRenderer(deps: SlabBridgeDeps): () => void {
     // `gone` phase handling (dissolve / detach tail) already removed
     // them from the scene; we just clear the map entry so the id can
     // be reused later.
+    //
+    // Kind-specific cleanup fires here via `onItemGone` — the renderer
+    // tore down the DOM, the bridge tore down its bookkeeping, the
+    // surface tears down its per-kind resources (frame-source
+    // subscriptions, input-capture listeners, cloud sessions). The
+    // hook runs from `prev.items` because `state.items` no longer
+    // contains it; the previous snapshot is the canonical last view.
     if (prev != null) {
-      for (const [id] of prev.items) {
+      for (const [id, prevItem] of prev.items) {
         if (!state.items.has(id)) {
           mountedElements.delete(id);
           mounted.delete(id);
           ended.delete(id);
+          if (onItemGone) {
+            try {
+              onItemGone(prevItem);
+            } catch (err: unknown) {
+              warn("slab bridge onItemGone threw", {
+                id,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
         }
       }
     }
