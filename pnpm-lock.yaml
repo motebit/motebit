@@ -2036,6 +2036,9 @@ importers:
       '@motebit/crypto-webauthn':
         specifier: workspace:*
         version: link:../crypto-webauthn
+      '@motebit/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@motebit/verifier':
         specifier: workspace:*
         version: link:../verifier

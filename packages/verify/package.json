@@ -66,6 +66,7 @@
     "@motebit/crypto-appattest": "workspace:*",
     "@motebit/crypto-tpm": "workspace:*",
     "@motebit/crypto-webauthn": "workspace:*",
+    "@motebit/protocol": "workspace:*",
     "@motebit/verifier": "workspace:*"
   },
   "devDependencies": {

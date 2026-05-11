@@ -48,6 +48,9 @@ Fully self-attesting artifacts — signed and offline-verifiable with only `@mot
 - Federation handshake and heartbeat (`spec/relay-federation-v1.md`)
 - Discovery metadata at `/.well-known/motebit.json` (`spec/discovery-v1.md`)
 - Operator transparency declaration at `/.well-known/motebit-transparency.json` (`docs/doctrine/operator-transparency.md`)
+- Content-artifact manifests on every state-export endpoint — relay-asserted `X-Motebit-Content-Manifest` HTTP header (`docs/doctrine/nist-alignment.md` §8). Verified offline with `motebit-verify content-artifact <body> --manifest <header>` against the relay public key from the operator-transparency declaration.
+
+The canonical verifier closes the consumer side: `packages/verify/src/cli.ts` (`motebit-verify`) accepts every signed-artifact category above (identity files, receipts, credentials, presentations, skills, content-artifact manifests) under one Apache-2.0 CLI. A claim is self-attesting only if a third party can verify it; a verifier that exists and demands the signature is what makes producer-side signing more than ceremony.
 
 Self-attesting via code-is-public plus CI enforcement — verification is "clone this repository and run the check":
 

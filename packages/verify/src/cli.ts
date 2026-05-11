@@ -44,7 +44,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ArtifactType } from "@motebit/crypto";
+import type { ArtifactType, ContentArtifactManifest } from "@motebit/crypto";
+import { verifyContentArtifact } from "@motebit/crypto";
+import type { ContentArtifactType } from "@motebit/protocol";
+import { ALL_CONTENT_ARTIFACT_TYPES, isContentArtifactType } from "@motebit/protocol";
 import { formatHuman, verifyFile } from "@motebit/verifier";
 
 import { buildHardwareVerifiers } from "./adapters.js";
@@ -57,8 +60,19 @@ const EXPECT_VALUES: readonly ArtifactType[] = [
   "skill",
 ];
 
+/**
+ * First positional argument that switches the CLI into content-artifact
+ * mode. Verifies a relay-asserted (or motebit-asserted) C2PA-shape
+ * manifest against the bytes it covers — the consumer-side primitive
+ * for the state-export-signing surface (`docs/doctrine/nist-alignment.md`
+ * §8). Stays a subcommand rather than auto-detection because
+ * content-artifact mode takes TWO inputs (body + manifest); auto-
+ * detection on a single positional cannot distinguish them.
+ */
+const CONTENT_ARTIFACT_SUBCOMMAND = "content-artifact";
+
 interface ParsedArgs {
-  readonly mode: "verify" | "help" | "version";
+  readonly mode: "verify" | "verify-content-artifact" | "help" | "version";
   readonly file?: string;
   readonly json: boolean;
   readonly expectedType?: ArtifactType;
@@ -66,10 +80,24 @@ interface ParsedArgs {
   readonly bundleId?: string;
   readonly androidAttestationApplicationIdPath?: string;
   readonly rpId?: string;
+  /** Content-artifact mode: manifest input — either base64url header value or path to JSON file. */
+  readonly manifest?: string;
+  /** Content-artifact mode: optional pinned producer key (hex, 64 chars). */
+  readonly expectedProducerKey?: string;
+  /** Content-artifact mode: optional expected artifact-type from the closed registry. */
+  readonly expectedArtifactType?: ContentArtifactType;
   readonly usageError?: string;
 }
 
-function parseArgs(argv: readonly string[]): ParsedArgs {
+export function parseArgs(argv: readonly string[]): ParsedArgs {
+  // Detect content-artifact subcommand at the head of the arg list.
+  // The remaining args are parsed in content-artifact mode — a strict
+  // subset of the credential-verification flags (no platform-specific
+  // overrides) plus content-artifact-specific flags.
+  if (argv[0] === CONTENT_ARTIFACT_SUBCOMMAND) {
+    return parseContentArtifactArgs(argv.slice(1));
+  }
+
   let file: string | undefined;
   let json = false;
   let expectedType: ArtifactType | undefined;
@@ -185,12 +213,116 @@ function usage(message: string): ParsedArgs {
   return { mode: "help", json: false, usageError: message };
 }
 
+/**
+ * Parse args for the `content-artifact` subcommand. Accepts:
+ *
+ *   motebit-verify content-artifact <body-file> --manifest <header-or-path>
+ *                                    [--expect <artifact-type>]
+ *                                    [--producer-key <hex>]
+ *                                    [--json]
+ *
+ * `--manifest` accepts EITHER a base64url-encoded canonical-JSON value
+ * (as emitted in the `X-Motebit-Content-Manifest` HTTP header) OR a
+ * filesystem path to a JSON file. Auto-detected by checking if the
+ * value parses as JSON when treated as a path; on filesystem read
+ * failure, falls back to base64url-header interpretation.
+ *
+ * `--producer-key` (optional) pins the expected producer's hex public
+ * key (32 bytes / 64 hex chars). When set, the CLI rejects with
+ * `producer_key_mismatch` if the manifest's declared key differs —
+ * the offline trust-anchor primitive (a verifier who has pinned the
+ * relay's pubkey from `/.well-known/motebit-transparency.json` can
+ * confirm the producer matches).
+ *
+ * `--expect` (optional) narrows to a member of the `ContentArtifactType`
+ * registry; mirrors the closed-registry pattern of the credential-
+ * mode `--expect`.
+ */
+function parseContentArtifactArgs(argv: readonly string[]): ParsedArgs {
+  let file: string | undefined;
+  let manifest: string | undefined;
+  let expectedArtifactType: ContentArtifactType | undefined;
+  let expectedProducerKey: string | undefined;
+  let json = false;
+  let help = false;
+
+  let i = 0;
+  while (i < argv.length) {
+    const arg = argv[i]!;
+    switch (arg) {
+      case "-h":
+      case "--help":
+        help = true;
+        i++;
+        break;
+      case "--json":
+        json = true;
+        i++;
+        break;
+      case "--manifest": {
+        const value = argv[i + 1];
+        if (value === undefined) return usage("--manifest requires a value (header or file path)");
+        manifest = value;
+        i += 2;
+        break;
+      }
+      case "--expect":
+      case "--expected-type": {
+        const value = argv[i + 1];
+        if (value === undefined) return usage(`${arg} requires a value`);
+        if (!isContentArtifactType(value)) {
+          return usage(
+            `unknown --expect value "${value}" (valid: ${ALL_CONTENT_ARTIFACT_TYPES.join(", ")})`,
+          );
+        }
+        expectedArtifactType = value;
+        i += 2;
+        break;
+      }
+      case "--producer-key": {
+        const value = argv[i + 1];
+        if (value === undefined) return usage("--producer-key requires a hex value");
+        if (!/^[0-9a-fA-F]{64}$/.test(value)) {
+          return usage("--producer-key must be 64 hex characters (32-byte Ed25519 public key)");
+        }
+        expectedProducerKey = value.toLowerCase();
+        i += 2;
+        break;
+      }
+      default:
+        if (arg.startsWith("-")) return usage(`unknown flag: ${arg}`);
+        if (file !== undefined) {
+          return usage(
+            `expected exactly one body-file argument, got a second: "${arg}" (after "${file}")`,
+          );
+        }
+        file = arg;
+        i++;
+        break;
+    }
+  }
+
+  if (help) return { mode: "help", json };
+  if (file === undefined) return usage("content-artifact: missing body-file argument");
+  if (manifest === undefined) return usage("content-artifact: --manifest is required");
+
+  return {
+    mode: "verify-content-artifact",
+    file,
+    manifest,
+    json,
+    ...(expectedArtifactType !== undefined && { expectedArtifactType }),
+    ...(expectedProducerKey !== undefined && { expectedProducerKey }),
+  };
+}
+
 function renderHelp(): string {
   return [
     "motebit-verify — verify any signed Motebit artifact offline.",
     "",
     "USAGE",
     "  motebit-verify <path> [options]",
+    "  motebit-verify content-artifact <body-file> --manifest <header-or-path> [options]",
     "",
     "  <path> may be a single file (identity, receipt, credential, presentation,",
     "  or a skill envelope JSON) OR a skill directory containing SKILL.md +",
@@ -198,6 +330,14 @@ function renderHelp(): string {
     "  envelope.files[]). Skill directories run the full envelope-sig +",
     "  body-hash + per-file-hash cross-check; single-file inputs run the",
     "  artifact's own signature check.",
+    "",
+    "  `content-artifact` mode verifies a C2PA-shape relay-asserted",
+    "  manifest (e.g. the `X-Motebit-Content-Manifest` HTTP header emitted",
+    "  on every state-export endpoint) against the response-body bytes",
+    "  it covers. Two-step check: SHA-256 content-hash recomputation +",
+    "  Ed25519 signature verification against the manifest's declared",
+    "  producer key. Offline by design; pin the producer key with",
+    `  --producer-key from /.well-known/motebit-transparency.json.`,
     "",
     "OPTIONS",
     "  --json                    Print structured JSON instead of human-readable.",
@@ -217,6 +357,24 @@ function renderHelp(): string {
     "                            alongside other pinned config.",
     "  --rp-id <id>              Override the expected WebAuthn Relying Party ID",
     "                            (default: motebit.com).",
+    "",
+    "  CONTENT-ARTIFACT MODE — `motebit-verify content-artifact <body> ...`",
+    "  --manifest <header-or-path>",
+    "                            Either a base64url-encoded canonical-JSON",
+    "                            manifest value (the form emitted in the",
+    "                            X-Motebit-Content-Manifest HTTP header) OR a",
+    "                            filesystem path to a JSON manifest file.",
+    "                            Auto-detected.",
+    "  --producer-key <hex>      Pin the expected producer's Ed25519 public",
+    "                            key (64 hex chars). When set, rejects with",
+    "                            producer_key_mismatch if the manifest's",
+    "                            declared key differs. Pair with a key fetched",
+    "                            from /.well-known/motebit-transparency.json",
+    "                            for offline trust-anchor enforcement.",
+    "  --expect <artifact-type>  In content-artifact mode, narrows to a member",
+    "                            of the ContentArtifactType registry",
+    `                            (${ALL_CONTENT_ARTIFACT_TYPES.length} types today; see @motebit/protocol).`,
+    "",
     "  -h, --help                Show this help.",
     "  -V, --version             Print version.",
     "",
@@ -257,6 +415,190 @@ function getPackageVersion(): string {
   return cachedVersion;
 }
 
+/**
+ * Decode the `--manifest` argument. Tries the value as a filesystem
+ * path first; if the file exists and parses as JSON, returns that.
+ * Otherwise, treats it as a base64url-encoded canonical-JSON
+ * representation (the form `services/relay/src/state-export.ts` emits
+ * in the `X-Motebit-Content-Manifest` HTTP header). Returns the
+ * parsed manifest object or a usage error.
+ *
+ * Auto-detect order matters: a base64url string could in principle be
+ * a legal path on disk, but the path-first try is bounded (readFileSync
+ * + JSON.parse) and falls through silently to header-decode. The
+ * inverse — treating every input as header bytes — would accidentally
+ * succeed on JSON files whose contents happen to base64-decode as
+ * arbitrary bytes, returning malformed garbage.
+ */
+export function decodeManifestInput(
+  value: string,
+): { ok: true; manifest: ContentArtifactManifest } | { ok: false; error: string } {
+  // Path-first: if the value looks like a path and readable as JSON, use that.
+  try {
+    const fileContents = readFileSync(value, "utf-8");
+    const parsed = JSON.parse(fileContents) as ContentArtifactManifest;
+    return { ok: true, manifest: parsed };
+  } catch {
+    // Fall through to header-decode.
+  }
+
+  // Header-form: base64url → UTF-8 → JSON. Buffer is available because
+  // the CLI runs in Node ≥20 (per repo engines).
+  try {
+    const decoded = Buffer.from(value, "base64url").toString("utf-8");
+    if (decoded === "") {
+      return { ok: false, error: "--manifest is empty or undecodable as base64url" };
+    }
+    const parsed = JSON.parse(decoded) as ContentArtifactManifest;
+    return { ok: true, manifest: parsed };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      error: `--manifest is neither a readable JSON file nor a valid base64url-encoded manifest: ${msg}`,
+    };
+  }
+}
+
+/** Failure-reason → human-readable phrase for the human-mode CLI output. */
+export function describeContentArtifactReason(reason: string): string {
+  switch (reason) {
+    case "content_hash_mismatch":
+      return "body bytes do not match the manifest's content_hash (the artifact was tampered, OR the manifest was issued for different bytes)";
+    case "signature_invalid":
+      return "signature does not verify against the declared producer key (manifest tampered, OR signed by a different key than the one declared)";
+    case "malformed_public_key":
+      return "manifest's producer_public_key is not 64 hex characters (32-byte Ed25519)";
+    case "malformed_signature":
+      return "manifest's signature is not valid base64url";
+    case "unsupported_suite":
+      return "manifest's cryptosuite is not yet implemented by this verifier (post-quantum migration pending)";
+    case "producer_key_mismatch":
+      return "manifest's declared producer key does not match the value pinned via --producer-key";
+    case "artifact_type_mismatch":
+      return "manifest's artifact_type does not match the value required via --expect";
+    default:
+      return reason;
+  }
+}
+
+async function verifyContentArtifactCli(args: ParsedArgs, json: boolean): Promise<number> {
+  if (args.file === undefined) {
+    process.stderr.write(`motebit-verify: content-artifact missing body-file argument\n`);
+    return 2;
+  }
+  if (args.manifest === undefined) {
+    process.stderr.write(`motebit-verify: content-artifact requires --manifest\n`);
+    return 2;
+  }
+
+  let bodyBytes: Uint8Array;
+  try {
+    const buf = readFileSync(args.file);
+    bodyBytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`motebit-verify: cannot read body-file ${args.file}: ${msg}\n`);
+    return 2;
+  }
+
+  const decoded = decodeManifestInput(args.manifest);
+  if (!decoded.ok) {
+    process.stderr.write(`motebit-verify: ${decoded.error}\n`);
+    return 2;
+  }
+  const manifest = decoded.manifest;
+
+  // Pre-crypto policy checks: producer-key pin and artifact-type narrow.
+  // Both bounded to bytes-level comparison — no new crypto in this
+  // package per CLAUDE.md Rule 1. The primitive's failure modes stay
+  // pristine; these CLI-layer rejections carry their own typed reasons.
+  if (
+    args.expectedProducerKey !== undefined &&
+    manifest.producer_public_key.toLowerCase() !== args.expectedProducerKey
+  ) {
+    const result = {
+      valid: false,
+      reason: "producer_key_mismatch",
+      expected_producer_public_key: args.expectedProducerKey,
+      actual_producer_public_key: manifest.producer_public_key.toLowerCase(),
+    };
+    if (json) {
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    } else {
+      process.stdout.write(
+        `✗ content-artifact INVALID — ${describeContentArtifactReason(result.reason)}\n`,
+      );
+    }
+    return 1;
+  }
+  if (
+    args.expectedArtifactType !== undefined &&
+    manifest.artifact_type !== args.expectedArtifactType
+  ) {
+    const result = {
+      valid: false,
+      reason: "artifact_type_mismatch",
+      expected_artifact_type: args.expectedArtifactType,
+      actual_artifact_type: manifest.artifact_type,
+    };
+    if (json) {
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    } else {
+      process.stdout.write(
+        `✗ content-artifact INVALID — ${describeContentArtifactReason(result.reason)}\n`,
+      );
+    }
+    return 1;
+  }
+
+  const result = await verifyContentArtifact(manifest, bodyBytes);
+
+  if (json) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          valid: result.valid,
+          ...(result.reason !== undefined && { reason: result.reason }),
+          manifest: {
+            suite: manifest.suite,
+            artifact_type: manifest.artifact_type,
+            producer: manifest.producer,
+            producer_public_key: manifest.producer_public_key,
+            claim_generator: manifest.claim_generator,
+            produced_at: manifest.produced_at,
+            content_hash: manifest.content_hash,
+            ...(manifest.invocation !== undefined && { invocation: manifest.invocation }),
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } else {
+    if (result.valid) {
+      process.stdout.write(
+        [
+          `✓ content-artifact VERIFIED`,
+          `  artifact_type    ${manifest.artifact_type}`,
+          `  producer         ${manifest.producer}`,
+          `  producer_key     ${manifest.producer_public_key}`,
+          `  claim_generator  ${manifest.claim_generator}`,
+          `  produced_at      ${manifest.produced_at}`,
+          `  suite            ${manifest.suite}`,
+          `  content_hash     ${manifest.content_hash}`,
+          ``,
+        ].join("\n"),
+      );
+    } else {
+      process.stdout.write(
+        `✗ content-artifact INVALID — ${describeContentArtifactReason(result.reason ?? "unknown")}\n`,
+      );
+    }
+  }
+  return result.valid ? 0 : 1;
+}
+
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -272,6 +614,10 @@ async function main(): Promise<number> {
     }
     process.stdout.write(`${help}\n`);
     return 0;
+  }
+
+  if (args.mode === "verify-content-artifact") {
+    return verifyContentArtifactCli(args, args.json);
   }
 
   if (args.file === undefined) {
@@ -326,12 +672,29 @@ async function main(): Promise<number> {
   return result.valid ? 0 : 1;
 }
 
-main()
-  .then((code) => {
-    process.exit(code);
-  })
-  .catch((err: unknown) => {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`motebit-verify: ${msg}\n`);
-    process.exit(2);
-  });
+// Entry-point guard: only run when invoked as the binary, not when
+// imported by tests or programmatic consumers. Mirrors the standard
+// Node ESM pattern `if (import.meta.url === pathToFileURL(argv[1]))`.
+// Without this, importing cli.ts to test the pure-function helpers
+// triggers main() with vitest's argv and exits the test process.
+const invokedAsBinary = (() => {
+  if (process.argv[1] === undefined) return false;
+  try {
+    const argvFileUrl = new URL(`file://${process.argv[1]}`).href;
+    return import.meta.url === argvFileUrl;
+  } catch {
+    return false;
+  }
+})();
+
+if (invokedAsBinary) {
+  main()
+    .then((code) => {
+      process.exit(code);
+    })
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`motebit-verify: ${msg}\n`);
+      process.exit(2);
+    });
+}
