@@ -903,6 +903,38 @@ export class SlabManager {
     if (prev != null && "close" in prev && typeof prev.close === "function") {
       prev.close();
     }
+    // flipY discipline by source type — the canonical Three.js perf
+    // pattern AND the WebGL2-spec-safe one:
+    //
+    //   HTMLImageElement (tier 3): flipY = true. The image is in
+    //     CSS top-down pixel order; WebGL's UNPACK_FLIP_Y_WEBGL
+    //     flips it during texImage2D so the texture ends up
+    //     bottom-up in GL native order.
+    //
+    //   ImageBitmap (tiers 1+2): flipY = false. The bitmap was
+    //     already pre-flipped at decode time via
+    //     `createImageBitmap(..., { imageOrientation: "flipY" })`,
+    //     so the texture data is bottom-up already. Setting flipY
+    //     would trigger a SECOND flip via UNPACK_FLIP_Y_WEBGL on
+    //     WebGL2 implementations that honor it for ImageBitmap,
+    //     and the screencast renders upside-down (caught 2026-05-11
+    //     on apple.com).
+    //
+    // Three.js docs claim flipY is ignored for ImageBitmap, but the
+    // Three.js source still issues `pixelStorei(UNPACK_FLIP_Y_WEBGL,
+    // ...)` before every upload — actual behavior is browser-WebGL2-
+    // implementation-defined. Setting flipY explicitly per source
+    // type is the only way to guarantee correctness across browsers.
+    //
+    // Duck-type rather than `instanceof HTMLImageElement` — this code
+    // runs in node-environment unit tests where DOM globals don't
+    // exist, and `instanceof HTMLImageElement` throws. ImageBitmap +
+    // VideoFrame expose `.close()`; HTMLImageElement does not. The
+    // check is the same one the GPU-resource-release branch above
+    // already uses, just inverted.
+    const sourceIsBitmapLike =
+      "close" in source && typeof (source as { close?: unknown }).close === "function";
+    this.screenTexture.flipY = !sourceIsBitmapLike;
     this.screenTexture.image = source;
     this.screenTexture.needsUpdate = true;
     this.screenMesh.visible = true;
