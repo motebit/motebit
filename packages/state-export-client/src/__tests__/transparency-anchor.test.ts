@@ -217,7 +217,7 @@ describe("fetchTransparencyAnchor — HTTP wrapper", () => {
     let calledUrl = "";
     const declaration = await buildDeclaration(signer);
     const mockFetch: typeof globalThis.fetch = async (input) => {
-      calledUrl = typeof input === "string" ? input : input.toString();
+      calledUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       return new Response(JSON.stringify(declaration), { status: 200 });
     };
     await fetchTransparencyAnchor("https://relay.example.com/", { fetch: mockFetch });
@@ -228,7 +228,7 @@ describe("fetchTransparencyAnchor — HTTP wrapper", () => {
     let calledUrl = "";
     const declaration = await buildDeclaration(signer);
     const mockFetch: typeof globalThis.fetch = async (input) => {
-      calledUrl = typeof input === "string" ? input : input.toString();
+      calledUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       return new Response(JSON.stringify(declaration), { status: 200 });
     };
     await fetchTransparencyAnchor("https://relay.example.com", {
