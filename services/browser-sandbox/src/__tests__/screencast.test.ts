@@ -55,10 +55,10 @@ describe("startScreencast", () => {
     expect(startCall).toBeDefined();
     expect(startCall?.[1]).toMatchObject({
       format: "jpeg",
-      quality: 60,
-      maxWidth: 1280,
-      maxHeight: 800,
-      everyNthFrame: 2,
+      quality: 90,
+      maxWidth: 1920,
+      maxHeight: 1200,
+      everyNthFrame: 1,
     });
   });
 

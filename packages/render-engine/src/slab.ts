@@ -840,15 +840,38 @@ export class SlabManager {
   setScreencastImage(source: HTMLImageElement | ImageBitmap): void {
     if (this.screenTexture == null) {
       this.screenTexture = new THREE.Texture();
-      // `flipY = true` matches Three.js convention for HTMLImageElement
-      // and default-orientation ImageBitmap; the texture renders
-      // upright on the mesh. SRGBColorSpace matches the JPEG source's
-      // color space so the screencast displays at face value rather
-      // than gamma-shifted.
+      // Hero-surface sampling — the visionOS-window pattern. Three
+      // configs make the slab read as sharp at every angle and
+      // distance the user could view it from:
+      //
+      //   colorSpace: SRGBColorSpace — JPEG source is sRGB-encoded;
+      //     tagging the texture lets Three.js's tone-mapped pipeline
+      //     decode → linear-light → display correctly. Without this,
+      //     the content is gamma-shifted darker than the source.
+      //
+      //   minFilter: LinearMipmapLinearFilter (trilinear) +
+      //     generateMipmaps: true — when the texture is minified
+      //     (slab tilted away, slab small in frame), trilinear
+      //     samples between two mip levels and avoids the sparkle
+      //     + broken antialiasing that nearest-mip and no-mipmap
+      //     paths produce. Cost: ~2 ms/frame on desktop GPUs to
+      //     regenerate the mip chain on each texture update, free
+      //     once we move to VideoTexture/GPUExternalTexture (the
+      //     end-game pin in motebit-computer.md).
+      //
+      //   anisotropy: 16 — when the slab is angled, each screen
+      //     pixel covers a horizontally-elongated texel footprint;
+      //     isotropic sampling averages a circle when it should
+      //     average an ellipse → smear on the axis perpendicular
+      //     to the tilt. Apple ships max anisotropy on every Metal-
+      //     rendered window in visionOS for this reason. Three.js
+      //     clamps to `renderer.capabilities.getMaxAnisotropy()`
+      //     at upload — 16 is the desktop/visionOS canonical max.
       this.screenTexture.colorSpace = THREE.SRGBColorSpace;
-      this.screenTexture.minFilter = THREE.LinearFilter;
+      this.screenTexture.minFilter = THREE.LinearMipmapLinearFilter;
       this.screenTexture.magFilter = THREE.LinearFilter;
-      this.screenTexture.generateMipmaps = false;
+      this.screenTexture.generateMipmaps = true;
+      this.screenTexture.anisotropy = 16;
       this.screenMaterial.map = this.screenTexture;
       this.screenMaterial.needsUpdate = true;
     }

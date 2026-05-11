@@ -20,14 +20,23 @@
  * Wire format (one frame per NDJSON line):
  *
  *   { "jpeg_base64": "<...>", "timestamp": 1700000000123,
- *     "device_width": 1280, "device_height": 800 }
+ *     "device_width": 1920, "device_height": 1200 }
  *
- * Quality + sample rate are tuned for the slab's perceptual
- * register, not for fidelity: 60% JPEG quality at every-2nd-frame
- * (~15fps from a 30fps page) is enough motion that the slab reads
- * as alive without saturating bandwidth. Operators that need
- * higher quality can tune `BrowserSandboxConfig` later — for v1.3
- * the constants are inline.
+ * Quality tier — hero-surface, not bandwidth-budget. The slab is
+ * the most-looked-at object in the product after the creature;
+ * it gets visionOS-window-grade fidelity. JPEG quality 90 at
+ * 1920×1200 every frame produces a stream whose visible artifacts
+ * are below the noise floor of the slab's transmission shader.
+ *
+ * The earlier v1.3 register (quality 60, every-2nd-frame, 1280×800)
+ * was tuned for "reads as alive" — it succeeded perceptually but
+ * left text antialiasing soft and produced visible chroma blocks
+ * on flat backgrounds. The hero-surface tier costs ~3× bandwidth
+ * (~1.5 MB/s peak) for a hero surface the user looks at
+ * continuously — the right trade. End-game replaces the JPEG path
+ * entirely with WebCodecs H.264 (`motebit-computer.md`
+ * §"Capture-pipeline end-game"); this tier is the substrate the
+ * end-game inherits, not a parallel codepath.
  *
  * One screencast per session. The pool stores the disposer so
  * `closeSession` tears down the screencast first; double-start is
@@ -40,18 +49,34 @@ import type { ScreencastFrame } from "@motebit/protocol";
 export type { ScreencastFrame } from "@motebit/protocol";
 
 const SCREENCAST_FORMAT = "jpeg" as const;
-const SCREENCAST_QUALITY = 60;
-const SCREENCAST_MAX_WIDTH = 1280;
-const SCREENCAST_MAX_HEIGHT = 800;
 /**
- * `everyNthFrame: 2` — Chromium pages typically composite at 60fps
- * (or 30fps on battery); requesting every-2nd-frame caps screencast
- * at ~30fps from a 60fps page or ~15fps from 30fps. The slab's
- * perceptual register doesn't need 60fps; halving the rate halves
- * bandwidth + JPEG-encode CPU. Higher motion fidelity is a
- * post-v1.3 tuning concern.
+ * JPEG quality 90 — the threshold above which compression artifacts
+ * are below normal viewing distance perception on a hero surface.
+ * 85 is "looks identical to original on a thumbnail"; 90 is "looks
+ * identical to original at full-size on a textured surface in 3D
+ * being looked at directly." The slab gets the latter.
  */
-const SCREENCAST_EVERY_NTH = 2;
+const SCREENCAST_QUALITY = 90;
+/**
+ * 1920×1200 source — enough resolution that the slab is texel-
+ * supersampled at any reasonable display size up to ~4K. The
+ * screen mesh is ~0.46 m wide in world space; at typical viewing
+ * distance and DPR 2 that's ~960–1200 screen pixels — a 1920px
+ * source gives ≥1.5× oversampling, which trilinear + max-aniso
+ * filtering converts to sharpness rather than aliasing.
+ */
+const SCREENCAST_MAX_WIDTH = 1920;
+const SCREENCAST_MAX_HEIGHT = 1200;
+/**
+ * `everyNthFrame: 1` — every composited frame. The slab's
+ * sympathetic breathing at 0.3 Hz reads as alive only when
+ * sub-frame motion (scroll, hover, cursor) is smooth; every-other-
+ * frame at 15 fps produced visible step. CDP screencast caps at
+ * Chromium's composite rate (typically 30–60 fps depending on
+ * power state), which is the right tier — the slab is not a 120fps
+ * surface, but it should not stutter.
+ */
+const SCREENCAST_EVERY_NTH = 1;
 
 /**
  * Stop the screencast cleanly. Idempotent — calling twice is a no-op.
