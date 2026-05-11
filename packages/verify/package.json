@@ -67,6 +67,7 @@
     "@motebit/crypto-tpm": "workspace:*",
     "@motebit/crypto-webauthn": "workspace:*",
     "@motebit/protocol": "workspace:*",
+    "@motebit/state-export-client": "workspace:*",
     "@motebit/verifier": "workspace:*"
   },
   "devDependencies": {

@@ -15,6 +15,7 @@
     { "path": "../crypto-tpm" },
     { "path": "../crypto-webauthn" },
     { "path": "../protocol" },
+    { "path": "../state-export-client" },
     { "path": "../verifier" }
   ]
 }

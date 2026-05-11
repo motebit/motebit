@@ -1365,6 +1365,9 @@ export interface VerifyOptions {
 }
 
 // @public
+export function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptVerifyResult>;
+
+// @public
 export function verifyReceiptChain(receipt: SignableReceipt, knownKeys: KnownKeys): Promise<ReceiptVerification>;
 
 // @public

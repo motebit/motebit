@@ -71,3 +71,10 @@ export type {
   OnchainAnchorResult,
   OnchainAnchorFailureReason,
 } from "./onchain-anchor.js";
+
+export { verifyInnerSignedReceipts } from "./inner-receipts.js";
+export type {
+  InnerReceiptVerification,
+  InnerReceiptVerificationFailureReason,
+  InnerReceiptsVerification,
+} from "./inner-receipts.js";

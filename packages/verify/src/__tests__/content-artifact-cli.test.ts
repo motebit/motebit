@@ -322,3 +322,189 @@ describe("motebit-verify content-artifact — subprocess end-to-end", () => {
     expect(parsed.manifest.artifact_type).toBe("audit-trail");
   });
 });
+
+// --- v1.1 recursive inner-receipt verification (subprocess) -----------------
+
+describe("motebit-verify content-artifact — v1.1 inner-receipt recursion", () => {
+  let tmp: string;
+
+  beforeAll(async () => {
+    tmp = mkdtempSync(join(tmpdir(), "motebit-verify-inner-e2e-"));
+  });
+
+  function runCli(args: readonly string[]): {
+    status: number | null;
+    stdout: string;
+    stderr: string;
+  } {
+    const result = spawnSync("npx", ["--yes", "tsx", CLI_SRC, ...args], {
+      encoding: "utf-8",
+      timeout: 30_000,
+    });
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
+  }
+
+  it("recursively verifies a v1.1 execution-ledger with inner signed receipts", async () => {
+    const { signExecutionReceipt } = await import("@motebit/crypto");
+
+    // Inner delegate's keypair — signs an ExecutionReceipt directly.
+    const delegateKp = await generateKeypair();
+    const innerReceipt = await signExecutionReceipt(
+      {
+        task_id: "inner-task-1",
+        motebit_id: "delegate-mote-cli",
+        device_id: "delegate-device",
+        submitted_at: 1000,
+        completed_at: 2000,
+        status: "completed",
+        result: "ok",
+        tools_used: ["web_search"],
+        memories_formed: 0,
+        prompt_hash: "0".repeat(64),
+        result_hash: "1".repeat(64),
+        public_key: bytesToHex(delegateKp.publicKey),
+      } as unknown as Parameters<typeof signExecutionReceipt>[0],
+      delegateKp.privateKey,
+    );
+
+    // Relay's keypair — signs the outer ContentArtifactManifest over
+    // the JSON body containing signed_receipts.
+    const relayKp = await generateKeypair();
+    const body = {
+      spec: "motebit/execution-ledger@1.1",
+      motebit_id: "owner-mote-cli",
+      goal_id: "goal-1",
+      plan_id: "plan-1",
+      started_at: 0,
+      completed_at: 3000,
+      status: "completed",
+      timeline: [],
+      steps: [],
+      delegation_receipts: [],
+      content_hash: "0".repeat(64),
+      signed_receipts: [JSON.stringify(innerReceipt)],
+    };
+    const bodyBytes = new TextEncoder().encode(JSON.stringify(body));
+    const bodyPath = join(tmp, "v1_1-body.json");
+    writeFileSync(bodyPath, bodyBytes);
+
+    const manifest = await signContentArtifact(bodyBytes, {
+      artifactType: "execution-ledger",
+      producer: `did:key:z${bytesToHex(relayKp.publicKey).slice(0, 16)}`,
+      producerPublicKey: relayKp.publicKey,
+      producerPrivateKey: relayKp.privateKey,
+      claimGenerator: "motebit-relay/0.5.2-e2e",
+    });
+    const manifestB64 = manifestToHeader(manifest);
+
+    const res = runCli(["content-artifact", bodyPath, "--manifest", manifestB64]);
+    expect(res.status, `stderr: ${res.stderr}\nstdout: ${res.stdout}`).toBe(0);
+    expect(res.stdout).toMatch(/✓ content-artifact VERIFIED/);
+    expect(res.stdout).toMatch(/✓ inner receipts 1\/1 VERIFIED/);
+    expect(res.stdout).toContain("inner-task-1");
+    expect(res.stdout).toContain("delegate-mote-cli");
+  });
+
+  it("exits 1 when an inner receipt is tampered (outer still valid)", async () => {
+    const { signExecutionReceipt } = await import("@motebit/crypto");
+    const delegateKp = await generateKeypair();
+    const innerReceipt = await signExecutionReceipt(
+      {
+        task_id: "inner-tampered",
+        motebit_id: "delegate-mote-cli-2",
+        device_id: "delegate-device",
+        submitted_at: 1000,
+        completed_at: 2000,
+        status: "completed",
+        result: "original-result",
+        tools_used: ["web_search"],
+        memories_formed: 0,
+        prompt_hash: "0".repeat(64),
+        result_hash: "1".repeat(64),
+        public_key: bytesToHex(delegateKp.publicKey),
+      } as unknown as Parameters<typeof signExecutionReceipt>[0],
+      delegateKp.privateKey,
+    );
+
+    // Tamper the inner receipt's `result` AFTER signing — the receipt's
+    // signature was computed over the original. The outer manifest
+    // covers the body bytes INCLUDING the tampered inner receipt, so
+    // it stays valid; only inner verification catches the lie.
+    const tamperedInner = { ...innerReceipt, result: "tampered-result" };
+
+    const relayKp = await generateKeypair();
+    const body = {
+      spec: "motebit/execution-ledger@1.1",
+      motebit_id: "owner-mote-cli",
+      goal_id: "goal-tampered",
+      plan_id: "plan-1",
+      started_at: 0,
+      completed_at: 3000,
+      status: "completed",
+      timeline: [],
+      steps: [],
+      delegation_receipts: [],
+      content_hash: "0".repeat(64),
+      signed_receipts: [JSON.stringify(tamperedInner)],
+    };
+    const bodyBytes = new TextEncoder().encode(JSON.stringify(body));
+    const bodyPath = join(tmp, "v1_1-body-tampered.json");
+    writeFileSync(bodyPath, bodyBytes);
+
+    const manifest = await signContentArtifact(bodyBytes, {
+      artifactType: "execution-ledger",
+      producer: `did:key:z${bytesToHex(relayKp.publicKey).slice(0, 16)}`,
+      producerPublicKey: relayKp.publicKey,
+      producerPrivateKey: relayKp.privateKey,
+      claimGenerator: "motebit-relay/0.5.2-e2e",
+    });
+    const manifestB64 = manifestToHeader(manifest);
+
+    const res = runCli(["content-artifact", bodyPath, "--manifest", manifestB64]);
+    expect(res.status).toBe(1);
+    // Outer manifest STILL VERIFIED — the relay signed the bytes-as-
+    // delivered. Inner failure is what fails the overall verification.
+    expect(res.stdout).toMatch(/✓ content-artifact VERIFIED/);
+    expect(res.stdout).toMatch(/✗ inner receipts 0\/1 VERIFIED/);
+    expect(res.stdout).toMatch(/signature_invalid/);
+  });
+
+  it("stays silent on inner receipts when the body is v1.0 (no field)", async () => {
+    const relayKp = await generateKeypair();
+    const body = {
+      spec: "motebit/execution-ledger@1.0",
+      motebit_id: "owner-mote-cli",
+      goal_id: "goal-v1-0",
+      plan_id: "plan-1",
+      started_at: 0,
+      completed_at: 3000,
+      status: "completed",
+      timeline: [],
+      steps: [],
+      delegation_receipts: [],
+      content_hash: "0".repeat(64),
+    };
+    const bodyBytes = new TextEncoder().encode(JSON.stringify(body));
+    const bodyPath = join(tmp, "v1_0-body.json");
+    writeFileSync(bodyPath, bodyBytes);
+
+    const manifest = await signContentArtifact(bodyBytes, {
+      artifactType: "execution-ledger",
+      producer: `did:key:z${bytesToHex(relayKp.publicKey).slice(0, 16)}`,
+      producerPublicKey: relayKp.publicKey,
+      producerPrivateKey: relayKp.privateKey,
+      claimGenerator: "motebit-relay/0.5.2-e2e",
+    });
+
+    const res = runCli(["content-artifact", bodyPath, "--manifest", manifestToHeader(manifest)]);
+    expect(res.status, `stderr: ${res.stderr}`).toBe(0);
+    expect(res.stdout).toMatch(/✓ content-artifact VERIFIED/);
+    // No "inner receipts" line on v1.0 bodies — calm software: silent
+    // on the verified path when the field doesn't apply.
+    expect(res.stdout).not.toMatch(/inner receipts/);
+  });
+});

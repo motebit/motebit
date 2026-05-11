@@ -235,6 +235,7 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // Artifact signing
     "signExecutionReceipt",
     "verifyExecutionReceipt",
+    "verifyReceipt",
     "signSovereignPaymentReceipt",
     "verifyReceiptChain",
     "verifyReceiptSequence",

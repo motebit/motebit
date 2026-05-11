@@ -1038,7 +1038,34 @@ async function verifyReceiptSignature(
   return { valid };
 }
 
-async function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptVerifyResult> {
+/**
+ * Verify a single `ExecutionReceipt` by:
+ *
+ *   1. Resolving the signer key — `receipt.public_key` (embedded hex) is
+ *      the canonical source. A receipt without an embedded key cannot
+ *      be verified offline; verification fails with a typed error.
+ *   2. Verifying the Ed25519 signature over the receipt's content hash
+ *      (per `spec/execution-ledger-v1.md` §6).
+ *   3. Recursively verifying each entry in `delegation_receipts` (§11.5)
+ *      so multi-hop chains are fully audited.
+ *
+ * Returns a `ReceiptVerifyResult` with the signer's `did:key`, the
+ * outer signature validity, and an array of nested delegation results.
+ * Fail-closed on every error path — missing key, wrong key length,
+ * malformed hex, signature mismatch.
+ *
+ * Consumed by `@motebit/state-export-client::verifyInnerSignedReceipts`
+ * to recursively check each `signed_receipts` entry inside a v1.1
+ * relay-assembled execution-ledger reconstruction
+ * (`spec/execution-ledger-v1.md` §4.3) and by `motebit-verify
+ * content-artifact --verify-inner` for the same purpose at the CLI.
+ *
+ * Closes the operator-trust gap at the consumer side: a verifier with
+ * v1.1 inner receipts in hand can prove "motebit X did this work"
+ * directly against motebit X's own public key, without trusting the
+ * relay's word.
+ */
+export async function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptVerifyResult> {
   // Resolve public key: embedded in receipt, or fail
   let publicKey: Uint8Array | null = null;
   let signerDid: string | undefined;

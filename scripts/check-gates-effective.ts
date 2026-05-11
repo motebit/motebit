@@ -1533,6 +1533,18 @@ export async function probeFetch(): Promise<unknown> {
         src.replace(/motebit\/execution-ledger@1\.1/g, "motebit/execution-ledger@probe-removed"),
       ),
   },
+  {
+    script: "check-execution-ledger-inner-receipt-verified",
+    proves:
+      "flags the consumer-side recursive verification silently regressing to outer-only checks. Drift class: the v1.1 wire change becomes inert at the operator-facing CLI surface; producer ships bytes that no consumer recursively verifies. Same shadow-dependency shape as the producer-only signing pattern the session has been closing.",
+    perturb: () =>
+      // Remove the import of verifyInnerSignedReceipts from the CLI;
+      // the gate must flag the regression because the consumer-side
+      // wiring is broken even though the primitive itself still exists.
+      mutateFile(`packages/verify/src/cli.ts`, (src) =>
+        src.replace(/\bverifyInnerSignedReceipts\b/g, "probe_inner_verifier_removed"),
+      ),
+  },
 ];
 
 /**

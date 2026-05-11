@@ -48,6 +48,10 @@ import type { ArtifactType, ContentArtifactManifest } from "@motebit/crypto";
 import { verifyContentArtifact } from "@motebit/crypto";
 import type { ContentArtifactType } from "@motebit/protocol";
 import { ALL_CONTENT_ARTIFACT_TYPES, isContentArtifactType } from "@motebit/protocol";
+import {
+  verifyInnerSignedReceipts,
+  type InnerReceiptsVerification,
+} from "@motebit/state-export-client";
 import { formatHuman, verifyFile } from "@motebit/verifier";
 
 import { buildHardwareVerifiers } from "./adapters.js";
@@ -554,11 +558,34 @@ async function verifyContentArtifactCli(args: ParsedArgs, json: boolean): Promis
 
   const result = await verifyContentArtifact(manifest, bodyBytes);
 
+  // v1.1 inner-receipt recursive verification — only when the outer
+  // manifest already verified (no point auditing the inside of bytes
+  // we don't trust were assembled by the relay we expected). Auto-on
+  // when applicable; no flag to remember. Calm-software register:
+  // surfaces a per-inner-receipt summary only when v1.1 bodies are
+  // detected. Per `spec/execution-ledger-v1.md` §4.3 + closure of the
+  // operator-trust gap (`docs/doctrine/nist-alignment.md` §8).
+  let innerVerification: InnerReceiptsVerification | undefined;
+  if (result.valid && manifest.artifact_type === "execution-ledger") {
+    try {
+      const parsed = JSON.parse(new TextDecoder().decode(bodyBytes)) as unknown;
+      const inner = await verifyInnerSignedReceipts(parsed);
+      if (inner.applicable) innerVerification = inner;
+    } catch {
+      // Body parsed earlier for the outer manifest, but if v1.1 inner
+      // recursion can't parse it (somehow), silently skip — the outer
+      // check has already verified the bytes. v1.0 bodies and bodies
+      // without `signed_receipts` set `applicable: false` and don't
+      // surface a section.
+    }
+  }
+  const innerFailed = innerVerification !== undefined && !innerVerification.allValid;
+
   if (json) {
     process.stdout.write(
       `${JSON.stringify(
         {
-          valid: result.valid,
+          valid: result.valid && !innerFailed,
           ...(result.reason !== undefined && { reason: result.reason }),
           manifest: {
             suite: manifest.suite,
@@ -570,6 +597,7 @@ async function verifyContentArtifactCli(args: ParsedArgs, json: boolean): Promis
             content_hash: manifest.content_hash,
             ...(manifest.invocation !== undefined && { invocation: manifest.invocation }),
           },
+          ...(innerVerification !== undefined && { inner_receipts: innerVerification }),
         },
         null,
         2,
@@ -590,13 +618,32 @@ async function verifyContentArtifactCli(args: ParsedArgs, json: boolean): Promis
           ``,
         ].join("\n"),
       );
+      if (innerVerification !== undefined) {
+        const allOk = innerVerification.allValid;
+        process.stdout.write(
+          [
+            `${allOk ? "✓" : "✗"} inner receipts ${innerVerification.verifiedCount}/${innerVerification.totalCount} VERIFIED (spec: motebit/execution-ledger@1.1)`,
+            ...innerVerification.results.map((r) => {
+              if (r.valid) {
+                return `  ✓ ${r.taskId}  motebit=${r.motebitId}${r.signerDid !== undefined ? `  signer=${r.signerDid}` : ""}`;
+              }
+              return `  ✗ ${r.taskId}  motebit=${r.motebitId}  reason=${r.reason ?? "unknown"}${r.detail !== undefined ? `  detail=${r.detail}` : ""}`;
+            }),
+            ``,
+          ].join("\n"),
+        );
+      }
     } else {
       process.stdout.write(
         `✗ content-artifact INVALID — ${describeContentArtifactReason(result.reason ?? "unknown")}\n`,
       );
     }
   }
-  return result.valid ? 0 : 1;
+  // Overall validity gates on outer AND inner — a v1.1 bundle where any
+  // inner receipt fails is not a clean verification, even if the relay's
+  // outer signature checks out (the relay is correctly attesting bytes
+  // it assembled, but those bytes contain falsified inner claims).
+  return result.valid && !innerFailed ? 0 : 1;
 }
 
 async function main(): Promise<number> {
