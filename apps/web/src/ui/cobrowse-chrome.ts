@@ -210,11 +210,21 @@ function baseStrip(stateKind: ControlState["kind"]): HTMLDivElement {
   strip.style.display = "flex";
   strip.style.alignItems = "center";
   strip.style.gap = "10px";
-  strip.style.padding = "10px 16px";
-  // Flush with the slab's top edge — no margin, no rounded outer
-  // corner. The chrome is the slab's edge region with affordances
-  // embedded, not a card floating above the surface.
-  strip.style.margin = "0";
+  // Horizontal padding accommodates the slab's top-corner curve. The
+  // stage's borderRadius is ~83px (matching the slab's meniscus); the
+  // chrome strip occupies a ~54px-tall band entirely inside that
+  // curve, so at the strip's vertical center the silhouette is
+  // ~22px inset from each rectangular edge. With 36px horizontal
+  // padding, the rightmost affordance (reload icon) sits well inside
+  // the silhouette at y_center, not at the silhouette boundary.
+  // Vertical padding holds at 12px to give the strip a comfortable
+  // height without competing with the URL field's natural metrics.
+  strip.style.padding = "12px 36px";
+  // Push the strip down by ~8px so its top edge is below the most-
+  // curved region of the slab's top corner (which curves to a point
+  // at y=0). Above the strip, ~8px of glass shows the meniscus —
+  // chrome reads as inside the slab, not flush to its highest curve.
+  strip.style.margin = "8px 0 0 0";
   strip.style.borderRadius = "0";
   // Slab-coherent material (motebit-computer.md §"Visual properties").
   // Very subtle tint inherits the slab's substrate. The strong

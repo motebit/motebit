@@ -217,14 +217,16 @@ const BODY_REGION_CENTER_Y = -SLAB_HEIGHT * (CHROME_REGION_FRACTION / 2);
  * content's edge — silhouette and silhouette-within-silhouette
  * fight each other.
  *
- * 16pt at the stage's pixel scale, applied uniformly on all four
+ * 28pt at the stage's pixel scale, applied uniformly on all four
  * sides of the screen mesh within the body region. The top inset
  * doubles as the visual gap between chrome strip's bottom edge and
  * screen mesh's top edge — chrome and content read as related but
- * not abutting. Same value Apple uses for window content insets
- * on visionOS.
+ * not abutting. The Apple visionOS canonical window content inset
+ * sits in the 20–28pt range; 28pt reads as a clear breathing margin
+ * at the slab's 0.54×0.334m extent, prior 16pt was too subtle (~3%
+ * of slab width) to register as a margin against the silhouette.
  */
-const CONTENT_INSET_PT = 16;
+const CONTENT_INSET_PT = 28;
 const CONTENT_INSET_WORLD = CONTENT_INSET_PT * STAGE_PIXEL_TO_WORLD;
 
 /**
