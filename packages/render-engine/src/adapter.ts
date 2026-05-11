@@ -293,6 +293,17 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.slab?.clearScreencast();
   }
 
+  /**
+   * Toggle the slab's screencast-mesh visibility WITHOUT releasing
+   * the texture. Pair with the surface's URL-bar-focus → home-
+   * overlay transition: `true` on focus, `false` on blur / commit /
+   * Esc. Texture stays installed so resume is cold-start-free.
+   * Distinct from `clearSlabScreencast` (lifecycle terminator).
+   */
+  setSlabScreencastSuppressed(suppressed: boolean): void {
+    this.slab?.setScreencastSuppressed(suppressed);
+  }
+
   setBackground(color: number | null): void {
     if (this.scene) {
       this.scene.background = color === null ? null : new THREE.Color(color);

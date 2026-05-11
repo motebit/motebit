@@ -2274,6 +2274,12 @@ export class WebApp {
     if (this._homeOverlayActive) return;
     this._homeOverlayActive = true;
     this.liveBrowserHandle.setHomeState(this.effectiveHomeState());
+    // Suppress the WebGL screen mesh — Apple's Safari pattern: the
+    // page render is replaced (not blurred-behind) when the URL
+    // bar focuses. Texture stays installed so resume is cold-
+    // start-free; only visibility flips. Tiles render against
+    // pure slab interior, never against a competing video.
+    this.renderer.setSlabScreencastSuppressed?.(true);
     this.mountHomeViewIntoBodySlot();
   }
 
@@ -2290,6 +2296,11 @@ export class WebApp {
     if (!this._homeOverlayActive) return;
     this._homeOverlayActive = false;
     this.liveBrowserHandle.setHomeState(this.effectiveHomeState());
+    // Un-suppress the WebGL screen mesh — per-frame visibility
+    // derivation reveals it on the next render tick against the
+    // most-recent frame already in the texture (no cold-start,
+    // no blank).
+    this.renderer.setSlabScreencastSuppressed?.(false);
     // Clear the slot so the next overlay-open rebuilds fresh tiles
     // (in case the audit log got new entries between opens).
     this.liveBrowserHandle.bodySlot.replaceChildren();

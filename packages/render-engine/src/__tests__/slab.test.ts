@@ -645,6 +645,34 @@ describe("SlabManager — screencast WebGL texture (v1.3 → texture register)",
     expect(screen.visible).toBe(true);
   });
 
+  it("setScreencastSuppressed(true) hides the screen mesh WITHOUT releasing the texture — overlay-register lifecycle", () => {
+    // Pins the URL-bar-focus → home-overlay contract: suppression
+    // hides the mesh visually while the texture stays installed,
+    // so resuming the session (overlay exit) reveals the mesh
+    // against the most-recent frame already in the texture — no
+    // cold-start, no blank. Distinct from clearScreencast which
+    // releases the texture (lifecycle terminator).
+    const mgr = makeManager();
+    mgr.setUserVisible(true);
+    mgr.setScreencastImage({ width: 1280, height: 800 } as unknown as HTMLImageElement);
+    mgr.update(0, 0.5);
+    const screen = findScreenMesh(mgr)!;
+    expect(screen.visible).toBe(true);
+    expect(screen.material.map).not.toBeNull();
+
+    // Suppress — mesh hides on next tick. Texture survives.
+    mgr.setScreencastSuppressed(true);
+    mgr.update(0.5, 0.1);
+    expect(screen.visible).toBe(false);
+    expect(screen.material.map).not.toBeNull(); // Texture survives.
+
+    // Un-suppress — mesh re-emerges against the still-installed texture.
+    mgr.setScreencastSuppressed(false);
+    mgr.update(1, 0.1);
+    expect(screen.visible).toBe(true);
+    expect(screen.material.map).not.toBeNull();
+  });
+
   it("closes ImageBitmap on replacement so GPU-side bitmap memory doesn't leak", () => {
     const mgr = makeManager();
     let aClosed = false;

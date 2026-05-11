@@ -530,19 +530,35 @@ export function buildLiveBrowserElement(
       bodySlot.style.setProperty("-webkit-backdrop-filter", "");
       bodySlot.dataset.homeState = "register";
     } else {
-      // overlay — bodySlot composites OVER the screencast layer.
-      // Backdrop-blur + low-alpha background dim the live screencast
-      // behind without touching its WebGL material; the screencast
-      // keeps streaming so the user feels the session waiting, not
-      // gone. Backdrop alpha + blur tuned to "session faintly
-      // visible, decision-space readable" — not opaque (Safari iOS
-      // pattern) and not just dim (which would feel modal). The
-      // overlay reads as glass-on-glass with the slab.
+      // overlay — visually identical to the register state, by
+      // design. Apple's Safari pattern: focusing the URL bar on an
+      // active page replaces the page render with the Start Page;
+      // the previous page is NOT visible behind a blur. Blurring
+      // the live screencast under a translucent sheet (the prior
+      // implementation) produced two competing readable layers
+      // and felt visually noisy; the doctrine answer matches the
+      // platform answer.
+      //
+      // The semantic distinction between "register" (no session
+      // beneath) and "overlay" (session suspended beneath) is NOT
+      // communicated through the slot's appearance. It's signaled
+      // via:
+      //   - URL bar state: empty placeholder (register) vs current
+      //     URL pre-selected for editing (overlay).
+      //   - WebGL screencast: cleared texture (register) vs
+      //     suppressed-but-installed texture (overlay) — the slab's
+      //     `setScreencastSuppressed` hides the screen mesh
+      //     without releasing the texture so resuming the session
+      //     is cold-start-free.
+      //
+      // The `dataset.homeState` attribute differs so tests + future
+      // CSS rules can branch on the semantic state without it
+      // showing in the visible register today.
       bodySlot.style.display = "flex";
       bodySlot.style.pointerEvents = "auto";
-      bodySlot.style.background = "rgba(255, 255, 255, 0.18)";
-      bodySlot.style.backdropFilter = "blur(16px) saturate(1.2)";
-      bodySlot.style.setProperty("-webkit-backdrop-filter", "blur(16px) saturate(1.2)");
+      bodySlot.style.background = "";
+      bodySlot.style.backdropFilter = "";
+      bodySlot.style.setProperty("-webkit-backdrop-filter", "");
       bodySlot.dataset.homeState = "overlay";
     }
   };

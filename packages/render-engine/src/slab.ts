@@ -326,6 +326,21 @@ export class SlabManager {
   private readonly screenMesh: THREE.Mesh;
   private readonly screenMaterial: THREE.MeshBasicMaterial;
   private screenTexture: THREE.Texture | null = null;
+  /**
+   * When true, the per-frame visibility derivation hides the screen
+   * mesh regardless of texture presence. Surface sets this on the
+   * Session → Home overlay transition (URL-bar focus mid-session) —
+   * the home view occupies the body alone while the screencast
+   * texture stays installed so resume is cold-start-free. Surface
+   * clears it on overlay exit (blur / commit / Esc); next render
+   * tick reveals the screen mesh against the most-recent frame
+   * already in the texture.
+   *
+   * Distinct from `clearScreencast` which RELEASES the texture
+   * entirely. Suppression is a visibility gate; clear is a
+   * lifecycle terminator.
+   */
+  private screencastSuppressed = false;
   private readonly planeMaterial: THREE.MeshPhysicalMaterial;
   /**
    * Silhouette companion to `planeMaterial`. Same `MeshPhysicalMaterial`
@@ -971,6 +986,21 @@ export class SlabManager {
   }
 
   /**
+   * Toggle the screencast suppression flag — hides the screen mesh
+   * without releasing its texture. Pairs with the URL-bar-focus →
+   * home-overlay transition: surface sets `true` on focus so the
+   * home view occupies the body alone, sets `false` on blur /
+   * commit / Esc so the screencast re-emerges against the most-
+   * recent frame already in the texture (no cold-start, no blank).
+   * Distinct from `clearScreencast` which releases the texture.
+   * Per-frame visibility derivation reads this flag — change here
+   * applies on next render tick.
+   */
+  setScreencastSuppressed(suppressed: boolean): void {
+    this.screencastSuppressed = suppressed;
+  }
+
+  /**
    * Hold the empty slab visible. Items always make the plane visible
    * regardless; this flag governs only the empty-state behavior.
    */
@@ -1193,7 +1223,7 @@ export class SlabManager {
     // `setScreencastImage` no longer flips `screenMesh.visible`
     // directly — it just installs the texture and lets this loop
     // decide visibility.
-    this.screenMesh.visible = visible && this.screenTexture !== null;
+    this.screenMesh.visible = visible && this.screenTexture !== null && !this.screencastSuppressed;
     // Sympathetic breathing applies to all three meshes (front, back,
     // sides) uniformly — the slab inflates as one volume. Per-mesh
     // (rather than via a wrapper group) so the CSS3D stage — also a

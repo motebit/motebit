@@ -238,6 +238,17 @@ export interface RenderAdapter {
    * closes or the live_browser slab item dissolves. Idempotent.
    */
   clearSlabScreencast?(): void;
+
+  /**
+   * Toggle screencast-mesh visibility WITHOUT releasing the texture.
+   * Used by the URL-bar-focus → home-overlay transition (Apple's
+   * Safari Start Page pattern): suppression hides the mesh while
+   * the user picks a destination from the home view, then clears
+   * on blur/commit/Esc so the session resumes at the most-recent
+   * frame. Distinct from `clearSlabScreencast` which is the
+   * lifecycle terminator (texture released).
+   */
+  setSlabScreencastSuppressed?(suppressed: boolean): void;
 }
 
 // === Slab ("Motebit Computer") — scene primitive types ===
