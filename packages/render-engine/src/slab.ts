@@ -1079,7 +1079,23 @@ export class SlabManager {
     this.silhouetteMaterial.emissiveIntensity = emissiveIntensity;
 
     this.planeMaterial.opacity = frame.planeVisibility;
-    this.silhouetteMaterial.opacity = frame.planeVisibility;
+    // Silhouette companion (back pane + side wall) reads at 55% of the
+    // front pane's opacity. From off-axis views — looking at the slab
+    // edge-on or from below — the prior 1:1 silhouette opacity made
+    // the slab read as "panel with solid bottom" rather than "glass
+    // volume." Lowering the silhouette pair to 0.55× preserves the
+    // front pane's content register (page text crisp through the
+    // transmissive front glass) while letting the side wall + back
+    // pane read as glass character — what's behind the slab shows
+    // through faintly from steep angles.
+    //
+    // Same pattern Apple visionOS uses for window edges: the title-bar-
+    // facing pane is fully present; the edges and back of the window
+    // are visibly more translucent so the window reads as "glass
+    // volume" rather than "panel with edges." Material tuning, not
+    // overlay geometry — the simplest move that lands the brand
+    // signature (slab as a glass volume) at off-axis views.
+    this.silhouetteMaterial.opacity = frame.planeVisibility * 0.55;
     const visible = frame.planeVisibility > 0.01;
     this.planeMesh.visible = visible;
     this.backPaneMesh.visible = visible;
