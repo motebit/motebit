@@ -8,6 +8,7 @@ import type { AdjudicatorVote } from '@motebit/protocol';
 import type { BalanceWaiver } from '@motebit/protocol';
 import type { ComputerSessionActionRecord } from '@motebit/protocol';
 import type { ConsolidationReceipt } from '@motebit/protocol';
+import type { ContentArtifactType } from '@motebit/protocol';
 import type { DelegationToken } from '@motebit/protocol';
 import type { DeletionCertificate } from '@motebit/protocol';
 import type { DisputeAppeal } from '@motebit/protocol';
@@ -121,7 +122,7 @@ export const CONTENT_ARTIFACT_SUITE: SuiteId;
 
 // @public
 export interface ContentArtifactManifest {
-    readonly artifact_type: string;
+    readonly artifact_type: ContentArtifactType;
     readonly claim_generator: string;
     readonly content_hash: string;
     readonly invocation?: {
@@ -957,7 +958,7 @@ export function signContentArtifact(content: Uint8Array, options: SignContentArt
 
 // @public
 export interface SignContentArtifactOptions {
-    readonly artifactType: string;
+    readonly artifactType: ContentArtifactType;
     readonly claimGenerator: string;
     readonly invocation?: {
         readonly task_id?: string;
