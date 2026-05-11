@@ -2434,6 +2434,9 @@ importers:
       '@motebit/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@motebit/state-export-client':
+        specifier: workspace:*
+        version: link:../../packages/state-export-client
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
