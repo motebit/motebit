@@ -239,6 +239,27 @@ const CONTENT_INSET_WORLD = CONTENT_INSET_PT * STAGE_PIXEL_TO_WORLD;
 const SCREEN_MESH_WIDTH = SLAB_WIDTH - 2 * CONTENT_INSET_WORLD;
 const SCREEN_MESH_HEIGHT = BODY_REGION_HEIGHT - 2 * CONTENT_INSET_WORLD;
 
+/**
+ * Inner-content corner radius for the body region (browser content).
+ * Apple visionOS Safari's webview content is a rounded rectangle
+ * with corners rounded at ~50% of the outer window's corner radius,
+ * regardless of whether the window silhouette is straight at that
+ * vertical position. The reason is visual continuity inside the
+ * surface: the slab's outer silhouette is rounded, so everything
+ * rendered inside it should read as rounded too. Internal sharp
+ * corners contradict the parent surface's character.
+ *
+ * Prior behavior rounded only the bottom corners of the body region
+ * (which matched the slab's bottom-corner curves geometrically) but
+ * left the top corners squared (because the slab silhouette is
+ * straight at the body's top vertical position). The user's eye
+ * correctly read the asymmetry as "browser isn't following the slab
+ * shape." Half-radius all-around brings the body region into the
+ * same rounded-rectangle character as the slab silhouette without
+ * over-curving it into a pill.
+ */
+const INNER_CORNER_RADIUS = SLAB_CORNER_RADIUS * 0.5;
+
 // ── Renderer-side per-item state ─────────────────────────────────────
 
 interface ManagedElement {
@@ -1364,7 +1385,15 @@ function createBodyMeniscusGeometry(
   const pos = geo.attributes.position;
   if (pos == null) return geo;
 
-  const r = SLAB_CORNER_RADIUS;
+  // All four corners rounded with INNER_CORNER_RADIUS. Apple visionOS
+  // pattern: webview content is a rounded rectangle with corners
+  // rounded at ~50% of the outer window's radius, regardless of
+  // where the window silhouette curves are at that local position.
+  // Visual continuity inside the surface > matching the slab
+  // silhouette's local geometry at each point — the body region
+  // reads as a rounded card nested within the slab silhouette, not
+  // as a rectangle with one rounded edge and one square edge.
+  const r = INNER_CORNER_RADIUS;
   const halfW = width / 2;
   const halfH = height / 2;
   const cx = halfW - r;
@@ -1373,14 +1402,13 @@ function createBodyMeniscusGeometry(
   for (let i = 0; i < arr.length; i += 3) {
     const x = arr[i]!;
     const y = arr[i + 1]!;
-    // Round only the BOTTOM corners (y at or below -(halfH - r)).
-    // Top corners stay squared — the body region's top edge is the
-    // chrome boundary, not part of the slab's outer silhouette.
-    if (y >= -(halfH - r)) continue;
+    const inBottomCornerZone = y < -(halfH - r);
+    const inTopCornerZone = y > +(halfH - r);
+    if (!inBottomCornerZone && !inTopCornerZone) continue;
     const absX = Math.abs(x);
     if (absX <= cx) continue;
     const ax = Math.sign(x) * cx;
-    const ay = -(halfH - r);
+    const ay = inBottomCornerZone ? -(halfH - r) : +(halfH - r);
     const dx = x - ax;
     const dy = y - ay;
     const d = Math.hypot(dx, dy);
