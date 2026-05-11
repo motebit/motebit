@@ -208,57 +208,74 @@ const BODY_REGION_HEIGHT = SLAB_HEIGHT * (1 - CHROME_REGION_FRACTION);
 const BODY_REGION_CENTER_Y = -SLAB_HEIGHT * (CHROME_REGION_FRACTION / 2);
 
 /**
- * Content inset — the "meniscus breathes" rule per
- * `motebit-computer.md` §"Visual properties". Apple HIG ornament
- * pattern: rounded windows leave a visible margin between content
- * and the rounded edge so the silhouette curve has glass to be
- * visible against. Without the inset, content abuts the slab's
- * meniscus directly and the slab's silhouette becomes the
- * content's edge — silhouette and silhouette-within-silhouette
- * fight each other.
+ * Inscribed-safe-area inset — the iOS / visionOS pattern for
+ * rendering rectangular web content inside a rounded container
+ * whose corner radius is large enough to cause visible clipping.
  *
- * 28pt at the stage's pixel scale, applied uniformly on all four
- * sides of the screen mesh within the body region. The top inset
- * doubles as the visual gap between chrome strip's bottom edge and
- * screen mesh's top edge — chrome and content read as related but
- * not abutting. The Apple visionOS canonical window content inset
- * sits in the 20–28pt range; 28pt reads as a clear breathing margin
- * at the slab's 0.54×0.334m extent, prior 16pt was too subtle (~3%
- * of slab width) to register as a margin against the silhouette.
+ * The slab has a corner radius of `SLAB_CORNER_RADIUS` ≈ 16% of
+ * slab width — five times larger than Apple Vision Pro Safari's
+ * typical 3% window-corner radius. At that scale, content rendered
+ * edge-to-edge inside the rounded silhouette has visibly clipped
+ * corners (Google.com's "Privacy / Terms" footer at bottom-right,
+ * "Sign in" at top-right). Rounding the content's own corners to
+ * match the slab makes those critical UI elements *more* clipped,
+ * not less.
+ *
+ * Apple's pattern when corner radius is large: inscribed rectangle.
+ * Content lives in the safe area — the largest rectangle that fits
+ * inside the rounded silhouette without poking past at the corners.
+ * The rounded portion of the silhouette becomes explicitly visible
+ * glass framing the content. Same shape as iPhone's notch and
+ * Dynamic Island: content fills the safe area; the curve is the
+ * device's character, not part of the content.
+ *
+ * The diagonal-touch inset (r × (1 − 1/√2) ≈ 0.293r) is the smallest
+ * inset where the rectangle's corners exactly graze the rounded
+ * corners at 45°. Any smaller, the rectangle pokes past the
+ * silhouette. Any larger, more glass is visible around the
+ * content. 0.293r is the canonical inscribed-rectangle constant.
  */
-const CONTENT_INSET_PT = 28;
-const CONTENT_INSET_WORLD = CONTENT_INSET_PT * STAGE_PIXEL_TO_WORLD;
+const INSCRIBED_INSET_WORLD = SLAB_CORNER_RADIUS * (1 - 1 / Math.sqrt(2));
 
 /**
- * Screen mesh dimensions — body region shrunk by content inset on
- * all four sides. Width loses 2×inset (left + right); height loses
- * 2×inset (top + bottom). The mesh stays centered at
- * `BODY_REGION_CENTER_Y` because the inset is symmetric within
- * the body region.
+ * Chrome-to-body breathing inset — a small visible glass strip
+ * between the chrome strip's bottom edge and the body mesh's top.
+ *
+ * The chrome strip (CSS3D, in `stageEl`) has its own internal
+ * padding + 1px border-bottom; the chrome region boundary in
+ * world coords (y = +SLAB_HEIGHT/2 − CHROME_REGION_HEIGHT) is the
+ * region's bottom, NOT the chrome strip's visual bottom. Without
+ * a top inset on the body mesh, the page's natural top row (e.g.
+ * Google's "About / Store / Sign in" nav) visually crowds into the
+ * chrome strip's bottom-border area — they read as one continuous
+ * stack instead of chrome + suspended body.
+ *
+ * 10pt creates a comfortable visible glass strip without dominating.
+ * Combined with the inscribed-safe lateral + bottom insets, the
+ * body mesh now sits as a clean rectangle suspended in the body
+ * region with consistent glass margins on all four sides — the
+ * "suspended in air within the slab" register motebit needs.
  */
-const SCREEN_MESH_WIDTH = SLAB_WIDTH - 2 * CONTENT_INSET_WORLD;
-const SCREEN_MESH_HEIGHT = BODY_REGION_HEIGHT - 2 * CONTENT_INSET_WORLD;
+const BODY_TOP_INSET_WORLD = 10 * STAGE_PIXEL_TO_WORLD;
 
 /**
- * Inner-content corner radius for the body region (browser content).
- * Apple visionOS Safari's webview content is a rounded rectangle
- * with corners rounded at ~50% of the outer window's corner radius,
- * regardless of whether the window silhouette is straight at that
- * vertical position. The reason is visual continuity inside the
- * surface: the slab's outer silhouette is rounded, so everything
- * rendered inside it should read as rounded too. Internal sharp
- * corners contradict the parent surface's character.
+ * Screen mesh dimensions — rectangular mesh suspended in the
+ * body region's safe area with glass margins on all four sides.
  *
- * Prior behavior rounded only the bottom corners of the body region
- * (which matched the slab's bottom-corner curves geometrically) but
- * left the top corners squared (because the slab silhouette is
- * straight at the body's top vertical position). The user's eye
- * correctly read the asymmetry as "browser isn't following the slab
- * shape." Half-radius all-around brings the body region into the
- * same rounded-rectangle character as the slab silhouette without
- * over-curving it into a pill.
+ *   width   = SLAB_WIDTH − 2 × inscribed_inset    (lateral safe area)
+ *   height  = body_region_height − top_inset − bottom_inset
+ *   centerY = body_region_center + (bottom_inset − top_inset)/2
+ *
+ * The center shifts slightly upward because the bottom inset
+ * (inscribed_inset, ~25pt) is larger than the top inset (10pt) —
+ * the bottom needs more inset to avoid the slab's rounded bottom
+ * corners, while the top only needs visual breathing from the
+ * chrome strip.
  */
-const INNER_CORNER_RADIUS = SLAB_CORNER_RADIUS * 0.5;
+const SCREEN_MESH_WIDTH = SLAB_WIDTH - 2 * INSCRIBED_INSET_WORLD;
+const SCREEN_MESH_HEIGHT = BODY_REGION_HEIGHT - INSCRIBED_INSET_WORLD - BODY_TOP_INSET_WORLD;
+const SCREEN_MESH_CENTER_Y =
+  BODY_REGION_CENTER_Y + (INSCRIBED_INSET_WORLD - BODY_TOP_INSET_WORLD) / 2;
 
 // ── Renderer-side per-item state ─────────────────────────────────────
 
@@ -651,6 +668,15 @@ export class SlabManager {
       // transmission target cleanly, and the front pane's
       // `transmission` samples it via the standard refraction shader.
       // Result: screen pixels show through the glass at face value.
+      //
+      // (Confirmed again 2026-05-11: tried `transparent: true` +
+      // opacity 0.96 + depthWrite:false to add "glass volume"
+      // character — Three.js excluded the screen mesh from the
+      // transmission backbuffer and content disappeared behind the
+      // front pane. The constraint is structural, not a tuning
+      // problem. Glass-volume feel for the body must come from the
+      // FRONT PANE's material, not from the screen mesh's alpha.)
+      //
       // Display pixels at face value — tone-mapping (ACES, etc.) on
       // a screencast washes out colors. Same register Three.js
       // recommends for video surfaces (`VideoTexture` examples).
@@ -662,7 +688,7 @@ export class SlabManager {
       side: THREE.DoubleSide,
     });
     this.screenMesh = new THREE.Mesh(screenGeo, this.screenMaterial);
-    this.screenMesh.position.set(0, BODY_REGION_CENTER_Y, 0);
+    this.screenMesh.position.set(0, SCREEN_MESH_CENTER_Y, 0);
     this.screenMesh.visible = false;
     this.screenMesh.name = "slab-screen";
     this.group.add(this.screenMesh);
@@ -1381,47 +1407,20 @@ function createBodyMeniscusGeometry(
   segX: number,
   segY: number,
 ): THREE.PlaneGeometry {
-  const geo = new THREE.PlaneGeometry(width, height, segX, segY);
-  const pos = geo.attributes.position;
-  if (pos == null) return geo;
-
-  // All four corners rounded with INNER_CORNER_RADIUS. Apple visionOS
-  // pattern: webview content is a rounded rectangle with corners
-  // rounded at ~50% of the outer window's radius, regardless of
-  // where the window silhouette curves are at that local position.
-  // Visual continuity inside the surface > matching the slab
-  // silhouette's local geometry at each point — the body region
-  // reads as a rounded card nested within the slab silhouette, not
-  // as a rectangle with one rounded edge and one square edge.
-  const r = INNER_CORNER_RADIUS;
-  const halfW = width / 2;
-  const halfH = height / 2;
-  const cx = halfW - r;
-
-  const arr = pos.array as Float32Array;
-  for (let i = 0; i < arr.length; i += 3) {
-    const x = arr[i]!;
-    const y = arr[i + 1]!;
-    const inBottomCornerZone = y < -(halfH - r);
-    const inTopCornerZone = y > +(halfH - r);
-    if (!inBottomCornerZone && !inTopCornerZone) continue;
-    const absX = Math.abs(x);
-    if (absX <= cx) continue;
-    const ax = Math.sign(x) * cx;
-    const ay = inBottomCornerZone ? -(halfH - r) : +(halfH - r);
-    const dx = x - ax;
-    const dy = y - ay;
-    const d = Math.hypot(dx, dy);
-    if (d === 0) continue;
-    if (d > r) {
-      const scale = r / d;
-      arr[i] = ax + dx * scale;
-      arr[i + 1] = ay + dy * scale;
-    }
-  }
-  pos.needsUpdate = true;
-  geo.computeVertexNormals();
-  return geo;
+  // Plain rectangular geometry. The mesh is inscribed inside the
+  // slab's rounded silhouette at the diagonal-touch threshold (see
+  // INSCRIBED_INSET_WORLD); the slab's rounded character is supplied
+  // by the silhouette around this mesh, not by rounding this mesh's
+  // own corners. iOS / visionOS inscribed-rectangle pattern: when
+  // the container's corner radius is large enough to clip rectangular
+  // content, render content in the safe area and let the curve be
+  // visible glass framing the content (the iPhone notch / Dynamic
+  // Island pattern applied to a slab silhouette).
+  //
+  // The function keeps its name + signature so the call site doesn't
+  // change. Returning a plain PlaneGeometry with no vertex munging is
+  // the correct geometry for the inscribed-rectangle approach.
+  return new THREE.PlaneGeometry(width, height, segX, segY);
 }
 
 /**
