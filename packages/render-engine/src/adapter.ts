@@ -281,7 +281,7 @@ export class ThreeJSAdapter implements RenderAdapter {
    * Non-item slab content, owned by the slab core. Pair with
    * `clearSlabScreencast` at session close.
    */
-  setSlabScreencastImage(source: HTMLImageElement | ImageBitmap): void {
+  setSlabScreencastImage(source: HTMLImageElement | ImageBitmap | VideoFrame): void {
     this.slab?.setScreencastImage(source);
   }
 

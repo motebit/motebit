@@ -822,11 +822,20 @@ export class SlabManager {
    * frames replace the texture image in place (`needsUpdate = true`)
    * so per-frame allocation is bounded.
    *
-   * Accepts `HTMLImageElement` (current path — `live-browser.ts`
-   * pre-decodes via `Image.decode()` and hands the decoded element
-   * directly) or `ImageBitmap` (future path if we move to
-   * `createImageBitmap`). Both are valid `THREE.Texture.image`
-   * sources.
+   * Accepts the three texture-uploadable surface types from
+   * `live-browser.ts`'s tiered decode pipeline:
+   *
+   *   VideoFrame       — WebCodecs `ImageDecoder` / `VideoDecoder`
+   *                      output (Chrome 94+, Safari 17+, Edge 94+).
+   *                      Hardware-accelerated, off-main-thread.
+   *   ImageBitmap      — `createImageBitmap(blob)` output (universal
+   *                      modern fallback). Off-main-thread native.
+   *   HTMLImageElement — `<img>.decode()` output (jsdom + ancient).
+   *
+   * Three.js r150+ accepts all three directly as `Texture.image` —
+   * the upload path is identical. The cleanup branch below releases
+   * GPU resources for `VideoFrame` and `ImageBitmap` (both have
+   * `.close()`); `HTMLImageElement` is JS-heap and self-cleaning.
    *
    * Replaces the CSS3DObject-mounted `<img>` rendering register: the
    * screencast now lives in the WebGL scene graph, depth-tested with
@@ -837,7 +846,7 @@ export class SlabManager {
    * substrate.md` §"Cohesive permeability" (the slab is glass; pixels
    * embed in it, they don't sit in a parallel layer in front of it).
    */
-  setScreencastImage(source: HTMLImageElement | ImageBitmap): void {
+  setScreencastImage(source: HTMLImageElement | ImageBitmap | VideoFrame): void {
     if (this.screenTexture == null) {
       this.screenTexture = new THREE.Texture();
       // Hero-surface sampling — the visionOS-window pattern. Three
@@ -875,10 +884,14 @@ export class SlabManager {
       this.screenMaterial.map = this.screenTexture;
       this.screenMaterial.needsUpdate = true;
     }
-    // Release the previous frame's GPU resources when the source is an
-    // ImageBitmap (HTMLImageElement is GC'd by the browser).
+    // Release the previous frame's GPU resources. `VideoFrame` and
+    // `ImageBitmap` both hold codec/GPU memory that doesn't GC and
+    // both expose `.close()`; the duck-type check handles both
+    // uniformly. `HTMLImageElement` is JS-heap and self-cleaning —
+    // no close method, no-ops through the typeof check.
     const prev = this.screenTexture.image as
       | (ImageBitmap & { close?: () => void })
+      | (VideoFrame & { close?: () => void })
       | HTMLImageElement
       | null;
     if (prev != null && "close" in prev && typeof prev.close === "function") {
@@ -900,6 +913,7 @@ export class SlabManager {
     if (this.screenTexture != null) {
       const bitmap = this.screenTexture.image as
         | (ImageBitmap & { close?: () => void })
+        | (VideoFrame & { close?: () => void })
         | HTMLImageElement
         | null;
       if (bitmap != null && "close" in bitmap && typeof bitmap.close === "function") {

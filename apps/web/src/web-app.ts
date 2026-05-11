@@ -1882,7 +1882,7 @@ export class WebApp {
         // silhouette. The HTML img stays mounted (opacity:0) for
         // the existing input-capture pipeline — same screen-space
         // rect, zero visual contribution.
-        onFrameDecoded: (image: HTMLImageElement) => {
+        onFrameDecoded: (image: HTMLImageElement | ImageBitmap | VideoFrame) => {
           this.renderer.setSlabScreencastImage?.(image);
         },
       },

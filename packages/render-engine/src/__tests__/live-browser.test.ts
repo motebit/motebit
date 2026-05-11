@@ -8,7 +8,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { ScreencastFrame, ScreencastFrameSource } from "@motebit/sdk";
 
-import { buildLiveBrowserElement } from "../live-browser.js";
+import { buildLiveBrowserElement, type DecodedScreencastFrame } from "../live-browser.js";
 
 class StubBus implements ScreencastFrameSource {
   private subs = new Set<(f: ScreencastFrame) => void>();
@@ -156,7 +156,7 @@ describe("buildLiveBrowserElement", () => {
         });
       };
     try {
-      const decoded: Array<{ image: HTMLImageElement; timestamp: number }> = [];
+      const decoded: Array<{ image: DecodedScreencastFrame; timestamp: number }> = [];
       buildLiveBrowserElement(bus, {
         onFrameDecoded: (image, frame) => {
           decoded.push({ image, timestamp: frame.timestamp });
@@ -172,7 +172,7 @@ describe("buildLiveBrowserElement", () => {
 
       expect(decoded).toHaveLength(1);
       expect(decoded[0]!.image).toBeInstanceOf(HTMLImageElement);
-      expect(decoded[0]!.image.src).toContain("FRAME-A");
+      expect((decoded[0]!.image as HTMLImageElement).src).toContain("FRAME-A");
       expect(decoded[0]!.timestamp).toBe(1_000);
     } finally {
       if (originalDecode) {
@@ -189,7 +189,7 @@ describe("buildLiveBrowserElement", () => {
     // visible img after src is set — so the slab texture path doesn't
     // silently drop frames in test environments.
     const bus = new StubBus();
-    const decoded: HTMLImageElement[] = [];
+    const decoded: DecodedScreencastFrame[] = [];
     const handle = buildLiveBrowserElement(bus, {
       onFrameDecoded: (image) => {
         decoded.push(image);
@@ -199,6 +199,71 @@ describe("buildLiveBrowserElement", () => {
     expect(decoded).toHaveLength(1);
     // In the fallback path the visible img IS what's passed.
     expect(decoded[0]).toBe(handle.element.querySelector("img"));
+  });
+
+  it("prefers the WebCodecs ImageDecoder tier when the global is present (hero-surface decode path)", async () => {
+    // The end-game decode pipeline is tiered: WebCodecs ImageDecoder
+    // → createImageBitmap → HTMLImage.decode. When ImageDecoder is
+    // present, that tier MUST be the one we take — it's the only path
+    // that produces a `VideoFrame` (the unified WebCodecs frame type
+    // the future H.264 `VideoDecoder` end-game will also produce) and
+    // the only path with hardware-accelerated decode + off-main-thread
+    // execution. Stub the global, publish a frame, assert the
+    // ImageDecoder constructor + .decode() were called and the
+    // produced VideoFrame is what got handed to onFrameDecoded.
+    const g = globalThis as unknown as {
+      ImageDecoder?: unknown;
+      fetch?: typeof fetch;
+    };
+    const originalImageDecoder = g.ImageDecoder;
+    const originalFetch = g.fetch;
+    const decodeCalls: Array<{ type: string; dataLen: number }> = [];
+    const fakeVideoFrame = { close: vi.fn(), __kind: "VideoFrame" as const };
+    g.fetch = (async (input: RequestInfo | URL) =>
+      ({
+        arrayBuffer: async () => new ArrayBuffer(String(input).length),
+        blob: async () => new Blob([]),
+      }) as Response) as typeof fetch;
+    class FakeImageDecoder {
+      private readonly init: { type: string; data: BufferSource };
+      constructor(init: { type: string; data: BufferSource }) {
+        this.init = init;
+      }
+      async decode(): Promise<{ image: unknown }> {
+        const data = this.init.data as ArrayBuffer;
+        decodeCalls.push({ type: this.init.type, dataLen: data.byteLength });
+        return { image: fakeVideoFrame };
+      }
+      close(): void {}
+      static async isTypeSupported(_type: string): Promise<boolean> {
+        return true;
+      }
+    }
+    g.ImageDecoder = FakeImageDecoder;
+    try {
+      const bus = new StubBus();
+      const decoded: DecodedScreencastFrame[] = [];
+      buildLiveBrowserElement(bus, {
+        onFrameDecoded: (image) => {
+          decoded.push(image);
+        },
+      });
+      bus.publish(makeFrame({ jpeg_base64: "WEBCODECS", timestamp: 1 }));
+      // Tier-1 decode is async — wait one microtask + macrotask flush.
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(decodeCalls).toHaveLength(1);
+      expect(decodeCalls[0]!.type).toBe("image/jpeg");
+      expect(decoded).toHaveLength(1);
+      // The handed-off surface IS the VideoFrame the ImageDecoder
+      // produced — not a re-decoded HTMLImageElement. This is the
+      // architectural pin: the slab receives a VideoFrame whenever
+      // the environment supports the WebCodecs tier.
+      expect(decoded[0]).toBe(fakeVideoFrame);
+    } finally {
+      g.ImageDecoder = originalImageDecoder;
+      g.fetch = originalFetch;
+    }
   });
 
   it("disables native HTML image drag on the frame img — no native drag-ghost, no drop-handler hijack", () => {

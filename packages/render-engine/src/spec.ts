@@ -208,10 +208,18 @@ export interface RenderAdapter {
    * the glass volume; this method lights it up with the cloud
    * browser's JPEG bitstream (one frame at a time, replace-in-place).
    *
-   * Pass `HTMLImageElement` (current path — `live-browser.ts`
-   * pre-decodes via `Image.decode()` and hands the decoded element)
-   * or `ImageBitmap` (if a future surface uses `createImageBitmap`).
-   * Both are valid `THREE.Texture.image` sources.
+   * Accepts any of the three texture-uploadable surfaces the
+   * `live-browser.ts` decode pipeline produces:
+   *
+   *   VideoFrame       — WebCodecs `ImageDecoder` output (Chrome 94+,
+   *                      Safari 17+, Edge 94+). Hardware-accelerated,
+   *                      off-main-thread, same type the H.264 end-game
+   *                      will produce.
+   *   ImageBitmap      — `createImageBitmap(blob)` output (universal
+   *                      modern fallback).
+   *   HTMLImageElement — `<img>.decode()` output (jsdom + ancient).
+   *
+   * Three.js r150+ uploads all three identically via `Texture.image`.
    *
    * Replaces the prior CSS3DObject `<img>` overlay path. WebGL render
    * means shared depth buffer with the creature (no through-punch on
@@ -219,7 +227,7 @@ export interface RenderAdapter {
    * the slab's droplet shape, not a hard rectangle). Pair with
    * `clearSlabScreencast()` on session close.
    */
-  setSlabScreencastImage?(source: HTMLImageElement | ImageBitmap): void;
+  setSlabScreencastImage?(source: HTMLImageElement | ImageBitmap | VideoFrame): void;
   /**
    * Hide the slab's screen mesh and dispose its texture. Sibling of
    * `setSlabScreencastImage`; called when the cloud-browser session
