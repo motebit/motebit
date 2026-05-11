@@ -225,7 +225,7 @@ describe("buildLiveBrowserElement", () => {
     const originalCreateImageBitmap = g.createImageBitmap;
     const originalFetch = g.fetch;
     const decodeCalls: Array<{ type: string }> = [];
-    const bridgeCalls: Array<{ source: unknown }> = [];
+    const bridgeCalls: Array<{ source: unknown; options?: ImageBitmapOptions }> = [];
     const fakeVideoFrame = { close: vi.fn(), __kind: "VideoFrame" as const };
     const fakeBitmap = { close: vi.fn(), __kind: "ImageBitmap" as const };
     g.fetch = (async () =>
@@ -233,8 +233,8 @@ describe("buildLiveBrowserElement", () => {
         arrayBuffer: async () => new ArrayBuffer(16),
         blob: async () => new Blob([]),
       }) as Response) as typeof fetch;
-    g.createImageBitmap = (async (source: unknown) => {
-      bridgeCalls.push({ source });
+    g.createImageBitmap = (async (source: unknown, options?: ImageBitmapOptions) => {
+      bridgeCalls.push({ source, options });
       return fakeBitmap as unknown as ImageBitmap;
     }) as typeof createImageBitmap;
     class FakeImageDecoder {
@@ -271,6 +271,11 @@ describe("buildLiveBrowserElement", () => {
       // its source — the bridge step is what makes the WebGL upload
       // race-free.
       expect(bridgeCalls[0]!.source).toBe(fakeVideoFrame);
+      // `imageOrientation: "flipY"` is mandatory — WebGL's flipY is
+      // a no-op for ImageBitmap uploads, so the bitmap must be pre-
+      // flipped at decode time to render right-side up. Pinning this
+      // prevents the upside-down regression (caught 2026-05-11).
+      expect(bridgeCalls[0]!.options?.imageOrientation).toBe("flipY");
       expect(decoded).toHaveLength(1);
       // The handoff surface is the bridge output, not the raw frame.
       expect(decoded[0]).toBe(fakeBitmap);

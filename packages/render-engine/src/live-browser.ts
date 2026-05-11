@@ -249,9 +249,20 @@ async function decodeFrameForTexture(dataUri: string): Promise<DecodedScreencast
           // ImageBitmap. Once this resolves, the source VideoFrame
           // and the decoder are both safe to close; the returned
           // bitmap remains valid for texture upload.
+          //
+          // `imageOrientation: "flipY"` is mandatory for WebGL
+          // upload. Three.js's `texture.flipY = true` (default) is
+          // honored for HTMLImageElement uploads but per WebGL spec
+          // SILENTLY NO-OPS for ImageBitmap uploads. Without
+          // pre-flipping at decode time, the bitmap lands top-left-
+          // origin in a bottom-left-origin WebGL coord system →
+          // content renders upside-down. Pre-flip here makes the
+          // bitmap's native orientation match WebGL's, and the slab's
+          // texture.flipY default keeps working for tier-3 HTMLImage.
           return await g.createImageBitmap(frame as unknown as ImageBitmapSource, {
             colorSpaceConversion: "none",
             premultiplyAlpha: "default",
+            imageOrientation: "flipY",
           });
         } finally {
           if (frame != null) frame.close();
@@ -263,13 +274,18 @@ async function decodeFrameForTexture(dataUri: string): Promise<DecodedScreencast
     }
   }
 
-  // Tier 2 — createImageBitmap from Blob.
+  // Tier 2 — createImageBitmap from Blob (direct, no decoder hop).
+  // Same `imageOrientation: "flipY"` requirement as tier 1 — WebGL's
+  // `UNPACK_FLIP_Y_WEBGL` is a no-op for ImageBitmap uploads, so the
+  // bitmap must be pre-flipped at decode time. Without this, the slab
+  // would render upside-down on the Firefox tier-2 path.
   if (typeof g.createImageBitmap === "function" && typeof g.fetch === "function") {
     try {
       const blob = await g.fetch(dataUri).then((r) => r.blob());
       return await g.createImageBitmap(blob, {
         colorSpaceConversion: "none",
         premultiplyAlpha: "default",
+        imageOrientation: "flipY",
       });
     } catch {
       // Fall through to tier 3 — environment supports neither WebCodecs nor createImageBitmap fully.
