@@ -180,7 +180,7 @@ Three additional apps ship alongside the five surfaces and play narrower roles:
 
 ## Verify & integrate
 
-Verify any motebit artifact — identity files, receipts, credentials, or presentations — with zero dependencies:
+Verify any motebit artifact — identity files, receipts, credentials, presentations, skills, or content-artifact manifests on relay state exports — with zero dependencies:
 
 ```typescript
 import { verify } from "@motebit/crypto";
@@ -196,6 +196,18 @@ if (result.type === "receipt" && result.valid) {
   console.log(result.signer); // did:key of executing agent
   console.log(result.delegations); // nested delegation chain
 }
+```
+
+Or one-install offline CLI — verify a state export the relay returned, pinned to the operator's transparency-declared key:
+
+```bash
+npx @motebit/verify content-artifact ./audit-trail.json \
+  --manifest "$(curl -s ...| jq -r .'X-Motebit-Content-Manifest')" \
+  --producer-key $(curl -s https://motebit.com/.well-known/motebit-transparency.json | jq -r .relay_public_key)
+# ✓ content-artifact VERIFIED
+#   artifact_type    audit-trail
+#   producer         did:key:z6Mk...
+#   suite            motebit-jcs-ed25519-hex-v1
 ```
 
 Build on the protocol with stable types from `@motebit/sdk` (`ExecutionReceipt`, `MotebitState`, `AgentTrustRecord`, and the adapter interfaces). **11 npm packages publish from this monorepo** — 10 Apache-2.0 (the permissive floor, with an explicit patent grant) and 1 BSL-1.1 (the reference runtime). Current versions are the badge values above and on each row's npm link:

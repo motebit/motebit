@@ -29,7 +29,11 @@ Self-delegation executes and settles budget — it just produces no trust signal
 
 ## Token audience binding
 
-`aud` is required on `SignedTokenPayload` (compile-time) and enforced by `verifySignedToken` (runtime). `expectedAudience` is required on all `verifySignedTokenForDevice` calls. Tokens without `aud` are rejected at both layers. Canonical audiences: `sync`, `task:submit`, `admin:query`, `rotate-key`, `pair`, `register-device`. Prevents cross-endpoint replay.
+`aud` is required on `SignedTokenPayload` (compile-time) and enforced by `verifySignedToken` (runtime). `expectedAudience` is required on all `verifySignedTokenForDevice` calls. Tokens without `aud` are rejected at both layers. The canonical set is the closed `TokenAudience` literal union in `packages/protocol/src/audience.ts` (15 audiences today), drift-locked by `check-audience-canonical` (drift-defense #83). Prevents cross-endpoint replay; a token signed for one audience is rejected by a verifier expecting another.
+
+## Content-artifact provenance binding
+
+Every relay-assembled state-export wraps the response body in a `ContentArtifactManifest` (C2PA-shape) emitted via the `X-Motebit-Content-Manifest` HTTP header. The manifest is Ed25519-signed by `relayIdentity`; the body's SHA-256 hash is bound inside the signed manifest. Witness-composition: the relay attests **only** to what it assembled at time T (its own database state), never to agent actions inside the bundle — those carry their own motebit signatures and verify independently. A verifier hashes the received bytes verbatim against `manifest.content_hash` and verifies the signature against the relay's public key (trust-anchored from `/.well-known/motebit-transparency.json`). Closed-registry `ContentArtifactType` in `@motebit/protocol/src/artifact-type.ts` (12 types today, one per endpoint), drift-locked by `check-artifact-type-canonical` (#85) and `check-state-export-signed` (#86). Third-party verifier: `motebit-verify content-artifact <body> --manifest <header>`. Doctrine: `docs/doctrine/nist-alignment.md` §8.
 
 ## Budget-gated delegation
 

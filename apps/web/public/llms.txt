@@ -56,6 +56,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 
 - [create-motebit](https://www.npmjs.com/package/create-motebit): CLI scaffolder — `npm create motebit`. Apache-2.0 licensed.
 - [@motebit/crypto](https://www.npmjs.com/package/@motebit/crypto): Sign and verify every Motebit artifact. Cryptosuite-agile for post-quantum. Apache-2.0 licensed.
+- [@motebit/verify](https://www.npmjs.com/package/@motebit/verify): One-install `motebit-verify` CLI. Verifies identity files, execution receipts, credentials, presentations, skills, and content-artifact manifests on relay state exports — offline, network-free, Apache-2.0. Bundles every hardware-attestation platform (App Attest, TPM, Android Keystore, WebAuthn).
 
 ## Optional
 
