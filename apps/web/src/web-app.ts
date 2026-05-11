@@ -576,7 +576,12 @@ export class WebApp {
       renderer: this.renderer,
       renderItem: renderSlabItem,
       updateItem: updateSlabItem,
-      renderDetachArtifact: renderSlabDetachArtifact,
+      // Inject the removeArtifact closure so receipt artifacts emerging
+      // via slab-pinch can wire their dismiss button through the same
+      // ArtifactManager path used by the addArtifact fallback. One
+      // dismissal mechanism, two emergence physics.
+      renderDetachArtifact: (item, kind) =>
+        renderSlabDetachArtifact(item, kind, (artifactId) => this.removeArtifact(artifactId)),
       // Kind-specific cleanup at item end. Closes the lifecycle-
       // binding gap from 2026-05-11 — the renderer removed the DOM
       // on phase=gone but per-kind disposers (WebSocket subscription
@@ -978,35 +983,58 @@ export class WebApp {
    * and (c) the never-fired `releaseLiveBrowserItem` disposer.
    */
   dismissComputer(): void {
-    // End the slab item — bridge fires onItemGone → kind dispatcher
-    // routes to releaseLiveBrowserItem which closes the live-browser
-    // handle (frame-source unsubscribe, input-capture detach). The
-    // outcome `{kind: "dismissed"}` flows through the default detach
-    // policy which dissolves rather than emerging an artifact (the
-    // user's gesture is "put this away," not "save this").
-    if (this.liveBrowserItemId !== null && this.runtime != null) {
+    // Path A — active session present. Close the session and let
+    // `onSessionReceiptSigned → emergeSessionReceipt` drive the slab
+    // end via the pinch-detach path. The signed receipt IS the
+    // membrane-out crossing — the user sees content leave the slab
+    // carrying its provenance, not just vanish. Closing also
+    // releases the fly.io concurrency slot immediately rather than
+    // waiting for idle-timeout.
+    //
+    // Path B — no session (slab opened but never warmed, or session
+    // already closed). Dissolve the slab item directly — nothing
+    // happened that needs provenance, just clear the surface.
+    //
+    // Both paths trigger the bridge's `onItemGone → releaseLiveBrowserItem`
+    // cascade for kind-specific cleanup (WebSocket subscription
+    // unbind, input-capture detach) — that fires on phase=gone
+    // regardless of whether the item ended via dissolve or detach.
+    const sessionId = this._activeBrowserSessionId;
+    const itemId = this.liveBrowserItemId;
+
+    if (sessionId != null && this.computerRegistration != null) {
+      // Receipt-emergence drives the slab end; local mount-state
+      // clears inside emergeSessionReceipt when it lands.
+      void this.computerRegistration.sessionManager
+        .closeSession(sessionId, "user_dismissed_slab")
+        .catch(() => {
+          // closeSession faulted (server unreachable etc) — receipt
+          // won't fire to drive slab end. Fall back to dismissItem
+          // so the slab still clears for the user.
+          if (this.liveBrowserItemId === itemId && itemId !== null && this.runtime != null) {
+            try {
+              this.runtime.slab.dismissItem(itemId);
+            } catch {
+              // best-effort
+            }
+            this.liveBrowserItemId = null;
+            this.liveBrowserHandle = null;
+          }
+        });
+      this._activeBrowserSessionId = null;
+      return;
+    }
+
+    // Path B — no session. Dissolve directly.
+    if (itemId !== null && this.runtime != null) {
       try {
-        this.runtime.slab.dismissItem(this.liveBrowserItemId);
+        this.runtime.slab.dismissItem(itemId);
       } catch {
-        // Controller may already have cleared this id (race with a
-        // concurrent endItem from another path); best-effort.
+        // Race with concurrent endItem; best-effort.
       }
       this.liveBrowserItemId = null;
       this.liveBrowserHandle = null;
     }
-    // Close the cloud session — releases the fly.io concurrency slot
-    // immediately. Without this, the slot sits idle until the
-    // browser-sandbox's idle-timeout fires, which can be minutes.
-    const sessionId = this._activeBrowserSessionId;
-    if (sessionId != null && this.computerRegistration != null) {
-      void this.computerRegistration.sessionManager
-        .closeSession(sessionId, "user_dismissed_slab")
-        .catch(() => {
-          // Session may have already closed (server-initiated) or
-          // never registered; cleanup must not throw upward.
-        });
-    }
-    this._activeBrowserSessionId = null;
   }
 
   /**
@@ -2174,9 +2202,29 @@ export class WebApp {
 
   /**
    * v1.5 detach — emerge a signed `ComputerSessionReceipt` as a
-   * verifiable artifact in the scene. Sibling of the delegation
-   * receipt bubble (chat.ts → `buildReceiptArtifact`); same
-   * `addArtifact` path, same close-via-onDismiss contract.
+   * verifiable artifact in the scene.
+   *
+   * Doctrine-canonical path (preferred): when a `live_browser` slab
+   * item is currently mounted in a non-terminal phase, route through
+   * `slab.endItem(id, {kind: "completed", detachAs: "receipt", result:
+   * receipt})`. The slab controller transitions the item through
+   * `pinching → detached`, the slab-bridge picks up the
+   * `__slabDetach` marker, `renderDetachArtifact` builds the canonical
+   * receipt element with the signed receipt embedded, and the
+   * renderer's `detachSlabItemAsArtifact` plants it in the scene with
+   * the pinch animation. The membrane-out crossing is signed and
+   * physically visible — content leaves the slab carrying its
+   * provenance, symmetric to drag-drop's signed perception-in. Closes
+   * the asymmetry named in `liquescentia-as-substrate.md`
+   * §"Cohesive permeability."
+   *
+   * Fallback path (legacy): if no slab item is mounted (session
+   * completed after the slab was already dismissed) OR if `endItem`
+   * faults (item already in terminal phase), drop the receipt
+   * directly into the scene via `addArtifact`. Same DOM shape, same
+   * dismiss mechanism — just no pinch animation because there's no
+   * slab item to pinch from.
+   *
    * Exposed as a method (not inlined into the registration) so the
    * desktop surface can drive the same emergence path through the
    * shared `WebApp` / `DesktopApp` pattern, and tests can fire the
@@ -2184,6 +2232,31 @@ export class WebApp {
    */
   emergeSessionReceipt(receipt: ComputerSessionReceipt): void {
     if (typeof document === "undefined") return;
+
+    const itemId = this.liveBrowserItemId;
+    if (itemId !== null && this.runtime != null) {
+      try {
+        this.runtime.slab.endItem(itemId, {
+          kind: "completed",
+          result: receipt,
+          detachAs: "receipt",
+        });
+        // Slab pinch physics now drives emergence. The bridge fires
+        // renderDetachArtifact → detachSlabItemAsArtifact on the
+        // renderer; the artifact carries the receipt as its bead.
+        // Clear local mount state so a subsequent /computer rebuilds
+        // a fresh shell rather than reusing the now-detached id.
+        this.liveBrowserItemId = null;
+        this.liveBrowserHandle = null;
+        return;
+      } catch {
+        // Item already in terminal phase (dismissed during the
+        // close-sign race) — fall through to direct addArtifact.
+      }
+    }
+
+    // Legacy fallback — no slab item to detach from. Receipt still
+    // emerges, just not via pinch physics.
     const id = `csr-${receipt.receipt_id}`;
     const el = buildComputerSessionReceiptArtifact(receipt, () => {
       this.removeArtifact(id);

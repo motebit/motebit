@@ -34,8 +34,12 @@
 import { stripInternalTags } from "@motebit/ai-core";
 import type { SlabItem, SlabItemActions, ArtifactKindForDetach } from "@motebit/runtime";
 import type { UserInputForwardResult } from "@motebit/runtime";
-import { buildLiveBrowserElement } from "@motebit/render-engine";
+import {
+  buildLiveBrowserElement,
+  buildComputerSessionReceiptArtifact,
+} from "@motebit/render-engine";
 import type { LiveBrowserElementHandle } from "@motebit/render-engine";
+import type { ComputerSessionReceipt } from "@motebit/sdk";
 import type { ScreencastFrameSource, UserInputEvent } from "@motebit/sdk";
 import { attachInputCapture } from "./cobrowse-input-capture.js";
 
@@ -2109,6 +2113,7 @@ export function updateSlabItem(item: SlabItem, element: HTMLElement): void {
 export function renderDetachArtifact(
   item: SlabItem,
   artifactKind: ArtifactKindForDetach,
+  removeArtifact?: (artifactId: string) => void,
 ): { id: string; kind: ArtifactKindForDetach; element: HTMLElement } {
   if (typeof document === "undefined") {
     return {
@@ -2117,6 +2122,30 @@ export function renderDetachArtifact(
       element: createHeadlessSlabItemStub(item),
     };
   }
+  const artifactId = `slab-artifact-${item.id}`;
+  const payload = item.payload as Record<string, unknown> | null;
+  const detach = payload?.__slabDetach as { outcome?: { result?: unknown } } | undefined;
+  const result = detach?.outcome?.result;
+
+  // Receipt artifacts emerging from the slab carry their signed
+  // ComputerSessionReceipt as the detached bead — the canonical
+  // membrane-out crossing per liquescentia-as-substrate.md
+  // §"Cohesive permeability." When the outcome.result is a signed
+  // receipt, route through buildComputerSessionReceiptArtifact so
+  // the same DOM shape that surfaces via the (legacy) addArtifact
+  // path also lands via the (doctrine-canonical) slab-pinch path —
+  // one emergence physics, one artifact shape.
+  if (artifactKind === "receipt" && isComputerSessionReceipt(result)) {
+    const onDismiss = (): void => {
+      removeArtifact?.(artifactId);
+    };
+    const el = buildComputerSessionReceiptArtifact(result, onDismiss);
+    return { id: artifactId, kind: artifactKind, element: el };
+  }
+
+  // Generic fallback — text/code/plan/memory or a receipt artifactKind
+  // without a receipt-shaped result (defensive). Renders the payload
+  // as a 320px card.
   const card = baseCard();
   card.classList.add("slab-detach-artifact", `slab-detach-${artifactKind}`);
   card.style.maxWidth = "320px";
@@ -2125,10 +2154,7 @@ export function renderDetachArtifact(
   const body = textRow();
   body.style.fontSize = "12px";
   body.style.color = "rgba(14, 22, 40, 0.95)";
-  const payload = item.payload as Record<string, unknown> | null;
   if (payload) {
-    const detach = payload.__slabDetach as { outcome?: { result?: unknown } } | undefined;
-    const result = detach?.outcome?.result;
     if (result != null) {
       body.textContent = typeof result === "string" ? result : JSON.stringify(result, null, 2);
     } else if (typeof payload.text === "string") {
@@ -2137,10 +2163,25 @@ export function renderDetachArtifact(
   }
   card.appendChild(body);
   return {
-    id: `slab-artifact-${item.id}`,
+    id: artifactId,
     kind: artifactKind,
     element: card,
   };
+}
+
+/**
+ * Duck-type a value as a `ComputerSessionReceipt`. The detach
+ * payload's `result` is `unknown` so we must inspect at runtime
+ * before handing to the receipt-shaped renderer.
+ */
+function isComputerSessionReceipt(value: unknown): value is ComputerSessionReceipt {
+  if (value == null || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.receipt_id === "string" &&
+    typeof v.embodiment_mode === "string" &&
+    typeof v.actions_hash === "string"
+  );
 }
 
 /**
