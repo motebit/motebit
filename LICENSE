@@ -61,6 +61,7 @@ to the Business Source License:
   packages/crypto/                   @motebit/crypto — signing and verification
   packages/verifier/                 @motebit/verifier — verifyFile / verifyArtifact / formatHuman library
   packages/verify/                   @motebit/verify — motebit-verify CLI (bundles the canonical platform leaves)
+  packages/state-export-client/      @motebit/state-export-client — browser-safe verifier for X-Motebit-Content-Manifest headers on relay state exports
   packages/crypto-appattest/         @motebit/crypto-appattest — Apple App Attest chain verifier
   packages/crypto-android-keystore/  @motebit/crypto-android-keystore — Android Hardware-Backed Keystore Attestation chain verifier
   packages/crypto-tpm/               @motebit/crypto-tpm — TPM 2.0 EK chain verifier

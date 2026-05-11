@@ -1,4 +1,49 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// Mock the verification client at module level so the api tests don't
+// need real keypairs or signed manifests. The mock's
+// `verifiedStateExportFetch` reads from `globalThis.fetch` (which the
+// tests below already mock) and returns the body in the new shape with
+// a synthetic-valid verification. URL + auth-header assertions stay
+// intact; verification-path-specific tests live in @motebit/state-export-client.
+vi.mock("@motebit/state-export-client", () => ({
+  fetchTransparencyAnchor: vi.fn().mockResolvedValue({
+    ok: true,
+    anchor: {
+      relayPublicKey: new Uint8Array(32),
+      relayPublicKeyHex: "0".repeat(64),
+      relayId: "test-relay",
+      declaredAt: 0,
+    },
+  }),
+  verifiedStateExportFetch: vi
+    .fn()
+    .mockImplementation(async (url: string, opts: { init?: RequestInit } = {}) => {
+      const res = await globalThis.fetch(url, opts.init);
+      if (!res.ok) {
+        const body = await res.text();
+        const err = new Error(`fetch failed: HTTP ${res.status}`);
+        (err as Error & { status?: number; body?: string }).status = res.status;
+        (err as Error & { status?: number; body?: string }).body = body;
+        throw err;
+      }
+      const body = await res.json();
+      return {
+        body,
+        bodyBytes: new Uint8Array(),
+        verification: {
+          valid: true,
+          producerPublicKeyHex: "0".repeat(64),
+          producerDid: "did:key:ztest",
+          artifactType: "audit-trail",
+          claimGenerator: "motebit-relay/test",
+          producedAt: new Date().toISOString(),
+          contentHash: "0".repeat(64),
+        },
+      };
+    }),
+}));
+
 import {
   fetchState,
   fetchMemory,
@@ -54,7 +99,7 @@ describe("fetchState", () => {
     const call = fetchMock.mock.calls[0]!;
     expect(call[0]).toBe(`${config.apiUrl}/api/v1/state/${config.motebitId}`);
     expectAuthHeader(call);
-    expect(result).toEqual(data);
+    expect(result.body).toEqual(data);
   });
 
   it("passes AbortSignal", async () => {
@@ -81,7 +126,7 @@ describe("fetchMemory", () => {
     const call = fetchMock.mock.calls[0]!;
     expect(call[0]).toBe(`${config.apiUrl}/api/v1/memory/${config.motebitId}?sensitivity=all`);
     expectAuthHeader(call);
-    expect(result).toEqual(data);
+    expect(result.body).toEqual(data);
   });
 });
 
@@ -96,7 +141,7 @@ describe("fetchEvents", () => {
     const call = fetchMock.mock.calls[0]!;
     expect(call[0]).toBe(`${config.apiUrl}/api/v1/sync/${config.motebitId}/pull?after_clock=5`);
     expectAuthHeader(call);
-    expect(result).toEqual(data);
+    expect(result.body).toEqual(data);
   });
 });
 
@@ -113,6 +158,7 @@ describe("deleteMemoryNode", () => {
     const init = call[1] as RequestInit;
     expect(init.method).toBe("DELETE");
     expectAuthHeader(call);
+    // DELETE is a mutation, not a state export — uses unverified apiFetch.
     expect(result).toEqual(data);
   });
 });
@@ -128,6 +174,7 @@ describe("fetchHealth", () => {
     const call = fetchMock.mock.calls[0]!;
     expect(call[0]).toBe(`${config.apiUrl}/health`);
     expectAuthHeader(call);
+    // /health is not a state-export endpoint — uses unverified apiFetch.
     expect(result).toEqual(data);
   });
 });
@@ -144,7 +191,7 @@ describe("fetchGoals", () => {
     const call = fetchMock.mock.calls[0]!;
     expect(call[0]).toBe(`${config.apiUrl}/api/v1/goals/${config.motebitId}`);
     expectAuthHeader(call);
-    expect(result).toEqual(data);
+    expect(result.body).toEqual(data);
   });
 
   it("passes AbortSignal", async () => {
@@ -171,7 +218,7 @@ describe("fetchConversations", () => {
     const call = fetchMock.mock.calls[0]!;
     expect(call[0]).toBe(`${config.apiUrl}/api/v1/conversations/${config.motebitId}`);
     expectAuthHeader(call);
-    expect(result).toEqual(data);
+    expect(result.body).toEqual(data);
   });
 });
 
@@ -186,7 +233,7 @@ describe("fetchConversationMessages", () => {
     const call = fetchMock.mock.calls[0]!;
     expect(call[0]).toBe(`${config.apiUrl}/api/v1/conversations/${config.motebitId}/c1/messages`);
     expectAuthHeader(call);
-    expect(result).toEqual(data);
+    expect(result.body).toEqual(data);
   });
 });
 
@@ -201,7 +248,7 @@ describe("fetchDevices", () => {
     const call = fetchMock.mock.calls[0]!;
     expect(call[0]).toBe(`${config.apiUrl}/api/v1/devices/${config.motebitId}`);
     expectAuthHeader(call);
-    expect(result).toEqual(data);
+    expect(result.body).toEqual(data);
   });
 
   it("passes AbortSignal", async () => {
@@ -218,18 +265,22 @@ describe("fetchDevices", () => {
 });
 
 describe("ApiError", () => {
-  it("is thrown on non-OK response", async () => {
+  // ApiError is thrown by the unverified `apiFetch` path (non-state-export
+  // endpoints + the DELETE mutation). State-export endpoints throw
+  // `StateExportFetchError` from `@motebit/state-export-client` instead;
+  // that path is exercised by the state-export-client package's own tests.
+  it("is thrown on non-OK response by unverified apiFetch path", async () => {
     mockFetch({ error: "not found" }, 404);
 
-    await expect(fetchState()).rejects.toThrow(ApiError);
-    await expect(fetchState()).rejects.toThrow("API 404");
+    await expect(fetchHealth()).rejects.toThrow(ApiError);
+    await expect(fetchHealth()).rejects.toThrow("API 404");
   });
 
   it("includes status and body", async () => {
     mockFetch({ error: "bad" }, 400);
 
     try {
-      await fetchState();
+      await fetchHealth();
       expect.fail("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(ApiError);

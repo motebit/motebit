@@ -1,0 +1,49 @@
+{
+  "name": "@motebit/state-export-client",
+  "version": "0.1.0",
+  "description": "Browser-safe client for verified motebit state-export reads. Wraps fetch with X-Motebit-Content-Manifest verification + Trust-On-First-Use bootstrap from /.well-known/motebit-transparency.json. Apache-2.0; consumes @motebit/crypto + @motebit/protocol only.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "license": "Apache-2.0",
+  "keywords": [
+    "motebit",
+    "verification",
+    "self-attesting",
+    "content-provenance",
+    "operator-transparency"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@motebit/crypto": "workspace:*",
+    "@motebit/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

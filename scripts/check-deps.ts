@@ -99,6 +99,7 @@ const LAYER: Record<string, number> = {
   "@motebit/molecule-runner": 6,
   "@motebit/verifier": 6,
   "@motebit/verify": 6,
+  "@motebit/state-export-client": 6,
 };
 
 const APP_LAYER = 6;
@@ -117,6 +118,7 @@ const PERMISSIVE_PACKAGES = new Set([
   "create-motebit",
   "@motebit/verifier",
   "@motebit/verify",
+  "@motebit/state-export-client",
   "@motebit/crypto-android-keystore",
   "@motebit/crypto-appattest",
   "@motebit/crypto-tpm",
@@ -134,6 +136,7 @@ const PERMISSIVE_IMPORT_ALLOWED = new Set([
   "create-motebit",
   "@motebit/verifier",
   "@motebit/verify",
+  "@motebit/state-export-client",
   "@motebit/crypto-android-keystore",
   "@motebit/crypto-appattest",
   "@motebit/crypto-tpm",

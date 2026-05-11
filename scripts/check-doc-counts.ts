@@ -332,7 +332,13 @@ const DOCS: ReadonlyArray<DocFile> = [
         label: "Permissive-floor list intro",
       },
       {
-        regex: /All (\d+) packages started at `1\.0\.0`/,
+        // Matches either "All N packages started at 1.0.0" (original
+        // coordinated-release wording) or "N of the M packages started
+        // at 1.0.0" (post-state-export-client wording — state-export-client
+        // joined the published surface as 0.1.0 rather than the 1.0.0
+        // initial cohort). In both forms the captured digit is the
+        // published total: "All " precedes it, or "N of the " does.
+        regex: /(?:All |\d+ of the )(\d+) packages started at `1\.0\.0`/,
         key: "publishedTotal",
         label: "Coordinated-release sentence",
       },

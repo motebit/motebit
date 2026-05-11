@@ -3,7 +3,7 @@ title: Changelog
 description: Where to find what changed across motebit's published packages.
 ---
 
-Motebit ships 11 packages to npm — 10 Apache-2.0 packages on the [public surface](/docs/concepts/public-surface) and 1 BSL-1.1 reference runtime. Each carries its own `CHANGELOG.md` written by [Changesets](https://github.com/changesets/changesets), so "what changed" lives next to the code that changed.
+Motebit ships 12 packages to npm — 11 Apache-2.0 packages on the [public surface](/docs/concepts/public-surface) and 1 BSL-1.1 reference runtime. Each carries its own `CHANGELOG.md` written by [Changesets](https://github.com/changesets/changesets), so "what changed" lives next to the code that changed.
 
 ## Authoritative sources
 
@@ -18,7 +18,7 @@ The doctrine is **one canonical source per synchronization invariant**. A root C
 
 ## Published packages
 
-The 10 Apache-2.0 packages on the permissive floor:
+The 11 Apache-2.0 packages on the permissive floor:
 
 | Package                            | npm                                                                   | Changelog                                                                                               |
 | ---------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -27,6 +27,7 @@ The 10 Apache-2.0 packages on the permissive floor:
 | `@motebit/crypto`                  | [npm](https://www.npmjs.com/package/@motebit/crypto)                  | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto/CHANGELOG.md)                  |
 | `@motebit/verifier`                | [npm](https://www.npmjs.com/package/@motebit/verifier)                | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/verifier/CHANGELOG.md)                |
 | `@motebit/verify`                  | [npm](https://www.npmjs.com/package/@motebit/verify)                  | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/verify/CHANGELOG.md)                  |
+| `@motebit/state-export-client`     | [npm](https://www.npmjs.com/package/@motebit/state-export-client)     | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/state-export-client/CHANGELOG.md)     |
 | `@motebit/crypto-appattest`        | [npm](https://www.npmjs.com/package/@motebit/crypto-appattest)        | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-appattest/CHANGELOG.md)        |
 | `@motebit/crypto-android-keystore` | [npm](https://www.npmjs.com/package/@motebit/crypto-android-keystore) | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-android-keystore/CHANGELOG.md) |
 | `@motebit/crypto-tpm`              | [npm](https://www.npmjs.com/package/@motebit/crypto-tpm)              | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-tpm/CHANGELOG.md)              |
@@ -41,10 +42,10 @@ The BSL-1.1 reference runtime:
 
 ## Workspace-private packages
 
-The 51 workspace-private packages (everything not in the table above) are pinned to `0.0.0-private` per the [public-surface doctrine](/docs/concepts/public-surface). They have no semver claim and no independent changelog — their behavior changes ship as part of `motebit`'s release cadence, documented in the `motebit` package's `CHANGELOG.md`. The Changesets `ignore` list locks them at the sentinel so internal-dependency bumps can't creep them upward.
+The 51 workspace-private packages (everything not in the table above) are pinned to `0.0.0-private` per the [public-surface doctrine](/docs/concepts/public-surface). They have no semver claim and no independent changelog — their behavior changes ship as part of `motebit`'s release cadence, documented in the `motebit` package's `CHANGELOG.md`. The Changesets `ignore` list locks them at the sentinel so internal-dependency bumps can't creep them upward. (`@motebit/state-export-client` joined the published Apache-2.0 surface 2026-05-11 — see the table above.)
 
 ## Versioning policy
 
 Each published package follows [semver 2.0.0](https://semver.org/). Breaking changes require a `major` changeset with a non-empty `## Migration` section per `check-changeset-discipline`. The Apache-2.0 packages use `check-api-surface` to enforce that the type-extracted baseline (`packages/<name>/etc/<name>.api.md`) cannot drift without an explicit major bump. The `motebit` CLI uses `check-cli-surface` against `apps/cli/etc/cli-surface.json` for the operator-facing surface (subcommands, flags, exit codes, paths).
 
-All 11 packages started at `1.0.0` in the coordinated initial release; each now versions independently on its own merit per [release-versioning doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/release-versioning.md). Current versions are on each package's npm page.
+11 of the 12 packages started at `1.0.0` in the coordinated initial release; `@motebit/state-export-client` joined later (initial release `0.1.0`, 2026-05-11). Each now versions independently on its own merit per [release-versioning doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/release-versioning.md). Current versions are on each package's npm page.

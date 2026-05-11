@@ -5,6 +5,12 @@ import type {
   EventLogEntry,
   ToolAuditEntry,
 } from "@motebit/sdk";
+import {
+  fetchTransparencyAnchor,
+  verifiedStateExportFetch,
+  type TransparencyAnchor,
+  type VerifiedStateExportResponse,
+} from "@motebit/state-export-client";
 
 // === Config ===
 
@@ -33,7 +39,53 @@ export class ApiError extends Error {
   }
 }
 
-// === Fetch Helper ===
+// === Trust-anchor bootstrap ===
+//
+// One TOFU fetch of `/.well-known/motebit-transparency.json` per
+// session. The returned anchor pins the relay's signing key; every
+// subsequent state-export verifies against the same pinned key.
+// `bootstrapTransparencyAnchor` is idempotent — repeated calls return
+// the cached anchor without a fresh network round-trip.
+
+let cachedAnchor: TransparencyAnchor | undefined;
+let bootstrapInflight: Promise<TransparencyAnchor> | undefined;
+
+export class TransparencyAnchorError extends Error {
+  constructor(
+    public readonly reason: string,
+    public readonly detail?: string,
+  ) {
+    super(`transparency anchor: ${reason}${detail !== undefined ? ` — ${detail}` : ""}`);
+    this.name = "TransparencyAnchorError";
+  }
+}
+
+export async function bootstrapTransparencyAnchor(
+  signal?: AbortSignal,
+): Promise<TransparencyAnchor> {
+  if (cachedAnchor !== undefined) return cachedAnchor;
+  if (bootstrapInflight !== undefined) return bootstrapInflight;
+  bootstrapInflight = (async () => {
+    const result = await fetchTransparencyAnchor(config.apiUrl, { signal });
+    if (!result.ok) {
+      throw new TransparencyAnchorError(result.reason, result.detail);
+    }
+    cachedAnchor = result.anchor;
+    return result.anchor;
+  })();
+  try {
+    return await bootstrapInflight;
+  } finally {
+    bootstrapInflight = undefined;
+  }
+}
+
+/** Exposed for tests + UI status surfaces — returns the cached anchor if bootstrap succeeded, else undefined. */
+export function currentTransparencyAnchor(): TransparencyAnchor | undefined {
+  return cachedAnchor;
+}
+
+// === Fetch Helper (unverified, non-state-export endpoints only) ===
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${config.apiUrl}${path}`;
@@ -47,6 +99,39 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(res.status, res.statusText, body);
   }
   return res.json() as Promise<T>;
+}
+
+// === Verified fetch helper (state-export endpoints) ===
+//
+// Every consumer of `services/relay/src/state-export.ts` — `/api/v1/{state,memory,audit,goals,
+// plans,conversations,devices,gradient,sync,execution}/...` — MUST
+// route through this helper so the `X-Motebit-Content-Manifest`
+// header is verified against the response body. Drift-gated by
+// `check-state-export-consumer-verifies`.
+
+async function verifiedApiFetch<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<VerifiedStateExportResponse<T>> {
+  const url = `${config.apiUrl}${path}`;
+  const headers = new Headers(init?.headers);
+  if (config.apiToken) {
+    headers.set("Authorization", `Bearer ${config.apiToken}`);
+  }
+  // Bootstrap the anchor lazily on the first verified call. A failed
+  // bootstrap propagates as TransparencyAnchorError; the caller logs
+  // and continues with no anchor (partial verification — manifest
+  // self-consistency is still checked).
+  let anchor: TransparencyAnchor | undefined;
+  try {
+    anchor = await bootstrapTransparencyAnchor(init?.signal ?? undefined);
+  } catch {
+    anchor = undefined;
+  }
+  return verifiedStateExportFetch<T>(url, {
+    init: { ...init, headers },
+    ...(anchor !== undefined && { anchor }),
+  });
 }
 
 // === Response Types ===
@@ -85,18 +170,32 @@ export interface AuditResponse {
 }
 
 // === Endpoint Functions ===
+//
+// State-export endpoints return `VerifiedStateExportResponse<T>`:
+// `{ body: T | null, bodyBytes, verification }`. Callers MUST check
+// `verification.valid` before consuming `body` — never render
+// unverified state.
 
-export function fetchState(signal?: AbortSignal): Promise<StateResponse> {
-  return apiFetch<StateResponse>(`/api/v1/state/${config.motebitId}`, { signal });
+export function fetchState(
+  signal?: AbortSignal,
+): Promise<VerifiedStateExportResponse<StateResponse>> {
+  return verifiedApiFetch<StateResponse>(`/api/v1/state/${config.motebitId}`, { signal });
 }
 
-export function fetchMemory(signal?: AbortSignal): Promise<MemoryResponse> {
+export function fetchMemory(
+  signal?: AbortSignal,
+): Promise<VerifiedStateExportResponse<MemoryResponse>> {
   // Inspector dashboard needs all sensitivity levels for monitoring.
-  return apiFetch<MemoryResponse>(`/api/v1/memory/${config.motebitId}?sensitivity=all`, { signal });
+  return verifiedApiFetch<MemoryResponse>(`/api/v1/memory/${config.motebitId}?sensitivity=all`, {
+    signal,
+  });
 }
 
-export function fetchEvents(afterClock: number, signal?: AbortSignal): Promise<EventsResponse> {
-  return apiFetch<EventsResponse>(
+export function fetchEvents(
+  afterClock: number,
+  signal?: AbortSignal,
+): Promise<VerifiedStateExportResponse<EventsResponse>> {
+  return verifiedApiFetch<EventsResponse>(
     `/api/v1/sync/${config.motebitId}/pull?after_clock=${afterClock}`,
     { signal },
   );
@@ -106,17 +205,22 @@ export function deleteMemoryNode(
   nodeId: string,
   signal?: AbortSignal,
 ): Promise<DeleteMemoryResponse> {
+  // DELETE is a mutation, not a state export — no manifest is emitted
+  // by the relay for tombstone responses. Use the unverified path.
   return apiFetch<DeleteMemoryResponse>(`/api/v1/memory/${config.motebitId}/${nodeId}`, {
     method: "DELETE",
     signal,
   });
 }
 
-export function fetchAudit(signal?: AbortSignal): Promise<AuditResponse> {
-  return apiFetch<AuditResponse>(`/api/v1/audit/${config.motebitId}`, { signal });
+export function fetchAudit(
+  signal?: AbortSignal,
+): Promise<VerifiedStateExportResponse<AuditResponse>> {
+  return verifiedApiFetch<AuditResponse>(`/api/v1/audit/${config.motebitId}`, { signal });
 }
 
 export function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {
+  // /health is not a state-export endpoint — no manifest emitted.
   return apiFetch<HealthResponse>("/health", { signal });
 }
 
@@ -142,8 +246,10 @@ export interface GoalsResponse {
   goals: GoalEntry[];
 }
 
-export function fetchGoals(signal?: AbortSignal): Promise<GoalsResponse> {
-  return apiFetch<GoalsResponse>(`/api/v1/goals/${config.motebitId}`, { signal });
+export function fetchGoals(
+  signal?: AbortSignal,
+): Promise<VerifiedStateExportResponse<GoalsResponse>> {
+  return verifiedApiFetch<GoalsResponse>(`/api/v1/goals/${config.motebitId}`, { signal });
 }
 
 // === Conversations ===
@@ -181,15 +287,19 @@ export interface ConversationMessagesResponse {
   messages: ConversationMessageEntry[];
 }
 
-export function fetchConversations(signal?: AbortSignal): Promise<ConversationsResponse> {
-  return apiFetch<ConversationsResponse>(`/api/v1/conversations/${config.motebitId}`, { signal });
+export function fetchConversations(
+  signal?: AbortSignal,
+): Promise<VerifiedStateExportResponse<ConversationsResponse>> {
+  return verifiedApiFetch<ConversationsResponse>(`/api/v1/conversations/${config.motebitId}`, {
+    signal,
+  });
 }
 
 export function fetchConversationMessages(
   conversationId: string,
   signal?: AbortSignal,
-): Promise<ConversationMessagesResponse> {
-  return apiFetch<ConversationMessagesResponse>(
+): Promise<VerifiedStateExportResponse<ConversationMessagesResponse>> {
+  return verifiedApiFetch<ConversationMessagesResponse>(
     `/api/v1/conversations/${config.motebitId}/${conversationId}/messages`,
     { signal },
   );
@@ -237,12 +347,19 @@ export interface SinglePlanResponse {
   plan: PlanEntry;
 }
 
-export function fetchPlans(signal?: AbortSignal): Promise<PlansResponse> {
-  return apiFetch<PlansResponse>(`/api/v1/plans/${config.motebitId}`, { signal });
+export function fetchPlans(
+  signal?: AbortSignal,
+): Promise<VerifiedStateExportResponse<PlansResponse>> {
+  return verifiedApiFetch<PlansResponse>(`/api/v1/plans/${config.motebitId}`, { signal });
 }
 
-export function fetchPlan(planId: string, signal?: AbortSignal): Promise<SinglePlanResponse> {
-  return apiFetch<SinglePlanResponse>(`/api/v1/plans/${config.motebitId}/${planId}`, { signal });
+export function fetchPlan(
+  planId: string,
+  signal?: AbortSignal,
+): Promise<VerifiedStateExportResponse<SinglePlanResponse>> {
+  return verifiedApiFetch<SinglePlanResponse>(`/api/v1/plans/${config.motebitId}/${planId}`, {
+    signal,
+  });
 }
 
 // === Devices ===
@@ -261,8 +378,10 @@ export interface DevicesResponse {
   devices: DeviceEntry[];
 }
 
-export function fetchDevices(signal?: AbortSignal): Promise<DevicesResponse> {
-  return apiFetch<DevicesResponse>(`/api/v1/devices/${config.motebitId}`, { signal });
+export function fetchDevices(
+  signal?: AbortSignal,
+): Promise<VerifiedStateExportResponse<DevicesResponse>> {
+  return verifiedApiFetch<DevicesResponse>(`/api/v1/devices/${config.motebitId}`, { signal });
 }
 
 // === Gradient ===
@@ -313,8 +432,10 @@ export interface GradientResponse {
   history: GradientSnapshotEntry[];
 }
 
-export function fetchGradient(signal?: AbortSignal): Promise<GradientResponse> {
-  return apiFetch<GradientResponse>(`/api/v1/gradient/${config.motebitId}`, { signal });
+export function fetchGradient(
+  signal?: AbortSignal,
+): Promise<VerifiedStateExportResponse<GradientResponse>> {
+  return verifiedApiFetch<GradientResponse>(`/api/v1/gradient/${config.motebitId}`, { signal });
 }
 
 // === Agent Trust ===

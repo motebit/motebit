@@ -1485,6 +1485,26 @@ export async function probeMint(): Promise<string> {
         return src.slice(0, idx) + probe + "\n" + src.slice(idx);
       }),
   },
+  {
+    script: "check-state-export-consumer-verifies",
+    proves:
+      "flags a source file in `apps/` or `packages/` that contains a state-export URL template without importing `@motebit/state-export-client`. Drift class: a consumer fetches a state-export endpoint and discards the producer-signed manifest — invisible truth on the consumer side that the producer-side drift gate cannot catch.",
+    perturb: () =>
+      // Drop a probe file with a state-export URL template and a fetch
+      // call that does NOT route through the verifier package.
+      // Located under apps/ to land in one of the gate's scan roots.
+      writeFixture(
+        `apps/inspector/src/${PROBE_PREFIX}unverified-consumer.ts`,
+        `// Probe-only file: fetches a state-export endpoint without
+// importing @motebit/state-export-client. The gate must reject.
+declare const motebitId: string;
+export async function probeFetch(): Promise<unknown> {
+  const res = await fetch(\`/api/v1/audit/\${motebitId}\`);
+  return res.json();
+}
+`,
+      ),
+  },
 ];
 
 /**

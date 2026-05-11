@@ -1,8 +1,46 @@
 import React from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
-import { InspectorApp } from "../InspectorApp";
 import { TrustMode, BatteryMode } from "@motebit/sdk";
+
+// Mock @motebit/state-export-client — tests mock `globalThis.fetch`
+// with raw JSON bodies; this translation layer wraps each response
+// into the verified `{ body, verification }` shape the inspector
+// consumes. URL + render assertions stay intact; the verification
+// path is exercised in `@motebit/state-export-client` tests.
+vi.mock("@motebit/state-export-client", () => ({
+  fetchTransparencyAnchor: vi.fn().mockResolvedValue({
+    ok: true,
+    anchor: {
+      relayPublicKey: new Uint8Array(32),
+      relayPublicKeyHex: "0".repeat(64),
+      relayId: "test-relay",
+      declaredAt: 0,
+    },
+  }),
+  verifiedStateExportFetch: vi
+    .fn()
+    .mockImplementation(async (url: string, opts: { init?: RequestInit } = {}) => {
+      const res = await globalThis.fetch(url, opts.init);
+      if (!res.ok) throw new Error(`fetch failed: HTTP ${res.status}`);
+      const body = await res.json();
+      return {
+        body,
+        bodyBytes: new Uint8Array(),
+        verification: {
+          valid: true,
+          producerPublicKeyHex: "0".repeat(64),
+          producerDid: "did:key:ztest",
+          artifactType: "audit-trail",
+          claimGenerator: "motebit-relay/test",
+          producedAt: new Date().toISOString(),
+          contentHash: "0".repeat(64),
+        },
+      };
+    }),
+}));
+
+import { InspectorApp } from "../InspectorApp";
 
 const originalFetch = globalThis.fetch;
 

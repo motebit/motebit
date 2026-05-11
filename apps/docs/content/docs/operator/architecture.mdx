@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **49 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 23 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **50 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 23 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -106,6 +106,7 @@ motebit/
 │   ├── molecule-runner/       [L6]          Shared boot kernel for molecule/atom services — composes runtime + persistence + mcp-server + tools behind one `runMolecule` call.
 │   ├── verifier/              [L6 · Apache-2.0]    Library — verifyFile, verifyArtifact, formatHuman helpers over @motebit/crypto. Permissive-floor-pure; no bin.
 │   ├── verify/                [L6 · Apache-2.0]    Canonical `motebit-verify` CLI — aggregates the canonical Apache-2.0 platform leaves (App Attest, Android Keystore, TPM, WebAuthn; plus deprecated Play Integrity for one minor cycle) with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) for one-install offline verification. The defaults are overridable flags, not proprietary judgment — the permissive-floor line stays here.
+│   ├── state-export-client/   [L6 · Apache-2.0]    Browser-safe verifier for `X-Motebit-Content-Manifest` HTTP headers on relay state exports. Trust-on-first-use bootstrap from `/.well-known/motebit-transparency.json` produces a `TransparencyAnchor`; per-call `verifiedStateExportFetch` wraps `fetch` with manifest-against-bytes verification + optional producer-key pin. Sibling of `motebit/verify` (CLI for files on disk); same crypto primitives, different consumer surface. Drift-locked by `check-state-export-consumer-verifies` (#87).
 │   │
 │   │   # Standalone — outside the layer DAG
 │   └── github-action/         [—]           GitHub Action for identity verification in CI.

@@ -93,6 +93,17 @@ export function InspectorApp(): React.ReactElement {
   const [budgetAllocations, setBudgetAllocations] = useState<BudgetAllocationEntry[]>([]);
   const [succession, setSuccession] = useState<SuccessionResponse | null>(null);
   const [presentation, setPresentation] = useState<Record<string, unknown> | null>(null);
+  // Aggregate verification status across all state-export fetches.
+  // Calm-software register: silent when verified=verified (motebit
+  // anti-pattern: don't confirm what the user can already see); a
+  // failure surface only renders when at least one panel's manifest
+  // failed verification — that's the tampering / mis-signed signal
+  // operators need to see.
+  const [verificationStatus, setVerificationStatus] = useState<{
+    readonly verifiedCount: number;
+    readonly totalCount: number;
+    readonly failures: ReadonlyArray<{ readonly endpoint: string; readonly reason: string }>;
+  }>({ verifiedCount: 0, totalCount: 0, failures: [] });
   const [presentationLoading, setPresentationLoading] = useState(false);
   const [connected, setConnected] = useState(false);
   const [activePanel, setActivePanel] = useState<string>("state");
@@ -146,17 +157,51 @@ export function InspectorApp(): React.ReactElement {
           fetchSuccession(signal).catch(() => null as SuccessionResponse | null),
         ]);
 
-        setState(stateRes.state);
-        pushHistory(stateRes.state);
-        setMemories(memoryRes.memories);
-        setEdges(memoryRes.edges);
-        setAudit(auditRes.entries);
-        setGoals(goalsRes.goals);
-        setConversations(convRes.conversations);
-        setDevices(devicesRes.devices);
-        setPlans(plansRes.plans);
-        setGradientCurrent(gradientRes.current);
-        setGradientHistory(gradientRes.history);
+        // State-export endpoints return VerifiedStateExportResponse —
+        // body is null when verification fails. Pull out body if valid;
+        // collect verification result for aggregate UI status. Never
+        // render unverified state (when body is null, leave the
+        // previous render in place — better than a flicker to empty).
+        const verifiedRefs = [
+          { endpoint: "state", res: stateRes },
+          { endpoint: "memory", res: memoryRes },
+          { endpoint: "events", res: eventsRes },
+          { endpoint: "audit", res: auditRes },
+          { endpoint: "goals", res: goalsRes },
+          { endpoint: "conversations", res: convRes },
+          { endpoint: "devices", res: devicesRes },
+          { endpoint: "plans", res: plansRes },
+          { endpoint: "gradient", res: gradientRes },
+        ];
+        const failures = verifiedRefs
+          .filter((ref) => !ref.res.verification.valid)
+          .map((ref) => ({
+            endpoint: ref.endpoint,
+            reason: ref.res.verification.valid === false ? ref.res.verification.reason : "unknown",
+          }));
+        setVerificationStatus({
+          verifiedCount: verifiedRefs.length - failures.length,
+          totalCount: verifiedRefs.length,
+          failures,
+        });
+
+        if (stateRes.body !== null) {
+          setState(stateRes.body.state);
+          pushHistory(stateRes.body.state);
+        }
+        if (memoryRes.body !== null) {
+          setMemories(memoryRes.body.memories);
+          setEdges(memoryRes.body.edges);
+        }
+        if (auditRes.body !== null) setAudit(auditRes.body.entries);
+        if (goalsRes.body !== null) setGoals(goalsRes.body.goals);
+        if (convRes.body !== null) setConversations(convRes.body.conversations);
+        if (devicesRes.body !== null) setDevices(devicesRes.body.devices);
+        if (plansRes.body !== null) setPlans(plansRes.body.plans);
+        if (gradientRes.body !== null) {
+          setGradientCurrent(gradientRes.body.current);
+          setGradientHistory(gradientRes.body.history);
+        }
         setTrustRecords(trustRes.records);
         setAgentGraphNodes(agentGraphRes.nodes);
         setAgentGraphEdges(agentGraphRes.edges);
@@ -201,13 +246,14 @@ export function InspectorApp(): React.ReactElement {
           setSuccession(successionRes);
         }
 
-        if (eventsRes.events.length > 0) {
+        if (eventsRes.body !== null && eventsRes.body.events.length > 0) {
+          const eventsBody = eventsRes.body;
           setEvents((prev) => {
             const existingIds = new Set(prev.map((e) => e.event_id));
-            const newEvents = eventsRes.events.filter((e) => !existingIds.has(e.event_id));
+            const newEvents = eventsBody.events.filter((e) => !existingIds.has(e.event_id));
             return [...prev, ...newEvents];
           });
-          const maxClock = Math.max(...eventsRes.events.map((e) => e.version_clock));
+          const maxClock = Math.max(...eventsBody.events.map((e) => e.version_clock));
           if (maxClock > maxClockRef.current) {
             maxClockRef.current = maxClock;
           }
@@ -373,11 +419,37 @@ export function InspectorApp(): React.ReactElement {
       );
   }
 
+  // Calm-software register: render a verification chip only when at
+  // least one state-export response failed verification. On the
+  // verified path the chip is invisible — every panel rendered means
+  // the producer-signed manifest verified against the body bytes,
+  // and confirming what the user can already see is anti-pattern.
+  const verificationChip =
+    verificationStatus.totalCount > 0 && verificationStatus.failures.length > 0
+      ? React.createElement(
+          "div",
+          {
+            className: "verification-chip verification-chip-failed",
+            title: verificationStatus.failures.map((f) => `${f.endpoint}: ${f.reason}`).join("\n"),
+            style: {
+              padding: "2px 8px",
+              borderRadius: "4px",
+              fontSize: "0.8em",
+              background: "rgba(220, 50, 50, 0.15)",
+              color: "rgb(180, 30, 30)",
+              border: "1px solid rgba(220, 50, 50, 0.4)",
+            },
+          },
+          `✗ ${verificationStatus.failures.length}/${verificationStatus.totalCount} panels failed verification`,
+        )
+      : null;
+
   const header = React.createElement(
     "div",
     { className: "inspector-header" },
     React.createElement("h1", null, "Motebit Inspector"),
     React.createElement(ConnectionStatus, { connected }),
+    verificationChip,
   );
 
   return React.createElement("div", { className: "inspector-app" }, header, nav, content);

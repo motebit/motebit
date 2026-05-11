@@ -26,8 +26,12 @@ export function ConversationsPanel({
       setExpandedId(conversationId);
       setLoadingMessages(true);
       try {
+        // fetchConversationMessages returns VerifiedStateExportResponse —
+        // body is null on verification failure. Treat both null-body and
+        // throw paths as empty so the panel never renders unverified data.
         const res = await fetchConversationMessages(conversationId);
-        setMessages(res.messages);
+        if (res.body !== null) setMessages(res.body.messages);
+        else setMessages([]);
       } catch {
         setMessages([]);
       } finally {
