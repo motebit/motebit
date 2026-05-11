@@ -133,6 +133,7 @@ describe("@motebit/wire-schemas barrel", () => {
       barrel.GRADIENT_CREDENTIAL_SUBJECT_SCHEMA_ID,
       barrel.CREDENTIAL_ANCHOR_BATCH_SCHEMA_ID,
       barrel.CREDENTIAL_ANCHOR_PROOF_SCHEMA_ID,
+      barrel.SIGNED_TRANSPARENCY_DECLARATION_SCHEMA_ID,
     ];
     for (const url of urls) {
       expect(url).toMatch(/^https:\/\/raw\.githubusercontent\.com\/motebit\/motebit\/main\//);
@@ -177,6 +178,9 @@ describe("@motebit/wire-schemas barrel", () => {
     );
     expect(barrel.buildCredentialAnchorBatchJsonSchema().title).toBe("CredentialAnchorBatch (v1)");
     expect(barrel.buildCredentialAnchorProofJsonSchema().title).toBe("CredentialAnchorProof (v1)");
+    expect(barrel.buildSignedTransparencyDeclarationJsonSchema().title).toBe(
+      "SignedTransparencyDeclaration (v1)",
+    );
   });
 
   it("re-exports the shared assemble helper", () => {
