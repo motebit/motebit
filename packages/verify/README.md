@@ -75,6 +75,33 @@ const result = await verifyFile("cred.json", {
 });
 ```
 
+`buildHardwareVerifiers()` with no arguments uses motebit's canonical defaults (`com.motebit.mobile` bundle, `motebit.com` RP ID, pinned Apple/Google/FIDO/TPM roots). To verify credentials minted by a fork, a federation peer, or a custom build, pass a `HardwareVerifierBundleConfig`:
+
+```ts
+import { readFileSync } from "node:fs";
+import { buildHardwareVerifiers } from "@motebit/verify";
+import { verifyFile } from "@motebit/verifier";
+
+const result = await verifyFile("cred.json", {
+  hardwareAttestation: buildHardwareVerifiers({
+    // Apple App Attest — non-motebit iOS build
+    appAttestBundleId: "com.example.app",
+    // Android Keystore — raw attestationApplicationId bytes from the
+    // leaf cert, computed once at build time from (packageName, signing-cert SHA-256)
+    androidKeystoreExpectedAttestationApplicationId: readFileSync("./app-id.bin"),
+    // WebAuthn — relying-party domain
+    webauthnRpId: "example.com",
+    // Optional — override any pinned root set (test fabrications, federation peer roots, etc.)
+    appAttestRootPem: customAppleRootPem,
+    androidKeystoreRootPems: [customGoogleRoot1, customGoogleRoot2],
+    webauthnRootPems: [customYubicoRoot],
+    tpmRootPems: [customInfineonRoot],
+  }),
+});
+```
+
+Every field is optional and falls back to the motebit-canonical default. The Android Keystore arm is wired only when `androidKeystoreExpectedAttestationApplicationId` is supplied — there is no canonical default for the leaf-cert package binding, by design.
+
 ## The three-package lineage
 
 This package sits at the top of a deliberate three-layer split — the same shape long-lived tool lineages use (git / libgit2, cargo / tokio, npm / @npm/arborist):

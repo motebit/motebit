@@ -37,6 +37,19 @@ const result = await verify(credential, {
 
 A verifier that dynamically fetched Google's attestation roots has no sovereign story. The pinned roots are the self-attesting contract — third parties audit `DEFAULT_ANDROID_KEYSTORE_TRUST_ANCHORS` and know which trust anchors this library accepts. Source of truth: `roots.json` in [`android/keyattestation`](https://github.com/android/keyattestation), Google's canonical Kotlin reference verifier.
 
+## Lower-level primitives
+
+Beyond `androidKeystoreVerifier`, the package exports the parser + constants + canonical literals for advanced consumers:
+
+- `verifyAndroidKeystoreAttestation(...)` — bare-metal entry: takes the parsed `KeyDescription` + caller-supplied roots and returns the structured verification result. `androidKeystoreVerifier` is a thin curry over this.
+- `parseKeyDescription(derBytes)` — walk the AOSP `KeyDescription` ASN.1 extension into a typed structure (`attestationVersion`, `attestationSecurityLevel`, `hardwareEnforced`, etc.).
+- `SECURITY_LEVEL_SOFTWARE`, `SECURITY_LEVEL_TRUSTED_ENVIRONMENT`, `SECURITY_LEVEL_STRONG_BOX` — the canonical `attestationSecurityLevel` enum values per AOSP. Use these to constrain the accepted floor.
+- `VERIFIED_BOOT_STATE_VERIFIED`, `VERIFIED_BOOT_STATE_SELF_SIGNED`, `VERIFIED_BOOT_STATE_UNVERIFIED`, `VERIFIED_BOOT_STATE_FAILED` — the four canonical `verifiedBootState` values; populate `allowedVerifiedBootStates` from this set.
+- `ANDROID_KEYSTORE_PLATFORM` — the canonical platform-string constant (`"android_keystore"`).
+- `ANDROID_KEY_ATTESTATION_OID` (`1.3.6.1.4.1.11129.2.1.17`) — the X.509 extension OID the leaf carries.
+- `GOOGLE_ANDROID_KEYSTORE_ROOT_RSA_PEM`, `GOOGLE_ANDROID_KEYSTORE_ROOT_ECDSA_PEM` — the two pinned Google attestation roots (RSA-4096 + ECDSA P-384). Both ship by default; overrideable via `HardwareVerifierBundleConfig.androidKeystoreRootPems` in `@motebit/verify`.
+- `EMPTY_REVOCATION_SNAPSHOT` — typed empty snapshot for callers that don't yet wire a revocation list. Replace with a real snapshot at release time per `@motebit/verify`'s embedding pipeline.
+
 ## Why a hand-rolled DER walker
 
 The `KeyDescription` ASN.1 structure has ~50 optional context-tagged fields in `AuthorizationList`, two of which carry policy-relevant material (`[704] rootOfTrust` and `[709] attestationApplicationId`). A schema-driven parser would have to declare all 50 fields just to skip past the ones we ignore. Walking the DER directly costs ~150 lines and stays scoped to exactly what verification needs — same trade-off [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm) made for `TPMS_ATTEST` parsing.

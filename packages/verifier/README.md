@@ -36,7 +36,7 @@ The unified `verify()` dispatcher in [`@motebit/crypto`](https://www.npmjs.com/p
 - **credential** — W3C-style Verifiable Credentials
 - **presentation** — W3C-style Verifiable Presentations
 
-This package wraps the dispatcher with `verifyFile` (path → result), `verifyArtifact` (string → result), and `formatHuman` (result → printable banner).
+This package wraps the dispatcher with `verifyFile` (path → result), `verifyArtifact` (string → result), `verifySkillDirectory` (path-to-a-skill-directory → result, for skill bundles shipped as a tree rather than a single file), and `formatHuman` (result → printable banner).
 
 ## Guarantees
 

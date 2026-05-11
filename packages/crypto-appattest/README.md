@@ -33,6 +33,15 @@ const result = await verify(credential, {
 
 A verifier that dynamically fetches CA certificates has no sovereign story. The pinned root is the self-attesting contract — third parties audit `APPLE_APPATTEST_ROOT_PEM` and know what chain this library accepts. Zero network; chain path, clock-skew, and OID extraction are all deterministic from Apple's published spec.
 
+## Lower-level primitives
+
+Beyond `deviceCheckVerifier`, the package exports a few primitives for advanced consumers (test harnesses, third-party verifiers that want to plug pieces of the chain into their own dispatcher):
+
+- `verifyAppAttestReceipt(...)` — bare-metal entry: takes the parsed receipt + caller-supplied trust roots and returns the structured verification result. `deviceCheckVerifier` is a thin curry over this.
+- `parseAppAttestCbor(bytes)` — parse the raw CBOR Apple emits from `DCAppAttestService.attestKey` into a typed `AppAttestReceipt`. Used internally; exposed for test fixtures and inspection tools.
+- `APPLE_APPATTEST_FMT` — the canonical fmt-string constant (`"apple-appattest"`) used to dispatch by attestation format. Exported so other dispatchers can pattern-match without hardcoding.
+- `APPLE_APPATTEST_ROOT_PEM` — the pinned Apple App Attestation Root CA, exported for audit and for `HardwareVerifierBundleConfig.appAttestRootPem` overrides in `@motebit/verify`.
+
 ## Related
 
 - [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — dispatcher (pure permissive-floor; zero deps)

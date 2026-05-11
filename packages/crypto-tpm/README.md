@@ -30,6 +30,17 @@ const result = await verify(credential, {
 
 A verifier that dynamically fetched vendor CAs has no sovereign story. The pinned vendor roots are the self-attesting contract — third parties audit `DEFAULT_PINNED_TPM_ROOTS` and know which EK CAs this library accepts. Adding a vendor is additive (one PEM constant + one accept-set entry), not a policy rewrite.
 
+## Lower-level primitives
+
+Beyond `tpmVerifier`, the package exports the parser internals + pinned-root constants for advanced consumers (test fabrications, third-party verifiers wiring custom dispatchers):
+
+- `verifyTpmQuote(...)` — bare-metal entry: takes the already-parsed `TPMS_ATTEST` structure + AK chain and returns the structured verification result.
+- `parseTpmsAttest(bytes)` — parse the raw TPM-marshaled binary into a typed `TpmsAttest`. Hand-rolled per TCG spec.
+- `composeTpmsAttestForTest(...)` — inverse of the parser; emits canonical bytes for test fixtures so the round-trip is observable.
+- `TPM_GENERATED_VALUE` (`0xff544347`) — the magic constant TPM-emitted quotes carry; format dispatchers use this to detect the structure.
+- `TPM_PLATFORM` — the canonical platform-string constant (`"tpm"`) used to route by claim platform.
+- `INFINEON_TPM_EK_ROOT_PEM`, `NUVOTON_TPM_EK_ROOT_PEM`, `STMICRO_TPM_EK_RSA_ROOT_PEM`, `STMICRO_TPM_EK_ECC_ROOT_PEM`, `INTEL_PTT_EK_ROOT_PEM` — the pinned vendor EK roots, exported for audit and for `HardwareVerifierBundleConfig.tpmRootPems` overrides in `@motebit/verify`.
+
 ## Why a hand-rolled parser
 
 TPM 2.0's `TPMS_ATTEST` structure is ~100 lines of big-endian length-prefixed marshaling. Pulling a full TPM library for that would cross a larger surface area than the struct we actually parse. Scoped to exactly what verification needs.

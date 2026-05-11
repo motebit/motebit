@@ -1,6 +1,6 @@
 # @motebit/state-export-client
 
-Browser-safe verifier for motebit state-export responses. Wraps `fetch` with `X-Motebit-Content-Manifest` verification + a trust-on-first-use bootstrap from `/.well-known/motebit-transparency.json`.
+Browser-safe verifier for motebit state-export responses. Wraps `fetch` with `X-Motebit-Content-Manifest` verification, performs trust-on-first-use bootstrap from `/.well-known/motebit-transparency.json`, and recursively verifies inner agent signatures on v1.1 execution-ledger bundles.
 
 Apache-2.0 (permissive floor). Consumes `@motebit/crypto` + `@motebit/protocol` only. Zero new cryptographic logic; zero implicit network calls; fail-closed on every verification path.
 
@@ -8,7 +8,9 @@ Apache-2.0 (permissive floor). Consumes `@motebit/crypto` + `@motebit/protocol` 
 
 Every state-export endpoint in `services/relay/src/state-export.ts` emits a relay-signed `ContentArtifactManifest` in the `X-Motebit-Content-Manifest` HTTP header. Producer-side signing is invisible truth unless a consumer demands the signature. This package is that consumer — drop it into any browser app and every state-export read becomes self-attesting.
 
-## Quick start
+A v1.1 execution-ledger goes one layer deeper: the outer manifest is signed by the relay (witness-composition "I assembled these bytes"); the inner `signed_receipts[]` field carries byte-identical canonical JSON of each delegated motebit's own signed `ExecutionReceipt`. `verifyInnerSignedReceipts` recursively audits each one. A relay cannot fabricate inner signatures without holding the delegate motebits' private keys.
+
+## Quick start — verified state-export fetch (outer envelope)
 
 ```ts
 import { fetchTransparencyAnchor, verifiedStateExportFetch } from "@motebit/state-export-client";
@@ -34,6 +36,27 @@ if (verification.valid) {
 }
 ```
 
+## Quick start — inner-receipt recursive verification (v1.1 execution-ledger)
+
+```ts
+import { verifiedStateExportFetch, verifyInnerSignedReceipts } from "@motebit/state-export-client";
+
+const { body, verification } = await verifiedStateExportFetch(
+  `https://relay.example.com/api/v1/execution/${motebitId}/${goalId}`,
+  { anchor: anchor.anchor, init: { headers: { Authorization: `Bearer ${token}` } } },
+);
+if (!verification.valid) throw new Error(`outer: ${verification.reason}`);
+
+const inner = await verifyInnerSignedReceipts(body);
+if (inner.applicable && !inner.allValid) {
+  for (const r of inner.results) {
+    if (!r.valid) console.error(`✗ ${r.taskId} (${r.motebitId}): ${r.reason}`);
+  }
+}
+```
+
+`verifyInnerSignedReceipts` returns `applicable: false` for v1.0 bodies, non-execution-ledger bodies, or bodies with an empty `signed_receipts` field — calm-software default, no flag required. On v1.1 bodies, every entry is parsed, every signature is checked against its embedded public key, and `delegation_receipts` chains are walked recursively.
+
 ## Trust-anchor chain
 
 ```
@@ -41,13 +64,54 @@ if (verification.valid) {
   → declaration is self-signed; signature verifies against embedded relay_public_key
   → cache the key (TOFU)
   → every X-Motebit-Content-Manifest verifies against the pinned key
+  → every inner signed_receipts[] entry verifies against its own embedded public_key
 ```
 
-The operator-transparency declaration is the trust root. See [`docs/doctrine/operator-transparency.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/operator-transparency.md) and [`docs/doctrine/nist-alignment.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/nist-alignment.md) §8.
+The operator-transparency declaration is the trust root. The relay's identity key signs the declaration _and_ every state-export manifest, so a single TOFU bootstrap commits the relay to a specific Ed25519 key across every endpoint. Inner receipts carry their own embedded public keys signed by the delegate motebits — the relay cannot rotate those without holding the delegates' private keys.
+
+See [`docs/doctrine/operator-transparency.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/operator-transparency.md), [`docs/doctrine/nist-alignment.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/nist-alignment.md) §8, and [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §4.3.
+
+## Onchain anchoring (Stage 2)
+
+The transparency declaration is anchored to Solana via a Memo program transaction. `verifyDeclarationOnchainAnchor` and `lookupTransparencyAnchor` together let a verifier confirm the declaration's hash was posted onchain by the relay's identity key, closing the "operator deletes the JSON file" disappearance gap.
+
+```ts
+import {
+  lookupTransparencyAnchor,
+  verifyDeclarationOnchainAnchor,
+} from "@motebit/state-export-client";
+
+const lookup = await lookupTransparencyAnchor({
+  declarationHashHex: anchor.anchor.declarationHashHex,
+  signerAddress: anchor.anchor.relaySolanaAddress, // optional pin
+});
+if (lookup.ok) {
+  const proof = await verifyDeclarationOnchainAnchor(declaration, lookup.anchor);
+  if (!proof.ok) console.error("✗", proof.reason);
+}
+```
+
+## Programmatic surface
+
+| Export                                                     | Kind     | Role                                                                                                                       |
+| ---------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `fetchTransparencyAnchor(baseUrl, opts?)`                  | function | TOFU bootstrap — fetch `/.well-known/motebit-transparency.json`, verify self-signature, return pinned `TransparencyAnchor` |
+| `verifyTransparencyDeclaration(declaration)`               | function | Lower-level: verify a `SignedTransparencyDeclaration` from any source (cached, archived, fixture)                          |
+| `verifiedStateExportFetch(url, opts)`                      | function | Wrap `fetch` — verify outer envelope against body bytes + optional anchor pin                                              |
+| `verifyManifestAgainstBytes(manifest, bodyBytes, anchor?)` | function | Lower-level: verify a parsed `ContentArtifactManifest` against bytes you already have                                      |
+| `verifyInnerSignedReceipts(body)`                          | function | Recursive v1.1 inner-receipt audit — per-receipt verdict with typed failure reasons                                        |
+| `lookupTransparencyAnchor(opts)`                           | function | Onchain — query Solana RPC for a Memo program transaction posting the declaration hash                                     |
+| `verifyDeclarationOnchainAnchor(declaration, anchor)`      | function | Onchain — verify the Memo transaction's signer and content match the declaration                                           |
+| `StateExportFetchError`                                    | class    | Thrown on non-2xx HTTP; verifier never attempts to verify error envelopes                                                  |
+| `MANIFEST_HEADER`                                          | constant | The header name (`"X-Motebit-Content-Manifest"`) — exposed for custom transports                                           |
+
+All result types (`TransparencyAnchorResult`, `StateExportVerification`, `InnerReceiptsVerification`, etc.) and failure-reason unions are also exported — discriminated unions, type-narrowable by the `ok` / `valid` / `applicable` field.
 
 ## Failure reasons
 
-Every verification failure carries a typed reason for audit logging:
+Every verification path surfaces a typed reason for audit logging.
+
+**Outer envelope** (`StateExportVerification.reason`):
 
 - `manifest_header_missing` — response had no `X-Motebit-Content-Manifest` header
 - `malformed_manifest_header` — header was not valid base64url-encoded JSON
@@ -56,7 +120,15 @@ Every verification failure carries a typed reason for audit logging:
 - `malformed_public_key` / `malformed_signature` / `unsupported_suite` — manifest internals
 - `producer_key_mismatch` — declared key differs from the anchor's pinned key
 
-Non-2xx HTTP responses throw `StateExportFetchError` — the verifier never attempts to verify error envelopes (signing 5xx pages would be misleading provenance for a service outage).
+**Inner receipts** (`InnerReceiptVerification.reason`, per-receipt):
+
+- `malformed_json` — an entry in `signed_receipts[]` was not valid JSON
+- `missing_public_key` — the parsed receipt had no `public_key` field to verify against
+- `signature_invalid` — the receipt's Ed25519 signature did not verify against its embedded key
+- `delegation_failed` — a nested entry in `delegation_receipts[]` failed verification
+- `unknown` — wrapped crypto exception (shouldn't normally fire — surfaces opaque failures from the underlying primitive)
+
+Non-2xx HTTP throws `StateExportFetchError` — the verifier never attempts to verify error envelopes (signing 5xx pages would be misleading provenance for a service outage).
 
 ## License
 

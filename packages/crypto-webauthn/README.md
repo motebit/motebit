@@ -34,6 +34,15 @@ v1 accepts `fmt: "packed"` only. Other formats (`tpm`, `android-key`, `android-s
 
 A verifier that dynamically fetches the FIDO Metadata Service has no sovereign story. The pinned root set is the self-attesting contract — third parties audit `DEFAULT_FIDO_ROOTS` and know which vendor roots this library accepts. Rotations land as additive constants.
 
+## Lower-level primitives
+
+Beyond `webauthnVerifier`, the package exports the parser + pinned-root constants for advanced consumers:
+
+- `verifyWebAuthnAttestation(...)` — bare-metal entry: takes the parsed attestation object + caller-supplied roots and returns the structured verification result. `webauthnVerifier` is a thin curry over this.
+- `parseWebAuthnAttestationObjectCbor(bytes)` — parse the raw CBOR object the browser emits into a typed `{ fmt, attStmt, authData }` structure.
+- `WEBAUTHN_FMT_PACKED` — the canonical fmt-string constant (`"packed"`) used to dispatch by attestation format.
+- `APPLE_WEBAUTHN_ROOT_PEM`, `YUBICO_FIDO_ROOT_PEM`, `MICROSOFT_TPM_ROOT_PEM` — the pinned vendor roots, exported for audit and for `HardwareVerifierBundleConfig.webauthnRootPems` overrides in `@motebit/verify`.
+
 ## Related
 
 - [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — dispatcher (pure permissive-floor; zero deps)

@@ -1545,6 +1545,20 @@ export async function probeFetch(): Promise<unknown> {
         src.replace(/\bverifyInnerSignedReceipts\b/g, "probe_inner_verifier_removed"),
       ),
   },
+  {
+    script: "check-readme-public-exports",
+    proves:
+      "flags a publish-surface package shipping a new public-named export from src/index.ts without README mention. Exactly the 2026-05-11 state-export-client@0.2.0 incident class — `verifyInnerSignedReceipts` shipped under a `minor` Changeset bump but the README was unchanged, so the new function was invisible to npm-page visitors. Probe appends a uniquely-named fixture export to `packages/verifier/src/index.ts`; the gate must catch it because the identifier appears in no README. byte-identical restoration on cleanup.",
+    perturb: () =>
+      // Append a uniquely-named export to a small publish-surface package
+      // (verifier — currently 0 missing exports per the gate). The export
+      // identifier is novel enough that it's guaranteed not to appear in
+      // README.md, so the gate must flag it.
+      mutateFile(
+        `packages/verifier/src/index.ts`,
+        (src) => `${src}\nexport const ${PROBE_PREFIX}readme_drift_probe = "probe-only";\n`,
+      ),
+  },
 ];
 
 /**
