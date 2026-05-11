@@ -2236,15 +2236,21 @@ export class WebApp {
       const view = buildSlabHomeView(affordances, {
         onAffordanceTap: (aff) => {
           const targetUrl = `${aff.scheme}://${aff.host}`;
-          // Dispatch as a navigate forward event through the same
-          // path the URL bar uses — `forwardUserInput({kind:
-          // "navigate", url})`. The forward closure handles
-          // session warming, audit logging, and URL state update.
-          // For overlay-mode tap: the URL bar already has focus, so
-          // moving focus to the tile button triggers blur on the
-          // input → blur handler exits the overlay → navigate
-          // proceeds → new URL state flips off the overlay
-          // (idempotent). Single dispatcher, one outcome.
+          // Synchronous overlay exit BEFORE dispatch — closes the
+          // race with the URL-input's deferred blur handler. The
+          // click handler already holds the affordance in closure,
+          // so removing the tile button from the DOM doesn't
+          // interrupt the running handler; the dispatch proceeds
+          // normally and the URL-state update path lands on resolve.
+          // Idempotent: blur's setTimeout(0) fires later but
+          // exitHomeOverlay's early-return on !_homeOverlayActive
+          // makes it a no-op. Also forces the URL input to blur so
+          // the input's focused state doesn't survive the navigate
+          // (matches Apple's commit-then-defocus pattern).
+          if (this._homeOverlayActive) {
+            this.exitHomeOverlay();
+            this.liveBrowserHandle?.element.querySelector("input")?.blur();
+          }
           void this.liveBrowserForwardEvent?.({
             kind: "navigate",
             url: targetUrl,
