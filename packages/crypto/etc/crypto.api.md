@@ -116,6 +116,25 @@ export const CONSOLIDATION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 export { ConsolidationReceipt }
 
+// @public
+export const CONTENT_ARTIFACT_SUITE: SuiteId;
+
+// @public
+export interface ContentArtifactManifest {
+    readonly artifact_type: string;
+    readonly claim_generator: string;
+    readonly content_hash: string;
+    readonly invocation?: {
+        readonly task_id?: string;
+        readonly receipt_id?: string;
+    };
+    readonly produced_at: string;
+    readonly producer: string;
+    readonly producer_public_key: string;
+    readonly signature: string;
+    readonly suite: SuiteId;
+}
+
 // @public (undocumented)
 export function createPresentation(credentials: VerifiableCredential[], privateKey: Uint8Array, publicKey: Uint8Array): Promise<VerifiablePresentation>;
 
@@ -934,6 +953,24 @@ export function signComputerSessionReceipt<T extends Omit<SignableComputerSessio
 export function signConsolidationReceipt(receipt: Omit<ConsolidationReceipt, "signature" | "suite" | "public_key">, privateKey: Uint8Array, publicKey?: Uint8Array): Promise<ConsolidationReceipt>;
 
 // @public
+export function signContentArtifact(content: Uint8Array, options: SignContentArtifactOptions): Promise<ContentArtifactManifest>;
+
+// @public
+export interface SignContentArtifactOptions {
+    readonly artifactType: string;
+    readonly claimGenerator: string;
+    readonly invocation?: {
+        readonly task_id?: string;
+        readonly receipt_id?: string;
+    };
+    readonly producedAt?: string;
+    readonly producer: string;
+    readonly producerPrivateKey: Uint8Array;
+    readonly producerPublicKey: Uint8Array;
+    readonly suite?: SuiteId;
+}
+
+// @public
 export function signDelegation(delegation: Omit<DelegationToken, "signature" | "suite">, delegatorPrivateKey: Uint8Array): Promise<DelegationToken>;
 
 // @public
@@ -1246,6 +1283,16 @@ export function verifyComputerSessionReceipt(receipt: SignableComputerSessionRec
 
 // @public
 export function verifyConsolidationReceipt(receipt: ConsolidationReceipt, publicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyContentArtifact(manifest: ContentArtifactManifest, content: Uint8Array): Promise<VerifyContentArtifactResult>;
+
+// @public
+export interface VerifyContentArtifactResult {
+    readonly reason?: "content_hash_mismatch" | "signature_invalid" | "malformed_public_key" | "malformed_signature" | "unsupported_suite";
+    // (undocumented)
+    readonly valid: boolean;
+}
 
 // @public
 export function verifyCredentialAnchor(credential: Record<string, unknown>, anchorProof: CredentialAnchorProofFields, chainVerifier?: ChainAnchorVerifier): Promise<CredentialAnchorVerifyResult>;

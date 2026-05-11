@@ -1691,6 +1691,16 @@ export {
   type TrustCredentialSubject,
 } from "./credentials.js";
 export {
+  signContentArtifact,
+  verifyContentArtifact,
+  CONTENT_ARTIFACT_SUITE,
+} from "./content-artifact.js";
+export type {
+  ContentArtifactManifest,
+  SignContentArtifactOptions,
+  VerifyContentArtifactResult,
+} from "./content-artifact.js";
+export {
   computeCredentialLeaf,
   verifyCredentialAnchor,
   verifyRevocationAnchor,

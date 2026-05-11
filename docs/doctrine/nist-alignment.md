@@ -83,15 +83,15 @@ The recurring asks across NIST documents (SP 800-63-4, SP 800-207, NISTIR 8587, 
 
 **Aligned with.** SP 800-207 (Zero Trust Architecture).
 
-### 8. Content provenance for AI outputs — _deferred extension_
+### 8. Content provenance for standalone artifacts
 
-**Ask.** AI-generated content (images, audio, written reports) should carry verifiable provenance binding the artifact to the producing agent and invocation.
+**Ask.** Content that travels independently of the conversation (memory exports, audit-trail JSON, plan dumps, future generated documents and media) should carry verifiable provenance binding the bytes to a producer identity and a moment of production. C2PA-shape: manifest separate from content, signed over the manifest, content's hash bound in.
 
-**Motebit.** Currently signs **execution receipts** (the invocation record), not detached content artifacts. Where motebit produces discrete bytes (skill bundle outputs, computer-use session receipts), the artifact carries the receipt — adequate when the artifact is consumed alongside the conversation. Where motebit would produce a **standalone content artifact** that travels independently (a generated image, an exported document) — the C2PA-shape manifest signature is the right extension: same `@motebit/crypto` primitives (canonical JSON, Ed25519, suite-dispatch) producing a C2PA-compatible manifest attached to the artifact bytes.
+**Motebit.** `signContentArtifact` / `verifyContentArtifact` / `ContentArtifactManifest` in [`packages/crypto/src/content-artifact.ts`](../../packages/crypto/src/content-artifact.ts). Pinned suite `motebit-jcs-ed25519-hex-v1`. Two-step verification — SHA-256 content-hash recomputation catches tampering of the bytes; Ed25519 signature verification over the canonical-JSON manifest catches tampering of the metadata. Both must pass; fail-closed with typed reasons (`content_hash_mismatch | signature_invalid | malformed_public_key | malformed_signature | unsupported_suite`).
 
-**Status.** Land when a real consumer ships. Adding `signContentArtifact` / `verifyContentArtifact` without a content-generation surface would be ceremony — same anti-pattern as `generateKeypairBySuite` declined during the cryptosuite agility audit. The primitives are ready; the consumer is not.
+**Recognition note.** This section was initially "deferred until a real consumer ships" in this doctrine's first cut. A grep audit immediately after publication surfaced the 12 state-export routes at [`services/relay/src/state-export.ts`](../../services/relay/src/state-export.ts) producing unsigned downloadable JSON today (audit trails, memory graphs, plan exports, conversation pulls, gradient history, execution-ledger reconstruction). The original framing was wrong — the consumer was already shipping; the primitive was the missing piece. Closing the gap was correct; deferring it would have left the self-attesting-system doctrine ([`self-attesting-system.md`](self-attesting-system.md)) contradicting the export surface. The primitive ships alone in this commit; consumer-side migration of the state-export endpoints (each carries its own design choice about producer identity — relay-signs-as-host vs motebit-signs-as-subject vs both) lands as a follow-up.
 
-**Aligned with (when shipped).** C2PA Content Authenticity v1.x, Content Authenticity Initiative manifest formats.
+**Aligned with.** C2PA Content Authenticity v1.x, Content Authenticity Initiative manifest formats. The motebit manifest shape maps cleanly to C2PA assertions (`c2pa.actions` → `claim_generator` + `produced_at`; `c2pa.hash.data` → `content_hash`); C2PA-native tooling reads via a translation layer when industry consumption demands strict compatibility.
 
 ## What motebit does not claim
 

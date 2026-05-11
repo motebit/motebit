@@ -277,6 +277,14 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // Merkle inclusion-proof primitive (extracted from credential-anchor
     // for reuse in witness-omission disputes). Pure, browser-safe.
     "verifyMerkleInclusion",
+    // Content-artifact provenance — C2PA-shape manifest signature
+    // over arbitrary content bytes + producer identity + invocation
+    // context. Same canonical-JSON + Ed25519 + suite-dispatch pattern
+    // as `signExecutionReceipt` / `signSkillManifest`. Closes the
+    // self-attesting-system gap for state-export and future generated
+    // artifacts. See `docs/doctrine/nist-alignment.md` §8.
+    "signContentArtifact",
+    "verifyContentArtifact",
     // Witness-omission dispute (retention phase 4b-3) — sign + verify +
     // canonicalization. Permissive-floor primitive for Path A quorum
     // accountability on append_only_horizon certs.
