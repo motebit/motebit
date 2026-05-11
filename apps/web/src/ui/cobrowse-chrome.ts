@@ -138,8 +138,8 @@ export interface RenderCoBrowseChromeOpts {
    * state is `user`, the URL input renders this as its `value` so
    * the user sees what page they're on (browser convention — Chrome,
    * Safari, Firefox always show the current URL in the address bar).
-   * Null/undefined → input renders empty with the "Anywhere."
-   * placeholder. Wired by the surface from
+   * Null/undefined → input renders empty with the
+   * "type a URL · or ask motebit" placeholder. Wired by the surface from
    * `runtime.setBrowserSessionProvider` / `_currentBrowserUrl`.
    */
   readonly currentUrl?: string | null;
@@ -201,36 +201,41 @@ function baseStrip(stateKind: ControlState["kind"]): HTMLDivElement {
   strip.className = `cobrowse-chrome cobrowse-chrome-${stateKind}`;
   strip.style.display = "flex";
   strip.style.alignItems = "center";
-  strip.style.gap = "12px";
-  strip.style.padding = "8px 14px";
-  strip.style.margin = "8px";
-  strip.style.borderRadius = "10px";
-  // Fully opaque surround so page content beneath the chrome
-  // does NOT bleed through. The prior 0.85 alpha + backdrop blur
-  // still let page pixels show, breaking the "real browser top
-  // bar" register the user expects. Solid white at 0.97 alpha
-  // (just shy of pure white so the slab's soul tint shows
-  // faintly under it, body-coherent) reads as a real browser
-  // chrome row — content stops at the chrome's bottom edge,
-  // exactly like Chrome / Safari / Firefox.
-  strip.style.background = "rgba(252, 253, 255, 0.97)";
-  // Backdrop blur stays for the soul-tint pickup at the seam
-  // between chrome and slab body — gives the chrome a slight
-  // material depth rather than reading as a flat sticker.
-  strip.style.backdropFilter = "blur(20px) saturate(1.4)";
+  strip.style.gap = "10px";
+  strip.style.padding = "10px 16px";
+  // Flush with the slab's top edge — no margin, no rounded outer
+  // corner. The chrome is the slab's edge region with affordances
+  // embedded, not a card floating above the surface.
+  strip.style.margin = "0";
+  strip.style.borderRadius = "0";
+  // Slab-coherent material (motebit-computer.md §"Visual properties").
+  // Very subtle tint inherits the slab's substrate. The strong
+  // backdrop blur is the vibrancy register Apple-grade chrome uses
+  // when sitting on a content surface — content visible through is
+  // blurred to unreadable, the chrome material reads as ONE with
+  // the slab beneath it. Heavy saturate boosts the underlying soul
+  // tint so the chrome's chromatic character matches the slab body.
+  strip.style.background = "rgba(255, 255, 255, 0.06)";
+  strip.style.backdropFilter = "blur(40px) saturate(1.8)";
   (strip.style as unknown as Record<string, string>)["webkitBackdropFilter"] =
-    "blur(20px) saturate(1.4)";
-  strip.style.border = "1px solid rgba(120, 140, 180, 0.22)";
-  strip.style.boxShadow = "0 1px 0 rgba(40, 55, 90, 0.04), 0 4px 14px rgba(40, 55, 90, 0.08)";
+    "blur(40px) saturate(1.8)";
+  // No full border. A hairline bottom separates chrome from the
+  // content register below — the only edge that signals "chrome
+  // stops here, content begins." Same shape as Apple's vibrancy
+  // chrome (Finder window title bar, Safari title bar).
+  strip.style.border = "none";
+  strip.style.borderBottom = "1px solid rgba(120, 140, 180, 0.12)";
+  // No drop shadow. Chrome is part of the slab's silhouette, not a
+  // separate object casting a shadow on the slab body.
+  strip.style.boxShadow = "none";
   strip.style.font =
     "13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
   strip.style.color = "rgba(40, 55, 90, 0.92)";
   strip.style.pointerEvents = "auto";
 
   // Doorbell accent on the one state that truly asks. Other
-  // states keep the surround but no accent — the surface is
-  // present at all times, the accent only fires when the user
-  // needs to make a decision.
+  // states keep the chrome neutral — the accent only fires when
+  // the user needs to make a decision.
   if (stateKind === "handoff_pending") {
     strip.style.borderLeft = "3px solid rgba(80, 130, 200, 0.85)";
   }
@@ -451,9 +456,9 @@ function buildCaption(text: string): HTMLDivElement {
 }
 
 /**
- * Read-only URL display for `motebit`-driving state. Same pill
- * shape as the user-driving input but non-editable — shows where
- * motebit has navigated to. Browser convention is the URL bar
+ * Read-only URL display for `motebit`-driving state. Embedded into
+ * the chrome's substrate — same register as the user-driving input,
+ * only the editability changes. Browser convention is the URL bar
  * always shows the current URL regardless of who's driving.
  */
 function buildUrlDisplay(url: string): HTMLDivElement {
@@ -462,10 +467,10 @@ function buildUrlDisplay(url: string): HTMLDivElement {
   display.textContent = formatUrlForDisplay(url);
   display.style.flex = "1 1 auto";
   display.style.minWidth = "0";
-  display.style.padding = "6px 12px";
-  display.style.borderRadius = "8px";
-  display.style.background = "rgba(240, 242, 248, 0.92)";
-  display.style.border = "1px solid rgba(120, 140, 180, 0.18)";
+  display.style.padding = "4px 8px";
+  display.style.borderRadius = "0";
+  display.style.background = "transparent";
+  display.style.border = "none";
   display.style.color = "rgba(40, 55, 90, 0.86)";
   display.style.font = "inherit";
   display.style.overflow = "hidden";
@@ -490,7 +495,11 @@ function buildUrlInput(forwardEvent: ForwardEventFn, currentUrl: string | null):
   input.spellcheck = false;
   input.autocomplete = "off";
   input.autocapitalize = "off";
-  input.placeholder = "Anywhere.";
+  // Two-modality hint per motebit-computer.md §"Empty register":
+  // the URL input is the slab's empty affordance. Two paths: type
+  // a URL into the chrome, or ask motebit in chat. Same surface,
+  // two grammars, one calm prompt.
+  input.placeholder = "type a URL · or ask motebit";
   // Pre-populate with the current URL — Chrome / Safari / Firefox
   // all show the current URL in the address bar by default; users
   // expect to see where they are. Edit-to-navigate replaces the
@@ -500,25 +509,25 @@ function buildUrlInput(forwardEvent: ForwardEventFn, currentUrl: string | null):
   }
   input.style.flex = "1 1 auto";
   input.style.minWidth = "0";
-  // Pill-shaped input — Apple Safari register. Same shape as the
-  // motebit-driving display so the URL bar's register is consistent
-  // across states; only the editability changes.
-  input.style.padding = "6px 12px";
-  input.style.borderRadius = "8px";
-  input.style.background = "rgba(240, 242, 248, 0.92)";
-  input.style.border = "1px solid rgba(120, 140, 180, 0.18)";
+  // Embedded into the slab's chrome — no pill background, no
+  // visible border, no rounded corner. The URL input IS the
+  // chrome's content register; it doesn't need its own surround.
+  // The strip's own backdrop-blur provides the substrate.
+  input.style.padding = "4px 8px";
+  input.style.borderRadius = "0";
+  input.style.background = "transparent";
+  input.style.border = "none";
   input.style.outline = "none";
   input.style.font = "inherit";
   input.style.color = "rgba(40, 55, 90, 0.92)";
   input.style.pointerEvents = "auto";
-  // Focus styling — subtle blue ring on focus, calm-software register.
+  // Focus styling — barely-there tint at the seam, no border ring.
+  // Calm-software register: focus is a hint, not an alarm.
   input.addEventListener("focus", () => {
-    input.style.borderColor = "rgba(80, 130, 200, 0.55)";
-    input.style.background = "rgba(255, 255, 255, 0.98)";
+    input.style.background = "rgba(255, 255, 255, 0.12)";
   });
   input.addEventListener("blur", () => {
-    input.style.borderColor = "rgba(120, 140, 180, 0.18)";
-    input.style.background = "rgba(240, 242, 248, 0.92)";
+    input.style.background = "transparent";
   });
   input.addEventListener("keydown", (e) => {
     // Stop propagation — address-bar typing must NOT reach the
@@ -542,7 +551,7 @@ function buildUrlInput(forwardEvent: ForwardEventFn, currentUrl: string | null):
     // displayed value to its canonical form (typed `google.com` →
     // resolved `https://google.com/`) — same transition Safari
     // shows. Clearing the input synchronously here used to flash
-    // the placeholder ("Anywhere.") between Enter and resolution
+    // the placeholder between Enter and resolution
     // because the navigate result is async; the user perceived the
     // bar going blank then their URL coming back. Blur ends the
     // edit register without the flash.
@@ -661,19 +670,29 @@ function buildHistoryButton(
   btn.className = `cobrowse-chrome-btn cobrowse-chrome-btn-history cobrowse-chrome-btn-${kind}`;
   btn.textContent = glyph;
   btn.setAttribute("aria-label", label);
+  // Borderless tinted glyph — Apple HIG ornament pattern for chrome
+  // affordances. No framed cell, no background, no border. The
+  // glyph IS the affordance; the cell that used to surround it
+  // was web-form-shaped UI that broke the slab-native register.
+  // Hit area expanded via padding so the glyph stays comfortably
+  // tappable without rendering as a button-shape.
   btn.style.flex = "0 0 auto";
-  btn.style.width = "26px";
-  btn.style.height = "26px";
-  btn.style.padding = "0";
-  btn.style.font = "16px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
-  btn.style.color = "rgba(40, 55, 90, 0.78)";
-  btn.style.background = "rgba(255, 255, 255, 0.62)";
-  btn.style.border = "1px solid rgba(120, 140, 180, 0.32)";
-  btn.style.borderRadius = "6px";
+  btn.style.padding = "4px 8px";
+  btn.style.font = "15px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
+  btn.style.color = "rgba(40, 55, 90, 0.65)";
+  btn.style.background = "transparent";
+  btn.style.border = "none";
+  btn.style.borderRadius = "0";
   btn.style.cursor = "pointer";
   btn.style.userSelect = "none";
   btn.style.pointerEvents = "auto";
-  btn.style.transition = "background 120ms ease-out";
+  btn.style.transition = "color 120ms ease-out";
+  btn.addEventListener("mouseenter", () => {
+    btn.style.color = "rgba(40, 55, 90, 0.95)";
+  });
+  btn.addEventListener("mouseleave", () => {
+    btn.style.color = "rgba(40, 55, 90, 0.65)";
+  });
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     void forwardEvent({ kind }).catch((err: unknown) => {

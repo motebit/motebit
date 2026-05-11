@@ -215,61 +215,81 @@ describe("renderCoBrowseChrome — state structure", () => {
   });
 });
 
-// ── Always-present URL-bar register — visual surround across all states ──
+// ── Slab-coherent chrome register — one material across all states ─────
 //
-// Browser convention is a persistent address bar — it's the user's
-// primary navigation affordance. The chrome surround stays present
-// (glass-blur, border, shadow) on every state so the URL bar
-// occludes page content beneath it cleanly. The differentiator
-// across states is content (URL input vs caption vs Grant/Deny) and
-// the doorbell accent for handoff_pending — not the surround.
+// Doctrine: motebit-computer.md §"Visual properties" — chrome inherits
+// the slab's substrate (one material throughout, no separate object
+// floating above the slab). The strip uses heavy backdrop-blur for
+// vibrancy (content visible through is blurred unreadable, chrome
+// reads as one with the slab beneath). No opaque white pill, no full
+// border, no drop shadow — those produced the "card floating above
+// the slab" register the Apple-design pass reversed.
 //
-// Architectural correction (2026-05-09): the prior calm/present
-// split made user+motebit transparent ("calm"), which caused the
-// URL bar to overlap page content (no occluding background). Real
-// browsers always have an opaque chrome row. These tests pin the
-// always-present rule so future edits can't fade the URL bar
-// chrome into the page again.
-describe("renderCoBrowseChrome — always-present chrome surround", () => {
-  it("user state has the present surround — glass-blur, border, shadow (occludes page)", () => {
+// Architectural correction (2026-05-11): the prior "always-present
+// opaque surround" decision was made to fix a real overlap bug, but
+// the fix wasn't right — opaque chrome fractured the slab into two
+// objects. Right fix: slab-coherent translucent chrome + content
+// inset (motebit-computer.md §"Visual properties" — content inset
+// ~16pt). These tests pin the slab-coherent register; the content-
+// inset arm lands in the WebGL screen-mesh sizing.
+describe("renderCoBrowseChrome — slab-coherent chrome surround", () => {
+  it("user state has slab-coherent material — low-alpha tint, heavy backdrop blur, no full border, no shadow", () => {
     const { machine } = makeMockMachine();
     const { fwd } = makeForwardEvent();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
-    expect(el.style.background).toMatch(/rgba\(\s*\d+,\s*\d+,\s*\d+\s*,\s*0\.[89]/);
-    expect(el.style.border).toContain("solid");
-    expect(el.style.boxShadow).not.toBe("none");
-    // No doorbell accent in user state — surround is present, but
-    // not asking for a decision.
+    // Low-alpha background (slab-coherent) — alpha 0.0X, not 0.8/0.9.
+    expect(el.style.background).toMatch(/rgba\(\s*\d+,\s*\d+,\s*\d+\s*,\s*0\.0\d/);
+    // Heavy backdrop blur — the vibrancy register that occludes
+    // content visually without an opaque background.
+    expect(el.style.backdropFilter).toMatch(/blur\(\d+px\)/);
+    // No full border — only a hairline bottom separating chrome
+    // from content below.
+    // No full border — only a hairline bottom. JSDOM clears
+    // shorthand `border: none` to empty string; we assert the
+    // absence of any solid border declaration on the full shorthand
+    // (the bottom hairline is asserted separately).
+    expect(el.style.border).not.toContain("solid");
+    expect(el.style.borderBottom).toContain("solid");
+    // No box shadow — chrome is part of the slab silhouette, not a
+    // separate card casting a shadow on the slab body. JSDOM
+    // serializes `box-shadow: none` to empty string.
+    expect(el.style.boxShadow).not.toMatch(/rgba|\bpx\b/);
+    // No doorbell accent in user state.
     expect(el.style.borderLeft).not.toContain("3px solid");
   });
 
-  it("motebit state has the present surround — same as user, browser convention", () => {
+  it("motebit state has slab-coherent material — same shape as user", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "motebit" }, machine, {});
-    expect(el.style.background).toMatch(/rgba\(\s*\d+,\s*\d+,\s*\d+\s*,\s*0\.[89]/);
-    expect(el.style.border).toContain("solid");
-    expect(el.style.boxShadow).not.toBe("none");
+    expect(el.style.background).toMatch(/rgba\(\s*\d+,\s*\d+,\s*\d+\s*,\s*0\.0\d/);
+    expect(el.style.backdropFilter).toMatch(/blur\(\d+px\)/);
+    expect(el.style.border).not.toContain("solid");
+    expect(el.style.borderBottom).toContain("solid");
+    expect(el.style.boxShadow).not.toMatch(/rgba|\bpx\b/);
     expect(el.style.borderLeft).not.toContain("3px solid");
   });
 
-  it("handoff_pending has the present surround + doorbell accent", () => {
+  it("handoff_pending has slab-coherent material + doorbell accent", () => {
     const { machine } = makeMockMachine();
     const state: ControlState = { kind: "handoff_pending", current: "user", requesting: "motebit" };
     const el = renderCoBrowseChrome(state, machine, {});
-    expect(el.style.background).toMatch(/rgba\(\s*\d+,\s*\d+,\s*\d+\s*,\s*0\.[89]/);
-    expect(el.style.border).toContain("solid");
-    expect(el.style.boxShadow).not.toBe("none");
+    expect(el.style.background).toMatch(/rgba\(\s*\d+,\s*\d+,\s*\d+\s*,\s*0\.0\d/);
+    expect(el.style.backdropFilter).toMatch(/blur\(\d+px\)/);
+    expect(el.style.border).not.toContain("solid");
+    expect(el.style.borderBottom).toContain("solid");
+    expect(el.style.boxShadow).not.toMatch(/rgba|\bpx\b/);
     // Doorbell accent — only fires when the user needs to decide.
     expect(el.style.borderLeft).toContain("3px solid");
   });
 
-  it("paused has the present surround — no doorbell accent", () => {
+  it("paused has slab-coherent material — no doorbell accent", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "paused", previousDriver: "user" }, machine, {});
-    expect(el.style.background).toMatch(/rgba\(\s*\d+,\s*\d+,\s*\d+\s*,\s*0\.[89]/);
-    expect(el.style.border).toContain("solid");
-    expect(el.style.boxShadow).not.toBe("none");
-    // Paused is held, not asking — no doorbell accent.
+    expect(el.style.background).toMatch(/rgba\(\s*\d+,\s*\d+,\s*\d+\s*,\s*0\.0\d/);
+    expect(el.style.backdropFilter).toMatch(/blur\(\d+px\)/);
+    expect(el.style.border).not.toContain("solid");
+    expect(el.style.borderBottom).toContain("solid");
+    expect(el.style.boxShadow).not.toMatch(/rgba|\bpx\b/);
     expect(el.style.borderLeft).not.toContain("3px solid");
   });
 
