@@ -20,6 +20,11 @@ import {
   renderDetachArtifact as renderSlabDetachArtifact,
   releaseLiveBrowserItem,
 } from "./ui/slab-items";
+import {
+  buildSlabHomeView,
+  computeSlabHomeAffordances,
+  type SlabHomeAffordance,
+} from "./ui/slab-home.js";
 import { renderCoBrowseChrome, animateMarkForReceipt } from "./ui/cobrowse-chrome";
 import type { LiveBrowserElementHandle } from "@motebit/render-engine";
 import type {
@@ -239,6 +244,18 @@ export class WebApp {
    * to kill the "browser is on HN" memory-confabulation pattern.
    */
   private _currentBrowserUrl: string | null = null;
+  /**
+   * Slab home-register state. True when the body should show the
+   * home view (forward-framed affordances + empty-empty fallback);
+   * false when the screencast occupies the body with a real URL's
+   * content. Derived from `_currentBrowserUrl` — null or "about:blank"
+   * → home register. Composes with the screencast frame-routing in
+   * `onFrameDecoded`: incoming frames are dropped when on the home
+   * register so `about:blank` whitescreens don't compete with the
+   * home view for the body. Pairs with `LiveBrowserElementHandle
+   * .setHomeVisible()` for the DOM side.
+   */
+  private _onHomeRegister = true;
   private _motebitId = "";
   private _deviceId = "";
   private _publicKeyHex = "";
@@ -868,6 +885,10 @@ export class WebApp {
           // next `[Now]` block before the new session navigates.
           this._currentBrowserUrl = null;
           this.detachSessionFromLiveBrowser();
+          // URL went to null → home register re-applies; body
+          // transitions back to the slab home view (if affordances
+          // exist) or the empty-empty fallback.
+          this.applyHomeRegisterToCurrentState();
         },
         // chrome-1a-fix / prompt-1 — capture resolved URL on every
         // motebit-driven `computer({ kind: "navigate" })`. Sibling
@@ -879,6 +900,9 @@ export class WebApp {
           // Browser convention: address bar updates on every
           // navigation, not just on control-state change.
           this.applyChromeToCurrentState();
+          // URL state changed → re-derive the home register. Real
+          // URL → home view hides, screencast frame routing resumes.
+          this.applyHomeRegisterToCurrentState();
         },
         // Implicit-grant fast path — let `request_control` skip the
         // slab-band prompt when the AI's reach for `computer` came
@@ -1972,6 +1996,12 @@ export class WebApp {
           // state and the (possibly null) session URL — both
           // honest representations of the READY register.
           this.applyChromeToCurrentState();
+          // Apply the home register — slab opens at URL null, so
+          // the body slot is visible with the home view (affordance
+          // tiles if past activity exists, empty-empty fallback if
+          // not). Goes through the same applier the URL-change
+          // path uses, single source of truth for the toggle.
+          this.applyHomeRegisterToCurrentState();
         },
         // 2026-05-09 — route every pre-decoded frame onto the slab's
         // WebGL screen-mesh texture. Pixels live in the scene graph,
@@ -1979,7 +2009,16 @@ export class WebApp {
         // silhouette. The HTML img stays mounted (opacity:0) for
         // the existing input-capture pipeline — same screen-space
         // rect, zero visual contribution.
+        //
+        // Home-register gate: skip the texture upload when on the
+        // home register. The cloud Chromium streams `about:blank`
+        // white frames before any navigation; without this gate
+        // they'd compete with the home view for the body. The
+        // bus still flows (frames keep arriving so the first
+        // post-navigation frame lands promptly) — we just don't
+        // route to the texture while the home view is the body.
         onFrameDecoded: (image: HTMLImageElement | ImageBitmap) => {
+          if (this._onHomeRegister) return;
           this.renderer.setSlabScreencastImage?.(image);
         },
       },
@@ -2040,6 +2079,131 @@ export class WebApp {
   }
 
   /**
+   * Compute the slab home view's forward-framed affordances by
+   * querying the motebit's `UserInputForwarded` event log for past
+   * navigate events (host-redacted audit format per `co-browse.ts`
+   * §"URL-redacted navigate detail"). Dedups by host; returns the
+   * 4 most-recent hosts. Each affordance is a calm tile on the
+   * slab body's empty register — "Continue google.com," act-framed
+   * launchpad informed by past affinity, not a chronological record
+   * list.
+   *
+   * Doctrine: `records-vs-acts.md` — body shows acts, panels hold
+   * records. Same signed receipts feed both surfaces but with
+   * different reading registers; this path is the act register.
+   *
+   * Fail-soft: a query fault returns an empty list, the home view
+   * collapses to its empty-empty fallback (pure slab interior, no
+   * decorative chrome). First-time users land here too.
+   */
+  /**
+   * Convert an `InteriorColor.tint` triplet (linear-space rgb in
+   * [0, 1]) to a CSS hex string (`#rrggbb`) suitable for the home
+   * view's soul-tinted tile background. Gamma is left linear here
+   * because tiles read fine under the slab's transmission shader
+   * without a sRGB conversion at the CSS layer; if a perceptual
+   * delta surfaces, swap for a sRGB-encoded variant.
+   */
+  private tintToHex(tint: readonly [number, number, number]): string {
+    const clamp = (v: number): number => Math.max(0, Math.min(1, v));
+    const hex = (v: number): string =>
+      Math.round(clamp(v) * 255)
+        .toString(16)
+        .padStart(2, "0");
+    return `#${hex(tint[0])}${hex(tint[1])}${hex(tint[2])}`;
+  }
+
+  private async getSlabHomeAffordances(): Promise<SlabHomeAffordance[]> {
+    if (!this.runtime) return [];
+    try {
+      const events = await this.runtime.events.query({
+        motebit_id: this._motebitId,
+        event_types: [EventType.UserInputForwarded],
+      });
+      // Type-narrow each event's payload to the audit shape we need.
+      const typed = events
+        .map((e) => ({
+          payload: e.payload as unknown as UserInputForwardedPayload,
+          timestamp: e.timestamp,
+        }))
+        .filter((e) => e.payload?.detail?.kind === "navigate");
+      return computeSlabHomeAffordances(typed);
+    } catch {
+      // Audit-log read fault is non-fatal — empty home register.
+      return [];
+    }
+  }
+
+  /**
+   * Recompute the home register from `_currentBrowserUrl` and apply
+   * the matching slab body state:
+   *
+   *   On home register (URL is null or "about:blank"):
+   *     - `setHomeVisible(true)` on the handle (body slot visible)
+   *     - `clearSlabScreencast()` so any prior session's last frame
+   *       releases its texture and the screen mesh's per-frame
+   *       visibility derives false (`41e28ead` binding)
+   *     - Build + mount the home view DOM (affordance tiles or
+   *       empty-empty wrapper) into `bodySlot`
+   *
+   *   Off home register (real URL navigated):
+   *     - `setHomeVisible(false)` (body slot hidden via display:none)
+   *     - Incoming screencast frames resume routing to the screen
+   *       mesh through the normal `onFrameDecoded` path
+   *
+   * The per-frame `onFrameDecoded` callback (`mountLiveBrowserShell`)
+   * reads `_onHomeRegister` and skips `setSlabScreencastImage` while
+   * on home register — `about:blank` whitescreens don't compete with
+   * the home view for the body.
+   */
+  private applyHomeRegisterToCurrentState(): void {
+    const handle = this.liveBrowserHandle;
+    if (!handle) return;
+    const url = this._currentBrowserUrl;
+    const onHome = url == null || url === "" || url === "about:blank";
+    const wasOnHome = this._onHomeRegister;
+    this._onHomeRegister = onHome;
+    handle.setHomeVisible(onHome);
+    if (onHome) {
+      // Releasing the texture lets the screen-mesh visibility binding
+      // (cd98aa8f / 41e28ead) derive false on the next render tick.
+      this.renderer.clearSlabScreencast?.();
+      // Async-build affordances and mount into the slot. The slot
+      // shows whatever's currently in it during the async window
+      // (initial empty, or stale tiles from a prior open); fine, it
+      // just refreshes when the query lands.
+      void this.getSlabHomeAffordances().then((affordances) => {
+        // Re-check the handle + register state — the user may have
+        // dismissed or navigated during the await window.
+        if (this.liveBrowserHandle !== handle) return;
+        if (!this._onHomeRegister) return;
+        const view = buildSlabHomeView(affordances, {
+          onAffordanceTap: (aff) => {
+            const targetUrl = `${aff.scheme}://${aff.host}`;
+            // Dispatch as a navigate forward event through the same
+            // path the URL bar uses — `forwardUserInput({kind:
+            // "navigate", url})`. The forward closure handles
+            // session warming, audit logging, and URL state update.
+            void this.liveBrowserForwardEvent?.({
+              kind: "navigate",
+              url: targetUrl,
+            });
+          },
+          soulTint: this._interiorColor ? this.tintToHex(this._interiorColor.tint) : undefined,
+        });
+        handle.bodySlot.replaceChildren(view);
+      });
+    } else if (wasOnHome) {
+      // Leaving home — clear the slot so prior tiles don't linger
+      // behind the screencast. The slot is display:none now but the
+      // children are still in the DOM; replaceChildren keeps memory
+      // tidy and prevents stale tap handlers from firing on a
+      // re-show with different affordances.
+      handle.bodySlot.replaceChildren();
+    }
+  }
+
+  /**
    * Stable session-aware forward closure mounted on the shell at
    * boot. Routes every URL-bar / input-capture event the same way:
    *
@@ -2095,6 +2259,10 @@ export class WebApp {
       if (event.kind === "navigate" && result.outcome === "forwarded") {
         this._currentBrowserUrl = event.url;
         this.applyChromeToCurrentState();
+        // URL state changed via user-typed navigate → home register
+        // re-applies. Off-home transition hides the body slot and
+        // resumes screencast frame routing.
+        this.applyHomeRegisterToCurrentState();
       }
       return result;
     };

@@ -86,6 +86,39 @@ export interface LiveBrowserElementHandle {
    */
   readonly controlBandSlot: HTMLElement;
   /**
+   * Slab home view mount slot — the slab body's READY-state content
+   * surface. Sibling pattern of `addressBarSlot` / `controlBandSlot`:
+   * empty by default, surfaces fill it via `bodySlot.replaceChildren
+   * (...)` when the empty register is active.
+   *
+   * Mounted inside the body wrapper alongside the screencast img.
+   * Visibility is mutually exclusive with the screencast — when a
+   * real URL is being browsed, the screencast occupies the body
+   * (via the WebGL screen mesh) and this slot is hidden; when no
+   * session has navigated to a meaningful URL (cold-start, post-
+   * dismiss, post-`about:blank`), the slot is visible and the
+   * surface populates it with forward affordances or a breathing
+   * mark fallback. Toggle via `setHomeVisible(bool)`.
+   *
+   * Doctrine: `motebit-computer.md` §"What appears on the slab"
+   * names the slab as the surface showing what the motebit is, has
+   * been, or could be attending to. The home view's forward-framed
+   * affordances are the "could be" register — informed by past
+   * activity (signed receipts), framed as the next act.
+   * `records-vs-acts.md` distinguishes records (panels) from acts
+   * (slab): home tiles are act-framed launchpads, not record
+   * listings.
+   */
+  readonly bodySlot: HTMLElement;
+  /**
+   * Toggle the body-slot home view's visibility. Pairs with the
+   * surface's URL-state observation: hide when the chrome's
+   * `currentUrl` is a real navigation target, show otherwise.
+   * Visibility is via CSS `display`; the slot's mounted content is
+   * preserved across toggles so re-show is cheap.
+   */
+  setHomeVisible(visible: boolean): void;
+  /**
    * Stop the subscription and clear the rendered frame. Idempotent —
    * a second call is a no-op. The element itself is left in the DOM
    * for the slab's dissolve animation to take it the rest of the way.
@@ -426,8 +459,51 @@ export function buildLiveBrowserElement(
   body.style.alignItems = "center";
   body.style.justifyContent = "center";
   body.style.overflow = "hidden";
+  // Body slot is positioned absolute over the body wrapper so it
+  // composes ON TOP of the screencast-img layer. Both occupy the
+  // same body rect; the img is opacity:0 input-geometry while the
+  // bodySlot is the visible empty-register content surface. The
+  // slot's children inherit pointer-events from their CSS; the slot
+  // itself is pointer-events:none so it doesn't block the underlying
+  // img's input-capture when hidden (display:none also defeats hit
+  // testing, so this is belt-and-suspenders).
+  const bodySlot = document.createElement("div");
+  bodySlot.className = "slab-live-browser-body-slot";
+  bodySlot.style.position = "absolute";
+  bodySlot.style.inset = "0";
+  bodySlot.style.display = "flex";
+  bodySlot.style.alignItems = "center";
+  bodySlot.style.justifyContent = "center";
+  bodySlot.style.pointerEvents = "none";
+  // Make body wrapper position:relative so the absolute slot anchors
+  // to it rather than to a distant ancestor.
+  body.style.position = "relative";
   body.appendChild(img);
+  body.appendChild(bodySlot);
   root.appendChild(body);
+
+  // Track home visibility so setHomeVisible can flip display without
+  // touching the slot's mounted children. Default visible — the slab
+  // boots into the empty register and surfaces hide on URL navigate.
+  let homeVisible = true;
+  const setHomeVisible = (visible: boolean): void => {
+    if (homeVisible === visible) return;
+    homeVisible = visible;
+    bodySlot.style.display = visible ? "flex" : "none";
+    // When visible, the slot's contents may include interactive
+    // tiles — re-enable pointer-events on the slot so children can
+    // receive clicks. When hidden, the slot is display:none which
+    // also defeats hit testing.
+    bodySlot.style.pointerEvents = visible ? "auto" : "none";
+  };
+  // Start in the canonical empty-register pointer state — slot is
+  // visible (display:flex per CSS above) but pointer-events:none
+  // until a surface mounts interactive content, at which point the
+  // surface's setHomeVisible(true) (or initial true→true call) will
+  // bump pointer-events to auto. The initial assignment below makes
+  // the no-content default safe: empty slot doesn't block input
+  // capture geometry on the img layer.
+  bodySlot.style.pointerEvents = "auto";
 
   let firstFrameSeen = false;
   let lastTimestamp = 0;
@@ -557,6 +633,8 @@ export function buildLiveBrowserElement(
     frameElement: img,
     addressBarSlot,
     controlBandSlot,
+    bodySlot,
+    setHomeVisible,
     dispose(): void {
       if (disposed) return;
       disposed = true;
