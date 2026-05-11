@@ -296,6 +296,30 @@ export async function buildSignedDeclaration(
 }
 
 /**
+ * Anchor a signed transparency declaration to Solana via the Memo
+ * program. Closes the trust-on-first-use (TOFU) gap on the first fetch
+ * of `/.well-known/motebit-transparency.json` — a verifier who knows
+ * the relay's Solana address (pinned out-of-band) can confirm the
+ * declaration's hash matches a memo at that address, without trusting
+ * the network channel that delivered the declaration.
+ *
+ * Fire-and-forget at the relay; chain submission failure logs but does
+ * not block startup or unregister the unanchored declaration. The
+ * anchor's value compounds when one exists — without an anchor, the
+ * verifier falls back to TOFU.
+ *
+ * Doctrine: `docs/doctrine/operator-transparency.md` § "Stage 2 onchain
+ * anchor" (lifted forward 2026-05-11, decoupled from the multi-operator
+ * wire-format spec); `docs/doctrine/nist-alignment.md` §8 "savant gap".
+ */
+export async function anchorTransparencyDeclaration(
+  declaration: SignedDeclaration,
+  submitter: { submitTransparencyAnchor: (hashHex: string) => Promise<{ txHash: string }> },
+): Promise<{ txHash: string }> {
+  return submitter.submitTransparencyAnchor(declaration.hash);
+}
+
+/**
  * Render the declaration as human-readable Markdown. The output is the
  * canonical text of `services/relay/PRIVACY.md`. Sibling-boundary test
  * asserts the committed PRIVACY.md matches this render exactly.

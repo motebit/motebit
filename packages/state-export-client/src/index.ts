@@ -64,3 +64,10 @@ export type {
   VerifiedFetchOptions,
   VerifiedStateExportResponse,
 } from "./verified-fetch.js";
+
+export { lookupTransparencyAnchor, verifyDeclarationOnchainAnchor } from "./onchain-anchor.js";
+export type {
+  OnchainAnchorLookupOptions,
+  OnchainAnchorResult,
+  OnchainAnchorFailureReason,
+} from "./onchain-anchor.js";

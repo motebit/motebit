@@ -569,6 +569,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-state-export-consumer-verifies",
   },
   {
+    name: "check-transparency-onchain-anchored",
+    defends:
+      'every relay startup file (`services/relay/src/index.ts`) that constructs a `SolanaMemoSubmitter` MUST also call `anchorTransparencyDeclaration` so the operator-transparency declaration\'s hash is committed onchain via the Memo program. Closes the trust-on-first-use (TOFU) "savant gap" on `/.well-known/motebit-transparency.json`: without an onchain anchor, the first fetch trusts HTTPS + DNS + CAs — a DNS hijack or malicious ISP can substitute a different declaration whose self-signature verifies (against the attacker\'s key). With the anchor, a verifier with the relay\'s pinned anchor address (`@motebit/state-export-client::lookupTransparencyAnchor`) cross-checks the declaration hash against a Solana memo at that address — a second channel the network provider cannot tamper with. The gate is narrow on purpose (the relay startup file is the unique trust-anchor surface); Solana submitters constructed elsewhere (tests, scripts) are not forced to anchor. Doctrine: `docs/doctrine/operator-transparency.md` § Stage 2 onchain anchor (lifted forward 2026-05-11, decoupled from the multi-operator wire-format spec); `docs/doctrine/nist-alignment.md` §8 "savant gap closure".',
+    script: "check-transparency-onchain-anchored",
+  },
+  {
     name: "check-ha-not-a-gate",
     defends:
       "hardware attestation raises the `HardwareAttestationSemiring` score — never admits or rejects (CLAUDE.md `Hardware-rooted identity is additive`; doctrine `docs/doctrine/hardware-attestation.md`). The software-only-identity floor is part of the protocol promise; converting the additive scoring axis into an admission criterion silently excludes software-floor users at the moat layer. Gate forbids four shapes in `services/relay/src` + `packages/{policy,market,runtime}/src`: (1) numeric threshold compares on `attestation_score`, (2) HA-property-chain `score`/`level` threshold compares, (3) exclusionary `.filter(…hardware_attestation…)` calls, (4) `if (…hardware_attestation…)` followed within 3 lines by reject/throw/skip. Waiver `// hardware-attestation: intentional-threshold — <reason>` for legitimate exceptions (one shipping today: `services/relay/src/agents.ts:334` — projection filter for response payload, not routing admission). Same negative-invariant + waiver shape as `check-suite-dispatch` (#11): closed-by-construction with explicit, audited exits.",

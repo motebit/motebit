@@ -20,7 +20,12 @@ import {
   sha256,
   verify as verifyEd25519,
 } from "@motebit/encryption";
-import { buildSignedDeclaration, renderMarkdown, DECLARATION_CONTENT } from "../transparency.js";
+import {
+  anchorTransparencyDeclaration,
+  buildSignedDeclaration,
+  renderMarkdown,
+  DECLARATION_CONTENT,
+} from "../transparency.js";
 import type { RelayIdentity } from "../federation.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -86,6 +91,56 @@ describe("operator transparency declaration", () => {
     // empty, either every gap is closed (great) or someone removed the
     // honesty escape hatch (bad). Either way, force a deliberate review.
     expect(DECLARATION_CONTENT.honest_gaps).toBeDefined();
+  });
+});
+
+describe("anchorTransparencyDeclaration — Stage 2 onchain anchor", () => {
+  it("submits the declaration hash via the injected submitter", async () => {
+    const declaration = await buildSignedDeclaration(relayIdentity, 7777);
+    const submitted: string[] = [];
+    const fakeSubmitter = {
+      submitTransparencyAnchor: async (hash: string) => {
+        submitted.push(hash);
+        return { txHash: "test-tx-signature" };
+      },
+    };
+
+    const result = await anchorTransparencyDeclaration(declaration, fakeSubmitter);
+
+    expect(result.txHash).toBe("test-tx-signature");
+    expect(submitted).toEqual([declaration.hash]);
+  });
+
+  it("propagates submitter errors so the caller can log + retry", async () => {
+    const declaration = await buildSignedDeclaration(relayIdentity, 7777);
+    const fakeSubmitter = {
+      submitTransparencyAnchor: async () => {
+        throw new Error("solana rpc down");
+      },
+    };
+    await expect(anchorTransparencyDeclaration(declaration, fakeSubmitter)).rejects.toThrow(
+      "solana rpc down",
+    );
+  });
+
+  it("anchors a hash that round-trips against the verifier", async () => {
+    // Sanity check: the hash a verifier would compute from the
+    // declaration matches the hash the anchor function submits.
+    // Closes the producer-verifier symmetry — what the relay anchors
+    // is what the verifier checks.
+    const declaration = await buildSignedDeclaration(relayIdentity, 12345);
+    let captured: string | undefined;
+    await anchorTransparencyDeclaration(declaration, {
+      submitTransparencyAnchor: async (hash) => {
+        captured = hash;
+        return { txHash: "tx" };
+      },
+    });
+    expect(captured).toBe(declaration.hash);
+    // The hash on the declaration IS what gets anchored — the
+    // verifier reads transparency.json, sees declaration.hash, and
+    // looks for memo `motebit:transparency:v1:{declaration.hash}` on chain.
+    expect(captured).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 

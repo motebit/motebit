@@ -1505,6 +1505,22 @@ export async function probeFetch(): Promise<unknown> {
 `,
       ),
   },
+  {
+    script: "check-transparency-onchain-anchored",
+    proves:
+      "flags a relay startup that constructs a `SolanaMemoSubmitter` without calling `anchorTransparencyDeclaration`. Drift class: the TOFU/savant gap — the producer-signed declaration goes unanchored, leaving a network-layer trust hole the verifier cannot close from the consumer side.",
+    perturb: () =>
+      // Mutate services/relay/src/index.ts to remove the
+      // anchorTransparencyDeclaration call while keeping
+      // createSolanaMemoSubmitter intact. The gate must reject the
+      // file because the submitter is wired but the anchor is not.
+      mutateFile(`services/relay/src/index.ts`, (src) => {
+        // Strip the entire anchor-block we added; the gate sees
+        // createSolanaMemoSubmitter still present, anchorTransparencyDeclaration
+        // absent.
+        return src.replace(/anchorTransparencyDeclaration/g, "probe_anchor_removed");
+      }),
+  },
 ];
 
 /**

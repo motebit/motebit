@@ -43,6 +43,7 @@ vi.mock("@solana/web3.js", async (importOriginal) => {
 import {
   parseMemoAnchor,
   parseRevocationMemo,
+  parseTransparencyAnchorMemo,
   SolanaMemoSubmitter,
   SOLANA_MAINNET_CAIP2,
   SOLANA_DEVNET_CAIP2,
@@ -96,6 +97,44 @@ describe("parseMemoAnchor", () => {
   it("handles leaf count of 0", () => {
     const result = parseMemoAnchor("motebit:anchor:v1:root:0");
     expect(result).toEqual({ version: "v1", merkleRoot: "root", leafCount: 0 });
+  });
+});
+
+// === parseTransparencyAnchorMemo ===
+
+describe("parseTransparencyAnchorMemo", () => {
+  const HASH = "a".repeat(64);
+
+  it("parses a valid transparency anchor memo", () => {
+    const result = parseTransparencyAnchorMemo(`motebit:transparency:v1:${HASH}`);
+    expect(result).toEqual({ version: "v1", declarationHashHex: HASH });
+  });
+
+  it("normalizes hex to lowercase", () => {
+    const result = parseTransparencyAnchorMemo(`motebit:transparency:v1:${HASH.toUpperCase()}`);
+    expect(result?.declarationHashHex).toBe(HASH);
+  });
+
+  it("returns null for wrong prefix", () => {
+    expect(parseTransparencyAnchorMemo(`other:transparency:v1:${HASH}`)).toBeNull();
+  });
+
+  it("returns null for wrong second segment", () => {
+    expect(parseTransparencyAnchorMemo(`motebit:revocation:v1:${HASH}`)).toBeNull();
+  });
+
+  it("returns null for malformed hash (not 64 hex)", () => {
+    expect(parseTransparencyAnchorMemo("motebit:transparency:v1:notenoughhex")).toBeNull();
+    expect(parseTransparencyAnchorMemo("motebit:transparency:v1:" + "x".repeat(64))).toBeNull();
+  });
+
+  it("returns null for wrong segment count", () => {
+    expect(parseTransparencyAnchorMemo(`motebit:transparency:v1:${HASH}:extra`)).toBeNull();
+    expect(parseTransparencyAnchorMemo(`motebit:transparency:v1`)).toBeNull();
+  });
+
+  it("returns null for empty string", () => {
+    expect(parseTransparencyAnchorMemo("")).toBeNull();
   });
 });
 
@@ -402,6 +441,71 @@ describe("SolanaMemoSubmitter — submitRevocation", () => {
     await expect(submitter.submitRevocation(OLD_KEY_HEX, TIMESTAMP)).rejects.toThrow(
       "submit failed",
     );
+  });
+});
+
+// === submitTransparencyAnchor (mocked RPC) ===
+
+describe("SolanaMemoSubmitter — submitTransparencyAnchor", () => {
+  const seed = Keypair.generate().secretKey.slice(0, 32);
+  const DECL_HASH = "abcd1234".repeat(8); // 64 hex chars
+
+  beforeEach(() => {
+    latestBlockhashMock.mockReset();
+    sendRawTransactionMock.mockReset();
+    confirmTransactionMock.mockReset();
+    latestBlockhashMock.mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 2_000_000,
+    });
+    sendRawTransactionMock.mockResolvedValue("TransparencyTx1111111111111111111111111111111");
+    confirmTransactionMock.mockResolvedValue({ value: { err: null } });
+  });
+
+  it("returns the transparency anchor tx signature", async () => {
+    const submitter = new SolanaMemoSubmitter({
+      rpcUrl: "https://api.mainnet-beta.solana.com",
+      identitySeed: seed,
+    });
+    const result = await submitter.submitTransparencyAnchor(DECL_HASH);
+    expect(result.txHash).toBe("TransparencyTx1111111111111111111111111111111");
+  });
+
+  it("submits the expected transparency anchor memo string", async () => {
+    const submitter = new SolanaMemoSubmitter({
+      rpcUrl: "https://api.mainnet-beta.solana.com",
+      identitySeed: seed,
+    });
+    await submitter.submitTransparencyAnchor(DECL_HASH);
+    const rawBuf = sendRawTransactionMock.mock.calls[0]![0] as Buffer | Uint8Array;
+    const text = Buffer.from(rawBuf).toString("utf-8");
+    const expectedMemo = `motebit:transparency:v1:${DECL_HASH}`;
+    expect(text).toContain(expectedMemo);
+  });
+
+  it("round-trips through parseTransparencyAnchorMemo", async () => {
+    const submitter = new SolanaMemoSubmitter({
+      rpcUrl: "https://api.mainnet-beta.solana.com",
+      identitySeed: seed,
+    });
+    await submitter.submitTransparencyAnchor(DECL_HASH);
+    const rawBuf = sendRawTransactionMock.mock.calls[0]![0] as Buffer | Uint8Array;
+    const text = Buffer.from(rawBuf).toString("utf-8");
+    // Extract just the memo prefix region — the tx wrapper carries
+    // extra bytes around the memo program data.
+    const match = text.match(/motebit:transparency:v1:[0-9a-fA-F]{64}/);
+    expect(match).not.toBeNull();
+    const parsed = parseTransparencyAnchorMemo(match![0]);
+    expect(parsed).toEqual({ version: "v1", declarationHashHex: DECL_HASH });
+  });
+
+  it("propagates errors from the RPC layer", async () => {
+    sendRawTransactionMock.mockRejectedValue(new Error("submit failed"));
+    const submitter = new SolanaMemoSubmitter({
+      rpcUrl: "https://api.mainnet-beta.solana.com",
+      identitySeed: seed,
+    });
+    await expect(submitter.submitTransparencyAnchor(DECL_HASH)).rejects.toThrow("submit failed");
   });
 });
 

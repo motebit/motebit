@@ -149,6 +149,52 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
     return { txHash: signature };
   }
 
+  /**
+   * Submit an operator-transparency declaration anchor — immediate, no batching.
+   *
+   * The relay anchors `sha256(canonicalJson(declaration))` to Solana when
+   * it deploys (or when the declaration changes). A verifier who knows the
+   * relay's Solana address (pinned out-of-band — like Apple App Attest's
+   * root cert is pinned) can confirm the declaration's hash matches a memo
+   * at that address. This closes the trust-on-first-use (TOFU) gap on the
+   * first fetch of `/.well-known/motebit-transparency.json` — without an
+   * anchor, the verifier trusts whatever HTTPS + DNS returned; with an
+   * anchor, the verifier trusts a separate channel (Solana) that the
+   * network provider cannot tamper with.
+   *
+   * Memo format: "motebit:transparency:v1:{declaration_hash_hex}"
+   *
+   * Doctrine: `docs/doctrine/operator-transparency.md` (Stage 2 onchain
+   * anchor), `docs/doctrine/nist-alignment.md` §8 (savant-gap closure).
+   */
+  async submitTransparencyAnchor(declarationHashHex: string): Promise<{ txHash: string }> {
+    const memo = `motebit:transparency:v1:${declarationHashHex}`;
+
+    const instruction = new TransactionInstruction({
+      keys: [{ pubkey: this.keypair.publicKey, isSigner: true, isWritable: true }],
+      programId: MEMO_PROGRAM_ID,
+      data: Buffer.from(memo, "utf-8"),
+    });
+
+    const tx = new Transaction().add(instruction);
+    const latest = await this.connection.getLatestBlockhash(this.commitment);
+    tx.recentBlockhash = latest.blockhash;
+    tx.feePayer = this.keypair.publicKey;
+    tx.sign(this.keypair);
+
+    const signature = await this.connection.sendRawTransaction(tx.serialize());
+    await this.connection.confirmTransaction(
+      {
+        signature,
+        blockhash: latest.blockhash,
+        lastValidBlockHeight: latest.lastValidBlockHeight,
+      },
+      this.commitment,
+    );
+
+    return { txHash: signature };
+  }
+
   async isAvailable(): Promise<boolean> {
     try {
       // Check RPC reachability
@@ -201,6 +247,26 @@ export function parseRevocationMemo(memo: string): {
   const timestamp = parseInt(parts[4]!, 10);
   if (isNaN(timestamp)) return null;
   return { version, publicKeyHex, timestamp };
+}
+
+/**
+ * Parse a transparency-declaration anchor memo back into its
+ * components. Memo format: `motebit:transparency:v1:{declaration_hash_hex}`.
+ * Used by verifiers who scan a relay's Solana address for the latest
+ * declaration anchor (`@motebit/state-export-client`'s
+ * `lookupTransparencyAnchor`).
+ */
+export function parseTransparencyAnchorMemo(memo: string): {
+  version: string;
+  declarationHashHex: string;
+} | null {
+  const parts = memo.split(":");
+  if (parts.length !== 4) return null;
+  if (parts[0] !== "motebit" || parts[1] !== "transparency") return null;
+  const version = parts[2]!;
+  const declarationHashHex = parts[3]!;
+  if (!/^[0-9a-fA-F]{64}$/.test(declarationHashHex)) return null;
+  return { version, declarationHashHex: declarationHashHex.toLowerCase() };
 }
 
 export { SOLANA_MAINNET_CAIP2, SOLANA_DEVNET_CAIP2 };

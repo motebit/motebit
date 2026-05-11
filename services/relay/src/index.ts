@@ -825,8 +825,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Operator transparency routes (docs/doctrine/operator-transparency.md) ---
   // Stage 1.5: signed declaration at /.well-known/motebit-transparency.json,
-  // admin view at /api/v1/admin/transparency. Onchain anchoring deferred to
-  // Stage 2 (spec/relay-transparency-v1.md).
+  // admin view at /api/v1/admin/transparency. Stage 2 onchain anchor is
+  // lifted forward (2026-05-11) — when SOLANA_RPC_URL is set, the relay
+  // anchors the declaration hash via the Memo program below. The wire-
+  // format spec (spec/relay-transparency-v1.md) remains deferred until
+  // a second operator forces field standardization, but the trust-
+  // anchor closure ships now.
   const { registerTransparencyRoutes } = await import("./transparency.js");
   await registerTransparencyRoutes({ app, relayIdentity });
 
@@ -1293,8 +1297,36 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     logger.info("anchoring.solana_submitter_configured", {
       address: memoSubmitter.address,
       network: memoSubmitter.network,
-      streams: ["settlement", "credential", "revocation"],
+      streams: ["settlement", "credential", "revocation", "transparency"],
     });
+
+    // --- Transparency declaration onchain anchoring ---
+    // Closes the TOFU gap on /.well-known/motebit-transparency.json: a
+    // verifier with the pinned relay anchor address can cross-check the
+    // declaration's hash against a Solana memo without trusting the
+    // HTTPS/DNS channel that delivered the declaration. Fire-and-forget
+    // — anchor failure does not block startup or invalidate the signed
+    // (unanchored) declaration; an unanchored verifier still gets TOFU.
+    // Doctrine: docs/doctrine/operator-transparency.md § Stage 2 onchain
+    // anchor (lifted forward 2026-05-11); docs/doctrine/nist-alignment.md
+    // §8 savant-gap closure.
+    void (async () => {
+      try {
+        const { buildSignedDeclaration, anchorTransparencyDeclaration } =
+          await import("./transparency.js");
+        const declaration = await buildSignedDeclaration(relayIdentity);
+        const result = await anchorTransparencyDeclaration(declaration, memoSubmitter);
+        logger.info("transparency.anchored", {
+          hash: declaration.hash,
+          tx_hash: result.txHash,
+          anchor_address: memoSubmitter.address,
+        });
+      } catch (err) {
+        logger.warn("transparency.anchor_failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
   }
 
   // --- Settlement anchor batching (relay-federation-v1.md §7.6) ---
