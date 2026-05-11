@@ -207,6 +207,36 @@ const BODY_REGION_HEIGHT = SLAB_HEIGHT * (1 - CHROME_REGION_FRACTION);
  */
 const BODY_REGION_CENTER_Y = -SLAB_HEIGHT * (CHROME_REGION_FRACTION / 2);
 
+/**
+ * Content inset — the "meniscus breathes" rule per
+ * `motebit-computer.md` §"Visual properties". Apple HIG ornament
+ * pattern: rounded windows leave a visible margin between content
+ * and the rounded edge so the silhouette curve has glass to be
+ * visible against. Without the inset, content abuts the slab's
+ * meniscus directly and the slab's silhouette becomes the
+ * content's edge — silhouette and silhouette-within-silhouette
+ * fight each other.
+ *
+ * 16pt at the stage's pixel scale, applied uniformly on all four
+ * sides of the screen mesh within the body region. The top inset
+ * doubles as the visual gap between chrome strip's bottom edge and
+ * screen mesh's top edge — chrome and content read as related but
+ * not abutting. Same value Apple uses for window content insets
+ * on visionOS.
+ */
+const CONTENT_INSET_PT = 16;
+const CONTENT_INSET_WORLD = CONTENT_INSET_PT * STAGE_PIXEL_TO_WORLD;
+
+/**
+ * Screen mesh dimensions — body region shrunk by content inset on
+ * all four sides. Width loses 2×inset (left + right); height loses
+ * 2×inset (top + bottom). The mesh stays centered at
+ * `BODY_REGION_CENTER_Y` because the inset is symmetric within
+ * the body region.
+ */
+const SCREEN_MESH_WIDTH = SLAB_WIDTH - 2 * CONTENT_INSET_WORLD;
+const SCREEN_MESH_HEIGHT = BODY_REGION_HEIGHT - 2 * CONTENT_INSET_WORLD;
+
 // ── Renderer-side per-item state ─────────────────────────────────────
 
 interface ManagedElement {
@@ -580,7 +610,13 @@ export class SlabManager {
     // value — environment lighting shouldn't tint a display
     // surface. Initial state hidden + no map; populated by
     // `setScreencastImage(...)` when a live screencast is active.
-    const screenGeo = createBodyMeniscusGeometry(SLAB_WIDTH, BODY_REGION_HEIGHT, 16, 16);
+    // Mesh dimensions = body region shrunk uniformly by CONTENT_INSET
+    // on all four sides. Width and height each lose 2×inset. The
+    // inset creates the "meniscus breathes" margin: a visible glass
+    // ring around the screencast where the slab's silhouette curve
+    // is legible without content abutting it. Top inset doubles as
+    // the visual gap between chrome strip and screen mesh.
+    const screenGeo = createBodyMeniscusGeometry(SCREEN_MESH_WIDTH, SCREEN_MESH_HEIGHT, 16, 16);
     this.screenMaterial = new THREE.MeshBasicMaterial({
       // The screencast JPEG is opaque — no alpha channel. Marking the
       // material `transparent: true` was a v1 mistake: Three.js's
