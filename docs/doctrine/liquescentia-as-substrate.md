@@ -58,7 +58,17 @@ The architecture names this endgame in `packages/render-engine/src/adapter.ts`'s
 
 **Current state:** the adapter uses `ENV_LIGHT` unconditionally as both today's behavior and the eventual fallback. Promotion to real-world spectrum (via `XRSession.requestLightProbe()` / `WebXRManager.getEstimatedLight()`) is endgame work blocked on a real-device test surface (Vision Pro AR mode / Quest passthrough rig). The code's comment names the gap; this doctrine pins what closing it requires.
 
-**Renderer promotion — WebGL → WebGPU.** Alongside the light-source promotion, the spatial surface promotes the renderer itself from WebGL (Three.js `WebGLRenderer`) to WebGPU (`WebGPURenderer` in the `three/webgpu` namespace). Apple shipped WebGPU in Safari 26 (June 2025) on visionOS; it is the canonical visionOS WebXR rendering API going forward. Same scene graph, swap the renderer at the `RenderAdapter` seam, same physics — the slab's contract (Ring 1) is identical across both renderers. The trigger isn't aesthetic; the trigger is `apps/spatial` landing on real Vision Pro hardware, where alignment with the platform's WebXR canonical API is forced. Until then, WebGL stays the working renderer everywhere and WebGPU is a future backend on the existing adapter, not a parallel interface (see [`motebit-computer.md`](motebit-computer.md) §"Compositing — content vs chrome split").
+**Renderer promotion — WebGL → WebGPU.** The renderer itself promotes from Three.js `WebGLRenderer` to `WebGPURenderer` (in the `three/webgpu` namespace). Apple shipped WebGPU in Safari 26 (June 2025) on visionOS / iOS 26 / iPadOS 26 / macOS Tahoe; combined with Chrome (since 2023), Edge, and Firefox (2025), WebGPU's by-default availability is now ~70% globally — production-ready for the slab's hero surfaces.
+
+The migration is **lower-risk than the conservative framing implies**. Three.js's `WebGPURenderer` ships with TSL (Three Shader Language), which transpiles to WGSL or GLSL depending on the runtime backend. Same scene graph, same materials, same physics — the slab's contract (Ring 1) is identical across both renderers; only the renderer instance swaps at the `RenderAdapter` seam. The "parallel-implementation tax" that would justify deferring doesn't exist if motebit stays on Three.js (which it should — re-platforming off Three.js is not in scope here).
+
+Three triggers can fire the migration, ordered by leverage:
+
+1. **`apps/spatial` lands on Vision Pro hardware.** WebGPU is the canonical visionOS WebXR rendering API; alignment is forced. The original sole trigger this doctrine named.
+2. **A render artifact demands compute shaders.** Real fluid sim for the pinch animation, particle systems for memory surfacing, advanced post-processing — WebGL has no compute path.
+3. **Voluntary endgame.** Once the slab's visual character is stable and the consumer-side product surface is shipping, a pre-emptive renderer migration is defensible on its own merits: cleaner API, future-aligned, no parallel maintenance. No technical waiting required.
+
+Cross-browser fallback handled by Three.js auto-detection (`createRenderer({ forceWebGL: false })`). The ~15% long tail (older Firefox, some Android, Intel macOS) continues on WebGL automatically. **The capture pipeline migration (JPEG → WebCodecs `VideoDecoder` + `importExternalTexture`) is separate end-game work that lives at the screencast layer**, not the renderer layer — see [`motebit-computer.md`](motebit-computer.md) §"Compositing — content vs chrome split" for that pin. Renderer and capture migrate independently on their own triggers.
 
 ## Operational consequences
 

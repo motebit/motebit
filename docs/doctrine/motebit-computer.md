@@ -321,7 +321,51 @@ The split disappears on AR-glasses surfaces, where native compositing (RealityKi
 
 **The pixels-vs-truth invariant.** The screencast is presentation only. Actions never route through pixel coordinates — they route through typed semantic primitives (`navigate`, `click_element`, `type_into`, `key`, `keypress`, `paste`, `scroll`) on `ComputerSessionManager.forwardUserInput`. Pixel-coord input on the WebGL texture is structurally impossible; the typed-truth-perception doctrine + `check-affordance-routing` gate (#28) enforce. The frame is what the page looks like; the AX tree + typed actions are what it means.
 
-**Future renderer promotion.** When the AR-glasses surface lands ([`liquescentia-as-substrate.md`](liquescentia-as-substrate.md) §"AR glasses"), the renderer promotes from WebGL to WebGPU — same scene graph, swap the renderer, same physics. The `RenderAdapter` is the seam. Until that trigger fires (or compute-shader / off-main-thread requirements appear), WebGL stays canonical and WebGPU is a future backend on the existing adapter, not a parallel interface.
+**Future renderer promotion.** The renderer promotes from WebGL to WebGPU — same scene graph, swap at the `RenderAdapter` seam, same physics. Three.js's `WebGPURenderer` ships with TSL auto-fallback, so the migration carries no parallel-maintenance tax. Three triggers (AR-glasses platform alignment, compute-shader requirement, voluntary endgame) can fire it on their own merits — see [`liquescentia-as-substrate.md`](liquescentia-as-substrate.md) §"AR glasses" for the full pin.
+
+### Inscribed-rectangle body — the slab-shape vs rectangular-content resolution
+
+The slab has a 16% corner radius (5× Apple visionOS's typical 3% window radius). Rendering rectangular web content inside a heavily-rounded silhouette creates structural tension: page corners get clipped at the slab's rounded corners, or the body mesh competes with the silhouette by rounding its own corners.
+
+Motebit resolves this via the **iOS / visionOS inscribed-rectangle pattern**: the body mesh is a plain rectangle inscribed inside the slab's safe area, with consistent glass margins on all four sides. The slab's rounded corners become explicitly visible glass framing the content, not a competing border on the content itself. Same shape as iPhone's notch and Dynamic Island — content lives in the safe rectangle; the device's curve is visible character around it.
+
+Implementation in `packages/render-engine/src/slab.ts`:
+
+```
+INSCRIBED_INSET_WORLD = SLAB_CORNER_RADIUS × (1 − 1/√2)  ≈ 25pt
+BODY_TOP_INSET_WORLD  = 10pt   (visible breathing between chrome strip and body)
+
+SCREEN_MESH_WIDTH  = SLAB_WIDTH − 2 × inscribed_inset
+SCREEN_MESH_HEIGHT = body_region_height − inscribed_inset − top_inset
+SCREEN_MESH_CENTER_Y = body_center + (inscribed_inset − top_inset)/2
+```
+
+The body mesh's geometry is a plain `THREE.PlaneGeometry` — no rounded corners. The rounded character of the slab is supplied by the silhouette around the mesh, never by the mesh competing with the silhouette. The "rounded card inside rounded slab" pattern (commit `be02845c`) was structurally reversed on 2026-05-11 in favor of "rectangular content inside rounded frame," which is the visionOS-Safari-adapted-for-motebit pattern.
+
+### Capture-pipeline end-game — JPEG-over-WebSocket → WebCodecs + GPUExternalTexture
+
+Today's screencast pipeline emits JPEG-base64 frames from Playwright's CDP at every-other-frame, 60% quality. Client-side: `<img>.decode()` → `HTMLImageElement` → `texSubImage2D` to the WebGL screen-mesh texture. This is **deliberate v1 — bandwidth + JPEG-encode CPU vs frame fidelity** — and the architecture has a clear end-game:
+
+| Stage    | Wire format                       | Decode path                             | GPU upload path                                                                                              |
+| -------- | --------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Today    | JPEG-base64 over WebSocket        | `<img>.decode()` → `HTMLImageElement`   | `texSubImage2D` (WebGL) / `copyExternalImageToTexture` (WebGPU) — both incur a copy from decoded RGBA to GPU |
+| End-game | H.264 / VP9 / AV1 streaming codec | WebCodecs `VideoDecoder` → `VideoFrame` | `GPUDevice.importExternalTexture()` — **zero-copy YUV sampled directly in the fragment shader**              |
+
+The end-game's load-bearing capability is `importExternalTexture` reading the GPU-decoded video frame's YUV planes directly, eliminating the JPEG-decode + RGBA-upload round-trip. For a 60fps slab at higher resolutions, this is the difference between a frame-upload stall and free.
+
+Three caveats survive the research:
+
+- **External texture lifetime is per-task.** `GPUExternalTexture` is destroyed as a microtask after each render — re-import every frame, rebuild the bindgroup every frame. Three.js's WebGPURenderer handles this internally for `VideoTexture`; raw WebGPU code must bake it into the render loop.
+- **Source swaps need explicit dispose.** Three.js issue #29925: changing `<video>` source mid-render crashes the WebGPURenderer when the old external texture is released. Pattern: `texture.dispose()` and create a new `VideoTexture` rather than reassigning `video.src`.
+- **`texture.colorSpace = THREE.SRGBColorSpace`** on the `VideoTexture` under WebGPURenderer or the page renders washed out.
+
+Triggers — independent from the renderer migration:
+
+1. **Measured throughput ceiling** — telemetry shows frame-upload jank correlating with page complexity or screencast resolution.
+2. **Higher fidelity required** — operator-grade browsing where 60% JPEG is no longer acceptable (multi-stream surfaces, peer_viewport screencasts, demo-quality recording).
+3. **Multi-stream futures** — when several screencasts compose on one slab (federated peer_viewport overlays, comparison views), per-stream decode CPU at JPEG rates blows past the budget.
+
+The renderer migration and the capture-pipeline migration **must not be conflated**. The renderer migration is a small swap at the `RenderAdapter` seam. The pipeline migration is a substantial rewrite spanning `services/browser-sandbox` (encoder), the wire format (`ScreencastFrame` discriminated union — JPEG-base64 OR codec stream), and the client decode + texture path. Each has its own trigger; each ships independently.
 
 ## Relationship to other scene primitives
 
