@@ -27,7 +27,15 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages/ packages/
 COPY services/browser-sandbox/ services/browser-sandbox/
 
-RUN pnpm install --frozen-lockfile
+# Filtered install — only browser-sandbox + its transitive workspace
+# deps + their externals. Without the filter, `pnpm install` pulls the
+# WHOLE workspace including `@motebit/wallet-solana`, whose Solana
+# stack pulls `bigint-buffer` whose postinstall runs `node-gyp` to
+# build a native module — which requires `make`/`g++` that aren't in
+# the Playwright base image. Browser-sandbox doesn't depend on the
+# Solana stack; the filter excludes it entirely. Build is also ~3x
+# faster and the image ~200 MB smaller.
+RUN pnpm install --frozen-lockfile --filter "@motebit/browser-sandbox..."
 RUN pnpm --filter @motebit/browser-sandbox... build
 RUN pnpm --filter @motebit/browser-sandbox deploy --prod /app/deployed
 
