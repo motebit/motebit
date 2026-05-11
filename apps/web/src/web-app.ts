@@ -1151,11 +1151,23 @@ export class WebApp {
     if (!preset) return;
     this._interiorColor = preset;
     this.renderer.setInteriorColor(preset);
+    // The chrome's lead mark is the creature's tiny mirror — its
+    // gradient reads from `_interiorColor`. Without this refresh,
+    // the creature recolors but the mark stays at the prior tint
+    // until the next control-state transition. Sibling pattern to
+    // /sensitivity + /vision mutations (slash-commands.ts L434,
+    // 478, 488), which all call refreshSlabChrome after touching
+    // runtime state the chrome reads.
+    this.refreshSlabChrome();
   }
 
   setInteriorColorDirect(color: InteriorColor): void {
     this._interiorColor = color;
     this.renderer.setInteriorColor(color);
+    // Mirror of setInteriorColor — see comment there. Custom-color
+    // path (color picker swatch live preview) needs the same
+    // refresh so the mark tracks the picker in real time.
+    this.refreshSlabChrome();
   }
 
   getInteriorColor(): InteriorColor | null {
