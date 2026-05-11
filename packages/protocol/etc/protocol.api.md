@@ -1487,6 +1487,12 @@ export enum EventType {
 // @public
 export const EXECUTION_LEDGER_ARTIFACT: ContentArtifactType;
 
+// @public
+export const EXECUTION_LEDGER_SPEC_V1_0: "motebit/execution-ledger@1.0";
+
+// @public (undocumented)
+export const EXECUTION_LEDGER_SPEC_V1_1: "motebit/execution-ledger@1.1";
+
 // @public (undocumented)
 export interface ExecutionReceipt {
     // (undocumented)
@@ -1652,8 +1658,8 @@ export interface GoalExecutionManifest {
     plan_id: string;
     // (undocumented)
     signature?: string;
-    // (undocumented)
-    spec: "motebit/execution-ledger@1.0";
+    signed_receipts?: string[];
+    spec: "motebit/execution-ledger@1.0" | "motebit/execution-ledger@1.1";
     // (undocumented)
     started_at: number;
     // (undocumented)

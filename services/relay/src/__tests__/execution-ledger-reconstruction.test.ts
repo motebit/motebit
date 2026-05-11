@@ -716,6 +716,108 @@ describe("Execution Ledger Reconstruction — GET /api/v1/execution/:motebitId/:
     const step = body.steps[0]!;
     expect(step.tools_used).toEqual(["file_read"]);
   });
+
+  // --- 12. Inner signed receipts (v1.1 — additive per spec §4.3) ---
+
+  it("emits motebit/execution-ledger@1.1 with signed_receipts when inner receipts are archived", async () => {
+    const { persistReceiptChain } = await import("../receipts-store.js");
+
+    const delegationTaskId = "task-archived-inner";
+    const delegateMotebitId = "delegate-mote-archived";
+    const innerReceipt = {
+      task_id: delegationTaskId,
+      motebit_id: delegateMotebitId,
+      device_id: "delegate-device-archived",
+      submitted_at: 1100,
+      completed_at: 1400,
+      status: "completed",
+      result: "ok",
+      tools_used: ["web_search"],
+      memories_formed: 0,
+      prompt_hash: "0".repeat(64),
+      result_hash: "1".repeat(64),
+      suite: "motebit-jcs-ed25519-b64-v1",
+      public_key: "ab".repeat(32),
+      signature: "deadbeef".repeat(8),
+    };
+
+    savePlan(relay, { total_steps: 1 });
+    saveStep(relay, 0, { delegation_task_id: delegationTaskId });
+
+    // Seed the canonical byte-identical archive — same path tasks.ts uses
+    // when a receipt is submitted by a delegated motebit.
+    persistReceiptChain(
+      relay.moteDb.db,
+      innerReceipt as unknown as Parameters<typeof persistReceiptChain>[1],
+    );
+
+    await pushEvents(relay, MOTEBIT_ID, [
+      makeEvent(MOTEBIT_ID, 1, EventType.GoalCreated, { goal_id: GOAL_ID }),
+      makeEvent(MOTEBIT_ID, 2, EventType.PlanCreated, {
+        plan_id: PLAN_ID,
+        goal_id: GOAL_ID,
+        total_steps: 1,
+      }),
+      makeEvent(MOTEBIT_ID, 3, EventType.PlanStepDelegated, {
+        plan_id: PLAN_ID,
+        step_id: "step-0",
+        ordinal: 0,
+        task_id: delegationTaskId,
+      }),
+      makeEvent(MOTEBIT_ID, 4, EventType.AgentTaskCompleted, {
+        task_id: delegationTaskId,
+        goal_id: GOAL_ID,
+        status: "completed",
+        tools_used: ["web_search"],
+        receipt: innerReceipt,
+      }),
+      makeEvent(MOTEBIT_ID, 5, EventType.GoalCompleted, {
+        goal_id: GOAL_ID,
+        status: "completed",
+      }),
+    ]);
+
+    const res = await relay.app.request(`/api/v1/execution/${MOTEBIT_ID}/${GOAL_ID}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ExecutionLedgerResponse & {
+      signed_receipts?: string[];
+    };
+
+    expect(body.spec).toBe("motebit/execution-ledger@1.1");
+    expect(body.signed_receipts).toBeDefined();
+    expect(body.signed_receipts).toHaveLength(1);
+
+    // Bytes are canonical JSON — round-trip parse must recover the inner receipt.
+    const parsed = JSON.parse(body.signed_receipts![0]!) as typeof innerReceipt;
+    expect(parsed.task_id).toBe(delegationTaskId);
+    expect(parsed.motebit_id).toBe(delegateMotebitId);
+    expect(parsed.signature).toBe(innerReceipt.signature);
+    expect(parsed.public_key).toBe(innerReceipt.public_key);
+  });
+
+  it("stays at motebit/execution-ledger@1.0 when no inner receipts are archived", async () => {
+    // Same as the canonical happy-path test, but explicitly asserts the
+    // spec version stays at 1.0 — gracefully degrades on relays where
+    // the archive is empty (testnet, ephemeral deploys, partial sync).
+    savePlan(relay);
+    saveStep(relay, 0);
+    await pushEvents(relay, MOTEBIT_ID, [
+      makeEvent(MOTEBIT_ID, 1, EventType.GoalCreated, { goal_id: GOAL_ID }),
+      makeEvent(MOTEBIT_ID, 2, EventType.GoalCompleted, { goal_id: GOAL_ID }),
+    ]);
+    const res = await relay.app.request(`/api/v1/execution/${MOTEBIT_ID}/${GOAL_ID}`, {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    const body = (await res.json()) as ExecutionLedgerResponse & {
+      signed_receipts?: string[];
+    };
+    expect(body.spec).toBe("motebit/execution-ledger@1.0");
+    expect(body.signed_receipts).toBeUndefined();
+  });
 });
 
 // === Layered content-provenance — relay-asserted outer manifest =============

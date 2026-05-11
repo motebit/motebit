@@ -1521,6 +1521,18 @@ export async function probeFetch(): Promise<unknown> {
         return src.replace(/anchorTransparencyDeclaration/g, "probe_anchor_removed");
       }),
   },
+  {
+    script: "check-execution-ledger-receipts-archived",
+    proves:
+      "flags the execution-ledger reconstruction silently regressing back to v1.0 summary-only semantics. Drift class: the operator-trust gap — without `signed_receipts` sourced from the byte-identical archive, verifiers cannot check inner motebit signatures and the relay's word becomes the trust floor.",
+    perturb: () =>
+      // Remove the v1.1 spec literal from state-export.ts; the gate
+      // must reject the file because the v1.1 path is the closure of
+      // the operator-trust gap.
+      mutateFile(`services/relay/src/state-export.ts`, (src) =>
+        src.replace(/motebit\/execution-ledger@1\.1/g, "motebit/execution-ledger@probe-removed"),
+      ),
+  },
 ];
 
 /**

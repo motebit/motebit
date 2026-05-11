@@ -575,6 +575,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-transparency-onchain-anchored",
   },
   {
+    name: "check-execution-ledger-receipts-archived",
+    defends:
+      'the execution-ledger reconstruction in `services/relay/src/state-export.ts` MUST surface byte-identical inner signed receipts via the v1.1 `signed_receipts` field — sourced from `relay_receipts.receipt_json` (the canonical archive per `services/relay/CLAUDE.md` Rule 11). Closes the operator-trust gap: without the v1.1 wiring, the reconstruction emits only `signature_prefix` (16 chars, display-only) and a verifier cannot independently check inner motebit signatures, so a relay that falsely claims "motebit X did this work" is undetectable. With v1.1, the verifier holds the canonical-JSON bytes the motebit signed and verifies each Ed25519 signature against the named motebit\'s public key. The gate scans `state-export.ts` for three required symbols: `getStoredReceiptJson` (archive accessor), `motebit/execution-ledger@1.1` (version-bumped spec literal), `motebit/execution-ledger@1.0` (graceful-degradation fallback when the archive is empty — testnet, ephemeral deploys). Drift-defense #89, completes the producer-side wiring for cross-relay verification. Doctrine: `spec/execution-ledger-v1.md` §4.3, `docs/doctrine/nist-alignment.md` §8 "inner-receipt verification."',
+    script: "check-execution-ledger-receipts-archived",
+  },
+  {
     name: "check-ha-not-a-gate",
     defends:
       "hardware attestation raises the `HardwareAttestationSemiring` score — never admits or rejects (CLAUDE.md `Hardware-rooted identity is additive`; doctrine `docs/doctrine/hardware-attestation.md`). The software-only-identity floor is part of the protocol promise; converting the additive scoring axis into an admission criterion silently excludes software-floor users at the moat layer. Gate forbids four shapes in `services/relay/src` + `packages/{policy,market,runtime}/src`: (1) numeric threshold compares on `attestation_score`, (2) HA-property-chain `score`/`level` threshold compares, (3) exclusionary `.filter(…hardware_attestation…)` calls, (4) `if (…hardware_attestation…)` followed within 3 lines by reject/throw/skip. Waiver `// hardware-attestation: intentional-threshold — <reason>` for legitimate exceptions (one shipping today: `services/relay/src/agents.ts:334` — projection filter for response payload, not routing admission). Same negative-invariant + waiver shape as `check-suite-dispatch` (#11): closed-by-construction with explicit, audited exits.",

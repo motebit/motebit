@@ -28,6 +28,7 @@ import { canonicalJson, bytesToHex, toBase64Url } from "@motebit/encryption";
 import { signContentArtifact } from "@motebit/crypto";
 import type { ContentArtifactType } from "@motebit/protocol";
 import type { RelayIdentity } from "./federation.js";
+import { getStoredReceiptJson } from "./receipts-store.js";
 
 /**
  * Self-identification claim embedded in the outer
@@ -479,6 +480,31 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
       };
     });
 
+    // 7a. Inner signed receipts (v1.1 — additive per spec
+    // `spec/execution-ledger-v1.md` §4.3). The byte-identical canonical
+    // JSON of each delegated motebit's signed ExecutionReceipt — sourced
+    // from `relay_receipts.receipt_json` (per `services/relay/CLAUDE.md`
+    // Rule 11). Closes the operator-trust gap: a verifier holding these
+    // bytes can independently verify each inner Ed25519 signature against
+    // the producing motebit's public key, without trusting the relay's
+    // word that "motebit X did this work." Ordering corresponds 1:1 with
+    // `delegationReceipts` by `task_id`.
+    //
+    // Archive lookup key is `(delegate_motebit_id, task_id)` per
+    // `services/relay/src/receipts-store.ts` — the DELEGATE's motebit
+    // signed the receipt, not the goal-owner. Using the goal-owner's
+    // motebitId here would miss every cross-motebit delegation.
+    //
+    // Producing v1.1 only when at least one inner receipt is archived
+    // keeps the reconstruction graceful on relays that don't yet have
+    // the archive populated — the v1.0 envelope still works for them.
+    const signedReceipts: string[] = [];
+    for (const summary of delegationReceipts) {
+      if (summary.motebit_id === "") continue;
+      const archived = getStoredReceiptJson(moteDb.db, summary.motebit_id, summary.task_id);
+      if (archived !== null) signedReceipts.push(archived);
+    }
+
     // 8. Content hash (SHA-256 of canonical timeline)
     const canonicalLines = timeline.map((entry) => canonicalJson(entry));
     const hashBuf = await crypto.subtle.digest(
@@ -495,13 +521,17 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
       active: "active",
     };
 
-    // Inner artifact — `motebit/execution-ledger@1.0` body. Per spec §6,
-    // the agent-signature field is omitted for relay-reconstructed
-    // ledgers (the relay does not hold the agent's private key); the
-    // outer relay-asserted manifest emitted by `emitSignedExport`
-    // attests to bundle assembly, never to the agent's actions.
-    return emitSignedExport(c, "execution-ledger", {
-      spec: "motebit/execution-ledger@1.0",
+    // Inner artifact — `motebit/execution-ledger@1.0` body when no inner
+    // receipts are archived, otherwise `motebit/execution-ledger@1.1`
+    // (additive per spec §4.3). Per spec §6, the agent-signature field
+    // is omitted for relay-reconstructed ledgers (the relay does not
+    // hold the agent's private key); the outer relay-asserted manifest
+    // emitted by `emitSignedExport` attests to bundle assembly, never
+    // to the agent's actions. v1.1's `signed_receipts` lets verifiers
+    // check inner motebit signatures independently.
+    const bumpToV1_1 = signedReceipts.length > 0;
+    const body: Record<string, unknown> = {
+      spec: bumpToV1_1 ? "motebit/execution-ledger@1.1" : "motebit/execution-ledger@1.0",
       motebit_id: motebitId,
       goal_id: goalId,
       plan_id: plan.plan_id,
@@ -512,6 +542,8 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
       steps: stepSummaries,
       delegation_receipts: delegationReceipts,
       content_hash: contentHash,
-    });
+    };
+    if (bumpToV1_1) body.signed_receipts = signedReceipts;
+    return emitSignedExport(c, "execution-ledger", body);
   });
 }

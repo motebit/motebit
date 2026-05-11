@@ -143,6 +143,30 @@ The top-level `delegation_receipts` array contains metadata for each delegated t
 | `tools_used`       | string[] | Tools the delegated agent invoked.                      |
 | `signature_prefix` | string   | First 16 characters of the receipt's Ed25519 signature. |
 
+### 4.3 — Inner Signed Receipts (v1.1 — additive)
+
+A v1.1 reconstruction MAY include an optional top-level `signed_receipts` array that carries the byte-identical canonical-JSON of each delegated motebit's signed `ExecutionReceipt` (the wire shape defined in §11). Field shape:
+
+| Field             | Type     | Description                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `signed_receipts` | string[] | Optional. Each element is the JSON-stringified canonical form of one `ExecutionReceipt` — byte-identical to what the producing motebit signed. Ordering corresponds 1:1 with `delegation_receipts[]` summaries by `task_id`. Verifiers MAY parse each entry, recompute the canonical signing body, and verify the Ed25519 signature against the receipt's `public_key` field. |
+
+**Why v1.1 is additive, not breaking:**
+
+- Producers MAY emit `spec: "motebit/execution-ledger@1.1"` when `signed_receipts` is present. v1.0 consumers parse the body as JSON and ignore the unknown field — no break.
+- Producers that cannot populate `signed_receipts` (motebit-side ledgers where the producer doesn't have its peers' signed receipts) continue to emit `spec: "motebit/execution-ledger@1.0"`.
+- Relay reconstructions that have the inner receipts archived (per relay-side storage convention) SHOULD bump to v1.1 and populate the field. Verifiers that recognize v1.1 iterate the array and verify each inner signature; verifiers that don't recognize v1.1 fall back to v1.0 semantics (summaries only).
+
+**Why this closes the operator-trust gap:**
+
+In v1.0, a relay-assembled reconstruction's `delegation_receipts` carries `signature_prefix` (first 16 characters) — display only, not verifiable. A verifier today can confirm the relay-asserted outer signature on the bundle (when wrapped in a `ContentArtifactManifest` per `docs/doctrine/nist-alignment.md` §8) but cannot independently verify the motebit signatures inside. The relay's word is the floor.
+
+With v1.1's `signed_receipts`, the verifier holds byte-identical canonical-JSON for each inner receipt. Each one verifies against its named motebit's public key. The relay can no longer falsely claim "motebit X did this work" — a verifier checks the inner Ed25519 signature against motebit X's pinned key (from the credential anchor chain, the motebit's identity file, or any other trust source the verifier already accepts). Federation peers, regulatory auditors, third-party validators all gain cross-relay verification capability.
+
+**Storage source (reference convention — non-binding):**
+
+The reference relay's archive at `relay_receipts.receipt_json` (per `services/relay/CLAUDE.md` Rule 11) holds byte-identical canonical JSON of every motebit-signed receipt the relay has handled. The v1.1 reconstruction sources `signed_receipts` from this archive — the bytes that go on the wire are the bytes the motebit originally signed. Alternative implementations MAY use different storage shapes so long as the egress bytes preserve canonical-JSON byte-identity per §11.1.
+
 ---
 
 ## 5. Canonical Serialization

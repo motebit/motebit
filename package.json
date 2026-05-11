@@ -87,6 +87,7 @@
     "check-state-export-signed": "npx tsx scripts/check-state-export-signed.ts",
     "check-state-export-consumer-verifies": "npx tsx scripts/check-state-export-consumer-verifies.ts",
     "check-transparency-onchain-anchored": "npx tsx scripts/check-transparency-onchain-anchored.ts",
+    "check-execution-ledger-receipts-archived": "npx tsx scripts/check-execution-ledger-receipts-archived.ts",
     "check-doctrine-citations": "npx tsx scripts/check-doctrine-citations.ts",
     "check-readme-bin-claims": "npx tsx scripts/check-readme-bin-claims.ts",
     "check-docs-cli-claims": "npx tsx scripts/check-docs-cli-claims.ts",

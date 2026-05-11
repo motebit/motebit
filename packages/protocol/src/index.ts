@@ -1410,7 +1410,13 @@ export interface ExecutionStepSummary {
 }
 
 export interface GoalExecutionManifest {
-  spec: "motebit/execution-ledger@1.0";
+  /**
+   * `motebit/execution-ledger@1.0` for legacy ledgers, `motebit/execution-ledger@1.1`
+   * for ledgers that embed byte-identical inner signed receipts via `signed_receipts`.
+   * v1.1 is purely additive — every v1.0 consumer continues to parse v1.1 bodies
+   * by ignoring the optional field. See `spec/execution-ledger-v1.md` §4.3.
+   */
+  spec: "motebit/execution-ledger@1.0" | "motebit/execution-ledger@1.1";
   motebit_id: string;
   goal_id: string;
   plan_id: string;
@@ -1420,6 +1426,19 @@ export interface GoalExecutionManifest {
   timeline: ExecutionTimelineEntry[];
   steps: ExecutionStepSummary[];
   delegation_receipts: DelegationReceiptSummary[];
+  /**
+   * Byte-identical canonical-JSON of each delegated motebit's signed
+   * `ExecutionReceipt`. Optional and only present in v1.1 reconstructions
+   * where the relay has the receipts archived (per
+   * `services/relay/CLAUDE.md` Rule 11). Each element is the JSON-stringified
+   * receipt the motebit signed; verifiers MAY parse + recursively verify
+   * each one's Ed25519 signature independently. Closes the operator-trust
+   * gap that v1.0 summaries leave open — a relay that lies about which
+   * motebit did the work is detectable because the inner signature can be
+   * checked against the named motebit's public key without trusting the
+   * relay. See `spec/execution-ledger-v1.md` §4.3.
+   */
+  signed_receipts?: string[];
   content_hash: string;
   signature?: string;
 }
@@ -1433,6 +1452,15 @@ export interface DelegationReceiptSummary {
   tools_used: string[];
   signature_prefix: string;
 }
+
+/**
+ * Canonical spec identifiers for the execution-ledger reconstruction.
+ * v1.1 adds the optional `signed_receipts` field; the wire shape is
+ * otherwise identical to v1.0. Verifiers that recognize v1.1 SHOULD
+ * iterate `signed_receipts` and verify each inner signature when present.
+ */
+export const EXECUTION_LEDGER_SPEC_V1_0 = "motebit/execution-ledger@1.0" as const;
+export const EXECUTION_LEDGER_SPEC_V1_1 = "motebit/execution-ledger@1.1" as const;
 
 export interface AgentCapabilities {
   motebit_id: MotebitId;
