@@ -136,14 +136,14 @@ describe("computeSlabHomeAffordances — dedup by host, sort by recency, top N",
   });
 
   it("returns empty for events with no navigate details — non-navigate audit shapes don't surface as affordances", () => {
-    const events = [
+    const events: Array<{ payload: UserInputForwardedPayload; timestamp: number }> = [
       {
         payload: {
           session_id: "s1",
           motebit_id: "did:motebit:test",
           outcome: "forwarded",
           control_state_at_forwarding: { kind: "user" } as never,
-          detail: { kind: "click", x_norm: 0.5, y_norm: 0.5, button: "left" } as never,
+          detail: { kind: "click", x_norm: 0.5, y_norm: 0.5, button: "left" },
           timestamp: 1,
         },
         timestamp: 1,
@@ -191,13 +191,13 @@ describe("buildSlabHomeView — calm Apple-grade tile shape, forward-framed only
 
     // Each tile is forward-framed — verb + host, never a date or
     // "Recent" header.
-    for (const tile of tiles) {
+    Array.from(tiles).forEach((tile) => {
       expect(tile.textContent).toContain("Continue");
       // Doctrine lock: no chronological framing on the body. If a
       // future change adds "yesterday at 3pm" to the tile, this
       // assertion catches it.
       expect(tile.textContent).not.toMatch(/yesterday|ago|recent|history/i);
-    }
+    });
     // Hosts appear as the legible center label.
     const texts = Array.from(tiles).map((t) => t.textContent);
     expect(texts.some((t) => t?.includes("google.com"))).toBe(true);
@@ -277,7 +277,7 @@ describe("buildSlabHomeView — calm Apple-grade tile shape, forward-framed only
     const stubAnimate = vi.fn((_keyframes: unknown, options: KeyframeAnimationOptions) => ({
       effect: { getComputedTiming: () => options } as unknown as AnimationEffect,
     }));
-    const proto = Element.prototype as { animate?: typeof stubAnimate };
+    const proto = Element.prototype as unknown as { animate?: typeof stubAnimate };
     const original = proto.animate;
     proto.animate = stubAnimate as never;
     try {
