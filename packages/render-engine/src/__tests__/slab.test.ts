@@ -562,18 +562,23 @@ describe("SlabManager — screencast WebGL texture (v1.3 → texture register)",
     expect(screen!.material.map).toBeNull();
   });
 
-  it("setScreencastImage(image) populates the material's map and shows the screen mesh", () => {
+  it("setScreencastImage(image) populates the material's map and shows the screen mesh once the slab is user-visible", () => {
     const mgr = makeManager();
     const fakeImage = { width: 1280, height: 800 } as unknown as HTMLImageElement;
     mgr.setScreencastImage(fakeImage);
     const screen = findScreenMesh(mgr)!;
-    expect(screen.visible).toBe(true);
+    // Texture installed eagerly — material.map points at what we
+    // passed in, no per-frame allocation.
     expect(screen.material.map).not.toBeNull();
-    // Texture's image points at what we passed in — the next frame
-    // will replace `.image` in place rather than allocating a new
-    // texture per frame.
     const map = screen.material.map as { image: unknown };
     expect(map.image).toBe(fakeImage);
+    // Screen-mesh visibility is derived per-frame from (user-visible
+    // AND screenTexture !== null) — the always-already-slab fix that
+    // closes the /computer-toggle stitch desync (2026-05-11). Make
+    // the slab user-visible + tick so the derivation lands.
+    mgr.setUserVisible(true);
+    mgr.update(0, 0.5);
+    expect(screen.visible).toBe(true);
   });
 
   it("subsequent setScreencastImage calls replace the texture's image in place (no per-frame allocation)", () => {
@@ -589,13 +594,20 @@ describe("SlabManager — screencast WebGL texture (v1.3 → texture register)",
     expect((screen.material.map as { image: unknown }).image).toBe(b);
   });
 
-  it("clearScreencast() hides the mesh, releases the texture, and clears the material map", () => {
+  it("clearScreencast() releases the texture, clears the material map, and hides the mesh on the next tick", () => {
     const mgr = makeManager();
+    mgr.setUserVisible(true);
     mgr.setScreencastImage({ width: 1280, height: 800 } as unknown as HTMLImageElement);
-    mgr.clearScreencast();
+    mgr.update(0, 0.5);
     const screen = findScreenMesh(mgr)!;
-    expect(screen.visible).toBe(false);
+    expect(screen.visible).toBe(true);
+    mgr.clearScreencast();
+    // Texture + map released eagerly.
     expect(screen.material.map).toBeNull();
+    // Visibility derives next tick — (user-visible AND
+    // screenTexture !== null) → false once the texture is nulled.
+    mgr.update(0.5, 0.1);
+    expect(screen.visible).toBe(false);
   });
 
   it("clearScreencast() on a never-painted slab is a no-op (no throw, idempotent)", () => {
@@ -604,6 +616,33 @@ describe("SlabManager — screencast WebGL texture (v1.3 → texture register)",
     expect(() => mgr.clearScreencast()).not.toThrow();
     const screen = findScreenMesh(mgr)!;
     expect(screen.visible).toBe(false);
+  });
+
+  it("hiding the slab user-visibility hides the screencast screen mesh even with an active texture — content must not outlive the substrate", () => {
+    // Pins the always-already-slab invariant: the screen mesh's
+    // visibility IS derived from the slab's user-visibility, not
+    // from screencast presence alone. Without this binding,
+    // `/computer`-toggling the slab off leaves the WebGL screen
+    // mesh rendering its texture in 3D space — content outliving
+    // the substrate. Third instance of the slab/stitch desync
+    // (chrome band, stage opacity, screen mesh) — this lock
+    // prevents the fourth.
+    const mgr = makeManager();
+    mgr.setUserVisible(true);
+    mgr.setScreencastImage({ width: 1280, height: 800 } as unknown as HTMLImageElement);
+    mgr.update(0, 0.5);
+    const screen = findScreenMesh(mgr)!;
+    expect(screen.visible).toBe(true);
+    // The user-hide gesture (e.g., /computer toggle). Texture is
+    // still installed — the session didn't end, just got hidden.
+    mgr.setUserVisible(false);
+    mgr.update(0.5, 0.5);
+    expect(screen.visible).toBe(false);
+    expect(screen.material.map).not.toBeNull(); // Texture still live.
+    // Reveal again — texture is still there, mesh comes back.
+    mgr.setUserVisible(true);
+    mgr.update(1, 0.5);
+    expect(screen.visible).toBe(true);
   });
 
   it("closes ImageBitmap on replacement so GPU-side bitmap memory doesn't leak", () => {

@@ -937,7 +937,10 @@ export class SlabManager {
     this.screenTexture.flipY = !sourceIsBitmapLike;
     this.screenTexture.image = source;
     this.screenTexture.needsUpdate = true;
-    this.screenMesh.visible = true;
+    // Visibility is derived per-frame in the render loop from
+    // (user-visible AND screenTexture !== null) — single source of
+    // truth, no eager flag here. See the screenMesh.visible binding
+    // in the per-frame block.
   }
 
   /**
@@ -947,7 +950,11 @@ export class SlabManager {
    * `setScreencastImage` was never called.
    */
   clearScreencast(): void {
-    this.screenMesh.visible = false;
+    // No eager `screenMesh.visible = false` — the per-frame render
+    // loop derives visibility from (user-visible AND screenTexture
+    // !== null). Nulling the texture below resolves to false on the
+    // next render tick (~16 ms at 60 fps), which is imperceptible
+    // and keeps the single-source-of-truth discipline.
     if (this.screenTexture != null) {
       const bitmap = this.screenTexture.image as
         | (ImageBitmap & { close?: () => void })
@@ -1174,6 +1181,19 @@ export class SlabManager {
     this.planeMesh.visible = visible;
     this.backPaneMesh.visible = visible;
     this.sideWallMesh.visible = visible;
+    // Bind the screencast screen mesh's visibility to the slab's
+    // user-visibility AND the presence of a texture. Without this,
+    // the WebGL screen mesh keeps rendering its texture in 3D space
+    // even after `/computer` toggles the slab off — the glass volume
+    // + chrome fade out, but the JPEG texture floats on, content
+    // outliving its substrate (always-already-slab.md violation,
+    // third instance of the slab/stitch desync after chrome band
+    // and stage opacity — caught 2026-05-11 on /computer toggle).
+    // Per-frame derivation here is the single source of truth;
+    // `setScreencastImage` no longer flips `screenMesh.visible`
+    // directly — it just installs the texture and lets this loop
+    // decide visibility.
+    this.screenMesh.visible = visible && this.screenTexture !== null;
     // Sympathetic breathing applies to all three meshes (front, back,
     // sides) uniformly — the slab inflates as one volume. Per-mesh
     // (rather than via a wrapper group) so the CSS3D stage — also a
