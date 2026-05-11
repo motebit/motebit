@@ -86,6 +86,42 @@ describe("computeSlabHomeAffordances — dedup by host, sort by recency, top N",
     expect(result.map((a) => a.host)).toEqual(["f.com", "e.com", "d.com", "c.com"]);
   });
 
+  it("collapses canonical-host duplicates — `www.google.com` and `google.com` are one tile, most-recent engagement wins", () => {
+    // Without canonical dedup, the audit log's `www.` variants
+    // would surface as separate tiles for the same destination —
+    // exactly the "algorithmically-unfinished" tell Apple's
+    // Spotlight never shows. Lock that they collapse here.
+    const events = [
+      makeNavigateEvent("www.google.com", 1_000),
+      makeNavigateEvent("google.com", 3_000), // newest, real
+      makeNavigateEvent("www.google.com", 2_000),
+    ];
+    const result = computeSlabHomeAffordances(events);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.host).toBe("google.com");
+    expect(result[0]!.lastEngagedAt).toBe(3_000);
+  });
+
+  it("rejects TLD-less hosts — `gmail` from a URL-bar typo doesn't become a tile", () => {
+    // `gmail` (no `.`) is almost always a typo or shorthand from
+    // the URL bar that the parser kept as a bare host. A tile
+    // "Continue gmail" alongside "Continue gmail.com" reads as
+    // algorithmically-broken. Drop the dotless variant.
+    const events = [makeNavigateEvent("gmail", 1_000), makeNavigateEvent("gmail.com", 2_000)];
+    const result = computeSlabHomeAffordances(events);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.host).toBe("gmail.com");
+  });
+
+  it("preserves localhost — a TLD-less but legitimate destination", () => {
+    // The dotless-host filter shouldn't kill localhost (a real
+    // destination for dev workflows). Whitelist exception.
+    const events = [makeNavigateEvent("localhost", 1)];
+    const result = computeSlabHomeAffordances(events);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.host).toBe("localhost");
+  });
+
   it("filters out 'unknown' hosts — audit redaction collapse, not affordance", () => {
     // The audit format collapses malformed URLs to host: "unknown"
     // per co-browse.ts §"URL-redacted navigate detail". A tile
@@ -122,14 +158,21 @@ describe("computeSlabHomeAffordances — dedup by host, sort by recency, top N",
 });
 
 describe("buildSlabHomeView — calm Apple-grade tile shape, forward-framed only", () => {
-  it("returns an empty wrapper for the empty-empty register — no decorative mark, no redundant caption", () => {
-    // Doctrine: always-already-slab.md + the calm-software discipline.
-    // The chrome strip's "type a URL · or ask motebit" placeholder is
-    // the first-time-user affordance. The body's empty-empty state
-    // is honestly empty — pure slab interior shows through.
+  it("renders the 'Anywhere.' watermark for the empty-empty register — calm intentional floor, not absence", () => {
+    // Doctrine: empty-empty is the first-time-user impression, and
+    // "pure empty glass" can read as broken / loading to users who
+    // haven't internalized the calm-software register. A single
+    // forward-framed watermark fixes that — reads as design, not
+    // absence. Complements the chrome strip's mechanism-framed
+    // placeholder ("type a URL · or ask motebit"): two registers,
+    // one calm intent. No grid, no card outlines.
     const root = buildSlabHomeView([], { onAffordanceTap: vi.fn() });
-    expect(root.children).toHaveLength(0);
-    expect(root.textContent).toBe("");
+    const watermark = root.querySelector(".slab-home-watermark");
+    expect(watermark).not.toBeNull();
+    expect(watermark?.textContent).toBe("Anywhere.");
+    // No tile grid — empty-empty must NOT show card outlines
+    // (Apple's "broken-container" failure mode).
+    expect(root.querySelector(".slab-home-affordance")).toBeNull();
   });
 
   it("renders forward-framed tiles — verb is 'Continue', host is the legible center, no chronological labels", () => {
@@ -174,6 +217,31 @@ describe("buildSlabHomeView — calm Apple-grade tile shape, forward-framed only
     expect(tile).not.toBeNull();
     tile.click();
     expect(handler).toHaveBeenCalledWith(aff);
+  });
+
+  it("renders a favicon img for each tile — visual identity dominates string parsing", () => {
+    // Apple lesson: Spotlight, Dock, Watch smart-stack lead with
+    // icons. A favicon makes tiles scannable; without it, the only
+    // differentiator between tiles is text and the surface reads
+    // as a database list. Lock the img element on each tile so a
+    // regression that drops it hits CI.
+    const aff: SlabHomeAffordance = {
+      id: "aff-apple.com",
+      host: "apple.com",
+      scheme: "https",
+      lastEngagedAt: 1,
+    };
+    const root = buildSlabHomeView([aff], { onAffordanceTap: vi.fn() });
+    const tile = root.querySelector(".slab-home-affordance");
+    const favicon = tile?.querySelector("img");
+    expect(favicon).not.toBeNull();
+    // Source the privacy-respecting DuckDuckGo favicon service —
+    // no API key, no tracking, host-keyed lookup.
+    expect(favicon?.src).toContain("icons.duckduckgo.com");
+    expect(favicon?.src).toContain("apple.com");
+    // Lazy + async-decoded so the favicon fetch doesn't block tile
+    // paint when the home view first mounts.
+    expect(favicon?.loading).toBe("lazy");
   });
 
   it("uses the soul tint when provided — tile glass composes with slab transmission, not a hard white card", () => {
