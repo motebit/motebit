@@ -1406,6 +1406,22 @@ export function probeAdmit(peer: PeerProfile): boolean {
       ),
   },
   {
+    script: "check-doctrine-citations",
+    proves:
+      "flags a doctrine doc that cites a non-existent gate (`check-X`) or a missing path-shaped reference. The drift class the gate exists to catch — doctrine prose that lies about what code/gates exist after a rename, package extraction, or hypothetical name. Same shape as `check-readme-bin-claims` / `check-docs-cli-claims` / `check-docs-slash-claims`, fourth member of the doc-citation-validation family.",
+    perturb: () =>
+      writeFixture(
+        `docs/doctrine/${PROBE_PREFIX}stale-citation.md`,
+        `# Probe-only doctrine doc
+
+Cites \`packages/nonexistent/__probe.ts\` which does not exist.
+Also cites \`check-imaginary-gate\` which is not a real drift gate.
+
+If check-doctrine-citations is working, both references fail the gate.
+`,
+      ),
+  },
+  {
     script: "check-audience-canonical",
     proves:
       'flags an audience literal that is not a member of the closed `TokenAudience` registry. Same drift class the registry exists to catch — a typo at a signing site (`aud: "task:sumbit"`) that pre-registry was a runtime 401 at the verifier.',

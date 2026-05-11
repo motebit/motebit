@@ -180,6 +180,15 @@ describe("SpatialSlabManager — ambient surface presence", () => {
     expect(mgr.toggleUserVisible()).toBe(false);
   });
 
+  it("isUserVisible reflects the current hold state", () => {
+    const mgr = makeManager();
+    expect(mgr.isUserVisible()).toBe(false);
+    mgr.setUserVisible(true);
+    expect(mgr.isUserVisible()).toBe(true);
+    mgr.toggleUserVisible();
+    expect(mgr.isUserVisible()).toBe(false);
+  });
+
   it("an active item raises the surface regardless of user hold", () => {
     const mgr = makeManager();
     mgr.addItem(makeSpec("s1"));

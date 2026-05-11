@@ -40,7 +40,7 @@ The pair is non-negotiable. New typed-truth fields ship with all three commitmen
 
 ## Where this lives
 
-- **Wire format / semantic fields:** `services/browser-sandbox/src/action-executor.ts` (action results), `packages/runtime/src/computer-session-manager.ts` (gate refusals), `packages/runtime/src/perception.ts` (drop-payload outcomes).
+- **Wire format / semantic fields:** `services/browser-sandbox/src/action-executor.ts` (action results), `packages/runtime/src/computer-use.ts` (gate refusals), `packages/runtime/src/perception.ts` (drop-payload outcomes).
 - **Prompt clauses:** `packages/ai-core/src/prompt.ts` `PERCEPTION_DOCTRINE` constant.
 - **Tests pin both sides:** `packages/ai-core/src/__tests__/prompt.test.ts` (clause text), `services/browser-sandbox/src/__tests__/action-executor.test.ts` (dispatch behavior), `services/browser-sandbox/src/__tests__/url-equivalence.test.ts` (comparator).
 

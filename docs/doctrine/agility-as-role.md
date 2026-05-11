@@ -25,7 +25,7 @@ The pattern is unstated but load-bearing. Three instances run through it today; 
 
 - **Role:** "permissive floor" — the open-license layer that defines the protocol's interoperability surface. Every consumer of the protocol's wire format types (third parties standing up alternate implementations) reads from the permissive floor; nothing in the BSL upper layer is required to interoperate.
 - **Instance today:** `Apache-2.0` (flipped from MIT on commit `2d8b91a9`, 2026-04-23). Convergence target: one license at the BSL Change Date.
-- **Migration shape:** the role is named in `package.json` `license` fields, in `LICENSE` headers, in `LICENSING.md` tables, and in CLAUDE.md doctrine prose. Replacing the instance is a sweep across declared values + a doctrine update — no consumer has to re-link, because consumers depend on _what the floor permits_, not on the literal SPDX identifier. Drift defense `check-floor-license` (rule shape, gate via `check-package-license`) verifies every permissive-floor package carries the role's instance, not a hardcoded literal.
+- **Migration shape:** the role is named in `package.json` `license` fields, in `LICENSE` headers, in `LICENSING.md` tables, and in CLAUDE.md doctrine prose. Replacing the instance is a sweep across declared values + a doctrine update — no consumer has to re-link, because consumers depend on _what the floor permits_, not on the literal SPDX identifier. Drift defense `check-license-doc-sync` verifies every permissive-floor package's `license` field carries the role's instance + that `LICENSING.md` / `CONTRIBUTING.md` prose agrees on membership.
 - **Memory:** `architecture_license_floor_apache`.
 
 ### Settlement-rail registry

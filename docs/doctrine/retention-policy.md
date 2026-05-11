@@ -14,8 +14,8 @@ Today's enforcement asymmetry is the diagnosis:
 | ------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
 | Memory        | ✓ `MemoryContent.sensitivity`                    | ✓ `consolidation-cycle.ts:444-453` — `prune` phase calls `deleteMemory(..., "retention_enforcement")` |
 | Conversations | ✗ `ConversationStoreAdapter` carries none        | ✗ `conversation-search.ts:38` — `ConversationMessageRecord` has no TTL                                |
-| Events        | ✗ `EventLogEntry` (`protocol/index.ts:346-356`)  | ✗ `event-log/src/index.ts` is append-only by construction                                             |
-| Tool audit    | ✗ `ToolAuditEntry` (`protocol/index.ts:429-440`) | ✗ `browser-persistence/src/tool-audit-store.ts` queries but never prunes                              |
+| Events        | ✗ `EventLogEntry` (`protocol/index.ts:346-356`)  | ✗ `packages/event-log/src/index.ts` is append-only by construction                                    |
+| Tool audit    | ✗ `ToolAuditEntry` (`protocol/index.ts:429-440`) | ✗ `packages/browser-persistence/src/tool-audit-store.ts` queries but never prunes                     |
 
 `CLAUDE.md:77` claims "Retention enforced via deletion certificates" as the motebit privacy boundary. Today, only memory honors that claim. The fix is not to retrofit memory's prune phase onto the other three — they have different physics, and the prune phase isn't the right enforcement for any of them. The fix is to name the three shapes, type-system them at the protocol layer, and register each store against the shape its physics dictates.
 
@@ -231,7 +231,7 @@ JCS canonicalization throughout, suite-tagged via the cert's `suite` field; veri
 
 ### Decision 7 — `mutable_pruning` attests erase, not tombstone
 
-**Scenario.** A receiver verifies a `mutable_pruning` cert and acts on the assumption that the bytes are unrecoverable. The local store implements deletion as tombstone — the `tombstoned: true` pattern that's correct for the event log (`event-log/src/index.ts`) and currently extends incorrectly to memory (the cycle's prune phase calls `deleteMemory`, but a tombstone-not-erase implementation would silently weaken the cert's claim).
+**Scenario.** A receiver verifies a `mutable_pruning` cert and acts on the assumption that the bytes are unrecoverable. The local store implements deletion as tombstone — the `tombstoned: true` pattern that's correct for the event log (`packages/event-log/src/index.ts`) and currently extends incorrectly to memory (the cycle's prune phase calls `deleteMemory`, but a tombstone-not-erase implementation would silently weaken the cert's claim).
 
 **Test.** If `mutable_pruning` attests "no future retrieval" (the weak reading), the operator's signed cert can hold while the bytes persist on disk indefinitely — the doctrine's privacy claim is structurally weaker than receivers assume. If it attests "bytes unrecoverable" (the strong reading), tombstone-as-implementation is wrong and phase 3 must deliver actual erase.
 
