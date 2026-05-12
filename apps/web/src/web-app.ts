@@ -2057,6 +2057,14 @@ export class WebApp {
     // to the session-bound register (URL bar shows live URL, control
     // band shows live state).
     this.applyChromeToCurrentState();
+    // Start keepalive — pings the sandbox every 60s so the idle
+    // reaper doesn't tear down the session while the user has
+    // motebit foregrounded but isn't actively interacting with the
+    // cloud browser. Closes the "I cleared the CAPTCHA, idled 11
+    // min, fresh CAPTCHA waiting" failure mode without making
+    // sessions unboundedly long (closing the tab stops the timer;
+    // normal reaper takes over after BROWSER_SANDBOX_IDLE_MS).
+    this.startCloudSessionKeepalive();
   }
 
   /**
@@ -2532,6 +2540,8 @@ export class WebApp {
    */
   private detachSessionFromLiveBrowser(): void {
     this._activeBrowserSessionId = null;
+    // Stop the keepalive timer — no session to keep alive.
+    this.stopCloudSessionKeepalive();
     // Release the slab's WebGL screen-mesh texture so the body
     // returns to its empty register. Sibling of setSlabScreencastImage;
     // a subsequent session's first frame re-allocates cleanly.
@@ -2540,6 +2550,54 @@ export class WebApp {
     // pre-session register (URL bar empty, control band reads the
     // post-session control state).
     this.applyChromeToCurrentState();
+  }
+
+  /**
+   * Cloud-session keepalive timer — fires `computerRegistration.
+   * keepalive()` on a fixed interval (60s) while a cloud-browser
+   * session is mounted. The sandbox's idle reaper at
+   * BROWSER_SANDBOX_IDLE_MS (10min) tears down sessions whose
+   * `lastUsedAt` is past the cutoff; keeping the timestamp fresh
+   * keeps the session warm across the user's idle gaps.
+   *
+   * Doctrine binding: "accumulated trust" — a CAPTCHA-cleared
+   * Google session has reputation capital invested in it; the
+   * reaper destroys that capital every 10 minutes of inactivity.
+   * The keepalive amortizes the investment across the user's
+   * working attention window without making sessions unboundedly
+   * long (closing the motebit tab stops the timer; normal reaper
+   * takes over).
+   *
+   * Idempotent: calling `startCloudSessionKeepalive` while a timer
+   * is already running is a no-op. Cleared by
+   * `stopCloudSessionKeepalive`, which is called on detach +
+   * dispose. Errors during a ping are swallowed (fail-soft — a
+   * transient sandbox blip shouldn't cascade into UI failures;
+   * the worst case is the reaper fires on the next idle window,
+   * which is the pre-fix behavior).
+   */
+  private _cloudKeepaliveTimer: ReturnType<typeof setInterval> | null = null;
+
+  private static readonly CLOUD_KEEPALIVE_INTERVAL_MS = 60_000;
+
+  private startCloudSessionKeepalive(): void {
+    if (this._cloudKeepaliveTimer !== null) return;
+    if (typeof setInterval === "undefined") return;
+    this._cloudKeepaliveTimer = setInterval(() => {
+      void this.computerRegistration?.keepalive().catch(() => {
+        // Fail-soft — a transient sandbox blip doesn't cascade.
+        // If keepalive is consistently failing, the reaper will
+        // fire on the next idle window and the user lands back at
+        // the pre-fix behavior. The chat surfaces broader errors
+        // via the normal tool-failure paths.
+      });
+    }, WebApp.CLOUD_KEEPALIVE_INTERVAL_MS);
+  }
+
+  private stopCloudSessionKeepalive(): void {
+    if (this._cloudKeepaliveTimer === null) return;
+    clearInterval(this._cloudKeepaliveTimer);
+    this._cloudKeepaliveTimer = null;
   }
 
   /**

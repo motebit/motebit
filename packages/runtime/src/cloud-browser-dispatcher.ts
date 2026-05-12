@@ -243,6 +243,31 @@ export class CloudBrowserDispatcher implements ComputerPlatformDispatcher {
   }
 
   /**
+   * Keepalive ping — touches the service-side session's `lastUsedAt`
+   * so the idle reaper doesn't tear down a session while the user
+   * has motebit foregrounded but isn't actively interacting with
+   * the cloud browser. The surface fires this on a periodic interval
+   * (web: 60s) for as long as the live_browser slab item is mounted.
+   *
+   * Idempotent. Returns silently on 204; surfaces errors only when
+   * the session is not opened on this dispatcher (the surface should
+   * stop pinging once its own session goes away, but defending
+   * against ordering races is cheap).
+   *
+   * Doctrine: "accumulated trust" — Google's reputation for a cloud
+   * session is built per-session and destroyed on session reap.
+   * Keeping a CAPTCHA-cleared session warm across user idle gaps is
+   * the cleanest way to amortize that investment without making
+   * sessions unboundedly long (the surface stops pinging when the
+   * user closes motebit; normal reaper takes over).
+   */
+  async keepalive(): Promise<void> {
+    const cloudId = this.cloudSessionId;
+    if (cloudId === null) return;
+    await this.request<void>("POST", `/sessions/${encodeURIComponent(cloudId)}/keepalive`);
+  }
+
+  /**
    * Tear down the cloud browser session. The `sessionId` arg from the
    * runtime's session manager is the manager's client-side id, not
    * the cloud session id — for v1 (single active cloud session) we

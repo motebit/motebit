@@ -149,6 +149,57 @@ describe("registerWebComputerTool", () => {
     expect(calls.dispose).toBe(1);
   });
 
+  it("exposes keepalive that delegates to the dispatcher when supported", async () => {
+    // Pin from 2026-05-12. Closes the "I cleared the Google CAPTCHA,
+    // idled past BROWSER_SANDBOX_IDLE_MS, returned to a fresh CAPTCHA"
+    // failure mode. The web surface fires registration.keepalive() on
+    // a 60s interval while the live_browser slab is mounted; the
+    // registration delegates to dispatcher.keepalive() which POSTs to
+    // /sessions/:id/keepalive on the sandbox; the sandbox touches
+    // lastUsedAt so the idle reaper doesn't fire. The keepalive is
+    // duck-typed: dispatchers without it (test mocks, future
+    // dispatchers, etc.) get a silent no-op.
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    let keepaliveCalls = 0;
+    // Add keepalive to the mock dispatcher (CloudBrowserDispatcher
+    // has it; the protocol-shaped mock does not by default).
+    (dispatcher as unknown as { keepalive?: () => Promise<void> }).keepalive = async () => {
+      keepaliveCalls += 1;
+    };
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+    expect(reg).not.toBeNull();
+    expect(typeof reg!.keepalive).toBe("function");
+    await reg!.keepalive();
+    expect(keepaliveCalls).toBe(1);
+    await reg!.keepalive();
+    expect(keepaliveCalls).toBe(2);
+  });
+
+  it("keepalive is a no-op when the dispatcher doesn't implement it (duck-typed)", async () => {
+    // Pin: backwards-compatibility with dispatchers that don't have
+    // keepalive. The web surface should be able to call keepalive
+    // unconditionally without crashing on dispatchers that omit the
+    // method.
+    const registry = new InMemoryToolRegistry();
+    const { dispatcher } = makeMockDispatcher();
+    // Default mock dispatcher has NO keepalive method.
+    const reg = registerWebComputerTool(registry, {
+      baseUrl: "https://browser.example.com",
+      getAuthToken: () => "tok",
+      motebitId: "did:motebit:test",
+      dispatcher,
+    });
+    expect(reg).not.toBeNull();
+    // Must not throw.
+    await expect(reg!.keepalive()).resolves.toBeUndefined();
+  });
+
   it("rejects with structured failure when no `action` argument supplied", async () => {
     const registry = new InMemoryToolRegistry();
     const { dispatcher } = makeMockDispatcher();

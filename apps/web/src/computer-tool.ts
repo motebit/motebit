@@ -92,6 +92,23 @@ export interface ComputerToolRegistration {
    * tool-dispatch path.
    */
   ensureDefaultSession: () => Promise<ComputerSessionHandle | null>;
+  /**
+   * Keepalive ping — touches the cloud session's `lastUsedAt` so the
+   * idle reaper (BROWSER_SANDBOX_IDLE_MS ≈ 10min) doesn't tear it
+   * down while the user has motebit foregrounded but isn't actively
+   * interacting with the cloud browser. The surface fires this on a
+   * 60s interval for as long as the live_browser slab item is mounted.
+   *
+   * Doctrine: "accumulated trust" — Google's CAPTCHA reputation for a
+   * cloud session is built per-session and destroyed on session reap.
+   * Closes the "I cleared the CAPTCHA, idled 11 min, fresh CAPTCHA
+   * waiting" failure mode without making sessions unboundedly long
+   * (closing the motebit tab stops the pings; normal reaper takes
+   * over after IDLE_MS).
+   *
+   * No-op when no session is open. Idempotent.
+   */
+  keepalive: () => Promise<void>;
   /** Teardown — closes the default session and disposes the cloud browser. */
   dispose: () => Promise<void>;
 }
@@ -856,5 +873,18 @@ export function registerWebComputerTool(
     sessionManager.dispose();
   }
 
-  return { sessionManager, coBrowseControl, ensureDefaultSession, dispose };
+  // Keepalive — delegate to the dispatcher if it supports the
+  // method (CloudBrowserDispatcher does; test mocks may not). The
+  // dispatcher's keepalive is internally a no-op when no session
+  // is open, so we don't need to gate on defaultSession here.
+  // Doctrine: "accumulated trust" — keep CAPTCHA-cleared sessions
+  // warm across user idle gaps.
+  async function keepalive(): Promise<void> {
+    const d = dispatcher as { keepalive?: () => Promise<void> };
+    if (typeof d.keepalive === "function") {
+      await d.keepalive();
+    }
+  }
+
+  return { sessionManager, coBrowseControl, ensureDefaultSession, keepalive, dispose };
 }

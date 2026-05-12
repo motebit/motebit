@@ -234,6 +234,55 @@ describe("browser-sandbox routes", () => {
     });
   });
 
+  // ── Keepalive: warm sessions while user has motebit foregrounded ────
+  describe("POST /sessions/:id/keepalive", () => {
+    // Pin from 2026-05-12. Surface fires this on a 60s interval
+    // while the user has a cloud-browser session mounted. Closes the
+    // "I cleared the CAPTCHA, idled 11 min, now there's a fresh
+    // CAPTCHA waiting" failure mode by keeping the session warm
+    // across the user's idle gaps — without making sessions
+    // unboundedly long (closing the tab stops the pings, normal
+    // reaper takes over).
+
+    it("returns 204 No Content on success and touches lastUsedAt", async () => {
+      const touchSpy = vi.fn();
+      (pool as unknown as { touchSession: typeof touchSpy }).touchSession = touchSpy;
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const ensure = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const { session_id } = (await ensure.json()) as { session_id: string };
+
+      const res = await app.request(`/sessions/${session_id}/keepalive`, {
+        method: "POST",
+        headers: authHeader(),
+      });
+      expect(res.status).toBe(204);
+      // touchSession was called with this session id — the load-
+      // bearing assertion: the reaper sees fresh lastUsedAt and
+      // doesn't reap.
+      expect(touchSpy).toHaveBeenCalledWith(session_id);
+    });
+
+    it("returns 404 + session_closed for unknown session id (fail-closed)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const res = await app.request("/sessions/nope/keepalive", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error: { reason: string } };
+      expect(body.error.reason).toBe("session_closed");
+    });
+
+    it("rejects without bearer (401 + permission_denied)", async () => {
+      const app = buildApp({ config: TEST_CONFIG, pool });
+      const res = await app.request("/sessions/abc/keepalive", { method: "POST" });
+      expect(res.status).toBe(401);
+    });
+  });
+
   describe("POST /sessions/:id/actions", () => {
     it("executes a screenshot action and returns wire shape", async () => {
       const app = buildApp({ config: TEST_CONFIG, pool });

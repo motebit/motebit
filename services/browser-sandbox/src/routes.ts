@@ -107,6 +107,37 @@ export function buildApp(deps: BuildAppDeps): Hono {
     });
   });
 
+  // Keepalive — touch lastUsedAt without doing any other work. The
+  // surface fires this on a 60s interval while the user has a
+  // cloud-browser session mounted (live_browser slab item is up),
+  // regardless of whether the user is actively interacting with the
+  // browser or just chatting alongside it. Closes the failure mode
+  // where a user clears a CAPTCHA, idles past BROWSER_SANDBOX_IDLE_MS
+  // (10min), and returns to find the session reaped + a fresh CAPTCHA
+  // waiting. The keepalive keeps the session warm as long as the user
+  // has motebit foregrounded; closing the tab stops the pings and the
+  // reaper takes over normally.
+  //
+  // Doctrine: "Accumulated trust — memory, state history, audit
+  // trails that make the agent more capable the longer it runs."
+  // The cloud session's Google-side reputation IS accumulated trust;
+  // a 10min reaper destroys it on every idle gap. The keepalive
+  // amortizes the CAPTCHA-clearing investment across the user's
+  // attention window.
+  //
+  // 204 No Content on success — no payload, idempotent. 404
+  // (ServiceError "session_closed") on missing session, same shape
+  // as other endpoints. Cheap by construction: one map update.
+  app.post("/sessions/:id/keepalive", async (c) => {
+    const sessionId = c.req.param("id");
+    const session = deps.pool.getSession(sessionId);
+    if (!session) {
+      throw new ServiceError("session_closed", `session not found: ${sessionId}`);
+    }
+    deps.pool.touchSession(sessionId);
+    return c.body(null, 204);
+  });
+
   app.post("/sessions/:id/actions", async (c) => {
     const sessionId = c.req.param("id");
     const session = deps.pool.getSession(sessionId);
