@@ -58,6 +58,7 @@ import type { McpServerConfig } from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
 import { createWebComputerApprovalFlow } from "./computer-approval.js";
 import { registerWebComputerTool, type ComputerToolRegistration } from "./computer-tool.js";
+import { loadCookies, saveCookies } from "./encrypted-cookie-store.js";
 import type { ComputerSessionReceipt } from "@motebit/sdk";
 import { ScreencastFrameBus } from "./screencast-bus.js";
 import { setLiveBrowserSuppressionPredicate } from "./ui/slab-items.js";
@@ -219,25 +220,44 @@ export class WebApp {
    */
   private _activeBrowserSessionId: string | null = null;
   /**
-   * Phase 1 of the persistent user_data_dir arc — cookies-only,
-   * in-memory, per-WebApp lifetime. Seeded from each cloud-session
-   * dispose (via `onCookiesPersisted`); read on each new cloud-
-   * session open (via `getInitialCookies`). Survives reaper-driven
-   * tear-downs of the cloud Chromium while the user has motebit
-   * foregrounded — accumulates Google CAPTCHA reputation, logged-
-   * in account state across the user's working window.
+   * Phase 1+2 of the persistent user_data_dir arc — cookies-only, now
+   * with disk-backed encryption at rest. In-memory cache mirrors what
+   * IndexedDB holds; first read lazy-loads from disk; writes update
+   * both the cache and (fire-and-forget) the encrypted store.
    *
-   * Empty array on cold-start (first cloud session). Cleared
-   * implicitly on tab close (WebApp instance goes away). Phase 2
-   * adds disk persistence keyed by motebit_id + encryption-at-rest
-   * with the identity key; Phase 3 adds the `/cookies grant`
-   * consent gate + revoke UI.
+   * Survives:
+   *   - reaper-driven tear-downs of the cloud Chromium (Phase 1)
+   *   - tab close + reopen (Phase 2)
+   *   - browser restart, even device restart (Phase 2 — local-only;
+   *     cross-device sync is a future arc)
+   *
+   * The encrypted store is per-motebitId so multiple identities in
+   * the same origin don't share cookies (sovereign-floor invariant).
+   * Non-extractable AES-GCM key in IndexedDB; ciphertext at rest.
+   * Same security register as `encrypted-keystore.ts` for the
+   * device's private key — strongest browser-native at-rest
+   * encryption available.
+   *
+   * Phase 3 adds the `/cookies grant` consent gate + `/cookies
+   * revoke` UI on top of this storage. Cookies-by-default is fine
+   * for v1 (per-origin same-policy isolation + at-rest encryption
+   * is the floor); the consent gate is a precision affordance for
+   * users who want granular control.
    *
    * Doctrine: `docs/doctrine/runtime-invariants-over-prompt-rules.md`
    * applied to the cloud-browser surface — the structural fix for
    * accumulated browsing trust.
    */
   private _persistedCookies: readonly import("@motebit/runtime").PersistentCookieWire[] = [];
+  /**
+   * Lazy-load gate for the encrypted cookie store. The first call to
+   * `getInitialCookies` triggers a load from IndexedDB and caches
+   * the result in `_persistedCookies`. Subsequent reads serve from
+   * the cache. Writes update the cache synchronously + persist to
+   * disk asynchronously (fire-and-forget; persistence errors don't
+   * break the dispose path).
+   */
+  private _cookieStoreLoadOnce: Promise<void> | null = null;
   /**
    * chrome-1a-fix / prompt-1 — surface-tracked current URL for the
    * open cloud-browser session. Exposed via
@@ -946,23 +966,28 @@ export class WebApp {
         // the prompt band fires as before. Doctrine: `CLAUDE.md`
         // § UI — "do not confirm what the user can already see."
         getCurrentTypedIntent: () => runtime.currentTypedIntent(),
-        // Phase 1 of the persistent user_data_dir arc (cookies-only).
-        // In-memory store on the WebApp instance; survives across
-        // cloud-session boundaries within one WebApp lifetime
-        // (i.e., across opens/closes of the cloud Chromium while
-        // motebit stays in the user's tab). Closes the per-cloud-
-        // session CAPTCHA tax for active users — Google's
-        // reputation for the session lives in cookies; carrying
-        // them across the session reaper means a cleared CAPTCHA
-        // stays cleared. Phase 2 will add disk persistence +
-        // encryption-at-rest using the motebit identity key; Phase
-        // 3 adds the `/cookies grant` consent gate + revoke UI.
-        // Doctrine: `docs/doctrine/runtime-invariants-over-prompt-
-        // rules.md` applied to the cloud-browser surface — the
-        // structural fix for accumulated browsing trust.
-        getInitialCookies: () => this._persistedCookies,
+        // Phase 1+2 of the persistent user_data_dir arc — in-memory
+        // cache backed by IndexedDB + WebCrypto AES-GCM encryption-
+        // at-rest. Survives reaper, tab close, browser restart,
+        // device restart. First read lazy-loads from disk; writes
+        // update cache + fire-and-forget persistence. Per-motebit
+        // record so identities don't share cookies. Phase 3 adds
+        // the `/cookies grant` + `/cookies revoke` UI. Doctrine:
+        // `docs/doctrine/runtime-invariants-over-prompt-rules.md`
+        // applied to the cloud-browser surface.
+        getInitialCookies: async () => {
+          await this.ensureCookieStoreLoaded(runtime.motebitId);
+          return this._persistedCookies;
+        },
         onCookiesPersisted: (cookies) => {
           this._persistedCookies = cookies;
+          // Fire-and-forget — a persistence error shouldn't break
+          // dispose. The user just loses the accumulated trust for
+          // the next session; cold-start on next open.
+          void saveCookies(runtime.motebitId, cookies).catch(() => {
+            // Swallowed: encrypted-cookie-store is itself fail-soft;
+            // any error here is already logged at the store layer.
+          });
         },
       });
 
@@ -2636,6 +2661,32 @@ export class WebApp {
     if (this._cloudKeepaliveTimer === null) return;
     clearInterval(this._cloudKeepaliveTimer);
     this._cloudKeepaliveTimer = null;
+  }
+
+  /**
+   * Lazy-load the persisted cookie jar from IndexedDB into the
+   * in-memory cache. Idempotent — the load runs once per WebApp
+   * lifetime, gated by `_cookieStoreLoadOnce`. Subsequent
+   * `getInitialCookies` calls serve from `_persistedCookies` after
+   * the first load resolves.
+   *
+   * Failures fail-soft: the cache stays empty, the user gets
+   * cold-start cookies on the next cloud session. Same posture as
+   * the encrypted-cookie-store itself — accumulated-trust degrades
+   * to no-trust under error, not to broken-session.
+   */
+  private ensureCookieStoreLoaded(motebitId: string): Promise<void> {
+    if (this._cookieStoreLoadOnce !== null) return this._cookieStoreLoadOnce;
+    this._cookieStoreLoadOnce = loadCookies(motebitId)
+      .then((cookies) => {
+        this._persistedCookies = cookies;
+      })
+      .catch(() => {
+        // Already swallowed inside loadCookies; defensive double-
+        // catch so the once-promise resolves cleanly even on
+        // unexpected throws.
+      });
+    return this._cookieStoreLoadOnce;
   }
 
   /**
