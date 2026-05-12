@@ -1685,6 +1685,36 @@ describe("synthesizeClosingFallback — runtime guarantee of visible closing tex
     expect(out).toContain("click_element");
   });
 
+  // Branch coverage: partial-success path's lastToolName-empty
+  // ternary arm. The function has a ternary on `lastToolName`
+  // truthiness inside the partial-success block; the WITH-name arm
+  // is covered above, this pins the WITHOUT-name arm.
+  it("partial success without lastToolName: still names the count, generic 'hit an issue'", () => {
+    const out = synthesizeClosingFallback({
+      toolCallsSucceeded: 2,
+      toolCallsFailed: 1,
+      lastToolName: "",
+    });
+    expect(out).toContain("2/3");
+    expect(out).toMatch(/hit an issue/i);
+    // Empty-name path must not produce a backtick'd tool name.
+    expect(out).not.toContain("``");
+  });
+
+  // Same shape for all-success-with-empty-name (covers the path even
+  // though the all-success block currently has no ternary — pins the
+  // contract that empty name is a valid input on every success
+  // shape).
+  it("all success without lastToolName: brief acknowledgment, never empty", () => {
+    const out = synthesizeClosingFallback({
+      toolCallsSucceeded: 3,
+      toolCallsFailed: 0,
+      lastToolName: "",
+    });
+    expect(out.length).toBeGreaterThan(0);
+    expect(out).toMatch(/done|next/i);
+  });
+
   it("all success: brief acknowledgment, never empty", () => {
     const out = synthesizeClosingFallback({
       toolCallsSucceeded: 3,
