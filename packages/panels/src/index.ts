@@ -131,6 +131,22 @@ export {
 } from "./skills/controller";
 
 export {
+  createTrustController,
+  isDeletionAction,
+  type TrustController,
+  type TrustControllerOptions,
+  type TrustFetchAdapter,
+  type TrustState,
+  type TrustCookieSummary,
+  type TrustMemoryNode,
+  type TrustConversation,
+  type TrustReceipt,
+  type TrustAuditRecord,
+  type TrustPeerRecord,
+  type TrustCookie,
+} from "./trust/controller";
+
+export {
   RegistryBackedSkillsPanelAdapter,
   SkillConsentDeclined,
   requiresInstallConsent,
