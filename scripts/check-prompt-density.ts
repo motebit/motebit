@@ -68,8 +68,17 @@ const DOCTRINE_PATH = "docs/doctrine/runtime-invariants-over-prompt-rules.md";
  * that landed alongside the doctrine memo. New clauses bump this with
  * doctrine justification in the commit message; pruning lowers it
  * (allowed silently — pruning is encouraged).
+ *
+ * Bump log:
+ *   - 2026-05-12 62→63: navigation_triggered typed-truth clause on
+ *     click_element + key results. A-grade (wire field exists on
+ *     click_element via doClickElement's beforeUrl/afterUrl capture,
+ *     extended to key via doKey same shape); gated by
+ *     check-typed-truth-perception (#80) as the 12th typed-truth
+ *     field. Closes the "AI says done on submit-class action when
+ *     the page didn't move" confabulation class witnessed today.
  */
-const BASELINE = 62;
+const BASELINE = 63;
 
 function countRuleClauses(source: string): number {
   let count = 0;

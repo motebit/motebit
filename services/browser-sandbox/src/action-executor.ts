@@ -405,8 +405,21 @@ async function doKey(session: BrowserSession, action: KeyAction): Promise<Action
   // The wire format encodes modifiers inside the `key` string itself
   // (e.g. `"cmd+c"`, `"ctrl+shift+t"`, `"Escape"`). No separate
   // modifier list — the translator splits + renames + rejoins.
+  //
+  // Typed-truth `navigation_triggered`: capture URL before + after so
+  // form-submission via key("Enter") reports whether the page
+  // actually moved. Same shape `doClickElement` ships for the click
+  // path. When false, the keystroke fired but no navigation happened
+  // — the AI shouldn't claim "submitted" / "done" until it reads the
+  // post-state. Witnessed bug 2026-05-12: AI pressed Enter on the
+  // Google search input, got `ok: true`, said "Done" — but the form
+  // didn't submit (Google's promo overlay intercepted) and the page
+  // stayed on the homepage. The wire field carries the truth; the
+  // prompt teaches reading it.
+  const beforeUrl = session.page.url();
   await pressKeyCombo(session.page, action.key);
-  return { kind: "key", ok: true };
+  const afterUrl = session.page.url();
+  return { kind: "key", ok: true, navigation_triggered: beforeUrl !== afterUrl };
 }
 
 async function doScroll(session: BrowserSession, action: ScrollAction): Promise<ActionResult> {

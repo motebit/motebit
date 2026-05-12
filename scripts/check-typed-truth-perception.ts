@@ -172,6 +172,13 @@ const TYPED_TRUTH_FIELDS: ReadonlyArray<TypedTruthField> = [
     notes:
       "Type-action recovery hint when text_appeared is false. Dispatcher attaches `recovery_hint: \"read_page_then_type_into\"` to the type result so the AI's natural next step is the durable element-addressed path (read_page → type_into, atomic focus + type) instead of coordinate click + retype (which hits the same focus race). Closes the 2026-05-12 witnessed bug where the AI saw text_appeared: false, said 'Clicking it first, then typing. Done.' — the coordinate remediation failed the same way and the AI confabulated success. Shipped 2026-05-12; doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md § typed-truth-perception triple.",
   },
+  {
+    field: "navigation_triggered",
+    promptText: "navigation_triggered",
+    dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
+    notes:
+      "click_element + key truth-feedback: did the action cause the page URL to change? Dispatcher captures page.url() before + after the action; result carries `navigation_triggered: true` when URL moved, false when click/keystroke landed but page didn't navigate. Closes the 2026-05-12 witnessed bug where the AI called click_element(submit_button_id), got ok: true, said 'Done' — but the form submission was blocked by Google's promo overlay and the page stayed on the homepage. The wire field had been emitted on click_element since the action shipped, but neither the prompt taught reading it nor was it registered here, so the AI ignored the false flag and confabulated completion. The drift class this gate (#80) exists to catch — silent typed truth (the wire carries the answer but the AI describes it wrong because no reading rule). Extended to key results 2026-05-12 to cover the form-submit-via-Enter path. Doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md § typed-truth-perception triple.",
+  },
 ];
 
 interface Violation {

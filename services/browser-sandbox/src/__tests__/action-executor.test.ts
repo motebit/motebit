@@ -508,6 +508,49 @@ describe("executeAction", () => {
       await executeAction(session, { kind: "key", key: "Enter" }, deps);
       expect(keyboardCalls[0]?.arg).toBe("Enter");
     });
+
+    // Typed-truth navigation_triggered: when Enter (or any key) is
+    // pressed and the page navigates as a result (form submit, link
+    // navigation), the result carries `navigation_triggered: true`.
+    // When the key fires but the page doesn't move, false.
+    describe("navigation_triggered typed-truth field", () => {
+      it("navigation_triggered: false when Enter does NOT trigger navigation (witnessed bug)", async () => {
+        const mock = makeMockSession();
+        // Default mock: page.url() returns "about:blank" both before
+        // and after the key press — no navigation fired. Mirrors the
+        // 2026-05-12 witnessed bug where the AI pressed Enter on the
+        // Google search input, Google's promo overlay intercepted,
+        // and the page stayed on the homepage.
+        const result = (await executeAction(
+          mock.session,
+          { kind: "key", key: "Enter" },
+          deps,
+        )) as Record<string, unknown>;
+        expect(result.ok).toBe(true);
+        expect(result.navigation_triggered).toBe(false);
+      });
+
+      it("navigation_triggered: true when Enter triggers a form submission", async () => {
+        const mock = makeMockSession();
+        // Simulate Playwright's url() returning different values
+        // before and after the keypress — form submission navigated
+        // the page.
+        let urlReadCount = 0;
+        mock.setPageUrlImpl(() => {
+          urlReadCount++;
+          return urlReadCount === 1
+            ? "https://example.com/form"
+            : "https://example.com/submit-result";
+        });
+        const result = (await executeAction(
+          mock.session,
+          { kind: "key", key: "Enter" },
+          deps,
+        )) as Record<string, unknown>;
+        expect(result.ok).toBe(true);
+        expect(result.navigation_triggered).toBe(true);
+      });
+    });
   });
 
   describe("scroll", () => {
