@@ -102,9 +102,100 @@ export interface ActionResult {
  */
 export interface ActionExecutorDeps {
   readonly now?: () => number;
+  /**
+   * Milliseconds to wait after a frame-stale error before the one-shot
+   * retry. ~100ms is enough for Playwright to bind to the new frame
+   * after a same-origin redirect (Google's `?zx=…` anti-cache pattern,
+   * OAuth round-trips, AJAX URL rewrites). Tests pass 0 for
+   * determinism. Doctrine: motebit-computer.md §"Typed truth on
+   * results" — `frame_stale` ships with executor enforcement.
+   */
+  readonly frameStaleRetryDelayMs?: number;
 }
 
+/**
+ * Detect Playwright's "page navigated underneath the action" error
+ * family. Pattern-match on the message because Playwright doesn't
+ * export a named error class for these — they're all generic
+ * `Error`s with discriminating messages. The four observed patterns:
+ *
+ *   - "Execution context was destroyed, most likely because of a navigation"
+ *   - "frame was detached" / "Frame was detached"
+ *   - "Target closed" / "Target page, context or browser has been closed"
+ *   - "frame not attached" (transient subframe state)
+ *
+ * Capture is conservative — extra patterns silently fall through to
+ * the route's general `platform_blocked` envelope, preserving the
+ * existing failure mode rather than silently mis-classifying an
+ * unrelated error as `frame_stale`.
+ */
+function isFrameStaleError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message;
+  return (
+    msg.includes("Execution context was destroyed") ||
+    msg.includes("frame was detached") ||
+    msg.includes("Frame was detached") ||
+    msg.includes("Target closed") ||
+    msg.includes("Target page, context or browser has been closed") ||
+    msg.includes("frame not attached")
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
+}
+
+/**
+ * Execute one `ComputerAction`. Wraps the dispatch switch with a
+ * one-shot retry on frame-stale errors — the most common failure
+ * mode on real-world pages (Google's anti-cache redirect, OAuth
+ * round-trips, SPA navigations during a click/type). If the retry
+ * also catches a stale frame, surfaces `ServiceError("frame_stale")`
+ * so the dispatcher's reason taxonomy stays closed and the AI sees a
+ * typed-truth-perception field instead of an opaque 500.
+ *
+ * Before this wrapper, frame-stale errors fell through the route's
+ * global error handler into `platform_blocked` (HTTP 500) — the AI
+ * received "the platform is blocking key presses" prose for what
+ * was actually a recoverable redirect race. Doctrine:
+ * motebit-computer.md §"Typed truth on results."
+ */
 export async function executeAction(
+  session: BrowserSession,
+  action: ComputerAction,
+  deps: ActionExecutorDeps = {},
+): Promise<ActionResult> {
+  try {
+    return await dispatchAction(session, action, deps);
+  } catch (err: unknown) {
+    if (!isFrameStaleError(err)) throw err;
+    // First attempt caught a stale frame. Wait briefly for Playwright
+    // to bind to the new frame after the navigation race, then retry
+    // once. This recovers transient redirects (Google's `?zx=…`
+    // anti-cache, OAuth, AJAX URL rewrites) without the AI seeing the
+    // race.
+    await delay(deps.frameStaleRetryDelayMs ?? 100);
+    try {
+      return await dispatchAction(session, action, deps);
+    } catch (retryErr: unknown) {
+      if (!isFrameStaleError(retryErr)) throw retryErr;
+      // Even the retry caught a stale frame — the page is moving
+      // faster than the executor can bind. Surface as the typed
+      // `frame_stale` reason so the AI sees a specific failure mode
+      // instead of an opaque `platform_blocked`. The PERCEPTION_
+      // DOCTRINE clause teaches the AI to re-read the page state
+      // rather than verbally interpret this as "platform is
+      // blocking."
+      throw new ServiceError(
+        "frame_stale",
+        "Page navigated underneath the action; the one-shot retry also caught a stale frame. Re-read the current page state before retrying.",
+      );
+    }
+  }
+}
+
+async function dispatchAction(
   session: BrowserSession,
   action: ComputerAction,
   deps: ActionExecutorDeps = {},

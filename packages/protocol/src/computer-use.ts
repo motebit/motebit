@@ -627,6 +627,17 @@ export interface ComputerSessionClosed {
  *   user_preempted     — physical user input interrupted mid-dispatch
  *   platform_blocked   — OS blocked synthetic input (secure password field, elevation boundary)
  *   not_supported      — surface cannot execute computer use at all
+ *   frame_stale        — the page navigated underneath the action; the
+ *                        executor's frame reference is no longer valid.
+ *                        Distinct from session_closed (the session is
+ *                        still open; only the frame changed). The
+ *                        cloud executor retries once before surfacing
+ *                        this so transient redirects (Google's
+ *                        anti-cache `?zx=…` redirect, OAuth round-
+ *                        trips, AJAX-driven URL rewrites) don't reach
+ *                        the AI as failure. When the AI sees this
+ *                        reason, the page has moved twice and a
+ *                        re-read is required.
  * @alpha
  */
 export const COMPUTER_FAILURE_REASONS = [
@@ -649,6 +660,22 @@ export const COMPUTER_FAILURE_REASONS = [
   // the log answer "what state were we in" without cross-referencing
   // adjacent co_browse_control_changed events.
   "not_in_control",
+  // Typed-truth-perception (motebit-computer.md §"Typed truth on
+  // results"): the page navigated mid-action so the executor's frame
+  // reference became stale. Playwright surfaces this as
+  // `Execution context was destroyed`, `frame was detached`,
+  // `Target closed`, or `Target page, context or browser has been
+  // closed`. Before this entry, those errors fell through the route
+  // handler's general catch into `platform_blocked` — the AI received
+  // an opaque server-fault and verbally interpreted it as "keystrokes
+  // aren't landing." With this reason typed, the executor retries
+  // once (recovers transient redirects without the AI seeing the
+  // race) and surfaces the failure with a name the prompt teaches
+  // against: re-read the page before retrying. Doctrine:
+  // motebit-computer.md §"Typed truth on results" + the
+  // typed-truth-perception triple (wire field + prompt clause +
+  // dispatch enforcement).
+  "frame_stale",
 ] as const;
 
 /** @alpha */

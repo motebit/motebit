@@ -896,4 +896,142 @@ describe("executeAction", () => {
       expect(result.text_appeared).toBe(false);
     });
   });
+
+  // ── Frame-stale retry: typed truth on the Playwright navigation race ─
+  describe("frame_stale — one-shot retry + typed reason on second failure", () => {
+    // Doctrine pin: motebit-computer.md §"Typed truth on results."
+    //
+    // Before this wrapper, a same-origin redirect during a key/click
+    // (Google's `?zx=…` anti-cache, OAuth round-trip, AJAX URL
+    // rewrite) threw a Playwright `Execution context was destroyed`
+    // (or `frame was detached` / `Target closed`) that fell through
+    // the route handler's general catch into `platform_blocked` (HTTP
+    // 500). The AI received an opaque server-fault and verbally
+    // interpreted it as "keystrokes aren't landing — the browser
+    // session may not have focus" — prose interpretation of a typed
+    // event.
+    //
+    // The wrapper catches the four Playwright frame-stale patterns,
+    // retries once after a brief settle delay (deps.frameStaleRetry
+    // DelayMs, defaulting to 100ms; tests pass 0 for determinism),
+    // and surfaces ServiceError("frame_stale") only if even the
+    // retry caught a stale frame. The dispatcher's reason taxonomy
+    // stays closed; the AI sees `frame_stale` and the PERCEPTION_
+    // DOCTRINE clause teaches it to re-read the page state.
+
+    const retryDeps = { now: () => FIXED_NOW, frameStaleRetryDelayMs: 0 };
+
+    function makeStaleThenOkKeyboard(
+      m: MockSession,
+      staleMessage: string,
+    ): { firstAttempt: () => boolean; secondAttempt: () => boolean } {
+      let calls = 0;
+      let firstCalled = false;
+      let secondCalled = false;
+      m.mockPage.keyboard.press = vi.fn(async (combo: string) => {
+        calls += 1;
+        if (calls === 1) {
+          firstCalled = true;
+          throw new Error(staleMessage);
+        }
+        secondCalled = true;
+        // Record the second-attempt call so we know the retry
+        // landed and dispatched the same action.
+        void combo;
+      }) as unknown as MockSession["mockPage"]["keyboard"]["press"];
+      return {
+        firstAttempt: () => firstCalled,
+        secondAttempt: () => secondCalled,
+      };
+    }
+
+    it("retries once on 'Execution context was destroyed' and returns ok", async () => {
+      const m = makeMockSession();
+      const probe = makeStaleThenOkKeyboard(
+        m,
+        "Execution context was destroyed, most likely because of a navigation",
+      );
+      const result = (await executeAction(
+        m.session,
+        { kind: "key", key: "Enter" },
+        retryDeps,
+      )) as Record<string, unknown>;
+      expect(probe.firstAttempt()).toBe(true);
+      expect(probe.secondAttempt()).toBe(true);
+      expect(result.kind).toBe("key");
+      expect(result.ok).toBe(true);
+    });
+
+    it("retries once on 'frame was detached' and returns ok", async () => {
+      const m = makeMockSession();
+      const probe = makeStaleThenOkKeyboard(m, "frame was detached");
+      const result = (await executeAction(
+        m.session,
+        { kind: "key", key: "Enter" },
+        retryDeps,
+      )) as Record<string, unknown>;
+      expect(probe.secondAttempt()).toBe(true);
+      expect(result.ok).toBe(true);
+    });
+
+    it("retries once on 'Target closed' and returns ok", async () => {
+      const m = makeMockSession();
+      const probe = makeStaleThenOkKeyboard(m, "Target closed");
+      const result = (await executeAction(
+        m.session,
+        { kind: "key", key: "Enter" },
+        retryDeps,
+      )) as Record<string, unknown>;
+      expect(probe.secondAttempt()).toBe(true);
+      expect(result.ok).toBe(true);
+    });
+
+    it("surfaces typed ServiceError('frame_stale') when the retry also catches a stale frame — NOT platform_blocked", async () => {
+      const m = makeMockSession();
+      m.mockPage.keyboard.press = vi.fn(async () => {
+        throw new Error("Execution context was destroyed, most likely because of a navigation");
+      }) as unknown as MockSession["mockPage"]["keyboard"]["press"];
+
+      await expect(
+        executeAction(m.session, { kind: "key", key: "Enter" }, retryDeps),
+      ).rejects.toMatchObject({
+        name: "ServiceError",
+        reason: "frame_stale",
+      });
+    });
+
+    it("does NOT retry non-frame-stale errors — preserves the existing failure mode for unrelated bugs", async () => {
+      const m = makeMockSession();
+      let calls = 0;
+      m.mockPage.keyboard.press = vi.fn(async () => {
+        calls += 1;
+        throw new Error("Some other Playwright error unrelated to frame state");
+      }) as unknown as MockSession["mockPage"]["keyboard"]["press"];
+
+      await expect(
+        executeAction(m.session, { kind: "key", key: "Enter" }, retryDeps),
+      ).rejects.toThrow("Some other Playwright error unrelated to frame state");
+      // Critically: the unrelated error was NOT retried — it
+      // surfaces verbatim on the first call. Retry is scoped to the
+      // frame-stale family by construction.
+      expect(calls).toBe(1);
+    });
+
+    it("frame_stale reason from sandbox maps back to ComputerFailureReason 'frame_stale' (status 409)", async () => {
+      // Cross-package wire-shape pin: the sandbox's REASON_STATUS
+      // map (services/browser-sandbox/src/errors.ts) and the
+      // dispatcher's statusToReason (packages/runtime/src/
+      // cloud-browser-dispatcher.ts) MUST stay symmetric so a
+      // remote sandbox-side frame_stale fires the same reason on
+      // the dispatcher-side. Imported here rather than asserted
+      // indirectly because the parity guarantee is the load-
+      // bearing claim.
+      const { ServiceError } = await import("../errors.js");
+      const e = new ServiceError("frame_stale", "test");
+      expect(e.status()).toBe(409);
+      expect(e.toEnvelope()).toEqual({
+        error: { reason: "frame_stale", message: "test" },
+      });
+    });
+  });
 });

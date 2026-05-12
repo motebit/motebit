@@ -46,6 +46,16 @@ const REASON_STATUS: Record<ComputerFailureReason, number> = {
   // `statusToReason` reverse-maps this back, so the cross-network
   // shape stays clean.
   not_in_control: 423,
+  // Typed-truth-perception (motebit-computer.md §"Typed truth on
+  // results"): the page navigated mid-action and the executor's
+  // frame reference is stale. 409 Conflict is the closest standard
+  // pairing — the resource (the browser frame) is in a state that
+  // conflicts with the request's assumed pre-state. The executor
+  // already retried once before surfacing this; receiving frame_stale
+  // means even the retry caught a fresh stale frame, so the AI must
+  // re-read before retrying. Paired with statusToReason in the
+  // dispatcher.
+  frame_stale: 409,
 };
 
 /**

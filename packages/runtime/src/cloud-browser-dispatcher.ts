@@ -115,6 +115,8 @@ const KNOWN_FAILURE_REASONS: ReadonlySet<ComputerFailureReason> = new Set<Comput
   "user_preempted",
   "platform_blocked",
   "not_supported",
+  "not_in_control",
+  "frame_stale",
 ]);
 
 /**
@@ -126,7 +128,11 @@ function statusToReason(status: number): ComputerFailureReason {
   if (status === 401 || status === 403) return "permission_denied";
   if (status === 404) return "session_closed";
   if (status === 408 || status === 504) return "user_preempted";
-  if (status === 409) return "session_closed";
+  // 409 Conflict: the page navigated underneath the action — the
+  // executor's frame reference is stale. Pairs with browser-sandbox's
+  // REASON_STATUS map (frame_stale: 409). Doctrine: motebit-
+  // computer.md §"Typed truth on results."
+  if (status === 409) return "frame_stale";
   // Co-browse Slice 1: 423 Locked maps back to not_in_control. Pairs
   // with browser-sandbox's REASON_STATUS map; the wire shape stays
   // symmetric so a remote-side gate fires the same reason on the
