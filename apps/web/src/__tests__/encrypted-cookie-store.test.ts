@@ -151,7 +151,7 @@ describe("encrypted-cookie-store — fail-soft on edge cases", () => {
     const dbReq = indexedDB.open("motebit-cookie-store", 1);
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       dbReq.onsuccess = () => resolve(dbReq.result);
-      dbReq.onerror = () => reject(dbReq.error);
+      dbReq.onerror = () => reject(dbReq.error ?? new Error("IDB open failed"));
     });
     const txn = db.transaction("cookies", "readonly");
     const store = txn.objectStore("cookies");
@@ -161,7 +161,7 @@ describe("encrypted-cookie-store — fail-soft on edge cases", () => {
       ciphertext: ArrayBuffer;
     }>((resolve, reject) => {
       getReq.onsuccess = () => resolve(getReq.result);
-      getReq.onerror = () => reject(getReq.error);
+      getReq.onerror = () => reject(getReq.error ?? new Error("IDB get failed"));
     });
     db.close();
 

@@ -241,7 +241,7 @@ async function loadWithFallback(motebitId: string): Promise<readonly PersistentC
   }
 }
 
-async function clearWithFallback(motebitId: string): Promise<void> {
+function clearWithFallback(motebitId: string): void {
   localStorage.removeItem(`${LS_PREFIX}${motebitId}`);
 }
 
@@ -306,7 +306,7 @@ export async function clearCookies(motebitId: string): Promise<void> {
     if (hasIndexedDB()) {
       await clearWithWebCrypto(motebitId);
     } else {
-      await clearWithFallback(motebitId);
+      clearWithFallback(motebitId);
     }
   } catch {
     // Fail-soft.
