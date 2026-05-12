@@ -315,9 +315,26 @@ Absent is not a bug. Do not fill it with ghost planes, skeleton loaders, typing 
 - **Idle-state chatter.** Skeleton loaders, "thinking…" text, persistent progress bars in idle. Kill on sight.
 - **Per-surface divergence.** Three surfaces shipping three slabs whose detachment physics subtly differ. The slab's contract is Ring 1 (controller, lifecycle types, embodiment-mode semantics — identical everywhere); the renderer is Ring 3 (requires WebGL). Surfaces with the renderer obey the same physics; surfaces without it fall back to the Ring-1 chat echo, never to a divergent slab.
 
-## Open decisions
+## Creature-slab relationship — fork (a) shipped by construction
 
-- **Creature-slab relationship.** Currently the slab renders as a separate object floating to the right of the creature. Two viable forks: (a) **attached organ** — slab is rendered as if perched on the creature's lower-rim, shares shadow and breath, reads as the body's extended perceptual field; (b) **invoked-only** — chrome is creature-less, creature appears on long-press or voice and dissolves when not needed (sharper sovereign-identity differentiator, closer to Siri-orb pattern). Today's "creature sits beside the slab as a separate object" is neither and is the surface the user most wants to fix.
+Earlier doctrine named this an open decision between (a) **attached organ** (slab perched on the creature's lower-rim, shares shadow and breath, reads as the body's extended perceptual field) and (b) **invoked-only** (chrome is creature-less, Siri-orb pattern). Grepping the code on 2026-05-11 found fork (a) is **already shipped by construction**, and the doctrine prose had simply not caught up.
+
+The construction:
+
+- **Parented in the scene graph.** `SlabManager` constructor adds `this.group` to `creatureGroup` (slab.ts:432), not to the scene root. The slab inherits every transform applied to the creature group — position drift, buoyancy bob, gravity sag, curiosity tilt — automatically.
+- **Overlap by construction.** With `SLAB_OFFSET_X = 0.38m`, `SLAB_WIDTH = 0.54m`, `BODY_R = 0.14m`, the slab's left edge sits at `x = 0.11m` while the creature's right edge sits at `x = 0.14m`. The two silhouettes overlap by **3 cm on the X axis**; with `SLAB_OFFSET_Z = -0.02m`, the slab is slightly behind the creature, so the body's sphere intrudes into the slab's silhouette from the front camera.
+- **Sympathetic breath.** Creature and slab both compute breath as `sin(t · 0.3 · 2π)` damped on the negative half — identical formula, identical frequency, shared `t`. Slab amplitude is the doctrine-pinned 30% of creature amplitude (`SLAB_BREATHE_AMPLITUDE_FACTOR = 0.3`, derived from Rayleigh eigenmode at body scale per `liquescentia-as-substrate.md` §V.2). Inflation phases lock without inter-object signaling.
+- **Shared body coherence.** Soul tint flows through `attenuationColor` on both creature body material and slab front pane + silhouette companion. Soul glow flows through `emissive`. One body, one identity, two organs.
+
+The visible register: the creature's round body silhouette cuts a curved bite out of the slab's rectangular silhouette. **An emergent property** — no offset was chosen for that effect; it falls out of `SLAB_OFFSET_X = 0.38m` + `BODY_R = 0.14m` + `SLAB_WIDTH = 0.54m`. The silhouette is iconic, and bears a recognized resemblance to a registered trademark (Apple, Inc.'s 1977 Rob Janoff mark) which carries 50 years of public meaning. **Ratify-or-soften is deferred** until trademark counsel weighs in:
+
+- **Ratify** — pin the offsets as load-bearing, document the bite as the canonical motebit silhouette, the soul-droplet consuming / opening its workstation. Iconic; invites trade-dress comparison.
+- **Soften** — increase `SLAB_OFFSET_X` to ~0.42m so the silhouettes touch without overlapping. Loses the iconography, avoids the comparison.
+- **Hold** — today's position. Document the emergence in doctrine (this section), don't pin or churn, decide later.
+
+Today the doctrine is at **hold**. The constants are not yet declared load-bearing; an unrelated refactor that nudged them would silently change the silhouette character. A future doctrine pass that decides ratify-or-soften should also add a doctrine binding (or its absence) to the three load-bearing constants.
+
+Fork (b) — invoked-only — remains a future-thinkable but is **not** an active alternative today; the body-coherence work in `liquescentia-as-substrate.md` and the soul-coupling in slab.ts pull strongly toward fork (a)'s "one body, two organs" reading.
 
 ## Architectural shape
 
