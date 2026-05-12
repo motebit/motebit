@@ -637,6 +637,37 @@ describe("buildSystemPrompt — [Now] block injection", () => {
     expect(prompt).toMatch(/already on X/);
   });
 
+  it("conversation behavior: compound requests execute all actions in one turn (never split, never opt-in-closer)", () => {
+    // Pin from 2026-05-12. Witnessed: user said "type motebit and press
+    // enter" on the cloud-browser slab; AI typed but never pressed
+    // enter and produced no closing text. The compound-action handling
+    // is the deeper failure mode that the existing opt-in-closer rule
+    // ("Would you like me to..." banned phrasings) only described
+    // symptomatically. The new clause names the rule directly: when
+    // the user requests multiple sequential actions in one message,
+    // execute all of them in this turn.
+    const prompt = buildSystemPrompt(makeContextPack());
+    expect(prompt).toMatch(/compound|multiple sequential actions/i);
+    expect(prompt).toMatch(/EXECUTE ALL OF THEM|do both/i);
+    expect(prompt).toMatch(/do NOT split|single turn/i);
+    // Names the witnessed user phrasing so the rule is concrete.
+    expect(prompt).toContain("type motebit and press enter");
+  });
+
+  it("conversation behavior: never end a turn silently after tool calls", () => {
+    // Pin from 2026-05-12. Companion rule to the runtime hard floor
+    // (synthesizeClosingFallback at loop.ts). The prompt teaches the
+    // model to always emit a closing sentence; the runtime guarantees
+    // one even if the model forgets. Defense in depth: AI behavior
+    // can drift, but the floor catches the failure.
+    const prompt = buildSystemPrompt(makeContextPack());
+    expect(prompt).toMatch(/Never end a turn silently|silent turn/i);
+    expect(prompt).toMatch(/at least one visible sentence|closing sentence/i);
+    // Names the runtime's safety floor so the AI knows there's a
+    // backstop but treats that as the floor, not the standard.
+    expect(prompt).toMatch(/runtime guarantees|safety floor|closing fallback/i);
+  });
+
   it("knowledge doctrine routes search-shaped intents to web_search (API tier) over driving a search engine in the cloud browser (pixels tier)", () => {
     // Regression pin from 2026-05-12. Witnessed: user asked motebit
     // to "search for X" via Google; AI navigated the cloud browser

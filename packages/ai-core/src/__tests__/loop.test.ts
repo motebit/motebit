@@ -1636,3 +1636,89 @@ describe("runTurnStreaming — memory candidate sensitivity floor", () => {
     expect(formed).toHaveLength(0); // governor rejected the floored Secret candidate
   });
 });
+
+// ── Runtime hard floor: synthesizeClosingFallback ──────────────────────
+import { synthesizeClosingFallback } from "../loop";
+
+describe("synthesizeClosingFallback — runtime guarantee of visible closing text", () => {
+  // Pin from 2026-05-12. Witnessed: user said "type motebit and press
+  // enter" on the cloud-browser slab. type_into succeeded; the press-
+  // enter action hit frame_stale or element_not_found; the AI iterated
+  // tool calls without ever emitting text; the empty-text safety-net's
+  // re-prompt also produced no visible text; the user saw a silently-
+  // terminated turn. The runtime's promise to the user ("if you sent a
+  // message, I will respond") was broken.
+  //
+  // This is the runtime hard floor — a pure function over the loop's
+  // exit state that ALWAYS returns a one-sentence user-facing message.
+  // Cannot return empty. Cannot fail. Last line of defense against
+  // silent turn termination.
+
+  it("failure-only: returns honest 'tried but couldn't' message, names the last tool", () => {
+    const out = synthesizeClosingFallback({
+      toolCallsSucceeded: 0,
+      toolCallsFailed: 2,
+      lastToolName: "click_element",
+    });
+    expect(out).toContain("click_element");
+    expect(out.length).toBeGreaterThan(0);
+    expect(out).toMatch(/try|next/i);
+  });
+
+  it("failure-only with no lastToolName: still returns a non-empty honest message", () => {
+    const out = synthesizeClosingFallback({
+      toolCallsSucceeded: 0,
+      toolCallsFailed: 1,
+      lastToolName: "",
+    });
+    expect(out.length).toBeGreaterThan(0);
+    expect(out).toMatch(/couldn't|try|next/i);
+  });
+
+  it("partial success: names the count + last tool that didn't land", () => {
+    const out = synthesizeClosingFallback({
+      toolCallsSucceeded: 2,
+      toolCallsFailed: 1,
+      lastToolName: "click_element",
+    });
+    expect(out).toContain("2/3");
+    expect(out).toContain("click_element");
+  });
+
+  it("all success: brief acknowledgment, never empty", () => {
+    const out = synthesizeClosingFallback({
+      toolCallsSucceeded: 3,
+      toolCallsFailed: 0,
+      lastToolName: "type_into",
+    });
+    expect(out.length).toBeGreaterThan(0);
+    expect(out).toMatch(/done|next/i);
+  });
+
+  it("zero actions: confesses + invites redirection, never empty", () => {
+    const out = synthesizeClosingFallback({
+      toolCallsSucceeded: 0,
+      toolCallsFailed: 0,
+      lastToolName: "",
+    });
+    expect(out.length).toBeGreaterThan(0);
+    expect(out).toMatch(/didn't take any action|what would you like/i);
+  });
+
+  it("cannot return empty for any combination of inputs (load-bearing invariant)", () => {
+    // The runtime contract: this function exists to GUARANTEE non-empty
+    // text. Sweep the boundary conditions.
+    const cases = [
+      { toolCallsSucceeded: 0, toolCallsFailed: 0, lastToolName: "" },
+      { toolCallsSucceeded: 0, toolCallsFailed: 0, lastToolName: "any_tool" },
+      { toolCallsSucceeded: 1, toolCallsFailed: 0, lastToolName: "" },
+      { toolCallsSucceeded: 0, toolCallsFailed: 1, lastToolName: "" },
+      { toolCallsSucceeded: 100, toolCallsFailed: 100, lastToolName: "x" },
+    ];
+    for (const c of cases) {
+      const out = synthesizeClosingFallback(c);
+      expect(out.length).toBeGreaterThan(0);
+      expect(out.trim()).not.toBe("");
+    }
+  });
+});

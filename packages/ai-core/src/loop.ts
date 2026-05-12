@@ -25,6 +25,61 @@ import { isSelfReferential, withStageTimeout, STAGE_TIMEOUTS_MS } from "./core.j
 
 const MAX_TOOL_ITERATIONS = 10;
 
+/**
+ * Deterministic closing-message synthesis — the runtime hard floor
+ * that guarantees every turn ends with at least one visible sentence.
+ *
+ * Called at the loop's exit when `finalText` is still empty after the
+ * existing empty-text safety-net (the re-prompt without tools). Pure
+ * function over the loop's exit state; cannot return empty.
+ *
+ * The four shapes:
+ *
+ *   - **Failure-only** (`toolCallsFailed > 0 && toolCallsSucceeded === 0`):
+ *     no actions landed. Honest about the outcome; invites the user
+ *     to redirect.
+ *
+ *   - **Partial success** (`toolCallsSucceeded > 0 && toolCallsFailed > 0`):
+ *     some actions completed, some didn't. Names the count and the
+ *     last tool attempted so the user knows where motebit stopped.
+ *
+ *   - **All success** (`toolCallsSucceeded > 0 && toolCallsFailed === 0`):
+ *     everything went through. The model's silence is honest ("nothing
+ *     more to say"); the floor just acknowledges and yields the turn
+ *     back to the user.
+ *
+ *   - **Zero actions** (`toolCallsSucceeded === 0 && toolCallsFailed === 0`):
+ *     the model emitted no tool calls and no text. Most likely a
+ *     model-state weirdness; the floor confesses and invites
+ *     redirection.
+ *
+ * Doctrine: motebit-computer.md §"Typed truth on results" applied to
+ * the turn-completion contract. The runtime promises the user a
+ * response per message; this is the mechanical floor that enforces
+ * the promise even when model behavior drifts.
+ */
+export function synthesizeClosingFallback(args: {
+  readonly toolCallsSucceeded: number;
+  readonly toolCallsFailed: number;
+  readonly lastToolName: string;
+}): string {
+  const { toolCallsSucceeded, toolCallsFailed, lastToolName } = args;
+  if (toolCallsFailed > 0 && toolCallsSucceeded === 0) {
+    return lastToolName
+      ? `I tried but \`${lastToolName}\` didn't go through — what would you like me to try next?`
+      : "I tried but couldn't complete that — what would you like me to try next?";
+  }
+  if (toolCallsSucceeded > 0 && toolCallsFailed > 0) {
+    return lastToolName
+      ? `I got partway through (${toolCallsSucceeded}/${toolCallsSucceeded + toolCallsFailed} succeeded) but \`${lastToolName}\` didn't land. What should I do next?`
+      : `I got partway through (${toolCallsSucceeded}/${toolCallsSucceeded + toolCallsFailed} succeeded) but hit an issue. What should I do next?`;
+  }
+  if (toolCallsSucceeded > 0) {
+    return "Done. Let me know what's next.";
+  }
+  return "I didn't take any action there — what would you like me to do?";
+}
+
 // === Missed-memory heuristic detection ===
 
 const PREFERENCE_RE = /\b(?:i\s+(?:like|prefer|love|enjoy|hate|dislike|can't stand))\s+(.{3,60})/gi;
@@ -1242,6 +1297,51 @@ export async function* runTurnStreaming(
         finalResponse = chunk.response;
       }
     }
+  }
+
+  // Runtime hard floor — the contract guarantee that every turn ends
+  // with at least one visible sentence. The empty-text safety-net
+  // above (re-prompt without tools) catches the "model emitted only
+  // tags after a successful tool call" case, but two failure modes
+  // bypass it:
+  //
+  //   (1) `toolCallsSucceeded === 0` — the re-prompt is gated on at
+  //       least one successful tool call. If every tool call failed
+  //       (or none was attempted) AND the model emitted no text, the
+  //       safety-net doesn't fire and the user sees silence.
+  //
+  //   (2) The re-prompt itself returns empty text — possible when
+  //       the model is in a state where it consistently emits only
+  //       tool_use blocks or only stripped tags. Without a final
+  //       fallback, the user sees silence.
+  //
+  // Witnessed 2026-05-12: user said "type motebit and press enter"
+  // on the cloud-browser slab. type_into succeeded; the press-enter
+  // action (click_element on search button OR key Enter) hit
+  // frame_stale or element_not_found; the AI iterated tool calls
+  // without text; the safety-net's re-prompt produced empty text;
+  // the user saw a silently-terminated turn with no assistant
+  // message at all. The runtime's promise to the user — "if you
+  // sent a message, I will respond" — was broken.
+  //
+  // This floor is a pure-function synthesis over the loop's exit
+  // state. It cannot return empty. It is the last line of defense
+  // against silent turn termination — model behavior can drift, the
+  // safety-net can fail, but this floor is mechanical. Doctrine:
+  // motebit-computer.md §"Typed truth on results" applied to the
+  // turn-completion contract.
+  if (finalText.trim() === "") {
+    finalText = synthesizeClosingFallback({
+      toolCallsSucceeded,
+      toolCallsFailed,
+      lastToolName,
+    });
+    yield { type: "text", text: finalText };
+    // Reflect the synthesized text on finalResponse so downstream
+    // consumers (memory candidates, conversation persistence, etc.)
+    // see a coherent assistant message rather than the empty string
+    // they would have seen pre-fix.
+    finalResponse = { ...finalResponse, text: finalText };
   }
 
   // 4. Form memories from candidates (governed if governor present)
