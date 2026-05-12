@@ -771,6 +771,33 @@ function buildTrail(
 
 // ── Shared — buttons ───────────────────────────────────────────────────
 
+/**
+ * State-chrome affordance — Take back / Grant / Deny / Resume.
+ *
+ * Slab-native pattern, same family as `buildHistoryButton` below:
+ * borderless tinted text, transparent background, hit area via
+ * padding. Doctrine: `motebit-computer.md` §"Visual properties":
+ *
+ *   > Tinted glyphs, borderless (back / forward / reload as
+ *   > SF-Symbol-shape icons). **Framed cells with their own corner
+ *   > radius and border are forbidden — they read as web-form UI,
+ *   > not slab-native.**
+ *
+ * The prior implementation rendered these as framed pills (white
+ * background, 1px border, 6px radius) — exactly the forbidden
+ * pattern. Replaced 2026-05-11 to match the slab's chrome family.
+ *
+ * Primary vs secondary distinguish by **text register** (tint depth +
+ * weight), not by frame:
+ *
+ *   - primary (Grant / Resume) — affirmative action, fuller tint
+ *     (0.92 alpha), 600 weight. Reads as "this is the forward path."
+ *   - secondary (Take back / Deny) — withdrawal / escape, muted tint
+ *     (0.55 alpha), 500 weight. Reads as "this is the alternative."
+ *
+ * Hover lifts tint opacity (calm Apple HIG color easing), never
+ * introduces a background or border.
+ */
 function buildButton(
   label: string,
   register: "primary" | "secondary",
@@ -780,22 +807,28 @@ function buildButton(
   btn.type = "button";
   btn.className = `cobrowse-chrome-btn cobrowse-chrome-btn-${register}`;
   btn.textContent = label;
-  btn.style.font = "inherit";
-  btn.style.padding = "5px 12px";
-  btn.style.borderRadius = "6px";
+  btn.style.flex = "0 0 auto";
+  btn.style.padding = "4px 10px";
+  btn.style.font = "13px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
+  btn.style.background = "transparent";
+  btn.style.border = "none";
+  btn.style.borderRadius = "0";
   btn.style.cursor = "pointer";
   btn.style.userSelect = "none";
   btn.style.pointerEvents = "auto";
-  btn.style.transition = "background 120ms ease-out, border-color 120ms ease-out";
-  if (register === "primary") {
-    btn.style.background = "rgba(80, 130, 200, 0.92)";
-    btn.style.color = "rgba(255, 255, 255, 0.96)";
-    btn.style.border = "1px solid rgba(60, 110, 180, 0.85)";
-  } else {
-    btn.style.background = "rgba(255, 255, 255, 0.62)";
-    btn.style.color = "rgba(40, 55, 90, 0.86)";
-    btn.style.border = "1px solid rgba(120, 140, 180, 0.45)";
-  }
+  btn.style.transition = "color 120ms ease-out";
+
+  const restColor = register === "primary" ? "rgba(40, 55, 90, 0.92)" : "rgba(40, 55, 90, 0.55)";
+  const hoverColor = register === "primary" ? "rgba(40, 55, 90, 1)" : "rgba(40, 55, 90, 0.85)";
+  btn.style.color = restColor;
+  btn.style.fontWeight = register === "primary" ? "600" : "500";
+
+  btn.addEventListener("mouseenter", () => {
+    btn.style.color = hoverColor;
+  });
+  btn.addEventListener("mouseleave", () => {
+    btn.style.color = restColor;
+  });
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     onClick();

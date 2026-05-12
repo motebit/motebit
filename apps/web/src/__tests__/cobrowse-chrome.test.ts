@@ -369,6 +369,95 @@ describe("renderCoBrowseChrome — surface-determinism", () => {
   });
 });
 
+// ── Doctrine pin: state-chrome affordances are slab-native, not framed pills ─
+
+describe("renderCoBrowseChrome — slab-native chrome affordance doctrine", () => {
+  // Pins motebit-computer.md §"Visual properties":
+  //   > Tinted glyphs, borderless (back / forward / reload as SF-Symbol-
+  //   > shape icons). Framed cells with their own corner radius and
+  //   > border are forbidden — they read as web-form UI, not slab-native.
+  //
+  // Take back / Grant / Deny / Resume historically rendered as framed
+  // white pills (1px border, 6px radius, opaque white background) — the
+  // exact pattern the doctrine forbids. Replaced 2026-05-11. This test
+  // pins the rule against regression.
+  //
+  // The negative assertions are the load-bearing ones; if a future
+  // refactor reintroduces background+border+radius on these affordances,
+  // the slab-native register collapses back to web-form UI and the test
+  // catches it before pixels ship.
+
+  const FRAMED_BG_PATTERN = /rgba\(\s*255\s*,\s*255\s*,\s*255/;
+  const FRAMED_BORDER_PATTERN = /\dpx\s+solid/;
+
+  function assertSlabNativeChromeButton(btn: HTMLButtonElement): void {
+    // Transparent background — no white pill.
+    expect(btn.style.background).not.toMatch(FRAMED_BG_PATTERN);
+    expect(btn.style.background).toBe("transparent");
+    // No solid border anywhere. jsdom normalizes `border: none`
+    // shorthand to empty string (see the chrome-material test at
+    // line ~248 for the same handling); the truth condition is
+    // "no solid declaration in any border slot."
+    expect(btn.style.border).not.toMatch(FRAMED_BORDER_PATTERN);
+    expect(btn.style.border).not.toContain("solid");
+    expect(btn.style.borderTop).not.toContain("solid");
+    expect(btn.style.borderBottom).not.toContain("solid");
+    expect(btn.style.borderLeft).not.toContain("solid");
+    expect(btn.style.borderRight).not.toContain("solid");
+    // Zero corner radius — no pill shape.
+    expect(btn.style.borderRadius).toBe("0");
+  }
+
+  it("Take back is slab-native (no framed pill)", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "motebit" }, machine, {});
+    const btn = el.querySelector(".cobrowse-chrome-btn-secondary") as HTMLButtonElement;
+    expect(btn).not.toBeNull();
+    expect(btn.textContent).toBe("Take back");
+    assertSlabNativeChromeButton(btn);
+  });
+
+  it("Grant + Deny are slab-native (no framed pill)", () => {
+    const { machine } = makeMockMachine();
+    const state: ControlState = {
+      kind: "handoff_pending",
+      current: "user",
+      requesting: "motebit",
+    };
+    const el = renderCoBrowseChrome(state, machine, {});
+    const grant = el.querySelector(".cobrowse-chrome-btn-primary") as HTMLButtonElement;
+    const deny = el.querySelector(".cobrowse-chrome-btn-secondary") as HTMLButtonElement;
+    expect(grant?.textContent).toBe("Grant");
+    expect(deny?.textContent).toBe("Deny");
+    assertSlabNativeChromeButton(grant);
+    assertSlabNativeChromeButton(deny);
+  });
+
+  it("Resume is slab-native (no framed pill)", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "paused", previousDriver: "user" }, machine, {});
+    const btn = el.querySelector(".cobrowse-chrome-btn-primary") as HTMLButtonElement;
+    expect(btn?.textContent).toBe("Resume");
+    assertSlabNativeChromeButton(btn);
+  });
+
+  it("primary vs secondary distinguish via text register (weight + color), not via frame", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome(
+      { kind: "handoff_pending", current: "user", requesting: "motebit" },
+      machine,
+      {},
+    );
+    const grant = el.querySelector(".cobrowse-chrome-btn-primary") as HTMLButtonElement;
+    const deny = el.querySelector(".cobrowse-chrome-btn-secondary") as HTMLButtonElement;
+    // Primary carries heavier weight.
+    expect(grant.style.fontWeight).toBe("600");
+    expect(deny.style.fontWeight).toBe("500");
+    // Primary carries fuller tint.
+    expect(grant.style.color).not.toBe(deny.style.color);
+  });
+});
+
 // ── URL input + history buttons ────────────────────────────────────────
 
 describe("renderCoBrowseChrome — user state input wiring", () => {
