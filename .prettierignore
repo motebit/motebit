@@ -54,3 +54,11 @@ apps/desktop/src-tauri/gen
 **/.venv
 **/venv
 **/__pycache__
+
+# Playwright artifacts. apps/web/.gitignore lists `test-results/` so they
+# never ship, but Prettier walks the filesystem independently and flags
+# .last-run.json on every local e2e invocation. Same shape as
+# apps/vscode/out and apps/desktop/src-tauri/gen above — gitignored
+# locally, prettier-ignored explicitly here.
+apps/*/test-results
+apps/*/playwright-report
