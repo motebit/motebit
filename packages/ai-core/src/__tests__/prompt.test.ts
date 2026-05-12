@@ -637,6 +637,41 @@ describe("buildSystemPrompt — [Now] block injection", () => {
     expect(prompt).toMatch(/already on X/);
   });
 
+  it("knowledge doctrine routes search-shaped intents to web_search (API tier) over driving a search engine in the cloud browser (pixels tier)", () => {
+    // Regression pin from 2026-05-12. Witnessed: user asked motebit
+    // to "search for X" via Google; AI navigated the cloud browser
+    // to google.com and submitted; Google's reCAPTCHA blocked the
+    // session with infinite challenge loop (cars → motorcycles →
+    // traffic lights) because the cloud-browser IP + fingerprint
+    // never improves the risk score regardless of correct answers.
+    //
+    // The clause teaches the hybrid-engine cost hierarchy applied
+    // to search: web_search is API tier (fast, cheap, no CAPTCHA);
+    // cloud-browser-driving-google is pixels tier (CAPTCHA wall by
+    // design). Search-shaped intents → web_search. Explicit
+    // navigation / site-interaction intents → cloud browser.
+    // CAPTCHA-on-search-engine → fall back to web_search rather
+    // than ask the user to solve.
+    const prompt = buildSystemPrompt(makeContextPack());
+    // Tier-mapping pin: clause must name web_search as the
+    // preferred tool for search intents.
+    expect(prompt).toMatch(/search-shaped intents|prefer.*web_search/i);
+    // Intent-vocabulary pin: clause must name the user phrasings
+    // that should route to web_search.
+    expect(prompt).toMatch(/search for|look up|find Z online|what's the latest/i);
+    // Failure-mode pin: clause must name the CAPTCHA-wall pattern
+    // and reCAPTCHA specifically (the witnessed 2026-05-12 case).
+    expect(prompt).toMatch(/CAPTCHA wall|reCAPTCHA|bot-detection wall/i);
+    // Recovery pin: clause must name web_search as the fallback
+    // when the cloud browser hits a CAPTCHA on a search-intent
+    // task, NOT user-handoff.
+    expect(prompt).toMatch(/fall back to .web_search|fall back to web_search/i);
+    // Doctrine-citation pin: clause must reference the hybrid-
+    // engine doctrine source so a contributor seeing the rule can
+    // trace it to CLAUDE.md.
+    expect(prompt).toMatch(/Hybrid engine|api .* ax .* pixels|API tier/i);
+  });
+
   it("perception doctrine forbids hedge-speak when pixels ARE granted", () => {
     // Regression pin from 2026-05-12. AI was producing contradictory
     // hedge-speak after /vision grant — "I can see the screen now,
