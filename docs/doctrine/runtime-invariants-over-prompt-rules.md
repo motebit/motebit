@@ -67,3 +67,11 @@ This is also not "the runtime should police the AI's output." The runtime's job 
 | Search-intent routing (compressed 2026-05-12)     | prompt teaching, registry tier-sort enforces selection      | A after compression — was B-shaped pre-compression because it duplicated the registry's tier-sort behavior |
 
 The B-grade items are not bugs; they're teaching that doesn't have an obvious runtime path. The audit's value isn't "make everything A" — it's "stay honest about which is which, and look for the A path before settling for B."
+
+## Enforcement
+
+`scripts/check-prompt-density.ts` (drift-defense #81, added 2026-05-12) is the CI forcing function for this doctrine. It counts rule-shaped clauses in `packages/ai-core/src/prompt.ts` — `- ` bullets plus `<digit>. ` numbered RULES lines — against a measured `BASELINE = 62` (the local minimum after the 2026-05-12 prompt-prune pass that landed alongside this memo). Growth fails the gate with the five-question audit reproduced in the failure message; pruning lowers the floor silently.
+
+Smoke-alarm shape, not a per-clause registry. Bumping `BASELINE` IS the doctrine moment — the commit that bumps it names the new clause's grade (A or B per the table above) in the message. The gate cannot mechanize the grading; it forces the moment to ask. False negatives on inline non-bullet rules ("Never narrate physical actions" inside a paragraph) are accepted as the cost of low-maintenance defense — the most common drift pattern is adding new bullets, and that's what the gate catches.
+
+Compounds with [`check-typed-truth-perception`](../drift-defenses.md) (#80): the wire half of every typed-truth triple is gated against drift; the prompt half is gated against accumulation. The two gates protect both halves of the doctrine that the typed-truth-perception memo names.

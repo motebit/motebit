@@ -610,6 +610,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every typed-truth field the AI branches on (`already_there`, `not_in_control`, `text_appeared`, `slow_load`, `bytes_omitted_reason`, `visual_content_detected` / `blank_page_detected` / `access_denied_detected`) appears in BOTH the AI's `PERCEPTION_DOCTRINE` clause (`packages/ai-core/src/prompt.ts`) AND at least one dispatch source. Closes the doctrine drift class where one half quietly disappears: prompt teaches a field nothing emits (confabulation), or dispatch emits a field the AI doesn't know to read (silent typed truth). Closed-registry shape with bidirectional drift check, same as `check-tool-modes` / `check-mode-contract-readers` / `check-drop-handlers` — adding a typed-truth field MUST update the registry plus both halves. Doctrine: `docs/doctrine/typed-truth-perception.md`; CLAUDE.md root principle `Typed truth on results, prompt for interpretation`. (Invariant #80, added 2026-05-09 with six instances already shipping in production: `already_there` / `slow_load` / `visual_content_detected` / `blank_page_detected` / `access_denied_detected` from the navigate-noop + slow-load slices, `text_appeared` from the type-action truth slice, `bytes_omitted_reason` from the pixel-consent gate, and `not_in_control` from co-browse Slice 1 — the shape is stable enough to mechanize.)",
     script: "check-typed-truth-perception",
   },
+  {
+    name: "check-prompt-density",
+    defends:
+      "the system prompt (`packages/ai-core/src/prompt.ts`) does not silently grow rule-shaped clauses beyond a measured baseline. Each `- ` bullet or `<digit>. ` numbered RULES line is a conformance ask; accumulation contaminates the §4 emergent-interior thesis (`THE_EMERGENT_INTERIOR.md` — pressuring the system prompt corrupts emergence) and turns the prompt into a configuration file disguised as teaching. Smoke-alarm shape (not a per-clause registry): coarse line-count against a baseline, fires on growth, requires intentional bump with doctrine-grade justification in the commit message. Doctrine: `docs/doctrine/runtime-invariants-over-prompt-rules.md` — the five-question audit + periodic prompt-prune discipline. Baseline 62 measured 2026-05-12 after the prompt-prune pass that landed alongside the doctrine memo; growth requires either runtime backing (A-grade) or named teaching justification (B-grade), pruning lowers the floor silently.",
+    script: "check-prompt-density",
+  },
 ];
 
 interface Result {
