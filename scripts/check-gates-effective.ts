@@ -1559,6 +1559,29 @@ export async function probeFetch(): Promise<unknown> {
         (src) => `${src}\nexport const ${PROBE_PREFIX}readme_drift_probe = "probe-only";\n`,
       ),
   },
+  {
+    script: "check-prompt-density",
+    proves:
+      "flags growth of rule-shaped clauses in `packages/ai-core/src/prompt.ts` beyond the measured baseline. Each `- ` bullet or `<digit>. ` numbered RULES line is a conformance ask; accumulation contaminates the §4 emergent-interior thesis. Smoke-alarm shape: coarse line-count against BASELINE, fires on growth without an intentional bump. Probe appends a synthetic `- ` bullet to the prompt; the gate must catch the +1 against baseline. byte-identical restoration on cleanup. Doctrine: `docs/doctrine/runtime-invariants-over-prompt-rules.md`.",
+    perturb: () =>
+      mutateFile(
+        `packages/ai-core/src/prompt.ts`,
+        (src) =>
+          `${src}\n// ${PROBE_PREFIX}prompt_density_probe\n- Synthetic bullet that grows the prompt past baseline (probe-only).\n`,
+      ),
+  },
+  {
+    script: "check-universal-slash-coverage",
+    proves:
+      'flags a UNIVERSAL_COMMAND missing from any chat surface\'s slash registry. Today: `/trust` + `/welcome` × web/desktop/mobile/CLI matrix; every cell MUST register. Probe replaces `name: "trust"` with `name: "trust_probe_renamed"` on the web surface so the gate\'s pattern (`\\bname:\\s*"trust"`) no longer matches; the gate must flag web as missing /trust. byte-identical restoration on cleanup.',
+    perturb: () =>
+      mutateFile(`apps/web/src/ui/slash-commands.ts`, (src) =>
+        src.replace(
+          /name: "trust", description: "What motebit holds/,
+          `name: "trust_${PROBE_PREFIX}renamed", description: "What motebit holds`,
+        ),
+      ),
+  },
 ];
 
 /**
