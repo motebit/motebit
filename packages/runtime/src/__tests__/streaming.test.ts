@@ -2344,6 +2344,80 @@ describe("Delegation streaming events", () => {
     // delegation_start comes before delegation_complete
     expect(startIdx).toBeLessThan(completeIdx);
   });
+
+  it("delegation_complete with a full signed receipt detaches as 'receipt' — never dissolves silently", async () => {
+    // Regression pin from the endItem mode-contract drift audit
+    // (2026-05-11). The slab-projection at motebit-runtime.ts:1691
+    // chooses between `detachAs: "receipt"` and silent dissolve based
+    // on `chunk.full_receipt`. A future refactor that drops the
+    // detach branch would lose the signed delegation receipt — a
+    // silent-data-loss bug in the proof-composability path. Doctrine:
+    // `motebit-computer.md` §"peer_viewport" — "the receipt IS the
+    // proof"; the mode's lifecycleDefaults are ["resting", "detached"],
+    // so dissolving a signed completion is OUTSIDE the contract.
+    //
+    // The pin: a delegation slab item whose streaming receipt carries
+    // a full signed `ExecutionReceipt` MUST transition through
+    // `pinching` (with `__slabDetach.artifactKind === "receipt"`)
+    // rather than `dissolving`. Streaming.ts populates `full_receipt`
+    // from any tool result whose value carries both `signature` and
+    // `motebit_id` (see streaming.ts:383); we craft a motebit_task
+    // result that satisfies that shape so the chunk emerges with
+    // `full_receipt` populated.
+    setMotebitToolServer(runtime, "motebit_task", "agent-delta");
+
+    const signedReceiptResult = {
+      task_id: "task-signed-789",
+      status: "completed",
+      tools_used: ["web_search"],
+      result: "Signed outcome",
+      motebit_id: "motebit:agent-delta",
+      signature:
+        "0xfedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" +
+        "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      public_key: "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+      delegation_receipts: [],
+    };
+
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "tool_status", name: "motebit_task", status: "calling" },
+        { type: "tool_status", name: "motebit_task", status: "done", result: signedReceiptResult },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+
+    const slabSnapshots: Array<{
+      items: ReadonlyMap<string, { kind: string; phase: string; payload: unknown }>;
+    }> = [];
+    runtime.slab.subscribe((state) => {
+      slabSnapshots.push({ items: state.items });
+    });
+
+    await collectChunks(runtime.sendMessageStreaming("ask the task agent"));
+
+    // Find every snapshot of the delegation item across the turn.
+    const delegationSnapshots = slabSnapshots
+      .flatMap((snap) => Array.from(snap.items.values()))
+      .filter((item) => item.kind === "delegation");
+    expect(delegationSnapshots.length).toBeGreaterThan(0);
+
+    // Load-bearing assertion: at some point the delegation item was
+    // in the `pinching` phase carrying the detach marker. That's the
+    // typed proof the dispatch chose detach, not dissolve.
+    const pinchingFrame = delegationSnapshots.find((item) => item.phase === "pinching");
+    expect(pinchingFrame).toBeDefined();
+    const detachMarker = (pinchingFrame!.payload as Record<string, unknown> | null)?.[
+      "__slabDetach"
+    ] as { artifactKind?: string } | undefined;
+    expect(detachMarker?.artifactKind).toBe("receipt");
+
+    // Negative assertion — the item must never have visited the
+    // dissolving phase. Dissolving here would be the silent-data-loss
+    // failure mode the audit exists to prevent.
+    const dissolvingFrame = delegationSnapshots.find((item) => item.phase === "dissolving");
+    expect(dissolvingFrame).toBeUndefined();
+  });
 });
 
 // === Streaming boundary sanitization (defense-in-depth) ===
