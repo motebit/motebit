@@ -412,6 +412,82 @@ describe("executeAction", () => {
       expect(result.focused).toBe(true);
       expect(result.text_appeared).toBe(false);
     });
+
+    // Typed-truth recovery_hint — when text_appeared is false, the
+    // dispatcher attaches a hint pointing the AI at read_page →
+    // type_into (atomic focus + type, no focus race), not coordinate
+    // click + retype. Closes the witnessed 2026-05-12 bug where the
+    // AI's coordinate remediation failed the same way and it
+    // confabulated success. Doctrine: runtime-invariants-over-prompt-
+    // rules.md § typed-truth-perception triple.
+    describe("recovery_hint typed-truth field", () => {
+      it("attaches recovery_hint when text_appeared is false (body focus)", async () => {
+        const mock = makeMockSession();
+        mock.setEvaluateImpl(async () => ({
+          focused: false,
+          active_element: "body",
+          value: "",
+          text_appeared: false,
+        }));
+        const result = (await executeAction(
+          mock.session,
+          { kind: "type", text: "motebit" },
+          deps,
+        )) as Record<string, unknown>;
+        expect(result.recovery_hint).toBe("read_page_then_type_into");
+      });
+
+      it("attaches recovery_hint when text_appeared is false (non-typeable focused)", async () => {
+        const mock = makeMockSession();
+        mock.setEvaluateImpl(async () => ({
+          focused: false,
+          active_element: "button",
+          value: "",
+          text_appeared: false,
+        }));
+        const result = (await executeAction(
+          mock.session,
+          { kind: "type", text: "motebit" },
+          deps,
+        )) as Record<string, unknown>;
+        expect(result.recovery_hint).toBe("read_page_then_type_into");
+      });
+
+      it("attaches recovery_hint when text_appeared is false (focus race; value diverged)", async () => {
+        const mock = makeMockSession();
+        mock.setEvaluateImpl(async () => ({
+          focused: true,
+          active_element: "input",
+          value: "something else",
+          text_appeared: false,
+        }));
+        const result = (await executeAction(
+          mock.session,
+          { kind: "type", text: "motebit" },
+          deps,
+        )) as Record<string, unknown>;
+        expect(result.recovery_hint).toBe("read_page_then_type_into");
+      });
+
+      it("omits recovery_hint when text_appeared is true (no recovery needed)", async () => {
+        const mock = makeMockSession();
+        mock.setEvaluateImpl(async () => ({
+          focused: true,
+          active_element: "input",
+          value: "motebit",
+          text_appeared: true,
+        }));
+        const result = (await executeAction(
+          mock.session,
+          { kind: "type", text: "motebit" },
+          deps,
+        )) as Record<string, unknown>;
+        expect(result.text_appeared).toBe(true);
+        // Absent field — type assertion via Object.keys so the assertion
+        // surface is the absence itself, not undefined-comparison drift.
+        expect(Object.prototype.hasOwnProperty.call(result, "recovery_hint")).toBe(false);
+      });
+    });
   });
 
   describe("key", () => {

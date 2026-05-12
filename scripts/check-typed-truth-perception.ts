@@ -165,6 +165,13 @@ const TYPED_TRUTH_FIELDS: ReadonlyArray<TypedTruthField> = [
     notes:
       "Form-submission typed-truth hint: the dispatcher detects the page's primary submit button (HTML input_type='submit' first, label heuristic — Search/Submit/Send/Sign in/Continue — as fallback) and surfaces its element_id on read_page results. Converted the click_element-over-key('Enter') prompt clause from B-grade (pure teaching) to A-grade (wire field + dispatch + thin teaching). Shipped 2026-05-12; doctrine exemplar of B→A graduation per docs/doctrine/runtime-invariants-over-prompt-rules.md — the doctrine being applied to itself.",
   },
+  {
+    field: "recovery_hint",
+    promptText: "recovery_hint",
+    dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
+    notes:
+      "Type-action recovery hint when text_appeared is false. Dispatcher attaches `recovery_hint: \"read_page_then_type_into\"` to the type result so the AI's natural next step is the durable element-addressed path (read_page → type_into, atomic focus + type) instead of coordinate click + retype (which hits the same focus race). Closes the 2026-05-12 witnessed bug where the AI saw text_appeared: false, said 'Clicking it first, then typing. Done.' — the coordinate remediation failed the same way and the AI confabulated success. Shipped 2026-05-12; doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md § typed-truth-perception triple.",
+  },
 ];
 
 interface Violation {

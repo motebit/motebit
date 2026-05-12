@@ -376,7 +376,29 @@ async function doType(session: BrowserSession, action: TypeAction): Promise<Acti
       text_appeared: rawValue.includes(typedText),
     };
   }, action.text);
-  return { kind: "type", ok: true, ...snapshot };
+  // Typed-truth recovery hint — when text_appeared is false, the
+  // canonical recovery is read_page → type_into, NOT coordinate
+  // click + retype (which is prone to the same focus race that
+  // dropped the original keystrokes). Surface the hint so the AI's
+  // natural next step is the durable element-addressed path.
+  //
+  // Witnessed bug 2026-05-12: AI typed via coordinate `type`, saw
+  // `text_appeared: false`, narrated "Clicking it first, then typing.
+  // Done." — the coordinate-based remediation hit the same focus
+  // race and the search field stayed empty. The hint converts the
+  // doctrine teaching "click + retype" into a typed-truth field the
+  // AI reads instead of inferring from the failure shape.
+  //
+  // Doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md
+  // § the typed-truth-perception triple — the wire field carries the
+  // recovery path; the prompt teaches reading it.
+  const recovery_hint = !snapshot.text_appeared ? "read_page_then_type_into" : undefined;
+  return {
+    kind: "type",
+    ok: true,
+    ...snapshot,
+    ...(recovery_hint !== undefined ? { recovery_hint } : {}),
+  };
 }
 
 async function doKey(session: BrowserSession, action: KeyAction): Promise<ActionResult> {
