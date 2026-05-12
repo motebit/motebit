@@ -608,3 +608,96 @@ describe("Housekeeping", () => {
     app.stop();
   });
 });
+
+// Phase 3 of the persistent user_data_dir arc — the user-control
+// affordance over motebit's accumulated browsing trust. These tests
+// pin the WebApp public methods the `/cookies` slash command consumes.
+// Encryption-at-rest is exercised in encrypted-cookie-store.test.ts;
+// this file pins the integration with the in-memory cache.
+describe("Persisted cookies (Phase 3 — /cookies status + revoke)", () => {
+  it("getPersistedCookies returns [] pre-bootstrap (no motebitId yet)", async () => {
+    const app = new WebApp();
+    await app.init(null as unknown as HTMLCanvasElement);
+    // No bootstrap call — motebitId is empty.
+    const cookies = await app.getPersistedCookies();
+    expect(cookies).toEqual([]);
+    app.stop();
+  });
+
+  it("getPersistedCookies returns [] cold-start after bootstrap", async () => {
+    const app = new WebApp();
+    await app.init(null as unknown as HTMLCanvasElement);
+    await app.bootstrap();
+    const cookies = await app.getPersistedCookies();
+    expect(cookies).toEqual([]);
+    app.stop();
+  });
+
+  it("clearPersistedCookies on cold-start is a no-op returning []", async () => {
+    const app = new WebApp();
+    await app.init(null as unknown as HTMLCanvasElement);
+    await app.bootstrap();
+    const cleared = await app.clearPersistedCookies();
+    expect(cleared).toEqual([]);
+    // Still empty after clear.
+    expect(await app.getPersistedCookies()).toEqual([]);
+    app.stop();
+  });
+
+  it("clearPersistedCookies wipes the encrypted store + in-memory cache", async () => {
+    const app = new WebApp();
+    await app.init(null as unknown as HTMLCanvasElement);
+    await app.bootstrap();
+    const motebitId = app.motebitId;
+
+    // Seed the encrypted store directly — simulates a prior cloud
+    // session having persisted cookies via onCookiesPersisted.
+    const { saveCookies } = await import("../encrypted-cookie-store.js");
+    await saveCookies(motebitId, [
+      {
+        name: "session_id",
+        value: "abc123",
+        domain: ".google.com",
+        path: "/",
+      },
+      {
+        name: "captcha_cleared",
+        value: "true",
+        domain: ".google.com",
+        path: "/",
+      },
+      {
+        name: "gh_session",
+        value: "xyz789",
+        domain: ".github.com",
+        path: "/",
+      },
+    ]);
+
+    // Need a fresh WebApp so the lazy-load gate fires against the
+    // newly-seeded store (the current app's gate may have already
+    // resolved to [] from this test's earlier setup).
+    app.stop();
+    const app2 = new WebApp();
+    await app2.init(null as unknown as HTMLCanvasElement);
+    await app2.bootstrap();
+
+    // Status: holding 3 cookies across 2 domains.
+    const status = await app2.getPersistedCookies();
+    expect(status).toHaveLength(3);
+
+    // Revoke: returns snapshot of what was cleared, leaves store empty.
+    const cleared = await app2.clearPersistedCookies();
+    expect(cleared).toHaveLength(3);
+    expect(await app2.getPersistedCookies()).toEqual([]);
+
+    // Subsequent reads from disk also return [] (the at-rest store
+    // was actually cleared, not just the in-memory cache).
+    app2.stop();
+    const app3 = new WebApp();
+    await app3.init(null as unknown as HTMLCanvasElement);
+    await app3.bootstrap();
+    expect(await app3.getPersistedCookies()).toEqual([]);
+    app3.stop();
+  });
+});

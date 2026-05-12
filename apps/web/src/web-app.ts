@@ -58,7 +58,7 @@ import type { McpServerConfig } from "@motebit/mcp-client";
 import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
 import { createWebComputerApprovalFlow } from "./computer-approval.js";
 import { registerWebComputerTool, type ComputerToolRegistration } from "./computer-tool.js";
-import { loadCookies, saveCookies } from "./encrypted-cookie-store.js";
+import { clearCookies, loadCookies, saveCookies } from "./encrypted-cookie-store.js";
 import type { ComputerSessionReceipt } from "@motebit/sdk";
 import { ScreencastFrameBus } from "./screencast-bus.js";
 import { setLiveBrowserSuppressionPredicate } from "./ui/slab-items.js";
@@ -238,11 +238,13 @@ export class WebApp {
    * device's private key — strongest browser-native at-rest
    * encryption available.
    *
-   * Phase 3 adds the `/cookies grant` consent gate + `/cookies
-   * revoke` UI on top of this storage. Cookies-by-default is fine
-   * for v1 (per-origin same-policy isolation + at-rest encryption
-   * is the floor); the consent gate is a precision affordance for
-   * users who want granular control.
+   * Phase 3 adds the `/cookies status` + `/cookies revoke` slash
+   * commands on top of this storage — the user-control affordance
+   * over the accumulated browsing trust. No consent gate: cookies
+   * stay scoped to the sandbox + the user's device (encrypted at
+   * rest), never crossing the AI-provider boundary the way pixels
+   * do. Persist-by-default is the right shape; revocation is the
+   * user's affordance.
    *
    * Doctrine: `docs/doctrine/runtime-invariants-over-prompt-rules.md`
    * applied to the cloud-browser surface — the structural fix for
@@ -2687,6 +2689,45 @@ export class WebApp {
         // unexpected throws.
       });
     return this._cookieStoreLoadOnce;
+  }
+
+  /**
+   * Phase 3 of the persistent user_data_dir arc — `/cookies status`
+   * reads from here. Returns the cookie jar motebit is holding at
+   * rest for this motebitId; lazy-loads from the encrypted store on
+   * first access. Read-only — mutations go through
+   * `clearPersistedCookies`. Returns `[]` pre-bootstrap (no motebitId
+   * yet) or on load failure (fail-soft).
+   */
+  async getPersistedCookies(): Promise<readonly import("@motebit/runtime").PersistentCookieWire[]> {
+    if (!this._motebitId) return [];
+    await this.ensureCookieStoreLoaded(this._motebitId);
+    return this._persistedCookies;
+  }
+
+  /**
+   * Phase 3 of the persistent user_data_dir arc — `/cookies revoke`
+   * routes here. Clears the at-rest encrypted store AND the in-memory
+   * cache; returns a snapshot of what was cleared so the caller can
+   * show the user what they revoked.
+   *
+   * Active sessions: the cleared state covers the at-rest jar; a
+   * currently-open cloud session retains its cookies inside Playwright
+   * until the session closes. When the session closes,
+   * `onCookiesPersisted` fires with the session's live cookies and
+   * those become the new at-rest set — accumulation post-revoke is
+   * fresh trust, not a hidden undo. The user message documents this
+   * honestly.
+   */
+  async clearPersistedCookies(): Promise<
+    readonly import("@motebit/runtime").PersistentCookieWire[]
+  > {
+    if (!this._motebitId) return [];
+    await this.ensureCookieStoreLoaded(this._motebitId);
+    const snapshot = this._persistedCookies;
+    this._persistedCookies = [];
+    await clearCookies(this._motebitId);
+    return snapshot;
   }
 
   /**

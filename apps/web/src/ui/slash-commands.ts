@@ -111,6 +111,7 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "serve", description: "Toggle accepting delegations" },
   { name: "sensitivity", description: "Show or set session sensitivity tier" },
   { name: "vision", description: "Grant or revoke pixel passthrough for the AI" },
+  { name: "cookies", description: "Inspect or revoke the cloud browser's persisted cookies" },
   { name: "receipts", description: "Show recent signed audit receipts" },
 ];
 
@@ -491,6 +492,63 @@ export function initSlashCommands(
         addMessage(
           "system",
           `Usage: /vision [grant|revoke|status] (current: ${runtime.getPixelConsent()})`,
+        );
+        return true;
+      }
+
+      // /cookies — Phase 3 of the persistent user_data_dir arc. The
+      // user-control affordance over motebit's accumulated browsing
+      // trust. `status` (default) lists what's held at rest with a
+      // redacted domain summary; `revoke` clears the encrypted store
+      // for this motebit. Cookies are encrypted at rest with a non-
+      // extractable AES-GCM key and never cross the AI-provider
+      // boundary — no consent gate needed at v1 (cf. `/vision`, which
+      // gates pixel egress to external providers). Doctrine:
+      // `runtime-invariants-over-prompt-rules.md` applied to the
+      // cloud-browser surface; `encrypted-cookie-store.ts` is the
+      // storage primitive.
+      if (name === "cookies") {
+        chatInput.value = "";
+        const arg = text.slice("/cookies".length).trim().toLowerCase();
+        if (arg === "" || arg === "status") {
+          void (async () => {
+            const cookies = await ctx.app.getPersistedCookies();
+            if (cookies.length === 0) {
+              addMessage(
+                "system",
+                "No persisted cookies. Cookies accumulate as you browse with motebit's cloud browser and survive across sessions, encrypted at rest. Use `/cookies revoke` to clear at any time.",
+              );
+              return;
+            }
+            const domains = new Set<string>();
+            for (const c of cookies) domains.add(c.domain.replace(/^\./, ""));
+            const domainList = [...domains].sort().join(", ");
+            addMessage(
+              "system",
+              `Holding ${cookies.length} cookie${cookies.length === 1 ? "" : "s"} across ${domains.size} domain${domains.size === 1 ? "" : "s"}: ${domainList}. Use \`/cookies revoke\` to clear.`,
+            );
+          })();
+          return true;
+        }
+        if (arg === "revoke") {
+          void (async () => {
+            const cleared = await ctx.app.clearPersistedCookies();
+            if (cleared.length === 0) {
+              addMessage("system", "No persisted cookies to revoke.");
+              return;
+            }
+            const domains = new Set<string>();
+            for (const c of cleared) domains.add(c.domain.replace(/^\./, ""));
+            addMessage(
+              "system",
+              `Revoked ${cleared.length} persisted cookie${cleared.length === 1 ? "" : "s"} across ${domains.size} domain${domains.size === 1 ? "" : "s"}. Future browsing sessions open with no prior trust. An active session keeps its cookies until you close the slab — whatever accumulates after revoke is fresh trust.`,
+            );
+          })();
+          return true;
+        }
+        addMessage(
+          "system",
+          "Usage: /cookies [status|revoke]. `status` lists what motebit holds at rest; `revoke` clears the encrypted store for this identity.",
         );
         return true;
       }
