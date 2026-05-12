@@ -295,6 +295,7 @@ export const COMMANDS: CommandEntry[] = [
   { usage: "/clear", desc: "Clear conversation history" },
   { usage: "/summarize", desc: "Summarize current conversation" },
   { usage: "/conversations", desc: "List recent conversations" },
+  { usage: "/welcome", desc: "Onboarding — what a motebit is, what it holds, and how to ask" },
   {
     usage: "/trust",
     desc: "What motebit holds for you — memories, conversations, signed receipts, signed deletions, federation peers",

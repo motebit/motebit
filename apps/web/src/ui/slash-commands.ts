@@ -112,6 +112,7 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "sensitivity", description: "Show or set session sensitivity tier" },
   { name: "vision", description: "Grant or revoke pixel passthrough for the AI" },
   { name: "cookies", description: "Inspect or revoke the cloud browser's persisted cookies" },
+  { name: "welcome", description: "Onboarding — what a motebit is, and what to ask" },
   { name: "trust", description: "What motebit holds for you — accumulated trust at a glance" },
   { name: "receipts", description: "Show recent signed audit receipts" },
 ];

@@ -30,6 +30,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "export", description: "Export all data as JSON" },
   { name: "clear", description: "Clear chat, start new conversation" },
   { name: "conversations", description: "Browse past conversations" },
+  { name: "welcome", description: "Onboarding — what a motebit is, and what to ask" },
   { name: "trust", description: "What motebit holds for you — accumulated trust at a glance" },
   { name: "goals", description: "View and manage goals" },
   { name: "computer", description: "Motebit Computer — reveal or hide the slab" },

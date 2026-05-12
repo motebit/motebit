@@ -115,6 +115,51 @@ describe("executeCommand", () => {
       expect(result!.summary).toBe("User discussed project architecture.");
     });
 
+    // /welcome — Phase 1 of the onboarding arc. A calm one-message tour
+    // that names the three thesis pillars and points to universal slash
+    // commands every surface ships. Discovery affordance for the
+    // architecture's accumulated state.
+    describe("welcome", () => {
+      it("returns a calm summary that opens the tour", async () => {
+        const result = await executeCommand(mockRuntime(), "welcome");
+        expect(result!.summary).toContain("Welcome");
+        expect(result!.summary).toContain("motebit");
+      });
+
+      it("detail names the sovereign-identity pillar", async () => {
+        const result = await executeCommand(mockRuntime(), "welcome");
+        expect(result!.detail).toContain("cryptographic identity");
+        expect(result!.detail).toContain("sovereign");
+      });
+
+      it("detail points to universal slash commands as concrete affordances", async () => {
+        const result = await executeCommand(mockRuntime(), "welcome");
+        // The four universal commands every surface ships — the
+        // cross-surface contract `check-trust-slash-cross-surface`
+        // locks for /trust extends in spirit to these.
+        expect(result!.detail).toContain("/trust");
+        expect(result!.detail).toContain("/memories");
+        expect(result!.detail).toContain("/forget");
+        expect(result!.detail).toContain("/help");
+      });
+
+      it("detail closes with an invitation, not a feature inventory", async () => {
+        const result = await executeCommand(mockRuntime(), "welcome");
+        // Calm-software register — the tour ends with "ask me anything"
+        // not "here's the full list of capabilities."
+        expect(result!.detail).toMatch(/ask me/i);
+      });
+
+      it("does not depend on runtime state — works pre-bootstrap", async () => {
+        // The welcome message is independent of memories / conversations
+        // / receipts; a brand-new motebit gets the same tour as one
+        // that has been running for months.
+        const result = await executeCommand(mockRuntime(), "welcome");
+        expect(result!.summary).toBeTruthy();
+        expect(result!.detail).toBeTruthy();
+      });
+    });
+
     // /trust — the trust-accumulation visibility arc. The shared
     // command aggregates five dimensions: memories, conversations,
     // signed receipts (accumulation pillar), signed deletions

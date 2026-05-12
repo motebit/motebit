@@ -16,6 +16,7 @@ import {
   cmdConversations,
   cmdSummarize,
   cmdTrust,
+  cmdWelcome,
 } from "./system.js";
 import { cmdMemories, cmdGraph, cmdCurious, cmdForget, cmdAudit } from "./memory.js";
 import { cmdGradient, cmdReflect } from "./intelligence.js";
@@ -54,6 +55,10 @@ export const COMMAND_DEFINITIONS: ReadonlyArray<{ name: string; description: str
     description:
       "What motebit holds for you — memories, conversations, signed receipts, signed deletions, federation peers",
   },
+  {
+    name: "welcome",
+    description: "Onboarding — what a motebit is, what it holds for you, and how to ask",
+  },
   { name: "withdraw", description: "Request withdrawal" },
   { name: "delegate", description: "Delegate task to agent" },
   { name: "propose", description: "Propose collaborative plan" },
@@ -88,6 +93,8 @@ export async function executeCommand(
       return cmdSummarize(runtime);
     case "trust":
       return cmdTrust(runtime);
+    case "welcome":
+      return cmdWelcome(runtime);
 
     // Memory
     case "memories":

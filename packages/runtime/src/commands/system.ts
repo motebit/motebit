@@ -1,4 +1,4 @@
-/** System commands: state, model, tools, approvals, conversations, summarize, trust. */
+/** System commands: state, model, tools, approvals, conversations, summarize, trust, welcome. */
 
 import type { MotebitId } from "@motebit/sdk";
 import type { MotebitRuntime } from "../index.js";
@@ -223,4 +223,59 @@ export async function cmdTrust(runtime: MotebitRuntime): Promise<CommandResult> 
       },
     },
   };
+}
+
+/**
+ * `/welcome` — Phase 1 of the onboarding arc.
+ *
+ * The thesis (sovereign identity + accumulated trust + governance at
+ * the boundary) is now visible at multiple surfaces, but it's
+ * discoverable only by typing slash commands the user doesn't yet know
+ * exist. Onboarding is the forcing function for outside-observer
+ * testability: walk a fresh user through the thesis in one calm
+ * message instead of requiring them to grep for what motebit IS.
+ *
+ * Shape: a single multi-line summary the surface renders as a chat
+ * message. Names the three pillars in order, points to existing
+ * universal slash commands as concrete affordances, ends with an
+ * invitation. Calm-software register — no banner, no modal, no auto-
+ * trigger. The user types `/welcome` (or arrives via a `/help` link
+ * the surfaces will wire in Phase 2) and gets the tour.
+ *
+ * Universal set only — `/trust`, `/memories`, `/forget`, `/help` work
+ * across web/desktop/mobile/CLI. Surface-specific suggestions
+ * (`/cookies` on web, `/computer` on web+desktop, etc.) are layered by
+ * each surface's slash handler if needed — same overlay pattern
+ * `/trust` uses for the web cookies dimension.
+ *
+ * Phase 2 (deferred): auto-fire `/welcome` on first-conversation
+ * (composes with the existing `contextPack.firstConversation` flag the
+ * AI prompt already reads). Today's ship is the on-demand discovery
+ * affordance — once it lands, auto-trigger is precision tuning.
+ *
+ * Doctrine: `docs/doctrine/runtime-invariants-over-prompt-rules.md`
+ * § trust-accumulation visibility arc — onboarding makes the
+ * architecture's accumulated state legible at first encounter rather
+ * than only on the third slash command the user thinks to type.
+ */
+export function cmdWelcome(_runtime: MotebitRuntime): CommandResult {
+  const summary = "Welcome. You're talking to a motebit — a sovereign agent.";
+  const detail = [
+    "I have my own cryptographic identity (Ed25519 keypair). I'm yours, not someone else's:",
+    "every conversation, every memory, every signed action stays inside the boundary",
+    "you control. I accumulate state across our conversations and across devices —",
+    "memory, trust, governance — all of it sovereign.",
+    "",
+    "A few things you can ask me:",
+    "",
+    "  /trust       — what I'm holding for you (memories, conversations, signed",
+    "                 receipts, signed deletions, federation peers)",
+    "  /memories    — the specific things I remember about you",
+    "  /forget <id> — clear a memory; each deletion produces a signed certificate",
+    "  /help        — the full list of what's available",
+    "",
+    "I notice, I remember, I wonder. Tell me something, or ask me anything.",
+  ].join("\n");
+
+  return { summary, detail };
 }
