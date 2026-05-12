@@ -182,7 +182,11 @@ function decidePixelGate(ctx: ProjectionContext): import("@motebit/sdk").PixelOm
   return null;
 }
 
-function projectForAi(data: unknown, ctx: ProjectionContext = DEFAULT_PROJECTION_CONTEXT): unknown {
+function projectForAi(
+  data: unknown,
+  ctx: ProjectionContext = DEFAULT_PROJECTION_CONTEXT,
+  onOmissionEmitted?: (reason: import("@motebit/sdk").PixelOmittedReason) => void,
+): unknown {
   if (data == null || typeof data !== "object") return data;
   const r = data as Record<string, unknown>;
   // Two kinds carry inline pixel bytes today: the explicit
@@ -205,6 +209,12 @@ function projectForAi(data: unknown, ctx: ProjectionContext = DEFAULT_PROJECTION
       // the redactor; here we trust the upstream contract.
       return r;
     }
+    // Notify the runtime that an omission fired, so the next turn's
+    // [Now] block can mark the omission as stale if the gate has
+    // since flipped. Same shape as `frame_stale`: typed wire field
+    // + prompt clause + dispatch enforcement. Doctrine:
+    // `motebit-computer.md` §"Typed truth on results."
+    onOmissionEmitted?.(reason);
     const { bytes_base64: _bytes_base64, ...rest } = r;
     return {
       ...rest,
@@ -378,6 +388,24 @@ export interface MotebitLoopDependencies {
    * consent is a typed affordance, not an AI prompt).
    */
   getPixelConsent?: () => import("@motebit/sdk").PixelConsentState;
+  /**
+   * Notify the runtime that `projectForAi` just emitted a
+   * `bytes_omitted_reason` on a screenshot / navigate result.
+   * Lets the runtime track "did the gate fire this conversation?"
+   * so the next turn's [Now] block can mark the prior omission as
+   * stale if the gate has since flipped.
+   *
+   * The runtime stores the most recent reason and compares against
+   * the current gate state at snapshot time — if the same gate
+   * would no longer fire (e.g., consent flipped from denied to
+   * session, or sensitivity dropped from elevated to none), the
+   * snapshot's `staleBytesOmissionReason` carries the prior reason
+   * and the prompt teaches the AI to re-take rather than re-
+   * recommend the affordance for the stale reason.
+   *
+   * Doctrine: `motebit-computer.md` §"Typed truth on results."
+   */
+  onPixelOmissionEmitted?: (reason: import("@motebit/sdk").PixelOmittedReason) => void;
 }
 
 export interface TurnResult {
@@ -906,7 +934,7 @@ export async function* runTurnStreaming(
         };
         const aiProjectedResult: ToolResult = {
           ...result,
-          data: projectForAi(result.data, projectionCtx),
+          data: projectForAi(result.data, projectionCtx, deps.onPixelOmissionEmitted),
         };
 
         // Use sanitizeAndCheck if available (duck-typed), otherwise fall back
@@ -1103,7 +1131,11 @@ export async function* runTurnStreaming(
         sensitivity: deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None,
         pixelConsent: deps.getPixelConsent?.() ?? "denied",
       };
-      const aiProjectedData = projectForAi(result.data, fallbackProjectionCtx);
+      const aiProjectedData = projectForAi(
+        result.data,
+        fallbackProjectionCtx,
+        deps.onPixelOmissionEmitted,
+      );
       let wrappedResult = result;
       if (aiProjectedData != null) {
         const dataStr =

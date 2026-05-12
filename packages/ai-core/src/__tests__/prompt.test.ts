@@ -376,6 +376,48 @@ describe("formatSessionState — runtime session-state block", () => {
     });
     expect(out).toContain("Pixel passthrough: session");
   });
+
+  // ── Stale pixel-omission signal (typed-truth-perception) ─────────
+  it("emits Stale pixel-omission line when staleBytesOmissionReason is set", async () => {
+    // Pin from 2026-05-11. The AI was telling the user "type /vision
+    // grant" after the user had already granted it — reading a stale
+    // bytes_omitted_reason from a prior tool result without noticing
+    // the gate had flipped. The runtime now computes the staleness
+    // and writes it into the snapshot; the [Now] block surfaces it
+    // explicitly so the AI's PERCEPTION_DOCTRINE clause can teach
+    // the recovery (re-take, don't re-recommend the affordance).
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "session",
+      staleBytesOmissionReason: "consent_required",
+    });
+    expect(out).toContain("Stale pixel-omission");
+    expect(out).toContain('prior bytes_omitted_reason="consent_required"');
+    expect(out).toContain("re-take");
+  });
+
+  it("emits Stale pixel-omission for sensitivity_blocked flips too", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "session",
+      staleBytesOmissionReason: "sensitivity_blocked",
+    });
+    expect(out).toContain('prior bytes_omitted_reason="sensitivity_blocked"');
+  });
+
+  it("omits Stale line when staleBytesOmissionReason is absent (no false positives)", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "session",
+    });
+    expect(out).not.toContain("Stale pixel-omission");
+  });
 });
 
 describe("buildSystemPrompt — [Now] block injection", () => {
@@ -604,8 +646,12 @@ describe("buildSystemPrompt — [Now] block injection", () => {
     const prompt = buildSystemPrompt(makeContextPack());
     expect(prompt).toContain("stale");
     expect(prompt).toMatch(/Pixel passthrough: session/);
-    expect(prompt).toMatch(/Re-take the screenshot/);
+    expect(prompt).toMatch(/re-take|re-call the tool/i);
     expect(prompt).toMatch(/sensitivity_blocked/);
+    // 2026-05-11 strengthening — the clause now explicitly forbids
+    // re-recommending the stale affordance (the exact failure mode
+    // witnessed in the Google CAPTCHA flow).
+    expect(prompt).toMatch(/Stale pixel-omission|stale reason/i);
   });
 
   it("injection defense forbids quoting the wrapper itself in replies", () => {

@@ -2160,6 +2160,10 @@ export class MotebitRuntime {
       void this.reflectAndStore();
     }
     this.conversation.reset();
+    // Per-conversation tracker — clear so a fresh conversation
+    // doesn't carry the prior conversation's omission shadow into
+    // its [Now] block.
+    this._lastPixelOmissionReason = null;
   }
 
   /**
@@ -2967,6 +2971,15 @@ export class MotebitRuntime {
         getEffectiveSensitivity: () => this.getEffectiveSessionSensitivity(),
         getProviderMode: () => this._providerMode,
         getPixelConsent: () => this._pixelConsent,
+        // Typed-truth on stale pixel omission. The loop's
+        // `projectForAi` invokes this whenever it strips bytes —
+        // the runtime stores the reason so the next turn's [Now]
+        // block can mark the omission as stale if the gate has
+        // since flipped. Doctrine: motebit-computer.md §"Typed
+        // truth on results."
+        onPixelOmissionEmitted: (reason) => {
+          this._lastPixelOmissionReason = reason;
+        },
       };
     }
   }
@@ -3260,6 +3273,27 @@ export class MotebitRuntime {
    */
   private _pixelConsent: import("@motebit/sdk").PixelConsentState = "denied";
 
+  /**
+   * Most-recent pixel-omission reason emitted by `projectForAi` this
+   * conversation. Set via the `onPixelOmissionEmitted` callback the
+   * runtime hands to `@motebit/ai-core`'s loop deps. Cleared on
+   * conversation reset / new.
+   *
+   * Used by `getSessionStateSnapshot` to compute the
+   * `staleBytesOmissionReason` field — when this is set AND the
+   * current gate would no longer fire the same reason (e.g., consent
+   * flipped denied → session, or sensitivity dropped from elevated to
+   * none), the snapshot carries the prior reason and the
+   * PERCEPTION_DOCTRINE clause teaches the AI to re-take rather than
+   * re-recommend the affordance for the stale reason.
+   *
+   * Doctrine: motebit-computer.md §"Typed truth on results." Closes
+   * the failure mode where the AI tells the user "type /vision grant"
+   * after the user has already granted — witnessed 2026-05-11 in the
+   * Google CAPTCHA flow.
+   */
+  private _lastPixelOmissionReason: import("@motebit/sdk").PixelOmittedReason | null = null;
+
   setPixelConsent(state: import("@motebit/sdk").PixelConsentState): void {
     this._pixelConsent = state;
   }
@@ -3308,10 +3342,43 @@ export class MotebitRuntime {
    */
   getSessionStateSnapshot(): import("@motebit/sdk").SessionStateSnapshot {
     const browser = this._browserSessionProvider?.() ?? { status: "closed" as const };
+    const sensitivity = this.getEffectiveSessionSensitivity();
+    // Compute staleness — if a prior projection emitted an omission
+    // reason, check whether the same gate would still fire under
+    // current state. If not, the prior omission is stale and the
+    // AI should re-take. Mirrors the gate logic from
+    // `@motebit/ai-core::decidePixelGate` (kept structurally
+    // identical; if that gate changes shape, this must too — the
+    // cross-package symmetry is the load-bearing invariant).
+    let staleBytesOmissionReason: import("@motebit/sdk").PixelOmittedReason | undefined;
+    if (this._lastPixelOmissionReason !== null) {
+      const sovereign = this._providerMode === "on-device";
+      const tierElevated = rankSensitivity(sensitivity) > rankSensitivity(SensitivityLevel.None);
+      const consentGranted = this._pixelConsent === "session";
+      // Reproduce the gate's decision under current state.
+      let currentReason: import("@motebit/sdk").PixelOmittedReason | null;
+      if (sovereign) {
+        currentReason = null; // sovereignty bypass
+      } else if (tierElevated) {
+        currentReason = "sensitivity_blocked";
+      } else if (!consentGranted) {
+        currentReason = "consent_required";
+      } else {
+        currentReason = null;
+      }
+      // Stale iff the prior reason no longer applies. Specifically:
+      // current gate permits, OR a different gate fires now.
+      // (A different-gate scenario means the AI should still re-take
+      // because the recovery affordance differs.)
+      if (currentReason !== this._lastPixelOmissionReason) {
+        staleBytesOmissionReason = this._lastPixelOmissionReason;
+      }
+    }
     return {
       browser,
-      sensitivity: this.getEffectiveSessionSensitivity(),
+      sensitivity,
       pixelConsent: this._pixelConsent,
+      ...(staleBytesOmissionReason !== undefined ? { staleBytesOmissionReason } : {}),
     };
   }
 

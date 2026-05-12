@@ -2694,3 +2694,84 @@ describe("SkillLoaded event emission — phase 3", () => {
     expect(events).toHaveLength(0);
   });
 });
+
+describe("MotebitRuntime — [Now] block stale pixel-omission (typed-truth-perception)", () => {
+  // Pin from 2026-05-11. The AI was telling the user "type /vision grant"
+  // after the user had already granted it — reading a stale historical
+  // bytes_omitted_reason without noticing the gate had flipped.
+  //
+  // The fix: projectForAi calls runtime's onPixelOmissionEmitted whenever
+  // it strips bytes; the runtime stores the reason in
+  // _lastPixelOmissionReason; getSessionStateSnapshot computes
+  // staleBytesOmissionReason by comparing the stored reason to the
+  // current gate state. When stale, the [Now] block surfaces it
+  // explicitly so PERCEPTION_DOCTRINE can teach the recovery.
+
+  function makeRuntime(): MotebitRuntime {
+    return new MotebitRuntime(
+      { motebitId: "stale-omission-test", tickRateHz: 0 },
+      createAdapters(createMockProvider()),
+    );
+  }
+
+  function setLastOmission(
+    rt: MotebitRuntime,
+    reason: import("@motebit/sdk").PixelOmittedReason | null,
+  ): void {
+    (rt as unknown as { _lastPixelOmissionReason: typeof reason })._lastPixelOmissionReason =
+      reason;
+  }
+
+  it("stale: prior consent_required + current consent granted → snapshot carries staleBytesOmissionReason", () => {
+    const rt = makeRuntime();
+    setLastOmission(rt, "consent_required");
+    rt.setPixelConsent("session");
+    const snap = rt.getSessionStateSnapshot();
+    expect(snap.staleBytesOmissionReason).toBe("consent_required");
+    expect(snap.pixelConsent).toBe("session");
+  });
+
+  it("not stale: prior consent_required + current consent still denied → no staleness signal", () => {
+    const rt = makeRuntime();
+    setLastOmission(rt, "consent_required");
+    // pixelConsent stays "denied" (default). The same gate would still
+    // fire, so the prior omission isn't stale — it's current.
+    const snap = rt.getSessionStateSnapshot();
+    expect(snap.staleBytesOmissionReason).toBeUndefined();
+  });
+
+  it("not stale: no prior omission recorded → no staleness signal", () => {
+    const rt = makeRuntime();
+    // Default _lastPixelOmissionReason = null. Even after granting
+    // consent, the snapshot doesn't claim staleness because there's
+    // no prior omission to be stale about.
+    rt.setPixelConsent("session");
+    const snap = rt.getSessionStateSnapshot();
+    expect(snap.staleBytesOmissionReason).toBeUndefined();
+  });
+
+  it("stale: prior consent_required + a different gate fires now (sensitivity_blocked) → still flagged as stale", () => {
+    // Both gates produce omissions, but the AFFORDANCE differs
+    // (/vision grant for consent vs /sensitivity none for tier).
+    // The AI should re-take so it sees the CURRENT recovery
+    // affordance, not the stale one.
+    const rt = makeRuntime();
+    setLastOmission(rt, "consent_required");
+    rt.setSessionSensitivity(SensitivityLevel.Medical);
+    const snap = rt.getSessionStateSnapshot();
+    expect(snap.staleBytesOmissionReason).toBe("consent_required");
+  });
+
+  it("resetConversation clears the tracker — new conversation doesn't inherit prior omission shadow", () => {
+    const rt = makeRuntime();
+    setLastOmission(rt, "consent_required");
+    rt.setPixelConsent("session");
+    expect(rt.getSessionStateSnapshot().staleBytesOmissionReason).toBe("consent_required");
+    rt.resetConversation();
+    // New conversation; tracker cleared.
+    expect(
+      (rt as unknown as { _lastPixelOmissionReason: unknown })._lastPixelOmissionReason,
+    ).toBeNull();
+    expect(rt.getSessionStateSnapshot().staleBytesOmissionReason).toBeUndefined();
+  });
+});

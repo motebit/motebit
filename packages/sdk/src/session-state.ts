@@ -75,4 +75,32 @@ export interface SessionStateSnapshot {
   readonly sensitivity: SensitivityLevel;
   /** Per-session pixel-passthrough consent — runtime-owned. */
   readonly pixelConsent: PixelConsentState;
+  /**
+   * Stale-omission signal — set when a prior tool result in this
+   * conversation emitted `bytes_omitted_reason: <r>` but the gate
+   * that fired `<r>` is no longer firing under the current state.
+   * Carries the prior reason so the prompt can teach the AI to
+   * recover correctly (re-take, don't re-recommend an already-
+   * granted affordance).
+   *
+   * The classic case: AI screenshot returns `bytes_omitted_reason:
+   * "consent_required"`; user types `/vision grant`; AI's next turn
+   * still references the historical omission and recommends
+   * `/vision grant` to a user who already granted it. This signal is
+   * the runtime telling the AI: "your prior omission is stale; the
+   * gate has flipped."
+   *
+   * Absent (undefined) means either no omission has fired this
+   * conversation OR the gate that fired is still firing (the
+   * omission isn't stale). The PERCEPTION_DOCTRINE clause in
+   * `@motebit/ai-core::prompt` teaches: if this field is present in
+   * the [Now] block, re-take before answering and DO NOT re-recommend
+   * the affordance for the stale reason.
+   *
+   * Doctrine: `motebit-computer.md` §"Typed truth on results" — same
+   * shape as `frame_stale` and `not_in_control`. Typed wire field +
+   * prompt clause + dispatch enforcement (the runtime computes the
+   * staleness, the AI doesn't have to cross-reference history).
+   */
+  readonly staleBytesOmissionReason?: import("./pixel-consent.js").PixelOmittedReason;
 }
