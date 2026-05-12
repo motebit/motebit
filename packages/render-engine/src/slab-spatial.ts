@@ -98,6 +98,7 @@ export class SpatialSlabManager {
     items: [],
     planeVisibility: 0,
     activeWarmth: 0,
+    bodyRegister: "home",
   };
 
   constructor(creatureGroup: THREE.Group, opts?: { detachHandler?: DetachArtifactHandler }) {

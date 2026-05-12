@@ -545,11 +545,13 @@ export function buildLiveBrowserElement(
       // via:
       //   - URL bar state: empty placeholder (register) vs current
       //     URL pre-selected for editing (overlay).
-      //   - WebGL screencast: cleared texture (register) vs
-      //     suppressed-but-installed texture (overlay) — the slab's
-      //     `setScreencastSuppressed` hides the screen mesh
-      //     without releasing the texture so resuming the session
-      //     is cold-start-free.
+      //   - WebGL screencast: cleared texture (`home` body register)
+      //     vs preserved-but-hidden texture (`transition` body
+      //     register) — the renderer's per-frame derivation reads
+      //     the body register and hides the screen mesh in both
+      //     non-`live` states so resuming the session is cold-start-
+      //     free. Doctrine: motebit-computer.md §"Body register —
+      //     the tri-state."
       //
       // The `dataset.homeState` attribute differs so tests + future
       // CSS rules can branch on the semantic state without it

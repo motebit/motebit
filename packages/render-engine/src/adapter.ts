@@ -9,6 +9,7 @@ import type {
   AudioReactivity,
   ArtifactSpec,
   ArtifactHandle,
+  SlabBodyRegister,
   SlabItemSpec,
   SlabItemHandle,
 } from "./spec.js";
@@ -294,14 +295,14 @@ export class ThreeJSAdapter implements RenderAdapter {
   }
 
   /**
-   * Toggle the slab's screencast-mesh visibility WITHOUT releasing
-   * the texture. Pair with the surface's URL-bar-focus → home-
-   * overlay transition: `true` on focus, `false` on blur / commit /
-   * Esc. Texture stays installed so resume is cold-start-free.
-   * Distinct from `clearSlabScreencast` (lifecycle terminator).
+   * Set the slab's body register — the tri-state truth for what
+   * occupies the body region (home affordances, live screencast, or
+   * home overlaying a dim screencast during URL-bar focus). The
+   * renderer derives screen-mesh visibility from this value. Doctrine:
+   * `motebit-computer.md` §"Body register — the tri-state."
    */
-  setSlabScreencastSuppressed(suppressed: boolean): void {
-    this.slab?.setScreencastSuppressed(suppressed);
+  setSlabBodyRegister(register: SlabBodyRegister): void {
+    this.slab?.setBodyRegister(register);
   }
 
   setBackground(color: number | null): void {

@@ -27,6 +27,8 @@ The slab is the constant-when-invoked; content is the visitor.
 - **Records** (panels of accumulated state) live outside the slab's silhouette by design — see [`records-vs-acts.md`](records-vs-acts.md). Records are not slab content.
 - **Empty** is the slab's READY register. The chrome strip with its URL input is the rendered affordance.
 
+What occupies the body region (below the chrome) is typed at `@motebit/render-engine::SlabBodyRegister` and lives in `slab-core.ts` as the **single source of truth**: `home` (forward-framed affordances, no live session), `live` (screencast occupies the body), `transition` (home overlays a dim screencast during URL-bar focus, Apple Safari pattern). The renderer derives screen-mesh visibility from the register; surfaces mount body content based on it. One value, two physical levers (WebGL screen mesh + CSS3D `bodySlot`), no implicit coupling. See [`motebit-computer.md`](motebit-computer.md) §"Body register — the tri-state."
+
 ## Violations the principle catches
 
 Past wrong moves on /computer were violations of one of the three assertions:

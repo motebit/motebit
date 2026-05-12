@@ -26,7 +26,7 @@ import {
   type SlabHomeAffordance,
 } from "./ui/slab-home.js";
 import { renderCoBrowseChrome, animateMarkForReceipt } from "./ui/cobrowse-chrome";
-import type { LiveBrowserElementHandle } from "@motebit/render-engine";
+import type { LiveBrowserElementHandle, SlabBodyRegister } from "@motebit/render-engine";
 import type {
   ConversationMessage,
   BehaviorCues,
@@ -2186,6 +2186,23 @@ export class WebApp {
     return "hidden";
   }
 
+  /**
+   * Map the same two cause-bits onto the renderer's body register —
+   * the typed truth for what occupies the slab's body region. The
+   * DOM-side `setHomeState` controls CSS (`display: none` vs flex
+   * vs flex+backdrop-blur); the renderer-side `setSlabBodyRegister`
+   * controls screen-mesh visibility (`live` shows the JPEG mesh,
+   * `home`/`transition` hide it, `transition` preserves the texture
+   * for cold-start-free resume). One state, two physical levers;
+   * both derived from the same composition so they cannot drift.
+   * Doctrine: `motebit-computer.md` §"Body register — the tri-state."
+   */
+  private effectiveBodyRegister(): SlabBodyRegister {
+    if (this._onHomeRegister) return "home";
+    if (this._homeOverlayActive) return "transition";
+    return "live";
+  }
+
   private applyHomeRegisterToCurrentState(): void {
     const handle = this.liveBrowserHandle;
     if (!handle) return;
@@ -2202,6 +2219,12 @@ export class WebApp {
     }
     const state = this.effectiveHomeState();
     handle.setHomeState(state);
+    // Renderer-side register write — the typed truth for screen-mesh
+    // visibility. Belt-and-suspenders with `clearSlabScreencast` below:
+    // the register alone hides the mesh on next tick, even if the
+    // texture-release races with the render loop. Doctrine: `motebit-
+    // computer.md` §"Body register — the tri-state."
+    this.renderer.setSlabBodyRegister?.(this.effectiveBodyRegister());
     if (onHome) {
       // Releasing the texture lets the screen-mesh visibility binding
       // (cd98aa8f / 41e28ead) derive false on the next render tick.
@@ -2285,12 +2308,13 @@ export class WebApp {
     if (this._homeOverlayActive) return;
     this._homeOverlayActive = true;
     this.liveBrowserHandle.setHomeState(this.effectiveHomeState());
-    // Suppress the WebGL screen mesh — Apple's Safari pattern: the
-    // page render is replaced (not blurred-behind) when the URL
-    // bar focuses. Texture stays installed so resume is cold-
-    // start-free; only visibility flips. Tiles render against
-    // pure slab interior, never against a competing video.
-    this.renderer.setSlabScreencastSuppressed?.(true);
+    // Flip the body register to `transition` — Apple's Safari pattern:
+    // the page render is replaced (not blurred-behind) when the URL
+    // bar focuses. Texture stays installed so resume is cold-start-
+    // free; only visibility flips. Tiles render against pure slab
+    // interior, never against a competing video. Doctrine: `motebit-
+    // computer.md` §"Body register — the tri-state."
+    this.renderer.setSlabBodyRegister?.(this.effectiveBodyRegister());
     this.mountHomeViewIntoBodySlot();
   }
 
@@ -2307,11 +2331,12 @@ export class WebApp {
     if (!this._homeOverlayActive) return;
     this._homeOverlayActive = false;
     this.liveBrowserHandle.setHomeState(this.effectiveHomeState());
-    // Un-suppress the WebGL screen mesh — per-frame visibility
-    // derivation reveals it on the next render tick against the
-    // most-recent frame already in the texture (no cold-start,
-    // no blank).
-    this.renderer.setSlabScreencastSuppressed?.(false);
+    // Flip the body register back to `live` — per-frame visibility
+    // derivation reveals the mesh on the next render tick against
+    // the most-recent frame already in the texture (no cold-start,
+    // no blank). Doctrine: `motebit-computer.md` §"Body register —
+    // the tri-state."
+    this.renderer.setSlabBodyRegister?.(this.effectiveBodyRegister());
     // Clear the slot so the next overlay-open rebuilds fresh tiles
     // (in case the audit log got new entries between opens).
     this.liveBrowserHandle.bodySlot.replaceChildren();

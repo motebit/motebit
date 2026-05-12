@@ -34,6 +34,7 @@
 import type {
   ArtifactSpec,
   ArtifactHandle,
+  SlabBodyRegister,
   SlabItemKind,
   SlabItemHandle,
   SlabItemPhase,
@@ -144,6 +145,16 @@ export interface SlabCoreFrame {
    * onto their slab material when warmth > 0.
    */
   readonly activeWarmth: number;
+  /**
+   * Body register — what occupies the body region right now (home
+   * affordances, live screencast, or home overlaying a dim screencast).
+   * Renderers derive screen-mesh visibility from this value; surfaces
+   * read it to decide which content to mount in `bodySlot`. One source
+   * of truth for the body's tri-state, lifted out of the prior
+   * implicit coupling between {screenTexture, screencastSuppressed}.
+   * Doctrine: `motebit-computer.md` §"Body register — the tri-state."
+   */
+  readonly bodyRegister: SlabBodyRegister;
 }
 
 export interface SlabCoreDeps {
@@ -208,6 +219,16 @@ export class SlabCore {
    * calm-software pattern (drop targets answer, don't shout).
    */
   private dragHover = false;
+  /**
+   * Body register — what's in the body region right now. Surfaces
+   * write via `setBodyRegister`; renderers read via `getBodyRegister`
+   * or the per-frame snapshot. Default `home`: empty-but-ready is the
+   * floor (the always-already-slab principle). The register lifts the
+   * prior implicit coupling between {screenTexture present, suppressed
+   * flag} into one named state — three values, one source of truth.
+   * Doctrine: `motebit-computer.md` §"Body register — the tri-state."
+   */
+  private bodyRegister: SlabBodyRegister = "home";
 
   constructor(deps: SlabCoreDeps = {}) {
     this.detachHandler = deps.detachHandler ?? null;
@@ -386,6 +407,21 @@ export class SlabCore {
     this.dragHover = hovering;
   }
 
+  /**
+   * Set the body register. Idempotent; calling with the current value
+   * is a no-op (the renderer reads from snapshot each tick, so the
+   * caller doesn't need to track prior state). Doctrine:
+   * `motebit-computer.md` §"Body register — the tri-state."
+   */
+  setBodyRegister(register: SlabBodyRegister): void {
+    this.bodyRegister = register;
+  }
+
+  /** Current body register. Read by renderers to derive mesh visibility. */
+  getBodyRegister(): SlabBodyRegister {
+    return this.bodyRegister;
+  }
+
   /** Read-only check used by renderers to gate per-id parallel state. */
   hasItem(id: string): boolean {
     return this.items.has(id);
@@ -488,6 +524,7 @@ export class SlabCore {
       items: snapshot,
       planeVisibility: this.planeVisibility,
       activeWarmth: this.activeWarmth,
+      bodyRegister: this.bodyRegister,
     };
   }
 

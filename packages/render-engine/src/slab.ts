@@ -45,6 +45,7 @@ import type {
   ArtifactSpec,
   ArtifactHandle,
   InteriorColor,
+  SlabBodyRegister,
   SlabItemSpec,
   SlabItemHandle,
 } from "./spec.js";
@@ -326,21 +327,6 @@ export class SlabManager {
   private readonly screenMesh: THREE.Mesh;
   private readonly screenMaterial: THREE.MeshBasicMaterial;
   private screenTexture: THREE.Texture | null = null;
-  /**
-   * When true, the per-frame visibility derivation hides the screen
-   * mesh regardless of texture presence. Surface sets this on the
-   * Session → Home overlay transition (URL-bar focus mid-session) —
-   * the home view occupies the body alone while the screencast
-   * texture stays installed so resume is cold-start-free. Surface
-   * clears it on overlay exit (blur / commit / Esc); next render
-   * tick reveals the screen mesh against the most-recent frame
-   * already in the texture.
-   *
-   * Distinct from `clearScreencast` which RELEASES the texture
-   * entirely. Suppression is a visibility gate; clear is a
-   * lifecycle terminator.
-   */
-  private screencastSuppressed = false;
   private readonly planeMaterial: THREE.MeshPhysicalMaterial;
   /**
    * Silhouette companion to `planeMaterial`. Same `MeshPhysicalMaterial`
@@ -986,18 +972,21 @@ export class SlabManager {
   }
 
   /**
-   * Toggle the screencast suppression flag — hides the screen mesh
-   * without releasing its texture. Pairs with the URL-bar-focus →
-   * home-overlay transition: surface sets `true` on focus so the
-   * home view occupies the body alone, sets `false` on blur /
-   * commit / Esc so the screencast re-emerges against the most-
-   * recent frame already in the texture (no cold-start, no blank).
-   * Distinct from `clearScreencast` which releases the texture.
-   * Per-frame visibility derivation reads this flag — change here
-   * applies on next render tick.
+   * Set the body register — the tri-state truth for what occupies the
+   * body region. Forwards to `core.setBodyRegister`; the per-frame
+   * derivation reads it next tick and applies screen-mesh visibility:
+   *
+   *   - `home`       — mesh hidden; pair with `clearScreencast()` to
+   *                    release the texture (home is the cold-start /
+   *                    post-dismiss state).
+   *   - `live`       — mesh visible against installed texture.
+   *   - `transition` — mesh hidden; texture preserved so resume on
+   *                    blur/commit/Esc is cold-start-free.
+   *
+   * Doctrine: `motebit-computer.md` §"Body register — the tri-state."
    */
-  setScreencastSuppressed(suppressed: boolean): void {
-    this.screencastSuppressed = suppressed;
+  setBodyRegister(register: SlabBodyRegister): void {
+    this.core.setBodyRegister(register);
   }
 
   /**
@@ -1211,19 +1200,26 @@ export class SlabManager {
     this.planeMesh.visible = visible;
     this.backPaneMesh.visible = visible;
     this.sideWallMesh.visible = visible;
-    // Bind the screencast screen mesh's visibility to the slab's
-    // user-visibility AND the presence of a texture. Without this,
-    // the WebGL screen mesh keeps rendering its texture in 3D space
-    // even after `/computer` toggles the slab off — the glass volume
-    // + chrome fade out, but the JPEG texture floats on, content
-    // outliving its substrate (always-already-slab.md violation,
-    // third instance of the slab/stitch desync after chrome band
-    // and stage opacity — caught 2026-05-11 on /computer toggle).
-    // Per-frame derivation here is the single source of truth;
-    // `setScreencastImage` no longer flips `screenMesh.visible`
-    // directly — it just installs the texture and lets this loop
-    // decide visibility.
-    this.screenMesh.visible = visible && this.screenTexture !== null && !this.screencastSuppressed;
+    // Bind the screencast screen mesh's visibility to (a) the slab
+    // being user-visible, (b) a texture installed, and (c) the body
+    // register being `live`. The register lifts the prior implicit
+    // coupling between {screenTexture present, screencastSuppressed
+    // flag} into one named state — `home` clears the texture and
+    // hides the mesh, `live` shows the mesh against the installed
+    // texture, `transition` preserves the texture but hides the mesh
+    // so the home overlay reads as the primary body content (Apple
+    // Safari URL-bar focus pattern). Without this, the WebGL screen
+    // mesh would keep rendering its texture in 3D space even after
+    // `/computer` toggles the slab off — the glass volume + chrome
+    // fade out, but the JPEG texture floats on, content outliving
+    // its substrate (always-already-slab.md violation, third instance
+    // of the slab/stitch desync after chrome band and stage opacity —
+    // caught 2026-05-11 on /computer toggle). Per-frame derivation
+    // here is the single source of truth; `setScreencastImage` no
+    // longer flips `screenMesh.visible` directly — it just installs
+    // the texture and lets this loop decide visibility.
+    this.screenMesh.visible =
+      visible && this.screenTexture !== null && frame.bodyRegister === "live";
     // Sympathetic breathing applies to all three meshes (front, back,
     // sides) uniformly — the slab inflates as one volume. Per-mesh
     // (rather than via a wrapper group) so the CSS3D stage — also a

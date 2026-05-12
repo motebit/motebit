@@ -562,7 +562,7 @@ describe("SlabManager — screencast WebGL texture (v1.3 → texture register)",
     expect(screen!.material.map).toBeNull();
   });
 
-  it("setScreencastImage(image) populates the material's map and shows the screen mesh once the slab is user-visible", () => {
+  it("setScreencastImage(image) populates the material's map and shows the screen mesh once the slab is user-visible and the body register is live", () => {
     const mgr = makeManager();
     const fakeImage = { width: 1280, height: 800 } as unknown as HTMLImageElement;
     mgr.setScreencastImage(fakeImage);
@@ -573,10 +573,11 @@ describe("SlabManager — screencast WebGL texture (v1.3 → texture register)",
     const map = screen.material.map as { image: unknown };
     expect(map.image).toBe(fakeImage);
     // Screen-mesh visibility is derived per-frame from (user-visible
-    // AND screenTexture !== null) — the always-already-slab fix that
-    // closes the /computer-toggle stitch desync (2026-05-11). Make
-    // the slab user-visible + tick so the derivation lands.
+    // AND screenTexture !== null AND bodyRegister === "live"). Default
+    // register is `home` (the doctrine floor — empty IS READY); the
+    // surface flips to `live` once a real URL is navigated.
     mgr.setUserVisible(true);
+    mgr.setBodyRegister("live");
     mgr.update(0, 0.5);
     expect(screen.visible).toBe(true);
   });
@@ -597,6 +598,7 @@ describe("SlabManager — screencast WebGL texture (v1.3 → texture register)",
   it("clearScreencast() releases the texture, clears the material map, and hides the mesh on the next tick", () => {
     const mgr = makeManager();
     mgr.setUserVisible(true);
+    mgr.setBodyRegister("live");
     mgr.setScreencastImage({ width: 1280, height: 800 } as unknown as HTMLImageElement);
     mgr.update(0, 0.5);
     const screen = findScreenMesh(mgr)!;
@@ -605,7 +607,8 @@ describe("SlabManager — screencast WebGL texture (v1.3 → texture register)",
     // Texture + map released eagerly.
     expect(screen.material.map).toBeNull();
     // Visibility derives next tick — (user-visible AND
-    // screenTexture !== null) → false once the texture is nulled.
+    // screenTexture !== null AND bodyRegister === "live") → false once
+    // the texture is nulled.
     mgr.update(0.5, 0.1);
     expect(screen.visible).toBe(false);
   });
@@ -629,6 +632,7 @@ describe("SlabManager — screencast WebGL texture (v1.3 → texture register)",
     // prevents the fourth.
     const mgr = makeManager();
     mgr.setUserVisible(true);
+    mgr.setBodyRegister("live");
     mgr.setScreencastImage({ width: 1280, height: 800 } as unknown as HTMLImageElement);
     mgr.update(0, 0.5);
     const screen = findScreenMesh(mgr)!;
@@ -645,31 +649,61 @@ describe("SlabManager — screencast WebGL texture (v1.3 → texture register)",
     expect(screen.visible).toBe(true);
   });
 
-  it("setScreencastSuppressed(true) hides the screen mesh WITHOUT releasing the texture — overlay-register lifecycle", () => {
-    // Pins the URL-bar-focus → home-overlay contract: suppression
-    // hides the mesh visually while the texture stays installed,
-    // so resuming the session (overlay exit) reveals the mesh
-    // against the most-recent frame already in the texture — no
+  it("setBodyRegister('transition') hides the screen mesh WITHOUT releasing the texture — overlay-register lifecycle", () => {
+    // Pins the URL-bar-focus → home-overlay contract: the `transition`
+    // register hides the mesh visually while the texture stays
+    // installed, so resuming the session (overlay exit) reveals the
+    // mesh against the most-recent frame already in the texture — no
     // cold-start, no blank. Distinct from clearScreencast which
-    // releases the texture (lifecycle terminator).
+    // releases the texture (lifecycle terminator). The register lifts
+    // the prior {screencastSuppressed boolean, screenTexture present}
+    // implicit pair into one named state.
     const mgr = makeManager();
     mgr.setUserVisible(true);
+    mgr.setBodyRegister("live");
     mgr.setScreencastImage({ width: 1280, height: 800 } as unknown as HTMLImageElement);
     mgr.update(0, 0.5);
     const screen = findScreenMesh(mgr)!;
     expect(screen.visible).toBe(true);
     expect(screen.material.map).not.toBeNull();
 
-    // Suppress — mesh hides on next tick. Texture survives.
-    mgr.setScreencastSuppressed(true);
+    // Transition (URL-bar focus mid-session) — mesh hides on next
+    // tick. Texture survives.
+    mgr.setBodyRegister("transition");
     mgr.update(0.5, 0.1);
     expect(screen.visible).toBe(false);
     expect(screen.material.map).not.toBeNull(); // Texture survives.
 
-    // Un-suppress — mesh re-emerges against the still-installed texture.
-    mgr.setScreencastSuppressed(false);
+    // Back to live (overlay exit) — mesh re-emerges against the
+    // still-installed texture.
+    mgr.setBodyRegister("live");
     mgr.update(1, 0.1);
     expect(screen.visible).toBe(true);
+    expect(screen.material.map).not.toBeNull();
+  });
+
+  it("setBodyRegister('home') hides the screen mesh even with an installed texture — home register is the slab's READY floor", () => {
+    // The `home` register names what the prior implementation derived
+    // from {screenTexture === null}: the body is the home view, no
+    // live screencast. In practice the surface also calls
+    // `clearScreencast` to release the texture on entering home, but
+    // the register alone must suffice for visibility derivation — a
+    // misordered teardown (register flipped first, texture cleared
+    // second) must not leave the JPEG visible against home tiles.
+    const mgr = makeManager();
+    mgr.setUserVisible(true);
+    mgr.setBodyRegister("live");
+    mgr.setScreencastImage({ width: 1280, height: 800 } as unknown as HTMLImageElement);
+    mgr.update(0, 0.5);
+    const screen = findScreenMesh(mgr)!;
+    expect(screen.visible).toBe(true);
+
+    mgr.setBodyRegister("home");
+    mgr.update(0.5, 0.1);
+    expect(screen.visible).toBe(false);
+    // Texture not released here — that's the surface's call via
+    // `clearScreencast()`. The register's job is visibility, not
+    // lifecycle.
     expect(screen.material.map).not.toBeNull();
   });
 

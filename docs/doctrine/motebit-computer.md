@@ -54,6 +54,29 @@ Internal reorganization made visible.
 - **Constellations** — they cluster above the slab when their domain is active; their own scene object.
 - **UI chrome** (buttons, menus, inputs) — affordances live on the creature or in panels.
 
+## Body register — the tri-state
+
+The slab's body region (the area below the chrome strip) is in exactly one of three registers at any moment. The register is **typed at `@motebit/render-engine::SlabBodyRegister`** and **lives in `slab-core.ts` as the single source of truth**; the renderer derives screen-mesh visibility from it, and surfaces mount the body content based on it. One value, two physical levers (the WebGL screen mesh and the CSS3D `bodySlot`), zero possibility of drift.
+
+| Register       | What's in the body                                                   | Screen mesh | Texture                                 |
+| -------------- | -------------------------------------------------------------------- | ----------- | --------------------------------------- |
+| **home**       | The home view — forward-framed affordances. The slab's READY floor.  | hidden      | released (paired `clearSlabScreencast`) |
+| **live**       | The live screencast — the page the motebit is browsing.              | visible     | installed, replaced per-frame           |
+| **transition** | The home view overlays a dim screencast (URL-bar focus mid-session). | hidden      | preserved (resume is cold-start-free)   |
+
+The two **cause-bits** that compose the register live on the surface (web: `_onHomeRegister` from URL state, `_homeOverlayActive` from URL-bar focus state). The composition is `effectiveBodyRegister()` — one mapping, one writer, one reader, no implicit coupling. Prior to 2026-05-11 the register was implicit in `{screenTexture present, screencastSuppressed boolean}` and `home` was indistinguishable from `transition` at the renderer (both rendered as "mesh hidden") despite having opposite texture lifecycles. The typed register names the difference and makes the renderer's derivation honest.
+
+### Home — the could-be register
+
+Of the three registers, `home` deserves its own subsection — it's the fourth content register alongside eye / hand / mind, and the one that names the slab's **READY floor**. When no session is active (cold-start, post-dismiss, `about:blank`), the body shows forward-framed launchpads informed by the motebit's own signed audit log of past navigates. The framing is what makes it slab-native rather than panel-native:
+
+- **Forward verb, not chronological entry.** Tiles read as `Continue google.com`, not `Visited 2 days ago`. The DATA is past-affinity (the same redacted audit-log records that populate the sovereign panel); the TILE means "I would like to go here next." Same data, two surfaces, two reading registers — records-as-records (panel) vs records-as-resumption (slab).
+- **Privacy-aligned through the audit log's existing redaction.** The audit log keeps only scheme + host (`co-browse.ts` §"URL-redacted navigate detail"), exactly the coarseness resumption needs.
+- **Empty-empty is "Anywhere."** First-time user with no history yet: one soul-tinted watermark word, breathing at 0.3 Hz, no decorative mark, no caption competing with the chrome's `"type a URL · or ask motebit"`. Two ready signals competing is a violation; one of them must speak.
+- **Substrate-bubbles, not cards.** Lower bg alpha + heavier backdrop blur than a card. Tiles read as content **rising through** the slab rather than sitting on it. The materiality delta from "card" → "bubble" is the difference between close-but-not-exact and exactly-the-doctrine.
+
+Doctrine compounds: home is `records-as-resumption` — the records-vs-acts test (`records-vs-acts.md`) holds because the same byte-records appear in two **registers**, not because records moved onto the body. The panel's credential list is records-as-records; the slab's home tile is records-as-resumption. Both refer to the same signed data, neither is the other.
+
 ## Rings-aware duplication
 
 The slab's **renderer** is Ring 3 (3D creature / scene; requires WebGL, on-screen creature, wide-enough viewport). Chat is **Ring 1** (text always available).
@@ -302,7 +325,7 @@ Same shape applies to every layer.
 
 - **`@motebit/render-engine`** (Layer 2, BSL) — types + adapter + renderer. Declares `SlabItemKind`, `SlabItemPhase` (with detach-pinch as a typed phase), `EmbodimentMode`, `SlabItemSpec`, `SlabItemHandle` alongside `RenderAdapter` slab methods (`addSlabItem`, `dissolveSlabItem`, `detachSlabItemAsArtifact`, `clearSlabItems`, `setSlabVisible`, `toggleSlabVisible`) and the Three.js `SlabManager`. **Future:** split protocol-shape members up to `@motebit/protocol` (Layer 0, Apache-2.0) so third-party motebit implementers can target them without depending on the renderer; deferred until the contract has at least one external consumer.
 - **`@motebit/runtime`** (Layer 4, BSL) — controller + bridge. `SlabController` translates LLM turns, tool calls, plan steps, delegations into `openItem` / `updateItem` / `restItem` / `endItem` / `dismissItem`. Surfaces subscribe via `bindSlabControllerToRenderer`.
-- **Per-surface renderers** (Layer 5) — wiring. Each surface wires a `RenderAdapter` slab implementation to its scene graph. Web + desktop today use Three.js with byte-identical per-kind HTML renderers in `slab-items.ts`. Spatial (WebXR held-tablet) and mobile (WebView-hosted) follow.
+- **Per-surface renderers** (Layer 5) — wiring. Each surface wires a `RenderAdapter` slab implementation to its scene graph. Web + desktop today use Three.js with mostly-mirrored per-kind HTML renderers in `slab-items.ts`. **Honest divergence**: web has cobrowse extensions (live-browser screencast + input capture) that desktop does not, so the two files differ by ~260 lines as of 2026-05-11; the rendering of every per-kind item (`stream`, `tool_call`, `plan_step`, `shell`, `fetch`, `embedding`, `delegation`, `memory`) is mirrored. Sibling-boundary discipline applies: changes to a shared kind MUST land on both. Three consumers (web + desktop + spatial slab-as-held-tablet) is the extraction trigger, per the panels-pattern doctrine. Spatial (WebXR held-tablet) and mobile (WebView-hosted) follow.
 
 One type surface, one event stream, multiple renderers — see [`panels-pattern.md`](panels-pattern.md). Contract is Ring 1; renderer is Ring 3.
 

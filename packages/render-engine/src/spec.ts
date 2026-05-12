@@ -240,15 +240,34 @@ export interface RenderAdapter {
   clearSlabScreencast?(): void;
 
   /**
-   * Toggle screencast-mesh visibility WITHOUT releasing the texture.
-   * Used by the URL-bar-focus → home-overlay transition (Apple's
-   * Safari Start Page pattern): suppression hides the mesh while
-   * the user picks a destination from the home view, then clears
-   * on blur/commit/Esc so the session resumes at the most-recent
-   * frame. Distinct from `clearSlabScreencast` which is the
-   * lifecycle terminator (texture released).
+   * Set the slab's body register — the tri-state truth for what
+   * occupies the body region (the area below the chrome strip). One
+   * source of truth for the home view, the live screencast, and the
+   * URL-bar-focus → home-overlay transition. The renderer derives
+   * screen-mesh visibility from the register; surfaces mount the
+   * home view into `bodySlot` based on the same value.
+   *
+   *   - `home`     — body shows home affordances; no live session
+   *                  (cold-start, post-dismiss, `about:blank`).
+   *                  Screen mesh hidden. Texture should be released
+   *                  via `clearSlabScreencast`.
+   *   - `live`     — body shows live screencast; session is active
+   *                  and URL is committed. Screen mesh visible
+   *                  against installed texture.
+   *   - `transition` — home view overlays a dim screencast (Apple's
+   *                  Safari URL-bar-focus pattern); session keeps
+   *                  running. Screen mesh hidden, texture preserved
+   *                  so resume on blur/commit/Esc is cold-start-free.
+   *
+   * Doctrine: `motebit-computer.md` §"Body register — the tri-state."
+   * Replaces the prior `setSlabScreencastSuppressed` boolean which
+   * couldn't distinguish `home` (texture released) from `transition`
+   * (texture preserved) — both rendered as "mesh hidden" but had
+   * different lifecycle implications. The register lifts the
+   * implicit coupling between {screenTexture, suppressed} into one
+   * named state.
    */
-  setSlabScreencastSuppressed?(suppressed: boolean): void;
+  setSlabBodyRegister?(register: SlabBodyRegister): void;
 }
 
 // === Slab ("Motebit Computer") — scene primitive types ===
@@ -256,6 +275,34 @@ export interface RenderAdapter {
 // See docs/doctrine/motebit-computer.md. The slab is the canonical
 // surface for acts-in-progress; records go in panels, durable outputs
 // detach as artifacts. These types are the cross-surface contract.
+
+/**
+ * The slab's body register — what occupies the body region (below the
+ * chrome strip) at a given moment. Closed tri-state; adding a value is
+ * a contract bump (registry append, gate updates, doctrine).
+ *
+ *   - `home`       — home affordances are the body. Cold-start,
+ *                    post-dismiss, `about:blank`. No live session.
+ *   - `live`       — live screencast occupies the body. Session
+ *                    active, URL committed.
+ *   - `transition` — home overlays a dim screencast (URL-bar focus
+ *                    mid-session, Apple Safari Start Page pattern).
+ *                    Session keeps running; texture preserved so
+ *                    resume is cold-start-free.
+ *
+ * Doctrine: `motebit-computer.md` §"Body register — the tri-state."
+ * Default register on slab construction is `home`: empty-but-ready is
+ * the floor (the always-already-slab principle — the slab precedes
+ * content; content embeds INTO the register, never adjacent).
+ */
+export type SlabBodyRegister = "home" | "live" | "transition";
+
+/** Iteration array; closed under additions to `SlabBodyRegister`. */
+export const ALL_SLAB_BODY_REGISTERS: readonly SlabBodyRegister[] = [
+  "home",
+  "live",
+  "transition",
+] as const;
 
 /**
  * Kind of in-progress work a slab item represents. Unlike `ArtifactKind`
