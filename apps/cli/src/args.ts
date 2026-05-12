@@ -295,6 +295,10 @@ export const COMMANDS: CommandEntry[] = [
   { usage: "/clear", desc: "Clear conversation history" },
   { usage: "/summarize", desc: "Summarize current conversation" },
   { usage: "/conversations", desc: "List recent conversations" },
+  {
+    usage: "/trust",
+    desc: "What motebit holds for you — memories, conversations, signed receipts, signed deletions, federation peers",
+  },
   { usage: "/conversation <id>", desc: "Load a past conversation" },
   { usage: "/model <name>", desc: "Switch AI model (persists across sessions)" },
   { usage: "/connect <url>", desc: "Connect to a relay" },

@@ -616,6 +616,12 @@ const GATES: ReadonlyArray<Gate> = [
       "the system prompt (`packages/ai-core/src/prompt.ts`) does not silently grow rule-shaped clauses beyond a measured baseline. Each `- ` bullet or `<digit>. ` numbered RULES line is a conformance ask; accumulation contaminates the §4 emergent-interior thesis (`THE_EMERGENT_INTERIOR.md` — pressuring the system prompt corrupts emergence) and turns the prompt into a configuration file disguised as teaching. Smoke-alarm shape (not a per-clause registry): coarse line-count against a baseline, fires on growth, requires intentional bump with doctrine-grade justification in the commit message. Doctrine: `docs/doctrine/runtime-invariants-over-prompt-rules.md` — the five-question audit + periodic prompt-prune discipline. Baseline 62 measured 2026-05-12 after the prompt-prune pass that landed alongside the doctrine memo; growth requires either runtime backing (A-grade) or named teaching justification (B-grade), pruning lowers the floor silently.",
     script: "check-prompt-density",
   },
+  {
+    name: "check-trust-slash-cross-surface",
+    defends:
+      "every chat-surface that ships a slash-command registry — web (`apps/web/src/ui/slash-commands.ts`), desktop (`apps/desktop/src/ui/slash-commands.ts`), mobile (`apps/mobile/src/components/SlashAutocomplete.tsx`), CLI (`apps/cli/src/args.ts`) — registers `/trust`. The slash command surfaces the canonical 5-dimension trust-accumulation summary (memories + conversations + signed receipts + signed deletions + federation peers) computed by `cmdTrust`; the thesis claim 'accumulated trust is visible on every surface' holds at CI, not just at user encounter. Closed-registry shape (same as `check-skills-cross-surface` #73 + `check-typed-truth-perception` #80): SURFACES is the canonical inventory, each entry naming the file + the surface-native registration pattern. Doctrine: `docs/doctrine/runtime-invariants-over-prompt-rules.md` § trust-accumulation visibility arc. Spatial is intentionally out of scope — AR-glasses prototype has no chat surface and no slash menu.",
+    script: "check-trust-slash-cross-surface",
+  },
 ];
 
 interface Result {
