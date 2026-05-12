@@ -121,10 +121,13 @@ describe("BrowserPool", () => {
       expect(fake.state.contexts.size).toBe(0);
     });
 
-    it("is idempotent for already-closed session", async () => {
+    it("is idempotent for already-closed session — returns [] cookies (Phase 1)", async () => {
       const session = await pool.openSession();
       await pool.closeSession(session.sessionId);
-      await expect(pool.closeSession(session.sessionId)).resolves.toBeUndefined();
+      // Phase 1 cookie persistence: closeSession returns the final
+      // cookie jar before tearing down. On an already-closed (or
+      // unknown) session there's nothing to extract; returns [].
+      await expect(pool.closeSession(session.sessionId)).resolves.toEqual([]);
     });
   });
 

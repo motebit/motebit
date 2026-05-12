@@ -78,6 +78,58 @@ export interface CloudBrowserDispatcherOptions {
    * `globalThis.fetch`. Same shape as `typeof fetch`.
    */
   readonly fetch?: typeof globalThis.fetch;
+  /**
+   * Phase 1 of the persistent user_data_dir arc (cookies-only).
+   * Optional callback the dispatcher invokes on `queryDisplay` to
+   * seed the new sandbox context with cookies the runtime persisted
+   * from a prior session's dispose. Returning `undefined` or `[]`
+   * means cold-start (no prior trust to carry forward); returning
+   * the array of cookies sent on the previous session's dispose
+   * response carries Google CAPTCHA reputation, logged-in account
+   * state, etc. across cloud-session boundaries.
+   *
+   * Doctrine: `runtime-invariants-over-prompt-rules.md` applied to
+   * the cloud-browser surface — the structural fix for the per-
+   * cloud-session CAPTCHA tax. Phase 2 adds disk persistence +
+   * encryption; Phase 3 adds the `/cookies grant` consent gate.
+   */
+  readonly getInitialCookies?: () =>
+    | Promise<readonly PersistentCookieWire[]>
+    | readonly PersistentCookieWire[];
+  /**
+   * Phase 1 of the persistent user_data_dir arc — companion to
+   * `getInitialCookies`. Invoked on `dispose` with the cookies the
+   * sandbox returned in the DELETE response. The runtime persists
+   * these to its per-motebit cookie store; the next session's
+   * `getInitialCookies` reads from the same store. Fail-soft:
+   * callback errors are swallowed (a transient persistence failure
+   * shouldn't break session teardown).
+   */
+  readonly onCookiesPersisted?: (cookies: readonly PersistentCookieWire[]) => void | Promise<void>;
+}
+
+/**
+ * Wire-shape for a persisted browser cookie — what crosses the
+ * sandbox→dispatcher boundary. Sibling of Playwright's `Cookie`
+ * interface but declared here so consumers don't reach into
+ * `playwright-core` for the type (the dispatcher is the public
+ * boundary; Playwright is an internal implementation detail of
+ * the sandbox). All fields are JSON-serializable. Shape:
+ *
+ *   - `name`, `value` — required (the cookie itself)
+ *   - `domain`, `path` — required for `addCookies`
+ *   - `expires` — seconds since epoch; `-1` for session cookie
+ *   - `httpOnly`, `secure`, `sameSite` — security attributes
+ */
+export interface PersistentCookieWire {
+  readonly name: string;
+  readonly value: string;
+  readonly domain: string;
+  readonly path: string;
+  readonly expires?: number;
+  readonly httpOnly?: boolean;
+  readonly secure?: boolean;
+  readonly sameSite?: "Strict" | "Lax" | "None";
 }
 
 /**
@@ -168,14 +220,40 @@ export class CloudBrowserDispatcher implements ComputerPlatformDispatcher {
    */
   private cloudSessionId: string | null = null;
 
+  private readonly getInitialCookies:
+    | (() => Promise<readonly PersistentCookieWire[]> | readonly PersistentCookieWire[])
+    | null;
+  private readonly onCookiesPersisted:
+    | ((cookies: readonly PersistentCookieWire[]) => void | Promise<void>)
+    | null;
+
   constructor(opts: CloudBrowserDispatcherOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.getAuthToken = opts.getAuthToken;
     this.fetchImpl = opts.fetch ?? globalThis.fetch.bind(globalThis);
+    this.getInitialCookies = opts.getInitialCookies ?? null;
+    this.onCookiesPersisted = opts.onCookiesPersisted ?? null;
   }
 
   async queryDisplay(): Promise<ComputerDisplayInfo> {
-    const res = await this.request<EnsureSessionResponse>("POST", "/sessions/ensure");
+    // Phase 1 cookie persistence — seed the new sandbox session with
+    // cookies the runtime persisted from a prior session's dispose
+    // response. Cold-start (no prior cookies) when the callback is
+    // absent OR returns []/undefined.
+    let cookies: readonly PersistentCookieWire[] | undefined;
+    if (this.getInitialCookies) {
+      try {
+        const result = await this.getInitialCookies();
+        if (Array.isArray(result) && result.length > 0) {
+          cookies = result;
+        }
+      } catch {
+        // Callback error → cold-start. The user notices once-per-
+        // session-creation; better than failing session open.
+      }
+    }
+    const body = cookies !== undefined ? { cookies } : undefined;
+    const res = await this.request<EnsureSessionResponse>("POST", "/sessions/ensure", body);
     this.cloudSessionId = res.session_id;
     return res.display;
   }
@@ -278,7 +356,27 @@ export class CloudBrowserDispatcher implements ComputerPlatformDispatcher {
     const cloudId = this.cloudSessionId;
     if (cloudId === null) return;
     try {
-      await this.request<void>("DELETE", `/sessions/${encodeURIComponent(cloudId)}`);
+      // Phase 1 cookie persistence — the sandbox's DELETE response
+      // now carries the final cookie-jar state. Capture it, hand to
+      // the runtime's onCookiesPersisted callback so the next
+      // session's getInitialCookies can read from the same store.
+      // Cookies in the response are best-effort: a sandbox running
+      // pre-fix code returns 204/no-body, the parse-as-JSON catch
+      // handles it, and persistence is a no-op (graceful
+      // forward/backward compatibility).
+      const res = await this.request<{ readonly cookies?: readonly PersistentCookieWire[] }>(
+        "DELETE",
+        `/sessions/${encodeURIComponent(cloudId)}`,
+      );
+      if (this.onCookiesPersisted && res && Array.isArray(res.cookies)) {
+        try {
+          await this.onCookiesPersisted(res.cookies);
+        } catch {
+          // Fail-soft: a persistence error shouldn't break dispose.
+          // The accumulated-trust property degrades to "this session
+          // didn't carry forward" rather than "dispose threw."
+        }
+      }
     } finally {
       this.cloudSessionId = null;
     }

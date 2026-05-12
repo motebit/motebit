@@ -28,9 +28,27 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { Browser, BrowserContext, Page } from "playwright-core";
+import type { Browser, BrowserContext, Cookie, Page } from "playwright-core";
 
 import { ServiceError } from "./errors.js";
+
+/**
+ * Persistent-cookies wire shape — what crosses the sandbox→dispatcher
+ * HTTP boundary on session open + dispose. Phase 1 of the persistent
+ * `user_data_dir` arc (`docs/doctrine/runtime-invariants-over-prompt-
+ * rules.md` applied to the cloud-browser surface): cookies-only —
+ * the load-bearing primitive for accumulated browsing trust (Google
+ * CAPTCHA reputation, logged-in account state, session cookies all
+ * live here). Phase 2 expands to full user-data-dir if a real
+ * consumer needs it; Phase 3 adds the `/cookies grant` consent gate
+ * + encryption at rest.
+ *
+ * Shape is Playwright's `Cookie` — already JSON-serializable so the
+ * wire is straight passthrough. The dispatcher treats cookies as
+ * opaque blobs; only the sandbox parses them into Playwright's
+ * `BrowserContext.addCookies` / `BrowserContext.cookies` calls.
+ */
+export type PersistentCookie = Cookie;
 
 export interface BrowserSession {
   readonly sessionId: string;
@@ -108,8 +126,20 @@ export class BrowserPool {
    * Allocate a new isolated session. Throws `policy_denied` when the
    * concurrent-session cap is reached — that surfaces to the
    * dispatcher as 429 → `ComputerFailureReason.policy_denied`.
+   *
+   * Phase 1 cookie persistence: when `opts.initialCookies` is
+   * supplied, the new context's cookie jar is seeded from it via
+   * `context.addCookies` BEFORE the first page navigates. The
+   * caller (dispatcher) supplies cookies the runtime has persisted
+   * from a prior session's close response — the load-bearing
+   * primitive for "accumulated browsing trust." Without cookies,
+   * the context starts empty (current behavior, fail-soft).
    */
-  async openSession(): Promise<BrowserSession> {
+  async openSession(
+    opts: {
+      readonly initialCookies?: readonly PersistentCookie[];
+    } = {},
+  ): Promise<BrowserSession> {
     if (this.browser === null) {
       throw new ServiceError("platform_blocked", "BrowserPool not started");
     }
@@ -136,6 +166,21 @@ export class BrowserPool {
       locale: "en-US",
       timezoneId: "America/Los_Angeles",
     });
+    // Seed the cookie jar from persisted cookies (Phase 1). Best-
+    // effort: a malformed cookie shouldn't break session creation —
+    // log and continue. Real-world cookies from prior Playwright
+    // sessions are always well-formed since they came from
+    // `context.cookies()` originally.
+    if (opts.initialCookies && opts.initialCookies.length > 0) {
+      try {
+        await context.addCookies(opts.initialCookies as Cookie[]);
+      } catch {
+        // Best-effort seed; if Playwright rejects (e.g., an expired
+        // cookie has shifted format), the session still opens. The
+        // accumulated-trust property degrades to "no cookies this
+        // session" rather than "session can't open."
+      }
+    }
     const page = await context.newPage();
     const sessionId = randomUUID();
     const opened = this.now();
@@ -189,10 +234,18 @@ export class BrowserPool {
   /**
    * Tear down a single session. Idempotent — closing an already-closed
    * session is a no-op (mirrors the dispatcher's idempotent dispose).
+   *
+   * Phase 1 cookie persistence: BEFORE `context.close()`, captures the
+   * final cookie-jar state via `context.cookies()` and returns it.
+   * The caller (route handler) puts the cookies in the DELETE
+   * response so the dispatcher can persist them. Returns an empty
+   * array when the session is unknown or when cookie extraction
+   * fails — the latter is best-effort, fail-soft (a teardown should
+   * not block on cookie-export errors).
    */
-  async closeSession(sessionId: string): Promise<void> {
+  async closeSession(sessionId: string): Promise<PersistentCookie[]> {
     const s = this.sessions.get(sessionId);
-    if (!s) return;
+    if (!s) return [];
     this.sessions.delete(sessionId);
     // v1.3 — stop the CDP screencast (if any) before tearing down the
     // BrowserContext, so the screencast disposer runs against a still-
@@ -205,11 +258,22 @@ export class BrowserPool {
         // below will collect any residue.
       }
     }
+    // Capture cookies BEFORE closing the context — once closed, the
+    // cookie API throws. Best-effort: a failed export returns []
+    // and the caller persists empty (semantically: no accumulated
+    // state to carry forward this session).
+    let cookies: PersistentCookie[] = [];
+    try {
+      cookies = await s.context.cookies();
+    } catch {
+      // Fall through — empty cookies is honest.
+    }
     try {
       await s.context.close();
     } catch {
       // best-effort teardown; the entry is already removed from the map
     }
+    return cookies;
   }
 
   /**

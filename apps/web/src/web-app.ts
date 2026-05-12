@@ -219,6 +219,26 @@ export class WebApp {
    */
   private _activeBrowserSessionId: string | null = null;
   /**
+   * Phase 1 of the persistent user_data_dir arc — cookies-only,
+   * in-memory, per-WebApp lifetime. Seeded from each cloud-session
+   * dispose (via `onCookiesPersisted`); read on each new cloud-
+   * session open (via `getInitialCookies`). Survives reaper-driven
+   * tear-downs of the cloud Chromium while the user has motebit
+   * foregrounded — accumulates Google CAPTCHA reputation, logged-
+   * in account state across the user's working window.
+   *
+   * Empty array on cold-start (first cloud session). Cleared
+   * implicitly on tab close (WebApp instance goes away). Phase 2
+   * adds disk persistence keyed by motebit_id + encryption-at-rest
+   * with the identity key; Phase 3 adds the `/cookies grant`
+   * consent gate + revoke UI.
+   *
+   * Doctrine: `docs/doctrine/runtime-invariants-over-prompt-rules.md`
+   * applied to the cloud-browser surface — the structural fix for
+   * accumulated browsing trust.
+   */
+  private _persistedCookies: readonly import("@motebit/runtime").PersistentCookieWire[] = [];
+  /**
    * chrome-1a-fix / prompt-1 — surface-tracked current URL for the
    * open cloud-browser session. Exposed via
    * `runtime.setBrowserSessionProvider(...)` so the AI's prompt's
@@ -926,6 +946,24 @@ export class WebApp {
         // the prompt band fires as before. Doctrine: `CLAUDE.md`
         // § UI — "do not confirm what the user can already see."
         getCurrentTypedIntent: () => runtime.currentTypedIntent(),
+        // Phase 1 of the persistent user_data_dir arc (cookies-only).
+        // In-memory store on the WebApp instance; survives across
+        // cloud-session boundaries within one WebApp lifetime
+        // (i.e., across opens/closes of the cloud Chromium while
+        // motebit stays in the user's tab). Closes the per-cloud-
+        // session CAPTCHA tax for active users — Google's
+        // reputation for the session lives in cookies; carrying
+        // them across the session reaper means a cleared CAPTCHA
+        // stays cleared. Phase 2 will add disk persistence +
+        // encryption-at-rest using the motebit identity key; Phase
+        // 3 adds the `/cookies grant` consent gate + revoke UI.
+        // Doctrine: `docs/doctrine/runtime-invariants-over-prompt-
+        // rules.md` applied to the cloud-browser surface — the
+        // structural fix for accumulated browsing trust.
+        getInitialCookies: () => this._persistedCookies,
+        onCookiesPersisted: (cookies) => {
+          this._persistedCookies = cookies;
+        },
       });
 
       // Prompt-1 — wire the browser-session info provider so the

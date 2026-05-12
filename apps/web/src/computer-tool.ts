@@ -41,6 +41,7 @@ import {
   type ComputerPlatformDispatcher,
   type ComputerSessionHandle,
   type ComputerSessionManager,
+  type PersistentCookieWire,
 } from "@motebit/runtime";
 import { createDefaultComputerGovernance } from "@motebit/policy-invariants";
 import {
@@ -242,6 +243,31 @@ export interface RegisterWebComputerToolOptions {
    */
   readonly onNavigateResult?: (url: string) => void;
   /**
+   * Phase 1 of the persistent user_data_dir arc — cookies-only.
+   * When supplied, the dispatcher reads cookies from this callback
+   * on session-open and seeds the sandbox's new BrowserContext with
+   * them. Returning `undefined` or `[]` means cold-start (no prior
+   * trust to carry forward). Doctrine: `runtime-invariants-over-
+   * prompt-rules.md` applied to the cloud-browser surface — the
+   * structural fix for the per-cloud-session CAPTCHA tax.
+   *
+   * Phase 1 is in-memory only — caller owns the persistence shape;
+   * the registration just wires the dispatcher callbacks to it.
+   * Phase 2 adds encryption-at-rest with motebit identity key;
+   * Phase 3 adds `/cookies grant` consent gate + revoke UI.
+   */
+  readonly getInitialCookies?: () =>
+    | Promise<readonly PersistentCookieWire[]>
+    | readonly PersistentCookieWire[];
+  /**
+   * Companion to `getInitialCookies` — invoked on session-dispose
+   * with the cookies the sandbox returned. The caller (WebApp)
+   * persists into the same store it reads from in
+   * `getInitialCookies`. Fail-soft: callback errors are swallowed
+   * inside the dispatcher.
+   */
+  readonly onCookiesPersisted?: (cookies: readonly PersistentCookieWire[]) => void | Promise<void>;
+  /**
    * Co-browse Slice 2c-prerequisite — how long the `request_control`
    * tool waits for the user's Grant/Deny on the slab band before
    * timing out and reverting to user. Default 60s — long enough for
@@ -310,6 +336,12 @@ export function registerWebComputerTool(
     new CloudBrowserDispatcher({
       baseUrl: opts.baseUrl,
       getAuthToken: opts.getAuthToken,
+      // Phase 1 cookie persistence — pass through to the WebApp's
+      // in-memory store. Both callbacks are optional; the dispatcher
+      // no-ops cleanly when they're absent (back-compat for surfaces
+      // that don't wire cookie persistence yet).
+      ...(opts.getInitialCookies ? { getInitialCookies: opts.getInitialCookies } : {}),
+      ...(opts.onCookiesPersisted ? { onCookiesPersisted: opts.onCookiesPersisted } : {}),
     });
 
   // Co-browse Slice 2a — construct the control machine BEFORE

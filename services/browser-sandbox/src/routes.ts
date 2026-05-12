@@ -96,7 +96,25 @@ export function buildApp(deps: BuildAppDeps): Hono {
   );
 
   app.post("/sessions/ensure", async (c) => {
-    const session = await deps.pool.openSession();
+    // Phase 1 cookie persistence: optional `cookies` array in the
+    // request body seeds the new context's cookie jar. The
+    // dispatcher passes cookies the runtime stored from a prior
+    // session's close response — the load-bearing primitive for
+    // accumulated browsing trust (Google CAPTCHA reputation,
+    // logged-in account state). Absent body / non-array `cookies`
+    // = cold start, same as pre-fix behavior. Doctrine: docs/
+    // doctrine/runtime-invariants-over-prompt-rules.md applied to
+    // the cloud-browser surface.
+    let initialCookies: readonly import("./chromium-pool.js").PersistentCookie[] | undefined;
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as { cookies?: unknown };
+      if (Array.isArray(body.cookies)) {
+        initialCookies = body.cookies as readonly import("./chromium-pool.js").PersistentCookie[];
+      }
+    } catch {
+      // No body / malformed body — cold start. Same as pre-fix.
+    }
+    const session = await deps.pool.openSession({ initialCookies });
     return c.json({
       session_id: session.sessionId,
       display: {
@@ -170,8 +188,16 @@ export function buildApp(deps: BuildAppDeps): Hono {
 
   app.delete("/sessions/:id", async (c) => {
     const sessionId = c.req.param("id");
-    await deps.pool.closeSession(sessionId);
-    return c.body(null, 204);
+    // Phase 1 cookie persistence: closeSession captures the cookie
+    // jar BEFORE tearing down the context and returns it. The
+    // dispatcher reads this from the response body and hands it to
+    // the runtime's per-motebit cookie store, so the next session
+    // can seed from where this one left off. Promotes the response
+    // from 204 to 200 with a JSON body. Backward-compatible at the
+    // dispatcher boundary: older dispatchers ignore the body and
+    // still get a successful close.
+    const cookies = await deps.pool.closeSession(sessionId);
+    return c.json({ cookies }, 200);
   });
 
   /**

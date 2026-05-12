@@ -101,6 +101,9 @@ function makeFakePool(): { pool: BrowserPool; state: FakePoolState } {
     touchSession: () => undefined,
     closeSession: async (id: string) => {
       sessions.delete(id);
+      // Phase 1 cookie persistence: real pool returns the cookie
+      // jar; mock returns [] (no cookies in tests by default).
+      return [];
     },
     size: () => sessions.size,
     reapIdle: async () => undefined,
@@ -388,7 +391,7 @@ describe("browser-sandbox routes", () => {
   });
 
   describe("DELETE /sessions/:id", () => {
-    it("returns 204 and removes the session", async () => {
+    it("returns 200 + {cookies} and removes the session (Phase 1 cookie persistence)", async () => {
       const app = buildApp({ config: TEST_CONFIG, pool });
       const ensure = await app.request("/sessions/ensure", {
         method: "POST",
@@ -401,17 +404,30 @@ describe("browser-sandbox routes", () => {
         method: "DELETE",
         headers: authHeader(),
       });
-      expect(res.status).toBe(204);
+      // Phase 1 cookie persistence: DELETE now returns 200 with the
+      // session's final cookie jar in the body. Dispatcher reads
+      // these to seed the next session via getInitialCookies. The
+      // promotion from 204 to 200 is back-compat at the dispatcher
+      // boundary (its request() helper handles both shapes).
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { cookies?: unknown };
+      expect(Array.isArray(body.cookies)).toBe(true);
       expect(state.sessions.has(session_id)).toBe(false);
     });
 
-    it("is idempotent for unknown session id", async () => {
+    it("is idempotent for unknown session id — returns 200 + empty cookies", async () => {
       const app = buildApp({ config: TEST_CONFIG, pool });
       const res = await app.request("/sessions/never-existed", {
         method: "DELETE",
         headers: authHeader(),
       });
-      expect(res.status).toBe(204);
+      // Pool's closeSession on an unknown id returns []. Route
+      // surfaces that as 200 + {cookies: []} for shape consistency
+      // (always return the same body shape; the dispatcher branches
+      // on cookies.length, not on status code).
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { cookies?: unknown };
+      expect(body.cookies).toEqual([]);
     });
   });
 
