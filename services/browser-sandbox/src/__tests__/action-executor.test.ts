@@ -256,6 +256,37 @@ describe("executeAction", () => {
       await executeAction(session, action, deps);
       expect((mouseCalls[0]?.options as { button: string }).button).toBe("right");
     });
+
+    // Typed-truth navigation_triggered on coordinate click — closes
+    // the parallel confabulation gap. A coordinate click on a submit
+    // button must report whether the page actually moved; "ok: true"
+    // alone is not enough.
+    it("navigation_triggered: false when click doesn't move the page", async () => {
+      const mock = makeMockSession();
+      const result = (await executeAction(
+        mock.session,
+        { kind: "click", target: { x: 100, y: 200 } },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.ok).toBe(true);
+      expect(result.navigation_triggered).toBe(false);
+    });
+
+    it("navigation_triggered: true when click triggers a navigation (link / form submit)", async () => {
+      const mock = makeMockSession();
+      let urlReadCount = 0;
+      mock.setPageUrlImpl(() => {
+        urlReadCount++;
+        return urlReadCount === 1 ? "https://example.com/" : "https://example.com/landing";
+      });
+      const result = (await executeAction(
+        mock.session,
+        { kind: "click", target: { x: 100, y: 200 } },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.ok).toBe(true);
+      expect(result.navigation_triggered).toBe(true);
+    });
   });
 
   describe("double_click", () => {
@@ -264,6 +295,34 @@ describe("executeAction", () => {
       await executeAction(session, { kind: "double_click", target: { x: 300, y: 400 } }, deps);
       expect(mouseCalls[0]?.method).toBe("dblclick");
       expect(session.lastCursorX).toBe(300);
+    });
+
+    // Sibling of doClick — same navigation_triggered shape.
+    it("navigation_triggered: false when double_click doesn't move the page", async () => {
+      const mock = makeMockSession();
+      const result = (await executeAction(
+        mock.session,
+        { kind: "double_click", target: { x: 100, y: 200 } },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.ok).toBe(true);
+      expect(result.navigation_triggered).toBe(false);
+    });
+
+    it("navigation_triggered: true when double_click triggers a navigation", async () => {
+      const mock = makeMockSession();
+      let urlReadCount = 0;
+      mock.setPageUrlImpl(() => {
+        urlReadCount++;
+        return urlReadCount === 1 ? "https://example.com/" : "https://example.com/result";
+      });
+      const result = (await executeAction(
+        mock.session,
+        { kind: "double_click", target: { x: 100, y: 200 } },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.ok).toBe(true);
+      expect(result.navigation_triggered).toBe(true);
     });
   });
 

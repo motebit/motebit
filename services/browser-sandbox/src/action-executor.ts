@@ -261,24 +261,38 @@ async function dispatchAction(
 // ── Per-kind implementations ─────────────────────────────────────────
 
 async function doClick(session: BrowserSession, action: ClickAction): Promise<ActionResult> {
+  // Typed-truth `navigation_triggered`: capture URL before + after so
+  // coordinate clicks on submit buttons report whether the page
+  // actually moved. Same shape `doClickElement` + `doKey` ship for
+  // their respective paths — closes the parallel confabulation gap
+  // where coordinate-based click on a submit element returned ok:true
+  // but the form didn't submit (overlay intercept, bot detection
+  // silently dropping). The AI reads false and surfaces the truth
+  // instead of claiming "Done."
+  const beforeUrl = session.page.url();
   await session.page.mouse.click(action.target.x, action.target.y, {
     button: parseButton(action.button),
   });
   session.lastCursorX = action.target.x;
   session.lastCursorY = action.target.y;
-  return { kind: "click", ok: true };
+  const afterUrl = session.page.url();
+  return { kind: "click", ok: true, navigation_triggered: beforeUrl !== afterUrl };
 }
 
 async function doDoubleClick(
   session: BrowserSession,
   action: DoubleClickAction,
 ): Promise<ActionResult> {
+  // Sibling of doClick — same `navigation_triggered` capture so
+  // double-clicks on submit / link elements report navigation truth.
+  const beforeUrl = session.page.url();
   await session.page.mouse.dblclick(action.target.x, action.target.y, {
     button: parseButton(action.button),
   });
   session.lastCursorX = action.target.x;
   session.lastCursorY = action.target.y;
-  return { kind: "double_click", ok: true };
+  const afterUrl = session.page.url();
+  return { kind: "double_click", ok: true, navigation_triggered: beforeUrl !== afterUrl };
 }
 
 async function doMouseMove(
