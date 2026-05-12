@@ -660,12 +660,16 @@ describe("buildSystemPrompt — [Now] block injection", () => {
     // model to always emit a closing sentence; the runtime guarantees
     // one even if the model forgets. Defense in depth: AI behavior
     // can drift, but the floor catches the failure.
+    // Post-compression (2026-05-12): the prompt clause is now thin
+    // because the runtime hard floor (synthesizeClosingFallback) is
+    // the load-bearing guarantee. The prompt teaches; the runtime
+    // enforces. Test still pins that the prompt names the closing-
+    // sentence rule + acknowledges the runtime's safety net so the
+    // AI doesn't read the floor as the standard.
     const prompt = buildSystemPrompt(makeContextPack());
-    expect(prompt).toMatch(/Never end a turn silently|silent turn/i);
-    expect(prompt).toMatch(/at least one visible sentence|closing sentence/i);
-    // Names the runtime's safety floor so the AI knows there's a
-    // backstop but treats that as the floor, not the standard.
-    expect(prompt).toMatch(/runtime guarantees|safety floor|closing fallback/i);
+    expect(prompt).toMatch(/closing sentence|emit one closing|saying what landed/i);
+    expect(prompt).toMatch(/After tool calls/i);
+    expect(prompt).toMatch(/runtime|fallback floor|safety net/i);
   });
 
   it("knowledge doctrine routes search-shaped intents to web_search (API tier) over driving a search engine in the cloud browser (pixels tier)", () => {
