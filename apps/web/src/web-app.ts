@@ -983,7 +983,7 @@ export class WebApp {
           return this._persistedCookies;
         },
         onCookiesPersisted: (cookies) => {
-          this._persistedCookies = cookies;
+          this.setPersistedCookies(cookies);
           // Fire-and-forget — a persistence error shouldn't break
           // dispose. The user just loses the accumulated trust for
           // the next session; cold-start on next open.
@@ -2166,6 +2166,16 @@ export class WebApp {
    * current state and replaces it in the slot.
    */
   refreshSlabChrome(): void {
+    // Fail-soft when DOM is unavailable (Node test envs without
+    // jsdom). The setter-bundled refresh from setPersistedCookies
+    // fires unconditionally to preserve the runtime invariant; the
+    // env guard keeps that invariant safe to call from any code path
+    // — including the cookies-arc's lazy load that resolves before
+    // the slab chrome is rendered, and the test harness's bootstrap
+    // path that exercises persistence without a live DOM. The
+    // production path (browser env) always has document available;
+    // this guard only no-ops in the test env.
+    if (typeof document === "undefined") return;
     this.applyChromeToCurrentState();
   }
 
@@ -2689,7 +2699,7 @@ export class WebApp {
     if (this._cookieStoreLoadOnce !== null) return this._cookieStoreLoadOnce;
     this._cookieStoreLoadOnce = loadCookies(motebitId)
       .then((cookies) => {
-        this._persistedCookies = cookies;
+        this.setPersistedCookies(cookies);
       })
       .catch(() => {
         // Already swallowed inside loadCookies; defensive double-
@@ -2697,6 +2707,34 @@ export class WebApp {
         // unexpected throws.
       });
     return this._cookieStoreLoadOnce;
+  }
+
+  /**
+   * Canonical setter for `_persistedCookies` — invariant: every write
+   * to the cookie cache triggers a chrome refresh so the Phase 2
+   * trust-visibility pip stays coherent with the in-memory state.
+   *
+   * The runtime-invariants-over-prompt-rules doctrine applied to my
+   * own code: rather than asking every call-site to remember to call
+   * `refreshSlabChrome` after touching cookies (the kind of
+   * conformance-shaped rule the doctrine warns against), the
+   * structural invariant lives at the setter. The bug it prevents:
+   * `/cookies revoke` cleared the cache but didn't refresh the
+   * chrome, so the pip stayed visible after revoke until the next
+   * navigate / focus / sensitivity change happened to refresh chrome
+   * from a different path. Setter-bundled refresh makes that
+   * impossible.
+   *
+   * `refreshSlabChrome` safely no-ops when the slab isn't mounted
+   * (machine/runtime not yet wired) so calling from the lazy-load
+   * path is safe; the load typically resolves before the slab first
+   * renders anyway.
+   */
+  private setPersistedCookies(
+    next: readonly import("@motebit/runtime").PersistentCookieWire[],
+  ): void {
+    this._persistedCookies = next;
+    this.refreshSlabChrome();
   }
 
   /**
@@ -2733,7 +2771,7 @@ export class WebApp {
     if (!this._motebitId) return [];
     await this.ensureCookieStoreLoaded(this._motebitId);
     const snapshot = this._persistedCookies;
-    this._persistedCookies = [];
+    this.setPersistedCookies([]);
     await clearCookies(this._motebitId);
     return snapshot;
   }

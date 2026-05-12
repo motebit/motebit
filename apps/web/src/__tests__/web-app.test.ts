@@ -700,4 +700,28 @@ describe("Persisted cookies (Phase 3 — /cookies status + revoke)", () => {
     expect(await app3.getPersistedCookies()).toEqual([]);
     app3.stop();
   });
+
+  // Phase 2 trust-visibility post-fix invariant: every write to the
+  // persisted-cookies cache MUST trigger a chrome refresh so the
+  // cobrowse pip stays coherent with state. Before this invariant
+  // landed, `/cookies revoke` cleared the cache but left the pip
+  // visible until the next chrome refresh fired from a different
+  // path (navigate, sensitivity change). Runtime-invariants-over-
+  // prompt-rules doctrine: the setter bundles state + refresh so
+  // the bug is structurally impossible.
+  it("clearPersistedCookies triggers refreshSlabChrome (Phase 2 visibility invariant)", async () => {
+    const app = new WebApp();
+    await app.init(null as unknown as HTMLCanvasElement);
+    await app.bootstrap();
+    const spy = vi.spyOn(app, "refreshSlabChrome");
+    await app.clearPersistedCookies();
+    // Note: clearPersistedCookies internally calls
+    // ensureCookieStoreLoaded → setPersistedCookies(loadedCookies),
+    // then setPersistedCookies([]). Both setter calls trigger
+    // refresh, so the spy is called at least twice on the first
+    // revoke. The invariant is "at least one refresh fired per
+    // cache write," not exactly-N.
+    expect(spy).toHaveBeenCalled();
+    app.stop();
+  });
 });
