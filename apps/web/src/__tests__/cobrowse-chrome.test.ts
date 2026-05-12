@@ -801,3 +801,119 @@ describe("renderCoBrowseChrome — defensive guards", () => {
     expect(el.textContent).not.toContain("Deny");
   });
 });
+
+// Phase 2 of the trust-accumulation visibility arc — calm pip between
+// mark and URL bar when motebit holds persisted cookies for the
+// current host. Predicate is `urlHasTrustHeld` (tested in
+// cookie-host-match.test.ts); these tests cover the chrome render
+// contract — when the opt is true, the pip mounts; when absent or
+// false, it doesn't.
+describe("renderCoBrowseChrome — trust-held pip (Phase 2 trust-visibility)", () => {
+  it("renders the pip when trustHeld: true", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      trustHeld: true,
+    });
+    expect(el.querySelector(".cobrowse-chrome-trust-pip")).not.toBeNull();
+  });
+
+  it("does NOT render the pip when trustHeld: false", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      trustHeld: false,
+    });
+    expect(el.querySelector(".cobrowse-chrome-trust-pip")).toBeNull();
+  });
+
+  it("does NOT render the pip when trustHeld is omitted (calm default)", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {});
+    expect(el.querySelector(".cobrowse-chrome-trust-pip")).toBeNull();
+  });
+
+  it("pip mounts between the mark and the URL middle slot — Safari-lock position", () => {
+    const { machine } = makeMockMachine();
+    const { fwd } = makeForwardEvent();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      trustHeld: true,
+    });
+    const children = Array.from(el.children);
+    // Mark is wrapped in `cobrowse-chrome-mark-wrap` (the positioned
+    // container that holds the gradient circle + decorations);
+    // that wrap is the direct flex child.
+    const markIdx = children.findIndex((c) => c.classList.contains("cobrowse-chrome-mark-wrap"));
+    const pipIdx = children.findIndex((c) => c.classList.contains("cobrowse-chrome-trust-pip"));
+    const middleIdx = children.findIndex((c) => c.classList.contains("cobrowse-chrome-url-input"));
+    expect(markIdx).toBeGreaterThanOrEqual(0);
+    expect(pipIdx).toBeGreaterThan(markIdx);
+    expect(middleIdx).toBeGreaterThan(pipIdx);
+  });
+
+  it("pip uses the motebit interior color tint when provided", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      trustHeld: true,
+      interiorColor: {
+        tint: [0.39, 0.59, 0.78], // rgb(99, 150, 199)
+        glow: [0.55, 0.55, 0.85],
+      },
+    });
+    const pip = el.querySelector(".cobrowse-chrome-trust-pip") as HTMLElement;
+    // `rgb` helper renders 0–1 floats as 0–255 integers; tolerate the
+    // converted form.
+    expect(pip.style.background).toContain("rgb(99, 150, 199)");
+  });
+
+  it("pip falls back to a neutral tint when interior color is absent", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      trustHeld: true,
+    });
+    const pip = el.querySelector(".cobrowse-chrome-trust-pip") as HTMLElement;
+    // Background is a non-empty color (the explicit fallback rgb).
+    expect(pip.style.background).not.toBe("");
+    expect(pip.style.background).toContain("rgb");
+  });
+
+  it("pip is calm — subtle opacity, no border, no label, no chip register", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      trustHeld: true,
+    });
+    const pip = el.querySelector(".cobrowse-chrome-trust-pip") as HTMLElement;
+    expect(pip.style.opacity).toBe("0.55");
+    expect(pip.style.borderRadius).toBe("50%");
+    // No text content — the pip is a visual peripheral signal, not a label.
+    expect(pip.textContent).toBe("");
+    // 6px square — calm size, peripherally readable.
+    expect(pip.style.width).toBe("6px");
+    expect(pip.style.height).toBe("6px");
+  });
+
+  it("pip is aria-hidden — /trust slash command is the accessible counterpart", () => {
+    const { machine } = makeMockMachine();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      trustHeld: true,
+    });
+    const pip = el.querySelector(".cobrowse-chrome-trust-pip");
+    expect(pip!.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("pip renders on every control state (trust is site-state, not motebit-state)", () => {
+    const { machine } = makeMockMachine();
+    const states: ControlState[] = [
+      { kind: "user" },
+      { kind: "motebit" },
+      { kind: "handoff_pending", current: "user", requesting: "motebit" },
+      { kind: "paused", previousDriver: "user" },
+    ];
+    for (const state of states) {
+      const el = renderCoBrowseChrome(state, machine, { trustHeld: true });
+      expect(
+        el.querySelector(".cobrowse-chrome-trust-pip"),
+        `pip should render for state ${state.kind}`,
+      ).not.toBeNull();
+    }
+  });
+});

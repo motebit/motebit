@@ -173,6 +173,24 @@ export interface RenderCoBrowseChromeOpts {
    * `runtime.setBrowserSessionProvider` / `_currentBrowserUrl`.
    */
   readonly currentUrl?: string | null;
+  /**
+   * Phase 2 of the trust-accumulation visibility arc — when true,
+   * motebit holds persisted cookies for the host of `currentUrl`.
+   * The chrome renders a calm "trust held" pip between the mark and
+   * the URL, mirroring Safari's lock-icon position. Calm software
+   * register: no label, no chip, no tooltip — present-when-relevant
+   * and invisible otherwise. The complement to `/trust` (on-demand
+   * report) — this is the ambient signal during normal browsing.
+   *
+   * Wired by the surface from `urlHasTrustHeld(currentUrl,
+   * _persistedCookies)` in `cookie-host-match.ts`; the chrome stays
+   * pure render and the host-matching logic stays testable in
+   * isolation.
+   *
+   * Default false → no pip rendered. Setting true is additive to
+   * the existing mark + middle + trail register.
+   */
+  readonly trustHeld?: boolean;
 }
 
 /**
@@ -193,12 +211,56 @@ export function renderCoBrowseChrome(
       pixelConsent: opts.pixelConsent,
     }),
   );
+  // Phase 2 trust-accumulation visibility — calm pip between mark
+  // and URL when motebit holds persisted cookies for this host.
+  // Mounted only when trustHeld is true; default render path is
+  // unchanged. Position mirrors Safari's lock-icon — just-before
+  // the URL is the conventional spot for site-state signals.
+  if (opts.trustHeld === true) {
+    strip.appendChild(buildTrustPip(opts.interiorColor ?? null));
+  }
   // Normalize `null` → `undefined` for the slot builders so their
   // signatures don't have to accept both shapes.
   const forwardEvent = opts.forwardEvent ?? undefined;
   strip.appendChild(buildMiddle(state, forwardEvent, opts.currentUrl ?? null));
   strip.appendChild(buildTrail(state, machine, forwardEvent));
   return strip;
+}
+
+/**
+ * Phase 2 trust-accumulation pip — a small filled circle that
+ * appears between the mark and the URL when motebit holds persisted
+ * cookies for the current host. Calm-software register: no label,
+ * no chip, no tooltip; subtle enough to read peripherally on the
+ * third encounter and never have to think about explicitly.
+ *
+ * Visual: 6×6 dot, motebit's interior color at ~0.55 opacity. Same
+ * tint family as the mark's interior so the chrome reads as one
+ * unified expressive surface rather than two adjacent signals.
+ * Default tone when interior color is unavailable: a neutral cool
+ * blue matching the chrome's text color.
+ */
+function buildTrustPip(interiorColor: InteriorColor | null): HTMLSpanElement {
+  const pip = document.createElement("span");
+  pip.className = "cobrowse-chrome-trust-pip";
+  pip.style.display = "inline-block";
+  pip.style.width = "6px";
+  pip.style.height = "6px";
+  pip.style.borderRadius = "50%";
+  pip.style.flex = "0 0 6px";
+  // Subtle tint — motebit's interior color when available, neutral
+  // cool blue at low opacity otherwise. Same `tint` triplet the mark
+  // uses for its gradient (color-presets.ts) so the pip reads as
+  // part of the same expressive surface, not as an adjacent signal.
+  const tint = interiorColor?.tint ?? null;
+  pip.style.background = tint !== null ? rgb(tint) : "rgb(40, 55, 90)";
+  pip.style.opacity = "0.55";
+  // Aria-hidden — this is a peripheral visual signal, not an
+  // affordance. Screen readers don't need to announce "dot"; the
+  // /trust slash command is the accessible counterpart that surfaces
+  // the same accumulated-trust state in semantic language.
+  pip.setAttribute("aria-hidden", "true");
+  return pip;
 }
 
 // ── Layout ─────────────────────────────────────────────────────────────

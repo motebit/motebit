@@ -26,6 +26,7 @@ import {
   type SlabHomeAffordance,
 } from "./ui/slab-home.js";
 import { renderCoBrowseChrome, animateMarkForReceipt } from "./ui/cobrowse-chrome";
+import { urlHasTrustHeld } from "./cookie-host-match.js";
 import type { LiveBrowserElementHandle, SlabBodyRegister } from "@motebit/render-engine";
 import type {
   ConversationMessage,
@@ -2506,6 +2507,13 @@ export class WebApp {
       // who's driving — `motebit`-driving renders read-only
       // display, `user`-driving renders pre-populated input.
       currentUrl: this._currentBrowserUrl,
+      // Phase 2 trust-accumulation visibility — calm pip between
+      // mark and URL when motebit holds persisted cookies for the
+      // current host. Predicate is pure (no I/O) so this is cheap
+      // to evaluate on every chrome refresh; the in-memory
+      // `_persistedCookies` cache is populated by the cookies arc's
+      // lazy-load gate on first session open and stays warm.
+      trustHeld: urlHasTrustHeld(this._currentBrowserUrl, this._persistedCookies),
     });
 
     // No live_browser handle = no session = nothing to control.
