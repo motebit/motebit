@@ -637,6 +637,37 @@ describe("buildSystemPrompt — [Now] block injection", () => {
     expect(prompt).toMatch(/already on X/);
   });
 
+  it("perception doctrine forbids hedge-speak when pixels ARE granted", () => {
+    // Regression pin from 2026-05-12. AI was producing contradictory
+    // hedge-speak after /vision grant — "I can see the screen now,
+    // but the image data isn't rendering through to me in a usable
+    // way." Trains the user to distrust perception even when it's
+    // working. The clause forbids the "I can see, but I can't see"
+    // pattern and names three legitimate alternatives:
+    //   (a) specific element hard to locate — name the issue
+    //   (b) element resists automation by design (reCAPTCHA) — name
+    //       the bot-detection as the reason for handoff
+    //   (c) page is genuinely sparse — say so concretely
+    const prompt = buildSystemPrompt(makeContextPack());
+    // Mechanism pin: the clause must name pixel-present concretely-
+    // describe vocabulary.
+    expect(prompt).toMatch(/HAVE pixels|when pixels are present/i);
+    expect(prompt).toMatch(/describe what you see CONCRETELY|concrete description/i);
+    // Failure-mode pin: the clause must literally quote the failure
+    // phrase the AI was producing so a future reviewer can connect
+    // the rule to the witnessed bug.
+    expect(prompt).toContain("I can see the screen now, but");
+    // Recovery-case pin: the clause must name reCAPTCHA / behavioral
+    // fingerprinting as the canonical handoff case so the AI hands
+    // off for the RIGHT reason (bot-detection), not the wrong reason
+    // (image quality).
+    expect(prompt).toMatch(/reCAPTCHA|behavioral fingerprinting|bot detection/i);
+    // Doctrine pin: the clause closes with the "concrete description
+    // or concrete handoff, never both" rule — the load-bearing
+    // sentence that prevents the contradictory hedge.
+    expect(prompt).toMatch(/Concrete description.*concrete handoff|never both at once/i);
+  });
+
   it("perception doctrine prefers click_element(submit_button) over key('Enter') for form submission", () => {
     // Regression pin from 2026-05-11. AI was calling key("Enter") to
     // submit forms after type_into landed text. key is global —
