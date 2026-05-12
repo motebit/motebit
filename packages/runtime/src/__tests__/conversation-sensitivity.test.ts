@@ -313,6 +313,50 @@ describe("ConversationManager — read-side trimmed() filter by effective tier",
     expect(out.every((m) => m.content.startsWith("personal"))).toBe(true);
   });
 
+  it("CALM-SESSION ROUND-TRIP: defaultSensitivity None + effective None — messages persist and re-read on the next turn", () => {
+    // Regression pin from 2026-05-11. MotebitRuntime previously
+    // constructed ConversationManager WITHOUT passing
+    // `defaultSensitivity`, so the conversation.ts:117 fallback
+    // (`?? SensitivityLevel.Personal`) was in force. Every persisted
+    // message stamped at `max(Personal, effective)` = Personal in a
+    // calm session. The read-side `trimmed()` filter defaulted
+    // `effective` to None and `sensitivityPermits(None, Personal)` is
+    // false — so every Personal-stamped message got dropped from the
+    // trimmed history on the next turn. The AI told the user "I don't
+    // have a previous message in this session" mid-chat while the
+    // storage held all the prior turns.
+    //
+    // The fix: motebit-runtime.ts now passes `defaultSensitivity:
+    // SensitivityLevel.None` so the write-side and read-side baselines
+    // match. Cross-device leak protection is unchanged because real
+    // elevation paths (`classifyToolResult`, drop classification,
+    // `setSessionSensitivity`) still raise `effective` and floor the
+    // stamp via `max(default, effective)`.
+    //
+    // This test pins the calm-session round-trip: no elevation, both
+    // sides at None, messages MUST be readable on the next turn. If a
+    // future change re-introduces the Personal-default asymmetry, this
+    // test fails before pixels ship.
+    const store = makeCapturingStore();
+    const deps = makeDeps(store, {
+      defaultSensitivity: SensitivityLevel.None,
+      getEffectiveSensitivity: () => SensitivityLevel.None,
+    });
+    const cm = new ConversationManager(deps);
+    cm.pushExchange("open google.com", "Google's open.");
+    cm.pushExchange("press enter", "got it.");
+    // Write-side: messages stamped at None (max(None, None) = None).
+    expect(store._captured.every((m) => m.sensitivity === SensitivityLevel.None)).toBe(true);
+    // Read-side: trimmed() returns all four messages — the calm
+    // session's own history is readable on its own next turn.
+    const out = cm.trimmed();
+    expect(out).toHaveLength(4);
+    expect(out[0]).toMatchObject({ role: "user", content: "open google.com" });
+    expect(out[1]).toMatchObject({ role: "assistant", content: "Google's open." });
+    expect(out[2]).toMatchObject({ role: "user", content: "press enter" });
+    expect(out[3]).toMatchObject({ role: "assistant", content: "got it." });
+  });
+
   it("BYPASS REGRESSION: high-tier persisted messages do NOT leak into low-tier session trimmed history", () => {
     // The money test for the read-side filter (closes the read side
     // of the fifth egress-write boundary). Pre-fix: a Secret-effective

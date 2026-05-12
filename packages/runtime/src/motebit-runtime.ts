@@ -771,6 +771,30 @@ export class MotebitRuntime {
       getProvider: () => this.provider,
       getTaskRouter: () => this.taskRouter,
       generateCompletion: (prompt, taskType) => this.generateCompletion(prompt, taskType),
+      // Default sensitivity baseline for persisted messages. Set to
+      // `None` to match the read-side filter's default in
+      // `trimmed()` (which falls back to `None` when
+      // `getEffectiveSensitivity` is absent). The two MUST share a
+      // baseline or the runtime falls into the "remember nothing"
+      // failure mode: write-side floors at one tier, read-side
+      // filters at a lower tier, and on a calm None-tier turn every
+      // message the runtime wrote becomes unreadable to its own
+      // next turn. Witnessed 2026-05-11: the AI told the user
+      // "I don't have a previous message in this session" mid-chat
+      // because `?? SensitivityLevel.Personal` was stamping every
+      // message Personal while `?? SensitivityLevel.None` was the
+      // read-side default — asymmetric defaults on the same axis.
+      //
+      // Real cross-device leak protection (the original motivation
+      // for the floor) is unchanged: when a tool result classifies
+      // at a higher tier (`classifyToolResult`), or a slab item
+      // arrives in a `tier-bounded-by-source` mode, or the user
+      // explicitly elevates via `/sensitivity`, `effective` rises
+      // above `None` and `max(None, effective)` stamps the
+      // appropriately-elevated tier on those messages. The floor is
+      // load-bearing for ELEVATION-derived stamping, not for the
+      // calm-session baseline.
+      defaultSensitivity: SensitivityLevel.None,
       // Conversation-message sensitivity floor — closes the cross-
       // device leak shape: a Secret-effective turn persisting messages
       // at the static default tier, syncing to the relay, retrieved on
