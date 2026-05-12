@@ -2405,6 +2405,27 @@ export async function handleSlashCommand(
       break;
     }
 
+    case "trust": {
+      // Delegates to the shared cmdTrust dispatcher — the canonical
+      // 5-dimension trust-accumulation summary (memories +
+      // conversations + signed receipts + signed deletions +
+      // federation peers). Same projection web/desktop/mobile use;
+      // CLI gets the same content rendered via tryRunSharedCommand's
+      // calm formatter.
+      await trySharedCommand(runtime, cmd, args, config, fullConfig, repl);
+      break;
+    }
+
+    case "welcome": {
+      // Delegates to the shared cmdWelcome dispatcher — the
+      // onboarding tour naming the three thesis pillars. Same
+      // content fires on every chat surface so the first-encounter
+      // experience is coherent regardless of how the user reached
+      // motebit.
+      await trySharedCommand(runtime, cmd, args, config, fullConfig, repl);
+      break;
+    }
+
     default: {
       // Try the shared command layer before giving up
       const handled = await trySharedCommand(runtime, cmd, args, config, fullConfig, repl);

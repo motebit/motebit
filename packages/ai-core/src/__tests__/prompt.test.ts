@@ -246,15 +246,28 @@ describe("buildSystemPrompt", () => {
   // type-truth slice: the perception doctrine teaches the AI that
   // a `type` action's `ok: true` only means keystrokes fired — it
   // does NOT mean the text landed in the target field. The AI must
-  // read `text_appeared` and `focused`, and click the target field
-  // first if focus was wrong. Witnessed 2026-05-08: AI typed
-  // "motebit" into Google but nothing appeared in the search bar
-  // (focus was on body); AI confidently reported "Typed it."
-  it("teaches the AI to read text_appeared / focused on type results", () => {
+  // read `text_appeared` on the result; when false, the runtime
+  // attaches `recovery_hint: "read_page_then_type_into"` and the
+  // prompt teaches following the hint via the element-addressed
+  // recovery path (read_page → type_into), NOT coordinate click +
+  // retype which hits the same focus race.
+  //
+  // Witnessed 2026-05-08: AI typed "motebit" into Google but
+  // nothing appeared (focus was on body); AI confidently reported
+  // "Typed it." Original fix taught "click target field FIRST."
+  // Witnessed 2026-05-12: same AI used coordinate click + retype
+  // for the remediation and hit the same focus race, said "Done"
+  // when the search field was still empty. Re-fix replaced the
+  // brittle coordinate remediation with the typed-truth recovery
+  // hint shipped in commit 2263425d.
+  it("teaches the AI to read text_appeared on type results + follow the recovery_hint", () => {
     const prompt = buildSystemPrompt(makeContextPack());
     expect(prompt).toContain("text_appeared");
-    expect(prompt).toContain("focused");
-    expect(prompt).toContain("Click the target field FIRST");
+    expect(prompt).toContain("recovery_hint");
+    expect(prompt).toContain("read_page_then_type_into");
+    // The forbidden-remediation language: do not click + retype
+    // (the coordinate path that hits the same focus race).
+    expect(prompt).toContain("type_into");
   });
 
   // element-1 slice: AI should prefer element-addressed actions
