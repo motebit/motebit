@@ -158,6 +158,13 @@ const TYPED_TRUTH_FIELDS: ReadonlyArray<TypedTruthField> = [
     notes:
       "Sibling of access_denied_detected with distinct recovery semantics: access_denied is page-blocked (try elsewhere); bot_detection is page-challenges-humanness (recovery depends on intent — search → web_search fallback, site-interaction → user handoff). Shipped 2026-05-12 to convert the prompt-only CAPTCHA-fallback teaching from search-routing clause into a runtime-enforced typed reason. Doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md.",
   },
+  {
+    field: "submit_button_id",
+    promptText: "submit_button_id",
+    dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
+    notes:
+      "Form-submission typed-truth hint: the dispatcher detects the page's primary submit button (HTML input_type='submit' first, label heuristic — Search/Submit/Send/Sign in/Continue — as fallback) and surfaces its element_id on read_page results. Converted the click_element-over-key('Enter') prompt clause from B-grade (pure teaching) to A-grade (wire field + dispatch + thin teaching). Shipped 2026-05-12; doctrine exemplar of B→A graduation per docs/doctrine/runtime-invariants-over-prompt-rules.md — the doctrine being applied to itself.",
+  },
 ];
 
 interface Violation {

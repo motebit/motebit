@@ -573,6 +573,47 @@ export interface ReadPageResult {
    * shaped elements (text-content pages, document viewers).
    */
   readonly buttons: ReadonlyArray<ReadPageButton>;
+  /**
+   * Typed-truth hint naming the page's primary submit button by
+   * `element_id` — present when `buttons[]` contains a discoverable
+   * submit-class element. The runtime detects it via two signals in
+   * order:
+   *
+   *   1. **HTML semantic**: any button with `input_type === "submit"`
+   *      (`<input type="submit">`). Most reliable; this is the
+   *      browser's own statement that the element submits a form.
+   *   2. **Label heuristic** (fallback): a `<button>` whose visible
+   *      label matches a submit-class word — `Search` / `Submit` /
+   *      `Send` / `Sign in` / `Log in` / `Continue` / `Go` /
+   *      `Subscribe` / `Next` / `Save` / `Post`. Case-insensitive,
+   *      whole-label-or-prefix match. The label heuristic produces
+   *      false positives on rare pages with non-submit buttons
+   *      labeled "Send" (a contact-icon UI); the AI's reading still
+   *      benefits from the hint because `click_element` on a
+   *      non-submit button is a no-op rather than a wrong action.
+   *
+   * AI usage: when this field is present, prefer
+   * `click_element(submit_button_id)` over `key("Enter")` for form
+   * submission. The runtime invariant is the doctrine's preferred
+   * mechanism (no focus race, no global-keystroke ambiguity) — the
+   * wire field carries the "right tool for this page" signal that
+   * the AI's selection would otherwise have to derive from
+   * unstructured prompt teaching. Doctrine:
+   * `docs/doctrine/runtime-invariants-over-prompt-rules.md` —
+   * exemplar of B→A graduation via typed-truth conversion.
+   *
+   * Absent when:
+   *   - The page has no `buttons[]` at all (text-content pages).
+   *   - `buttons[]` contains no submit-class element (a search
+   *     results page with only navigation chips, e.g.).
+   *   - The page uses non-button submit affordances (custom widgets,
+   *     `<a>` tags posting via JS) — the heuristic stays conservative
+   *     to avoid false-confident hints.
+   *
+   * When absent, the AI falls back to its existing reasoning over
+   * `buttons[]` directly. This is additive, not replacing.
+   */
+  readonly submit_button_id?: string;
   readonly extracted_at: number;
 }
 

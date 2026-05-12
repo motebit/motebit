@@ -351,6 +351,120 @@ describe("extractStructuredPageContent", () => {
     expect(result.inputs[0]?.value?.length).toBe(100);
   });
 
+  // submit_button_id — typed-truth hint that names the page's primary
+  // submit element by element_id. Two-tier detection: HTML semantic
+  // (input_type === "submit") first, label heuristic as fallback.
+  // Doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md —
+  // B→A graduation of the click_element-over-key("Enter") clause.
+  describe("submit_button_id (typed-truth form-submit hint)", () => {
+    it("detects input[type=submit] via HTML semantic (Pass 1)", () => {
+      setBody(`
+        <button>Cancel</button>
+        <input type="submit" value="Save Changes" />
+      `);
+      const result = extractStructuredPageContent(OPTS);
+      // The submit input gets the id, NOT the lexically-first "Cancel"
+      // button — HTML semantic beats position.
+      const submit = result.buttons.find((b) => b.input_type === "submit");
+      expect(result.submit_button_id).toBe(submit!.element_id);
+    });
+
+    it("detects via label heuristic when no input[type=submit] exists (Pass 2)", () => {
+      setBody(`
+        <button>Cancel</button>
+        <button>Search</button>
+      `);
+      const result = extractStructuredPageContent(OPTS);
+      const searchBtn = result.buttons.find((b) => b.text === "Search");
+      expect(result.submit_button_id).toBe(searchBtn!.element_id);
+    });
+
+    it("matches prefix label like 'Search Google' against the 'search' word", () => {
+      setBody(`<button>Search Google</button>`);
+      const result = extractStructuredPageContent(OPTS);
+      expect(result.submit_button_id).toBe(result.buttons[0]!.element_id);
+    });
+
+    it("is case-insensitive on labels", () => {
+      setBody(`<button>SUBMIT</button>`);
+      const result = extractStructuredPageContent(OPTS);
+      expect(result.submit_button_id).toBe(result.buttons[0]!.element_id);
+    });
+
+    it("HTML semantic (Pass 1) wins over label heuristic (Pass 2)", () => {
+      // A "Search" label is BEFORE an input[type=submit] — Pass 1
+      // should still win because semantic is more reliable than label.
+      setBody(`
+        <button>Search</button>
+        <input type="submit" value="Submit" />
+      `);
+      const result = extractStructuredPageContent(OPTS);
+      const submitInput = result.buttons.find((b) => b.input_type === "submit");
+      expect(result.submit_button_id).toBe(submitInput!.element_id);
+    });
+
+    it("is absent when buttons[] has no submit-class element", () => {
+      setBody(`
+        <button>Cancel</button>
+        <button>Close</button>
+      `);
+      const result = extractStructuredPageContent(OPTS);
+      expect(result.submit_button_id).toBeUndefined();
+    });
+
+    it("is absent when the page has no buttons at all", () => {
+      setBody("<p>just text</p>");
+      const result = extractStructuredPageContent(OPTS);
+      expect(result.submit_button_id).toBeUndefined();
+    });
+
+    it("recognizes the canonical submit-class label set", () => {
+      const LABELS = [
+        "Search",
+        "Submit",
+        "Send",
+        "Sign in",
+        "Log in",
+        "Login",
+        "Continue",
+        "Go",
+        "Subscribe",
+        "Next",
+        "Save",
+        "Post",
+      ];
+      for (const label of LABELS) {
+        document.body.innerHTML = `<button>${label}</button>`;
+        const result = extractStructuredPageContent(OPTS);
+        expect(result.submit_button_id, `label "${label}" should match submit-class`).toBe(
+          result.buttons[0]!.element_id,
+        );
+      }
+    });
+
+    it("rejects non-submit-class labels (no false positives on 'Reset' / 'Cancel')", () => {
+      const NON_SUBMIT = ["Reset", "Cancel", "Close", "Back", "Delete"];
+      for (const label of NON_SUBMIT) {
+        document.body.innerHTML = `<button>${label}</button>`;
+        const result = extractStructuredPageContent(OPTS);
+        expect(
+          result.submit_button_id,
+          `label "${label}" should NOT match submit-class`,
+        ).toBeUndefined();
+      }
+    });
+
+    it("does not match 'Search' as a substring of a longer non-submit phrase", () => {
+      // "Researcher" starts with "Resear..." and "Sea" is inside it.
+      // Whole-label-or-prefix discipline keeps this from false-matching.
+      // (Strictly speaking "Researcher" doesn't start with "search " so
+      // the heuristic is safe; this test pins the discipline.)
+      setBody(`<button>Researcher tools</button>`);
+      const result = extractStructuredPageContent(OPTS);
+      expect(result.submit_button_id).toBeUndefined();
+    });
+  });
+
   it("element-1: shared element_id namespace across inputs + buttons (counter is monotonic)", () => {
     setBody(`
       <input type="text" name="q" />

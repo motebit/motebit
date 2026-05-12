@@ -825,6 +825,7 @@ export function extractStructuredPageContent(opts: {
     text: string;
     input_type?: string;
   }>;
+  submit_button_id?: string;
 } {
   const {
     textMaxBytes,
@@ -1037,6 +1038,55 @@ export function extractStructuredPageContent(opts: {
     });
   }
 
+  // Typed-truth submit-button detection. Two-tier signal: HTML semantic
+  // first (input_type === "submit" is the browser's own statement that
+  // the element submits a form), label heuristic as fallback. Lowercase
+  // whole-label-or-prefix match against a curated submit-class word set
+  // — kept conservative on purpose so a false-confident hint on a
+  // non-submit "Send" button (e.g. a contact-icon UI) costs at most one
+  // no-op click. Doctrine:
+  // `docs/doctrine/runtime-invariants-over-prompt-rules.md` — the
+  // wire-field replacement for the prompt's prior click_element-over-
+  // key("Enter") teaching, now gated by typed-truth-perception.
+  const SUBMIT_LABEL_WORDS = [
+    "search",
+    "submit",
+    "send",
+    "sign in",
+    "log in",
+    "login",
+    "continue",
+    "go",
+    "subscribe",
+    "next",
+    "save",
+    "post",
+  ];
+  let submitButtonId: string | undefined;
+  // Pass 1: HTML semantic — first `input_type === "submit"` wins.
+  for (const b of buttons) {
+    if (b.input_type === "submit") {
+      submitButtonId = b.element_id;
+      break;
+    }
+  }
+  // Pass 2: label heuristic — first label that matches a submit-class
+  // word (whole-label-or-prefix match) wins. Skipped when Pass 1 fired.
+  if (!submitButtonId) {
+    for (const b of buttons) {
+      const label = b.text.trim().toLowerCase();
+      if (label.length === 0) continue;
+      // Whole-label match (label === word) OR prefix match where the
+      // remainder is a space-delimited suffix ("Search Google" matches
+      // "search"). Word-boundary discipline keeps "Reset" from matching
+      // "Subscribe" or other coincidental prefixes.
+      if (SUBMIT_LABEL_WORDS.some((w) => label === w || label.startsWith(`${w} `))) {
+        submitButtonId = b.element_id;
+        break;
+      }
+    }
+  }
+
   return {
     url: location.href,
     title: titleRaw,
@@ -1046,6 +1096,7 @@ export function extractStructuredPageContent(opts: {
     links,
     inputs,
     buttons,
+    ...(submitButtonId ? { submit_button_id: submitButtonId } : {}),
   };
 }
 
@@ -1076,6 +1127,7 @@ export async function executeReadPage(session: BrowserSession): Promise<ReadPage
     links: extracted.links,
     inputs: extracted.inputs as ReadonlyArray<ReadPageInput>,
     buttons: extracted.buttons as ReadonlyArray<ReadPageButton>,
+    ...(extracted.submit_button_id ? { submit_button_id: extracted.submit_button_id } : {}),
     extracted_at: Date.now(),
   };
 }

@@ -54,17 +54,17 @@ This is also not "the runtime should police the AI's output." The runtime's job 
 
 ## Examples — recent fixes graded against the doctrine
 
-| Fix                                               | Pattern                                                     | Grade                                                                                                      |
-| ------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `frame_stale` typed-truth                         | wire field + dispatch retry + prompt teaching               | A — full triple, prompt is the smallest piece                                                              |
-| Stale-bytes-omission                              | runtime computes staleness, snapshot field, prompt teaching | A — full triple                                                                                            |
-| `synthesizeClosingFallback`                       | pure runtime guarantee, prompt teaching is additive         | A — runtime is load-bearing                                                                                |
-| Conversation-memory `defaultSensitivity` baseline | runtime fix at construction site                            | A — runtime-only, zero prompt change                                                                       |
-| Click-capture inscribed-inset alignment           | geometry alignment, zero prompt change                      | A — pure architecture                                                                                      |
-| Click_element-over-key("Enter")                   | prompt-only (no runtime enforcement)                        | B — pure teaching, candidate for runtime conversion (tool-policy demotion of `key` for submit-class)       |
-| Hedge-speak forbidden                             | prompt-only                                                 | B — pure teaching, hard to enforce at runtime                                                              |
-| Compound-action execution                         | prompt-only                                                 | B — pure teaching, hard to enforce structurally                                                            |
-| Search-intent routing (compressed 2026-05-12)     | prompt teaching, registry tier-sort enforces selection      | A after compression — was B-shaped pre-compression because it duplicated the registry's tier-sort behavior |
+| Fix                                               | Pattern                                                                                  | Grade                                                                                                         |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `frame_stale` typed-truth                         | wire field + dispatch retry + prompt teaching                                            | A — full triple, prompt is the smallest piece                                                                 |
+| Stale-bytes-omission                              | runtime computes staleness, snapshot field, prompt teaching                              | A — full triple                                                                                               |
+| `synthesizeClosingFallback`                       | pure runtime guarantee, prompt teaching is additive                                      | A — runtime is load-bearing                                                                                   |
+| Conversation-memory `defaultSensitivity` baseline | runtime fix at construction site                                                         | A — runtime-only, zero prompt change                                                                          |
+| Click-capture inscribed-inset alignment           | geometry alignment, zero prompt change                                                   | A — pure architecture                                                                                         |
+| Click_element-over-key("Enter")                   | wire field (`submit_button_id` on read_page) + dispatch detection + thin prompt teaching | A — graduated B→A on 2026-05-12 via `submit_button_id` typed-truth conversion; the doctrine applied to itself |
+| Hedge-speak forbidden                             | prompt-only                                                                              | B — pure teaching, hard to enforce at runtime                                                                 |
+| Compound-action execution                         | prompt-only                                                                              | B — pure teaching, hard to enforce structurally                                                               |
+| Search-intent routing (compressed 2026-05-12)     | prompt teaching, registry tier-sort enforces selection                                   | A after compression — was B-shaped pre-compression because it duplicated the registry's tier-sort behavior    |
 
 The B-grade items are not bugs; they're teaching that doesn't have an obvious runtime path. The audit's value isn't "make everything A" — it's "stay honest about which is which, and look for the A path before settling for B."
 
