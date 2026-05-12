@@ -637,6 +637,40 @@ describe("buildSystemPrompt — [Now] block injection", () => {
     expect(prompt).toMatch(/already on X/);
   });
 
+  it("perception doctrine prefers click_element(submit_button) over key('Enter') for form submission", () => {
+    // Regression pin from 2026-05-11. AI was calling key("Enter") to
+    // submit forms after type_into landed text. key is global —
+    // fires on whatever holds focus, which may have drifted between
+    // the type_into and the key call. The mechanism that survives
+    // focus drift is click_element(submit_button_id): the server
+    // resolves + acts atomically. Same architectural axis as
+    // element-addressed > coordinate (clause above), one tier
+    // tighter — the keyboard tier is preferred over coordinates,
+    // but element-addressed actions are preferred over BOTH.
+    //
+    // The clause names the user-intent → mechanism mapping
+    // ("press enter" / "submit" / "search" / "send" → click_element
+    // on the form's submit button) and explicitly forbids key("Enter")
+    // when a submit button exists.
+    const prompt = buildSystemPrompt(makeContextPack());
+    // Mechanism-name pin: the clause must name both alternatives so
+    // the AI sees the comparison, not just the recommendation.
+    expect(prompt).toContain("click_element(submit_button_id)");
+    expect(prompt).toMatch(/key\("Enter"\)/);
+    // Intent-mapping pin: the clause must name the user-side language
+    // ("press enter", "submit", "search", "send") that maps to the
+    // submit-button click, so the AI doesn't take user phrasing
+    // literally as a keyboard request.
+    expect(prompt).toMatch(/press enter|submit|search|send/i);
+    // Failure-mode pin: the clause must explicitly call out global-
+    // keystroke focus drift as the failure mode this rule prevents.
+    expect(prompt).toMatch(/focus.*drift|global.*keystroke|focus race/i);
+    // Reserve-clause pin: the clause must NAME the legitimate uses
+    // of key("Enter") (terminal / no-submit-button / sandboxed-iframe
+    // cases) so the AI doesn't read this as "never use key()."
+    expect(prompt).toMatch(/terminal|no submit button|sandboxed/i);
+  });
+
   it("perception doctrine teaches that bytes_omitted results go stale once the gate flips", () => {
     // Repro: user granted /vision after the AI had already taken a
     // screenshot with bytes omitted under consent_required. Without
