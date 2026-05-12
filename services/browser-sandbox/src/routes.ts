@@ -146,7 +146,7 @@ export function buildApp(deps: BuildAppDeps): Hono {
   // 204 No Content on success — no payload, idempotent. 404
   // (ServiceError "session_closed") on missing session, same shape
   // as other endpoints. Cheap by construction: one map update.
-  app.post("/sessions/:id/keepalive", async (c) => {
+  app.post("/sessions/:id/keepalive", (c) => {
     const sessionId = c.req.param("id");
     const session = deps.pool.getSession(sessionId);
     if (!session) {
