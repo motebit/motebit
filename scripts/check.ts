@@ -617,10 +617,10 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-prompt-density",
   },
   {
-    name: "check-trust-slash-cross-surface",
+    name: "check-universal-slash-coverage",
     defends:
-      "every chat-surface that ships a slash-command registry — web (`apps/web/src/ui/slash-commands.ts`), desktop (`apps/desktop/src/ui/slash-commands.ts`), mobile (`apps/mobile/src/components/SlashAutocomplete.tsx`), CLI (`apps/cli/src/args.ts`) — registers `/trust`. The slash command surfaces the canonical 5-dimension trust-accumulation summary (memories + conversations + signed receipts + signed deletions + federation peers) computed by `cmdTrust`; the thesis claim 'accumulated trust is visible on every surface' holds at CI, not just at user encounter. Closed-registry shape (same as `check-skills-cross-surface` #73 + `check-typed-truth-perception` #80): SURFACES is the canonical inventory, each entry naming the file + the surface-native registration pattern. Doctrine: `docs/doctrine/runtime-invariants-over-prompt-rules.md` § trust-accumulation visibility arc. Spatial is intentionally out of scope — AR-glasses prototype has no chat surface and no slash menu.",
-    script: "check-trust-slash-cross-surface",
+      "every chat-surface that ships a slash-command registry — web (`apps/web/src/ui/slash-commands.ts`), desktop (`apps/desktop/src/ui/slash-commands.ts`), mobile (`apps/mobile/src/components/SlashAutocomplete.tsx`), CLI (`apps/cli/src/args.ts`) — registers every UNIVERSAL_COMMAND in the gate's registry. Today: `/trust` (canonical 5-dimension trust-accumulation summary computed by cmdTrust) + `/welcome` (onboarding tour naming the three thesis pillars). Closed-registry shape (same as `check-skills-cross-surface` #73 + `check-typed-truth-perception` #80): UNIVERSAL_COMMANDS × SURFACES matrix; adding a universal command MUST update the registry + every surface's slash list. Generalized from a per-command gate to one rule covering N commands — future universal commands cost one registry line, not a new script. Doctrine: `docs/doctrine/runtime-invariants-over-prompt-rules.md` § trust-accumulation visibility arc + onboarding arc. Spatial is intentionally out of scope — AR-glasses prototype has no chat surface and no slash menu.",
+    script: "check-universal-slash-coverage",
   },
 ];
 
