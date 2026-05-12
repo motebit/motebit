@@ -151,6 +151,13 @@ const TYPED_TRUTH_FIELDS: ReadonlyArray<TypedTruthField> = [
     promptText: "access_denied_detected",
     dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
   },
+  {
+    field: "bot_detection_detected",
+    promptText: "bot_detection_detected",
+    dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
+    notes:
+      "Sibling of access_denied_detected with distinct recovery semantics: access_denied is page-blocked (try elsewhere); bot_detection is page-challenges-humanness (recovery depends on intent — search → web_search fallback, site-interaction → user handoff). Shipped 2026-05-12 to convert the prompt-only CAPTCHA-fallback teaching from search-routing clause into a runtime-enforced typed reason. Doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md.",
+  },
 ];
 
 interface Violation {

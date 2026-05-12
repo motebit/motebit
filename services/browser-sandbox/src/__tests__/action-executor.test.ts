@@ -95,6 +95,7 @@ function makeMockSession(): MockSession {
     hasCanvases: false,
     blankish: false,
     denied: false,
+    botDetection: false,
   });
   let pageUrlImpl: () => string = () => currentUrl;
 
@@ -531,6 +532,7 @@ describe("executeAction", () => {
         hasCanvases: false,
         blankish: false,
         denied: true,
+        botDetection: false,
       }));
       const result = (await executeAction(
         m.session,
@@ -539,6 +541,55 @@ describe("executeAction", () => {
       )) as Record<string, unknown>;
       expect(result.access_denied_detected).toBe(true);
       expect(result.visual_content_detected).toBe(false);
+      expect(result.bot_detection_detected).toBe(false);
+    });
+
+    it("detects bot_detection_wall (reCAPTCHA / hCaptcha / Cloudflare Turnstile) — typed sibling of access_denied", async () => {
+      // Pin from 2026-05-12. Witnessed: Google's reCAPTCHA challenge
+      // page (google.com/sorry/index) was NOT being flagged by the
+      // existing access_denied detector — its content uses "I'm not
+      // a robot", "unusual traffic", "verify you are human" patterns
+      // the prior regex didn't catch. Without a typed signal, the
+      // AI was reading the page text and inferring CAPTCHA, then
+      // falling back via the prompt-only CAPTCHA-fallback rule.
+      // After this slice, the field is typed and the prompt teaches
+      // the intent-aware recovery (search → web_search; site-
+      // interaction → user handoff). Doctrine: docs/doctrine/
+      // runtime-invariants-over-prompt-rules.md.
+      const m = makeMockSession();
+      m.setEvaluateImpl(async () => ({
+        textLength: 200,
+        hasImages: true,
+        hasCanvases: false,
+        blankish: false,
+        denied: false,
+        botDetection: true,
+      }));
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "google.com" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.bot_detection_detected).toBe(true);
+      // Sibling of denied: distinct field, distinct recovery; both
+      // suppress visual_content_detected since the page isn't real
+      // content.
+      expect(result.access_denied_detected).toBe(false);
+      expect(result.visual_content_detected).toBe(false);
+    });
+
+    it("bot_detection_detected defaults to false on a healthy page", async () => {
+      const m = makeMockSession();
+      // Default evaluateImpl in makeMockSession returns botDetection:
+      // false (added to the default fixture). Verify the field
+      // surfaces correctly on a normal navigate.
+      const result = (await executeAction(
+        m.session,
+        { kind: "navigate", url: "motebit.com" },
+        deps,
+      )) as Record<string, unknown>;
+      expect(result.bot_detection_detected).toBe(false);
+      expect(result.visual_content_detected).toBe(true);
     });
 
     it("falls back to defaults when the heuristic evaluate throws", async () => {

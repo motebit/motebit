@@ -525,12 +525,37 @@ async function doNavigate(session: BrowserSession, action: NavigateAction): Prom
           /access denied|forbidden|cloudflare|attention required|just a moment|please verify|are you human|enable\s+javascript/i.test(
             text,
           );
+        // Bot-detection wall — the page rendered, no hard denial, but
+        // the gatekeeper is challenging the session as bot-shaped
+        // (reCAPTCHA, hCaptcha, Cloudflare Turnstile, Google's
+        // "unusual traffic" page). Distinct from `denied`: the page
+        // isn't blocked outright; the user (or motebit) is being
+        // asked to PROVE humanness. Distinct recovery: for search
+        // intent, fall back to web_search (the API tier); for
+        // navigation/site-interaction intent, hand off to the user.
+        //
+        // URL check catches Google's anti-bot redirect (sorry/index)
+        // and similar challenge-frame URLs that don't always carry
+        // the challenge text in the body (it's iframe'd in). Body
+        // check catches the visible challenge prompts on pages that
+        // render the challenge inline.
+        const url = location.href;
+        const urlBot =
+          /\/sorry\/index|\/sorry\/?\?|google\.com\/sorry|recaptcha|challenges\.cloudflare|\/cdn-cgi\/challenge-platform|hcaptcha\.com/i.test(
+            url,
+          );
+        const bodyBot =
+          /i['']?m not a robot|i am not a robot|recaptcha|unusual traffic|verify you are human|why did this happen\?|hcaptcha|cloudflare turnstile|complete the security check|prove you('re| are) human|please confirm you are not a robot/i.test(
+            text,
+          );
+        const botDetection = urlBot || bodyBot;
         return {
           textLength: text.length,
           hasImages,
           hasCanvases,
           blankish: text.length < 32 && !hasImages && !hasCanvases,
           denied,
+          botDetection,
         };
       })
       .catch(() => ({
@@ -539,6 +564,7 @@ async function doNavigate(session: BrowserSession, action: NavigateAction): Prom
         hasCanvases: false,
         blankish: true,
         denied: false,
+        botDetection: false,
       }));
 
     // 2026-05-08: capture a screenshot inline as part of the navigate
@@ -575,9 +601,20 @@ async function doNavigate(session: BrowserSession, action: NavigateAction): Prom
       kind: "navigate",
       ok: true,
       url: session.page.url(),
-      visual_content_detected: !heuristic.blankish && !heuristic.denied,
+      visual_content_detected: !heuristic.blankish && !heuristic.denied && !heuristic.botDetection,
       blank_page_detected: heuristic.blankish,
       access_denied_detected: heuristic.denied,
+      // Typed-truth-perception sibling of access_denied_detected.
+      // Sibling because the recovery differs: denied → can't see
+      // page, try elsewhere; bot_detection → challenge presented,
+      // recovery depends on intent (search → web_search fallback,
+      // site-interaction → user handoff). The prompt's PERCEPTION_
+      // DOCTRINE teaches the recovery path. Doctrine: motebit-
+      // computer.md §"Typed truth on results" + the runtime-
+      // invariants-over-prompt-rules doctrine — this is the typed
+      // structural fix that replaces a prompt-only "fall back when
+      // CAPTCHA" rule with a wire field the AI reads.
+      bot_detection_detected: heuristic.botDetection,
       visual_readiness_timeout: visualReadinessTimeout,
       slow_load: slowLoad,
       ...(bytes_base64 !== undefined
