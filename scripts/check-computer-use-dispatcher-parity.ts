@@ -179,37 +179,51 @@ function parseRustKinds(): ParseResult {
 }
 
 /**
- * Parse `case "<name>":` arms from the TS executor's `executeAction`
- * switch only — not from helper switches elsewhere in the file
- * (`translateModifier` has `case "cmd": return "Meta"` arms that
- * would over-match if the regex weren't scoped). Walks braces from
- * the `executeAction` signature to find the matching closer.
+ * Parse `case "<name>":` arms from the TS executor's dispatch path —
+ * not from helper switches elsewhere in the file (`translateModifier`
+ * has `case "cmd": return "Meta"` arms that would over-match if the
+ * regex weren't scoped). Scans both `executeAction` (the entry point)
+ * AND `dispatchAction` (the internal switch that `executeAction`
+ * delegates to after the `frame_stale` retry-wrapper). Either
+ * function may carry kinds; the union of their arms is the coverage.
  */
 function parseTsKinds(): ParseResult {
   const source = readFile(TS_FILE);
-  const fnMatch = /export\s+async\s+function\s+executeAction\s*\([^)]*\)[^{]*\{/.exec(source);
-  if (fnMatch === null) {
-    throw new Error(
-      `check-computer-use-dispatcher-parity: could not locate \`export async function executeAction\` in ${TS_FILE}`,
-    );
-  }
-  // Walk braces from after the fn signature to find the matching closer.
-  const start = fnMatch.index + fnMatch[0].length;
-  let depth = 1;
-  let i = start;
-  while (i < source.length && depth > 0) {
-    const ch = source[i];
-    if (ch === "{") depth++;
-    else if (ch === "}") depth--;
-    i++;
-  }
-  const fnBody = source.slice(start, i - 1);
   const kinds = new Set<string>();
-  const re = /case\s+"([a-z_]+)"\s*:/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(fnBody)) !== null) {
-    kinds.add(m[1]!);
+  const caseRe = /case\s+"([a-z_]+)"\s*:/g;
+
+  function scanFunction(fnSignatureRe: RegExp, required: boolean): void {
+    const fnMatch = fnSignatureRe.exec(source);
+    if (fnMatch === null) {
+      if (required) {
+        throw new Error(
+          `check-computer-use-dispatcher-parity: could not locate dispatch function (${fnSignatureRe}) in ${TS_FILE}`,
+        );
+      }
+      return;
+    }
+    const start = fnMatch.index + fnMatch[0].length;
+    let depth = 1;
+    let i = start;
+    while (i < source.length && depth > 0) {
+      const ch = source[i];
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      i++;
+    }
+    const fnBody = source.slice(start, i - 1);
+    let m: RegExpExecArray | null;
+    caseRe.lastIndex = 0;
+    while ((m = caseRe.exec(fnBody)) !== null) kinds.add(m[1]!);
   }
+
+  // `executeAction` is the entry point — required to exist.
+  scanFunction(/export\s+async\s+function\s+executeAction\s*\([^)]*\)[^{]*\{/, true);
+  // `dispatchAction` is the internal switch, present when
+  // `executeAction` wraps with frame_stale retry. Optional: if the
+  // refactor reverts, the entry function carries the cases directly.
+  scanFunction(/(?:async\s+)?function\s+dispatchAction\s*\([^)]*\)[^{]*\{/, false);
+
   return { kinds, count: kinds.size };
 }
 

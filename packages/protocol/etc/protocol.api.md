@@ -620,7 +620,7 @@ export function composeTrustChain(scores: number[]): number;
 export const COMPUTER_ACTION_KINDS: readonly ["screenshot", "cursor_position", "click", "double_click", "mouse_move", "drag", "type", "key", "scroll", "navigate", "click_element", "focus_element", "type_into"];
 
 // @alpha
-export const COMPUTER_FAILURE_REASONS: readonly ["policy_denied", "approval_required", "approval_expired", "permission_denied", "session_closed", "target_not_found", "target_obscured", "user_preempted", "platform_blocked", "not_supported", "not_in_control"];
+export const COMPUTER_FAILURE_REASONS: readonly ["policy_denied", "approval_required", "approval_expired", "permission_denied", "session_closed", "target_not_found", "target_obscured", "user_preempted", "platform_blocked", "not_supported", "not_in_control", "frame_stale"];
 
 // @alpha
 export type ComputerAction = ScreenshotAction | CursorPositionAction | ClickAction | DoubleClickAction | MouseMoveAction | DragAction | TypeAction | KeyAction | ScrollAction | NavigateAction | ClickElementAction | FocusElementAction | TypeIntoAction;

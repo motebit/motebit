@@ -695,6 +695,7 @@ export interface SessionStateSnapshot {
     readonly browser: BrowserSessionInfo;
     readonly pixelConsent: PixelConsentState;
     readonly sensitivity: SensitivityLevel;
+    readonly staleBytesOmissionReason?: PixelOmittedReason;
 }
 
 // @public
