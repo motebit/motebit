@@ -3,6 +3,7 @@ import {
   RelayDelegationAdapter,
   executeCommand,
   cmdSelfTest,
+  cmdWelcome,
   PLANNING_TASK_ROUTER,
   resolveProactiveAnchor,
   bindSlabControllerToRenderer,
@@ -2735,6 +2736,42 @@ export class WebApp {
   ): void {
     this._persistedCookies = next;
     this.refreshSlabChrome();
+  }
+
+  /**
+   * Phase 2 of the onboarding arc — auto-fire `/welcome` on first
+   * encounter for a fresh motebit so the thesis is visible day-one,
+   * not gated on the user knowing to type `/welcome`. Returns the
+   * welcome content (summary + detail concatenated) when the motebit
+   * is fresh — no prior conversations on record. Returns `null`
+   * otherwise, including pre-bootstrap (no runtime).
+   *
+   * "Fresh" is conversation-list-empty: any user message creates a
+   * conversation, so a second bootstrap after even one exchange
+   * returns null — the welcome fires at-most-once per motebit-life
+   * unless the user never engaged. Repeat-but-haven't-engaged returns
+   * the same intro, which is the right behavior (it's the same user
+   * encountering motebit for the first time).
+   *
+   * Persistence-by-detection rather than persistence-in-conversation-
+   * store keeps the welcome content out of the audit trail (it's
+   * surface ceremony, not user/assistant turn) and lets surfaces
+   * decide whether to render it as a system message, a banner, an
+   * empty-state, etc. Web's main.ts surfaces it as a system message.
+   */
+  welcomeIfFresh(): { summary: string; detail: string } | null {
+    if (!this.runtime) return null;
+    if (this.runtime.listConversations().length > 0) return null;
+    // Lazy require — cmdWelcome is the canonical source of welcome
+    // content, lives in @motebit/runtime/commands/system.ts. Imported
+    // here via the runtime's shared dispatcher rather than a direct
+    // function call so the welcome content stays in sync with the
+    // /welcome slash command (single source of truth).
+    const result = cmdWelcome(this.runtime);
+    return {
+      summary: result.summary,
+      detail: typeof result.detail === "string" ? result.detail : "",
+    };
   }
 
   /**

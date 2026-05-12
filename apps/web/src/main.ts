@@ -524,6 +524,23 @@ async function bootstrap(): Promise<void> {
   for (const msg of cleaned) {
     addMessage(msg.role, msg.content, true);
   }
+
+  // Phase 2 of the onboarding arc — auto-fire /welcome on first
+  // encounter for a fresh motebit. WebApp.welcomeIfFresh() returns
+  // the canonical /welcome content (the same cmdWelcome the slash
+  // command surfaces) when no prior conversations exist, null
+  // otherwise. Fires at-most-once per motebit-life unless the user
+  // never engaged — in which case the repeat-but-haven't-engaged
+  // user encounters the same intro, which is the right behavior
+  // (it's the same first encounter). Doctrine:
+  // `docs/doctrine/runtime-invariants-over-prompt-rules.md` §
+  // trust-accumulation visibility arc + onboarding arc.
+  if (cleaned.length === 0) {
+    const welcome = app.welcomeIfFresh();
+    if (welcome !== null) {
+      addMessage("system", `${welcome.summary}\n\n${welcome.detail}`, true);
+    }
+  }
 }
 
 // Expose app for E2E test injection (setProviderDirect, isProviderConnected).

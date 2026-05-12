@@ -10,6 +10,7 @@ export { canonicalJson } from "./execution-ledger.js";
 export {
   executeCommand,
   cmdSelfTest,
+  cmdWelcome,
   COMMAND_DEFINITIONS,
   PlanExecutionVM,
   type CommandResult,

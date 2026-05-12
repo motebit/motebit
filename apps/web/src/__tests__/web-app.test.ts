@@ -701,6 +701,33 @@ describe("Persisted cookies (Phase 3 — /cookies status + revoke)", () => {
     app3.stop();
   });
 
+  // Phase 2 of the onboarding arc — auto-fire /welcome on first
+  // encounter for a fresh motebit.
+  describe("welcomeIfFresh (Phase 2 onboarding auto-fire)", () => {
+    it("returns null pre-bootstrap (no runtime)", () => {
+      const app = new WebApp();
+      // No init / bootstrap — runtime is null.
+      expect(app.welcomeIfFresh()).toBeNull();
+      app.stop();
+    });
+
+    it("returns welcome content on a fresh motebit (no prior conversations)", async () => {
+      const app = new WebApp();
+      await app.init(null as unknown as HTMLCanvasElement);
+      await app.bootstrap();
+      const welcome = app.welcomeIfFresh();
+      expect(welcome).not.toBeNull();
+      expect(welcome!.summary).toContain("Welcome");
+      expect(welcome!.summary).toContain("motebit");
+      // The detail body names the universal slash commands the
+      // canonical cmdWelcome points to — same source-of-truth as
+      // the /welcome slash command.
+      expect(welcome!.detail).toContain("/trust");
+      expect(welcome!.detail).toContain("/memories");
+      app.stop();
+    });
+  });
+
   // Phase 2 trust-visibility post-fix invariant: every write to the
   // persisted-cookies cache MUST trigger a chrome refresh so the
   // cobrowse pip stays coherent with state. Before this invariant

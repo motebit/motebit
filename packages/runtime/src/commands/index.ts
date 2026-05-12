@@ -26,6 +26,7 @@ import { cmdBalance, cmdDeposits, cmdDiscover, cmdProposals } from "./market.js"
 export type { CommandResult, RelayConfig } from "./types.js";
 export type { SelfTestConfig, MintToken } from "./self-test.js";
 export { cmdSelfTest } from "./self-test.js";
+export { cmdWelcome } from "./system.js";
 export { PlanExecutionVM, type PlanSnapshot, type PlanEvent } from "./plans.js";
 
 /**

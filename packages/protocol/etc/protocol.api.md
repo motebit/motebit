@@ -2564,6 +2564,7 @@ export interface ReadPageResult {
     readonly links: ReadonlyArray<ReadPageLink>;
     // (undocumented)
     readonly session_id: string;
+    readonly submit_button_id?: string;
     // (undocumented)
     readonly text: string;
     // (undocumented)
