@@ -10,6 +10,7 @@ interface SlashCommand {
 const SLASH_COMMANDS: SlashCommand[] = [
   { name: "model", description: "Show or switch model" },
   { name: "conversations", description: "Browse conversations" },
+  { name: "trust", description: "What motebit holds for you" },
   { name: "new", description: "New conversation" },
   { name: "memories", description: "Browse memories" },
   { name: "state", description: "Show state vector" },

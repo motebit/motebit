@@ -112,6 +112,7 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "sensitivity", description: "Show or set session sensitivity tier" },
   { name: "vision", description: "Grant or revoke pixel passthrough for the AI" },
   { name: "cookies", description: "Inspect or revoke the cloud browser's persisted cookies" },
+  { name: "trust", description: "What motebit holds for you — accumulated trust at a glance" },
   { name: "receipts", description: "Show recent signed audit receipts" },
 ];
 
@@ -493,6 +494,53 @@ export function initSlashCommands(
           "system",
           `Usage: /vision [grant|revoke|status] (current: ${runtime.getPixelConsent()})`,
         );
+        return true;
+      }
+
+      // /trust — Phase 1 of the trust-accumulation visibility arc.
+      // Calls the surface-agnostic `cmdTrust` shared command (memories
+      // + conversations + signed receipts) then layers the web-only
+      // cookies dimension on top — same decoration pattern as
+      // `/sensitivity` and `/vision` adding surface-specific affordances
+      // to shared state. Future dimensions (federation peers, skills,
+      // credentials) compound additively in cmdTrust; web stays the
+      // home for cookies-line layering because the cloud-browser
+      // surface is web-only by architecture.
+      if (name === "trust") {
+        chatInput.value = "";
+        void (async () => {
+          const runtime = ctx.app.getRuntime();
+          if (!runtime) {
+            addMessage("system", "Runtime not initialized.");
+            return;
+          }
+          const relay = await getRelayConfig(ctx);
+          const sharedResult = await executeCommand(
+            runtime,
+            "trust",
+            undefined,
+            relay ?? undefined,
+          );
+          if (!sharedResult) return;
+
+          // Layer the web-only cookies dimension. Lazy-load gated;
+          // cold-start returns []. Cookies count gets its own line in
+          // the summary because the cloud-browser surface is the
+          // load-bearing accumulator for browsing-trust specifically.
+          const cookies = await ctx.app.getPersistedCookies();
+          let summary = sharedResult.summary;
+          if (cookies.length > 0) {
+            const domains = new Set<string>();
+            for (const c of cookies) domains.add(c.domain.replace(/^\./, ""));
+            summary += ` ${cookies.length} persisted ${cookies.length === 1 ? "cookie" : "cookies"} across ${domains.size} ${domains.size === 1 ? "domain" : "domains"} for the cloud browser.`;
+          }
+
+          if (sharedResult.detail) {
+            addExpandableCard(summary, sharedResult.detail);
+          } else {
+            addMessage("system", summary);
+          }
+        })();
         return true;
       }
 

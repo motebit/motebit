@@ -114,6 +114,141 @@ describe("executeCommand", () => {
       const result = await executeCommand(mockRuntime(), "summarize");
       expect(result!.summary).toBe("User discussed project architecture.");
     });
+
+    // /trust — Phase 1 of the trust-accumulation visibility arc. The
+    // shared command aggregates three dimensions: memories,
+    // conversations, signed receipts. Surface-specific overlays
+    // (cookies on web) layer on top in the surface's slash-command.
+    describe("trust", () => {
+      it("reports the empty-accumulation case", async () => {
+        const result = await executeCommand(
+          mockRuntime({
+            motebitId: "did:motebit:0xtest",
+            listConversations: () => [],
+            getRecentReceipts: () => [],
+            memory: { exportAll: async () => ({ nodes: [], edges: [] }) },
+          }),
+          "trust",
+        );
+        expect(result!.summary).toContain("hasn't accumulated state yet");
+        expect(result!.data).toMatchObject({
+          trust: { memories: 0, conversations: 0, receipts: 0 },
+        });
+      });
+
+      it("aggregates memories + conversations + receipts when present", async () => {
+        const result = await executeCommand(
+          mockRuntime({
+            motebitId: "did:motebit:0xtest",
+            listConversations: () => [
+              { id: "c1", startedAt: 0, messageCount: 5 },
+              { id: "c2", startedAt: 0, messageCount: 3 },
+            ],
+            getRecentReceipts: () => [
+              { tool_name: "click_element", status: "completed" },
+              { tool_name: "type_into", status: "completed" },
+              { tool_name: "navigate", status: "completed" },
+            ],
+            memory: {
+              exportAll: async () => ({
+                nodes: [
+                  { node_id: "n1", sensitivity: "personal" },
+                  { node_id: "n2", sensitivity: "personal" },
+                  { node_id: "n3", sensitivity: "none" },
+                ],
+                edges: [],
+              }),
+            },
+          }),
+          "trust",
+        );
+        expect(result!.summary).toContain("3 memories");
+        expect(result!.summary).toContain("2 conversations");
+        expect(result!.summary).toContain("3 signed receipts");
+        expect(result!.data).toMatchObject({
+          trust: { memories: 3, conversations: 2, receipts: 3 },
+        });
+      });
+
+      it("singular forms when count is 1", async () => {
+        const result = await executeCommand(
+          mockRuntime({
+            motebitId: "did:motebit:0xtest",
+            listConversations: () => [{ id: "c1", startedAt: 0, messageCount: 1 }],
+            getRecentReceipts: () => [{ tool_name: "navigate", status: "completed" }],
+            memory: {
+              exportAll: async () => ({
+                nodes: [{ node_id: "n1", sensitivity: "none" }],
+                edges: [],
+              }),
+            },
+          }),
+          "trust",
+        );
+        expect(result!.summary).toContain("1 memory,");
+        expect(result!.summary).toContain("1 conversation,");
+        expect(result!.summary).toContain("1 signed receipt");
+      });
+
+      it("surfaces sensitivity distribution in detail when memories exist", async () => {
+        const result = await executeCommand(
+          mockRuntime({
+            motebitId: "did:motebit:0xtest",
+            listConversations: () => [],
+            getRecentReceipts: () => [],
+            memory: {
+              exportAll: async () => ({
+                nodes: [
+                  { node_id: "n1", sensitivity: "personal" },
+                  { node_id: "n2", sensitivity: "personal" },
+                  { node_id: "n3", sensitivity: "financial" },
+                ],
+                edges: [],
+              }),
+            },
+          }),
+          "trust",
+        );
+        expect(result!.detail).toContain("Memory sensitivity:");
+        expect(result!.detail).toContain("2 personal");
+        expect(result!.detail).toContain("1 financial");
+      });
+
+      it("surfaces recent receipts (up to 5) in detail when present", async () => {
+        const receipts = Array.from({ length: 8 }, (_, i) => ({
+          tool_name: `tool_${i}`,
+          status: "completed" as const,
+        }));
+        const result = await executeCommand(
+          mockRuntime({
+            motebitId: "did:motebit:0xtest",
+            listConversations: () => [],
+            getRecentReceipts: () => receipts,
+            memory: { exportAll: async () => ({ nodes: [], edges: [] }) },
+          }),
+          "trust",
+        );
+        // Last 5: tool_3..tool_7
+        expect(result!.detail).toContain("Recent receipts: tool_3, tool_4, tool_5, tool_6, tool_7");
+      });
+
+      it("omits detail when memory and receipts both empty (one-line summary)", async () => {
+        const result = await executeCommand(
+          mockRuntime({
+            motebitId: "did:motebit:0xtest",
+            listConversations: () => [
+              { id: "c1", startedAt: 0, messageCount: 1 },
+              { id: "c2", startedAt: 0, messageCount: 1 },
+            ],
+            getRecentReceipts: () => [],
+            memory: { exportAll: async () => ({ nodes: [], edges: [] }) },
+          }),
+          "trust",
+        );
+        expect(result!.summary).toContain("conversations");
+        expect(result!.detail).toBeUndefined();
+      });
+    });
   });
 
   describe("memory commands", () => {

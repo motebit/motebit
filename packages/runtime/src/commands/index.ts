@@ -15,6 +15,7 @@ import {
   cmdApprovals,
   cmdConversations,
   cmdSummarize,
+  cmdTrust,
 } from "./system.js";
 import { cmdMemories, cmdGraph, cmdCurious, cmdForget, cmdAudit } from "./memory.js";
 import { cmdGradient, cmdReflect } from "./intelligence.js";
@@ -48,6 +49,7 @@ export const COMMAND_DEFINITIONS: ReadonlyArray<{ name: string; description: str
   { name: "discover", description: "Discover agents on relay" },
   { name: "proposals", description: "List active proposals" },
   { name: "conversations", description: "List conversations" },
+  { name: "trust", description: "What motebit holds for you — accumulated trust at a glance" },
   { name: "withdraw", description: "Request withdrawal" },
   { name: "delegate", description: "Delegate task to agent" },
   { name: "propose", description: "Propose collaborative plan" },
@@ -80,6 +82,8 @@ export async function executeCommand(
       return cmdConversations(runtime);
     case "summarize":
       return cmdSummarize(runtime);
+    case "trust":
+      return cmdTrust(runtime);
 
     // Memory
     case "memories":
