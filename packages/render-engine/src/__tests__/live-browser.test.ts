@@ -386,12 +386,44 @@ describe("buildLiveBrowserElement", () => {
     expect(img.src).toBe("data:image/jpeg;base64,FIRST");
   });
 
-  it("locks aspect ratio to the captured viewport on first frame", () => {
+  it("click-capture img stretches to fill the inscribed-inset rect (matches WebGL screen-mesh stretch — fixes 2026-05-12 click-misalignment)", () => {
+    // Pin from 2026-05-12. Witnessed: post-takeback CAPTCHA
+    // checkbox unclickable because the DOM img was letterbox-
+    // centered with `aspectRatio` while the WebGL screen-mesh
+    // stretched onto an inscribed-inset rect — two coordinate
+    // systems for what doctrine claims is one geometry. Fix: drop
+    // the letterbox (img stretches via width/height 100%) and apply
+    // the inscribed-inset padding on the body wrapper so the img's
+    // getBoundingClientRect equals the screen-mesh's projected
+    // screen-space rect.
     const bus = new StubBus();
     const handle = buildLiveBrowserElement(bus);
     bus.publish(makeFrame({ device_width: 1920, device_height: 1080 }));
     const img = handle.element.querySelector("img") as HTMLImageElement;
-    expect(img.style.aspectRatio).toBe("1920 / 1080");
+    // Stretch — no letterbox. Width + height fill the parent.
+    expect(img.style.width).toBe("100%");
+    expect(img.style.height).toBe("100%");
+    // The aspect-ratio CSS is no longer set on first-frame; the
+    // padding on the body wrapper supplies the geometry instead.
+    expect(img.style.aspectRatio).toBe("");
+  });
+
+  it("body wrapper applies inscribed-rectangle insets matching the WebGL screen-mesh (single source of truth)", async () => {
+    // Pin: the body wrapper's padding MUST equal the same constants
+    // the WebGL screen-mesh uses (INSCRIBED_INSET_PX on left/right/
+    // bottom, BODY_TOP_INSET_PX on top), imported directly from
+    // slab.ts. If these drift apart, clicks land off-target by the
+    // delta — same root cause as the original misalignment bug.
+    const { INSCRIBED_INSET_PX, BODY_TOP_INSET_PX } = await import("../slab.js");
+    const bus = new StubBus();
+    const handle = buildLiveBrowserElement(bus);
+    const body = handle.element.querySelector(".slab-live-browser-body") as HTMLElement;
+    expect(body).not.toBeNull();
+    expect(body.style.boxSizing).toBe("border-box");
+    expect(body.style.paddingTop).toBe(`${BODY_TOP_INSET_PX}px`);
+    expect(body.style.paddingLeft).toBe(`${INSCRIBED_INSET_PX}px`);
+    expect(body.style.paddingRight).toBe(`${INSCRIBED_INSET_PX}px`);
+    expect(body.style.paddingBottom).toBe(`${INSCRIBED_INSET_PX}px`);
   });
 
   it("subsequent frames update src in place without re-mounting", () => {

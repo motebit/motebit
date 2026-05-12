@@ -239,6 +239,24 @@ const BODY_REGION_CENTER_Y = -SLAB_HEIGHT * (CHROME_REGION_FRACTION / 2);
 const INSCRIBED_INSET_WORLD = SLAB_CORNER_RADIUS * (1 - 1 / Math.sqrt(2));
 
 /**
+ * Inscribed inset in **stage-pixel** space — the same geometric inset
+ * the WebGL screen-mesh applies, expressed in CSS pixels so the
+ * CSS3D side (chrome strip + body wrapper + click-capture img) can
+ * align with the WebGL projection.
+ *
+ * Why it's exported: the click-capture img in `live-browser.ts` must
+ * occupy the same screen-space rect as the WebGL screen-mesh; if the
+ * two diverge, the user clicks on what they see in WebGL but the
+ * pointer event lands on a DOM element at a different position
+ * (witnessed 2026-05-12: post-takeback CAPTCHA checkbox unclickable
+ * because the DOM img was letterbox-centered in the full body while
+ * the WebGL mesh occupied the inscribed-inset rect). Same constants,
+ * single source of truth — `live-browser.ts` imports rather than
+ * duplicates.
+ */
+export const INSCRIBED_INSET_PX = INSCRIBED_INSET_WORLD / STAGE_PIXEL_TO_WORLD;
+
+/**
  * Chrome-to-body breathing inset — a small visible glass strip
  * between the chrome strip's bottom edge and the body mesh's top.
  *
@@ -258,6 +276,16 @@ const INSCRIBED_INSET_WORLD = SLAB_CORNER_RADIUS * (1 - 1 / Math.sqrt(2));
  * "suspended in air within the slab" register motebit needs.
  */
 const BODY_TOP_INSET_WORLD = 10 * STAGE_PIXEL_TO_WORLD;
+
+/**
+ * Chrome-to-body breathing inset in **stage-pixel** space. By
+ * construction = 10 (since BODY_TOP_INSET_WORLD = 10 × pixel-to-
+ * world). Exported alongside `INSCRIBED_INSET_PX` so the CSS3D side
+ * can position the click-capture img to match the WebGL screen-
+ * mesh's vertical position. See `INSCRIBED_INSET_PX` for the
+ * load-bearing rationale.
+ */
+export const BODY_TOP_INSET_PX = 10;
 
 /**
  * Screen mesh dimensions — rectangular mesh suspended in the

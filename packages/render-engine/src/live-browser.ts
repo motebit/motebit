@@ -30,6 +30,7 @@
  */
 
 import type { ScreencastFrame, ScreencastFrameSource } from "@motebit/sdk";
+import { INSCRIBED_INSET_PX, BODY_TOP_INSET_PX } from "./slab.js";
 
 export interface LiveBrowserElementHandle {
   /** Mountable HTMLElement — the slab manager appends this to the plane. */
@@ -444,37 +445,63 @@ export function buildLiveBrowserElement(
   // (`liquescentia-as-substrate.md`).
   img.style.display = "none";
   img.style.opacity = "0";
-  // Letterbox the screencast within the body wrapper. `aspectRatio`
-  // (initially 16/10; updated to the cloud Chromium's actual
-  // device ratio on first frame) drives the visible rect, and
-  // `max-width: 100%` + `max-height: 100%` constrain it to the body
-  // wrapper's flex-1 area. The img's bounding-rect equals the
-  // visible screencast rect — input-capture's coord translation
-  // (`getBoundingClientRect()` against this element) stays honest
-  // without having to compute letterbox offsets. Whatever space the
-  // letterbox leaves around the img reads as the slab's body glass
-  // — calm-software register, not a black bar.
-  img.style.maxWidth = "100%";
-  img.style.maxHeight = "100%";
-  img.style.aspectRatio = "16 / 10";
+  // Click-capture geometry MUST match the WebGL screen-mesh's
+  // projected screen-space rect — the user clicks on what they
+  // see (the WebGL screencast); the pointer event lands on this
+  // DOM element. If the two rects diverge by even a few pixels,
+  // clicks miss small targets (witnessed 2026-05-12: post-take-
+  // back CAPTCHA checkbox unclickable because the DOM img was
+  // letterbox-centered in the full body region while the WebGL
+  // screen-mesh occupied an inscribed-inset rect 24px smaller on
+  // left/right/bottom and 10px from chrome on top).
+  //
+  // Fix: drop the letterbox aspect-ratio and stretch the img to
+  // fill the body wrapper, matching the WebGL screen-mesh's
+  // stretch behavior. The body wrapper applies the SAME inscribed
+  // insets the WebGL mesh uses (`INSCRIBED_INSET_PX` on left/
+  // right/bottom, `BODY_TOP_INSET_PX` on top) — see the body
+  // wrapper's CSS below. Same constants, single source of truth
+  // (slab.ts exports; live-browser.ts imports) so a future inset
+  // tuning lands in one file and both surfaces follow.
+  img.style.width = "100%";
+  img.style.height = "100%";
   img.style.background = "rgba(255, 255, 255, 0.04)";
 
   // Body wrapper — takes the remainder of the stage after the
-  // chrome strip + address-bar slot, and centers the screencast
-  // img within. `flex: 1 1 0` claims the remainder; `min-height: 0`
-  // lets the wrapper actually shrink so its content can fit (the
-  // default `min-height: auto` of flex items would force the
-  // wrapper to its content's intrinsic size and overflow the
-  // stage). `overflow: hidden` is a safety net against any
-  // pixel-rounding edge case.
+  // chrome strip + address-bar slot, and hosts the screencast
+  // img + body slot inside the inscribed-rectangle safe area.
+  // `flex: 1 1 0` claims the remainder; `min-height: 0` lets the
+  // wrapper actually shrink so its content can fit (the default
+  // `min-height: auto` of flex items would force the wrapper to
+  // its content's intrinsic size and overflow the stage).
+  // `overflow: hidden` is a safety net against any pixel-rounding
+  // edge case.
+  //
+  // Padding applies the inscribed-rectangle insets: top =
+  // BODY_TOP_INSET_PX (10px breathing between chrome + body),
+  // left/right/bottom = INSCRIBED_INSET_PX (~24px so the rect
+  // stays inside the slab's rounded silhouette). These are the
+  // SAME insets the WebGL screen-mesh uses (see slab.ts
+  // SCREEN_MESH_WIDTH / SCREEN_MESH_HEIGHT / SCREEN_MESH_CENTER_Y).
+  // With both sides applying the same insets, the click-capture
+  // img's getBoundingClientRect equals the screen-mesh's projected
+  // screen-space rect — clicks land where the user sees them.
+  // `box-sizing: border-box` so the padding subtracts from the
+  // wrapper's outer size rather than adding to it (otherwise the
+  // wrapper would overflow the chrome-less remainder).
   const body = document.createElement("div");
   body.className = "slab-live-browser-body";
   body.style.flex = "1 1 0";
   body.style.minHeight = "0";
   body.style.display = "flex";
-  body.style.alignItems = "center";
-  body.style.justifyContent = "center";
+  body.style.alignItems = "stretch";
+  body.style.justifyContent = "stretch";
   body.style.overflow = "hidden";
+  body.style.boxSizing = "border-box";
+  body.style.paddingTop = `${BODY_TOP_INSET_PX}px`;
+  body.style.paddingRight = `${INSCRIBED_INSET_PX}px`;
+  body.style.paddingBottom = `${INSCRIBED_INSET_PX}px`;
+  body.style.paddingLeft = `${INSCRIBED_INSET_PX}px`;
   // Body slot is positioned absolute over the body wrapper so it
   // composes ON TOP of the screencast-img layer. Both occupy the
   // same body rect; the img is opacity:0 input-geometry while the
@@ -624,15 +651,20 @@ export function buildLiveBrowserElement(
       // math against the screencast natural-dimensions stays honest.
       if (!firstFrameSeen) {
         firstFrameSeen = true;
-        if (frame.device_width > 0 && frame.device_height > 0) {
-          img.style.aspectRatio = `${frame.device_width} / ${frame.device_height}`;
-        }
         // Flip the img to `display: block` (kept at `opacity: 0`) so
         // `getBoundingClientRect()` returns real pixels for the
         // input-capture coordinate translation. Pair with the
         // `display: none` + `opacity: 0` initial state in the
         // constructor; the texture is the visible register, this
         // is just the input-capture geometry made measurable.
+        //
+        // Note: the prior implementation also set `aspectRatio` on
+        // the img to lock its letterbox shape. The img now stretches
+        // to fill the inscribed-inset rect (matching the WebGL
+        // screen-mesh's stretch behavior) so the aspect-ratio is no
+        // longer load-bearing — removed on 2026-05-12 along with the
+        // padding-based inscribed-inset alignment that closes the
+        // click-misalignment bug.
         img.style.display = "block";
       }
       // Hand the decoded surface to consumers (apps/web routes it to the
