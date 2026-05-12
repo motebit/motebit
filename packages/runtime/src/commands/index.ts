@@ -49,7 +49,11 @@ export const COMMAND_DEFINITIONS: ReadonlyArray<{ name: string; description: str
   { name: "discover", description: "Discover agents on relay" },
   { name: "proposals", description: "List active proposals" },
   { name: "conversations", description: "List conversations" },
-  { name: "trust", description: "What motebit holds for you — accumulated trust at a glance" },
+  {
+    name: "trust",
+    description:
+      "What motebit holds for you — memories, conversations, signed receipts, signed deletions, federation peers",
+  },
   { name: "withdraw", description: "Request withdrawal" },
   { name: "delegate", description: "Delegate task to agent" },
   { name: "propose", description: "Propose collaborative plan" },

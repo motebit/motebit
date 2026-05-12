@@ -115,11 +115,17 @@ describe("executeCommand", () => {
       expect(result!.summary).toBe("User discussed project architecture.");
     });
 
-    // /trust — Phase 1 of the trust-accumulation visibility arc. The
-    // shared command aggregates three dimensions: memories,
-    // conversations, signed receipts. Surface-specific overlays
-    // (cookies on web) layer on top in the surface's slash-command.
+    // /trust — the trust-accumulation visibility arc. The shared
+    // command aggregates five dimensions: memories, conversations,
+    // signed receipts (accumulation pillar), signed deletions
+    // (governance pillar), federation peers (network pillar).
+    // Surface-specific overlays (cookies on web) layer on top in the
+    // surface's slash-command.
     describe("trust", () => {
+      // Default empty-everything stubs the new dimensions use.
+      const emptyAudit = { query: async () => [] };
+      const emptyAgents = async () => [];
+
       it("reports the empty-accumulation case", async () => {
         const result = await executeCommand(
           mockRuntime({
@@ -127,12 +133,14 @@ describe("executeCommand", () => {
             listConversations: () => [],
             getRecentReceipts: () => [],
             memory: { exportAll: async () => ({ nodes: [], edges: [] }) },
+            auditLog: emptyAudit,
+            listTrustedAgents: emptyAgents,
           }),
           "trust",
         );
         expect(result!.summary).toContain("hasn't accumulated state yet");
         expect(result!.data).toMatchObject({
-          trust: { memories: 0, conversations: 0, receipts: 0 },
+          trust: { memories: 0, conversations: 0, receipts: 0, deletions: 0, peers: 0 },
         });
       });
 
@@ -159,6 +167,8 @@ describe("executeCommand", () => {
                 edges: [],
               }),
             },
+            auditLog: emptyAudit,
+            listTrustedAgents: emptyAgents,
           }),
           "trust",
         );
@@ -166,7 +176,7 @@ describe("executeCommand", () => {
         expect(result!.summary).toContain("2 conversations");
         expect(result!.summary).toContain("3 signed receipts");
         expect(result!.data).toMatchObject({
-          trust: { memories: 3, conversations: 2, receipts: 3 },
+          trust: { memories: 3, conversations: 2, receipts: 3, deletions: 0, peers: 0 },
         });
       });
 
@@ -182,6 +192,8 @@ describe("executeCommand", () => {
                 edges: [],
               }),
             },
+            auditLog: emptyAudit,
+            listTrustedAgents: emptyAgents,
           }),
           "trust",
         );
@@ -206,6 +218,8 @@ describe("executeCommand", () => {
                 edges: [],
               }),
             },
+            auditLog: emptyAudit,
+            listTrustedAgents: emptyAgents,
           }),
           "trust",
         );
@@ -225,6 +239,8 @@ describe("executeCommand", () => {
             listConversations: () => [],
             getRecentReceipts: () => receipts,
             memory: { exportAll: async () => ({ nodes: [], edges: [] }) },
+            auditLog: emptyAudit,
+            listTrustedAgents: emptyAgents,
           }),
           "trust",
         );
@@ -242,11 +258,153 @@ describe("executeCommand", () => {
             ],
             getRecentReceipts: () => [],
             memory: { exportAll: async () => ({ nodes: [], edges: [] }) },
+            auditLog: emptyAudit,
+            listTrustedAgents: emptyAgents,
           }),
           "trust",
         );
         expect(result!.summary).toContain("conversations");
         expect(result!.detail).toBeUndefined();
+      });
+
+      // Governance pillar — signed deletion certificates.
+      it("counts signed deletions from audit log (delete_memory + delete_conversation + flush_record)", async () => {
+        const result = await executeCommand(
+          mockRuntime({
+            motebitId: "did:motebit:0xtest",
+            listConversations: () => [],
+            getRecentReceipts: () => [],
+            memory: { exportAll: async () => ({ nodes: [], edges: [] }) },
+            auditLog: {
+              query: async () => [
+                { audit_id: "a1", action: "delete_memory", target_type: "memory" },
+                { audit_id: "a2", action: "delete_memory", target_type: "memory" },
+                { audit_id: "a3", action: "delete_conversation", target_type: "conversation" },
+                { audit_id: "a4", action: "flush_record", target_type: "memory" },
+                // Non-deletion actions are excluded.
+                { audit_id: "a5", action: "set_sensitivity", target_type: "session" },
+                { audit_id: "a6", action: "skill_trust_grant", target_type: "skill" },
+              ],
+            },
+            listTrustedAgents: emptyAgents,
+          }),
+          "trust",
+        );
+        expect(result!.summary).toContain("4 signed deletions on the audit trail");
+        expect(result!.data).toMatchObject({ trust: { deletions: 4 } });
+      });
+
+      it("surfaces deletion-action breakdown in detail", async () => {
+        const result = await executeCommand(
+          mockRuntime({
+            motebitId: "did:motebit:0xtest",
+            listConversations: () => [],
+            getRecentReceipts: () => [],
+            memory: { exportAll: async () => ({ nodes: [], edges: [] }) },
+            auditLog: {
+              query: async () => [
+                { audit_id: "a1", action: "delete_memory" },
+                { audit_id: "a2", action: "delete_memory" },
+                { audit_id: "a3", action: "delete_memory" },
+                { audit_id: "a4", action: "flush_record" },
+              ],
+            },
+            listTrustedAgents: emptyAgents,
+          }),
+          "trust",
+        );
+        expect(result!.detail).toContain("Deletion breakdown:");
+        expect(result!.detail).toContain("3 delete_memory");
+        expect(result!.detail).toContain("1 flush_record");
+      });
+
+      it("uses singular 'deletion' when count is 1", async () => {
+        const result = await executeCommand(
+          mockRuntime({
+            motebitId: "did:motebit:0xtest",
+            listConversations: () => [],
+            getRecentReceipts: () => [],
+            memory: { exportAll: async () => ({ nodes: [], edges: [] }) },
+            auditLog: { query: async () => [{ audit_id: "a1", action: "delete_memory" }] },
+            listTrustedAgents: emptyAgents,
+          }),
+          "trust",
+        );
+        expect(result!.summary).toContain("1 signed deletion on the audit trail");
+      });
+
+      // Network pillar — federation peers.
+      it("counts federation peers via listTrustedAgents", async () => {
+        const result = await executeCommand(
+          mockRuntime({
+            motebitId: "did:motebit:0xtest",
+            listConversations: () => [],
+            getRecentReceipts: () => [],
+            memory: { exportAll: async () => ({ nodes: [], edges: [] }) },
+            auditLog: emptyAudit,
+            listTrustedAgents: async () => [
+              { remote_motebit_id: "did:motebit:0xa", trust_level: "verified" },
+              { remote_motebit_id: "did:motebit:0xb", trust_level: "discovered" },
+              { remote_motebit_id: "did:motebit:0xc", trust_level: "verified" },
+            ],
+          }),
+          "trust",
+        );
+        expect(result!.summary).toContain("3 federation peers known");
+        expect(result!.data).toMatchObject({ trust: { peers: 3 } });
+      });
+
+      it("uses singular 'peer' when count is 1", async () => {
+        const result = await executeCommand(
+          mockRuntime({
+            motebitId: "did:motebit:0xtest",
+            listConversations: () => [],
+            getRecentReceipts: () => [],
+            memory: { exportAll: async () => ({ nodes: [], edges: [] }) },
+            auditLog: emptyAudit,
+            listTrustedAgents: async () => [
+              { remote_motebit_id: "did:motebit:0xa", trust_level: "verified" },
+            ],
+          }),
+          "trust",
+        );
+        expect(result!.summary).toContain("1 federation peer known");
+      });
+
+      // Composition — all five dimensions present simultaneously.
+      it("composes all five dimensions in the summary line", async () => {
+        const result = await executeCommand(
+          mockRuntime({
+            motebitId: "did:motebit:0xtest",
+            listConversations: () => [{ id: "c1", startedAt: 0, messageCount: 1 }],
+            getRecentReceipts: () => [{ tool_name: "navigate", status: "completed" }],
+            memory: {
+              exportAll: async () => ({
+                nodes: [{ node_id: "n1", sensitivity: "personal" }],
+                edges: [],
+              }),
+            },
+            auditLog: {
+              query: async () => [
+                { audit_id: "a1", action: "delete_memory" },
+                { audit_id: "a2", action: "delete_conversation" },
+              ],
+            },
+            listTrustedAgents: async () => [
+              { remote_motebit_id: "did:motebit:0xa", trust_level: "verified" },
+            ],
+          }),
+          "trust",
+        );
+        // All five dimensions visible.
+        expect(result!.summary).toContain("1 memory");
+        expect(result!.summary).toContain("1 conversation");
+        expect(result!.summary).toContain("1 signed receipt");
+        expect(result!.summary).toContain("2 signed deletions");
+        expect(result!.summary).toContain("1 federation peer");
+        expect(result!.data).toMatchObject({
+          trust: { memories: 1, conversations: 1, receipts: 1, deletions: 2, peers: 1 },
+        });
       });
     });
   });
