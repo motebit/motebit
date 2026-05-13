@@ -33,6 +33,7 @@ import type {
 import { buildSystemPrompt as buildPrompt } from "./prompt.js";
 import {
   extractMemoryTags,
+  extractNarrationTag,
   extractStateTags,
   stripTags,
   fetchWithConnectionTimeout,
@@ -363,6 +364,7 @@ export class OpenAIProvider implements IntelligenceProvider {
     const toolCalls = collectToolCalls(pending);
     const memoryCandidates = extractMemoryTags(accumulated);
     const stateUpdates = extractStateTags(accumulated);
+    const taskStepNarration = extractNarrationTag(accumulated);
     const displayText = stripTags(accumulated);
 
     yield {
@@ -376,6 +378,7 @@ export class OpenAIProvider implements IntelligenceProvider {
         ...(inputTokens || outputTokens
           ? { usage: { input_tokens: inputTokens, output_tokens: outputTokens } }
           : {}),
+        ...(taskStepNarration !== null ? { task_step_narration: taskStepNarration } : {}),
       },
     };
   }
@@ -481,6 +484,7 @@ export class OpenAIProvider implements IntelligenceProvider {
     const rawText = choice?.message?.content ?? "";
     const memoryCandidates = extractMemoryTags(rawText);
     const stateUpdates = extractStateTags(rawText);
+    const taskStepNarration = extractNarrationTag(rawText);
     const displayText = stripTags(rawText);
 
     const toolCalls: ToolCall[] = (choice?.message?.tool_calls ?? [])
@@ -497,6 +501,7 @@ export class OpenAIProvider implements IntelligenceProvider {
       memory_candidates: memoryCandidates,
       state_updates: stateUpdates,
       ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      ...(taskStepNarration !== null ? { task_step_narration: taskStepNarration } : {}),
     };
 
     if (data.usage) {

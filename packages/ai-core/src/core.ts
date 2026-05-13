@@ -377,6 +377,70 @@ export function extractActions(text: string): string[] {
   return actions;
 }
 
+/**
+ * Maximum length for a task-step narration. Caps the chrome's
+ * narration strip at a width that reads as calm-software (a single
+ * line, not a paragraph). The model's prompt clause already targets
+ * ~80 chars; this is the runtime ceiling. Narrations longer than
+ * this get truncated to the ceiling minus the ellipsis (we don't
+ * want to drop information, but we also don't want the chrome to
+ * line-wrap into a multi-line block).
+ */
+const TASK_STEP_NARRATION_MAX_CHARS = 80;
+
+/**
+ * Extract the task-step narration tag from the model's response
+ * text. Returns the trimmed content of the LAST `<narration>` tag,
+ * or null when no tag is present.
+ *
+ * **Multiple-tag policy: take the LAST.** Asymmetric with
+ * `extractMemoryTags` (which takes ALL because memory is cumulative).
+ * Narration is about the model's CURRENT task-step — last tag is the
+ * most recent thought; first tag would represent stale state. The
+ * prompt clause instructs single-tag emission per turn; last-wins is
+ * the right default if the model violates the instruction.
+ *
+ * Producer for the `task_step_narration` typed-truth triple. Wire
+ * field on `AIResponse` (in `@motebit/sdk`); prompt clause in
+ * `PERCEPTION_DOCTRINE`; runtime validation in
+ * `narration-validation.ts`. This is the missing fourth part — the
+ * EXPLICIT producer that bridges model text → AIResponse field.
+ *
+ * Doctrine: `chrome-as-state-render.md` § "Hybrid narration source"
+ * + the four-part typed-truth-triple structure (wire + prompt +
+ * producer + validator) — see project memory note
+ * `architecture_typed_truth_four_parts.md` for the asymmetry between
+ * implicit (tool-result) and explicit (narration) producers.
+ */
+export function extractNarrationTag(text: string): string | null {
+  const regex = /<narration\s*>([\s\S]*?)<\/narration\s*>/g;
+  let lastContent: string | null = null;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const content = match[1]!.trim();
+    if (content !== "") {
+      lastContent = content;
+    }
+  }
+  if (lastContent === null) return null;
+  // Cap to the chrome's calm-software ceiling. Truncate with an
+  // ellipsis rather than dropping the whole field — partial truth
+  // beats no truth in the chrome's narration register.
+  if (lastContent.length > TASK_STEP_NARRATION_MAX_CHARS) {
+    return lastContent.slice(0, TASK_STEP_NARRATION_MAX_CHARS - 1) + "…";
+  }
+  return lastContent;
+}
+
+// Narration tags strip via `stripTags` above (alongside <memory>,
+// <state>, <thinking>) — keeps the visible-text strip in one place
+// per the existing tag-handling convention. The narration BELONGS
+// to the slab's chrome register (`motebit × virtual_browser` cell),
+// not to the mote-conversation register; visible-text strip
+// enforces the registers stay distinct (`goals → chat`, `task-steps
+// → chrome` per `chrome-as-state-render.md` and
+// `goals-vs-tasks.md`).
+
 // Action keywords → MotebitState field deltas
 const ACTION_RULES: { pattern: RegExp; updates: Partial<MotebitState> }[] = [
   // Movement / proximity (allow words between verb and direction)
@@ -448,6 +512,7 @@ export function stripTags(text: string): string {
     .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
     .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
     .replace(/<state\s+[^>]*\/>/g, "")
+    .replace(/<narration\s*>[\s\S]*?<\/narration\s*>/g, "")
     .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
     .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
     .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
@@ -962,6 +1027,7 @@ export class AnthropicProvider implements StreamingProvider {
 
     const memoryCandidates = extractMemoryTags(accumulated);
     const stateUpdates = extractStateTags(accumulated);
+    const taskStepNarration = extractNarrationTag(accumulated);
     const displayText = stripTags(accumulated);
 
     yield {
@@ -975,6 +1041,7 @@ export class AnthropicProvider implements StreamingProvider {
         ...(inputTokens || outputTokens
           ? { usage: { input_tokens: inputTokens, output_tokens: outputTokens } }
           : {}),
+        ...(taskStepNarration !== null ? { task_step_narration: taskStepNarration } : {}),
       },
     };
   }
@@ -1112,6 +1179,7 @@ export class AnthropicProvider implements StreamingProvider {
 
     const memoryCandidates = extractMemoryTags(rawText);
     const stateUpdates = extractStateTags(rawText);
+    const taskStepNarration = extractNarrationTag(rawText);
     const displayText = stripTags(rawText);
 
     return {
@@ -1121,6 +1189,7 @@ export class AnthropicProvider implements StreamingProvider {
       state_updates: stateUpdates,
       ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
       usage: data.usage,
+      ...(taskStepNarration !== null ? { task_step_narration: taskStepNarration } : {}),
     };
   }
 
