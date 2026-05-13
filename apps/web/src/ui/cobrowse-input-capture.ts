@@ -513,30 +513,47 @@ interface CursorHaloHandle {
   dispose(): void;
 }
 
-function mountCursorHalo(img: HTMLImageElement, soulTint: string): CursorHaloHandle {
-  const parent = img.parentElement;
-  if (!parent) {
-    // Defensive — return a no-op handle if the img isn't mounted.
-    const el = document.createElement("div");
-    return { element: el, dispose: () => undefined };
-  }
+function mountCursorHalo(_img: HTMLImageElement, soulTint: string): CursorHaloHandle {
   const halo = document.createElement("div");
   halo.className = "cobrowse-cursor-halo";
-  halo.style.position = "absolute";
+  // Position: fixed pins the halo to viewport coordinates directly.
+  // Mouse `e.clientX` / `e.clientY` are also viewport coords; the
+  // halo's transform consumes those values verbatim. ONE coordinate
+  // system end-to-end — no parent-padding-edge math, no offsetLeft
+  // semantics drift, no decoupled coordinate paths between halo
+  // position and click dispatch. The dispatch uses the SAME e.clientX
+  // / e.clientY → translateClick computes the logical browser pixel,
+  // but both halo center and click target are anchored at the same
+  // viewport point. The "click doesn't land where the ring is" bug
+  // class is structurally impossible after this — halo position IS
+  // the click position, computed by the same source.
+  halo.style.position = "fixed";
   halo.style.left = "0";
   halo.style.top = "0";
   halo.style.width = `${CURSOR_HALO_SIZE_PX}px`;
   halo.style.height = `${CURSOR_HALO_SIZE_PX}px`;
   halo.style.borderRadius = "50%";
-  halo.style.transform = "translate(-50%, -50%) scale(0.85)";
+  // Initial transform places the halo off-screen until the first
+  // mouseenter / mousemove. Centering via translate(-50%, -50%) is
+  // composed with the per-frame translate3d below.
+  halo.style.transform = "translate3d(-100px, -100px, 0) translate(-50%, -50%)";
   halo.style.background = "transparent";
   halo.style.border = `1.5px solid ${colorWithAlpha(soulTint, 0.55)}`;
   halo.style.boxShadow = `0 0 8px ${colorWithAlpha(soulTint, 0.35)}, inset 0 0 4px ${colorWithAlpha(soulTint, 0.25)}`;
   halo.style.opacity = "0";
   halo.style.pointerEvents = "none";
-  halo.style.transition = "opacity 140ms ease-out, transform 80ms ease-out, left 0ms, top 0ms";
-  halo.style.willChange = "transform, left, top, opacity";
-  parent.appendChild(halo);
+  // z-index above the slab + chrome so the halo always reads against
+  // page content; below modal dialogs. Sits comfortably in the slab's
+  // visual layer without re-stacking.
+  halo.style.zIndex = "1000";
+  // Show/hide is opacity-only; position changes go through transform
+  // (GPU-composited, no layout reflow per frame).
+  halo.style.transition = "opacity 140ms ease-out";
+  halo.style.willChange = "transform, opacity";
+  // Mount to document.body — position: fixed renders in viewport
+  // space regardless of parent. Avoids any parent-stacking-context
+  // / overflow-clip interaction that could clip or offset the halo.
+  document.body.appendChild(halo);
   return {
     element: halo,
     dispose(): void {
@@ -545,27 +562,21 @@ function mountCursorHalo(img: HTMLImageElement, soulTint: string): CursorHaloHan
   };
 }
 
-function moveCursorHalo(handle: CursorHaloHandle, img: HTMLImageElement, e: MouseEvent): void {
-  const rect = img.getBoundingClientRect();
-  const lx = e.clientX - rect.left;
-  const ly = e.clientY - rect.top;
-  // Same coordinate-space pattern as the click ripple — parent-local
-  // (img.offsetLeft + lx, img.offsetTop + ly) so the halo follows
-  // the cursor regardless of parent padding/margin around the img.
-  const cx = img.offsetLeft + lx;
-  const cy = img.offsetTop + ly;
-  handle.element.style.left = `${cx}px`;
-  handle.element.style.top = `${cy}px`;
+function moveCursorHalo(handle: CursorHaloHandle, _img: HTMLImageElement, e: MouseEvent): void {
+  // Single-source-of-truth: e.clientX / e.clientY are the viewport
+  // coordinates that click dispatch ALSO uses. The halo center sits
+  // exactly at the cursor's viewport position via translate3d. GPU-
+  // composited (no layout reflow), so the position update is sub-
+  // frame fast.
+  handle.element.style.transform = `translate3d(${e.clientX}px, ${e.clientY}px, 0) translate(-50%, -50%)`;
 }
 
 function showCursorHalo(handle: CursorHaloHandle): void {
   handle.element.style.opacity = "0.9";
-  handle.element.style.transform = "translate(-50%, -50%) scale(1)";
 }
 
 function hideCursorHalo(handle: CursorHaloHandle): void {
   handle.element.style.opacity = "0";
-  handle.element.style.transform = "translate(-50%, -50%) scale(0.85)";
 }
 
 // 16px — iPadOS-grade. The halo IS the cursor over the slab (the OS
