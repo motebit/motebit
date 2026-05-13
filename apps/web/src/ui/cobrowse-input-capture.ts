@@ -97,28 +97,53 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
     warn: (msg, ctx) => console.warn(msg, ctx),
   };
 
-  // Local input-feedback layer — 0ms-response primitives that
-  // overlay the screencast img with cursor halo / click ripple /
-  // scroll indicator. Separates input acknowledgment (local, instant)
-  // from page response (remote, RTT-bound) — the cloud-gaming /
-  // visionOS pattern that makes ~200ms RTT feel responsive enough.
-  // The tabIndex=0 below (line ~116) makes the img focusable for
-  // keyboard events (the document-level keydown handler requires
-  // `document.activeElement === img`). Wheel was previously also
-  // gated on focus, but as of 2026-05-12 wheel routes through a
-  // hover-OR-focus check — see onWheel below for the rationale.
+  // Local input-feedback layer — the halo IS the cursor over the
+  // slab. Single representation per zone, doctrine-aligned with the
+  // spatial app (no OS cursor on AR-glasses; halo is the gaze
+  // indicator). The conflict where the OS cursor + halo were both
+  // tracking and clicks went to the OS cursor while the halo was a
+  // separate visual (the 2026-05-12 Frankenstein) is dissolved by
+  // hiding the OS cursor inside the slab boundary: ONE indicator,
+  // identical coordinate as the underlying mouse position, halo's
+  // position IS where the click lands.
+  //
+  // iPadOS trackpad cursor uses this exact pattern — when hovering
+  // UIKit content, the OS arrow becomes a translucent dot. macOS
+  // doesn't (legacy), but iPadOS is the more recent Apple decision
+  // and matches motebit's spatial-as-endgame doctrine: web slab as
+  // proto-spatial primitive.
+  //
+  // Off-slab (chat panel, chrome, settings), the OS cursor returns
+  // automatically — the `cursor: none` only applies to this img.
+  // Surface boundaries control which indicator is active.
+  //
+  // Companion action-anchored feedback primitives:
+  //   - click ripple: fires at click position, exact, centered with
+  //     the halo by construction (same cursor coords).
+  //   - scroll indicator: fires at wheel position on each wheel
+  //     event.
+  //
+  // Doctrine: `spatial-as-endgame.md` + `motebit-computer.md`. The
+  // tabIndex=0 below makes the img focusable for keyboard events;
+  // wheel routes through hover-OR-focus per onWheel.
   const cursorHalo = mountCursorHalo(img, soulTint);
 
   // Make the img focusable so it can receive keyboard events. Save
-  // the prior value so detach restores faithfully (the slab item
+  // the prior values so detach restores faithfully (the slab item
   // owns the element; we're a transient guest).
   const priorTabIndex = img.tabIndex;
   const priorOutline = img.style.outline;
+  const priorCursor = img.style.cursor;
   img.tabIndex = 0;
   // Calm chrome: focus-ring on a screencast image looks like an
   // OS dialog. Suppress here; if accessibility needs a focus
   // indicator we add a high-contrast custom ring later.
   img.style.outline = "none";
+  // Halo IS the cursor over the slab — hide the OS cursor inside the
+  // slab boundary so the user sees ONE indicator instead of two.
+  // Mouse coordinates still flow normally; only the OS visual is
+  // suppressed.
+  img.style.cursor = "none";
 
   // Bookkeeping for fire-and-forget forwards. A failure on one
   // event must not block the next (a slow transport shouldn't queue
@@ -138,6 +163,15 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
     img.focus();
     const coords = translateClick(img, e, fallbackWidth, fallbackHeight);
     if (!coords) return; // out-of-bounds (defensive — clicks on the img should always be in-bounds)
+    // Sync the halo to the click position before firing the ripple.
+    // Both primitives now compute from the same MouseEvent (e), so
+    // their visual centers ALWAYS coincide — closes the "ripple
+    // sometimes off-center from the ring" class where a fast click
+    // outran the prior mousemove and the halo was at a stale
+    // position. With the halo IS the cursor over the slab (OS
+    // cursor hidden), the halo's position visibly anchors the
+    // ripple's expansion.
+    moveCursorHalo(cursorHalo, img, e);
     // Slice 2e — local click-ripple feedback. Pure DOM animation;
     // no wire involvement. Confirms "my click registered there"
     // before the next screencast frame arrives. Soul-tinted so
@@ -335,6 +369,7 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
     // Restore pre-attach state.
     img.tabIndex = priorTabIndex;
     img.style.outline = priorOutline;
+    img.style.cursor = priorCursor;
   };
 }
 
@@ -533,7 +568,14 @@ function hideCursorHalo(handle: CursorHaloHandle): void {
   handle.element.style.transform = "translate(-50%, -50%) scale(0.85)";
 }
 
-const CURSOR_HALO_SIZE_PX = 28;
+// 16px — iPadOS-grade. The halo IS the cursor over the slab (the OS
+// pointer is hidden), so the size matches what users expect of a
+// pointer indicator: compact, precise enough to read positionally
+// against dense page UI (Hacker News links, Gmail rows), still
+// readable as a presence ring rather than a precision tip. Prior
+// register (28px) was sized for "decorative orbit around the OS
+// cursor"; once the halo IS the cursor, smaller wins.
+const CURSOR_HALO_SIZE_PX = 16;
 
 /**
  * Scroll indicator — brief soul-tinted directional bar that spawns
