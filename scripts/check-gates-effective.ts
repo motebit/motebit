@@ -1367,6 +1367,22 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       ),
   },
   {
+    script: "check-typed-truth-perception",
+    proves:
+      "flags a dishonesty-persistent registry entry whose runtime intercept rule has been removed from DISHONESTY_RULES in `packages/ai-core/src/dishonest-closing.ts`. The gate's Half-3 sync invariant — every `class: \"dishonesty-persistent\"` field MUST appear in DISHONESTY_RULES — closes the next-sibling-sweep drift class mechanically (you can't quietly forget to extend the runtime intercept when adding a new persistent dishonesty field; gate fires).",
+    perturb: () =>
+      mutateFile("packages/ai-core/src/dishonest-closing.ts", (src) =>
+        // Mangle the field name in the navigation_triggered DISHONESTY_RULES
+        // entry so the gate's regex parser can't find it; the registry entry
+        // is class: dishonesty-persistent so Half-3 must fire. Distinctive
+        // suffix for unambiguous cleanup.
+        src.replace(
+          /field:\s*"navigation_triggered"/,
+          'field: "navigation_triggered_REMOVED_FOR_PROBE"',
+        ),
+      ),
+  },
+  {
     script: "check-money-boundary",
     proves:
       "flags an inline `Math.round(amount * 1_000_000)` outside the canonical `packages/protocol/src/money.ts` — the converter formula is a primitive, not a snippet, and a sibling-rolled copy is the drift class the gate exists to catch.",

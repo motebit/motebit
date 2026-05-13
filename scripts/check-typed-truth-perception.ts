@@ -57,6 +57,53 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 
+/**
+ * Field-classification taxonomy for typed-truth-perception fields.
+ * Each field belongs to exactly one class; the class governs whether
+ * the runtime intercept (`packages/ai-core/src/dishonest-closing.ts`)
+ * applies and what shape the intercept takes.
+ *
+ *   `dishonesty-persistent` — model claims success the wire
+ *     contradicts; the typed truth is durable (page IS blank, page
+ *     IS access-denied, navigation DID NOT trigger). Walk-back
+ *     semantics in the runtime intercept assume persistence — the
+ *     last relevant entry's value is the truth. Every entry of this
+ *     class MUST appear in `DISHONESTY_RULES` (gate enforces).
+ *   `dishonesty-transient` — model claims success the wire might
+ *     contradict, but the typed truth is transient (slow_load
+ *     resolves; page might finish loading between observation and
+ *     draft). The walk-back's persistent-state assumption violates
+ *     here; runtime intercept is deferred pending transience-aware
+ *     semantics (time-budget / polling-aware design).
+ *   `affordance` — wire field is a HINT pointing at what to do
+ *     next, not a failure signal. Out of scope for the runtime
+ *     intercept by design; conflating with dishonesty-class would
+ *     trigger spurious overrides.
+ *   `positive-signal` — wire field flags SUCCESS the model SHOULD
+ *     claim. Out of scope by design; the dishonest negation (when
+ *     applicable) is captured by sibling dishonesty-persistent
+ *     fields' coverage.
+ *   `control-state` — wire field is about authority (who is driving),
+ *     not truth (did the action land). Different register; intercept
+ *     doesn't apply.
+ *   `transparency` — wire field is a logging/transparency signal
+ *     about runtime behavior (e.g., why bytes were stripped). Not a
+ *     closing-claim signal; intercept doesn't apply.
+ *
+ * Const-string-union enforces deliberate classification at registry
+ * insertion time — adding a new field requires picking a class
+ * (compile-time error otherwise), which prevents the next sibling
+ * sweep from accidentally landing an affordance hint in the
+ * dishonesty rules.
+ */
+type TypedTruthClass =
+  | "dishonesty-persistent"
+  | "dishonesty-transient"
+  | "affordance"
+  | "positive-signal"
+  | "control-state"
+  | "transparency";
+
 interface TypedTruthField {
   /**
    * The literal field name as emitted by the dispatch. Matches via
@@ -64,6 +111,12 @@ interface TypedTruthField {
    * any source counts.
    */
   readonly field: string;
+  /**
+   * Field-classification — see `TypedTruthClass` for the semantics.
+   * Drives the drift gate's "every dishonesty-persistent field
+   * appears in DISHONESTY_RULES" assertion.
+   */
+  readonly class: TypedTruthClass;
   /**
    * The string the gate greps for in `packages/ai-core/src/prompt.ts`.
    * Usually the same as `field` (the prompt names the literal field).
@@ -100,59 +153,74 @@ interface TypedTruthField {
 const TYPED_TRUTH_FIELDS: ReadonlyArray<TypedTruthField> = [
   {
     field: "already_there",
+    class: "positive-signal",
     promptText: "already_there",
     dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
     notes:
-      "navigate-noop short-circuit; doNavigate returns the field when urlsAreEquivalent matches the current page url. Shipped 2026-05-09.",
+      "navigate-noop short-circuit; doNavigate returns the field when urlsAreEquivalent matches the current page url. Shipped 2026-05-09. Positive-signal: model SHOULD claim 'already there' when this fires; no dishonest negation to intercept.",
   },
   {
     field: "not_in_control",
+    class: "control-state",
     promptText: "control denials",
     dispatchSources: [
       "services/browser-sandbox/src/action-executor.ts",
       "packages/runtime/src/cloud-browser-dispatcher.ts",
     ],
     notes:
-      "Co-browse Slice 1 gate refusal. The prompt clause uses semantic phrasing ('Runtime gates ... arrive as typed errors ... control denials') because the doctrine is gate-pattern, not field-name-shaped — but the dispatch emits the literal `not_in_control` reason. promptText pins the semantic clause.",
+      "Co-browse Slice 1 gate refusal. The prompt clause uses semantic phrasing ('Runtime gates ... arrive as typed errors ... control denials') because the doctrine is gate-pattern, not field-name-shaped — but the dispatch emits the literal `not_in_control` reason. promptText pins the semantic clause. Control-state: about authority (who is driving), not truth (did the action land); different register from dishonesty intercept.",
   },
   {
     field: "text_appeared",
+    class: "positive-signal",
     promptText: "text_appeared",
     dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
     notes:
-      "type-action truth-snapshot: did the typed text actually land in a focused element. Closes the action-truth gap witnessed 2026-05-08.",
+      "type-action truth-snapshot: did the typed text actually land in a focused element. Closes the action-truth gap witnessed 2026-05-08. Positive-signal: model SHOULD claim 'typed it' when true; the dishonest-false case is captured by `recovery_hint` (which fires precisely when text_appeared: false) and intercepted there.",
   },
   {
     field: "bytes_omitted_reason",
+    class: "transparency",
     promptText: "bytes_omitted_reason",
     dispatchSources: ["packages/ai-core/src/loop.ts"],
     notes:
-      "Pixel-consent gate: stripped bytes carry a reason field so the AI describes the gate honestly instead of inferring from missing image content.",
+      "Pixel-consent gate: stripped bytes carry a reason field so the AI describes the gate honestly instead of inferring from missing image content. Transparency-class: a logging signal about runtime behavior, not a closing-claim contradiction.",
   },
   {
     field: "slow_load",
+    class: "dishonesty-transient",
     promptText: "slow_load",
     dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
     notes:
-      "Navigate timeout that fell through to the heuristic + screenshot path; ok:true with hedge. Shipped 2026-05-09.",
+      "Navigate timeout that fell through to the heuristic + screenshot path; ok:true with hedge. Shipped 2026-05-09. Dishonesty-transient: model claiming 'loaded' when slow_load: true is a contradiction, BUT the typed-truth is transient (page may finish loading between observation and draft). The dishonest-closing intercept's walk-back assumes the last-relevant entry's value is the durable state; that assumption violates here. Runtime intercept deferred pending transience-aware semantics (time-budget / polling-aware design).",
   },
   {
     field: "visual_content_detected",
+    class: "positive-signal",
     promptText: "visual_content_detected",
     dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
+    notes:
+      "Positive-signal: model SHOULD claim 'I see X' when true. The dishonest-false case is structurally equivalent to (`blank_page_detected: true || access_denied_detected: true || bot_detection_detected: true`) per the producer derivation at action-executor.ts:653 — all three sibling fields are dishonesty-persistent and intercepted, so the negation is covered without a separate rule. The producer derivation is pinned by a unit test in action-executor.test.ts to catch the future regression where someone changes the heuristic but forgets to maintain the invariant.",
   },
   {
     field: "blank_page_detected",
+    class: "dishonesty-persistent",
     promptText: "blank_page_detected",
     dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
+    notes:
+      "Sibling of bot_detection_detected and access_denied_detected. Persistent-state dishonesty: page IS blank, doesn't self-resolve. Intercepted in DISHONESTY_RULES as of 2026-05-12 sweep.",
   },
   {
     field: "access_denied_detected",
+    class: "dishonesty-persistent",
     promptText: "access_denied_detected",
     dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
+    notes:
+      "Sibling of bot_detection_detected and blank_page_detected. Persistent-state dishonesty: page IS access-denied, doesn't self-resolve. Distinct recovery from bot_detection (try elsewhere vs solve challenge). Intercepted in DISHONESTY_RULES as of 2026-05-12 sweep.",
   },
   {
     field: "bot_detection_detected",
+    class: "dishonesty-persistent",
     promptText: "bot_detection_detected",
     dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
     notes:
@@ -160,13 +228,15 @@ const TYPED_TRUTH_FIELDS: ReadonlyArray<TypedTruthField> = [
   },
   {
     field: "submit_button_id",
+    class: "affordance",
     promptText: "submit_button_id",
     dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
     notes:
-      "Form-submission typed-truth hint: the dispatcher detects the page's primary submit button (HTML input_type='submit' first, label heuristic — Search/Submit/Send/Sign in/Continue — as fallback) and surfaces its element_id on read_page results. Converted the click_element-over-key('Enter') prompt clause from B-grade (pure teaching) to A-grade (wire field + dispatch + thin teaching). Shipped 2026-05-12; doctrine exemplar of B→A graduation per docs/doctrine/runtime-invariants-over-prompt-rules.md — the doctrine being applied to itself.",
+      "Form-submission typed-truth hint: the dispatcher detects the page's primary submit button (HTML input_type='submit' first, label heuristic — Search/Submit/Send/Sign in/Continue — as fallback) and surfaces its element_id on read_page results. Converted the click_element-over-key('Enter') prompt clause from B-grade (pure teaching) to A-grade (wire field + dispatch + thin teaching). Shipped 2026-05-12; doctrine exemplar of B→A graduation per docs/doctrine/runtime-invariants-over-prompt-rules.md — the doctrine being applied to itself. Affordance-class: a hint pointing at what to click next, not a failure signal; out of scope for the dishonesty intercept by design.",
   },
   {
     field: "recovery_hint",
+    class: "dishonesty-persistent",
     promptText: "recovery_hint",
     dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
     notes:
@@ -174,6 +244,7 @@ const TYPED_TRUTH_FIELDS: ReadonlyArray<TypedTruthField> = [
   },
   {
     field: "navigation_triggered",
+    class: "dishonesty-persistent",
     promptText: "navigation_triggered",
     dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
     notes:
@@ -215,6 +286,27 @@ function scan(): Violation[] {
     ];
   }
 
+  // Half 3 source: parse the runtime intercept's DISHONESTY_RULES
+  // table to confirm every dishonesty-class-persistent registry entry
+  // has a corresponding rule. The table lives in
+  // `packages/ai-core/src/dishonest-closing.ts` as a `const
+  // DISHONESTY_RULES: readonly DishonestyRule[] = [...]`. Read once
+  // here, parse the `field: "..."` strings, compare against the
+  // registry's dishonesty-persistent entries.
+  //
+  // Why parse vs import: this script runs at gate time, not in the
+  // application; importing across package boundaries from a script
+  // is brittle (build state, ESM resolution). Greppy parse is
+  // cheaper and the contract — `field: "<name>"` rows in the table
+  // — is stable.
+  const interceptSource = readFile("packages/ai-core/src/dishonest-closing.ts");
+  const interceptFieldRegex = /field:\s*"([a-zA-Z_][a-zA-Z0-9_]*)"/g;
+  const interceptedFields = new Set<string>();
+  let match: RegExpExecArray | null;
+  while ((match = interceptFieldRegex.exec(interceptSource)) !== null) {
+    interceptedFields.add(match[1]!);
+  }
+
   for (const entry of TYPED_TRUTH_FIELDS) {
     // Half 1: prompt clause must contain promptText.
     if (!promptSource.includes(entry.promptText)) {
@@ -235,6 +327,24 @@ function scan(): Violation[] {
         field: entry.field,
         reason: `dispatch enforcement missing — \`${entry.field}\` not found in any of: ${entry.dispatchSources.join(", ")}`,
         remediation: `Restore the dispatch-side emission of \`${entry.field}\` in one of the listed source files OR update the dispatchSources array in scripts/check-typed-truth-perception.ts to point at the new home (then update docs/doctrine/typed-truth-perception.md to match).`,
+      });
+    }
+
+    // Half 3 (sync-invariant): every dishonesty-persistent field MUST
+    // appear in the runtime intercept's DISHONESTY_RULES table. This
+    // is the meta-pattern that catches the next sibling sweep's "you
+    // forgot a sibling" drift mechanically rather than by reviewer
+    // eyeball — the canonical typed-truth-perception triple (wire +
+    // prompt + runtime) becomes structurally enforceable. Other
+    // classes (transient, affordance, positive-signal, control-state,
+    // transparency) are out of scope by design and don't appear in
+    // the table; the gate doesn't assert their absence (the rule is
+    // append-only enforcement, not exhaustive class enforcement).
+    if (entry.class === "dishonesty-persistent" && !interceptedFields.has(entry.field)) {
+      violations.push({
+        field: entry.field,
+        reason: `dishonesty-persistent field missing from runtime intercept — \`${entry.field}\` not found in DISHONESTY_RULES table at packages/ai-core/src/dishonest-closing.ts`,
+        remediation: `Add a DISHONESTY_RULES entry for \`${entry.field}\` so the runtime intercept catches model claims that contradict it. The rule shape: { claims, toolKinds, field: "${entry.field}", check: <predicate>, honest: "<correction text>" }. Mirror the existing rules; the test surface in dishonest-closing.test.ts will need three new pins (triggers-on-failure / retry-recovers / register-distinction).`,
       });
     }
   }

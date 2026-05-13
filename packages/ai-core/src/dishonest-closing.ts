@@ -226,22 +226,142 @@ function findMostRecentRelevantEntry(
 }
 
 /**
+ * Dishonesty-class field check — returns true when the value
+ * contradicts a "Done"-class claim. Each rule binds one typed-truth
+ * field to its contradiction predicate.
+ */
+type FieldCheck = (value: unknown) => boolean;
+
+/**
+ * One row of the dishonesty-rule table. Encodes the four parallel
+ * checks (claim register, tool-action register, field name, value
+ * predicate) and the honest-line correction text as data.
+ *
+ * The table replaces what would otherwise be 5+ parallel if-blocks
+ * doing the same five things (claim guard, kind guard, field
+ * extraction, value check, return string). At three rules the
+ * branches were tolerable; at five they are not. Refactoring at this
+ * boundary serves three structural ends:
+ *
+ *   - The dishonesty-class registry is auditable as data — the
+ *     `check-typed-truth-perception` drift gate can assert "every
+ *     dishonesty-class-persistent registry entry MUST appear in
+ *     `DISHONESTY_RULES`," catching the next sweep's "you forgot a
+ *     sibling" drift mechanically rather than by reviewer eyeball.
+ *   - Adding the next field is one row of data, not a 30-line copy-
+ *     paste of the inspection logic.
+ *   - The 28-test pin matrix parameterizes against the table (each
+ *     rule × three pins: triggers-on-failure, retry-doesnt-trigger,
+ *     register-distinction-holds), so coverage grows linearly with
+ *     data instead of quadratically with maintenance.
+ *
+ * Failure-class rule (`errorReason: "frame_stale"`) doesn't fit the
+ * field-on-data shape — it inspects `entry.errorReason` not
+ * `entry.data.<field>`. Kept as a separate early-return in
+ * `inspectDishonesty` for clarity; the data-driven shape only
+ * generalizes well over the success-result rules.
+ */
+interface DishonestyRule {
+  /**
+   * Claim registers this rule fires for. `action` is always present
+   * — generic "Done" claims should be checked against every register.
+   */
+  readonly claims: ReadonlyArray<ClosingClaimKind>;
+  /** Tool-action kinds whose results carry the field. */
+  readonly toolKinds: ReadonlySet<string>;
+  /** The typed-truth field name on `entry.data`. */
+  readonly field: string;
+  /** Returns true when the field's value contradicts the claim. */
+  readonly check: FieldCheck;
+  /** Honest correction text appended after the model's draft. */
+  readonly honest: string;
+}
+
+/**
+ * The full set of dishonesty-class success-result rules. Editing this
+ * array is the canonical way to add a new typed-truth runtime check;
+ * the drift gate enforces the registry-to-rules sync.
+ *
+ * Ordering note: rules iterate in declaration order. When two rules
+ * could match the same entry (e.g. a hypothetical type result with
+ * both `recovery_hint` and a CAPTCHA flag), the earlier rule wins.
+ * Today no entry shape supports two simultaneous matches, but the
+ * deterministic order keeps the contract closed.
+ */
+const DISHONESTY_RULES: readonly DishonestyRule[] = [
+  {
+    claims: ["submit", "action"],
+    toolKinds: SUBMIT_KINDS,
+    field: "navigation_triggered",
+    check: (v) => v === false,
+    honest:
+      "Actually wait — the click/keystroke landed but the page didn't move. The submission may have been intercepted by an overlay (cookie banner, bot detection) or silently dropped. Let me re-read the page.",
+  },
+  {
+    claims: ["type", "action"],
+    toolKinds: TYPE_KINDS,
+    field: "recovery_hint",
+    check: (v) => typeof v === "string" && v.length > 0,
+    honest:
+      "Actually wait — I typed but the text didn't appear in the field (likely a focus race). Let me re-read the page and try clicking the field first, then retyping.",
+  },
+  {
+    claims: ["view", "action"],
+    toolKinds: VIEW_KINDS,
+    field: "bot_detection_detected",
+    check: (v) => v === true,
+    honest:
+      "Actually wait — what loaded looks like a CAPTCHA or bot-detection wall, not the intended content. The page may need a manual challenge before I can continue.",
+  },
+  {
+    // Sibling sweep — `blank_page_detected` is the dishonesty-class
+    // sibling that fires when the navigate result heuristic detected
+    // an empty page (no visible text, near-blank pixels). Model
+    // claiming "the page shows X" / "loaded" while the page is blank
+    // is the same dishonesty shape as the bot_detection case, just a
+    // different content failure.
+    claims: ["view", "action"],
+    toolKinds: VIEW_KINDS,
+    field: "blank_page_detected",
+    check: (v) => v === true,
+    honest:
+      "Actually wait — the page that loaded appears blank (no visible content). The navigation may have completed but rendered nothing useful. Let me re-read the page or try a different URL.",
+  },
+  {
+    // Sibling sweep — `access_denied_detected` fires when the
+    // navigate result surfaced a 403/login-wall/access-denied page.
+    // Distinct from `bot_detection_detected` (which is challenge-
+    // humanness) — this is page-blocked outright; recovery is "try
+    // elsewhere" not "solve the CAPTCHA."
+    claims: ["view", "action"],
+    toolKinds: VIEW_KINDS,
+    field: "access_denied_detected",
+    check: (v) => v === true,
+    honest:
+      "Actually wait — what loaded looks like an access-denied or login-wall page, not the intended content. The site is blocking this request; let me try a different approach.",
+  },
+];
+
+/**
  * Inspect a single log entry for typed-truth dishonesty. Returns the
  * honest correction sentence when the entry contradicts a "Done"-
  * class claim of the given kind, or null when the entry is honest
  * (no contradiction).
  *
- * Each branch maps to one dishonesty-class field. The honest-line
- * phrasing mirrors the prompt teaching's recovery cue so the model
- * sees a familiar shape if it processes the correction on a
- * subsequent turn (the conversation-history snapshot of this turn
- * carries the corrected text via `finalResponse.text`).
+ * Two phases:
+ *   1. Failure-class check — `frame_stale` lives on `entry.errorReason`,
+ *      not on `entry.data`. Early-return.
+ *   2. Success-result table walk — iterate `DISHONESTY_RULES` and
+ *      return the first rule whose claim, tool-kind, and field-value
+ *      checks all match. Deterministic by declaration order.
  */
 function inspectDishonesty(entry: ToolResultLogEntry, claim: ClosingClaimKind): string | null {
-  // Tool failure — `frame_stale` is the dishonesty-class error. Other
-  // failure reasons (policy_denied, session_closed) are surfaced via
-  // the count-based fallback branches and don't need re-correction
-  // here.
+  // Failure-class — `frame_stale` is the dishonesty-class error.
+  // Other failure reasons (policy_denied, session_closed) are
+  // surfaced via the count-based fallback branches and don't need
+  // re-correction here. Kept outside the table because it inspects
+  // `errorReason`, not `data.<field>` — different shape than the
+  // data-driven rules.
   if (!entry.ok) {
     if (entry.errorReason === "frame_stale") {
       return "Actually wait — the page navigated underneath the last action and even the one-shot retry caught a stale frame. Let me re-read the current page state before reporting.";
@@ -249,47 +369,33 @@ function inspectDishonesty(entry: ToolResultLogEntry, claim: ClosingClaimKind): 
     return null;
   }
 
-  // Successful tool result — inspect typed-truth fields by claim kind.
+  // Successful tool result — inspect typed-truth fields by walking
+  // the rule table.
   const data = entry.data;
   if (data === null || typeof data !== "object") return null;
 
   const kind = extractActionKind(data);
+  if (kind === null) return null;
 
-  // navigation_triggered: false on a submit-class action contradicts
-  // a "submit"-claim or a generic "action"-claim that landed on a
-  // submit-kind tool. Action-claim against a non-submit kind doesn't
-  // trigger this branch (a `type` action's typed-truth lives in
-  // `recovery_hint`, not `navigation_triggered`).
-  if ((claim === "submit" || claim === "action") && kind !== null && SUBMIT_KINDS.has(kind)) {
-    const navTriggered = (data as { navigation_triggered?: unknown }).navigation_triggered;
-    if (navTriggered === false) {
-      return "Actually wait — the click/keystroke landed but the page didn't move. The submission may have been intercepted by an overlay (cookie banner, bot detection) or silently dropped. Let me re-read the page.";
-    }
-  }
-
-  // recovery_hint present on a type-class action contradicts a
-  // "type"-claim or a generic "action"-claim that landed on a type-
-  // kind tool.
-  if ((claim === "type" || claim === "action") && kind !== null && TYPE_KINDS.has(kind)) {
-    const hint = (data as { recovery_hint?: unknown }).recovery_hint;
-    if (typeof hint === "string" && hint.length > 0) {
-      return "Actually wait — I typed but the text didn't appear in the field (likely a focus race). Let me re-read the page and try clicking the field first, then retyping.";
-    }
-  }
-
-  // bot_detection_detected: true on a view-class action contradicts a
-  // "view"-claim or a generic "action"-claim. Distinct from the
-  // submit-class navigation_triggered case — a screenshot showing a
-  // CAPTCHA wall isn't a navigation failure, it's a content failure.
-  if ((claim === "view" || claim === "action") && kind !== null && VIEW_KINDS.has(kind)) {
-    const botDetected = (data as { bot_detection_detected?: unknown }).bot_detection_detected;
-    if (botDetected === true) {
-      return "Actually wait — what loaded looks like a CAPTCHA or bot-detection wall, not the intended content. The page may need a manual challenge before I can continue.";
-    }
+  for (const rule of DISHONESTY_RULES) {
+    if (!rule.claims.includes(claim)) continue;
+    if (!rule.toolKinds.has(kind)) continue;
+    const value = (data as Record<string, unknown>)[rule.field];
+    if (rule.check(value)) return rule.honest;
   }
 
   return null;
 }
+
+/**
+ * Test-only export so the drift gate (`check-typed-truth-perception`)
+ * can assert that every dishonesty-class-persistent registry entry
+ * appears in `DISHONESTY_RULES`. NOT part of the public API; the
+ * underscore prefix marks it.
+ */
+export const __DISHONESTY_RULE_FIELDS: ReadonlySet<string> = new Set(
+  DISHONESTY_RULES.map((r) => r.field),
+);
 
 /**
  * Top-level intercept. Returns the correction sentence to append to

@@ -209,6 +209,56 @@ describe("detectDishonestClosing — three test pins", () => {
       expect(correction).not.toBeNull();
       expect(correction).toContain("page navigated underneath");
     });
+
+    // Sibling sweep pins (2026-05-12): blank_page_detected and
+    // access_denied_detected. Same shape as bot_detection_detected,
+    // distinct content-failure semantics. Persistent-state dishonesty
+    // (page IS blank / IS denied), so the walk-back's last-relevant-
+    // entry assumption holds cleanly.
+
+    it("blank_page_detected on navigate triggers correction", () => {
+      const log: ToolResultLogEntry[] = [
+        {
+          name: "computer",
+          ok: true,
+          data: {
+            kind: "screenshot",
+            ok: true,
+            bytes_base64: "AAAA",
+            blank_page_detected: true,
+          },
+          errorReason: null,
+        },
+      ];
+      const correction = detectDishonestClosing({
+        finalText: "Here's the page.",
+        toolResultsLog: log,
+      });
+      expect(correction).not.toBeNull();
+      expect(correction).toContain("blank");
+    });
+
+    it("access_denied_detected on navigate triggers correction", () => {
+      const log: ToolResultLogEntry[] = [
+        {
+          name: "computer",
+          ok: true,
+          data: {
+            kind: "screenshot",
+            ok: true,
+            bytes_base64: "AAAA",
+            access_denied_detected: true,
+          },
+          errorReason: null,
+        },
+      ];
+      const correction = detectDishonestClosing({
+        finalText: "Loaded.",
+        toolResultsLog: log,
+      });
+      expect(correction).not.toBeNull();
+      expect(correction).toContain("access-denied");
+    });
   });
 
   // ── PIN (2): retry-and-recover does NOT trigger override ───────────
@@ -307,6 +357,59 @@ describe("detectDishonestClosing — three test pins", () => {
       const correction = detectDishonestClosing({ finalText: "Done.", toolResultsLog: log });
       expect(correction).toBeNull();
     });
+
+    // Retry-and-recover guards for the two new sibling rules.
+
+    it("blank_page_detected then re-navigate returns clean — no override", () => {
+      const log: ToolResultLogEntry[] = [
+        {
+          name: "computer",
+          ok: true,
+          data: {
+            kind: "screenshot",
+            ok: true,
+            bytes_base64: "AAAA",
+            blank_page_detected: true,
+          },
+          errorReason: null,
+        },
+        {
+          name: "computer",
+          ok: true,
+          data: { kind: "screenshot", ok: true, bytes_base64: "BBBB" },
+          errorReason: null,
+        },
+      ];
+      const correction = detectDishonestClosing({
+        finalText: "Here's the page.",
+        toolResultsLog: log,
+      });
+      expect(correction).toBeNull();
+    });
+
+    it("access_denied_detected then re-navigate returns clean — no override", () => {
+      const log: ToolResultLogEntry[] = [
+        {
+          name: "computer",
+          ok: true,
+          data: {
+            kind: "screenshot",
+            ok: true,
+            bytes_base64: "AAAA",
+            access_denied_detected: true,
+          },
+          errorReason: null,
+        },
+        {
+          name: "computer",
+          ok: true,
+          data: { kind: "screenshot", ok: true, bytes_base64: "BBBB" },
+          errorReason: null,
+        },
+      ];
+      const correction = detectDishonestClosing({ finalText: "Loaded.", toolResultsLog: log });
+      expect(correction).toBeNull();
+    });
   });
 
   // ── PIN (3): submit_button_id (affordance) does NOT trigger ────────
@@ -352,6 +455,57 @@ describe("detectDishonestClosing — three test pins", () => {
         },
       ];
       const correction = detectDishonestClosing({ finalText: "Submitted.", toolResultsLog: log });
+      expect(correction).toBeNull();
+    });
+
+    // Register-distinction pins for the two new rules. blank_page_detected
+    // / access_denied_detected are dishonesty-class siblings of
+    // bot_detection_detected; submit_button_id is affordance-class and
+    // must NOT trigger an override even when co-occurring with the
+    // dishonesty fields. (Pathological co-occurrence — in practice
+    // submit_button_id appears on read_page results, not navigate
+    // results — but encoding the register guarantee mechanically
+    // means a future refactor that surfaces submit_button_id on
+    // screenshot results wouldn't silently flip the register.)
+
+    it("blank_page_detected: false + submit_button_id present — no override", () => {
+      const log: ToolResultLogEntry[] = [
+        {
+          name: "computer",
+          ok: true,
+          data: {
+            kind: "screenshot",
+            ok: true,
+            bytes_base64: "AAAA",
+            blank_page_detected: false,
+            submit_button_id: "search-button-42",
+          },
+          errorReason: null,
+        },
+      ];
+      const correction = detectDishonestClosing({
+        finalText: "Here's the page.",
+        toolResultsLog: log,
+      });
+      expect(correction).toBeNull();
+    });
+
+    it("access_denied_detected: false + submit_button_id present — no override", () => {
+      const log: ToolResultLogEntry[] = [
+        {
+          name: "computer",
+          ok: true,
+          data: {
+            kind: "screenshot",
+            ok: true,
+            bytes_base64: "AAAA",
+            access_denied_detected: false,
+            submit_button_id: "search-button-42",
+          },
+          errorReason: null,
+        },
+      ];
+      const correction = detectDishonestClosing({ finalText: "Loaded.", toolResultsLog: log });
       expect(correction).toBeNull();
     });
   });

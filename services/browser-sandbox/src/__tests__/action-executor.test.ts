@@ -13,7 +13,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { ComputerAction } from "@motebit/protocol";
 
-import { executeAction } from "../action-executor.js";
+import { executeAction, deriveVisualContentDetected } from "../action-executor.js";
 import type { BrowserSession } from "../chromium-pool.js";
 
 interface MouseCall {
@@ -1263,5 +1263,69 @@ describe("executeAction", () => {
         error: { reason: "frame_stale", message: "test" },
       });
     });
+  });
+});
+
+describe("deriveVisualContentDetected — typed-truth derivation invariant", () => {
+  // Pin from 2026-05-12. The dishonest-closing runtime intercept's
+  // class taxonomy classifies `visual_content_detected` as positive-
+  // signal (model SHOULD claim "I see X" when true). The dishonest
+  // negation is NOT separately intercepted because the producer
+  // derivation guarantees one of three sibling fields
+  // (blank_page_detected, access_denied_detected, bot_detection_
+  // detected) is true whenever visual_content_detected is false, and
+  // those siblings ARE intercepted. This test pins the derivation so
+  // a future regression that breaks the invariant — e.g. someone
+  // adds a fourth heuristic flag without folding it into the
+  // derivation — fails here instead of silently re-opening the
+  // dishonesty surface. Sibling-boundary rule: when one boundary is
+  // fixed, pin all sibling boundaries in the same pass.
+
+  it("returns true only when all three negative flags are false (full visibility)", () => {
+    expect(
+      deriveVisualContentDetected({ blankish: false, denied: false, botDetection: false }),
+    ).toBe(true);
+  });
+
+  it("returns false when ANY negative flag is true (truth-table coverage)", () => {
+    // 2³ - 1 = 7 cases where at least one flag is true. The
+    // derivation MUST return false in every one of them.
+    const cases = [
+      { blankish: true, denied: false, botDetection: false },
+      { blankish: false, denied: true, botDetection: false },
+      { blankish: false, denied: false, botDetection: true },
+      { blankish: true, denied: true, botDetection: false },
+      { blankish: true, denied: false, botDetection: true },
+      { blankish: false, denied: true, botDetection: true },
+      { blankish: true, denied: true, botDetection: true },
+    ];
+    for (const h of cases) {
+      expect(deriveVisualContentDetected(h)).toBe(false);
+    }
+  });
+
+  it("invariant pin: visual_content_detected: false ⇔ at least one sibling dishonesty-class field is true", () => {
+    // The invariant the dishonest-closing intercept's coverage
+    // depends on. Encoded directly so a future contributor reading
+    // this test sees the structural relationship.
+    for (const blankish of [false, true]) {
+      for (const denied of [false, true]) {
+        for (const botDetection of [false, true]) {
+          const visual = deriveVisualContentDetected({ blankish, denied, botDetection });
+          // visual: false MUST imply at least one sibling is true
+          // (which means the dishonesty intercept catches the case).
+          if (!visual) {
+            expect(blankish || denied || botDetection).toBe(true);
+          }
+          // visual: true MUST imply all three siblings are false
+          // (clean positive signal, model can honestly claim "I see X").
+          if (visual) {
+            expect(blankish).toBe(false);
+            expect(denied).toBe(false);
+            expect(botDetection).toBe(false);
+          }
+        }
+      }
+    }
   });
 });

@@ -444,6 +444,41 @@ async function doScroll(session: BrowserSession, action: ScrollAction): Promise<
   return { kind: "scroll", ok: true };
 }
 
+/**
+ * Derive the `visual_content_detected` typed-truth field from the
+ * navigate-result heuristic flags. Exported so the unit test can pin
+ * the derivation and the typed-truth-perception drift gate's class
+ * coverage stays coherent.
+ *
+ * Invariant: `visual_content_detected: false` ≡ `(blankish || denied
+ * || botDetection)`. The three RHS flags each have their own
+ * dishonesty-class typed-truth field (`blank_page_detected`,
+ * `access_denied_detected`, `bot_detection_detected`) — all three
+ * are intercepted by the runtime in `dishonest-closing.ts`.
+ *
+ * Why this invariant matters: `visual_content_detected` is registered
+ * as positive-signal-class in `check-typed-truth-perception.ts` (the
+ * model SHOULD claim "I see X" when true). Its dishonest negation
+ * (model claims "I see X" when false) is NOT separately intercepted
+ * because the derivation guarantees one of the three sibling fields
+ * is true in that case, and those siblings ARE intercepted. A future
+ * regression that breaks the derivation (e.g. someone changes the
+ * heuristic to add a new failure mode without folding it into the
+ * derivation) would silently re-open the dishonesty surface — the
+ * test exists to catch exactly that.
+ *
+ * Doctrine: `runtime-invariants-over-prompt-rules.md` § typed-truth-
+ * perception triple. Sibling-boundary rule: when one boundary is
+ * fixed, the test pins all sibling boundaries in the same pass.
+ */
+export function deriveVisualContentDetected(heuristic: {
+  readonly blankish: boolean;
+  readonly denied: boolean;
+  readonly botDetection: boolean;
+}): boolean {
+  return !heuristic.blankish && !heuristic.denied && !heuristic.botDetection;
+}
+
 async function doNavigate(session: BrowserSession, action: NavigateAction): Promise<ActionResult> {
   // Normalize relative-looking inputs (`example.com`, `tesla.com/about`)
   // into absolute URLs. Per spec: implementations SHOULD normalize but
@@ -650,7 +685,7 @@ async function doNavigate(session: BrowserSession, action: NavigateAction): Prom
       kind: "navigate",
       ok: true,
       url: session.page.url(),
-      visual_content_detected: !heuristic.blankish && !heuristic.denied && !heuristic.botDetection,
+      visual_content_detected: deriveVisualContentDetected(heuristic),
       blank_page_detected: heuristic.blankish,
       access_denied_detected: heuristic.denied,
       // Typed-truth-perception sibling of access_denied_detected.
