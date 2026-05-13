@@ -31,7 +31,14 @@ import { join, resolve } from "node:path";
 
 const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
 const POLL_INTERVAL_MS = 3000;
-const PER_PACKAGE_ATTEMPTS = 30; // 30 × 3s = 90s
+// First-publish-of-a-new-scoped-package on npm + Sigstore provenance has a
+// long right tail before the metadata index returns the version (witnessed
+// 2026-05-13: @motebit/state-export-client@0.2.0 published successfully at
+// release.yml run 25790998711 but `npm view` 404'd for >90s after publish,
+// causing a cosmetic workflow failure even though the package was on npm.
+// Already-published packages return immediately, so the upper bound only
+// costs wall time on actual first-publishes.
+const PER_PACKAGE_ATTEMPTS = 100; // 100 × 3s = 300s
 
 interface Pkg {
   name: string;
