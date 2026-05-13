@@ -1,5 +1,137 @@
 # @motebit/crypto Changelog
 
+## 1.3.0
+
+### Minor Changes
+
+- f174164: v1.5 — `ComputerSessionReceipt` closes the asymmetry where delegation
+  has signed receipt chains but virtual_browser / desktop_drive sessions
+  emit only lifecycle events. Every computer-use session now crystallizes
+  at close into one signed artifact a third party with the signer's
+  public key can verify without contacting any relay — the moat thesis
+  ("accumulated trust") applied to the embodiment that previously had
+  none.
+
+  `@motebit/protocol` (Apache-2.0, permissive floor) adds three types
+  under `computer-use.ts`:
+  - `ComputerSessionActionRecord` — per-action structural roll-up
+    (`kind` + timing + outcome + `failure_reason`). Carries no targets,
+    args, or observation bytes — privacy invariant of the session-level
+    receipt is compositional with the audit invariant of per-action
+    `ToolInvocationReceipt`s.
+  - `SignableComputerSessionReceipt` — body before signing (counts,
+    outcomes_summary, failure_breakdown by `ComputerFailureReason`,
+    was_halted, max_sensitivity envelope, opened/closed timestamps,
+    display dimensions, embodiment_mode, JCS-canonicalized SHA-256
+    `actions_hash`).
+  - `ComputerSessionReceipt` — signed; `suite:
+"motebit-jcs-ed25519-b64-v1"` + `signature` (base64url).
+
+  `@motebit/crypto` adds `signComputerSessionReceipt`,
+  `verifyComputerSessionReceipt`, and `hashComputerSessionActions` —
+  sibling pattern to `signToolInvocationReceipt` / `hashToolPayload`.
+  Same JCS+Ed25519+base64url pipeline; same fail-closed verifier rules.
+
+  `@motebit/runtime` extends `ComputerSessionManager`:
+  - Per-action structural ledger appended on every `executeAction`
+    call (including halt-rejected calls — `was_halted: true` +
+    `user_preempted` failures land in the receipt honestly).
+  - Sensitivity envelope lifts off `governance.classifyObservation`'s
+    output; uses an explicit `sensitivity_level` when the classifier
+    supplies one, falls back to inferring `"financial"` from
+    `strip_bytes` (the conservative floor of the medical/financial/secret
+    bytes-strip trio per CLAUDE.md). High-water mark, never decays.
+  - New `summarize(sessionId, deps)` produces the unsigned body. Caller
+    injects the receipt-id generator, the embodiment_mode (apps stamp
+    per-dispatcher per v1.1), and the `hashActions` function (typically
+    wired to `@motebit/crypto`'s `hashComputerSessionActions`). Closed
+    sessions remain summarizable via a bounded post-close retention
+    buffer (FIFO, capacity 64).
+  - `halt()` now stamps `was_halted: true` on every active session;
+    sticky across `resume()` so the receipt commits to "the user paused
+    at least once," not to terminal halt state.
+
+  Wiring the signed receipt into the audit-event stream and surfacing it
+  on the slab as a detachable artifact is the next slice (the runtime
+  piece is the gate; UI follows). 14 crypto sign/verify tests + 11
+  runtime summarize tests + all 41 prior session-manager tests pass.
+
+- 5286de2: Close the `ContentArtifactType` registry — `ContentArtifactManifest.artifact_type` is now a typed literal union (`@motebit/protocol`) instead of a free string. Three seed types match the consumers shipping or pending: `audit-trail`, `memory-export`, `execution-ledger`. New exports:
+
+  ```ts
+  import {
+    type ContentArtifactType,
+    ALL_CONTENT_ARTIFACT_TYPES,
+    isContentArtifactType,
+    AUDIT_TRAIL_ARTIFACT,
+    MEMORY_EXPORT_ARTIFACT,
+    EXECUTION_LEDGER_ARTIFACT,
+  } from "@motebit/protocol";
+  ```
+
+  Drift gate `check-artifact-type-canonical` mirrors `check-audience-canonical` — every `artifact_type: "<literal>"` / `artifactType: "<literal>"` site is scanned against the registry. Pre-registry, a producer-site typo (`artifact_type: "audit_trail"` vs `"audit-trail"`) was a verifier-side classification miss with no compile-time signal.
+
+  Type narrowing on `@motebit/crypto` — the `artifact_type` field on `ContentArtifactManifest` and the `artifactType` field on `SignContentArtifactOptions` now require a member of the registry. The primitive was published 2026-05-10 (commit c47251c0) with no external consumers yet; this hardening lands within the same day as the initial shape.
+
+- c47251c: Add `signContentArtifact` + `verifyContentArtifact` + `ContentArtifactManifest` — content-artifact provenance for standalone artifacts that travel independently of the conversation context (memory exports, audit trails, plan dumps, future generated documents/media).
+
+  ```ts
+  import { signContentArtifact, verifyContentArtifact } from "@motebit/crypto";
+
+  const content = new TextEncoder().encode("audit entry 1\naudit entry 2\n");
+
+  const manifest = await signContentArtifact(content, {
+    artifactType: "audit-trail",
+    producer: "did:key:z6Mk…",
+    producerPublicKey,
+    producerPrivateKey,
+    claimGenerator: "motebit/1.x.x",
+    invocation: { task_id: "task-42" },
+  });
+
+  // Transport manifest separately from content (C2PA-shape: HTTP header,
+  // sidecar JSON, embedded metadata). Recipient verifies:
+  const { valid, reason } = await verifyContentArtifact(manifest, content);
+  ```
+
+  Two-step verification: SHA-256 content-hash recomputation + Ed25519 signature verification over the canonical-JSON manifest. Fail-closed with typed reasons (`content_hash_mismatch` | `signature_invalid` | `malformed_public_key` | `malformed_signature` | `unsupported_suite`).
+
+  Same canonical-JSON + Ed25519 + suite-dispatch pattern as `signExecutionReceipt` and `signSkillManifest` — nothing new at the crypto layer. Pinned suite `motebit-jcs-ed25519-hex-v1` today; PQ migration is a registry append (`@motebit/protocol`'s `SuiteAlgorithm` union pre-types ML-DSA-44/65 and SLH-DSA-SHA2-128s).
+
+  Closes the C2PA-shape provenance gap named in `docs/doctrine/nist-alignment.md` §8 (and previously deferred-with-reason). The primitive is the consumer-agnostic surface; relay state-export endpoints, future content-generation tools, and downloadable bundles all wire into the same shape.
+
+- 4bb65d8: Ship the consumer side of v1.1 inner-receipt recursive verification. Closes the producer-consumer arc the previous commit opened — the v1.1 wire change is no longer invisible truth, every shipping verifier now demands the inner signatures.
+
+  **`@motebit/crypto`** — `verifyReceipt` is now publicly exported (was internal-only). Verifies a single `ExecutionReceipt`'s Ed25519 signature against its embedded `public_key` and walks `delegation_receipts` recursively for multi-hop chains. Returns the standard `ReceiptVerifyResult` shape used elsewhere in the package.
+
+  **`@motebit/state-export-client`** — new export `verifyInnerSignedReceipts(body)`:
+
+  ```ts
+  import { verifyInnerSignedReceipts } from "@motebit/state-export-client";
+
+  const result = await verifyInnerSignedReceipts(body);
+  if (result.applicable) {
+    console.log(`${result.verifiedCount}/${result.totalCount} inner receipts verified`);
+    for (const r of result.results) {
+      if (!r.valid) console.error(`✗ ${r.taskId} (${r.motebitId}): ${r.reason}`);
+    }
+  }
+  ```
+
+  Parses each entry in `signed_receipts: string[]` as an `ExecutionReceipt`, calls `verifyReceipt`, returns a per-receipt verdict. Detects v1.1 bodies by checking `spec === "motebit/execution-ledger@1.1"` plus a non-empty `signed_receipts` field; returns `applicable: false` for v1.0 bodies, non-execution-ledger bodies, and non-object input. Five typed failure reasons: `malformed_json`, `missing_public_key`, `signature_invalid`, `delegation_failed`, `unknown`. Browser-safe — same dep boundary as the rest of the package.
+
+  **`@motebit/verify`** — `motebit-verify content-artifact` auto-invokes the recursive verifier whenever the manifest's `artifact_type === "execution-ledger"` and the body declares v1.1. No flag required (calm-software default — silent when the field doesn't apply). Per-receipt outcomes surface in both human output and `--json` output. Exit code now gates on outer AND inner — a v1.1 bundle where any inner receipt fails (`signature_invalid`, etc.) fails the overall verification even when the relay's outer signature is valid: the relay is correctly attesting bytes it assembled, but those bytes contain falsified inner claims.
+
+  **Why this matters:** the v1.1 producer commit shipped byte-identical inner receipts into a void — no consumer recursively verified. Today, every motebit-verify run audits inner signatures end-to-end. A federation peer with the relay's transparency-pinned key + a cross-relay state-export + `motebit-verify` can audit every motebit's claim inside without trusting the relay or any intermediary. Cross-relay verification becomes operationally complete, not just structurally possible.
+
+  Drift-locked by `check-execution-ledger-inner-receipt-verified` (drift-defense #90): the gate scans the state-export-client primitive home, the package re-export, and the CLI's import + call site; a refactor that disconnects the consumer-side wiring fails CI.
+
+  Doctrine: `spec/execution-ledger-v1.md` §4.3; `docs/doctrine/nist-alignment.md` §8 "Inner-receipt verifier shipped 2026-05-12."
+
+### Patch Changes
+
+- b4c38fb: Fix the `verify()` dispatcher's artifact-type detection: JSON-parse first, only fall back to YAML-frontmatter identity-file detection if the parse fails. Pre-fix `detectArtifactType` checked `artifact.includes("---")` BEFORE `JSON.parse`, which misclassified ~0.03% of stringified JSON receipts as identity files — base64url's alphabet (`A-Za-z0-9-_`) contains `-`, so a random ed25519 signature draws three consecutive `-` about once per 3000 signatures. Statistical CI flake; the structural fix removes the ambiguity entirely (JSON-parseable strings are never YAML frontmatter). Added a deterministic regression test driving `signature: "AAA---BBB---CCC"` so future refactors can't silently regress.
+
 ## 1.2.1
 
 ### Patch Changes
