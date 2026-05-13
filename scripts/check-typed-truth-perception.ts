@@ -144,9 +144,51 @@ interface TypedTruthField {
    * lives. At least one must contain the field name; this enforces
    * that the wire half of the doctrine pair stays present.
    *
+   * For tool-result classes, the dispatch source IS the producer —
+   * the action-executor emits the field directly on the result
+   * struct. For narration class, the producer is a separate explicit
+   * tag parser; `dispatchSources` may be empty and Half-2 is skipped
+   * (the field never flows through a wire-level dispatch surface).
+   *
    * Repo-relative paths.
    */
   readonly dispatchSources: ReadonlyArray<string>;
+  /**
+   * Half-4 — explicit producer-source files. REQUIRED for narration-
+   * class fields (`dishonesty-narration`); ignored for tool-result
+   * classes (their producer is implicit in `dispatchSources`).
+   *
+   * The producer is the runtime code that populates the field at
+   * emission time — for narration, the tag parser that converts
+   * model output text into the typed field value (e.g.
+   * `extractNarrationTag` in `core.ts` paralleling
+   * `extractMemoryTags`). At least one source must exist and contain
+   * a reference to the field; missing producerSources for a narration
+   * field is the half-shipped pattern witnessed 2026-05-12 in commit
+   * `8b1d6605` (shipped wire + prompt + validator with no producer;
+   * the validator's pass-through fired 100% of the time).
+   *
+   * Doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md §
+   * "The four-part typed-truth structure."
+   */
+  readonly producerSources?: ReadonlyArray<string>;
+  /**
+   * Half-5 — explicit validator-source files. REQUIRED for narration-
+   * class fields. For dishonesty-persistent fields the validator is
+   * the `DISHONESTY_RULES` table (Half-3 enforces inclusion); for
+   * transient / affordance / positive-signal / control-state /
+   * transparency classes, a validator doesn't apply by design.
+   *
+   * The validator is the runtime code that checks the field's value
+   * against wire-level typed truth BEFORE the chrome/UI consumes it,
+   * replacing falsified values with templated fallbacks (e.g.
+   * `validateTaskStepNarration` in `narration-validation.ts`). At
+   * least one source must exist and contain a reference to the field.
+   *
+   * Doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md §
+   * "The four-part typed-truth structure."
+   */
+  readonly validatorSources?: ReadonlyArray<string>;
   /** Brief why-the-shape note. Useful for forensics + future audits. */
   readonly notes?: string;
 }
@@ -267,9 +309,16 @@ const TYPED_TRUTH_FIELDS: ReadonlyArray<TypedTruthField> = [
     field: "task_step_narration",
     class: "dishonesty-narration",
     promptText: "task_step_narration",
-    dispatchSources: ["packages/ai-core/src/narration-validation.ts"],
+    // No wire dispatch — narration is not emitted on a tool result;
+    // it flows from model text → producer (extractNarrationTag) →
+    // AIResponse field → validator → chrome. Half-2 skips for
+    // narration class; producer + validator are the load-bearing
+    // pair (Half-4 + Half-5).
+    dispatchSources: [],
+    producerSources: ["packages/ai-core/src/core.ts"],
+    validatorSources: ["packages/ai-core/src/narration-validation.ts"],
     notes:
-      "In-flight narration field — the model emits `task_step_narration` on AIResponse as part of its response (not on a tool result). The chrome's `motebit × virtual_browser` register consumes the field; runtime validation in `validateTaskStepNarration` runs BEFORE the chrome reads it, replacing falsified narrations with runtime-templated fallbacks. Currently one rule (URL-mention contradiction). Third graduation of runtime-invariants-over-prompt-rules — the typed-truth-perception triple applied to in-flight motebit-voiced text. Doctrine: docs/doctrine/chrome-as-state-render.md § Hybrid narration source. Shipped 2026-05-12 as the first slice of PR 1 of the agent-surface pivot.",
+      "In-flight narration field — the model emits `<narration>...</narration>` tags in its response text; the producer `extractNarrationTag` (in core.ts paralleling `extractMemoryTags`) parses the tag into the typed `task_step_narration` field on AIResponse. The chrome's `motebit × virtual_browser` register consumes the field; runtime validation in `validateTaskStepNarration` runs BEFORE the chrome reads it, replacing falsified narrations with runtime-templated fallbacks. Currently one rule (URL-mention contradiction). Third graduation of runtime-invariants-over-prompt-rules — the typed-truth-perception triple applied to in-flight motebit-voiced text. Doctrine: docs/doctrine/chrome-as-state-render.md § Hybrid narration source + docs/doctrine/runtime-invariants-over-prompt-rules.md § The four-part typed-truth structure. Producer-gap bug class (commit 8b1d6605: wire + prompt + validator shipped with no producer; validator pass-through fired 100% of the time) caught by user intuition before push, fixed in cf1227d0; Half-4 + Half-5 now structurally enforce the four-part shape for narration class.",
   },
 ];
 
@@ -338,17 +387,23 @@ function scan(): Violation[] {
       });
     }
 
-    // Half 2: at least one dispatch source must contain the literal field name.
-    const dispatchHits = entry.dispatchSources.filter((path) => {
-      const src = readFile(path);
-      return src !== "" && fieldAppearsIn(entry.field, src);
-    });
-    if (dispatchHits.length === 0) {
-      violations.push({
-        field: entry.field,
-        reason: `dispatch enforcement missing — \`${entry.field}\` not found in any of: ${entry.dispatchSources.join(", ")}`,
-        remediation: `Restore the dispatch-side emission of \`${entry.field}\` in one of the listed source files OR update the dispatchSources array in scripts/check-typed-truth-perception.ts to point at the new home (then update docs/doctrine/typed-truth-perception.md to match).`,
+    // Half 2: at least one dispatch source must contain the literal
+    // field name. Skipped for narration class (no wire dispatch —
+    // narration flows from model text through an explicit producer,
+    // not through a wire-format emission surface; Half-4 covers the
+    // producer side).
+    if (entry.class !== "dishonesty-narration") {
+      const dispatchHits = entry.dispatchSources.filter((path) => {
+        const src = readFile(path);
+        return src !== "" && fieldAppearsIn(entry.field, src);
       });
+      if (dispatchHits.length === 0) {
+        violations.push({
+          field: entry.field,
+          reason: `dispatch enforcement missing — \`${entry.field}\` not found in any of: ${entry.dispatchSources.join(", ")}`,
+          remediation: `Restore the dispatch-side emission of \`${entry.field}\` in one of the listed source files OR update the dispatchSources array in scripts/check-typed-truth-perception.ts to point at the new home (then update docs/doctrine/typed-truth-perception.md to match).`,
+        });
+      }
     }
 
     // Half 3 (sync-invariant): every dishonesty-persistent field MUST
@@ -368,18 +423,86 @@ function scan(): Violation[] {
         remediation: `Add a DISHONESTY_RULES entry for \`${entry.field}\` so the runtime intercept catches model claims that contradict it. The rule shape: { claims, toolKinds, field: "${entry.field}", check: <predicate>, honest: "<correction text>" }. Mirror the existing rules; the test surface in dishonest-closing.test.ts will need three new pins (triggers-on-failure / retry-recovers / register-distinction).`,
       });
     }
+
+    // Half 4 + Half 5 (four-part-triple structural enforcement): every
+    // narration-class field MUST declare an explicit producer source
+    // AND an explicit validator source, each containing the field
+    // name. The doctrine names the four-part structure (wire + prompt
+    // + producer + validator) and the producer-gap bug class — commit
+    // 8b1d6605 shipped wire + prompt + validator for `task_step_
+    // narration` with no producer; the validator's pass-through fired
+    // 100% of the time. The triple was structurally complete on the
+    // registry side, inert at runtime. These halves graduate the
+    // doctrine's "deferred reviewer-discipline check" to mechanical
+    // enforcement for narration class (where the producer is
+    // explicit, not folded into dispatch).
+    //
+    // Why only narration class. Tool-result classes have implicit
+    // producer = dispatch (Half-2 covers); dishonesty-persistent has
+    // implicit validator = DISHONESTY_RULES (Half-3 covers).
+    // Narration is the class where both producer + validator are
+    // explicit separate code paths the registry must name.
+    //
+    // Doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md
+    // § "The four-part typed-truth structure."
+    if (entry.class === "dishonesty-narration") {
+      const producerSources = entry.producerSources ?? [];
+      if (producerSources.length === 0) {
+        violations.push({
+          field: entry.field,
+          reason: `producer source missing — narration-class field \`${entry.field}\` must declare \`producerSources\` (the runtime code that populates the field from model output text)`,
+          remediation: `Add \`producerSources: ["<path>"]\` to the \`${entry.field}\` registry entry, pointing at the file containing the tag parser (e.g. \`extractNarrationTag\` in packages/ai-core/src/core.ts). The half-shipped pattern this catches: shipping wire + prompt + validator without a producer means the validator's pass-through branch fires 100% of the time (witnessed 2026-05-12 in commit 8b1d6605). Doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md § The four-part typed-truth structure.`,
+        });
+      } else {
+        const producerHits = producerSources.filter((path) => {
+          const src = readFile(path);
+          return src !== "" && fieldAppearsIn(entry.field, src);
+        });
+        if (producerHits.length === 0) {
+          violations.push({
+            field: entry.field,
+            reason: `producer source declared but field not found — \`${entry.field}\` not present in any of: ${producerSources.join(", ")}`,
+            remediation: `Either restore the producer (tag parser) that populates \`${entry.field}\` in one of the listed sources OR update \`producerSources\` in scripts/check-typed-truth-perception.ts to point at the new home.`,
+          });
+        }
+      }
+
+      const validatorSources = entry.validatorSources ?? [];
+      if (validatorSources.length === 0) {
+        violations.push({
+          field: entry.field,
+          reason: `validator source missing — narration-class field \`${entry.field}\` must declare \`validatorSources\` (the runtime code that checks the field against wire-level typed truth before the consumer reads)`,
+          remediation: `Add \`validatorSources: ["<path>"]\` to the \`${entry.field}\` registry entry, pointing at the file containing the validator (e.g. \`validateTaskStepNarration\` in packages/ai-core/src/narration-validation.ts). The validator's job is catching falsified narrations before the chrome consumes them; without it the chrome renders model claims that contradict wire-level truth. Doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md § The four-part typed-truth structure.`,
+        });
+      } else {
+        const validatorHits = validatorSources.filter((path) => {
+          const src = readFile(path);
+          return src !== "" && fieldAppearsIn(entry.field, src);
+        });
+        if (validatorHits.length === 0) {
+          violations.push({
+            field: entry.field,
+            reason: `validator source declared but field not found — \`${entry.field}\` not present in any of: ${validatorSources.join(", ")}`,
+            remediation: `Either restore the validator that checks \`${entry.field}\` in one of the listed sources OR update \`validatorSources\` in scripts/check-typed-truth-perception.ts to point at the new home.`,
+          });
+        }
+      }
+    }
   }
   return violations;
 }
 
 function main(): void {
   console.log(
-    "▸ check-typed-truth-perception — every registered typed-truth field appears in BOTH the AI's PERCEPTION_DOCTRINE clause (packages/ai-core/src/prompt.ts) AND at least one dispatch source. Closes the doctrine drift class where one half quietly disappears: prompt teaches a field nothing emits (confabulation), or dispatch emits a field the AI doesn't know to read (silent typed truth). Doctrine: docs/doctrine/typed-truth-perception.md; principle in CLAUDE.md `Typed truth on results, prompt for interpretation`",
+    "▸ check-typed-truth-perception — every registered typed-truth field travels with its full four-part structure: wire + prompt + producer + validator. Half 1 asserts the PERCEPTION_DOCTRINE clause (packages/ai-core/src/prompt.ts). Half 2 asserts dispatch presence (the implicit producer for tool-result classes). Half 3 asserts DISHONESTY_RULES inclusion for dishonesty-persistent fields. Half 4 + Half 5 assert explicit producer + validator sources for narration-class fields (closing the producer-gap bug class witnessed in commit 8b1d6605 where wire + prompt + validator shipped without a producer). Doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md § The four-part typed-truth structure + docs/doctrine/typed-truth-perception.md; principle in CLAUDE.md `Typed truth on results, prompt for interpretation`",
   );
   const violations = scan();
   if (violations.length === 0) {
+    const narrationCount = TYPED_TRUTH_FIELDS.filter(
+      (f) => f.class === "dishonesty-narration",
+    ).length;
     console.log(
-      `✓ check-typed-truth-perception: ${TYPED_TRUTH_FIELDS.length} field(s) registered, all paired (prompt clause + dispatch source).`,
+      `✓ check-typed-truth-perception: ${TYPED_TRUTH_FIELDS.length} field(s) registered, all four-part-complete (prompt + dispatch + class-specific producer/validator; ${narrationCount} narration-class field(s) with explicit producer + validator).`,
     );
     process.exit(0);
   }
@@ -390,7 +513,7 @@ function main(): void {
     console.error(`    fix: ${v.remediation}\n`);
   }
   console.error(
-    "Doctrine: every typed-truth field travels with its pair — prompt clause + dispatch enforcement. New fields ship with both. See docs/doctrine/typed-truth-perception.md.",
+    "Doctrine: every typed-truth field travels with its full four-part structure — wire + prompt + producer + validator. New fields ship with all four. See docs/doctrine/runtime-invariants-over-prompt-rules.md § The four-part typed-truth structure + docs/doctrine/typed-truth-perception.md.",
   );
   process.exit(1);
 }
