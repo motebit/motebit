@@ -129,26 +129,47 @@ client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and in
 - **Jurisdiction**: varies by RPC operator
 - **DPA / terms**: configured via SOLANA_RPC_URL env var
 
+### Expo Push Service
+
+- **Role**: mobile push transport (forwards wake-signal payloads to APNS/FCM)
+- **Data shared**: push token, wake-signal payload (motebit_id, pending task count, timestamp — see invariant below)
+- **Jurisdiction**: United States
+- **DPA / terms**: https://expo.dev/terms
+
 ### Apple Push Notification Service
 
 - **Role**: mobile push delivery (iOS only, opt-in)
-- **Data shared**: push token, notification payload
+- **Data shared**: push token, wake-signal payload (motebit_id, pending task count, timestamp — no message body, no memory content, no prompt or response text; relay-side invariant enforced by the `PushPayload` type in `services/relay/src/push-adapter.ts`)
 - **Jurisdiction**: United States
 - **DPA / terms**: https://www.apple.com/legal/internet-services/push/
 
 ### Firebase Cloud Messaging
 
 - **Role**: mobile push delivery (Android only, opt-in)
-- **Data shared**: push token, notification payload
+- **Data shared**: push token, wake-signal payload (motebit_id, pending task count, timestamp — no message body, no memory content, no prompt or response text; relay-side invariant enforced by the `PushPayload` type in `services/relay/src/push-adapter.ts`)
 - **Jurisdiction**: United States
 - **DPA / terms**: https://firebase.google.com/terms/data-processing-terms
 
 ### Anthropic
 
-- **Role**: AI inference provider (via services/proxy)
+- **Role**: AI inference provider (via services/proxy when motebit-cloud routing selects an Anthropic model)
 - **Data shared**: model prompts and responses (per request, not retained at proxy beyond cache TTL)
 - **Jurisdiction**: United States
 - **DPA / terms**: https://www.anthropic.com/legal/dpa
+
+### OpenAI
+
+- **Role**: AI inference provider (via services/proxy when motebit-cloud routing selects an OpenAI model)
+- **Data shared**: model prompts and responses (per request, not retained at proxy beyond cache TTL)
+- **Jurisdiction**: United States
+- **DPA / terms**: https://openai.com/policies/data-processing-addendum
+
+### Google (Generative Language API)
+
+- **Role**: AI inference provider (via services/proxy when motebit-cloud routing selects a Gemini model)
+- **Data shared**: model prompts and responses (per request, not retained at proxy beyond cache TTL)
+- **Jurisdiction**: United States
+- **DPA / terms**: https://cloud.google.com/terms/data-processing-addendum
 
 ### Fly.io
 

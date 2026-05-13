@@ -202,27 +202,61 @@ export const DECLARATION_CONTENT = {
       data_processing_terms: "configured via SOLANA_RPC_URL env var",
     },
     {
+      name: "Expo Push Service",
+      role: "mobile push transport (forwards wake-signal payloads to APNS/FCM)",
+      data_shared: [
+        "push token",
+        "wake-signal payload (motebit_id, pending task count, timestamp — see invariant below)",
+      ],
+      jurisdiction: "United States",
+      data_processing_terms: "https://expo.dev/terms",
+    },
+    {
       name: "Apple Push Notification Service",
       role: "mobile push delivery (iOS only, opt-in)",
-      data_shared: ["push token", "notification payload"],
+      data_shared: [
+        "push token",
+        "wake-signal payload (motebit_id, pending task count, timestamp — no message body, no memory content, no prompt or response text; relay-side invariant enforced by the `PushPayload` type in `services/relay/src/push-adapter.ts`)",
+      ],
       jurisdiction: "United States",
       data_processing_terms: "https://www.apple.com/legal/internet-services/push/",
     },
     {
       name: "Firebase Cloud Messaging",
       role: "mobile push delivery (Android only, opt-in)",
-      data_shared: ["push token", "notification payload"],
+      data_shared: [
+        "push token",
+        "wake-signal payload (motebit_id, pending task count, timestamp — no message body, no memory content, no prompt or response text; relay-side invariant enforced by the `PushPayload` type in `services/relay/src/push-adapter.ts`)",
+      ],
       jurisdiction: "United States",
       data_processing_terms: "https://firebase.google.com/terms/data-processing-terms",
     },
     {
       name: "Anthropic",
-      role: "AI inference provider (via services/proxy)",
+      role: "AI inference provider (via services/proxy when motebit-cloud routing selects an Anthropic model)",
       data_shared: [
         "model prompts and responses (per request, not retained at proxy beyond cache TTL)",
       ],
       jurisdiction: "United States",
       data_processing_terms: "https://www.anthropic.com/legal/dpa",
+    },
+    {
+      name: "OpenAI",
+      role: "AI inference provider (via services/proxy when motebit-cloud routing selects an OpenAI model)",
+      data_shared: [
+        "model prompts and responses (per request, not retained at proxy beyond cache TTL)",
+      ],
+      jurisdiction: "United States",
+      data_processing_terms: "https://openai.com/policies/data-processing-addendum",
+    },
+    {
+      name: "Google (Generative Language API)",
+      role: "AI inference provider (via services/proxy when motebit-cloud routing selects a Gemini model)",
+      data_shared: [
+        "model prompts and responses (per request, not retained at proxy beyond cache TTL)",
+      ],
+      jurisdiction: "United States",
+      data_processing_terms: "https://cloud.google.com/terms/data-processing-addendum",
     },
     {
       name: "Fly.io",
