@@ -504,8 +504,7 @@ export function IntelligenceTab({
                   lineHeight: 16,
                 }}
               >
-                Open-source weights, ~10× cheaper than American alternatives. Hosted in China;
-                medical / financial / secret sensitivity tiers block all external AI by default.
+                Hosted in China.
               </Text>
             </>
           )}
@@ -522,17 +521,6 @@ export function IntelligenceTab({
                 autoCapitalize="none"
                 autoCorrect={false}
               />
-              <Text
-                style={{
-                  marginTop: 6,
-                  color: colors.textMuted,
-                  fontSize: 11,
-                  lineHeight: 16,
-                }}
-              >
-                Meta Llama 3.3 70B via Groq's LPU inference — fastest American open-source option
-                (~280 tok/sec). ~5× cheaper than American closed-source alternatives.
-              </Text>
             </>
           )}
         </View>
