@@ -1555,6 +1555,21 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-publishable-package-metadata",
+    proves:
+      "flags a publishable `package.json` whose `repository` block has been dropped — exactly the `@motebit/state-export-client@0.2.0` (2026-05-13) shape that sigstore provenance rejected mid-publish (`could not resolve provenance metadata`). Drift class: the canonical metadata block is a copy-paste convention; without structural enforcement, the next package introduced (or the next editor refactor that nukes the block) fails the same way at the same point in the release pipeline. Probe removes the entire `repository` block from `packages/verifier/package.json` (small, stable publishable target with a hand-edit-safe layout); the gate must flag `missing_repository`. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      // Strip the `repository` block from packages/verifier/package.json
+      // while preserving every other field. The block is structured
+      // `"repository": { … },` followed by a newline; the regex matches
+      // from the opening quote through the closing brace + trailing
+      // comma + the line-ending whitespace so the surrounding fields
+      // stay valid JSON. mutateFile restores byte-identical on cleanup.
+      mutateFile(`packages/verifier/package.json`, (src) =>
+        src.replace(/\s*"repository":\s*\{[^}]*\},\n/, "\n"),
+      ),
+  },
+  {
     script: "check-execution-ledger-receipts-archived",
     proves:
       "flags the execution-ledger reconstruction silently regressing back to v1.0 summary-only semantics. Drift class: the operator-trust gap — without `signed_receipts` sourced from the byte-identical archive, verifiers cannot check inner motebit signatures and the relay's word becomes the trust floor.",
