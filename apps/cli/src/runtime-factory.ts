@@ -86,13 +86,17 @@ import { dim } from "./colors.js";
 import type { CliConfig } from "./args.js";
 import { CONFIG_DIR, loadFullConfig } from "./config.js";
 
-export function getApiKey(provider: "anthropic" | "openai" | "google" = "anthropic"): string {
+export function getApiKey(
+  provider: "anthropic" | "openai" | "google" | "deepseek" = "anthropic",
+): string {
   const envVar =
     provider === "openai"
       ? "OPENAI_API_KEY"
       : provider === "google"
         ? "GOOGLE_API_KEY"
-        : "ANTHROPIC_API_KEY";
+        : provider === "deepseek"
+          ? "DEEPSEEK_API_KEY"
+          : "ANTHROPIC_API_KEY";
   const key = process.env[envVar];
   if (key == null || key === "") {
     const hint =
@@ -100,7 +104,9 @@ export function getApiKey(provider: "anthropic" | "openai" | "google" = "anthrop
         ? "Set it with: export OPENAI_API_KEY=sk-..."
         : provider === "google"
           ? "Set it with: export GOOGLE_API_KEY=AIza..."
-          : "Set it with: export ANTHROPIC_API_KEY=sk-ant-...";
+          : provider === "deepseek"
+            ? "Set it with: export DEEPSEEK_API_KEY=sk-..."
+            : "Set it with: export ANTHROPIC_API_KEY=sk-ant-...";
     console.error(`Error: ${envVar} environment variable is not set.\n${hint}`);
     process.exit(1);
   }
@@ -221,6 +227,14 @@ function cliConfigToUnified(config: CliConfig): UnifiedProviderConfig {
         mode: "byok",
         vendor: "google",
         apiKey: getApiKey("google"),
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "deepseek":
+      return {
+        mode: "byok",
+        vendor: "deepseek",
+        apiKey: getApiKey("deepseek"),
         model: config.model,
         maxTokens: config.maxTokens,
       };

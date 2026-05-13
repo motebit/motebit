@@ -13,7 +13,9 @@ import {
   DEFAULT_ANTHROPIC_MODEL,
   DEFAULT_OPENAI_MODEL,
   DEFAULT_GOOGLE_MODEL,
+  DEFAULT_DEEPSEEK_MODEL,
   DEFAULT_OLLAMA_MODEL,
+  DEEPSEEK_CANONICAL_URL,
 } from "../index";
 
 // === Test fixtures ===
@@ -39,6 +41,7 @@ describe("defaultModelForVendor", () => {
     expect(defaultModelForVendor("anthropic")).toBe(DEFAULT_ANTHROPIC_MODEL);
     expect(defaultModelForVendor("openai")).toBe(DEFAULT_OPENAI_MODEL);
     expect(defaultModelForVendor("google")).toBe(DEFAULT_GOOGLE_MODEL);
+    expect(defaultModelForVendor("deepseek")).toBe(DEFAULT_DEEPSEEK_MODEL);
   });
 });
 
@@ -49,6 +52,7 @@ describe("canonicalVendorBaseUrl", () => {
     expect(canonicalVendorBaseUrl("anthropic")).toBe("https://api.anthropic.com");
     expect(canonicalVendorBaseUrl("openai")).toBe("https://api.openai.com/v1");
     expect(canonicalVendorBaseUrl("google")).toBe(GOOGLE_OPENAI_COMPAT_URL);
+    expect(canonicalVendorBaseUrl("deepseek")).toBe(DEEPSEEK_CANONICAL_URL);
   });
 });
 
@@ -208,6 +212,41 @@ describe("resolveProviderSpec — byok google", () => {
       makeEnv(),
     );
     if (spec.kind === "cloud") expect(spec.model).toBe(DEFAULT_GOOGLE_MODEL);
+  });
+});
+
+describe("resolveProviderSpec — byok deepseek", () => {
+  it("dispatches DeepSeek as openai-compat at the DeepSeek canonical endpoint", () => {
+    const spec = resolveProviderSpec(
+      { mode: "byok", vendor: "deepseek", apiKey: "sk-deep-xxx", model: "deepseek-chat" },
+      makeEnv(),
+    );
+    expect(spec.kind).toBe("cloud");
+    if (spec.kind === "cloud") {
+      expect(spec.wireProtocol).toBe("openai");
+      expect(spec.apiKey).toBe("sk-deep-xxx");
+      expect(spec.model).toBe("deepseek-chat");
+      expect(spec.baseUrl).toBe(DEEPSEEK_CANONICAL_URL);
+    }
+  });
+  it("falls back to DEFAULT_DEEPSEEK_MODEL", () => {
+    const spec = resolveProviderSpec(
+      { mode: "byok", vendor: "deepseek", apiKey: "sk-deep-xxx" },
+      makeEnv(),
+    );
+    if (spec.kind === "cloud") expect(spec.model).toBe(DEFAULT_DEEPSEEK_MODEL);
+  });
+  it("env.cloudBaseUrl can substitute the canonical URL (browser CORS proxy)", () => {
+    const spec = resolveProviderSpec(
+      { mode: "byok", vendor: "deepseek", apiKey: "sk-deep-xxx" },
+      makeEnv({
+        cloudBaseUrl: (proto, canonical) =>
+          proto === "openai" && canonical === DEEPSEEK_CANONICAL_URL
+            ? "https://deepseek-proxy.example.com"
+            : canonical,
+      }),
+    );
+    if (spec.kind === "cloud") expect(spec.baseUrl).toBe("https://deepseek-proxy.example.com");
   });
 });
 
@@ -477,11 +516,12 @@ describe("type invariants", () => {
       { mode: "byok", vendor: "anthropic", apiKey: "k" },
       { mode: "byok", vendor: "openai", apiKey: "k" },
       { mode: "byok", vendor: "google", apiKey: "k" },
+      { mode: "byok", vendor: "deepseek", apiKey: "k" },
       { mode: "on-device", backend: "webllm" },
       { mode: "on-device", backend: "apple-fm" },
       { mode: "on-device", backend: "mlx" },
       { mode: "on-device", backend: "local-server" },
     ];
-    expect(configs.length).toBe(9);
+    expect(configs.length).toBe(10);
   });
 });

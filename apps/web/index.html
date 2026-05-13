@@ -7195,6 +7195,22 @@
                   >
                     Google
                   </button>
+                  <button
+                    class="byok-provider-btn"
+                    data-byok="deepseek"
+                    style="
+                      flex: 1;
+                      padding: 6px;
+                      border: 1px solid var(--border-light);
+                      border-radius: 6px;
+                      background: transparent;
+                      color: var(--text-muted);
+                      font-size: 12px;
+                      cursor: pointer;
+                    "
+                  >
+                    DeepSeek
+                  </button>
                 </div>
               </div>
               <div id="byok-anthropic">
@@ -7287,6 +7303,47 @@
                     <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
                     <option value="gemini-2.5-flash" selected>Gemini 2.5 Flash</option>
                     <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                  </select>
+                </div>
+              </div>
+              <div id="byok-deepseek" style="display: none">
+                <div class="settings-field">
+                  <label for="deepseek-api-key">API Key</label>
+                  <div class="settings-key-row">
+                    <input
+                      id="deepseek-api-key"
+                      type="password"
+                      placeholder="sk-..."
+                      autocomplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      class="tts-key-reveal"
+                      data-target="deepseek-api-key"
+                      aria-label="Show key"
+                      aria-pressed="false"
+                    >
+                      Show
+                    </button>
+                  </div>
+                  <small
+                    style="
+                      display: block;
+                      margin-top: 6px;
+                      color: var(--text-muted);
+                      font-size: 11px;
+                      line-height: 1.4;
+                    "
+                  >
+                    Open-source weights, ~10× cheaper than Claude. Hosted in China; medical / financial / secret sensitivity tiers block all external AI by default.
+                  </small>
+                </div>
+                <div class="settings-field">
+                  <label for="deepseek-model">Model</label>
+                  <select id="deepseek-model">
+                    <option value="deepseek-chat" selected>
+                      deepseek-chat — DeepSeek V3 (tool-use)
+                    </option>
                   </select>
                 </div>
               </div>

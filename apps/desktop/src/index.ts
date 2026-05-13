@@ -153,7 +153,13 @@ export interface TauriCommands {
  * neutrality. `loadDesktopConfig` migrates persisted Tauri config values
  * transparently so existing installs continue to work.
  */
-export type DesktopProvider = "anthropic" | "local-server" | "openai" | "google" | "proxy";
+export type DesktopProvider =
+  | "anthropic"
+  | "local-server"
+  | "openai"
+  | "google"
+  | "deepseek"
+  | "proxy";
 
 export interface DesktopAIConfig {
   provider: DesktopProvider;
@@ -270,6 +276,14 @@ function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig 
       return {
         mode: "byok",
         vendor: "google",
+        apiKey: config.apiKey ?? "",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "deepseek":
+      return {
+        mode: "byok",
+        vendor: "deepseek",
         apiKey: config.apiKey ?? "",
         model: config.model,
         maxTokens: config.maxTokens,

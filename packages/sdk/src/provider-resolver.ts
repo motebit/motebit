@@ -38,6 +38,7 @@ import {
   DEFAULT_ANTHROPIC_MODEL,
   DEFAULT_OPENAI_MODEL,
   DEFAULT_GOOGLE_MODEL,
+  DEFAULT_DEEPSEEK_MODEL,
   DEFAULT_OLLAMA_MODEL,
   DEFAULT_PROXY_MODEL,
 } from "./models.js";
@@ -58,6 +59,15 @@ export const ANTHROPIC_CANONICAL_URL = "https://api.anthropic.com";
 
 /** Canonical OpenAI API base URL. */
 export const OPENAI_CANONICAL_URL = "https://api.openai.com/v1";
+
+/**
+ * Canonical DeepSeek API base URL. DeepSeek exposes an OpenAI-compatible
+ * chat-completions endpoint at `{base}/chat/completions`; the BYOK arm
+ * routes through `OpenAIProvider` the same way Google does. Single
+ * source of truth — surfaces that need a CORS proxy or dev rewrite
+ * substitute via `env.cloudBaseUrl`.
+ */
+export const DEEPSEEK_CANONICAL_URL = "https://api.deepseek.com";
 
 /** Default Motebit Cloud relay URL. Surfaces may override via env. */
 export const DEFAULT_MOTEBIT_CLOUD_URL = "https://api.motebit.com";
@@ -101,6 +111,8 @@ export function defaultModelForVendor(vendor: ByokVendor): string {
       return DEFAULT_OPENAI_MODEL;
     case "google":
       return DEFAULT_GOOGLE_MODEL;
+    case "deepseek":
+      return DEFAULT_DEEPSEEK_MODEL;
   }
 }
 
@@ -117,6 +129,8 @@ export function canonicalVendorBaseUrl(vendor: ByokVendor): string {
       return OPENAI_CANONICAL_URL;
     case "google":
       return GOOGLE_OPENAI_COMPAT_URL;
+    case "deepseek":
+      return DEEPSEEK_CANONICAL_URL;
   }
 }
 
@@ -305,9 +319,11 @@ export function resolveProviderSpec(config: UnifiedProviderConfig, env: Resolver
     }
 
     case "byok": {
-      // Google is dispatched as OpenAI-compat — its public API is OpenAI-
-      // compatible at the canonical Google URL. Anthropic and OpenAI use
-      // their own canonical wire protocols.
+      // OpenAI-compat vendors (google, deepseek) dispatch through the
+      // OpenAI wire protocol — their hosted APIs expose
+      // `/chat/completions` with the same schema. Anthropic uses its
+      // own canonical wire protocol. The arm picks `anthropic` when the
+      // vendor is `"anthropic"`, otherwise `openai`.
       const wireProtocol: "anthropic" | "openai" =
         config.vendor === "anthropic" ? "anthropic" : "openai";
       const canonical = config.baseUrl ?? canonicalVendorBaseUrl(config.vendor);

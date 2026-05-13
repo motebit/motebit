@@ -30,8 +30,28 @@ export type ProviderMode = "on-device" | "motebit-cloud" | "byok";
  */
 export type OnDeviceBackend = "apple-fm" | "mlx" | "webllm" | "local-server";
 
-/** BYOK vendors — the only ones where the user holds the API key directly. */
-export type ByokVendor = "anthropic" | "openai" | "google";
+/**
+ * BYOK vendors — the only ones where the user holds the API key directly.
+ *
+ * Closed-set additive registry; fourth instance of the agility-as-role
+ * pattern (`docs/doctrine/agility-as-role.md` — alongside `SuiteId` for
+ * cryptosuites, "permissive floor" for licenses, `GuestRail`/`SovereignRail`
+ * for settlement). The role is "foundation-model vendor accessible via
+ * OpenAI-compatible wire protocol (or Anthropic's, for Anthropic itself)."
+ * Adding a vendor is a registry append + dispatch arm + default-model
+ * entry; the closure is enforced by exhaustive-switch typechecks in
+ * `provider-resolver.ts` and the api-extractor baseline gate.
+ *
+ * `deepseek` lands as the fourth instance — DeepSeek V3 is roughly
+ * Claude-Sonnet-class on tool-use benchmarks at ~10× cheaper pricing,
+ * served via DeepSeek's OpenAI-compatible API. Closes the doctrinal
+ * asymmetry where motebit's "intelligence is pluggable" founding claim
+ * (`CLAUDE.md` opening) was contradicted by a 3-vendor registry of
+ * exclusively-expensive Big Tech providers. The role stays closed at
+ * the wire-vocab boundary; affordability lands now for capital-
+ * constrained users via the additive registry shape.
+ */
+export type ByokVendor = "anthropic" | "openai" | "google" | "deepseek";
 
 /** On-device mode config. */
 export interface OnDeviceProviderConfig {

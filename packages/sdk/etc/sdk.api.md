@@ -144,7 +144,7 @@ export interface ByokProviderConfig {
 }
 
 // @public
-export type ByokVendor = "anthropic" | "openai" | "google";
+export type ByokVendor = "anthropic" | "openai" | "google" | "deepseek";
 
 // @public
 export function canonicalVendorBaseUrl(vendor: ByokVendor): string;
@@ -234,10 +234,19 @@ export interface CredentialSource {
 }
 
 // @public
+export const DEEPSEEK_CANONICAL_URL = "https://api.deepseek.com";
+
+// @public
+export const DEEPSEEK_MODELS: readonly ["deepseek-chat"];
+
+// @public
 export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
 
 // @public
 export const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig;
+
+// @public
+export const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 
 // @public
 export const DEFAULT_GOOGLE_MODEL = "gemini-2.5-flash";

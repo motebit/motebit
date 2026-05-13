@@ -210,6 +210,7 @@ export interface IntelligenceTabProps {
   model: string;
   apiKey: string;
   googleKey: string;
+  deepseekKey: string;
   localServerEndpoint: string;
   localBackend: LocalBackend;
   /** Canonical voice config from `@motebit/sdk`. */
@@ -220,6 +221,7 @@ export interface IntelligenceTabProps {
   onChangeModel: (m: string) => void;
   onChangeApiKey: (k: string) => void;
   onChangeGoogleKey: (k: string) => void;
+  onChangeDeepseekKey: (k: string) => void;
   onChangeLocalServerEndpoint: (e: string) => void;
   onChangeLocalBackend: (b: LocalBackend) => void;
   /** Patch-style update for the nested `voice` config. */
@@ -233,6 +235,7 @@ export function IntelligenceTab({
   model,
   apiKey,
   googleKey,
+  deepseekKey,
   localServerEndpoint,
   localBackend,
   voice,
@@ -242,6 +245,7 @@ export function IntelligenceTab({
   onChangeModel,
   onChangeApiKey,
   onChangeGoogleKey,
+  onChangeDeepseekKey,
   onChangeLocalServerEndpoint,
   onChangeLocalBackend,
   onChangeVoice,
@@ -258,13 +262,19 @@ export function IntelligenceTab({
   const uiMode: "motebit-cloud" | "byok" | "on-device" =
     provider === "proxy"
       ? "motebit-cloud"
-      : provider === "anthropic" || provider === "openai" || provider === "google"
+      : provider === "anthropic" ||
+          provider === "openai" ||
+          provider === "google" ||
+          provider === "deepseek"
         ? "byok"
         : "on-device"; // "local-server" and "on-device" both land here
 
   // The active BYOK vendor mirrors the flat provider when in byok mode.
-  const activeByokVendor: "anthropic" | "openai" | "google" =
-    provider === "openai" || provider === "google" || provider === "anthropic"
+  const activeByokVendor: "anthropic" | "openai" | "google" | "deepseek" =
+    provider === "openai" ||
+    provider === "google" ||
+    provider === "deepseek" ||
+    provider === "anthropic"
       ? provider
       : "anthropic";
 
@@ -276,7 +286,12 @@ export function IntelligenceTab({
     } else if (mode === "byok") {
       // Keep the current vendor if they're already in byok; otherwise default
       // to anthropic so the key input has a concrete target.
-      if (provider !== "anthropic" && provider !== "openai" && provider !== "google") {
+      if (
+        provider !== "anthropic" &&
+        provider !== "openai" &&
+        provider !== "google" &&
+        provider !== "deepseek"
+      ) {
         onChangeProvider("anthropic");
       }
     } else {
@@ -380,6 +395,20 @@ export function IntelligenceTab({
                 Google
               </Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.radioItem, activeByokVendor === "deepseek" && styles.radioActive]}
+              onPress={() => onChangeProvider("deepseek")}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.radioText,
+                  activeByokVendor === "deepseek" && styles.radioTextActive,
+                ]}
+              >
+                DeepSeek
+              </Text>
+            </TouchableOpacity>
           </View>
 
           <Text style={styles.sectionTitle}>Model</Text>
@@ -434,6 +463,32 @@ export function IntelligenceTab({
                 autoCapitalize="none"
                 autoCorrect={false}
               />
+            </>
+          )}
+          {activeByokVendor === "deepseek" && (
+            <>
+              <Text style={styles.sectionTitle}>DeepSeek API Key</Text>
+              <TextInput
+                style={styles.textField}
+                value={deepseekKey}
+                onChangeText={onChangeDeepseekKey}
+                placeholder="sk-..."
+                placeholderTextColor={colors.inputPlaceholder}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <Text
+                style={{
+                  marginTop: 6,
+                  color: colors.textMuted,
+                  fontSize: 11,
+                  lineHeight: 16,
+                }}
+              >
+                Open-source weights, ~10× cheaper than Claude. Hosted in China; medical / financial
+                / secret sensitivity tiers block all external AI by default.
+              </Text>
             </>
           )}
         </View>

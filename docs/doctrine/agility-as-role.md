@@ -2,7 +2,7 @@
 
 Every architectural axis where motebit reserves the right to swap concretes follows the same shape: name the **role** in code, gates, types, and prose; treat the **instance** as a registry entry whose value can change without touching consumers. Migration becomes a registry append, not a wire-format break or a codebase rewrite.
 
-The pattern is unstated but load-bearing. Three instances run through it today; a fourth is partially in place. Future architectural decisions involving a chosen technology should ask the test in [§ When to apply](#when-to-apply) on day one — the cost of indirection is one type alias, the cost of retrofitting later is the migration that motivates the decision.
+The pattern is unstated but load-bearing. Four instances run through it today. Future architectural decisions involving a chosen technology should ask the test in [§ When to apply](#when-to-apply) on day one — the cost of indirection is one type alias, the cost of retrofitting later is the migration that motivates the decision.
 
 ## The pattern
 
@@ -11,7 +11,7 @@ The pattern is unstated but load-bearing. Three instances run through it today; 
 - **Migration** is one entry added or substituted in the registry. Consumers continue to consume the role; the registry resolves to the new instance. No callsite changes.
 - **Drift defenses** check the role, never the literal instance. A gate that hardcodes `Ed25519` would fire spuriously the moment ML-DSA-65 is added; a gate that asks "every signed artifact carries a registered `SuiteId`" survives the migration unchanged.
 
-## Three instances in motebit
+## Four instances in motebit
 
 ### Cryptosuite agility
 
@@ -35,6 +35,15 @@ The pattern is unstated but load-bearing. Three instances run through it today; 
 - **Migration shape:** new rails are registry additions. Identity, signing, custody-mode, and accounting all read the role's interface; the rail's specific protocol is contained behind the rail adapter. Adding a fifth guest rail or a second sovereign rail is one new file in `@motebit/settlement-rails` plus one registry append.
 - **Defenses:** type-level enforcement of the custody split (`@ts-expect-error` negative-proof in `custody-boundary.test.ts`); `check-deps` (#2) — package-layer purity.
 - **Memory:** `architecture_rail_custody_split`.
+
+### Foundation-model agility
+
+- **Role:** `ByokVendor` in `@motebit/sdk` (`packages/sdk/src/provider-mode.ts`). The role is "foundation-model vendor accessible via OpenAI-compatible (or Anthropic's) wire protocol." Every BYOK config carries `vendor`; the provider resolver dispatches via exhaustive switches in `defaultModelForVendor`, `canonicalVendorBaseUrl`, and `resolveProviderSpec`'s `byok` arm. No surface is allowed to assume a specific vendor — all four chat surfaces (web, desktop, mobile, CLI) consume the role through the same registry shape.
+- **Instances today:** `anthropic`, `openai`, `google`, `deepseek` (four entries). The fourth instance — DeepSeek V3 via DeepSeek's hosted OpenAI-compatible API (2026-05-13) — closes the doctrinal asymmetry where motebit's founding "intelligence is pluggable" claim (`CLAUDE.md` opening) was contradicted by a 3-vendor registry of exclusively-expensive Big Tech providers. The role stays closed at the wire-vocab boundary; affordability lands via the additive registry shape (DeepSeek's hosted pricing is ~10× cheaper than Claude Sonnet at roughly Claude-Sonnet-class capability on tool-use benchmarks).
+- **Migration shape:** adding a new vendor is a registry append + three dispatch arms + a default model entry + a `*_MODELS` constant + parallel surface UI tile additions. Closure is enforced by exhaustive-switch typechecks (any missing case is a compile error) and by the `check-api-surface` baseline gate (the union's serialized signature in `sdk.api.md`). The wire format does not break — every BYOK config carries an explicit `vendor` discriminator.
+- **Defenses:** TypeScript exhaustive-dispatch (compile-time); `check-api-surface` (the SDK baseline mirrors the union); the provider-resolver tests (one describe block per vendor). No standalone drift gate needed — the existing discipline closes the loop.
+- **Memory:** `byok_deepseek_first_open_source`.
+- **What this enables for "intelligence is pluggable":** the founding doctrine claim becomes structurally true rather than aspirational. A user uncomfortable with US Big Tech picks DeepSeek; a user uncomfortable with Chinese hosting picks Anthropic; a user with sovereignty requirements picks on-device. Motebit is the constant; the vendor is the registry entry. Future open-source-via-API additions (OpenRouter as meta-vendor, Groq, Together, Fireworks) are sibling registry appends with the same shape.
 
 ## What this enables
 

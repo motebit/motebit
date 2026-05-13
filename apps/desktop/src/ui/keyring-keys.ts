@@ -25,6 +25,8 @@ export const ANTHROPIC_API_KEY_SLOT = "anthropic_api_key";
 export const OPENAI_API_KEY_SLOT = "openai_api_key";
 /** Google API key for BYOK chat provider (via OpenAI-compatible endpoint). */
 export const GOOGLE_API_KEY_SLOT = "google_api_key";
+/** DeepSeek API key for BYOK chat provider (via DeepSeek's OpenAI-compatible endpoint). */
+export const DEEPSEEK_API_KEY_SLOT = "deepseek_api_key";
 
 // === Voice ===
 //
@@ -69,6 +71,8 @@ export function byokKeyringKey(provider: DesktopProvider): string | null {
       return OPENAI_API_KEY_SLOT;
     case "google":
       return GOOGLE_API_KEY_SLOT;
+    case "deepseek":
+      return DEEPSEEK_API_KEY_SLOT;
     case "local-server":
     case "proxy":
       return null;

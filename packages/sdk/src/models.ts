@@ -25,6 +25,21 @@ export const GOOGLE_MODELS = [
 ] as const;
 
 /**
+ * DeepSeek models served via DeepSeek's OpenAI-compatible hosted API
+ * (`https://api.deepseek.com`). The API-facing identifier `deepseek-chat`
+ * routes to DeepSeek V3 — the workhorse, tool-use-capable model at
+ * roughly Claude-Sonnet-class capability and ~10× cheaper pricing
+ * ($0.27/M input · $1.10/M output). DeepSeek-R1 (`deepseek-reasoner`)
+ * is reasoning-class but tool-use support is uncertain at the Jan 2026
+ * cutoff; deferred to a sibling slice once verified.
+ *
+ * Single-entry registry today; expandable. The list shape stays
+ * symmetric with the other per-vendor `*_MODELS` constants so the
+ * settings UIs across surfaces consume them identically.
+ */
+export const DEEPSEEK_MODELS = ["deepseek-chat"] as const;
+
+/**
  * Common open-weights models that any local inference server can run.
  *
  * These identifiers are the model FAMILIES supported by every major local
@@ -82,6 +97,14 @@ export const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
 
 /** Default Google model. */
 export const DEFAULT_GOOGLE_MODEL = "gemini-2.5-flash";
+
+/**
+ * Default DeepSeek model — V3 via the `deepseek-chat` API identifier.
+ * The tool-use-capable workhorse; matches the per-vendor "default tier"
+ * convention used by `DEFAULT_ANTHROPIC_MODEL` / `DEFAULT_OPENAI_MODEL` /
+ * `DEFAULT_GOOGLE_MODEL`.
+ */
+export const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 
 /** Default Ollama model — used as the `local-server` default too. */
 export const DEFAULT_OLLAMA_MODEL = "llama3.2";

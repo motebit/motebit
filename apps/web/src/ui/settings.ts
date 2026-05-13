@@ -130,7 +130,7 @@ const ttsInworldKey = document.getElementById("tts-inworld-key") as HTMLInputEle
 // === State ===
 
 let activeProviderTab: ProviderTab = "proxy";
-let activeByokProvider: "anthropic" | "openai" | "google" = "anthropic";
+let activeByokProvider: "anthropic" | "openai" | "google" | "deepseek" = "anthropic";
 /** On-Device backend: browser (WebLLM) or auto-detected local server. */
 let activeLocalBackend: "webllm" | "server" = "webllm";
 
@@ -783,21 +783,10 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // === BYOK Sub-Provider Toggle ===
   document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const byok = btn.dataset.byok as "anthropic" | "openai" | "google";
+      const byok = btn.dataset.byok as "anthropic" | "openai" | "google" | "deepseek";
       if (!byok) return;
       activeByokProvider = byok;
-      document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((b) => {
-        const isActive = b.dataset.byok === byok;
-        b.classList.toggle("active", isActive);
-        b.style.background = isActive ? "var(--accent-bg)" : "transparent";
-        b.style.color = isActive ? "var(--text-heading)" : "var(--text-muted)";
-      });
-      const anthropicSection = document.getElementById("byok-anthropic");
-      const openaiSection = document.getElementById("byok-openai");
-      const googleSection = document.getElementById("byok-google");
-      if (anthropicSection) anthropicSection.style.display = byok === "anthropic" ? "" : "none";
-      if (openaiSection) openaiSection.style.display = byok === "openai" ? "" : "none";
-      if (googleSection) googleSection.style.display = byok === "google" ? "" : "none";
+      setByokProviderUI(byok);
     });
   });
 
@@ -1190,6 +1179,15 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
             const googleModel = document.getElementById("google-model") as HTMLSelectElement | null;
             if (googleApiKey) googleApiKey.value = config.apiKey;
             if (googleModel) googleModel.value = config.model ?? DEFAULT_GOOGLE_MODEL;
+          } else if (config.vendor === "deepseek") {
+            const deepseekApiKey = document.getElementById(
+              "deepseek-api-key",
+            ) as HTMLInputElement | null;
+            const deepseekModel = document.getElementById(
+              "deepseek-model",
+            ) as HTMLSelectElement | null;
+            if (deepseekApiKey) deepseekApiKey.value = config.apiKey;
+            if (deepseekModel) deepseekModel.value = config.model ?? "deepseek-chat";
           }
           break;
         }
@@ -1220,7 +1218,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   }
 
   /** Visually sync the BYOK sub-provider buttons + sections to `vendor`. */
-  function setByokProviderUI(vendor: "anthropic" | "openai" | "google"): void {
+  function setByokProviderUI(vendor: "anthropic" | "openai" | "google" | "deepseek"): void {
     document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((b) => {
       const isActive = b.dataset.byok === vendor;
       b.classList.toggle("active", isActive);
@@ -1230,9 +1228,11 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const anthropicSection = document.getElementById("byok-anthropic");
     const openaiSection = document.getElementById("byok-openai");
     const googleSection = document.getElementById("byok-google");
+    const deepseekSection = document.getElementById("byok-deepseek");
     if (anthropicSection) anthropicSection.style.display = vendor === "anthropic" ? "" : "none";
     if (openaiSection) openaiSection.style.display = vendor === "openai" ? "" : "none";
     if (googleSection) googleSection.style.display = vendor === "google" ? "" : "none";
+    if (deepseekSection) deepseekSection.style.display = vendor === "deepseek" ? "" : "none";
   }
 
   function setLocalBackendUI(backend: "webllm" | "server"): void {
@@ -1296,7 +1296,26 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       }
       case "anthropic": {
         // BYOK tab — branch on the active sub-provider
-        if (activeByokProvider === "google") {
+        if (activeByokProvider === "deepseek") {
+          // Agent-surface affordability path — DeepSeek V3 via the
+          // hosted OpenAI-compatible API. Fourth instance of
+          // agility-as-role for BYOK vendors. Resolver picks the
+          // wire protocol + canonical URL from the SDK's closed
+          // registry; the surface just collects the API key + model.
+          const deepseekApiKey = document.getElementById(
+            "deepseek-api-key",
+          ) as HTMLInputElement | null;
+          const deepseekModelEl = document.getElementById(
+            "deepseek-model",
+          ) as HTMLSelectElement | null;
+          config = {
+            mode: "byok",
+            vendor: "deepseek",
+            apiKey: deepseekApiKey?.value.trim() ?? "",
+            model: deepseekModelEl?.value ?? "deepseek-chat",
+            maxTokens,
+          };
+        } else if (activeByokProvider === "google") {
           const googleApiKey = document.getElementById("google-api-key") as HTMLInputElement | null;
           const googleModelEl = document.getElementById("google-model") as HTMLSelectElement | null;
           config = {

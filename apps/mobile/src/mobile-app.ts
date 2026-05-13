@@ -129,6 +129,7 @@ export type MobileProvider =
   | "anthropic"
   | "openai"
   | "google"
+  | "deepseek"
   | "proxy"
   | "on-device";
 
@@ -248,6 +249,14 @@ export function mobileSettingsToUnifiedProvider(
         apiKey: apiKey ?? "",
         model: settings.model,
         baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+        maxTokens: settings.maxTokens,
+      };
+    case "deepseek":
+      return {
+        mode: "byok",
+        vendor: "deepseek",
+        apiKey: apiKey ?? "",
+        model: settings.model,
         maxTokens: settings.maxTokens,
       };
     case "local-server":
@@ -408,6 +417,14 @@ function mobileConfigToUnified(config: MobileAIConfig): UnifiedProviderConfig {
       return {
         mode: "byok",
         vendor: "google",
+        apiKey: config.apiKey ?? "",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "deepseek":
+      return {
+        mode: "byok",
+        vendor: "deepseek",
         apiKey: config.apiKey ?? "",
         model: config.model,
         maxTokens: config.maxTokens,

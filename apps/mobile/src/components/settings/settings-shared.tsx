@@ -56,6 +56,7 @@ export type ProviderType =
   | "anthropic"
   | "openai"
   | "google"
+  | "deepseek"
   | "proxy"
   | "on-device";
 

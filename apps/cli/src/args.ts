@@ -13,7 +13,7 @@ import { bold, dim, cyan, green, command } from "./colors.js";
  * `--provider ollama` is accepted as an ergonomic alias for `local-server`
  * and silently normalized at parse time.
  */
-export type CliProvider = "anthropic" | "openai" | "google" | "local-server" | "proxy";
+export type CliProvider = "anthropic" | "openai" | "google" | "deepseek" | "local-server" | "proxy";
 
 export interface CliConfig {
   provider: CliProvider;
@@ -176,6 +176,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     "anthropic",
     "openai",
     "google",
+    "deepseek",
     "local-server",
     "proxy",
   ];
@@ -193,7 +194,9 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
         ? "gpt-5.4-mini"
         : cliProvider === "google"
           ? "gemini-2.5-flash"
-          : "claude-sonnet-4-6";
+          : cliProvider === "deepseek"
+            ? "deepseek-chat"
+            : "claude-sonnet-4-6";
   const allowedPaths =
     values["allowed-paths"] != null && values["allowed-paths"] !== ""
       ? values["allowed-paths"].split(",").map((p) => p.trim())
