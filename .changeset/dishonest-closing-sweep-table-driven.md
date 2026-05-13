@@ -1,5 +1,4 @@
 ---
-"@motebit/ai-core": patch
 "@motebit/browser-sandbox": patch
 ---
 
@@ -24,6 +23,6 @@ Sweep the dishonest-closing runtime intercept to its dishonesty-class siblings (
 
 **Producer-side derivation pin for `visual_content_detected`.** Extracted `deriveVisualContentDetected({blankish, denied, botDetection})` as a named exported function (was inline arithmetic in `doNavigate`). Three new tests in `services/browser-sandbox/src/__tests__/action-executor.test.ts` pin the truth table — full visibility case, 7-case negative truth-table, and the structural invariant `visual_content_detected: false ⇔ at least one sibling dishonesty-class field is true`. The invariant is the load-bearing reason `visual_content_detected` doesn't need a separate dishonesty rule (its negation co-occurs with rules that ARE intercepted); a future regression that breaks the derivation — e.g. someone adds a fourth heuristic flag without folding it into the derivation — fires the test instead of silently re-opening the dishonesty surface.
 
-**Sync-invariant graduation, generalized.** The prior changeset named "4 fields graduate from 2-of-3 to 3-of-3." This sweep brings the dishonesty-persistent count to 5 (added blank_page_detected, access_denied_detected). More importantly, it encodes the dishonesty-class registry AS DATA so the future "is every dishonesty-class field 3-of-3?" question is answered by the gate, not by a code review. The pattern is now a _finished_ exemplar — the next typed-truth field that ships dishonesty-persistent gets the runtime floor by gate-enforced default, not by reviewer eyeball.
+**Sync-invariant graduation, generalized.** The prior changeset named "4 fields graduate from 2-of-3 to 3-of-3." This sweep brings the dishonesty-persistent count to 5 (added blank*page_detected, access_denied_detected). More importantly, it encodes the dishonesty-class registry AS DATA so the future "is every dishonesty-class field 3-of-3?" question is answered by the gate, not by a code review. The pattern is now a \_finished* exemplar — the next typed-truth field that ships dishonesty-persistent gets the runtime floor by gate-enforced default, not by reviewer eyeball.
 
 Test counts: ai-core 448 → 454 (6 new dishonest-closing tests covering the two new rules × 3 pins each), sandbox 241 → 244 (3 derivation pins). Drift defenses: 83 hard gates green; 87 effectiveness probes green (one new probe for the dishonesty-persistent sync invariant). Graph-wide typecheck clean. No API breaks.
