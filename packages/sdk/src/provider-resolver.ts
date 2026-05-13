@@ -123,10 +123,10 @@ export function defaultModelForVendor(vendor: ByokVendor): string {
       return DEFAULT_OPENAI_MODEL;
     case "google":
       return DEFAULT_GOOGLE_MODEL;
-    case "deepseek":
-      return DEFAULT_DEEPSEEK_MODEL;
     case "groq":
       return DEFAULT_GROQ_MODEL;
+    case "deepseek":
+      return DEFAULT_DEEPSEEK_MODEL;
   }
 }
 
@@ -143,10 +143,10 @@ export function canonicalVendorBaseUrl(vendor: ByokVendor): string {
       return OPENAI_CANONICAL_URL;
     case "google":
       return GOOGLE_OPENAI_COMPAT_URL;
-    case "deepseek":
-      return DEEPSEEK_CANONICAL_URL;
     case "groq":
       return GROQ_CANONICAL_URL;
+    case "deepseek":
+      return DEEPSEEK_CANONICAL_URL;
   }
 }
 

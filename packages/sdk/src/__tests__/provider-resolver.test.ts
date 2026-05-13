@@ -43,8 +43,8 @@ describe("defaultModelForVendor", () => {
     expect(defaultModelForVendor("anthropic")).toBe(DEFAULT_ANTHROPIC_MODEL);
     expect(defaultModelForVendor("openai")).toBe(DEFAULT_OPENAI_MODEL);
     expect(defaultModelForVendor("google")).toBe(DEFAULT_GOOGLE_MODEL);
-    expect(defaultModelForVendor("deepseek")).toBe(DEFAULT_DEEPSEEK_MODEL);
     expect(defaultModelForVendor("groq")).toBe(DEFAULT_GROQ_MODEL);
+    expect(defaultModelForVendor("deepseek")).toBe(DEFAULT_DEEPSEEK_MODEL);
   });
 });
 
@@ -55,8 +55,8 @@ describe("canonicalVendorBaseUrl", () => {
     expect(canonicalVendorBaseUrl("anthropic")).toBe("https://api.anthropic.com");
     expect(canonicalVendorBaseUrl("openai")).toBe("https://api.openai.com/v1");
     expect(canonicalVendorBaseUrl("google")).toBe(GOOGLE_OPENAI_COMPAT_URL);
-    expect(canonicalVendorBaseUrl("deepseek")).toBe(DEEPSEEK_CANONICAL_URL);
     expect(canonicalVendorBaseUrl("groq")).toBe(GROQ_CANONICAL_URL);
+    expect(canonicalVendorBaseUrl("deepseek")).toBe(DEEPSEEK_CANONICAL_URL);
   });
 });
 
@@ -560,8 +560,8 @@ describe("type invariants", () => {
       { mode: "byok", vendor: "anthropic", apiKey: "k" },
       { mode: "byok", vendor: "openai", apiKey: "k" },
       { mode: "byok", vendor: "google", apiKey: "k" },
-      { mode: "byok", vendor: "deepseek", apiKey: "k" },
       { mode: "byok", vendor: "groq", apiKey: "k" },
+      { mode: "byok", vendor: "deepseek", apiKey: "k" },
       { mode: "on-device", backend: "webllm" },
       { mode: "on-device", backend: "apple-fm" },
       { mode: "on-device", backend: "mlx" },

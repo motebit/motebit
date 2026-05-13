@@ -144,7 +144,7 @@ export interface ByokProviderConfig {
 }
 
 // @public
-export type ByokVendor = "anthropic" | "openai" | "google" | "deepseek" | "groq";
+export type ByokVendor = "anthropic" | "openai" | "google" | "groq" | "deepseek";
 
 // @public
 export function canonicalVendorBaseUrl(vendor: ByokVendor): string;

@@ -403,6 +403,17 @@ export function IntelligenceTab({
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
+              style={[styles.radioItem, activeByokVendor === "groq" && styles.radioActive]}
+              onPress={() => onChangeProvider("groq")}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[styles.radioText, activeByokVendor === "groq" && styles.radioTextActive]}
+              >
+                Groq
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
               style={[styles.radioItem, activeByokVendor === "deepseek" && styles.radioActive]}
               onPress={() => onChangeProvider("deepseek")}
               activeOpacity={0.7}
@@ -414,17 +425,6 @@ export function IntelligenceTab({
                 ]}
               >
                 DeepSeek
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.radioItem, activeByokVendor === "groq" && styles.radioActive]}
-              onPress={() => onChangeProvider("groq")}
-              activeOpacity={0.7}
-            >
-              <Text
-                style={[styles.radioText, activeByokVendor === "groq" && styles.radioTextActive]}
-              >
-                Groq
               </Text>
             </TouchableOpacity>
           </View>
@@ -483,6 +483,21 @@ export function IntelligenceTab({
               />
             </>
           )}
+          {activeByokVendor === "groq" && (
+            <>
+              <Text style={styles.sectionTitle}>Groq API Key</Text>
+              <TextInput
+                style={styles.textField}
+                value={groqKey}
+                onChangeText={onChangeGroqKey}
+                placeholder="gsk_..."
+                placeholderTextColor={colors.inputPlaceholder}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </>
+          )}
           {activeByokVendor === "deepseek" && (
             <>
               <Text style={styles.sectionTitle}>DeepSeek API Key</Text>
@@ -506,21 +521,6 @@ export function IntelligenceTab({
               >
                 Hosted in China.
               </Text>
-            </>
-          )}
-          {activeByokVendor === "groq" && (
-            <>
-              <Text style={styles.sectionTitle}>Groq API Key</Text>
-              <TextInput
-                style={styles.textField}
-                value={groqKey}
-                onChangeText={onChangeGroqKey}
-                placeholder="gsk_..."
-                placeholderTextColor={colors.inputPlaceholder}
-                secureTextEntry
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
             </>
           )}
         </View>

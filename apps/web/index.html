@@ -7197,22 +7197,6 @@
                   </button>
                   <button
                     class="byok-provider-btn"
-                    data-byok="deepseek"
-                    style="
-                      flex: 1;
-                      padding: 6px;
-                      border: 1px solid var(--border-light);
-                      border-radius: 6px;
-                      background: transparent;
-                      color: var(--text-muted);
-                      font-size: 12px;
-                      cursor: pointer;
-                    "
-                  >
-                    DeepSeek
-                  </button>
-                  <button
-                    class="byok-provider-btn"
                     data-byok="groq"
                     style="
                       flex: 1;
@@ -7226,6 +7210,22 @@
                     "
                   >
                     Groq
+                  </button>
+                  <button
+                    class="byok-provider-btn"
+                    data-byok="deepseek"
+                    style="
+                      flex: 1;
+                      padding: 6px;
+                      border: 1px solid var(--border-light);
+                      border-radius: 6px;
+                      background: transparent;
+                      color: var(--text-muted);
+                      font-size: 12px;
+                      cursor: pointer;
+                    "
+                  >
+                    DeepSeek
                   </button>
                 </div>
               </div>
@@ -7322,6 +7322,39 @@
                   </select>
                 </div>
               </div>
+              <div id="byok-groq" style="display: none">
+                <div class="settings-field">
+                  <label for="groq-api-key">API Key</label>
+                  <div class="settings-key-row">
+                    <input
+                      id="groq-api-key"
+                      type="password"
+                      placeholder="gsk_..."
+                      autocomplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      class="tts-key-reveal"
+                      data-target="groq-api-key"
+                      aria-label="Show key"
+                      aria-pressed="false"
+                    >
+                      Show
+                    </button>
+                  </div>
+                </div>
+                <div class="settings-field">
+                  <label for="groq-model">Model</label>
+                  <select id="groq-model">
+                    <option value="llama-3.3-70b-versatile" selected>
+                      llama-3.3-70b-versatile — Llama 3.3 70B (tool-use)
+                    </option>
+                    <option value="openai/gpt-oss-120b">
+                      openai/gpt-oss-120b — GPT-OSS 120B (tool-use)
+                    </option>
+                  </select>
+                </div>
+              </div>
               <div id="byok-deepseek" style="display: none">
                 <div class="settings-field">
                   <label for="deepseek-api-key">API Key</label>
@@ -7359,39 +7392,6 @@
                   <select id="deepseek-model">
                     <option value="deepseek-chat" selected>
                       deepseek-chat — DeepSeek V3 (tool-use)
-                    </option>
-                  </select>
-                </div>
-              </div>
-              <div id="byok-groq" style="display: none">
-                <div class="settings-field">
-                  <label for="groq-api-key">API Key</label>
-                  <div class="settings-key-row">
-                    <input
-                      id="groq-api-key"
-                      type="password"
-                      placeholder="gsk_..."
-                      autocomplete="new-password"
-                    />
-                    <button
-                      type="button"
-                      class="tts-key-reveal"
-                      data-target="groq-api-key"
-                      aria-label="Show key"
-                      aria-pressed="false"
-                    >
-                      Show
-                    </button>
-                  </div>
-                </div>
-                <div class="settings-field">
-                  <label for="groq-model">Model</label>
-                  <select id="groq-model">
-                    <option value="llama-3.3-70b-versatile" selected>
-                      llama-3.3-70b-versatile — Llama 3.3 70B (tool-use)
-                    </option>
-                    <option value="openai/gpt-oss-120b">
-                      openai/gpt-oss-120b — GPT-OSS 120B (tool-use)
                     </option>
                   </select>
                 </div>

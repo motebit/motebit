@@ -17,8 +17,8 @@ export type CliProvider =
   | "anthropic"
   | "openai"
   | "google"
-  | "deepseek"
   | "groq"
+  | "deepseek"
   | "local-server"
   | "proxy";
 
@@ -183,8 +183,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     "anthropic",
     "openai",
     "google",
-    "deepseek",
     "groq",
+    "deepseek",
     "local-server",
     "proxy",
   ];
@@ -202,10 +202,10 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
         ? "gpt-5.4-mini"
         : cliProvider === "google"
           ? "gemini-2.5-flash"
-          : cliProvider === "deepseek"
-            ? "deepseek-chat"
-            : cliProvider === "groq"
-              ? "llama-3.3-70b-versatile"
+          : cliProvider === "groq"
+            ? "llama-3.3-70b-versatile"
+            : cliProvider === "deepseek"
+              ? "deepseek-chat"
               : "claude-sonnet-4-6";
   const allowedPaths =
     values["allowed-paths"] != null && values["allowed-paths"] !== ""
