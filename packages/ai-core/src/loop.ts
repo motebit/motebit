@@ -20,6 +20,8 @@ import type { BehaviorEngine } from "@motebit/behavior-engine";
 import type { StreamingProvider } from "./index.js";
 import { inferStateFromText } from "./infer-state.js";
 import { isSelfReferential, withStageTimeout, STAGE_TIMEOUTS_MS } from "./core.js";
+import { detectDishonestClosing } from "./dishonest-closing.js";
+import type { ToolResultLogEntry } from "./dishonest-closing.js";
 
 // === Constants ===
 
@@ -775,6 +777,13 @@ export async function* runTurnStreaming(
   let toolCallsSucceeded = 0;
   let toolCallsBlocked = 0;
   let toolCallsFailed = 0;
+  // Typed-truth log for the dishonest-closing intercept. Captures
+  // structured tool result data PRE-sanitization so the typed-truth
+  // fields (navigation_triggered, recovery_hint, bot_detection_detected)
+  // are intact at intercept time. Failure entries carry `errorReason`
+  // so the `frame_stale` register reaches the intercept too. See
+  // `dishonest-closing.ts` for the doctrine + walk-back semantics.
+  const toolResultsLog: ToolResultLogEntry[] = [];
 
   // Behavioral constraint: track consecutive identical tool calls to prevent
   // pathological loops (e.g. recall → recall → recall × 10). After 2 consecutive
@@ -1093,6 +1102,17 @@ export async function* runTurnStreaming(
           tool_call_id: toolCall.id,
           content: JSON.stringify(sanitized),
         });
+        // Typed-truth log — capture the PRE-sanitization data so the
+        // dishonest-closing intercept sees the structural fields
+        // (navigation_triggered, recovery_hint, bot_detection_detected)
+        // intact. Sanitization wraps for prompt-injection defense which
+        // would obscure these fields if we read from history.
+        toolResultsLog.push({
+          name: toolCall.name,
+          ok: true,
+          data: result.data,
+          errorReason: null,
+        });
         continue;
       }
 
@@ -1165,6 +1185,17 @@ export async function* runTurnStreaming(
           tool_call_id: toolCall.id,
           content: JSON.stringify({ ok: false, error: msg }),
         });
+        // Typed-truth log — capture the typed error reason so the
+        // dishonest-closing intercept can see frame_stale (the one
+        // failure-class field that contradicts a "Done" claim). Other
+        // reasons fall through the count-based fallback branches and
+        // don't need re-correction here.
+        toolResultsLog.push({
+          name: toolCall.name,
+          ok: false,
+          data: null,
+          errorReason: thrownReason ?? null,
+        });
         continue;
       }
       toolCallsSucceeded++;
@@ -1216,6 +1247,16 @@ export async function* runTurnStreaming(
         role: "tool",
         tool_call_id: toolCall.id,
         content: JSON.stringify(wrappedResult),
+      });
+      // Typed-truth log — capture the PRE-wrap data (`result.data`,
+      // not `wrappedResult.data` which has been wrapped in
+      // `[EXTERNAL_DATA]` markers for the AI). The dishonest-closing
+      // intercept reads structured fields, not the wrapped string.
+      toolResultsLog.push({
+        name: toolCall.name,
+        ok: true,
+        data: result.data,
+        errorReason: null,
       });
     }
 
@@ -1342,6 +1383,47 @@ export async function* runTurnStreaming(
     // see a coherent assistant message rather than the empty string
     // they would have seen pre-fix.
     finalResponse = { ...finalResponse, text: finalText };
+  }
+
+  // Dishonest-closing intercept — graduates four typed-truth fields
+  // from prompt-only teaching to runtime-enforced correction. When
+  // the model emits non-empty closing text that claims success
+  // ("Done", "submitted", "typed it in", "the page shows...") AND
+  // the most recent terminal action's typed truth contradicts the
+  // claim AND no successful retry of the same kind followed, append
+  // a correction so the user sees the truth before they act on the
+  // lie. The streaming model means we cannot UNSEND the model's
+  // text; we can only APPEND a correction in the same turn.
+  //
+  // Fields in scope (dishonesty-class): navigation_triggered,
+  // recovery_hint, bot_detection_detected, frame_stale.
+  // Out-of-scope (affordance-class): submit_button_id — that's a
+  // hint, not a failure signal; including it would trigger spurious
+  // overrides.
+  //
+  // Sync-invariant graduation: each of the four wire fields
+  // previously had wire+prompt coverage but no runtime enforcement
+  // (2-of-3 of the canonical typed-truth-perception triple). After
+  // this intercept, all four are 3-of-3 (wire + prompt + runtime).
+  //
+  // Doctrine: `runtime-invariants-over-prompt-rules.md` —
+  // `synthesizeClosingFallback` was named the exemplar; this is the
+  // exemplar extended to its full scope.
+  if (finalText.trim() !== "") {
+    const correction = detectDishonestClosing({
+      finalText,
+      toolResultsLog,
+    });
+    if (correction !== null) {
+      yield { type: "text", text: `\n\n${correction}` };
+      // Reflect the corrected text on finalResponse so memory
+      // candidates / conversation persistence / state inference see
+      // the same coherent message the user saw, not the pre-correction
+      // claim alone.
+      const correctedText = `${finalText}\n\n${correction}`;
+      finalText = correctedText;
+      finalResponse = { ...finalResponse, text: correctedText };
+    }
   }
 
   // 4. Form memories from candidates (governed if governor present)
