@@ -46,6 +46,8 @@ export const SECURE_STORE_KEYS = {
   googleApiKey: "motebit_google_api_key",
   /** DeepSeek API key for BYOK chat provider (OpenAI-compatible endpoint at api.deepseek.com). */
   deepseekApiKey: "motebit_deepseek_api_key",
+  /** Groq API key for BYOK chat provider (OpenAI-compatible endpoint at api.groq.com/openai/v1). */
+  groqApiKey: "motebit_groq_api_key",
   /** Identity binding: motebit_id persisted from first launch. */
   motebitId: "motebit_motebit_id",
   /** Identity binding: device_id persisted from first launch. */

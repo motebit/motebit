@@ -40,6 +40,26 @@ export const GOOGLE_MODELS = [
 export const DEEPSEEK_MODELS = ["deepseek-chat"] as const;
 
 /**
+ * Groq-hosted models served via Groq's OpenAI-compatible API
+ * (`https://api.groq.com/openai/v1`). Groq's pitch is speed + price —
+ * the LPU inference hardware delivers ~280 tokens/second on Llama 3.3
+ * 70B (roughly 5× faster than typical GPU-served Llama) at $0.59/M
+ * input · $0.79/M output (~5× cheaper than Claude Sonnet, ~5× more
+ * expensive than DeepSeek). Independent American option in the BYOK
+ * registry — post-NVIDIA-licensing-deal (December 2025) Groq remains
+ * an independent company under CEO Simon Edwards; the API service
+ * continues. Default `llama-3.3-70b-versatile` is the tool-use-
+ * capable workhorse; `openai/gpt-oss-120b` is OpenAI's open-weights
+ * release (only hosted competitively via Groq, MoE architecture
+ * comparable to GPT-4 class on tool benchmarks).
+ *
+ * The list shape stays symmetric with the other per-vendor
+ * `*_MODELS` constants so the settings UIs across surfaces consume
+ * them identically.
+ */
+export const GROQ_MODELS = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"] as const;
+
+/**
  * Common open-weights models that any local inference server can run.
  *
  * These identifiers are the model FAMILIES supported by every major local
@@ -105,6 +125,14 @@ export const DEFAULT_GOOGLE_MODEL = "gemini-2.5-flash";
  * `DEFAULT_GOOGLE_MODEL`.
  */
 export const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
+
+/**
+ * Default Groq model — Llama 3.3 70B served at ~280 tok/sec via the
+ * Groq LPU inference stack. Tool-use-capable; matches the per-vendor
+ * "default tier" convention used by the other `DEFAULT_*_MODEL`
+ * constants.
+ */
+export const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
 
 /** Default Ollama model — used as the `local-server` default too. */
 export const DEFAULT_OLLAMA_MODEL = "llama3.2";

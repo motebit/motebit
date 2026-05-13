@@ -57,6 +57,7 @@ export type ProviderType =
   | "openai"
   | "google"
   | "deepseek"
+  | "groq"
   | "proxy"
   | "on-device";
 

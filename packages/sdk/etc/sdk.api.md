@@ -144,7 +144,7 @@ export interface ByokProviderConfig {
 }
 
 // @public
-export type ByokVendor = "anthropic" | "openai" | "google" | "deepseek";
+export type ByokVendor = "anthropic" | "openai" | "google" | "deepseek" | "groq";
 
 // @public
 export function canonicalVendorBaseUrl(vendor: ByokVendor): string;
@@ -253,6 +253,9 @@ export const DEFAULT_GOOGLE_MODEL = "gemini-2.5-flash";
 
 // @public
 export const DEFAULT_GOVERNANCE_CONFIG: GovernanceConfig;
+
+// @public
+export const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
 
 // @public
 export const DEFAULT_LOCAL_SERVER_MODEL = "llama3.2";
@@ -398,6 +401,12 @@ export interface GradientStoreAdapter {
     // (undocumented)
     save(snapshot: GradientSnapshot): void;
 }
+
+// @public
+export const GROQ_CANONICAL_URL = "https://api.groq.com/openai/v1";
+
+// @public
+export const GROQ_MODELS: readonly ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"];
 
 // @public (undocumented)
 export interface IntelligenceProvider {

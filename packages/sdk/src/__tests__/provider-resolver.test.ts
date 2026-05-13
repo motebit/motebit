@@ -14,8 +14,10 @@ import {
   DEFAULT_OPENAI_MODEL,
   DEFAULT_GOOGLE_MODEL,
   DEFAULT_DEEPSEEK_MODEL,
+  DEFAULT_GROQ_MODEL,
   DEFAULT_OLLAMA_MODEL,
   DEEPSEEK_CANONICAL_URL,
+  GROQ_CANONICAL_URL,
 } from "../index";
 
 // === Test fixtures ===
@@ -42,6 +44,7 @@ describe("defaultModelForVendor", () => {
     expect(defaultModelForVendor("openai")).toBe(DEFAULT_OPENAI_MODEL);
     expect(defaultModelForVendor("google")).toBe(DEFAULT_GOOGLE_MODEL);
     expect(defaultModelForVendor("deepseek")).toBe(DEFAULT_DEEPSEEK_MODEL);
+    expect(defaultModelForVendor("groq")).toBe(DEFAULT_GROQ_MODEL);
   });
 });
 
@@ -53,6 +56,7 @@ describe("canonicalVendorBaseUrl", () => {
     expect(canonicalVendorBaseUrl("openai")).toBe("https://api.openai.com/v1");
     expect(canonicalVendorBaseUrl("google")).toBe(GOOGLE_OPENAI_COMPAT_URL);
     expect(canonicalVendorBaseUrl("deepseek")).toBe(DEEPSEEK_CANONICAL_URL);
+    expect(canonicalVendorBaseUrl("groq")).toBe(GROQ_CANONICAL_URL);
   });
 });
 
@@ -247,6 +251,46 @@ describe("resolveProviderSpec — byok deepseek", () => {
       }),
     );
     if (spec.kind === "cloud") expect(spec.baseUrl).toBe("https://deepseek-proxy.example.com");
+  });
+});
+
+describe("resolveProviderSpec — byok groq", () => {
+  it("dispatches Groq as openai-compat at the Groq canonical endpoint", () => {
+    const spec = resolveProviderSpec(
+      {
+        mode: "byok",
+        vendor: "groq",
+        apiKey: "gsk_xxx",
+        model: "llama-3.3-70b-versatile",
+      },
+      makeEnv(),
+    );
+    expect(spec.kind).toBe("cloud");
+    if (spec.kind === "cloud") {
+      expect(spec.wireProtocol).toBe("openai");
+      expect(spec.apiKey).toBe("gsk_xxx");
+      expect(spec.model).toBe("llama-3.3-70b-versatile");
+      expect(spec.baseUrl).toBe(GROQ_CANONICAL_URL);
+    }
+  });
+  it("falls back to DEFAULT_GROQ_MODEL", () => {
+    const spec = resolveProviderSpec(
+      { mode: "byok", vendor: "groq", apiKey: "gsk_xxx" },
+      makeEnv(),
+    );
+    if (spec.kind === "cloud") expect(spec.model).toBe(DEFAULT_GROQ_MODEL);
+  });
+  it("env.cloudBaseUrl can substitute the canonical URL (browser CORS proxy)", () => {
+    const spec = resolveProviderSpec(
+      { mode: "byok", vendor: "groq", apiKey: "gsk_xxx" },
+      makeEnv({
+        cloudBaseUrl: (proto, canonical) =>
+          proto === "openai" && canonical === GROQ_CANONICAL_URL
+            ? "https://groq-proxy.example.com"
+            : canonical,
+      }),
+    );
+    if (spec.kind === "cloud") expect(spec.baseUrl).toBe("https://groq-proxy.example.com");
   });
 });
 
@@ -517,11 +561,12 @@ describe("type invariants", () => {
       { mode: "byok", vendor: "openai", apiKey: "k" },
       { mode: "byok", vendor: "google", apiKey: "k" },
       { mode: "byok", vendor: "deepseek", apiKey: "k" },
+      { mode: "byok", vendor: "groq", apiKey: "k" },
       { mode: "on-device", backend: "webllm" },
       { mode: "on-device", backend: "apple-fm" },
       { mode: "on-device", backend: "mlx" },
       { mode: "on-device", backend: "local-server" },
     ];
-    expect(configs.length).toBe(10);
+    expect(configs.length).toBe(11);
   });
 });

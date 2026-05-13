@@ -13,6 +13,7 @@ import {
   OPENAI_MODELS,
   GOOGLE_MODELS,
   DEEPSEEK_MODELS,
+  GROQ_MODELS,
   LOCAL_SERVER_SUGGESTED_MODELS,
   PROXY_MODELS,
   APPROVAL_PRESET_CONFIGS,
@@ -65,12 +66,13 @@ type ProviderMode = "motebit-cloud" | "byok" | "on-device";
 /** Map a flat `DesktopProvider` to its top-level UI mode. */
 function modeForProvider(p: DesktopAIConfig["provider"]): ProviderMode {
   if (p === "proxy") return "motebit-cloud";
-  if (p === "anthropic" || p === "openai" || p === "google" || p === "deepseek") return "byok";
+  if (p === "anthropic" || p === "openai" || p === "google" || p === "deepseek" || p === "groq")
+    return "byok";
   return "on-device"; // local-server
 }
 
 let activeMode: ProviderMode = "motebit-cloud";
-let activeByokVendor: "anthropic" | "openai" | "google" | "deepseek" = "anthropic";
+let activeByokVendor: "anthropic" | "openai" | "google" | "deepseek" | "groq" = "anthropic";
 const settingsMaxTokens = document.getElementById(
   "settings-max-tokens",
 ) as HTMLSelectElement | null;
@@ -235,11 +237,13 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
           ? GOOGLE_MODELS
           : provider === "deepseek"
             ? DEEPSEEK_MODELS
-            : provider === "local-server"
-              ? LOCAL_SERVER_MODELS
-              : provider === "proxy"
-                ? PROXY_MODELS
-                : ANTHROPIC_MODELS;
+            : provider === "groq"
+              ? GROQ_MODELS
+              : provider === "local-server"
+                ? LOCAL_SERVER_MODELS
+                : provider === "proxy"
+                  ? PROXY_MODELS
+                  : ANTHROPIC_MODELS;
 
     // (API key field visibility is governed by mode-section-byok's `.active`
     // class — no per-provider inline display hack needed.)
@@ -333,7 +337,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   }
 
   function populateByokModeModels(
-    vendor: "anthropic" | "openai" | "google" | "deepseek",
+    vendor: "anthropic" | "openai" | "google" | "deepseek" | "groq",
     currentModel?: string,
   ): void {
     const models: readonly string[] =
@@ -343,7 +347,9 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
           ? GOOGLE_MODELS
           : vendor === "deepseek"
             ? DEEPSEEK_MODELS
-            : ANTHROPIC_MODELS;
+            : vendor === "groq"
+              ? GROQ_MODELS
+              : ANTHROPIC_MODELS;
     settingsByokModels.innerHTML = "";
     for (const model of models) {
       const opt = document.createElement("option");
@@ -521,7 +527,13 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   // datalist for the chosen vendor.
   document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const vendor = btn.dataset.byok as "anthropic" | "openai" | "google" | "deepseek" | undefined;
+      const vendor = btn.dataset.byok as
+        | "anthropic"
+        | "openai"
+        | "google"
+        | "deepseek"
+        | "groq"
+        | undefined;
       if (vendor == null) return;
       activeByokVendor = vendor;
       document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((b) => {
@@ -1629,7 +1641,8 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       activeProvider === "anthropic" ||
       activeProvider === "openai" ||
       activeProvider === "google" ||
-      activeProvider === "deepseek"
+      activeProvider === "deepseek" ||
+      activeProvider === "groq"
     ) {
       activeByokVendor = activeProvider;
     }

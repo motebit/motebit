@@ -87,7 +87,7 @@ import type { CliConfig } from "./args.js";
 import { CONFIG_DIR, loadFullConfig } from "./config.js";
 
 export function getApiKey(
-  provider: "anthropic" | "openai" | "google" | "deepseek" = "anthropic",
+  provider: "anthropic" | "openai" | "google" | "deepseek" | "groq" = "anthropic",
 ): string {
   const envVar =
     provider === "openai"
@@ -96,7 +96,9 @@ export function getApiKey(
         ? "GOOGLE_API_KEY"
         : provider === "deepseek"
           ? "DEEPSEEK_API_KEY"
-          : "ANTHROPIC_API_KEY";
+          : provider === "groq"
+            ? "GROQ_API_KEY"
+            : "ANTHROPIC_API_KEY";
   const key = process.env[envVar];
   if (key == null || key === "") {
     const hint =
@@ -106,7 +108,9 @@ export function getApiKey(
           ? "Set it with: export GOOGLE_API_KEY=AIza..."
           : provider === "deepseek"
             ? "Set it with: export DEEPSEEK_API_KEY=sk-..."
-            : "Set it with: export ANTHROPIC_API_KEY=sk-ant-...";
+            : provider === "groq"
+              ? "Set it with: export GROQ_API_KEY=gsk_..."
+              : "Set it with: export ANTHROPIC_API_KEY=sk-ant-...";
     console.error(`Error: ${envVar} environment variable is not set.\n${hint}`);
     process.exit(1);
   }
@@ -235,6 +239,14 @@ function cliConfigToUnified(config: CliConfig): UnifiedProviderConfig {
         mode: "byok",
         vendor: "deepseek",
         apiKey: getApiKey("deepseek"),
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "groq":
+      return {
+        mode: "byok",
+        vendor: "groq",
+        apiKey: getApiKey("groq"),
         model: config.model,
         maxTokens: config.maxTokens,
       };

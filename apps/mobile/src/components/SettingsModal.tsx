@@ -45,6 +45,7 @@ import {
   DEFAULT_OPENAI_MODEL,
   DEFAULT_GOOGLE_MODEL,
   DEFAULT_DEEPSEEK_MODEL,
+  DEFAULT_GROQ_MODEL,
   DEFAULT_OLLAMA_MODEL,
 } from "@motebit/sdk";
 import { BillingPanel } from "./BillingPanel";
@@ -117,6 +118,7 @@ export function SettingsModal({
   const [apiKey, setApiKey] = useState("");
   const [googleKey, setGoogleKey] = useState("");
   const [deepseekKey, setDeepseekKey] = useState("");
+  const [groqKey, setGroqKey] = useState("");
   const [openaiKey, setOpenaiKey] = useState("");
   const [elevenLabsKey, setElevenLabsKey] = useState("");
   const [billingRelayUrl, setBillingRelayUrl] = useState<string | null>(null);
@@ -142,18 +144,25 @@ export function SettingsModal({
       void SecureStore.getItemAsync(SECURE_STORE_KEYS.deepseekApiKey).then((k) => {
         if (k != null && k !== "") setDeepseekKey(k);
       });
+    } else if (settings.provider === "groq") {
+      void SecureStore.getItemAsync(SECURE_STORE_KEYS.groqApiKey).then((k) => {
+        if (k != null && k !== "") setGroqKey(k);
+      });
     } else {
       void SecureStore.getItemAsync(SECURE_STORE_KEYS.anthropicApiKey).then((k) => {
         if (k != null && k !== "") setApiKey(k);
       });
     }
-    // Pre-load google + deepseek keys independently so each section shows the
-    // stored value even when the active provider is something else.
+    // Pre-load google + deepseek + groq keys independently so each section
+    // shows the stored value even when the active provider is something else.
     void SecureStore.getItemAsync(SECURE_STORE_KEYS.googleApiKey).then((k) => {
       if (k != null && k !== "") setGoogleKey(k);
     });
     void SecureStore.getItemAsync(SECURE_STORE_KEYS.deepseekApiKey).then((k) => {
       if (k != null && k !== "") setDeepseekKey(k);
+    });
+    void SecureStore.getItemAsync(SECURE_STORE_KEYS.groqApiKey).then((k) => {
+      if (k != null && k !== "") setGroqKey(k);
     });
     void SecureStore.getItemAsync(SECURE_STORE_KEYS.openaiVoiceKey).then((k) => {
       if (k != null && k !== "") setOpenaiKey(k);
@@ -180,6 +189,9 @@ export function SettingsModal({
     }
     if (draft.provider === "deepseek" && deepseekKey) {
       await SecureStore.setItemAsync(SECURE_STORE_KEYS.deepseekApiKey, deepseekKey);
+    }
+    if (draft.provider === "groq" && groqKey) {
+      await SecureStore.setItemAsync(SECURE_STORE_KEYS.groqApiKey, groqKey);
     }
     if (openaiKey) {
       await SecureStore.setItemAsync(SECURE_STORE_KEYS.openaiVoiceKey, openaiKey);
@@ -225,7 +237,9 @@ export function SettingsModal({
                 ? googleKey
                 : draft.provider === "deepseek"
                   ? deepseekKey
-                  : undefined,
+                  : draft.provider === "groq"
+                    ? groqKey
+                    : undefined,
         localServerEndpoint:
           draft.provider === "local-server" ||
           (draft.provider === "on-device" && draft.localBackend === "local-server")
@@ -236,7 +250,18 @@ export function SettingsModal({
     }
 
     onSave(draft, aiConfig);
-  }, [draft, apiKey, googleKey, deepseekKey, openaiKey, elevenLabsKey, app, settings, onSave]);
+  }, [
+    draft,
+    apiKey,
+    googleKey,
+    deepseekKey,
+    groqKey,
+    openaiKey,
+    elevenLabsKey,
+    app,
+    settings,
+    onSave,
+  ]);
 
   const identity = useMemo(() => app.getIdentityInfo(), [app]);
 
@@ -329,6 +354,7 @@ export function SettingsModal({
                 apiKey={apiKey}
                 googleKey={googleKey}
                 deepseekKey={deepseekKey}
+                groqKey={groqKey}
                 localServerEndpoint={draft.localServerEndpoint}
                 localBackend={draft.localBackend ?? "apple-fm"}
                 voice={draft.voice}
@@ -348,13 +374,16 @@ export function SettingsModal({
                               ? DEFAULT_GOOGLE_MODEL
                               : p === "deepseek"
                                 ? DEFAULT_DEEPSEEK_MODEL
-                                : DEFAULT_ANTHROPIC_MODEL,
+                                : p === "groq"
+                                  ? DEFAULT_GROQ_MODEL
+                                  : DEFAULT_ANTHROPIC_MODEL,
                   })
                 }
                 onChangeModel={(m) => updateDraft({ model: m })}
                 onChangeApiKey={setApiKey}
                 onChangeGoogleKey={setGoogleKey}
                 onChangeDeepseekKey={setDeepseekKey}
+                onChangeGroqKey={setGroqKey}
                 onChangeLocalServerEndpoint={(e) => updateDraft({ localServerEndpoint: e })}
                 onChangeLocalBackend={(b) => updateDraft({ localBackend: b })}
                 onChangeVoice={(patch) => updateDraft({ voice: { ...draft.voice, ...patch } })}

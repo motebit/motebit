@@ -39,6 +39,7 @@ import {
   DEFAULT_OPENAI_MODEL,
   DEFAULT_GOOGLE_MODEL,
   DEFAULT_DEEPSEEK_MODEL,
+  DEFAULT_GROQ_MODEL,
   DEFAULT_OLLAMA_MODEL,
   DEFAULT_PROXY_MODEL,
 } from "./models.js";
@@ -68,6 +69,17 @@ export const OPENAI_CANONICAL_URL = "https://api.openai.com/v1";
  * substitute via `env.cloudBaseUrl`.
  */
 export const DEEPSEEK_CANONICAL_URL = "https://api.deepseek.com";
+
+/**
+ * Canonical Groq API base URL. Groq exposes an OpenAI-compatible
+ * chat-completions endpoint at `{base}/chat/completions` (the
+ * `/openai/v1` path segment is part of Groq's URL — they namespace
+ * the OpenAI-shape API explicitly). The BYOK arm routes through
+ * `OpenAIProvider`, same path as Google / DeepSeek. Single source of
+ * truth — surfaces that need a CORS proxy or dev rewrite substitute
+ * via `env.cloudBaseUrl`.
+ */
+export const GROQ_CANONICAL_URL = "https://api.groq.com/openai/v1";
 
 /** Default Motebit Cloud relay URL. Surfaces may override via env. */
 export const DEFAULT_MOTEBIT_CLOUD_URL = "https://api.motebit.com";
@@ -113,6 +125,8 @@ export function defaultModelForVendor(vendor: ByokVendor): string {
       return DEFAULT_GOOGLE_MODEL;
     case "deepseek":
       return DEFAULT_DEEPSEEK_MODEL;
+    case "groq":
+      return DEFAULT_GROQ_MODEL;
   }
 }
 
@@ -131,6 +145,8 @@ export function canonicalVendorBaseUrl(vendor: ByokVendor): string {
       return GOOGLE_OPENAI_COMPAT_URL;
     case "deepseek":
       return DEEPSEEK_CANONICAL_URL;
+    case "groq":
+      return GROQ_CANONICAL_URL;
   }
 }
 

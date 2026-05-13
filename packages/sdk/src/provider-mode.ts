@@ -51,7 +51,7 @@ export type OnDeviceBackend = "apple-fm" | "mlx" | "webllm" | "local-server";
  * the wire-vocab boundary; affordability lands now for capital-
  * constrained users via the additive registry shape.
  */
-export type ByokVendor = "anthropic" | "openai" | "google" | "deepseek";
+export type ByokVendor = "anthropic" | "openai" | "google" | "deepseek" | "groq";
 
 /** On-device mode config. */
 export interface OnDeviceProviderConfig {

@@ -211,6 +211,7 @@ export interface IntelligenceTabProps {
   apiKey: string;
   googleKey: string;
   deepseekKey: string;
+  groqKey: string;
   localServerEndpoint: string;
   localBackend: LocalBackend;
   /** Canonical voice config from `@motebit/sdk`. */
@@ -222,6 +223,7 @@ export interface IntelligenceTabProps {
   onChangeApiKey: (k: string) => void;
   onChangeGoogleKey: (k: string) => void;
   onChangeDeepseekKey: (k: string) => void;
+  onChangeGroqKey: (k: string) => void;
   onChangeLocalServerEndpoint: (e: string) => void;
   onChangeLocalBackend: (b: LocalBackend) => void;
   /** Patch-style update for the nested `voice` config. */
@@ -236,6 +238,7 @@ export function IntelligenceTab({
   apiKey,
   googleKey,
   deepseekKey,
+  groqKey,
   localServerEndpoint,
   localBackend,
   voice,
@@ -246,6 +249,7 @@ export function IntelligenceTab({
   onChangeApiKey,
   onChangeGoogleKey,
   onChangeDeepseekKey,
+  onChangeGroqKey,
   onChangeLocalServerEndpoint,
   onChangeLocalBackend,
   onChangeVoice,
@@ -265,15 +269,17 @@ export function IntelligenceTab({
       : provider === "anthropic" ||
           provider === "openai" ||
           provider === "google" ||
-          provider === "deepseek"
+          provider === "deepseek" ||
+          provider === "groq"
         ? "byok"
         : "on-device"; // "local-server" and "on-device" both land here
 
   // The active BYOK vendor mirrors the flat provider when in byok mode.
-  const activeByokVendor: "anthropic" | "openai" | "google" | "deepseek" =
+  const activeByokVendor: "anthropic" | "openai" | "google" | "deepseek" | "groq" =
     provider === "openai" ||
     provider === "google" ||
     provider === "deepseek" ||
+    provider === "groq" ||
     provider === "anthropic"
       ? provider
       : "anthropic";
@@ -290,7 +296,8 @@ export function IntelligenceTab({
         provider !== "anthropic" &&
         provider !== "openai" &&
         provider !== "google" &&
-        provider !== "deepseek"
+        provider !== "deepseek" &&
+        provider !== "groq"
       ) {
         onChangeProvider("anthropic");
       }
@@ -409,6 +416,17 @@ export function IntelligenceTab({
                 DeepSeek
               </Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.radioItem, activeByokVendor === "groq" && styles.radioActive]}
+              onPress={() => onChangeProvider("groq")}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[styles.radioText, activeByokVendor === "groq" && styles.radioTextActive]}
+              >
+                Groq
+              </Text>
+            </TouchableOpacity>
           </View>
 
           <Text style={styles.sectionTitle}>Model</Text>
@@ -488,6 +506,32 @@ export function IntelligenceTab({
               >
                 Open-source weights, ~10× cheaper than American alternatives. Hosted in China;
                 medical / financial / secret sensitivity tiers block all external AI by default.
+              </Text>
+            </>
+          )}
+          {activeByokVendor === "groq" && (
+            <>
+              <Text style={styles.sectionTitle}>Groq API Key</Text>
+              <TextInput
+                style={styles.textField}
+                value={groqKey}
+                onChangeText={onChangeGroqKey}
+                placeholder="gsk_..."
+                placeholderTextColor={colors.inputPlaceholder}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <Text
+                style={{
+                  marginTop: 6,
+                  color: colors.textMuted,
+                  fontSize: 11,
+                  lineHeight: 16,
+                }}
+              >
+                Meta Llama 3.3 70B via Groq's LPU inference — fastest American open-source option
+                (~280 tok/sec). ~5× cheaper than American closed-source alternatives.
               </Text>
             </>
           )}

@@ -130,6 +130,7 @@ export type MobileProvider =
   | "openai"
   | "google"
   | "deepseek"
+  | "groq"
   | "proxy"
   | "on-device";
 
@@ -255,6 +256,14 @@ export function mobileSettingsToUnifiedProvider(
       return {
         mode: "byok",
         vendor: "deepseek",
+        apiKey: apiKey ?? "",
+        model: settings.model,
+        maxTokens: settings.maxTokens,
+      };
+    case "groq":
+      return {
+        mode: "byok",
+        vendor: "groq",
         apiKey: apiKey ?? "",
         model: settings.model,
         maxTokens: settings.maxTokens,
@@ -425,6 +434,14 @@ function mobileConfigToUnified(config: MobileAIConfig): UnifiedProviderConfig {
       return {
         mode: "byok",
         vendor: "deepseek",
+        apiKey: config.apiKey ?? "",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "groq":
+      return {
+        mode: "byok",
+        vendor: "groq",
         apiKey: config.apiKey ?? "",
         model: config.model,
         maxTokens: config.maxTokens,

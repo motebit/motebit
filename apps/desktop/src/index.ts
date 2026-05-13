@@ -159,6 +159,7 @@ export type DesktopProvider =
   | "openai"
   | "google"
   | "deepseek"
+  | "groq"
   | "proxy";
 
 export interface DesktopAIConfig {
@@ -284,6 +285,14 @@ function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig 
       return {
         mode: "byok",
         vendor: "deepseek",
+        apiKey: config.apiKey ?? "",
+        model: config.model,
+        maxTokens: config.maxTokens,
+      };
+    case "groq":
+      return {
+        mode: "byok",
+        vendor: "groq",
         apiKey: config.apiKey ?? "",
         model: config.model,
         maxTokens: config.maxTokens,

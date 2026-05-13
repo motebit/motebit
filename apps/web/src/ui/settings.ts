@@ -130,7 +130,7 @@ const ttsInworldKey = document.getElementById("tts-inworld-key") as HTMLInputEle
 // === State ===
 
 let activeProviderTab: ProviderTab = "proxy";
-let activeByokProvider: "anthropic" | "openai" | "google" | "deepseek" = "anthropic";
+let activeByokProvider: "anthropic" | "openai" | "google" | "deepseek" | "groq" = "anthropic";
 /** On-Device backend: browser (WebLLM) or auto-detected local server. */
 let activeLocalBackend: "webllm" | "server" = "webllm";
 
@@ -783,7 +783,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // === BYOK Sub-Provider Toggle ===
   document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const byok = btn.dataset.byok as "anthropic" | "openai" | "google" | "deepseek";
+      const byok = btn.dataset.byok as "anthropic" | "openai" | "google" | "deepseek" | "groq";
       if (!byok) return;
       activeByokProvider = byok;
       setByokProviderUI(byok);
@@ -1188,6 +1188,11 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
             ) as HTMLSelectElement | null;
             if (deepseekApiKey) deepseekApiKey.value = config.apiKey;
             if (deepseekModel) deepseekModel.value = config.model ?? "deepseek-chat";
+          } else if (config.vendor === "groq") {
+            const groqApiKey = document.getElementById("groq-api-key") as HTMLInputElement | null;
+            const groqModel = document.getElementById("groq-model") as HTMLSelectElement | null;
+            if (groqApiKey) groqApiKey.value = config.apiKey;
+            if (groqModel) groqModel.value = config.model ?? "llama-3.3-70b-versatile";
           }
           break;
         }
@@ -1218,7 +1223,9 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   }
 
   /** Visually sync the BYOK sub-provider buttons + sections to `vendor`. */
-  function setByokProviderUI(vendor: "anthropic" | "openai" | "google" | "deepseek"): void {
+  function setByokProviderUI(
+    vendor: "anthropic" | "openai" | "google" | "deepseek" | "groq",
+  ): void {
     document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((b) => {
       const isActive = b.dataset.byok === vendor;
       b.classList.toggle("active", isActive);
@@ -1229,10 +1236,12 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const openaiSection = document.getElementById("byok-openai");
     const googleSection = document.getElementById("byok-google");
     const deepseekSection = document.getElementById("byok-deepseek");
+    const groqSection = document.getElementById("byok-groq");
     if (anthropicSection) anthropicSection.style.display = vendor === "anthropic" ? "" : "none";
     if (openaiSection) openaiSection.style.display = vendor === "openai" ? "" : "none";
     if (googleSection) googleSection.style.display = vendor === "google" ? "" : "none";
     if (deepseekSection) deepseekSection.style.display = vendor === "deepseek" ? "" : "none";
+    if (groqSection) groqSection.style.display = vendor === "groq" ? "" : "none";
   }
 
   function setLocalBackendUI(backend: "webllm" | "server"): void {
@@ -1313,6 +1322,20 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
             vendor: "deepseek",
             apiKey: deepseekApiKey?.value.trim() ?? "",
             model: deepseekModelEl?.value ?? "deepseek-chat",
+            maxTokens,
+          };
+        } else if (activeByokProvider === "groq") {
+          // US-hosted Meta-Llama path — Groq's LPU inference at
+          // ~280 tok/sec via OpenAI-compatible API. Fifth instance
+          // of agility-as-role for BYOK vendors. Same dispatch arm
+          // as DeepSeek / Google (wireProtocol: "openai").
+          const groqApiKey = document.getElementById("groq-api-key") as HTMLInputElement | null;
+          const groqModelEl = document.getElementById("groq-model") as HTMLSelectElement | null;
+          config = {
+            mode: "byok",
+            vendor: "groq",
+            apiKey: groqApiKey?.value.trim() ?? "",
+            model: groqModelEl?.value ?? "llama-3.3-70b-versatile",
             maxTokens,
           };
         } else if (activeByokProvider === "google") {
