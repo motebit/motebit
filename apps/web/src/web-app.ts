@@ -1235,13 +1235,56 @@ export class WebApp {
     const onReclaim = (): void => {
       machine.reclaimControl();
     };
+    // `/wheel` — the agent-surface pivot's mode-flip mechanism. The
+    // user takes the wheel from motebit's default-driving register.
+    // Wire-wise identical to `reclaimControl()` (motebit → user is
+    // the same protocol-level transition regardless of which slash
+    // command surfaced it); the rename names the user's mental model
+    // in the new register's vocabulary instead of the cobrowser-
+    // default's "I'm reclaiming something that was mine."
+    //
+    // Critical: a mode-flip is meaningless without surfacing the
+    // affordance that the flip just unlocked — the editable URL
+    // input. Without the focus dispatch, users `/wheel` into
+    // cobrowse mode and find nothing actually editable; that's the
+    // half-affordance gotcha. The flip is the precondition; the
+    // focus is the completion. Both fire in the same gesture.
+    //
+    // Order is load-bearing. `reclaimControl()` synchronously calls
+    // the chrome's subscriber, which rebuilds the strip and mounts
+    // the new URL input element. By the time the call returns, the
+    // element is reachable via the standard class selector. Focus
+    // happens AFTER the rebuild — selecting end of value rather
+    // than select-all so the user can type to append or backspace
+    // to edit, not erase by typing. The existing focus listener
+    // (in cobrowse-chrome.ts) surfaces the home overlay; that's
+    // the calm-default "tell me where" prompt this gesture composes
+    // naturally with.
+    //
+    // Fail-soft: if the transition rejected (e.g., already in user
+    // state — `invalid_from_state`) the focus dispatch still fires.
+    // Surfacing the input on a no-op transition is harmless and
+    // preserves the user's mental model that `/wheel` "puts them in
+    // the driver's seat" regardless of whether they were already
+    // there.
+    const onWheel = (): void => {
+      machine.reclaimControl();
+      const input = document.querySelector<HTMLInputElement>(".cobrowse-chrome-url-input");
+      if (input) {
+        input.focus();
+        const len = input.value.length;
+        input.setSelectionRange(len, len);
+      }
+    };
     document.addEventListener("motebit:cobrowse-grant", onGrant);
     document.addEventListener("motebit:cobrowse-deny", onDeny);
     document.addEventListener("motebit:cobrowse-reclaim", onReclaim);
+    document.addEventListener("motebit:cobrowse-wheel", onWheel);
     this.coBrowseDisposers.push(
       () => document.removeEventListener("motebit:cobrowse-grant", onGrant),
       () => document.removeEventListener("motebit:cobrowse-deny", onDeny),
       () => document.removeEventListener("motebit:cobrowse-reclaim", onReclaim),
+      () => document.removeEventListener("motebit:cobrowse-wheel", onWheel),
     );
   }
 

@@ -214,13 +214,22 @@ function renderMotebitVirtualBrowserRegister(
  * register's middle slot. Inline structure: the narration text reads
  * as motebit's first-person voice; the URL chip follows as context
  * ("Reading apple.com" — apple.com is the chip, calling out the
- * page the narration is talking about). Read-only in this register;
- * tapping the chip is a candidate handoff trigger in the follow-up
- * cobrowse-as-mode commit.
+ * page the narration is talking about).
+ *
+ * The chip is also the spatial-natural handoff target — tapping it
+ * is the "take the wheel" gesture, since the chip represents "the
+ * page motebit is on" and grabbing it means "I'll drive that page
+ * now." Wire-wise the same `motebit:cobrowse-wheel` CustomEvent the
+ * `/wheel` slash command dispatches; web-app's handler does
+ * `machine.reclaimControl()` + URL-bar focus in one gesture so the
+ * flip is operationally complete (editable input is the affordance
+ * the mode-flip unlocks). Doctrine: chrome-as-state-render.md §
+ * "URL bar placement" + § "Take-the-wheel affordance in PR 1."
  *
  * Calm-default styling — inherits the strip's `font` shorthand and
  * `color` from `cobrowse-chrome.ts`'s `baseStrip`. Specific
- * typography / chip affordance / animation cadence stay emergent.
+ * typography / chip affordance signal / animation cadence stay
+ * emergent through dogfooding.
  */
 function buildNarrationStrip(narration: string, currentUrl: string | null): HTMLDivElement {
   const wrap = document.createElement("div");
@@ -243,16 +252,66 @@ function buildNarrationStrip(narration: string, currentUrl: string | null): HTML
   wrap.appendChild(text);
 
   if (currentUrl) {
-    const chip = document.createElement("span");
-    chip.className = "slab-chrome-narration-url-chip";
-    chip.textContent = formatUrlHostForChip(currentUrl);
-    chip.style.color = "rgba(40, 55, 90, 0.62)";
-    chip.style.flex = "0 0 auto";
-    chip.setAttribute("aria-hidden", "true");
-    wrap.appendChild(chip);
+    wrap.appendChild(buildUrlChip(currentUrl));
   }
 
   return wrap;
+}
+
+/**
+ * URL chip — read-only context for the narration AND the spatial-
+ * natural handoff target. Rendered as a `<button type="button">` so
+ * the click semantics, focus-ring, and keyboard activation all come
+ * for free from the platform. The chip dispatches the same
+ * `motebit:cobrowse-wheel` CustomEvent the `/wheel` slash command
+ * uses — single mode-flip mechanism, multiple surface affordances
+ * (slash, chip, future gesture). Doctrine binding: the chip's
+ * tappability is the doctrine memo's "spatially-natural target"
+ * (page motebit is on → grabbing it means take the wheel).
+ *
+ * Surface-determinism: dispatching the typed CustomEvent the runtime
+ * already listens to means this affordance routes through the same
+ * typed-capability path as the slash command. `check-affordance-
+ * routing` approves by construction — no constructed prompt, no
+ * AI-loop routing.
+ */
+function buildUrlChip(currentUrl: string): HTMLButtonElement {
+  const chip = document.createElement("button");
+  chip.type = "button";
+  chip.className = "slab-chrome-narration-url-chip";
+  chip.textContent = formatUrlHostForChip(currentUrl);
+  chip.setAttribute(
+    "aria-label",
+    `Take the wheel — switch into cobrowse mode on ${chip.textContent}`,
+  );
+  chip.style.color = "rgba(40, 55, 90, 0.62)";
+  chip.style.flex = "0 0 auto";
+  // Calm-default chip register: borderless tinted text, transparent
+  // background, hit area via padding. Same family as the chrome's
+  // history buttons (←/→/↻) so the chip reads as part of the slab-
+  // native surface, not a web-form button. Hover lifts opacity, same
+  // ease curve as `buildButton`. Specific affordance signal (subtle
+  // underline-on-hover, cursor glyph variant, etc.) stays emergent.
+  chip.style.background = "transparent";
+  chip.style.border = "none";
+  chip.style.padding = "2px 4px";
+  chip.style.borderRadius = "0";
+  chip.style.font = "inherit";
+  chip.style.cursor = "pointer";
+  chip.style.userSelect = "none";
+  chip.style.pointerEvents = "auto";
+  chip.style.transition = "color 120ms ease-out";
+  chip.addEventListener("mouseenter", () => {
+    chip.style.color = "rgba(40, 55, 90, 0.92)";
+  });
+  chip.addEventListener("mouseleave", () => {
+    chip.style.color = "rgba(40, 55, 90, 0.62)";
+  });
+  chip.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.dispatchEvent(new CustomEvent("motebit:cobrowse-wheel"));
+  });
+  return chip;
 }
 
 /**

@@ -85,6 +85,15 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "grant", description: "Grant Motebit's pending control request" },
   { name: "deny", description: "Deny Motebit's pending control request" },
   { name: "reclaim", description: "Take back control from Motebit" },
+  // Agent-surface pivot — `/wheel` is the user's "take the wheel"
+  // gesture for the new motebit-default register. Wire-wise the same
+  // transition `/reclaim` issues (motebit → user); the rename names
+  // the user's mental model in the pivot's vocabulary. The web-app
+  // handler also surfaces URL-bar focus in the same gesture so the
+  // mode-flip is operationally complete (editable input is the
+  // affordance the flip unlocks). Doctrine: chrome-as-state-render.md
+  // § "Take-the-wheel affordance in PR 1."
+  { name: "wheel", description: "Take the wheel — switch into cobrowse mode" },
   { name: "mcp", description: "MCP server management" },
   { name: "state", description: "Show state vector" },
   { name: "tools", description: "List registered tools" },
@@ -276,6 +285,10 @@ export function initSlashCommands(
       case "reclaim":
         chatInput.value = "";
         document.dispatchEvent(new CustomEvent("motebit:cobrowse-reclaim"));
+        return;
+      case "wheel":
+        chatInput.value = "";
+        document.dispatchEvent(new CustomEvent("motebit:cobrowse-wheel"));
         return;
       case "mcp": {
         chatInput.value = "";

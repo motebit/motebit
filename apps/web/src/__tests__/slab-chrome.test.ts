@@ -119,7 +119,7 @@ describe("renderSlabChrome — motebit × virtual_browser narration register", (
     expect(narrationText?.textContent).toBe("Reading the page");
   });
 
-  it("tethers the URL host as a read-only chip after the narration", () => {
+  it("tethers the URL host as a chip after the narration", () => {
     const el = renderSlabChrome({ kind: "motebit" }, "virtual_browser", machine, {
       taskStepNarration: "Reading the page",
       currentUrl: "https://www.apple.com/iphone",
@@ -127,8 +127,31 @@ describe("renderSlabChrome — motebit × virtual_browser narration register", (
     const chip = el?.querySelector(".slab-chrome-narration-url-chip");
     // The chip canonicalizes: strip `www.`, expose host only.
     expect(chip?.textContent).toBe("apple.com");
-    // The chip is aria-hidden — peripheral context, not an affordance.
-    expect(chip?.getAttribute("aria-hidden")).toBe("true");
+    // The chip is the spatial-natural handoff target — rendered as a
+    // button so click semantics + focus-ring + keyboard activation
+    // come from the platform.
+    expect(chip?.tagName).toBe("BUTTON");
+    expect(chip?.getAttribute("aria-label")).toContain("Take the wheel");
+  });
+
+  it("chip click dispatches motebit:cobrowse-wheel — single mechanism shared with /wheel slash", () => {
+    const el = renderSlabChrome({ kind: "motebit" }, "virtual_browser", machine, {
+      taskStepNarration: "Reading the page",
+      currentUrl: "https://apple.com",
+    });
+    const chip = el?.querySelector(".slab-chrome-narration-url-chip") as HTMLButtonElement;
+    expect(chip).not.toBeNull();
+    let dispatched = false;
+    const listener = (): void => {
+      dispatched = true;
+    };
+    document.addEventListener("motebit:cobrowse-wheel", listener);
+    try {
+      chip.click();
+    } finally {
+      document.removeEventListener("motebit:cobrowse-wheel", listener);
+    }
+    expect(dispatched).toBe(true);
   });
 
   it("recedes to the cobrowse middle slot when narration is absent", () => {
