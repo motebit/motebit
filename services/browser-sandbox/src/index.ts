@@ -65,7 +65,23 @@ async function main(): Promise<void> {
   });
 
   log(`launching chromium (headless)`);
-  await pool.start(() => chromium.launch({ headless: true }));
+  await pool.start(() =>
+    chromium.launch({
+      headless: true,
+      // Playwright passes `--hide-scrollbars` to headless Chromium by
+      // default; the page's overlay scrollbars never appear in the
+      // captured screencast frames. Stop suppressing them so users see
+      // the page's natural OS-overlay scrollbar during scroll —
+      // matches what Chrome / Safari / Firefox show on every regular
+      // page. Surgical override via ignoreDefaultArgs preserves every
+      // other Playwright default (sandbox, GPU flags, etc.) and lets
+      // Chromium's own scrollbar behavior (autohide, fade, color) ride
+      // through to the user without any client-side overlay rendering.
+      // The witnessed 2026-05-12 complaint: "I don't see the scroll
+      // sidebar like regular browsers when u scroll."
+      ignoreDefaultArgs: ["--hide-scrollbars"],
+    }),
+  );
 
   const app = buildApp({ config, pool });
   const server = serve({ fetch: app.fetch, port: config.port });
