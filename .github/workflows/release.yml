@@ -157,6 +157,26 @@ jobs:
       # internally.
       # State 3 (all-ignored): skipped — direct-publish handles it
       # below as a no-op (workspace versions match npm).
+      # Token selection (CHANGESETS_TOKEN || GITHUB_TOKEN). When the
+      # repo secret `CHANGESETS_TOKEN` is set (a fine-grained PAT with
+      # Contents + Pull-requests write on motebit/motebit), the Version
+      # Packages PR is authored by the PAT's owner — a real user, not
+      # github-actions[bot]. CI workflow runs on that PR then fire
+      # without GitHub's `action_required` approval gate, which the
+      # default GITHUB_TOKEN-authored PRs trigger to prevent recursive
+      # workflow exploits. Without the PAT, the Version Packages PR
+      # sits BLOCKED in branch protection forever because the 6
+      # required status checks never get a chance to run.
+      #
+      # Witnessed failure: 2026-05-04 PR #91 sat unmerged for 9 days;
+      # release-train.yml's auto-merge step exited non-zero each
+      # Tuesday (2026-05-05, 2026-05-12) because the PR's checks were
+      # `action_required` with 0s duration. Diagnosed 2026-05-13.
+      #
+      # Fallback to GITHUB_TOKEN keeps forks and pre-PAT-setup boots
+      # working — same graceful-degradation pattern the TURBO_TOKEN
+      # block above uses. The fallback path still has the
+      # action_required gate; switching to CHANGESETS_TOKEN is the fix.
       - name: Create release PR or publish (with tags + GitHub releases)
         id: changesets
         if: steps.pending.outputs.state != 'skip'
@@ -168,7 +188,7 @@ jobs:
           commit: "Version Packages"
           createGithubReleases: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.CHANGESETS_TOKEN || secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
 
