@@ -560,6 +560,38 @@ export class SlabManager {
       // 8% diffuse for the surface to still read as a glass tile
       // rather than empty space.
       transmission: 0.92,
+      // Front-pane refraction override — calm-software readability
+      // tuning, 2026-05-12. The screencast mesh sits at depth ½
+      // inside the slab volume (harmony, balance — see
+      // motebit-computer.md §"Always-already slab" + the suspended-
+      // in-glass register from liquescentia-as-substrate.md). Light
+      // refracts through the front pane to reach the texture; even
+      // gentle IOR 1.22 + thickness 0.02 (the canonical body
+      // register) produced sub-pixel sample offsets that softened
+      // text below readability — witnessed 2026-05-12 (Google search
+      // results, LinkedIn snippet text both soft on the slab).
+      //
+      // Override ior 1.22 → 1.10 (water = 1.33; below 1.05 reads as
+      // plastic; 1.10 is the calm middle that still bends light from
+      // the side view, just less aggressively). Override thickness
+      // 0.02 → 0.01 — half the refraction sampling depth. Combined
+      // ~60% reduction in shader-induced softening at the content
+      // rect specifically.
+      //
+      // Doctrine: liquescentia-as-substrate.md's "shared medium" stays
+      // intact at the creature (which has no internal content, where
+      // dramatic refraction is the visual feature). This override is
+      // the content-bearing exception — readability wins over
+      // optical-glass purity at the slab's content rect. Geometry
+      // unchanged: mesh still at depth ½, side-view "airy room front,
+      // content middle, airy room back" register preserved.
+      //
+      // Side view stays glass: IOR 1.10 still bends environment light
+      // around the meniscus, just at a softer angle. Apple-grade
+      // calm: the glass shell reads as glass; the content inside
+      // reads as content; neither overrides the other.
+      ior: 1.1,
+      thickness: 0.01,
     });
     // Non-transmissive companion for the back pane + side wall. See
     // the field declaration above for the architectural why; in short,
