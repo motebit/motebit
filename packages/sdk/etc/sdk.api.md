@@ -41,6 +41,7 @@ export interface AIResponse {
     memory_candidates: MemoryCandidate[];
     // (undocumented)
     state_updates: Partial<MotebitState>;
+    task_step_narration?: string;
     // (undocumented)
     text: string;
     // (undocumented)

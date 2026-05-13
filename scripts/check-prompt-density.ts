@@ -77,8 +77,19 @@ const DOCTRINE_PATH = "docs/doctrine/runtime-invariants-over-prompt-rules.md";
  *     check-typed-truth-perception (#80) as the 12th typed-truth
  *     field. Closes the "AI says done on submit-class action when
  *     the page didn't move" confabulation class witnessed today.
+ *   - 2026-05-12 63→64: task_step_narration emission clause —
+ *     teaches the model to emit a single first-person present-tense
+ *     narration on AIResponse for the chrome's `motebit ×
+ *     virtual_browser` register to consume. A-grade (wire field on
+ *     AIResponse, runtime validation in
+ *     packages/ai-core/src/narration-validation.ts that falsifies
+ *     URL-mismatched narrations before the chrome reads them);
+ *     gated by check-typed-truth-perception (#80) as the 13th
+ *     typed-truth field. Third graduation of
+ *     runtime-invariants-over-prompt-rules and first slice of PR 1
+ *     of the agent-surface pivot. Doctrine: chrome-as-state-render.
  */
-const BASELINE = 63;
+const BASELINE = 64;
 
 function countRuleClauses(source: string): number {
   let count = 0;

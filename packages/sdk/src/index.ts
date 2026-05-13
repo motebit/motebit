@@ -335,6 +335,29 @@ export interface AIResponse {
   tool_calls?: ToolCall[];
   /** Token usage from the provider, if available. */
   usage?: { input_tokens: number; output_tokens: number };
+  /**
+   * Task-step narration — what motebit is currently doing, at the
+   * supervisor-cares-about granularity. Single first-person present-
+   * tense sentence ("Reading the page" / "Filling in the form" /
+   * "Hit a paywall — need your input"). Cap ~80 chars; the chrome is
+   * calm. Granularity is between action-step (too noisy) and
+   * goal-step (too sparse) — the chunk a supervisor cares about.
+   *
+   * Consumed by the slab's chrome in the `motebit × virtual_browser`
+   * register (and other `motebit × *` cells). Validated by
+   * `validateTaskStepNarration` in `@motebit/ai-core` before display
+   * — falsified narration is replaced with a runtime-templated
+   * fallback so the chrome never renders model claims contradicted
+   * by typed truth. Doctrine: third graduation of
+   * `runtime-invariants-over-prompt-rules.md`, the typed-truth-
+   * perception triple applied to in-flight motebit-voiced text.
+   * Architectural primitive: `chrome-as-state-render.md`.
+   *
+   * Optional. Absent / null when the model didn't emit a narration
+   * for this turn (idle, thinking, no active task-step). The chrome
+   * recedes to the empty register when absent.
+   */
+  task_step_narration?: string;
 }
 
 export interface IntelligenceProvider {

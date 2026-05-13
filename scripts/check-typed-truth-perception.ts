@@ -75,6 +75,18 @@ const ROOT = resolve(__dirname, "..");
  *     draft). The walk-back's persistent-state assumption violates
  *     here; runtime intercept is deferred pending transience-aware
  *     semantics (time-budget / polling-aware design).
+ *   `dishonesty-narration` — field is the model's IN-FLIGHT narration
+ *     (a typed string the model emits as part of its response, not a
+ *     wire field on a tool result). Contradiction-check runs against
+ *     wire-level typed truth (last-navigate URL, current tool
+ *     selection) BEFORE the chrome consumes the field. Validation
+ *     lives in `packages/ai-core/src/narration-validation.ts` rather
+ *     than `dishonest-closing.ts`'s DISHONESTY_RULES table — the
+ *     shape is different (text-vs-typed-truth, not field-vs-typed-
+ *     truth). The third graduation of `runtime-invariants-over-
+ *     prompt-rules.md`. Currently single-instance
+ *     (`task_step_narration`); when a second narration field ships,
+ *     a NARRATION_RULES table emerges to parallel DISHONESTY_RULES.
  *   `affordance` — wire field is a HINT pointing at what to do
  *     next, not a failure signal. Out of scope for the runtime
  *     intercept by design; conflating with dishonesty-class would
@@ -99,6 +111,7 @@ const ROOT = resolve(__dirname, "..");
 type TypedTruthClass =
   | "dishonesty-persistent"
   | "dishonesty-transient"
+  | "dishonesty-narration"
   | "affordance"
   | "positive-signal"
   | "control-state"
@@ -249,6 +262,14 @@ const TYPED_TRUTH_FIELDS: ReadonlyArray<TypedTruthField> = [
     dispatchSources: ["services/browser-sandbox/src/action-executor.ts"],
     notes:
       "click_element + key truth-feedback: did the action cause the page URL to change? Dispatcher captures page.url() before + after the action; result carries `navigation_triggered: true` when URL moved, false when click/keystroke landed but page didn't navigate. Closes the 2026-05-12 witnessed bug where the AI called click_element(submit_button_id), got ok: true, said 'Done' — but the form submission was blocked by Google's promo overlay and the page stayed on the homepage. The wire field had been emitted on click_element since the action shipped, but neither the prompt taught reading it nor was it registered here, so the AI ignored the false flag and confabulated completion. The drift class this gate (#80) exists to catch — silent typed truth (the wire carries the answer but the AI describes it wrong because no reading rule). Extended to key results 2026-05-12 to cover the form-submit-via-Enter path. Doctrine: docs/doctrine/runtime-invariants-over-prompt-rules.md § typed-truth-perception triple.",
+  },
+  {
+    field: "task_step_narration",
+    class: "dishonesty-narration",
+    promptText: "task_step_narration",
+    dispatchSources: ["packages/ai-core/src/narration-validation.ts"],
+    notes:
+      "In-flight narration field — the model emits `task_step_narration` on AIResponse as part of its response (not on a tool result). The chrome's `motebit × virtual_browser` register consumes the field; runtime validation in `validateTaskStepNarration` runs BEFORE the chrome reads it, replacing falsified narrations with runtime-templated fallbacks. Currently one rule (URL-mention contradiction). Third graduation of runtime-invariants-over-prompt-rules — the typed-truth-perception triple applied to in-flight motebit-voiced text. Doctrine: docs/doctrine/chrome-as-state-render.md § Hybrid narration source. Shipped 2026-05-12 as the first slice of PR 1 of the agent-surface pivot.",
   },
 ];
 
