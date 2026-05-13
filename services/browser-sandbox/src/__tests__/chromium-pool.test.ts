@@ -202,6 +202,131 @@ describe("BrowserPool", () => {
     });
   });
 
+  describe("ensureSession (identity-keyed dedup)", () => {
+    // Pin from 2026-05-12. Tier 3 fix for the "page reload allocates a
+    // fresh Chromium context" leak class. Same motebit + extant
+    // session = same session returned. Cap measures motebits per
+    // machine, not tabs per machine. Doctrine: "Persistent sovereign
+    // identity — a cryptographic entity across time and devices, not
+    // a session token" (CLAUDE.md).
+
+    it("first call allocates; same motebit second call returns the same session", async () => {
+      const mid = "motebit-aaaaaaaa";
+      const first = await pool.ensureSession({ motebitId: mid });
+      const second = await pool.ensureSession({ motebitId: mid });
+      expect(second.sessionId).toBe(first.sessionId);
+      // Critical: only ONE Chromium context allocated, not two.
+      expect(fake.state.contexts.size).toBe(1);
+      expect(pool.size()).toBe(1);
+      // Reuse path bumps lastUsedAt — the keepalive equivalent for
+      // ensure-driven reuse, prevents the reaper from sweeping a
+      // session a motebit just touched.
+      now += 5000;
+      const third = await pool.ensureSession({ motebitId: mid });
+      expect(third.lastUsedAt).toBe(now);
+    });
+
+    it("different motebits get different sessions (no cross-identity bleed)", async () => {
+      const a = await pool.ensureSession({ motebitId: "motebit-aaa" });
+      const b = await pool.ensureSession({ motebitId: "motebit-bbb" });
+      expect(a.sessionId).not.toBe(b.sessionId);
+      expect(pool.size()).toBe(2);
+    });
+
+    it("session attributes carry motebitId for closeSession's reverse-index cleanup", async () => {
+      const session = await pool.ensureSession({ motebitId: "motebit-ccc" });
+      expect(session.motebitId).toBe("motebit-ccc");
+    });
+
+    it("legacy openSession leaves motebitId null (admin/test path)", async () => {
+      const session = await pool.openSession();
+      expect(session.motebitId).toBeNull();
+    });
+
+    it("closeSession removes the reverse-index entry — next ensure allocates fresh", async () => {
+      const mid = "motebit-ddd";
+      const first = await pool.ensureSession({ motebitId: mid });
+      await pool.closeSession(first.sessionId);
+      const second = await pool.ensureSession({ motebitId: mid });
+      // Different session id — fresh allocation, not a stale-id return.
+      expect(second.sessionId).not.toBe(first.sessionId);
+      expect(pool.size()).toBe(1);
+    });
+
+    it("reapIdle cleans the reverse index too — next ensure allocates fresh", async () => {
+      const mid = "motebit-eee";
+      const first = await pool.ensureSession({ motebitId: mid });
+      // Walk past the idle threshold so the reaper sweeps `first`.
+      now += 90_000;
+      await pool.reapIdle();
+      expect(pool.getSession(first.sessionId)).toBeNull();
+      const second = await pool.ensureSession({ motebitId: mid });
+      expect(second.sessionId).not.toBe(first.sessionId);
+    });
+
+    it("concurrent-ensure race: two simultaneous calls for the same motebit return ONE session", async () => {
+      // Inject a slow `newContext` to widen the race window. Without
+      // the in-flight lock both calls miss the cache, both call
+      // openSession, both allocate Chromium contexts, the second's
+      // sessionByMotebit.set clobbers the first → orphan leaked.
+      const slowFake = makeFakeBrowser();
+      const slowPool = new BrowserPool(CONFIG, { now: () => now });
+      const origNewContext = slowFake.browser.newContext as unknown as (
+        ...args: unknown[]
+      ) => unknown;
+      slowFake.browser.newContext = vi.fn(async (...args: unknown[]) => {
+        // Yield to let the second caller arrive at ensureSession before
+        // this one finishes openSession.
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return (origNewContext as (...a: unknown[]) => Promise<BrowserContext>)(...args);
+      }) as unknown as typeof slowFake.browser.newContext;
+      await slowPool.start(async () => slowFake.browser);
+
+      const mid = "motebit-fff";
+      const [a, b] = await Promise.all([
+        slowPool.ensureSession({ motebitId: mid }),
+        slowPool.ensureSession({ motebitId: mid }),
+      ]);
+
+      expect(a.sessionId).toBe(b.sessionId);
+      // The load-bearing assertion: only ONE Chromium context was
+      // allocated, not two. (newContext called once.)
+      expect(slowFake.state.newContextCalls.length).toBe(1);
+      expect(slowFake.state.contexts.size).toBe(1);
+      expect(slowPool.size()).toBe(1);
+      await slowPool.shutdown();
+    });
+
+    it("liveness fall-through: dead session (page closed) triggers fresh allocation", async () => {
+      const mid = "motebit-ggg";
+      const first = await pool.ensureSession({ motebitId: mid });
+      // Mutate the page mock to report closed — simulates a page that
+      // crashed or was force-closed since the session was cached.
+      (first.page as unknown as { isClosed: () => boolean }).isClosed = () => true;
+      const second = await pool.ensureSession({ motebitId: mid });
+      // Second call must allocate fresh, not return the dead session.
+      expect(second.sessionId).not.toBe(first.sessionId);
+      // The dead session entry stays in the map (closeSession ownership);
+      // we only own the reverse index. Two contexts in the map; the
+      // dead one will be reaped on idle timeout.
+      expect(pool.size()).toBe(2);
+    });
+
+    it("legacy bearer (openSession) and ensureSession can coexist on the same pool", async () => {
+      // Legacy admin call.
+      const legacy = await pool.openSession();
+      // Identity-attributed call.
+      const identity = await pool.ensureSession({ motebitId: "motebit-hhh" });
+      expect(legacy.sessionId).not.toBe(identity.sessionId);
+      expect(legacy.motebitId).toBeNull();
+      expect(identity.motebitId).toBe("motebit-hhh");
+      // closeSession on legacy doesn't disturb the identity index.
+      await pool.closeSession(legacy.sessionId);
+      const sameIdentity = await pool.ensureSession({ motebitId: "motebit-hhh" });
+      expect(sameIdentity.sessionId).toBe(identity.sessionId);
+    });
+  });
+
   describe("shutdown", () => {
     it("closes every session and the browser", async () => {
       await pool.openSession();

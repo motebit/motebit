@@ -114,7 +114,33 @@ export function buildApp(deps: BuildAppDeps): Hono {
     } catch {
       // No body / malformed body — cold start. Same as pre-fix.
     }
-    const session = await deps.pool.openSession({ initialCookies });
+    // Identity-keyed dedup. When the caller authenticated with a
+    // relay-signed token, `auth.ts` set `c.var.motebitId` from the
+    // verified `mid` claim. Route through `ensureSession` so reloads /
+    // multi-tab / dev-restart for the same motebit reuse the existing
+    // Chromium context instead of multiplying against the
+    // `maxConcurrent` cap. The cap thus measures concurrent
+    // MOTEBITS-per-machine, not concurrent TABS-per-machine — the only
+    // shape coherent with "Persistent sovereign identity — a
+    // cryptographic entity across time and devices, not a session
+    // token" (`CLAUDE.md`).
+    //
+    // Cookies-on-reuse semantics: when the existing session is
+    // returned, the request's `cookies` body is IGNORED. The whole
+    // point of session reuse is state continuity — overwriting the
+    // in-flight cookie jar with a stale snapshot from disk would
+    // discard freshly-acquired CAPTCHA reputation / login cookies the
+    // session has accumulated since the last persistence write. Cold
+    // start (no existing session) seeds normally.
+    //
+    // Legacy bearer (no `motebitId`) keeps the fresh-every-call
+    // allocation — admin/test tooling intentionally allocates parallel
+    // sessions and shouldn't be silently deduplicated.
+    const motebitId = c.get("motebitId" as never) as string | undefined;
+    const session =
+      typeof motebitId === "string" && motebitId.length > 0
+        ? await deps.pool.ensureSession({ motebitId, initialCookies })
+        : await deps.pool.openSession({ initialCookies });
     return c.json({
       session_id: session.sessionId,
       display: {

@@ -164,6 +164,7 @@ function makeMockSession(): MockSession {
 
   const session: BrowserSession = {
     sessionId: "test-session",
+    motebitId: null,
     page: mockPage as unknown as BrowserSession["page"],
     context: {} as unknown as BrowserSession["context"],
     openedAt: 1_000_000,

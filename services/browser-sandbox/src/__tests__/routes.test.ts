@@ -15,7 +15,11 @@
  *     with the right HTTP status
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
+// eslint-disable-next-line no-restricted-imports -- tests need direct crypto for relay-token minting
+import { generateKeypair, createSignedToken } from "@motebit/crypto";
+import type { SignedTokenPayload } from "@motebit/crypto";
+import { BROWSER_SANDBOX_AUDIENCE } from "@motebit/protocol";
 
 // Mock the screencast module — the route's stream-start handler
 // calls `startScreencast(session.page, onFrame)`, which would attach
@@ -95,12 +99,40 @@ function makeFakePool(): { pool: BrowserPool; state: FakePoolState } {
 
   const state: FakePoolState = { sessions, openSessionImpl: fakeOpen };
 
+  // Identity-keyed dedup index — mirrors the real pool's
+  // `sessionByMotebit` reverse map. The route's relay-signed path
+  // calls `ensureSession`; the fake implements the same observable
+  // contract (same motebit twice → same session id) so route-level
+  // assertions exercise the wire shape, not the pool internals
+  // (those live in chromium-pool.test.ts).
+  const sessionByMotebit = new Map<string, string>();
   const pool = {
     openSession: () => state.openSessionImpl(),
+    ensureSession: async (opts: { motebitId: string }) => {
+      const existing = sessionByMotebit.get(opts.motebitId);
+      if (existing !== undefined) {
+        const s = sessions.get(existing);
+        if (s) return s;
+        sessionByMotebit.delete(opts.motebitId);
+      }
+      const session = await state.openSessionImpl();
+      // The real pool sets motebitId on the session struct; mirror
+      // that so closeSession can clean the index.
+      (session as unknown as { motebitId: string }).motebitId = opts.motebitId;
+      sessionByMotebit.set(opts.motebitId, session.sessionId);
+      return session;
+    },
     getSession: (id: string) => sessions.get(id) ?? null,
     touchSession: () => undefined,
     closeSession: async (id: string) => {
+      const s = sessions.get(id);
       sessions.delete(id);
+      if (s) {
+        const mid = (s as unknown as { motebitId: string | null }).motebitId;
+        if (mid !== null && mid !== undefined && sessionByMotebit.get(mid) === id) {
+          sessionByMotebit.delete(mid);
+        }
+      }
       // Phase 1 cookie persistence: real pool returns the cookie
       // jar; mock returns [] (no cookies in tests by default).
       return [];
@@ -234,6 +266,106 @@ describe("browser-sandbox routes", () => {
       const body = (await res.json()) as { error: { reason: string; message: string } };
       expect(body.error.reason).toBe("policy_denied");
       expect(body.error.message).toContain("cap reached");
+    });
+  });
+
+  // ── Identity-keyed dedup wire-shape (Tier 3, 2026-05-12) ──────────
+  describe("POST /sessions/ensure — relay-signed identity-keyed dedup", () => {
+    // The route reads `c.var.motebitId` (set by `requireAuth` from a
+    // verified relay-signed token's `mid` claim) and routes through
+    // `pool.ensureSession` for that path. End-to-end check: two
+    // ensures with the SAME relay-signed token return the SAME
+    // session_id; two ensures from DIFFERENT motebits return DIFFERENT
+    // session_ids. This is the user-visible contract that closes the
+    // "page reload allocates a fresh Chromium context" leak.
+
+    let relayPublicKeyHex: string;
+    let relayPrivateKey: Uint8Array;
+
+    beforeAll(async () => {
+      const keypair = await generateKeypair();
+      relayPrivateKey = keypair.privateKey;
+      relayPublicKeyHex = Array.from(keypair.publicKey)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+    });
+
+    async function mintToken(motebitId: string): Promise<string> {
+      const now = Date.now();
+      const payload: Omit<SignedTokenPayload, "suite"> = {
+        mid: motebitId,
+        did: "did:key:zRelay",
+        iat: now,
+        exp: now + 60_000,
+        jti: crypto.randomUUID(),
+        aud: BROWSER_SANDBOX_AUDIENCE,
+      };
+      return createSignedToken(payload, relayPrivateKey);
+    }
+
+    it("two ensures with the same relay-signed token return the same session_id", async () => {
+      const app = buildApp({
+        config: { ...TEST_CONFIG, trustedRelayPublicKeyHex: relayPublicKeyHex },
+        pool,
+      });
+      const token = await mintToken("motebit-alice");
+      const headers = { Authorization: `Bearer ${token}` };
+
+      const first = await app.request("/sessions/ensure", { method: "POST", headers });
+      const second = await app.request("/sessions/ensure", { method: "POST", headers });
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      const a = (await first.json()) as { session_id: string };
+      const b = (await second.json()) as { session_id: string };
+      // The load-bearing assertion: page reloads / multi-tab for the
+      // same motebit reuse one session, not multiplying against the
+      // maxConcurrent cap.
+      expect(b.session_id).toBe(a.session_id);
+      expect(state.sessions.size).toBe(1);
+    });
+
+    it("two ensures from different motebits return different session_ids", async () => {
+      const app = buildApp({
+        config: { ...TEST_CONFIG, trustedRelayPublicKeyHex: relayPublicKeyHex },
+        pool,
+      });
+      const tokenA = await mintToken("motebit-alice");
+      const tokenB = await mintToken("motebit-bob");
+
+      const first = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${tokenA}` },
+      });
+      const second = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${tokenB}` },
+      });
+      const a = (await first.json()) as { session_id: string };
+      const b = (await second.json()) as { session_id: string };
+      // Critical: no cross-identity session sharing.
+      expect(b.session_id).not.toBe(a.session_id);
+      expect(state.sessions.size).toBe(2);
+    });
+
+    it("legacy bearer keeps fresh-every-call (admin/test path unaffected)", async () => {
+      const app = buildApp({
+        config: { ...TEST_CONFIG, trustedRelayPublicKeyHex: relayPublicKeyHex },
+        pool,
+      });
+      // Two calls with the legacy shared bearer — no motebitId on
+      // c.var → route falls through to openSession → fresh every time.
+      const first = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const second = await app.request("/sessions/ensure", {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const a = (await first.json()) as { session_id: string };
+      const b = (await second.json()) as { session_id: string };
+      expect(b.session_id).not.toBe(a.session_id);
+      expect(state.sessions.size).toBe(2);
     });
   });
 
