@@ -1000,7 +1000,7 @@ export function extractStructuredPageContent(opts: {
     const tag = node.tagName.toLowerCase() as "input" | "textarea";
     const inputEl = node as HTMLInputElement | HTMLTextAreaElement;
     if (inputEl.disabled || inputEl.readOnly) continue;
-    if ((inputEl as HTMLElement).hidden) continue;
+    if ((inputEl as HTMLElement).hidden === true) continue;
     let inputType: string;
     if (tag === "textarea") {
       inputType = "textarea";
@@ -1057,7 +1057,7 @@ export function extractStructuredPageContent(opts: {
     const tag = node.tagName.toLowerCase() as "button" | "input";
     const el = node as HTMLButtonElement | HTMLInputElement;
     if (el.disabled) continue;
-    if ((el as HTMLElement).hidden) continue;
+    if ((el as HTMLElement).hidden === true) continue;
     const rect = node.getBoundingClientRect();
     const visible = rect.width > 0 && rect.height > 0;
     const inJsdom = typeof window !== "undefined" && navigator.userAgent.includes("jsdom");
