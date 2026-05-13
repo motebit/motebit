@@ -177,6 +177,18 @@ export const DECLARATION_CONTENT = {
       data_processing_terms: "https://x402.org",
     },
     {
+      name: "Bridge",
+      role: "Crypto-to-fiat off-ramp orchestration (services/relay/src/offramp.ts). Forwards a Solana USDC transfer from a motebit's sovereign wallet through Bridge's deposit address, with Bridge converting to fiat and ACH-ing to the user's bank. Used only when the operator configures a Bridge API key + customer ID at startup; otherwise the rail is omitted from `/health/ready`.",
+      data_shared: [
+        "Bridge customer_id (operator-scoped)",
+        "external_account_id (per user, supplied at withdrawal time)",
+        "transfer instructions (amount, source rail, source currency, deposit address)",
+        "settlement transaction hash",
+      ],
+      jurisdiction: "United States",
+      data_processing_terms: "https://bridge.xyz/legal",
+    },
+    {
       name: "Coinbase Developer Platform (x402 production facilitator)",
       role: "Mainnet x402 facilitator — JWT-authed per-request settlement of relay-mediated x402 payments on Base mainnet (and other supported chains). Used only when X402_TESTNET=false and CDP_API_KEY_ID + CDP_API_KEY_SECRET are configured.",
       data_shared: [

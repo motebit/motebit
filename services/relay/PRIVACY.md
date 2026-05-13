@@ -108,6 +108,13 @@ client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and in
 - **Jurisdiction**: varies by facilitator deployment
 - **DPA / terms**: https://x402.org
 
+### Bridge
+
+- **Role**: Crypto-to-fiat off-ramp orchestration (services/relay/src/offramp.ts). Forwards a Solana USDC transfer from a motebit's sovereign wallet through Bridge's deposit address, with Bridge converting to fiat and ACH-ing to the user's bank. Used only when the operator configures a Bridge API key + customer ID at startup; otherwise the rail is omitted from `/health/ready`.
+- **Data shared**: Bridge customer_id (operator-scoped), external_account_id (per user, supplied at withdrawal time), transfer instructions (amount, source rail, source currency, deposit address), settlement transaction hash
+- **Jurisdiction**: United States
+- **DPA / terms**: https://bridge.xyz/legal
+
 ### Coinbase Developer Platform (x402 production facilitator)
 
 - **Role**: Mainnet x402 facilitator — JWT-authed per-request settlement of relay-mediated x402 payments on Base mainnet (and other supported chains). Used only when X402_TESTNET=false and CDP_API_KEY_ID + CDP_API_KEY_SECRET are configured.
