@@ -1538,6 +1538,23 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-transparency-processors-canonical",
+    proves:
+      "flags an external hostname the relay/proxy contacts at runtime that's NOT mapped to a disclosed processor in the gate's HOSTNAME_TO_PROCESSOR registry. Drift class: services/relay/CLAUDE.md Rule 10 violation — code adds a `fetch(\"https://X/...\")` to a scanned source tree without the corresponding processor entry in DECLARATION_CONTENT, so PRIVACY.md silently lies about who motebit shares data with. Same shape that landed the OpenAI + Google omission externally caught by ChatGPT audit on 2026-05-13. Probe appends a URL-literal const naming an unmapped host to a stable scanned file; the gate's URL pattern must match it and the undeclared-host arm must fire. byte-identical restoration on cleanup.",
+    perturb: () =>
+      // Append a URL literal referencing an unmapped external host to
+      // a stable scanned file. The gate scans .ts files under
+      // services/proxy/src and services/relay/src for "https://X/..."
+      // literals; "probe.example.com" is in neither HOSTNAME_TO_PROCESSOR
+      // nor MOTEBIT_OWNED_HOSTS, so the gate must fire the undeclared_host
+      // finding.
+      mutateFile(
+        `services/relay/src/push-adapter.ts`,
+        (src) =>
+          `${src}\n// ${PROBE_PREFIX}transparency_processors_probe\nconst ${PROBE_PREFIX}transparency_processors_url = "https://probe.example.com/api/x";\nvoid ${PROBE_PREFIX}transparency_processors_url;\n`,
+      ),
+  },
+  {
     script: "check-execution-ledger-receipts-archived",
     proves:
       "flags the execution-ledger reconstruction silently regressing back to v1.0 summary-only semantics. Drift class: the operator-trust gap — without `signed_receipts` sourced from the byte-identical archive, verifiers cannot check inner motebit signatures and the relay's word becomes the trust floor.",
