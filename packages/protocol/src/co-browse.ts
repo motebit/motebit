@@ -87,6 +87,19 @@ export const CO_BROWSE_TRANSITION_KINDS = [
   "deny_control",
   "reclaim_control",
   "release_control",
+  // Agent-surface pivot — user voluntarily yields drive back to
+  // motebit. Symmetric to `release_control` (motebit yields to user),
+  // and the protocol-level partner to the `/back` surface affordance.
+  // No approval required: the user's identity is the trust root and
+  // they unilaterally decide who drives, including handing control
+  // back to motebit. From `{kind: "user"}` only; from any other state
+  // this is `invalid_from_state`. Closes the cobrowser-default-polarity
+  // asymmetry where the protocol named "user takes" but not "user
+  // gives" — implicit when user was the always-default driver, named
+  // now that motebit-default is the new register. Doctrine:
+  // chrome-as-state-render.md § "Take-the-wheel affordance in PR 1"
+  // + the cobrowse-as-mode reshape's `/back` slice.
+  "yield_control",
   "pause",
   "resume",
   "disconnect",

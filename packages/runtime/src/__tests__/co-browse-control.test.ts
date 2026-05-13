@@ -142,6 +142,52 @@ describe("CoBrowseControlMachine — release vs reclaim", () => {
   });
 });
 
+describe("CoBrowseControlMachine — yieldControl (user hands back to motebit)", () => {
+  it("yieldControl(user) from user state transitions to motebit (no approval needed)", () => {
+    const { machine, onTransition } = makeMachine();
+    // Initial state is user; user yields directly.
+    onTransition.mockClear();
+
+    const result = machine.yieldControl("user");
+    expect(result).toEqual({ ok: true, state: { kind: "motebit" } });
+    expect(onTransition.mock.calls[0]?.[0]).toMatchObject({
+      transition_kind: "yield_control",
+      initiator: "user",
+      from: { kind: "user" },
+      to: { kind: "motebit" },
+    });
+  });
+
+  it("yieldControl from non-user state is invalid_from_state", () => {
+    const { machine } = makeMachine();
+    // motebit state: nothing to yield from
+    machine.requestControl("motebit");
+    machine.grantControl("user");
+    expect(machine.getState().kind).toBe("motebit");
+    expect(machine.yieldControl("user")).toEqual({ ok: false, reason: "invalid_from_state" });
+
+    // paused: yielding from a held state is also invalid
+    machine.releaseControl("motebit");
+    machine.pause("user");
+    expect(machine.yieldControl("user")).toEqual({ ok: false, reason: "invalid_from_state" });
+  });
+
+  it("yieldControl by motebit (not user) returns wrong_party — only user can yield", () => {
+    const { machine } = makeMachine();
+    expect(machine.yieldControl("motebit" as never)).toEqual({ ok: false, reason: "wrong_party" });
+  });
+
+  it("yield + reclaim are symmetric — user can flip back and forth without state corruption", () => {
+    const { machine } = makeMachine();
+    // user → motebit
+    expect(machine.yieldControl("user")).toEqual({ ok: true, state: { kind: "motebit" } });
+    // motebit → user
+    expect(machine.reclaimControl()).toEqual({ ok: true, state: { kind: "user" } });
+    // user → motebit again
+    expect(machine.yieldControl("user")).toEqual({ ok: true, state: { kind: "motebit" } });
+  });
+});
+
 describe("CoBrowseControlMachine — pause / resume", () => {
   it("pause from user remembers user as previousDriver; resume restores", () => {
     const { machine } = makeMachine();

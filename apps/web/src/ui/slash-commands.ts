@@ -94,6 +94,14 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   // affordance the flip unlocks). Doctrine: chrome-as-state-render.md
   // § "Take-the-wheel affordance in PR 1."
   { name: "wheel", description: "Take the wheel — switch into cobrowse mode" },
+  // `/back` — symmetric partner to `/wheel` in the cobrowse-as-mode
+  // reshape. Hands drive back to motebit; routes to
+  // `machine.yieldControl("user")` via the typed
+  // `motebit:cobrowse-back` CustomEvent. Surface partners: the
+  // "motebit waiting" chip in the user-state chrome (same event),
+  // future gestures. Doctrine: chrome-as-state-render.md § "user
+  // register — cobrowse mode entered."
+  { name: "back", description: "Hand back to motebit — exit cobrowse mode" },
   { name: "mcp", description: "MCP server management" },
   { name: "state", description: "Show state vector" },
   { name: "tools", description: "List registered tools" },
@@ -289,6 +297,10 @@ export function initSlashCommands(
       case "wheel":
         chatInput.value = "";
         document.dispatchEvent(new CustomEvent("motebit:cobrowse-wheel"));
+        return;
+      case "back":
+        chatInput.value = "";
+        document.dispatchEvent(new CustomEvent("motebit:cobrowse-back"));
         return;
       case "mcp": {
         chatInput.value = "";

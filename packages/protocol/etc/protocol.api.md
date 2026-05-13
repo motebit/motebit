@@ -555,7 +555,7 @@ export interface ClickElementAction {
 }
 
 // @alpha
-export const CO_BROWSE_TRANSITION_KINDS: readonly ["request_control", "grant_control", "deny_control", "reclaim_control", "release_control", "pause", "resume", "disconnect"];
+export const CO_BROWSE_TRANSITION_KINDS: readonly ["request_control", "grant_control", "deny_control", "reclaim_control", "release_control", "yield_control", "pause", "resume", "disconnect"];
 
 // @alpha
 export interface CoBrowseControlChangedPayload {

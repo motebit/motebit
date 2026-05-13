@@ -64,6 +64,7 @@ interface MachineCalls {
   resume: Array<"user" | "motebit" | "system">;
   requestControl: Array<"motebit">;
   releaseControl: Array<"motebit">;
+  yieldControl: Array<"user">;
   pause: Array<"user" | "motebit" | "system">;
   disconnect: number;
 }
@@ -76,6 +77,7 @@ function makeMockMachine(): { machine: CoBrowseControlMachine; calls: MachineCal
     resume: [],
     requestControl: [],
     releaseControl: [],
+    yieldControl: [],
     pause: [],
     disconnect: 0,
   };
@@ -102,6 +104,10 @@ function makeMockMachine(): { machine: CoBrowseControlMachine; calls: MachineCal
     },
     releaseControl: (party) => {
       calls.releaseControl.push(party);
+      return ok;
+    },
+    yieldControl: (party) => {
+      calls.yieldControl.push(party);
       return ok;
     },
     pause: (party) => {
@@ -144,7 +150,7 @@ function makeForwardEvent(): {
 // ── State-keyed structure ──────────────────────────────────────────────
 
 describe("renderCoBrowseChrome — state structure", () => {
-  it("user state: mark + URL input + ← → ⟳ trail", () => {
+  it("user state: mark + URL input + ← → ⟳ trail + motebit-waiting chip", () => {
     const { machine } = makeMockMachine();
     const { fwd } = makeForwardEvent();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
@@ -154,6 +160,11 @@ describe("renderCoBrowseChrome — state structure", () => {
     expect(el.querySelector(".cobrowse-chrome-btn-back")).not.toBeNull();
     expect(el.querySelector(".cobrowse-chrome-btn-forward")).not.toBeNull();
     expect(el.querySelector(".cobrowse-chrome-btn-reload")).not.toBeNull();
+    // Cobrowse-as-mode reshape: explicit entered-mode indicator +
+    // handoff-back affordance. Names the user-state as a MODE, not
+    // the persistent default.
+    expect(el.querySelector(".cobrowse-chrome-motebit-waiting-chip")).not.toBeNull();
+    expect(el.textContent).toContain("motebit waiting");
     // No control-state buttons in user state.
     expect(el.textContent).not.toContain("Take back");
     expect(el.textContent).not.toContain("Grant");
@@ -171,6 +182,11 @@ describe("renderCoBrowseChrome — state structure", () => {
     // own navigate tool.
     expect(el.querySelector(".cobrowse-chrome-url-input")).toBeNull();
     expect(el.querySelector(".cobrowse-chrome-btn-back")).toBeNull();
+    // Cobrowse-as-mode reshape: the motebit-waiting chip is the
+    // user-state-only indicator. Motebit-state has its own register
+    // (narration + Take back); the waiting chip would be redundant
+    // here and confuse the polarity.
+    expect(el.querySelector(".cobrowse-chrome-motebit-waiting-chip")).toBeNull();
   });
 
   it("handoff_pending state: mark + 'asks to drive' caption + Grant/Deny trail", () => {
@@ -366,6 +382,36 @@ describe("renderCoBrowseChrome — surface-determinism", () => {
     const btn = el.querySelector(".cobrowse-chrome-btn") as HTMLButtonElement;
     btn.click();
     expect(calls.resume).toEqual(["user"]);
+  });
+
+  it("motebit-waiting chip click dispatches motebit:cobrowse-back — single mechanism shared with /back", () => {
+    const { machine } = makeMockMachine();
+    const { fwd } = makeForwardEvent();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    const chip = el.querySelector(
+      ".cobrowse-chrome-motebit-waiting-chip",
+    ) as HTMLButtonElement | null;
+    expect(chip).not.toBeNull();
+    let dispatched = false;
+    const listener = (): void => {
+      dispatched = true;
+    };
+    document.addEventListener("motebit:cobrowse-back", listener);
+    try {
+      chip!.click();
+    } finally {
+      document.removeEventListener("motebit:cobrowse-back", listener);
+    }
+    expect(dispatched).toBe(true);
+  });
+
+  it("motebit-waiting chip is a button with explicit aria-label (platform semantics, assistive-tech legible)", () => {
+    const { machine } = makeMockMachine();
+    const { fwd } = makeForwardEvent();
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    const chip = el.querySelector(".cobrowse-chrome-motebit-waiting-chip");
+    expect(chip?.tagName).toBe("BUTTON");
+    expect(chip?.getAttribute("aria-label")).toContain("Hand back to motebit");
   });
 });
 

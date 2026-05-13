@@ -1276,15 +1276,30 @@ export class WebApp {
         input.setSelectionRange(len, len);
       }
     };
+    // `/back` (and "motebit waiting" chip-tap) — cobrowse-as-mode
+    // reshape's exit affordance. Symmetric partner to `/wheel`;
+    // routes to the protocol-level `yieldControl` transition (user
+    // → motebit). The new register's lifecycle from the user's
+    // perspective: `/wheel` enters cobrowse mode + URL bar focuses;
+    // user does their thing; `/back` exits cobrowse mode + motebit
+    // resumes the narration register naturally. Surface-determinism
+    // preserved (typed CustomEvent → typed-capability call). Doctrine:
+    // chrome-as-state-render.md § "user register — cobrowse mode
+    // entered."
+    const onBack = (): void => {
+      machine.yieldControl("user");
+    };
     document.addEventListener("motebit:cobrowse-grant", onGrant);
     document.addEventListener("motebit:cobrowse-deny", onDeny);
     document.addEventListener("motebit:cobrowse-reclaim", onReclaim);
     document.addEventListener("motebit:cobrowse-wheel", onWheel);
+    document.addEventListener("motebit:cobrowse-back", onBack);
     this.coBrowseDisposers.push(
       () => document.removeEventListener("motebit:cobrowse-grant", onGrant),
       () => document.removeEventListener("motebit:cobrowse-deny", onDeny),
       () => document.removeEventListener("motebit:cobrowse-reclaim", onReclaim),
       () => document.removeEventListener("motebit:cobrowse-wheel", onWheel),
+      () => document.removeEventListener("motebit:cobrowse-back", onBack),
     );
   }
 

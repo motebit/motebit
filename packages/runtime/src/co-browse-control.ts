@@ -151,6 +151,26 @@ export interface CoBrowseControlMachine {
   releaseControl(by: "motebit"): CoBrowseTransitionResult;
 
   /**
+   * User voluntarily yields drive back to motebit. From `{kind:
+   * "user"}` only. No approval needed — the user's identity is the
+   * trust root; they unilaterally decide who drives, including
+   * handing control back. Symmetric protocol-level partner to
+   * `releaseControl` (motebit-yields) on the user side, and the
+   * surface partner to the `/back` slash command + "motebit waiting"
+   * chip-tap in the agent-surface pivot's cobrowse-as-mode reshape.
+   *
+   * Why this is a distinct transition (rather than re-using
+   * `requestControl` + auto-`grantControl`): a single explicit
+   * `yield_control` produces one audit event with the right
+   * semantics ("user handed back"); the request-then-grant compound
+   * would produce two events that a verifier would have to recognize
+   * as a paired pattern. The audit log is the source of truth for
+   * "who was driving when"; one transition kind keeps the log
+   * legible.
+   */
+  yieldControl(by: "user"): CoBrowseTransitionResult;
+
+  /**
    * Pause — neither party drives. Source-agnostic (could be the v1.2
    * halt gesture, the `/halt` slash command, or motebit's own stop
    * tool). `previousDriver` is preserved so `resume` restores
@@ -296,6 +316,16 @@ export function createCoBrowseControlMachine(
         return { ok: false, reason: "wrong_party" };
       }
       return commit({ kind: "user" }, "release_control", "motebit");
+    },
+
+    yieldControl(by) {
+      if (state.kind !== "user") {
+        return { ok: false, reason: "invalid_from_state" };
+      }
+      if (by !== "user") {
+        return { ok: false, reason: "wrong_party" };
+      }
+      return commit({ kind: "motebit" }, "yield_control", "user");
     },
 
     pause(by) {

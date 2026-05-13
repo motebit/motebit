@@ -35,6 +35,7 @@ function makeMockMachine(initial: ControlState = { kind: "user" }): CoBrowseCont
     denyControl: () => ok,
     reclaimControl: () => ok,
     releaseControl: () => ok,
+    yieldControl: () => ok,
     pause: () => ok,
     resume: () => ok,
     disconnect: () => ok,

@@ -826,9 +826,78 @@ function buildTrail(
         row.appendChild(buildHistoryButton("→", "forward", forwardEvent, "Go forward"));
         row.appendChild(buildHistoryButton("↻", "reload", forwardEvent, "Reload"));
       }
+      // Cobrowse-as-mode reshape — explicit "motebit waiting" chip
+      // marks the user-driving cell as an ENTERED MODE, not the
+      // persistent default. Doctrine: `chrome-as-state-render.md` §
+      // "user register" ("includes a small indicator that motebit
+      // is watching so the user knows they're not alone, and that
+      // motebit will narrate when they hand back"). The chip is also
+      // the handoff-back affordance — clicking dispatches the same
+      // `motebit:cobrowse-back` CustomEvent the `/back` slash command
+      // uses, which the web-app handler routes to
+      // `machine.yieldControl("user")`. Single mode-flip mechanism,
+      // two surface affordances; surface-determinism preserved
+      // (typed CustomEvent → typed-capability call, no AI-loop
+      // routing). Calm-default copy: "motebit waiting · hand back"
+      // is both presence indicator AND affordance label.
+      row.appendChild(buildMotebitWaitingChip());
       break;
   }
   return row;
+}
+
+/**
+ * Cobrowse-as-mode reshape — the user-state register's explicit
+ * mode indicator + handoff-back affordance. Sibling of the
+ * `motebit × virtual_browser` register's URL chip (slab-chrome.ts):
+ * same chip-as-button shape, same `motebit:cobrowse-wheel`-style
+ * surface event family, opposite direction.
+ *
+ * Why a chip-button rather than a static label: the doctrine names
+ * the chip-tap as the spatial-natural handoff target. Promoting
+ * the indicator from `<span>` to `<button type="button">` makes
+ * click semantics, focus-ring, and keyboard activation come from
+ * the platform; an explicit `aria-label` carries the affordance's
+ * full intent for assistive tech.
+ *
+ * Calm-default styling — same family as the chrome's history
+ * buttons (borderless tinted text, transparent background, hover
+ * lifts opacity). The chip's calm visual register reinforces
+ * "ambient indicator first, affordance second" — calm software,
+ * not a notification.
+ */
+function buildMotebitWaitingChip(): HTMLButtonElement {
+  const chip = document.createElement("button");
+  chip.type = "button";
+  chip.className = "cobrowse-chrome-motebit-waiting-chip";
+  chip.textContent = "motebit waiting";
+  chip.setAttribute(
+    "aria-label",
+    "Hand back to motebit — motebit is watching and will resume driving",
+  );
+  chip.style.flex = "0 0 auto";
+  chip.style.padding = "4px 8px";
+  chip.style.marginLeft = "4px";
+  chip.style.font = "12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
+  chip.style.color = "rgba(40, 55, 90, 0.55)";
+  chip.style.background = "transparent";
+  chip.style.border = "none";
+  chip.style.borderRadius = "0";
+  chip.style.cursor = "pointer";
+  chip.style.userSelect = "none";
+  chip.style.pointerEvents = "auto";
+  chip.style.transition = "color 120ms ease-out";
+  chip.addEventListener("mouseenter", () => {
+    chip.style.color = "rgba(40, 55, 90, 0.92)";
+  });
+  chip.addEventListener("mouseleave", () => {
+    chip.style.color = "rgba(40, 55, 90, 0.55)";
+  });
+  chip.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.dispatchEvent(new CustomEvent("motebit:cobrowse-back"));
+  });
+  return chip;
 }
 
 // ── Shared — buttons ───────────────────────────────────────────────────
