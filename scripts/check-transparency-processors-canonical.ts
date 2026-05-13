@@ -81,6 +81,7 @@ const HOSTNAME_TO_PROCESSOR: Record<string, string> = {
   "api.anthropic.com": "Anthropic",
   "api.openai.com": "OpenAI",
   "generativelanguage.googleapis.com": "Google (Generative Language API)",
+  "api.groq.com": "Groq",
 
   // Mobile push (via services/relay push-adapter)
   "exp.host": "Expo Push Service",

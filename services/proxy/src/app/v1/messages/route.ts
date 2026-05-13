@@ -99,6 +99,8 @@ function getProviderApiKey(provider: Provider): string | null {
       return process.env.OPENAI_API_KEY ?? null;
     case "google":
       return process.env.GOOGLE_AI_API_KEY ?? null;
+    case "groq":
+      return process.env.GROQ_API_KEY ?? null;
   }
 }
 
@@ -185,6 +187,29 @@ function buildProviderRequest(
           temperature: body.temperature,
           stream: true,
           stream_options: { include_usage: true },
+        }),
+      };
+    }
+
+    case "groq": {
+      // Groq exposes an OpenAI-compatible endpoint at api.groq.com/openai/v1;
+      // hosts open-source models (Llama 3.3 70B, GPT-OSS 120B) on LPU chips
+      // for high-throughput inference. Tools pass through in OpenAI shape.
+      const groqMessages = system ? [{ role: "system", content: system }, ...messages] : messages;
+      return {
+        url: "https://api.groq.com/openai/v1/chat/completions",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: groqMessages,
+          max_tokens: maxTokens,
+          temperature: body.temperature,
+          stream: true,
+          stream_options: { include_usage: true },
+          ...(body.tools != null ? { tools: body.tools } : {}),
         }),
       };
     }

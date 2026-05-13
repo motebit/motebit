@@ -271,6 +271,15 @@ export const DECLARATION_CONTENT = {
       data_processing_terms: "https://cloud.google.com/terms/data-processing-addendum",
     },
     {
+      name: "Groq",
+      role: "AI inference provider (via services/proxy when motebit-cloud routing selects an open-source model on Groq LPU hardware: Llama 3.3 70B, GPT-OSS 120B)",
+      data_shared: [
+        "model prompts and responses (per request, not retained at proxy beyond cache TTL)",
+      ],
+      jurisdiction: "United States",
+      data_processing_terms: "https://groq.com/terms-of-use",
+    },
+    {
       name: "Fly.io",
       role: "container hosting for relay and reference services",
       data_shared: ["host-level metadata (no app data beyond what Fly captures from log streams)"],

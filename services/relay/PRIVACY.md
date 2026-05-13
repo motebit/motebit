@@ -178,6 +178,13 @@ client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and in
 - **Jurisdiction**: United States
 - **DPA / terms**: https://cloud.google.com/terms/data-processing-addendum
 
+### Groq
+
+- **Role**: AI inference provider (via services/proxy when motebit-cloud routing selects an open-source model on Groq LPU hardware: Llama 3.3 70B, GPT-OSS 120B)
+- **Data shared**: model prompts and responses (per request, not retained at proxy beyond cache TTL)
+- **Jurisdiction**: United States
+- **DPA / terms**: https://groq.com/terms-of-use
+
 ### Fly.io
 
 - **Role**: container hosting for relay and reference services

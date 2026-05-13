@@ -51,10 +51,12 @@ export interface ProxyTokenPayload {
 
 // ── Provider routing ────────────────────────────────────────────────────
 
-export type Provider = "anthropic" | "openai" | "google";
+export type Provider = "anthropic" | "openai" | "google" | "groq";
 
 /** Model → provider mapping + pricing (USD per million tokens).
- *  3 tiers per provider: strongest, default, fast. */
+ *  3 tiers per provider for the big-three frontiers; Groq adds 2 open-source
+ *  rows on LPU hardware — speed-tier inference for the tool-loop-heavy turns
+ *  where latency compounds across iterations. */
 const MODEL_CONFIG: Record<string, { provider: Provider; input: number; output: number }> = {
   // Anthropic — opus (strongest), sonnet (default), haiku (fast)
   "claude-opus-4-6": { provider: "anthropic", input: 5.0, output: 25.0 },
@@ -69,6 +71,13 @@ const MODEL_CONFIG: Record<string, { provider: Provider; input: number; output: 
   "gemini-2.5-pro": { provider: "google", input: 1.25, output: 10.0 },
   "gemini-2.5-flash": { provider: "google", input: 0.3, output: 2.5 },
   "gemini-2.5-flash-lite": { provider: "google", input: 0.1, output: 0.4 },
+  // Groq — open-source on LPU hardware. Llama 3.3 70B is the tool-use workhorse;
+  // GPT-OSS 120B is OpenAI's open-source flagship with stronger tool calling.
+  // Pricing per Groq's public sheet 2026; the speed advantage (~500 tok/s on
+  // 70B vs ~50-80 on standard GPU clouds) is the structural win for motebit's
+  // tool-call-heavy runtime.
+  "llama-3.3-70b-versatile": { provider: "groq", input: 0.59, output: 0.79 },
+  "openai/gpt-oss-120b": { provider: "groq", input: 0.15, output: 0.75 },
 };
 
 /**

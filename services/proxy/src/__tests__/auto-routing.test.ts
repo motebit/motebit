@@ -44,6 +44,8 @@ describe("getModelProvider", () => {
     "gpt-5.4-nano": "openai",
     "gemini-2.5-pro": "google",
     "gemini-2.5-flash": "google",
+    "llama-3.3-70b-versatile": "groq",
+    "openai/gpt-oss-120b": "groq",
   };
 
   for (const [model, provider] of Object.entries(expected)) {
@@ -59,9 +61,9 @@ describe("getModelProvider", () => {
 });
 
 describe("getSupportedModels", () => {
-  it("returns all 9 models", () => {
+  it("returns all 11 models", () => {
     const models = getSupportedModels();
-    expect(models).toHaveLength(9);
+    expect(models).toHaveLength(11);
     expect(models).toContain("claude-sonnet-4-6");
     expect(models).toContain("claude-opus-4-6");
     expect(models).toContain("claude-haiku-4-5-20251001");
@@ -69,6 +71,8 @@ describe("getSupportedModels", () => {
     expect(models).toContain("gpt-5.4-nano");
     expect(models).toContain("gemini-2.5-pro");
     expect(models).toContain("gemini-2.5-flash");
+    expect(models).toContain("llama-3.3-70b-versatile");
+    expect(models).toContain("openai/gpt-oss-120b");
   });
 });
 
@@ -122,6 +126,20 @@ describe("calculateCostMicro", () => {
     // with margin = 0.00155 * 1.2 = 0.00186
     // micro = ceil(0.00186 * 1e6) = 1860
     expect(calculateCostMicro("gemini-2.5-flash", 1000, 500)).toBe(1860);
+  });
+
+  it("llama-3.3-70b-versatile: 1000 in / 500 out", () => {
+    // raw = (1000/1e6)*0.59 + (500/1e6)*0.79 = 0.00059 + 0.000395 = 0.000985
+    // with margin = 0.000985 * 1.2 = 0.001182
+    // micro = ceil(0.001182 * 1e6) = 1182
+    expect(calculateCostMicro("llama-3.3-70b-versatile", 1000, 500)).toBe(1182);
+  });
+
+  it("openai/gpt-oss-120b: 1000 in / 500 out", () => {
+    // raw = (1000/1e6)*0.15 + (500/1e6)*0.75 = 0.00015 + 0.000375 = 0.000525
+    // with margin = 0.000525 * 1.2 = 0.00063
+    // micro = ceil(0.00063 * 1e6) = 630
+    expect(calculateCostMicro("openai/gpt-oss-120b", 1000, 500)).toBe(630);
   });
 
   it("returns 0 for unknown model", () => {
