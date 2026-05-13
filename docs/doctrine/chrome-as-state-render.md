@@ -164,6 +164,20 @@ PR 2 ships the **second surface dispatcher against the same matrix**, lifting th
 
 **Mobile-as-renderer:** mobile has no live cobrowse session yet (cloud-browser dispatcher remains web-only at the consumer layer), so the `user × virtual_browser` / `handoff_pending × virtual_browser` / `paused × virtual_browser` cells are present in the dispatcher but inert at runtime today. The wire is set; the moment a mobile cloud-browser surface lands, the chrome's cells route through the existing `CoBrowseControlMachine` capability without further dispatcher work.
 
+## PR 3 scope (spatial, shipped 2026-05-13)
+
+PR 3 ships the **third surface dispatcher**, lifting the matrix from two-instance-deep to three-instance-deep and closing the spatial-as-endgame validation: the registers translate to a chromeless surface (voice + ambient + gaze) without semantic loss.
+
+**Shape:**
+
+- Pure dispatcher in `apps/spatial/src/slab-chrome.ts` exports `dispatchSlabChrome(state, embodimentMode, opts) → SlabChromeCell | null` — same signature, same cell-shape variants as mobile's. The dispatcher's body is 12 lines of switch-case over `ControlState`; per `feedback_endgame_not_mvp` × "rule of three," two duplicated dispatchers don't yet justify lifting to `@motebit/render-engine`. When a fourth slab surface arrives (desktop chrome, perhaps), promote `SlabChromeCell` + `dispatchSlabChrome` + `formatUrlHostForChip` to the shared package; drift-defense #94's `SLAB_SURFACES` registry is the discipline trigger.
+- Spatial render adapter `renderCellToActivity(cell) → string | null` lives in the same file. The HUD's active-task field is spatial's chrome render (per `apps/spatial/CLAUDE.md` Rule 1: HUD is the non-negotiable safety floor — connection state, balance, active task); the cell maps directly into it. Voice cues + creature-gaze updates compose on top of the same cell when their adapters arrive (out of scope for PR 3 — the activity label is the minimum semantic render that demonstrates the doctrine).
+- `task_step_narration` chunk handling in `spatial-app.ts` routes through the slab-chrome dispatcher (not `deriveStreamActivity`'s default arm), so the matrix-as-primitive path is the canonical seam. The two paths converge on the same string when narration alone fires; the slab-chrome path composes URL + narration (`"Reading the page · apple.com"`) and stands ready for the user / handoff / paused cells.
+
+**Structural lock:** `check-slab-chrome-coverage` (drift-defense #94) now asserts 3 surfaces × 4 control states + 5 deferred embodiments — matrix fully covered across web, mobile, and spatial.
+
+**Spatial-as-endgame validation closed:** the doctrine's claim "registers as information shapes survive the chromeless surface" is now testable end-to-end. The `SlabChromeCell` discriminated union flows from the dispatcher into surface-specific renders without any web-chrome assumptions leaking through. A future AR-glasses production renderer reads the same cell shape and composes voice + gaze + ambient indicators without re-deriving the matrix.
+
 ## Spatial-as-endgame validation
 
 The registers are correct **only if they translate to surfaces without chrome**.

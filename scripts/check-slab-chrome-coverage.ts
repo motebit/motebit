@@ -80,6 +80,11 @@ const SLAB_SURFACES: ReadonlyArray<SlabSurface> = [
     file: "apps/mobile/src/slab-chrome.ts",
     entry: "dispatchSlabChrome",
   },
+  {
+    name: "spatial",
+    file: "apps/spatial/src/slab-chrome.ts",
+    entry: "dispatchSlabChrome",
+  },
 ];
 
 /**

@@ -46,6 +46,43 @@ describe("deriveStreamActivity", () => {
     const chunk: StreamChunk = { type: "text", text: "hello" };
     expect(deriveStreamActivity(chunk)).toBeUndefined();
   });
+
+  it("task_step_narration → narration text (spatial chrome render)", () => {
+    // Doctrine: `chrome-as-state-render.md` § "Spatial-as-endgame
+    // validation" + § "PR 3 scope (spatial)". The validated
+    // narration becomes the activity label — spatial's HUD picks
+    // it up via ActivityTracker, satisfying the doctrine's
+    // "voice narration + ambient indicator" register without a
+    // chrome strip.
+    const chunk: StreamChunk = {
+      type: "task_step_narration",
+      text: "Reading the page",
+      valid: true,
+    };
+    expect(deriveStreamActivity(chunk)).toBe("Reading the page");
+  });
+
+  it("task_step_narration trims surrounding whitespace before surfacing", () => {
+    const chunk: StreamChunk = {
+      type: "task_step_narration",
+      text: "  Reading the page  ",
+      valid: true,
+    };
+    expect(deriveStreamActivity(chunk)).toBe("Reading the page");
+  });
+
+  it("task_step_narration with whitespace-only text falls back to 'thinking'", () => {
+    // Defense-in-depth — the runtime's emitter trims, but if a
+    // future caller bypasses validation the HUD must not display
+    // an empty register. "thinking" is the calm-default activity
+    // for any non-informative chunk.
+    const chunk: StreamChunk = {
+      type: "task_step_narration",
+      text: "   ",
+      valid: true,
+    };
+    expect(deriveStreamActivity(chunk)).toBe("thinking");
+  });
 });
 
 describe("derivePlanActivity", () => {

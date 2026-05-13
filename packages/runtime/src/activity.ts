@@ -46,6 +46,18 @@ export function deriveStreamActivity(chunk: StreamChunk): ActivityLabel | undefi
       return `approval: ${chunk.name}`;
     case "approval_expired":
       return "thinking";
+    case "task_step_narration":
+      // Spatial chrome render: the slab's
+      // `motebit × virtual_browser` register IS the activity label
+      // on chromeless surfaces (per `chrome-as-state-render.md`
+      // § "Spatial-as-endgame validation": "voice narration +
+      // ambient indicator"). The narration text becomes the HUD's
+      // active-task field; per `apps/spatial/CLAUDE.md` Rule 1,
+      // active task is one of the three HUD safety-floor essentials.
+      // Whitespace-only text falls back to "thinking" rather than
+      // displaying an empty register — the runtime emits trimmed
+      // text but defense-in-depth here keeps the HUD honest.
+      return chunk.text.trim().length > 0 ? chunk.text.trim() : "thinking";
     case "result":
     case "task_result":
       return null;

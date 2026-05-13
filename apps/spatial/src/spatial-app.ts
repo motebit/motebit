@@ -70,6 +70,8 @@ export { WebLLMProvider } from "./providers";
 import { SpatialSyncController } from "./sync-controller";
 import { SpatialMcpManager } from "./mcp-manager";
 import { tryVoiceCommand } from "./voice-commands";
+import { dispatchSlabChrome, renderCellToActivity } from "./slab-chrome";
+import type { ControlState } from "@motebit/sdk";
 import {
   ActivityTracker,
   deriveStreamActivity,
@@ -923,6 +925,33 @@ export class SpatialApp {
   }
 
   private pushStreamActivity(chunk: StreamChunk): void {
+    // task_step_narration routes through the slab-chrome dispatcher
+    // rather than `deriveStreamActivity`'s default arm — the
+    // dispatcher's `motebit-narration` cell is the matrix-as-primitive
+    // path (`docs/doctrine/chrome-as-state-render.md` § "Spatial-as-
+    // endgame validation"), and `renderCellToActivity` is spatial's
+    // surface-native render. The two paths converge on the same
+    // string when narration alone fires, but the slab-chrome path
+    // composes URL + narration ("Reading the page · apple.com") and
+    // stands ready for the user / handoff / paused cells when a
+    // future spatial CoBrowseControlMachine arrives. `deriveStream
+    // Activity` still handles the simple chunks (tool / delegation /
+    // approval / result) where the slab matrix doesn't apply.
+    if (chunk.type === "task_step_narration") {
+      // Spatial has no live cobrowse session yet — default control
+      // state is `motebit` (the new doctrine baseline) and
+      // `currentUrl` is null. The dispatcher's full matrix-shape
+      // composes when a future PR wires the machine; today only the
+      // `motebit-narration` cell fires.
+      const controlState: ControlState = { kind: "motebit" };
+      const cell = dispatchSlabChrome(controlState, "virtual_browser", {
+        taskStepNarration: chunk.text,
+        currentUrl: null,
+      });
+      const label = renderCellToActivity(cell);
+      if (label !== null) this.activity.set(label);
+      return;
+    }
     const next: ActivityLabel | undefined = deriveStreamActivity(chunk);
     if (next !== undefined) this.activity.set(next);
   }
