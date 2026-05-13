@@ -32,9 +32,9 @@ The typeset rendering of "Motebit" is the project's wordmark. Use it **as-is, un
 
 **USPTO filings:**
 
-- **Serial 99734573** — MOTEBIT (word mark), International Class 9 (downloadable software). Filed 2026-03-31 with first-use claim 2026-03-11; use-in-commerce basis (1a).
-- International Class 42 (software-as-a-service / platform) — pending
-- International Class 36 (financial / settlement services) — pending
+- **Serial 99734573** — MOTEBIT (word mark), International Class 9 (downloadable software). Filed 2026-03-31 with first-use claim 2026-03-11; use-in-commerce basis (1a). Filed wording: "Downloadable computer software using artificial intelligence (AI) for autonomous agent identity management, cryptographic authentication, multi-agent task delegation, and privacy-governed memory."
+- **Serial 99802258** — MOTEBIT (word mark), International Class 42 (AIaaS / SaaS). Filed 2026-05-04 with first-use claim 2026-03-11; use-in-commerce basis (1a). Two ID descriptions under one filing: (i) "Artificial intelligence as a service (AIAAS) services featuring software using artificial intelligence (AI) for autonomous agent orchestration, verifiable credential issuance, and cloud AI model routing"; (ii) "Software as a service (SAAS) services featuring software using artificial intelligence (AI) for agent identity verification, encrypted multi-device data synchronization, agent discovery, and multi-agent task routing and verifiable execution-receipt issuance."
+- **International Class 36** (financial / settlement services) — deliberately deferred until the relay's regulatory posture is clear (money-transmitter / BSA-AML conversation with fintech counsel before claiming "payment processing" or "settlement services" in a federal filing). Not a TODO — a decision.
 
 **Common-law trademark** — established through use in commerce since 2026-03-11 (npm packages published under `@motebit/` scope, `create-motebit`, and `motebit` CLI). Common-law rights apply in any jurisdiction where Motebit is in active use, independently of registration status.
 
@@ -97,4 +97,4 @@ If you see unauthorized use of Motebit trademarks or trade dress, contact: danie
 
 ---
 
-_Version 1.0 — effective 2026-04-26._
+_Version 1.1 — effective 2026-05-13 (added Serial 99802258 / IC 42 filing 2026-05-04; reframed IC 36 from "pending" to "deliberately deferred"). Version 1.0 was effective 2026-04-26._
