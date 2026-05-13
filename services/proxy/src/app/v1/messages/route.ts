@@ -2,7 +2,8 @@ export const runtime = "edge";
 
 import {
   type ProxyTokenPayload,
-  type Provider,
+  type InferenceHost,
+  isModelAllowedInMotebitCloud,
   DEPOSIT_LIMITS,
   BYOK_LIMITS,
   parseProxyToken,
@@ -91,7 +92,7 @@ function debitRelay(motebitId: string, amountMicro: number, referenceId: string)
 
 // ── Provider API adapters ───────────────────────────────────────────────
 
-function getProviderApiKey(provider: Provider): string | null {
+function getProviderApiKey(provider: InferenceHost): string | null {
   switch (provider) {
     case "anthropic":
       return process.env.ANTHROPIC_API_KEY ?? null;
@@ -112,7 +113,7 @@ interface ProviderRequest {
 
 /** Build the provider-specific request. All providers receive the same logical input. */
 function buildProviderRequest(
-  provider: Provider,
+  provider: InferenceHost,
   apiKey: string,
   model: string,
   body: Record<string, unknown>,
@@ -218,7 +219,7 @@ function buildProviderRequest(
 
 /** Extract token usage from a streaming SSE chunk. Handles both Anthropic and OpenAI formats. */
 function extractUsage(
-  provider: Provider,
+  provider: InferenceHost,
   line: string,
   usage: { input: number; output: number; cacheRead: number; cacheCreation: number },
 ): void {
@@ -390,6 +391,23 @@ export async function POST(request: Request): Promise<Response> {
           message: `Allowed: ${tokenPayload.models.join(", ")}`,
         }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+      );
+    }
+
+    // Motebit-cloud jurisdiction admission predicate. Lifts the previously-
+    // tribal "DeepSeek-is-BYOK-only-because-Chinese-hosted" decision to
+    // structural enforcement: if a future MODEL_CONFIG addition has a
+    // non-US jurisdiction, motebit-cloud refuses the route until the
+    // jurisdictional policy is explicitly widened. BYOK mode bypasses
+    // this filter (the user's own key, the user's own choice; sovereignty
+    // doctrine stays orthogonal to tier policy).
+    if (resolvedModel !== "auto" && !isModelAllowedInMotebitCloud(resolvedModel)) {
+      return new Response(
+        JSON.stringify({
+          error: "jurisdiction_not_permitted",
+          message: `${resolvedModel} is not available in motebit-cloud routing. Use BYOK to call this model with your own API key.`,
+        }),
+        { status: 451, headers: { ...cors, "Content-Type": "application/json" } },
       );
     }
   }

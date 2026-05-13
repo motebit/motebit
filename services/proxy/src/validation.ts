@@ -49,35 +49,153 @@ export interface ProxyTokenPayload {
   exp: number;
 }
 
-// ── Provider routing ────────────────────────────────────────────────────
+// ── Intelligence-source agility (agility-as-role instances 6 + 7) ───────
+//
+// The proxy routes data to inference hosts; the weights running there
+// were trained by model labs; the host operates from a legal jurisdiction.
+// These are three structurally distinct axes flattened into one `Provider`
+// field pre-this-refactor, which made the doctrine claim "intelligence is
+// pluggable" partially aspirational — the code conflated WHO trained the
+// weights (lab) with WHERE the data flows (host). The split makes that
+// claim load-bearing.
+//
+// Naming: InferenceHost / ModelLab are role names; entries are registry
+// additions. Same agility-as-role pattern as SuiteId, permissive floor,
+// GuestRail/SovereignRail, ByokVendor, foundation-model agility (the 5
+// instances documented in docs/doctrine/agility-as-role.md — this is the
+// 6th and 7th).
+//
+// Jurisdiction is NOT a role — it's a typed admission predicate that
+// lifts the previously-tribal "DeepSeek-not-in-motebit-cloud-because-
+// Chinese-hosted" decision into structural enforcement. You can't swap a
+// host's jurisdiction; the registry reflects legal reality.
 
-export type Provider = "anthropic" | "openai" | "google" | "groq";
+/** Where the HTTP request actually goes. The processor that receives the
+ *  prompt bytes. Anthropic/OpenAI/Google appear here because they run their
+ *  own hosted inference; Groq appears here because they host other labs'
+ *  open-source weights on LPU hardware. */
+export type InferenceHost = "anthropic" | "openai" | "google" | "groq";
 
-/** Model → provider mapping + pricing (USD per million tokens).
- *  3 tiers per provider for the big-three frontiers; Groq adds 2 open-source
- *  rows on LPU hardware — speed-tier inference for the tool-loop-heavy turns
- *  where latency compounds across iterations. */
-const MODEL_CONFIG: Record<string, { provider: Provider; input: number; output: number }> = {
-  // Anthropic — opus (strongest), sonnet (default), haiku (fast)
-  "claude-opus-4-6": { provider: "anthropic", input: 5.0, output: 25.0 },
-  "claude-sonnet-4-6": { provider: "anthropic", input: 3.0, output: 15.0 },
-  "claude-haiku-4-5-20251001": { provider: "anthropic", input: 1.0, output: 5.0 },
-  // OpenAI — gpt-5.4 (strongest), gpt-5.4-mini (mid), gpt-5.4-nano (fast)
-  "gpt-5.4": { provider: "openai", input: 2.5, output: 15.0 },
-  "gpt-5.4-mini": { provider: "openai", input: 0.75, output: 4.5 },
-  "gpt-5.4-nano": { provider: "openai", input: 0.2, output: 1.25 },
-  // Google — 2.5 pro (strongest), 2.5 flash (default), 2.5 flash-lite (fast)
-  // Note: Pro has tiered pricing (>200k: $2.50/$15). Using ≤200k rate; acceptable margin risk.
-  "gemini-2.5-pro": { provider: "google", input: 1.25, output: 10.0 },
-  "gemini-2.5-flash": { provider: "google", input: 0.3, output: 2.5 },
-  "gemini-2.5-flash-lite": { provider: "google", input: 0.1, output: 0.4 },
-  // Groq — open-source on LPU hardware. Llama 3.3 70B is the tool-use workhorse;
-  // GPT-OSS 120B is OpenAI's open-source flagship with stronger tool calling.
-  // Pricing per Groq's public sheet 2026; the speed advantage (~500 tok/s on
-  // 70B vs ~50-80 on standard GPU clouds) is the structural win for motebit's
-  // tool-call-heavy runtime.
-  "llama-3.3-70b-versatile": { provider: "groq", input: 0.59, output: 0.79 },
-  "openai/gpt-oss-120b": { provider: "groq", input: 0.15, output: 0.75 },
+/** Who trained the weights. Anthropic/OpenAI/Google appear here because
+ *  they trained Claude/GPT/Gemini respectively; Meta appears here because
+ *  Llama 3.3 70B is Meta's model (Groq just hosts it). OpenAI appears
+ *  twice (host="openai" for gpt-5.4 hosted at api.openai.com; lab="openai"
+ *  for gpt-oss-120b which they released as open weights and Groq hosts).
+ *  That's structurally correct — same entity can serve different roles. */
+export type ModelLab = "anthropic" | "openai" | "google" | "meta";
+
+/** Legal locus of the host. Reflective of physical/legal reality, not
+ *  pluggable. Drives the motebit-cloud admission predicate below. */
+export type Jurisdiction = "US" | "CN" | "EU";
+
+/** Jurisdictions motebit-cloud (services/proxy) routes to. The earlier
+ *  "DeepSeek is BYOK-only because Chinese-hosted" decision is now a typed
+ *  predicate, not tribal knowledge — adding a non-US host to MODEL_CONFIG
+ *  fails admission until this set is intentionally widened. */
+export const MOTEBIT_CLOUD_ALLOWED_JURISDICTIONS: ReadonlySet<Jurisdiction> = new Set<Jurisdiction>(
+  ["US"],
+);
+
+interface ModelEntry {
+  /** Where requests route. Same value drives pricing tier + transparency disclosure. */
+  host: InferenceHost;
+  /** Who trained the weights. Data field — populated for legibility, no shipping
+   *  consumer today (Path C auto-routing + UI attribution would be future consumers). */
+  lab: ModelLab;
+  /** Legal locus of the host. Drives MOTEBIT_CLOUD_ALLOWED_JURISDICTIONS predicate. */
+  jurisdiction: Jurisdiction;
+  /** Input price (USD per million tokens). */
+  input: number;
+  /** Output price (USD per million tokens). */
+  output: number;
+}
+
+/** Model → entry mapping. Three tiers per vertically-integrated lab+host
+ *  pair (Anthropic, OpenAI, Google); Groq adds 2 open-source rows where
+ *  host !== lab — the structural proof that the axes are decoupled. */
+const MODEL_CONFIG: Record<string, ModelEntry> = {
+  // Anthropic — opus (strongest), sonnet (default), haiku (fast). Vertically
+  // integrated: host === lab (Anthropic trains AND hosts Claude).
+  "claude-opus-4-6": {
+    host: "anthropic",
+    lab: "anthropic",
+    jurisdiction: "US",
+    input: 5.0,
+    output: 25.0,
+  },
+  "claude-sonnet-4-6": {
+    host: "anthropic",
+    lab: "anthropic",
+    jurisdiction: "US",
+    input: 3.0,
+    output: 15.0,
+  },
+  "claude-haiku-4-5-20251001": {
+    host: "anthropic",
+    lab: "anthropic",
+    jurisdiction: "US",
+    input: 1.0,
+    output: 5.0,
+  },
+  // OpenAI — gpt-5.4 (strongest), gpt-5.4-mini (mid), gpt-5.4-nano (fast).
+  // Vertically integrated for hosted models; OpenAI also appears as `lab`
+  // for gpt-oss-120b below (open-source) running on Groq.
+  "gpt-5.4": { host: "openai", lab: "openai", jurisdiction: "US", input: 2.5, output: 15.0 },
+  "gpt-5.4-mini": {
+    host: "openai",
+    lab: "openai",
+    jurisdiction: "US",
+    input: 0.75,
+    output: 4.5,
+  },
+  "gpt-5.4-nano": {
+    host: "openai",
+    lab: "openai",
+    jurisdiction: "US",
+    input: 0.2,
+    output: 1.25,
+  },
+  // Google — 2.5 pro (strongest), 2.5 flash (default), 2.5 flash-lite (fast).
+  // Pro has tiered pricing (>200k: $2.50/$15). Using ≤200k rate; acceptable margin risk.
+  "gemini-2.5-pro": {
+    host: "google",
+    lab: "google",
+    jurisdiction: "US",
+    input: 1.25,
+    output: 10.0,
+  },
+  "gemini-2.5-flash": {
+    host: "google",
+    lab: "google",
+    jurisdiction: "US",
+    input: 0.3,
+    output: 2.5,
+  },
+  "gemini-2.5-flash-lite": {
+    host: "google",
+    lab: "google",
+    jurisdiction: "US",
+    input: 0.1,
+    output: 0.4,
+  },
+  // Groq — open-source weights on LPU hardware. host !== lab for both:
+  // Meta trained Llama; OpenAI released gpt-oss-120b as open weights;
+  // Groq runs them. Speed advantage (~500 tok/s on 70B vs ~50-80 on
+  // standard GPU clouds) compounds across motebit's tool-call-heavy loops.
+  "llama-3.3-70b-versatile": {
+    host: "groq",
+    lab: "meta",
+    jurisdiction: "US",
+    input: 0.59,
+    output: 0.79,
+  },
+  "openai/gpt-oss-120b": {
+    host: "groq",
+    lab: "openai",
+    jurisdiction: "US",
+    input: 0.15,
+    output: 0.75,
+  },
 };
 
 /**
@@ -175,9 +293,38 @@ export function getModelForTaskType(taskType: string): string {
   return TASK_MODEL_MAP[taskType] ?? AUTO_DEFAULT_MODEL;
 }
 
-/** Get the provider for a model. */
-export function getModelProvider(model: string): Provider | null {
-  return MODEL_CONFIG[model]?.provider ?? null;
+/** Get the inference host for a model. Returns null for unknown models. */
+export function getModelHost(model: string): InferenceHost | null {
+  return MODEL_CONFIG[model]?.host ?? null;
+}
+
+/** Backwards-compatible alias preserved for callers that imported the
+ *  pre-axis-split name. New code should call `getModelHost` directly —
+ *  the function returns the data-flow destination, not the lab. */
+export const getModelProvider = getModelHost;
+
+/** Get the model lab (who trained the weights). Data-field accessor —
+ *  populated for legibility; no shipping consumer today (Path C auto-routing
+ *  + UI attribution would be future consumers). Returns null for unknown models. */
+export function getModelLab(model: string): ModelLab | null {
+  return MODEL_CONFIG[model]?.lab ?? null;
+}
+
+/** Get the legal jurisdiction of the model's inference host. Returns null
+ *  for unknown models. Consumers: motebit-cloud admission predicate. */
+export function getModelJurisdiction(model: string): Jurisdiction | null {
+  return MODEL_CONFIG[model]?.jurisdiction ?? null;
+}
+
+/** Motebit-cloud admission predicate. Returns true iff the model is known
+ *  AND its host's jurisdiction is in `MOTEBIT_CLOUD_ALLOWED_JURISDICTIONS`.
+ *  Previously this was tribal knowledge ("we just didn't add DeepSeek to
+ *  motebit-cloud because it's Chinese-hosted") — now it's structural.
+ *  BYOK mode skips this check entirely (the user's own key, the user's own
+ *  choice; sovereignty doctrine stays orthogonal to tier policy). */
+export function isModelAllowedInMotebitCloud(model: string): boolean {
+  const jurisdiction = getModelJurisdiction(model);
+  return jurisdiction != null && MOTEBIT_CLOUD_ALLOWED_JURISDICTIONS.has(jurisdiction);
 }
 
 /** Get all supported model IDs. */

@@ -3,12 +3,17 @@ import {
   getModelForTaskType,
   getAffordableModelForTask,
   getModelProvider,
+  getModelHost,
+  getModelLab,
+  getModelJurisdiction,
+  isModelAllowedInMotebitCloud,
   getSupportedModels,
   calculateCostMicro,
   resolveModelAlias,
   CLASSIFIER_MODEL,
   CHEAPEST_MODEL,
   AUTO_DEFAULT_MODEL,
+  MOTEBIT_CLOUD_ALLOWED_JURISDICTIONS,
 } from "../validation.js";
 
 describe("getModelForTaskType", () => {
@@ -318,5 +323,85 @@ describe("resolveModelAlias", () => {
       const resolved = resolveModelAlias(alias);
       expect(getModelProvider(resolved)).not.toBeNull();
     }
+  });
+});
+
+// === Intelligence-source agility (6th + 7th agility-as-role instances) ===
+//
+// Three axes structurally separated from the prior flat `Provider` field:
+// inference host (data-flow destination), model lab (who trained the
+// weights), jurisdiction (legal locus of host — typed admission predicate
+// for motebit-cloud). Doctrine: docs/doctrine/agility-as-role.md.
+
+describe("getModelHost — data-flow destination axis", () => {
+  it("returns the inference host that receives the prompt bytes", () => {
+    expect(getModelHost("claude-sonnet-4-6")).toBe("anthropic");
+    expect(getModelHost("gpt-5.4-mini")).toBe("openai");
+    expect(getModelHost("gemini-2.5-flash")).toBe("google");
+    expect(getModelHost("llama-3.3-70b-versatile")).toBe("groq");
+    expect(getModelHost("openai/gpt-oss-120b")).toBe("groq");
+  });
+
+  it("returns null for unknown models", () => {
+    expect(getModelHost("unknown-model")).toBeNull();
+  });
+
+  it("getModelProvider is a backwards-compatible alias for getModelHost", () => {
+    expect(getModelProvider("claude-sonnet-4-6")).toBe(getModelHost("claude-sonnet-4-6"));
+  });
+});
+
+describe("getModelLab — weight-trainer axis", () => {
+  it("vertically-integrated entities: lab === host", () => {
+    expect(getModelLab("claude-sonnet-4-6")).toBe("anthropic");
+    expect(getModelLab("gpt-5.4")).toBe("openai");
+    expect(getModelLab("gemini-2.5-pro")).toBe("google");
+  });
+
+  it("decoupled entries: lab !== host (open-weights on third-party hardware)", () => {
+    // Meta trained Llama; Groq hosts it.
+    expect(getModelLab("llama-3.3-70b-versatile")).toBe("meta");
+    expect(getModelHost("llama-3.3-70b-versatile")).toBe("groq");
+
+    // OpenAI released gpt-oss-120b as open weights; Groq hosts it.
+    // Same entity (OpenAI) serves as both `lab` (here) and `host`
+    // (for gpt-5.4 above) — the axes are independent.
+    expect(getModelLab("openai/gpt-oss-120b")).toBe("openai");
+    expect(getModelHost("openai/gpt-oss-120b")).toBe("groq");
+  });
+
+  it("returns null for unknown models", () => {
+    expect(getModelLab("unknown-model")).toBeNull();
+  });
+});
+
+describe("getModelJurisdiction — legal locus axis", () => {
+  it("every supported model has a typed jurisdiction (no null)", () => {
+    for (const model of getSupportedModels()) {
+      expect(getModelJurisdiction(model)).not.toBeNull();
+    }
+  });
+
+  it("returns null for unknown models", () => {
+    expect(getModelJurisdiction("unknown-model")).toBeNull();
+  });
+});
+
+describe("isModelAllowedInMotebitCloud — admission predicate", () => {
+  it("admits every currently-routed model (all US-jurisdiction today)", () => {
+    for (const model of getSupportedModels()) {
+      expect(isModelAllowedInMotebitCloud(model)).toBe(true);
+    }
+  });
+
+  it("rejects unknown models (fail-closed on missing jurisdiction)", () => {
+    expect(isModelAllowedInMotebitCloud("unknown-model")).toBe(false);
+    expect(isModelAllowedInMotebitCloud("")).toBe(false);
+  });
+
+  it("MOTEBIT_CLOUD_ALLOWED_JURISDICTIONS is US-only today", () => {
+    expect(MOTEBIT_CLOUD_ALLOWED_JURISDICTIONS.has("US")).toBe(true);
+    expect(MOTEBIT_CLOUD_ALLOWED_JURISDICTIONS.has("CN")).toBe(false);
+    expect(MOTEBIT_CLOUD_ALLOWED_JURISDICTIONS.has("EU")).toBe(false);
   });
 });
