@@ -72,12 +72,48 @@
         -webkit-user-select: text;
       }
 
-      /* === Theme Variables === */
+      /* === Theme Variables ===
+       *
+       * Material registers. The substrate (3D environment behind the
+       * canvas) provides the light source; chrome surfaces sit atop
+       * the substrate as glass that lets the substrate's chromatic
+       * gradient bleed through. Doctrine:
+       * `docs/doctrine/liquescentia-as-substrate.md` (the substrate
+       * is THE medium, propagates uniformly across surfaces).
+       *
+       * Three alpha registers correspond to three doctrinal categories:
+       *
+       *   - `--bg-glass`         ~0.06-0.28 — chrome-strip / act register
+       *     (slab chrome, cobrowse chrome, input bar). Maximum
+       *     transparency — the act is alive; the substrate-coloring
+       *     dominates. Pair with `blur(40px) saturate(1.8)`.
+       *
+       *   - `--bg-glass-strong` + `--bg-primary` ~0.55-0.62 — records
+       *     register (panels: conversations, memory, goals, agents,
+       *     sovereign, skills, activity, settings, dialogs). Records
+       *     hold still; the panel needs enough opacity to make
+       *     12-13px body text legible against the moving substrate
+       *     behind it. Same `blur(40px) saturate(1.8)` backdrop-
+       *     filter as the chrome strip so it reads as the SAME
+       *     material at a different intensity.
+       *
+       *   - `--bg-secondary` ~0.65-0.7 — assistant chat bubble
+       *     register. NOT a panel; a message-in-flight surface with
+       *     its own lighter `blur(12px)` backdrop-filter. Doctrinally
+       *     mid-air, not records. Higher alpha than the panel because
+       *     a single bubble carries content that needs to land
+       *     readable on first encounter.
+       *
+       *   - `--bg-overlay` / `--bg-card` / `--bg-input` — sub-surfaces
+       *     INSIDE a panel/modal. These already sit on top of the
+       *     panel's glass; further glass-stacking is unnecessary and
+       *     would over-blur. Solid-tint values are correct here.
+       */
       :root {
-        --bg-primary: rgba(255, 255, 255, 0.88);
+        --bg-primary: rgba(255, 255, 255, 0.55);
         --bg-secondary: rgba(255, 255, 255, 0.65);
         --bg-glass: rgba(255, 255, 255, 0.28);
-        --bg-glass-strong: rgba(255, 255, 255, 0.92);
+        --bg-glass-strong: rgba(255, 255, 255, 0.55);
         --bg-glass-hover: rgba(255, 255, 255, 0.22);
         --bg-overlay: rgba(0, 0, 0, 0.15);
         --bg-overlay-light: rgba(0, 0, 0, 0.05);
@@ -121,10 +157,10 @@
         --canvas-bg: #c8b8a4;
       }
       :root[data-theme="dark"] {
-        --bg-primary: rgba(30, 30, 40, 0.92);
+        --bg-primary: rgba(20, 22, 32, 0.62);
         --bg-secondary: rgba(40, 40, 55, 0.7);
         --bg-glass: rgba(50, 50, 65, 0.35);
-        --bg-glass-strong: rgba(35, 35, 48, 0.95);
+        --bg-glass-strong: rgba(20, 22, 32, 0.62);
         --bg-glass-hover: rgba(60, 60, 75, 0.3);
         --bg-overlay: rgba(0, 0, 0, 0.4);
         --bg-overlay-light: rgba(0, 0, 0, 0.2);
@@ -167,6 +203,50 @@
         --toggle-knob: rgba(255, 255, 255, 0.9);
         --canvas-bg: #2a2535;
       }
+
+      /* === Accessibility: prefers-reduced-transparency ===
+       *
+       * macOS / iOS / Android all expose "reduce transparency" as a
+       * system-level accessibility preference. When the OS reports it,
+       * restore higher panel alphas and drop the backdrop-filter blur
+       * so panels read as opaque surfaces. This is NOT a per-app
+       * toggle (calm software, single visual language); it's WCAG-
+       * grade respect for the user's existing OS-level intent.
+       * Identical pattern to `prefers-reduced-motion` killing the
+       * creature's 0.3 Hz breathing when the OS asks.
+       *
+       * Affects: --bg-glass-strong (the 7 panels + dialogs),
+       * --bg-primary (settings modal + provider tab), and the
+       * backdrop-filter declarations themselves on panel-direct
+       * selectors. Sub-surfaces inside panels (cards, inputs,
+       * overlays) are untouched — they already sit on the opaque
+       * panel and don't carry their own glass.
+       */
+      @media (prefers-reduced-transparency: reduce) {
+        :root {
+          --bg-primary: rgba(248, 249, 251, 0.98);
+          --bg-glass-strong: rgba(248, 249, 251, 0.98);
+        }
+        :root[data-theme="dark"] {
+          --bg-primary: rgba(22, 24, 32, 0.98);
+          --bg-glass-strong: rgba(22, 24, 32, 0.98);
+        }
+        #conversations-panel,
+        #memory-panel,
+        #goals-panel,
+        #agents-panel,
+        #sovereign-panel,
+        #skills-panel,
+        #activity-panel,
+        #settings-modal,
+        #pin-dialog,
+        #pairing-dialog,
+        #shortcut-dialog {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+        }
+      }
+
       /* Dark-mode HUD buttons floating over 3D canvas need more opacity
        to avoid the light scene bleeding through backdrop-filter */
       :root[data-theme="dark"] #conversations-btn,
@@ -682,8 +762,8 @@
         width: 90vw;
         max-height: 80vh;
         background: var(--bg-primary);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border: 1px solid var(--border);
         border-radius: 16px;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -2674,8 +2754,8 @@
       }
       #pin-dialog {
         background: var(--bg-glass-strong);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border: 1px solid var(--border-input);
         border-radius: 16px;
         padding: 24px;
@@ -2774,8 +2854,8 @@
       }
       #pairing-dialog {
         background: var(--bg-glass-strong);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border: 1px solid var(--border-input);
         border-radius: 16px;
         padding: 24px;
@@ -2881,8 +2961,8 @@
         width: 280px;
         z-index: 25;
         background: var(--bg-glass-strong);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-right: 1px solid var(--border);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
@@ -3142,8 +3222,8 @@
         width: 300px;
         z-index: 25;
         background: var(--bg-glass-strong);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-right: 1px solid var(--border);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
@@ -3528,8 +3608,8 @@
         width: 280px;
         z-index: 25;
         background: var(--bg-glass-strong);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-left: 1px solid var(--border);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
@@ -4212,8 +4292,8 @@
         width: 280px;
         z-index: 25;
         background: var(--bg-glass-strong);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-left: 1px solid var(--border);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
@@ -4450,8 +4530,8 @@
         width: 340px;
         z-index: 25;
         background: var(--bg-glass-strong);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-right: 1px solid var(--border);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
@@ -5059,8 +5139,8 @@
         padding: 14px 16px;
         border-radius: 12px;
         background: var(--bg-glass-strong);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border: 1px solid var(--border);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         font-size: 12px;
@@ -5327,8 +5407,8 @@
       }
       #shortcut-dialog {
         background: var(--bg-glass-strong);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border: 1px solid var(--border);
         border-radius: 16px;
         padding: 24px;
@@ -5630,8 +5710,8 @@
         width: 380px;
         z-index: 25;
         background: var(--bg-glass-strong);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-right: 1px solid var(--border);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
@@ -6040,8 +6120,8 @@
         width: 360px;
         z-index: 25;
         background: var(--bg-glass-strong);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-left: 1px solid var(--border);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
