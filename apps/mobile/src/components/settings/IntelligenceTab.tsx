@@ -486,8 +486,8 @@ export function IntelligenceTab({
                   lineHeight: 16,
                 }}
               >
-                Open-source weights, ~10× cheaper than Claude. Hosted in China; medical / financial
-                / secret sensitivity tiers block all external AI by default.
+                Open-source weights, ~10× cheaper than American alternatives. Hosted in China;
+                medical / financial / secret sensitivity tiers block all external AI by default.
               </Text>
             </>
           )}
