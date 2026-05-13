@@ -190,7 +190,14 @@ vi.mock("@motebit/sync-engine", () => ({
   EncryptedEventStoreAdapter: vi.fn().mockImplementation(() => ({})),
 }));
 
-import { MobileApp, COLOR_PRESETS } from "../mobile-app";
+import {
+  MobileApp,
+  COLOR_PRESETS,
+  mobileSettingsToUnifiedProvider,
+  mobileConfigToUnified,
+  type MobileSettings,
+  type MobileAIConfig,
+} from "../mobile-app";
 
 beforeEach(() => {
   secureStoreData.clear();
@@ -407,5 +414,155 @@ describe("MobileApp pre-init memory delegates", () => {
   it("summarizeConversation returns null before init", async () => {
     const r = await app.summarizeConversation();
     expect(r).toBeNull();
+  });
+});
+
+// Exhaustive switch-arm coverage for the two provider-mapping pure functions.
+// Each `MobileProvider` case is exercised so the branch-coverage gate doesn't
+// drift under threshold whenever a new ByokVendor is added (DeepSeek + Groq
+// landings dropped branches to 79.93% on 2026-05-13). Add a case here when
+// extending `MobileProvider`.
+describe("mobileSettingsToUnifiedProvider — exhaustive arms", () => {
+  const baseSettings = (provider: MobileSettings["provider"]) =>
+    ({
+      provider,
+      model: "m",
+      localBackend: "apple-fm",
+      localServerEndpoint: "http://localhost:1234",
+      maxTokens: 1000,
+    }) satisfies Pick<
+      MobileSettings,
+      "provider" | "localBackend" | "model" | "localServerEndpoint" | "maxTokens"
+    >;
+
+  it("proxy → motebit-cloud", () => {
+    const u = mobileSettingsToUnifiedProvider(baseSettings("proxy"));
+    expect(u.mode).toBe("motebit-cloud");
+  });
+
+  it("anthropic → byok anthropic", () => {
+    const u = mobileSettingsToUnifiedProvider(baseSettings("anthropic"), "k");
+    expect(u).toMatchObject({ mode: "byok", vendor: "anthropic", apiKey: "k" });
+  });
+
+  it("openai → byok openai", () => {
+    const u = mobileSettingsToUnifiedProvider(baseSettings("openai"), "k");
+    expect(u).toMatchObject({ mode: "byok", vendor: "openai", apiKey: "k" });
+  });
+
+  it("google → byok google with canonical baseUrl", () => {
+    const u = mobileSettingsToUnifiedProvider(baseSettings("google"), "k");
+    expect(u).toMatchObject({ mode: "byok", vendor: "google", apiKey: "k" });
+    expect(u).toHaveProperty("baseUrl");
+  });
+
+  it("deepseek → byok deepseek", () => {
+    const u = mobileSettingsToUnifiedProvider(baseSettings("deepseek"), "k");
+    expect(u).toMatchObject({ mode: "byok", vendor: "deepseek", apiKey: "k" });
+  });
+
+  it("groq → byok groq", () => {
+    const u = mobileSettingsToUnifiedProvider(baseSettings("groq"), "k");
+    expect(u).toMatchObject({ mode: "byok", vendor: "groq", apiKey: "k" });
+  });
+
+  it("local-server → on-device local-server", () => {
+    const u = mobileSettingsToUnifiedProvider(baseSettings("local-server"));
+    expect(u).toMatchObject({ mode: "on-device", backend: "local-server" });
+  });
+
+  it("on-device → on-device with localBackend (apple-fm default)", () => {
+    const u = mobileSettingsToUnifiedProvider(baseSettings("on-device"));
+    expect(u).toMatchObject({ mode: "on-device", backend: "apple-fm" });
+  });
+
+  it("on-device with local-server backend passes through localServerEndpoint", () => {
+    const settings = { ...baseSettings("on-device"), localBackend: "local-server" as const };
+    const u = mobileSettingsToUnifiedProvider(settings);
+    expect(u).toMatchObject({
+      mode: "on-device",
+      backend: "local-server",
+      endpoint: "http://localhost:1234",
+    });
+  });
+
+  it("on-device with non-local-server backend omits endpoint", () => {
+    const settings = { ...baseSettings("on-device"), localBackend: "mlx" as const };
+    const u = mobileSettingsToUnifiedProvider(settings);
+    expect(u).toMatchObject({ mode: "on-device", backend: "mlx" });
+    expect((u as { endpoint?: string }).endpoint).toBeUndefined();
+  });
+
+  it("on-device with undefined localBackend coalesces to apple-fm", () => {
+    const settings = { ...baseSettings("on-device"), localBackend: undefined };
+    const u = mobileSettingsToUnifiedProvider(settings);
+    expect(u).toMatchObject({ mode: "on-device", backend: "apple-fm" });
+  });
+
+  it("byok arms tolerate missing apiKey (resolver-side concern)", () => {
+    const u = mobileSettingsToUnifiedProvider(baseSettings("anthropic"));
+    expect(u).toMatchObject({ mode: "byok", vendor: "anthropic", apiKey: "" });
+  });
+});
+
+describe("mobileConfigToUnified — exhaustive arms", () => {
+  const baseConfig = (provider: MobileAIConfig["provider"]): MobileAIConfig => ({
+    provider,
+    model: "m",
+    apiKey: "k",
+    localBackend: "apple-fm",
+    localServerEndpoint: "http://localhost:1234",
+    maxTokens: 1000,
+  });
+
+  it("local-server → on-device local-server", () => {
+    const u = mobileConfigToUnified(baseConfig("local-server"));
+    expect(u).toMatchObject({ mode: "on-device", backend: "local-server" });
+  });
+
+  it("anthropic → byok anthropic", () => {
+    const u = mobileConfigToUnified(baseConfig("anthropic"));
+    expect(u).toMatchObject({ mode: "byok", vendor: "anthropic" });
+  });
+
+  it("openai → byok openai", () => {
+    const u = mobileConfigToUnified(baseConfig("openai"));
+    expect(u).toMatchObject({ mode: "byok", vendor: "openai" });
+  });
+
+  it("google → byok google", () => {
+    const u = mobileConfigToUnified(baseConfig("google"));
+    expect(u).toMatchObject({ mode: "byok", vendor: "google" });
+  });
+
+  it("deepseek → byok deepseek", () => {
+    const u = mobileConfigToUnified(baseConfig("deepseek"));
+    expect(u).toMatchObject({ mode: "byok", vendor: "deepseek" });
+  });
+
+  it("groq → byok groq", () => {
+    const u = mobileConfigToUnified(baseConfig("groq"));
+    expect(u).toMatchObject({ mode: "byok", vendor: "groq" });
+  });
+
+  it("proxy → motebit-cloud", () => {
+    const u = mobileConfigToUnified(baseConfig("proxy"));
+    expect(u.mode).toBe("motebit-cloud");
+  });
+
+  it("on-device → on-device with localBackend (apple-fm default)", () => {
+    const u = mobileConfigToUnified(baseConfig("on-device"));
+    expect(u).toMatchObject({ mode: "on-device", backend: "apple-fm" });
+  });
+
+  it("on-device with undefined localBackend falls back to apple-fm", () => {
+    const config: MobileAIConfig = { provider: "on-device", model: "m" };
+    const u = mobileConfigToUnified(config);
+    expect(u).toMatchObject({ mode: "on-device", backend: "apple-fm" });
+  });
+
+  it("byok arms tolerate missing apiKey", () => {
+    const u = mobileConfigToUnified({ provider: "anthropic", model: "m" });
+    expect(u).toMatchObject({ mode: "byok", vendor: "anthropic", apiKey: "" });
   });
 });

@@ -396,7 +396,7 @@ function migrateLegacyMobileSettings(
  * the on-device LAN inference backend. The legacy "ollama" name is migrated
  * on settings load by `migrateLegacyMobileSettings`.
  */
-function mobileConfigToUnified(config: MobileAIConfig): UnifiedProviderConfig {
+export function mobileConfigToUnified(config: MobileAIConfig): UnifiedProviderConfig {
   switch (config.provider) {
     case "local-server":
       return {
