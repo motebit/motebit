@@ -1,5 +1,1008 @@
 # @motebit/protocol
 
+## 1.3.0
+
+### Minor Changes
+
+- f1ba621: audit-chain-runtime-wire — `ChainedAuditSink` is now a composable
+  wrapper that auto-wires when surfaces supply both a `toolAuditSink`
+  and an `auditChainStore` adapter. Closes the gap from audit-chain-1
+  - audit-chain-2 where the primitives existed but had zero consumers
+    in production.
+
+  **`@motebit/protocol` (minor):** new `AuditChainEntry` and
+  `AuditChainStoreAdapter` interfaces. Wire-format permissive-floor
+  types so `StorageAdapters.auditChainStore` can reference them
+  without sdk crossing into BSL `@motebit/policy`. Concrete primitives
+  (`appendAuditEntry`, `verifyAuditChain`, the `crypto.subtle`
+  hashing) stay in `@motebit/policy/audit-chain.ts` — only the type
+  moves; same algorithm. `@motebit/policy` re-exports
+  `AuditEntry` / `AuditChainStore` as type aliases for backward
+  compatibility with existing in-package callers.
+
+  **`@motebit/sdk` (minor):** `StorageAdapters.auditChainStore?:
+AuditChainStoreAdapter` — surfaces opt in by passing
+  `new SqliteAuditChainStore(driver)` (cli, web, future surfaces with
+  SQLite) or omitting (in-tree tests, minimal sandboxes).
+
+  **Runtime auto-wire:** when both `toolAuditSink` and
+  `auditChainStore` are present, the runtime constructs
+  `new ChainedAuditSink({ inner: toolAuditSink, chainStore, motebitId })`
+  and passes the wrap to `PolicyGate`. Inner sink keeps doing what it
+  does (persistence, sync queries); chain layer runs in parallel for
+  tamper-evidence.
+
+  **ChainedAuditSink refactor — composable wrapper, not extends-
+  in-memory:** the prior shape extended `InMemoryAuditSink`,
+  duplicating the persistence layer. New shape implements
+  `AuditLogSink` directly and delegates `append` / `query` /
+  `getAll` / `queryStatsSince` / `queryByRunId` / `enumerateForFlush`
+  to the supplied `inner` sink. Cleaner architecturally, surface-
+  agnostic — the same primitive composes over `SqliteToolAuditSink`,
+  `TauriToolAuditSink`, `ExpoToolAuditSink`, or any future
+  implementation.
+
+  **MotebitDatabase exposes `auditChainStore: SqliteAuditChainStore`**
+  alongside the existing `toolAuditSink`. CLI threads both into its
+  `StorageAdapters`; the runtime auto-wraps. Web + mobile surfaces
+  follow the same pattern when they migrate.
+
+- a5bf96e: Co-browse Slice 0 — control-state primitive at the protocol layer.
+
+  Co-browse (the user driving inside motebit's isolated browser) is the
+  threshold UX motebit has been building toward: when the slab feels
+  like Chrome with motebit watching, helping, and able to take over with
+  permission, the product becomes obviously different from Cursor,
+  Claude Code, and normal browsers. Slice 0 lands the consent contract
+  _before_ the wire path — pointer/keyboard forwarding (Slice 1+) will
+  attach to a state machine that already encodes the trust model, not
+  the other way around.
+
+  The primitive is `ControlState`, a discriminated union over four
+  states the user named in their directive:
+
+  ```ts
+  type ControlState =
+    | { kind: "user" }
+    | { kind: "motebit" }
+    | { kind: "handoff_pending"; current: ControlHolder; requesting: ControlHolder }
+    | { kind: "paused"; previousDriver: ControlHolder };
+  ```
+
+  Plus `CO_BROWSE_TRANSITION_KINDS` (closed enum: `request_control`,
+  `grant_control`, `deny_control`, `reclaim_control`, `release_control`,
+  `pause`, `resume`, `disconnect`) and `CoBrowseControlChangedPayload`
+  for the audit-event shape.
+
+  Why a discriminated union, not a flat enum: `handoff_pending` needs to
+  know who currently holds and who's requesting (so a `deny` resolves to
+  the right side); `paused` needs to remember `previousDriver` so
+  `resume` restores continuity. Carrying that data in optional fields on
+  a flat enum would mean "remember to inspect this field when kind is
+  X." Discriminated union keeps the per-state shape a compile-time fact.
+
+  `EventType.CoBrowseControlChanged` enters the audit-event union. Every
+  transition emits one of these with full from/to state, so a verifier
+  replaying the log can independently rebuild the state machine without
+  re-running transition functions. Doctrine: the agent's awareness is
+  the integral of receipts over time — control transitions are
+  receipt-level events.
+
+  Runtime state machine and tests ship in the companion ignored
+  changeset.
+
+- 1f5b8aa: Co-browse Slice 1 — protocol additions for the executeAction gate.
+
+  `COMPUTER_FAILURE_REASONS` gains `not_in_control` — fired when a
+  session's optional `coBrowseControl` machine reports
+  `state.kind !== "motebit"` at dispatch time. Distinct from
+  `user_preempted` (active halt) and `policy_denied` (governance):
+  this is "who is allowed to act" rather than "what acts are
+  allowed."
+
+  `ComputerSessionActionRecord` gains optional
+  `control_state_at_denial?: ControlState`. Present iff
+  `failure_reason === "not_in_control"` — control state at non-control
+  denials would be category noise. The runtime stamps the literal
+  state on the per-action ledger; the field flows through
+  `actions_hash` into the session receipt's signed commitment, so any
+  retroactive edit to the recorded state breaks the signature. The
+  audit answers "what state were we in" without cross-referencing
+  adjacent `co_browse_control_changed` events.
+
+  @alpha — same release status as the rest of computer-use.ts.
+
+- 45aff03: Co-browse Slice 2c-batching-1 — wheel input. The first continuous
+  event class on top of Slice 2c's discrete substrate.
+
+  **New `wheel` variant on `UserInputEvent`** — `{ kind: "wheel"; x,
+y, dx, dy, event_count }`. Logical-pixel cursor anchor + CSS-pixel
+  scroll deltas matching `WheelEvent.deltaX`/`deltaY` axis convention
+  (positive `dy` scrolls down). `event_count` reports how many native
+  wheel events the capture surface coalesced into this one.
+
+  **Coalescing contract (foundation law).** Capture surfaces MUST
+  coalesce native wheel events at ≤60Hz — one wire event per ~16ms
+  window. Sustained scrolling at 100Hz native rate (modern trackpads)
+  must NOT produce 100 wire events/sec. Without this constraint
+  POST-per-event saturates the wire. The capture surface sums dx/dy
+  across the window and uses the LATEST cursor position so a swipe
+  that drifts mid-scroll lands at the user's actual cursor.
+
+  **Audit shape extension** — `UserInputForwardedDetail` gains a
+  `wheel` variant: `{ kind: "wheel"; x_norm, y_norm, dx, dy,
+event_count }`. Anchor coords normalize to [0, 1] like clicks;
+  deltas pass through unchanged (CSS-pixel scroll amounts aren't
+  sensitivity-bearing content).
+
+  **Spec** — `spec/computer-use-v1.md` §5.5 documents the wire +
+  audit shapes and the coalescing contract.
+
+  Drag, continuous pointermove, selection-drag remain deferred —
+  they need either burst-aggregated audit (one entry per drag rather
+  than per frame) or a WebSocket-shaped substrate to sustain >60Hz.
+  This slice is wheel only; it ships the simplest continuous event
+  class that works on the existing POST substrate.
+
+- 891a11b: Co-browse Slice 2c — protocol additions for user-driven input forwarding.
+
+  The driveability substrate. With Slice 2c wired the user can click,
+  type, and paste inside the cloud Chromium when `controlState.kind ===
+"user"`; Slice 1's gate continues to deny motebit dispatch unless
+  state === motebit. The consent loop opened by Slice 2b's slab band +
+  the AI-side `request_control` tool now has both sides.
+
+  **New wire format** — `UserInputEvent` discriminated union (click |
+  key | paste). Carries the raw data Chromium needs to dispatch (text,
+  logical-pixel coordinates, modifier flags). Coordinate system
+  matches the existing `ComputerAction.click` shape — logical pixels
+  against the cloud Chromium viewport. The capture surface is
+  responsible for translating CSS rect → logical pixels before
+  forwarding.
+
+  **Discrete events only.** Click + key + paste only. Wheel, drag,
+  continuous pointermove, selection-drag, and file-drag are
+  explicitly out of v1 — POST-per-event cannot sustain 50+ events/sec
+  at 30-100ms RTT; those classes require batching/coalescing or a
+  WebSocket-shaped substrate, deferred to a follow-up slice.
+
+  **New audit shape** — `UserInputForwardedPayload`, redacted by
+  construction:
+  - Keys log as `character_class` (letter / digit / punct / whitespace
+    / control / modifier / unknown) plus `key_role` (enter / tab /
+    escape / backspace / arrow / shortcut / printable / unknown).
+    Raw key value NEVER logged. Multi-char unrecognized key names
+    (IME composition strings) MUST collapse to `character_class:
+"unknown"` rather than being classified by their first character.
+  - Pastes log `length`, `line_count`, `looks_like_url`. Content
+    NEVER logged.
+  - Pointer events log normalized [0, 1] coordinates against the
+    rendered screencast rect. Raw pixels NEVER logged.
+
+  `control_state_at_forwarding` mirrors the `control_state_at_denial`
+  field on motebit-side denials (Slice 1) — verifiers reconstruct
+  context without cross-referencing adjacent control events.
+
+  **New `EventType.UserInputForwarded`** entry on the audit-event
+  enum. Emitted on every forward attempt — successes and rejections
+  both — so the audit trail records who tried to drive when.
+
+  **Closed-set rejection reasons** (`UserInputRejectionReason`):
+  `not_in_user_state` | `session_closed` | `transport_error` |
+  `not_supported`. Verifiers discriminate exhaustively.
+
+  **Spec** — `spec/computer-use-v1.md` §5.5 documents both wire and
+  audit formats, codifies the discrete-events-only scope, and pins
+  the sensitivity-boundary deferral (user-driven frames are still
+  observations; existing classification policy applies; medical /
+  financial / secret co-browse use requires an explicit policy pass
+  on the screencast surface itself).
+
+  Surface scope: `virtual_browser` only. `desktop_drive` has no
+  co-browse machine to drive — the user's real OS is the source —
+  and surfaces without a `ControlState` machine MUST NOT register
+  the affordance.
+
+- f083b7a: Co-browse Slice 2d — user-side address-bar navigation.
+
+  When `controlState.kind === "user"`, the user can type a URL into
+  an address-bar surface and navigate the slab's cloud Chromium.
+  Click + type + paste + scroll (Slice 2c-wheel) plus this gives
+  honest browser-driveability inside the slab. Genuine search
+  ("best laptops 2026" → search engine) deferred — Slice 2d is URL
+  navigation only.
+
+  **New `navigate` variant on `UserInputEvent`** — `{ kind:
+"navigate"; url: string }`. The wire carries the normalized URL.
+  Address-bar surfaces SHOULD normalize bare hostnames (`example.com`
+  → `https://example.com`) before forwarding, mirroring the
+  server-side regex (`^[a-z][a-z0-9+.-]*:\/\/`). Server-side dispatch
+  is `page.goto(url, { waitUntil: "domcontentloaded" })`. The
+  screencast surfaces the new page; navigate returns 204 (no inline
+  screenshot like motebit-side `ComputerAction.navigate`).
+
+  **URL-redacted audit shape** — `UserInputForwardedDetail.navigate`:
+  `{ kind: "navigate"; scheme; host; has_path; has_query }`. URL host
+  preserved; **path and query stripped**. URLs commonly carry session
+  tokens, bearer tokens, or sensitive identifiers (`?reset_token=...`,
+  `/patient/12345`); the user's signed audit log is more permanent
+  than a browser history, so conservative redaction is correct.
+  `has_path` / `has_query` retain "did the user submit a deep link"
+  without leaking the contents. Malformed URLs collapse to all-`unknown`.
+
+  **Spec** — `spec/computer-use-v1.md` §5.5 documents the wire +
+  audit shapes and the URL-redaction contract (mirrors browser-history
+  privacy: origin retained, path/query gone).
+
+- f4aa40d: Co-browse Slice 2e — browser history navigation + click-ripple
+  feedback. The last slice before the "Chrome-feel" demo speaks.
+
+  **Three new parameter-less variants on `UserInputEvent`** —
+  `{ kind: "back" }`, `{ kind: "forward" }`, `{ kind: "reload" }`.
+  Server-side: `page.goBack` / `page.goForward` / `page.reload`,
+  all with `{ waitUntil: "domcontentloaded", timeout: 15_000 }`.
+  Empty-history semantics: `back` / `forward` against a session
+  with no matching history MUST be a no-op (Playwright returns
+  null; the wire treats null as 204 success). Matches real-browser
+  UX.
+
+  **Audit shapes are equally minimal** — `{ kind: "back" | "forward"
+| "reload" }`. Nothing to redact; history navigation carries no
+  user-supplied data.
+
+  **Spec** — `spec/computer-use-v1.md` §5.5 documents all three
+  wire + audit variants and the empty-history no-op contract.
+
+  After this slice: click + type + paste + scroll + navigate +
+  back/forward/reload. The local end-state ("user can drive a
+  browser inside the slab") is now honest.
+
+- f9fd8f2: Co-browse Slice 2f — slab control-chrome cleanup. Smoke test surfaced
+  that `request_control` was rendering as a giant empty `tool_call`
+  slab item AND the doorbell was clipped at the page top — state
+  chrome was pretending to be content. Three structural fixes.
+
+  **`ToolDefinition.slabProjection?: "none" | "tool_call"`** — new
+  optional field. Default `"tool_call"` (or omitted) preserves the
+  existing card-per-call behavior. `"none"` declares the tool as
+  **state chrome** rather than a body act; the runtime suppresses
+  the slab item projection entirely. Closed string-literal union —
+  additive (a future `"observation"` variant could narrow further
+  without breaking existing callers).
+
+  Threaded through the AI loop's `tool_status` chunk
+  (`AgenticChunk.tool_status.slabProjection`) so the runtime's
+  projection site can read it without re-walking the registry.
+  Mirrors the existing `embodimentMode` plumbing (5 emit sites in
+  `ai-core/loop.ts`, one chunk-shape addition).
+
+  Doctrine: motebit-computer.md — slab content is body acts (browser,
+  peer viewport, memory artifact, tool result, desktop surface).
+  Slab CHROME is state-aware overlays (control band, address bar,
+  halt indicator). State-chrome tools belong in the latter; the
+  slab item projection is for the former. Without this field,
+  state-chrome tools would render duplicate UI: the affordance
+  card AND the chrome both visible, competing for attention and
+  obscuring the chrome's interactive elements.
+
+- a2daccd: Co-browse Slice 2h — `read_page`, the first ax-tier tool. Fills the
+  documented middle slot of the hybrid-engine cost hierarchy
+  (`api → ax → pixels` per `tool-mode.ts`). Until this slice no tool
+  declared `mode: "ax"`; the AI's only option against an open browser
+  session was a pixel screenshot (~30k tokens, crosses the
+  whole-screen privacy surface).
+
+  **`ReadPageResult` wire format** — new exported type carrying the
+  structured page observation: `url`, `title`, body `text` (bounded;
+  `text_truncated: bool` flags the cap), `headings: ReadPageHeading[]`
+  in document order (h1-h6 + visible text), `links: ReadPageLink[]`
+  (visible label + absolute href). Plus `kind: "read_page"`,
+  `session_id`, `extracted_at`. Closed shape so sandbox / dispatcher
+  / runtime / ai-core / tools all agree without drift.
+
+  Server-side bounds (in `services/browser-sandbox`): `text` capped
+  at 8KB UTF-8 (≈2K tokens vs ~30K for a screenshot), `headings`
+  and `links` capped at 100 entries each. Defends the AI context
+  against pathological pages.
+
+  **Spec update** — `spec/computer-use-v1.md` §4 codifies `read_page`
+  as a `SHOULD register` companion to `computer` for surfaces with
+  a `virtual_browser` embodiment. The MUST-NOT-leak-pixels invariant
+  is reaffirmed: page text crosses the AI boundary subject to the
+  existing sensitivity + outbound gates that govern `read_url` /
+  `web_search`; **screenshot bytes still never leave the device for
+  external AI**.
+
+  Doctrine: `CLAUDE.md` Principle 96 (Hybrid engine, structural
+  preference) — the registry sort `api → ax → pixels` already ranked
+  `mode: "ax"` between `mode: "api"` and `mode: "pixels"`, but the
+  middle tier was empty. `read_page` is its first tenant; the AI's
+  default tool selection now lands on structured text when "what's
+  on the page" is the question, falling back to pixels only when
+  visual context is genuinely required.
+
+- f174164: v1.5 — `ComputerSessionReceipt` closes the asymmetry where delegation
+  has signed receipt chains but virtual_browser / desktop_drive sessions
+  emit only lifecycle events. Every computer-use session now crystallizes
+  at close into one signed artifact a third party with the signer's
+  public key can verify without contacting any relay — the moat thesis
+  ("accumulated trust") applied to the embodiment that previously had
+  none.
+
+  `@motebit/protocol` (Apache-2.0, permissive floor) adds three types
+  under `computer-use.ts`:
+  - `ComputerSessionActionRecord` — per-action structural roll-up
+    (`kind` + timing + outcome + `failure_reason`). Carries no targets,
+    args, or observation bytes — privacy invariant of the session-level
+    receipt is compositional with the audit invariant of per-action
+    `ToolInvocationReceipt`s.
+  - `SignableComputerSessionReceipt` — body before signing (counts,
+    outcomes_summary, failure_breakdown by `ComputerFailureReason`,
+    was_halted, max_sensitivity envelope, opened/closed timestamps,
+    display dimensions, embodiment_mode, JCS-canonicalized SHA-256
+    `actions_hash`).
+  - `ComputerSessionReceipt` — signed; `suite:
+"motebit-jcs-ed25519-b64-v1"` + `signature` (base64url).
+
+  `@motebit/crypto` adds `signComputerSessionReceipt`,
+  `verifyComputerSessionReceipt`, and `hashComputerSessionActions` —
+  sibling pattern to `signToolInvocationReceipt` / `hashToolPayload`.
+  Same JCS+Ed25519+base64url pipeline; same fail-closed verifier rules.
+
+  `@motebit/runtime` extends `ComputerSessionManager`:
+  - Per-action structural ledger appended on every `executeAction`
+    call (including halt-rejected calls — `was_halted: true` +
+    `user_preempted` failures land in the receipt honestly).
+  - Sensitivity envelope lifts off `governance.classifyObservation`'s
+    output; uses an explicit `sensitivity_level` when the classifier
+    supplies one, falls back to inferring `"financial"` from
+    `strip_bytes` (the conservative floor of the medical/financial/secret
+    bytes-strip trio per CLAUDE.md). High-water mark, never decays.
+  - New `summarize(sessionId, deps)` produces the unsigned body. Caller
+    injects the receipt-id generator, the embodiment_mode (apps stamp
+    per-dispatcher per v1.1), and the `hashActions` function (typically
+    wired to `@motebit/crypto`'s `hashComputerSessionActions`). Closed
+    sessions remain summarizable via a bounded post-close retention
+    buffer (FIFO, capacity 64).
+  - `halt()` now stamps `was_halted: true` on every active session;
+    sticky across `resume()` so the receipt commits to "the user paused
+    at least once," not to terminal halt state.
+
+  Wiring the signed receipt into the audit-event stream and surfacing it
+  on the slab as a detachable artifact is the next slice (the runtime
+  piece is the gate; UI follows). 14 crypto sign/verify tests + 11
+  runtime summarize tests + all 41 prior session-manager tests pass.
+
+- 5851a24: `computer-use@1.0`: `navigate(url)` action lands as the tenth action kind.
+
+  Cloud-browser dispatcher (`services/browser-sandbox`, headless Playwright)
+  has no address-bar UI for `key` / `type` to drive — the spec's promotion
+  path (§"v1 limits — No new wire-format actions… real-usage-driven, not
+  speculative") fired when the AI hit `navigate to tesla.com` against the
+  sandbox surface. Real consumer demand, real action.
+
+  Wire shape:
+
+  ```ts
+  interface NavigateAction {
+    readonly kind: "navigate";
+    readonly url: string;
+  }
+  ```
+
+  Implementations SHOULD normalize relative-looking inputs (`example.com`
+  → `https://example.com`) but MAY reject malformed URLs with
+  `not_supported`.
+
+  Cloud-browser dispatcher implements via `page.goto(url, { waitUntil:
+"domcontentloaded" })`. Desktop dispatcher (Tauri Rust + xcap +
+  enigo) does NOT implement — OS-level computer-use has no notion of "the
+  active browser context"; the user controls which app is focused. The
+  dispatcher-parity check (`scripts/check-computer-use-dispatcher-parity`)
+  carries an explicit ALLOWLIST entry naming desktop as deferred until
+  an OS-level navigation use-case proves itself.
+
+  Stays within `@alpha` annotations on the `computer-use@1.0` types —
+  spec-shaped wire format, additive change, JSON Schema regenerated.
+  Companion ignored-package work in
+  `computer-use-navigate-action-ignored.md`.
+
+- 5286de2: Close the `ContentArtifactType` registry — `ContentArtifactManifest.artifact_type` is now a typed literal union (`@motebit/protocol`) instead of a free string. Three seed types match the consumers shipping or pending: `audit-trail`, `memory-export`, `execution-ledger`. New exports:
+
+  ```ts
+  import {
+    type ContentArtifactType,
+    ALL_CONTENT_ARTIFACT_TYPES,
+    isContentArtifactType,
+    AUDIT_TRAIL_ARTIFACT,
+    MEMORY_EXPORT_ARTIFACT,
+    EXECUTION_LEDGER_ARTIFACT,
+  } from "@motebit/protocol";
+  ```
+
+  Drift gate `check-artifact-type-canonical` mirrors `check-audience-canonical` — every `artifact_type: "<literal>"` / `artifactType: "<literal>"` site is scanned against the registry. Pre-registry, a producer-site typo (`artifact_type: "audit_trail"` vs `"audit-trail"`) was a verifier-side classification miss with no compile-time signal.
+
+  Type narrowing on `@motebit/crypto` — the `artifact_type` field on `ContentArtifactManifest` and the `artifactType` field on `SignContentArtifactOptions` now require a member of the registry. The primitive was published 2026-05-10 (commit c47251c0) with no external consumers yet; this hardening lands within the same day as the initial shape.
+
+- ea6dc4d: element-1 — structurally-addressed element actions for the
+  `computer` tool. Closes the action-truth gap witnessed 2026-05-08:
+  AI couldn't reliably click the search box on google.com because it
+  had no way to address page elements except by coordinate, and the
+  coordinate inference path required vision (gated by default + UX
+  friction). Production browser-agent platforms (Browserbase,
+  Playwright codegen, Anthropic's computer-use cookbook) converge on
+  the same primitive — durable structural element addressing,
+  coordinates as fallback for visual-only tasks.
+
+  New types:
+  - `ReadPageInput` — typeable input field with server-issued
+    `element_id`, `tag` (input/textarea), `input_type`, optional
+    `name`/`placeholder`/`aria_label`/`value`. Capped at 100 entries
+    in the read_page response; values capped at 256 chars.
+  - `ReadPageButton` — button-shaped clickable element with
+    `element_id`, `tag` (button/input/a), visible `text` (or
+    aria-label fallback for icon-only buttons), optional `input_type`
+    for `<input type="submit/button/reset">`. Capped at 100 entries.
+
+  `ReadPageResult` extended with `inputs: ReadPageInput[]` and
+  `buttons: ReadPageButton[]` arrays. Backward compatible — existing
+  consumers reading `text` / `headings` / `links` ignore the new
+  fields.
+
+  Three new actions in `ComputerAction`:
+  - `ClickElementAction` — `{ kind: "click_element", element_id }`.
+    Server resolves the stamped `data-motebit-id`, scrolls into view,
+    clicks center. Returns truth-feedback on the result envelope:
+    `clicked_tag`, `focused_typeable`, `navigation_triggered`.
+  - `FocusElementAction` — `{ kind: "focus_element", element_id }`.
+    Focus without the click side-effects (no dropdown opens, no
+    modal triggers). Truth: `tag`, `focused`.
+  - `TypeIntoAction` — `{ kind: "type_into", element_id, text,
+per_char_delay_ms?, clear_first? }`. Composes focus + clear +
+    type into one semantic action. Default `clear_first: true`
+    (mirrors human "type fresh into this field" intent). Same truth-
+    feedback shape as the lower-level `type` action: `focused`,
+    `active_element`, `value`, `text_appeared`.
+
+  On staleness — page navigated since read_page, page reloaded,
+  element removed by JS — actions return
+  `{ ok: false, reason: "element_not_found", message }` so the AI
+  knows to re-read.
+
+  Server-side strategy (`services/browser-sandbox`):
+  - `extractStructuredPageContent` walks the DOM, clears prior stamps,
+    and stamps each interactive element with
+    `data-motebit-id="motebit-N"`. Per-extraction counter; ids are
+    scoped to the response that issued them.
+  - `click_element` / `focus_element` / `type_into` resolve the
+    stamped attribute via `page.locator('[data-motebit-id="..."]')`,
+    scroll-into-view, then act. Element*id format is validated server-
+    side (regex `^[a-zA-Z0-9*-]+$`) to defend against selector
+    injection.
+
+  PERCEPTION_DOCTRINE update teaches the AI to prefer element-
+  addressed actions over coordinates when the target was discovered
+  via read_page; coordinate `click` / `type` remain available for
+  purely-visual tasks (drag a slider to a position seen in pixels).
+
+  Dispatcher parity — desktop_drive's `ComputerPlatformDispatcher`
+  does NOT yet implement these three kinds. The
+  `check-computer-use-dispatcher-parity` allowlist gains entries for
+  each, naming the deferred state: desktop's equivalent primitive
+  needs an accessibility-tree adapter (macOS AXUIElement, Windows
+  UIA, Linux AT-SPI) so click_element resolves an AX node id instead
+  of a DOM data-attribute. Same wire shape, different resolver.
+  Lands in a follow-up.
+
+  Open-ended on the type union — additive new actions land without
+  breaking existing consumers; the `default: never` exhaustive arm
+  in the cloud dispatcher catches missing handlers at compile time.
+
+- 88d8550: Extend `motebit/execution-ledger` from v1.0 to v1.1 — additive, non-breaking. The `GoalExecutionManifest` reconstruction shape gains an optional `signed_receipts?: string[]` field carrying byte-identical canonical-JSON of each delegated motebit's signed `ExecutionReceipt`. New constants `EXECUTION_LEDGER_SPEC_V1_0` and `EXECUTION_LEDGER_SPEC_V1_1` for type-safe spec-version literals.
+
+  ```ts
+  import { type GoalExecutionManifest, EXECUTION_LEDGER_SPEC_V1_1 } from "@motebit/protocol";
+
+  // v1.1 bodies carry signed_receipts when the relay has the byte-identical archive
+  const ledger = (await fetch(`${relay}/api/v1/execution/${motebitId}/${goalId}`).then((r) =>
+    r.json(),
+  )) as GoalExecutionManifest;
+
+  if (ledger.spec === EXECUTION_LEDGER_SPEC_V1_1 && ledger.signed_receipts) {
+    for (const receiptJson of ledger.signed_receipts) {
+      const receipt = JSON.parse(receiptJson);
+      // Verify each inner motebit's signature independently — no relay trust required.
+      // The bytes are canonical-JSON byte-identical with what the motebit signed.
+    }
+  }
+  ```
+
+  **Why this closes the operator-trust gap:**
+
+  Before v1.1, `delegation_receipts` carried `signature_prefix` — the first 16 characters of the motebit's Ed25519 signature. Display-only, not verifiable. A relay could falsely claim "motebit X did this work" and a verifier had to trust the relay's word (the outer relay-signed manifest on the bundle attests to bundle assembly, not to inner motebit attestation).
+
+  With v1.1, the verifier holds the byte-identical canonical JSON of each inner `ExecutionReceipt` — sourced from the relay's `relay_receipts.receipt_json` archive (per `services/relay/CLAUDE.md` Rule 11). Each entry parses to a full `ExecutionReceipt`, including its `public_key`, `suite`, and `signature` fields. The verifier checks each Ed25519 signature against the named motebit's public key, independent of the relay. A relay that lies about which motebit did the work is detectable; cross-relay verification becomes possible; federation peers can audit each other's claims.
+
+  **Why this is additive, not breaking:**
+  - v1.0 consumers continue to parse v1.1 bodies — JSON.parse ignores the unknown `signed_receipts` field
+  - Relays that don't have the archive populated (testnet, ephemeral deploys, partial sync) continue to emit `spec: "motebit/execution-ledger@1.0"` — graceful degradation
+  - The spec literal type widens from `"motebit/execution-ledger@1.0"` to `"motebit/execution-ledger@1.0" | "motebit/execution-ledger@1.1"`; consumers narrowing on the v1.0 literal will see a TypeScript widening but their runtime behavior continues
+
+  Producer wiring lives in `services/relay/src/state-export.ts` (BSL, reference relay). Drift gate `check-execution-ledger-receipts-archived` (drift-defense #89) prevents silent regression back to v1.0 summary-only semantics.
+
+  Doctrine: `spec/execution-ledger-v1.md` §4.3 (Inner Signed Receipts — v1.1 additive); `docs/doctrine/nist-alignment.md` §8 "Inner-receipt verification closed 2026-05-11"; `docs/doctrine/self-attesting-system.md` extends to relay-assembled bundles now that inner signatures pass through byte-identical.
+
+- 22b6a39: `ToolDefinition.embodimentMode` lands as the per-dispatcher embodiment
+  stamp the slab uses to pick the correct mode contract per surface.
+
+  The wire-format problem this closes: the `computer` tool name is
+  shared between cloud-browser (apps/web → CloudBrowserDispatcher,
+  isolated Chromium) and OS-drive (apps/desktop → Tauri Rust bridge,
+  real OS) — two physically distinct dispatchers, two different
+  embodiments per `motebit-computer.md` §"Embodiment modes" (cloud →
+  `virtual_browser`, desktop → `desktop_drive`). `tool-policy.ts` is
+  name-keyed and surface-blind, so a single mode would mis-tag one
+  surface. The previous safe-floor (`tool_result`) under-claimed the
+  embodiment for both.
+
+  Resolution: ToolDefinition now carries an optional `embodimentMode`
+  field. Each dispatcher's registration site stamps its own
+  embodiment (`apps/web/src/computer-tool.ts` →
+  `embodimentMode: "virtual_browser"`; `apps/desktop/src/computer-tool.ts`
+  → `embodimentMode: "desktop_drive"`). ai-core forwards the mode on
+  every `tool_status` chunk; the runtime's `projectSlabForTurn` picks
+  `chunk.mode` over `tool-policy.ts`'s generic floor.
+
+  The string union itself (`"mind" | "tool_result" | "virtual_browser"
+| "shared_gaze" | "desktop_drive" | "peer_viewport"`) is canonically
+  declared as `EmbodimentMode` in `@motebit/render-engine`. Typed here
+  as `string` to avoid a protocol→render-engine layer break — promoting
+  the type into `@motebit/protocol` is a separate slice the doctrine
+  names as deferred.
+
+  Doctrine: `motebit-computer.md` §"v1 implementation status —
+  Deferred to v1.5+: per-dispatcher mode stamping" — landed as v1.1
+  of the virtual_browser arc.
+
+- b7f79b2: Drag-drop perception substrate — protocol-layer types for the gesture the slab doctrine has named since landing.
+
+  ```ts
+  export type DropPayloadKind = "url" | "text" | "image" | "file" | "artifact";
+
+  export type DropTarget = "slab" | "creature" | "ambient";
+
+  export type DropPayload =
+    | {
+        kind: "url";
+        url: string;
+        sourceFrame?: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      }
+    | {
+        kind: "text";
+        text: string;
+        mimeType?: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      }
+    | {
+        kind: "image";
+        bytes: Uint8Array;
+        mimeType: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      }
+    | {
+        kind: "file";
+        bytes: Uint8Array;
+        filename: string;
+        mimeType: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      }
+    | {
+        kind: "artifact";
+        receiptHash: string;
+        payloadJson: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      };
+
+  export interface UserActionAttestation {
+    readonly kind: "user-drag";
+    readonly timestamp: number;
+    readonly surface: "web" | "desktop" | "mobile" | "spatial" | "cli";
+    readonly contentHashSha256?: string;
+  }
+
+  export function resolveDropTarget(payload: DropPayload): DropTarget;
+  ```
+
+  Two-level pattern, same shape as `SuiteId` / `GuestRail` / `ToolMode` (the agility-as-role pattern in `docs/doctrine/agility-as-role.md`). Categorical drop kinds are closed at the protocol layer — adding a kind is a protocol bump (additive, registry append). Per-kind handlers are runtime-extensible via `MotebitRuntime.registerDropHandler(kind, handler)`; v1 default handlers stage slab items for `url`, `text`, `image` in **`shared_gaze` mode** — the user is the driver, motebit is the observer, source is `user-source`, consent fires per-source. (`mind` would be a category error: `mind` is interior cognition, not user-fed external material.) The doctrine's three drop targets (`slab` / `creature` / `ambient`) carry as an optional hint defaulting to `slab`; spatial Phase 1B unlocks the other two without a wire-format change.
+
+  `UserActionAttestation` is **attestation of intentional delivery, not content authenticity.** The user's gesture proves they meant to deliver the payload — it does NOT prove the payload is authentic, unforged, or what it claims to be. A user can drag a forged PDF; the gesture still attests only that delivery was intentional. Authenticity comes from separate provenance — a source URL the runtime fetched, a cryptographic signature on the bytes, an `ExecutionReceipt`, or a content hash a trusted source previously published. Audit prose must keep the two distinct.
+
+  The three `DropTarget` values are **not equivalent drop zones with different visual effects.** They carry meaningfully different persistence and governance: `slab` is turn/session-scoped perception, `creature` is identity-adjacent state mutation requiring explicit confirmation / signed user intent, `ambient` is workspace-scoped reference with source-consent + expiration. v1 surfaces only ever set `slab`; `creature` and `ambient` unlock together with the per-target governance UX in spatial Phase 1B (never separately).
+
+  **Ambient invariant: consultable context, not automatic prompt context.** The motebit can reach for an ambient drop when a turn calls for it (retrieval-shaped), but the drop itself does NOT auto-fill the prompt at the next AI call. Future implementations will be tempted to dump ambient bytes into every turn's context pack; this invariant exists to prevent that failure mode.
+
+  **Dimensionality is not the gate; governance is.** A 2D web surface CAN distinguish the three targets via raycast pick at drop time (creature mesh hit, slab plane hit, no hit ≡ ambient). The actual gate is the per-target governance UX (creature confirmation modal + chosen mutation semantic; ambient consultable-context store + retrieval API). Until those exist, `MotebitRuntime.feedPerception` fails closed on non-slab targets with `DropTargetGovernanceRequiredError` (re-exported from `@motebit/runtime`) — same fail-closed pattern as `SovereignTierRequiredError`. The error names the missing consumer so a future implementer can wire it up by replacing the rejection with the governance-aware handler.
+
+  Drop-out provenance — when a motebit-produced artifact leaves the slab toward another destination — uses `ExecutionReceipt` (already in the protocol). This release covers the in-direction substrate.
+
+  Drift gate `check-drop-handlers` (#77) enforces both arms: every `DropPayloadKind` has a registered handler or an explicit allowlist entry, AND every per-surface drop handler routes through `runtime.feedPerception` (never constructs a prompt and calls `sendMessage` — the prompt-backdoor failure mode named in `motebit-computer.md` §"Failure modes specific to supervised agency").
+
+  Doctrine: `motebit-computer.md` §"Perception input — drop kinds and handlers" + `liquescentia-as-substrate.md` §"Cohesive permeability" (the membrane physics every drop crosses under conditions).
+
+- b42cee1: Add `BROWSER_SANDBOX_GRANT_AUDIENCE` (`"browser-sandbox-grant"`) and `BROWSER_SANDBOX_AUDIENCE` (`"browser-sandbox"`) constants for the audience-bound signed-token primitive.
+
+  These ship the relay-mediated dispatcher-token flow that replaces the v1 shared-bearer model in `services/browser-sandbox`. The first audience binds a motebit's grant request to the relay; the second binds the relay-signed token the motebit attaches to browser-sandbox requests. Single trust anchor (the pinned relay public key) and end-to-end audit attribution via the `mid` claim.
+
+  Same canonical-audience pattern as the existing `sync` / `task:submit` / `admin:query` audiences (still string literals at consumer sites; promoting them to typed constants is follow-up work, not a blocker for this migration).
+
+  ```ts
+  import { BROWSER_SANDBOX_GRANT_AUDIENCE, BROWSER_SANDBOX_AUDIENCE } from "@motebit/protocol";
+  ```
+
+- 9c39980: Add `frame_stale` to `COMPUTER_FAILURE_REASONS` — typed-truth reason for the Playwright navigation race during action dispatch.
+
+  Additive (new union member). Before this entry, Playwright's "Execution context was destroyed" / "frame was detached" / "Target closed" / "Target page, context or browser has been closed" errors fell through the browser-sandbox route handler's general catch into `platform_blocked` (HTTP 500). The AI received an opaque server-fault and verbally interpreted it as "the platform is blocking key presses" — prose interpretation of a typed event.
+
+  `frame_stale` is the proper typed reason for "the page navigated underneath the action; the executor's frame reference is stale." Distinct from `session_closed` (the session is still open; only the frame changed) and `platform_blocked` (OS-level synthetic-input block). Paired with one-shot retry in `services/browser-sandbox` and a `PERCEPTION_DOCTRINE` clause in `@motebit/ai-core` so the AI surfaces the recovery path ("the page changed — let me re-read") instead of confabulating about platform failure.
+
+- 3f2e370: Add canonical money primitives to the permissive-floor protocol surface: `MICRO`, `CENTS`, `toMicro`, `fromMicro`, `toCents`, `fromCents`. Pure algebra over numbers — interop law for integer-unit accounting. Every motebit implementation in any language uses the same formula at the API boundary.
+
+  Two reference precisions:
+
+  ```ts
+  import { toMicro, toCents } from "@motebit/protocol";
+
+  toMicro(0.5); // 500_000  — USDC 6-decimal ledger precision
+  toCents(0.5); // 50       — Stripe / fiat-rail precision
+  ```
+
+  `@motebit/virtual-accounts/money.ts` continues to export `MICRO`, `toMicro`, `fromMicro` — they re-export from the new canonical home, so existing imports work unchanged. Settlement rails (Stripe, x402) consume these directly instead of re-rolling `Math.round(amount * 100|1_000_000)` inline.
+
+  A new drift gate (`scripts/check-money-boundary.ts`) forbids inline copies of the converter formula in money-touching packages. Same closure pattern as cryptosuite agility — one canonical family, additive: a third precision (RWA tokens, JPY rails) is a new function in the same file, not a third inline copy.
+
+- e383c63: Add optional `submit_button_id?: string` to `ReadPageResult` — typed-truth hint naming the page's primary submit button by `element_id`.
+
+  Additive (new optional field). Detected at extraction time by the cloud-browser dispatcher via two signals in order: (1) HTML semantic — first button with `input_type === "submit"` wins; (2) label heuristic fallback — first button label matching a submit-class word (`Search`, `Submit`, `Send`, `Sign in`, `Log in`, `Continue`, `Go`, `Subscribe`, `Next`, `Save`, `Post`), case-insensitive, whole-label-or-prefix match. Absent when the page has no submit-class element.
+
+  Converts the AI's form-submission decision from prompt-only teaching (the 14-line `click_element-over-key("Enter")` bullet) to runtime-backed typed-truth: the wire field carries the "right tool for this page" signal that the AI's selection would otherwise have to derive from unstructured prompt rules. Doctrine: `docs/doctrine/runtime-invariants-over-prompt-rules.md` — exemplar of B→A graduation. Gated by `check-typed-truth-perception` (#80, registered as the 10th typed-truth field) so the prompt-teaching and dispatch-emission halves cannot drift apart.
+
+- eeebf19: Promote token audiences to a closed registry. Adds `TokenAudience` literal union, named constants for every canonical audience, `ALL_TOKEN_AUDIENCES` (frozen iteration order), and `isTokenAudience` type guard.
+
+  The registry covers fifteen audiences across multi-device + identity lifecycle (`sync`, `device:auth`, `pair`, `rotate-key`, `push:register`), task routing (`task:submit`, `admin:query`, `proposal`), virtual accounts (`account:{balance,deposit,withdraw,withdrawals,checkout}`), and the browser-sandbox dispatcher token flow (`browser-sandbox-grant`, `browser-sandbox`).
+
+  ```ts
+  import {
+    TokenAudience,
+    ALL_TOKEN_AUDIENCES,
+    isTokenAudience,
+    TASK_SUBMIT_AUDIENCE,
+    // …
+  } from "@motebit/protocol";
+
+  const aud: TokenAudience = TASK_SUBMIT_AUDIENCE; // typo at literal sites is a compile error
+  ```
+
+  Same closure pattern as `SuiteId`, `SettlementRail`, `ToolMode`. The drift gate `check-audience-canonical` (lands alongside this) scans every `aud: "<literal>"` and `createSyncToken("<literal>")` against `ALL_TOKEN_AUDIENCES`; a typo at a signing site that pre-registry would have been a runtime 401 is now caught at compile time + at CI.
+
+  `SignedTokenPayload.aud` stays `string` for wire-format compatibility (any `string` still flows through the verifier, which compares against `expectedAudience` literally). The narrowing happens at signing-site callers — they pass `TokenAudience` values; literals outside the registry fail the gate.
+
+  Adding an audience is intentional protocol-level work: a new entry in the union, a matching named constant, a registration in `ALL_TOKEN_AUDIENCES`, a doctrine update at `services/relay/CLAUDE.md` Rule 5. Renaming a literal is a wire break; deletions break running deployments.
+
+  Existing consumers do not need to migrate; the registry is additive over the existing string literals.
+
+- 9def0cd: Codify the trust-anchor primitive — `spec/relay-transparency-v1.md` (Stage 2b-i) ships. New exports from `@motebit/protocol`:
+
+  ```ts
+  import {
+    type SignedTransparencyDeclaration,
+    type TransparencySignedPayload,
+    type TransparencyAnchorRecord,
+    TRANSPARENCY_SUITE,
+    TRANSPARENCY_ANCHOR_MEMO_PREFIX,
+    TRANSPARENCY_SPEC_ID,
+    isSignedTransparencyDeclaration,
+  } from "@motebit/protocol";
+  ```
+
+  `SignedTransparencyDeclaration` is the binding wire shape of the operator-transparency declaration at `/.well-known/motebit-transparency.json`. The declaration is the trust anchor every motebit verifier pins: `relay_public_key` commits the operator to one Ed25519 identity, and every content-artifact manifest, settlement receipt, and federation handshake verifies against that key. The `content` field is operator-extensible per `spec/relay-transparency-v1.md` §3.1 — the protocol commits to the envelope, not to the posture vocabulary inside.
+
+  Companion zod schema in `@motebit/wire-schemas::SignedTransparencyDeclarationSchema`; JSON Schema (Apache-2.0) committed to `spec/schemas/signed-transparency-declaration-v1.json`.
+
+  **Why now, not deferred per the doctrine's original trigger:** the original `docs/doctrine/operator-transparency.md` Stage 2 deferral bundled "wire-format spec" and "operator-comparison vocabulary" under one "second operator forces field standardization" trigger. The savant-gap critique surfaced the first split (2a onchain-anchor lifted from 2b wire-format); examining 2b under the same lens surfaced a second split: trust-anchor codification (single-operator independent) and operator-comparison fields (multi-operator). After the previous commits made `transparency.json` load-bearing as the trust anchor for state-export verification, the asymmetry between transparency (no spec) and every other trust anchor in motebit (`identity`, `execution-ledger`, `credential`, `credential-anchor`, `settlement` — all with specs) was the gap to close. Stage 2b-ii (operator-comparison fields) stays deferred behind the original trigger.
+
+  The reference relay (`services/relay/src/transparency.ts`) now consumes the canonical types from `@motebit/protocol` instead of declaring them inline; `services/relay/src/transparency.ts::SignedDeclaration` is a narrowing of the protocol type that pins `content` to the relay's specific `DECLARATION_CONTENT` shape (operator-extensibility preserved at the protocol layer, narrowed at the consumer).
+
+  Doctrine: `spec/relay-transparency-v1.md`, `docs/doctrine/operator-transparency.md` § Stage 2 (split into 2a + 2b-i shipped, 2b-ii deferred), `docs/doctrine/nist-alignment.md` §8.
+
+- 91299fd: v1.3 of the virtual_browser arc — `ScreencastFrame` wire-format type
+  for live JPEG streaming from the cloud-browser service.
+
+  Per-action screenshots produced "moments" — the slab read as a
+  slideshow of stills, not a window into a browser. v1.3 swaps that for
+  a continuous JPEG frame stream from CDP `Page.startScreencast`.
+  `ScreencastFrame` is the wire shape both the server (`services/
+browser-sandbox`) and the dispatcher (`@motebit/runtime`'s
+  `CloudBrowserDispatcher`) consume:
+
+  ```ts
+  interface ScreencastFrame {
+    readonly jpeg_base64: string;
+    readonly timestamp: number; // wall-clock ms, normalized from CDP seconds
+    readonly device_width: number;
+    readonly device_height: number;
+  }
+  ```
+
+  Lives at the protocol layer next to the `ComputerSession*` cluster —
+  both producer and consumer reference one canonical shape, no drift
+  between server JSON and client decode.
+
+  Slice 1 of v1.3 (data path). The cloud-browser service ships the
+  `GET /sessions/:id/screencast` NDJSON-streaming endpoint; the
+  dispatcher ships `openScreencast({onFrame, onError})`; the slab UI
+  swap follows in slice 2.
+
+- 7ba2761: v1.3 slice 2 — slab UI swap. The `live_browser` slab item kind
+  crystallizes the continuous JPEG screencast into a single visual
+  element on the plane, replacing the "slideshow of stills" register
+  that per-action screenshots produced.
+
+  `@motebit/protocol` adds `ScreencastFrameSource` — minimal
+  subscribe-shape interface (`{subscribe(callback): () => void}`) the
+  producer (apps' frame bus) and consumer (the slab's live element)
+  both consume. Sibling pattern to other observer surfaces in the
+  package.
+
+  `@motebit/render-engine` adds:
+  - `live_browser` to the `SlabItemKind` union; `defaultEmbodimentMode`
+    maps it to `virtual_browser` so callers that don't pass `mode`
+    explicitly land at the right mode boundary.
+  - `buildLiveBrowserElement(source)` — pure DOM builder. Returns
+    `{element, dispose}`. The element is an `<img>` wrapped in a
+    `slab-live-browser` div with a placeholder until the first frame
+    arrives. Each subscribed frame replaces the placeholder, locks the
+    aspect ratio to the captured viewport, and updates `img.src` with
+    the JPEG data URL. Latest-wins on `timestamp` so out-of-order CDP
+    frames don't paint backwards. `dispose` is idempotent; post-dispose
+    publishes are silently dropped.
+  - 9 jsdom tests cover the subscribe → first-frame → subsequent-frames
+    → dispose lifecycle plus the latest-wins ordering and the dispose
+    → no-paint contract.
+
+  Why `<img>` and not `<canvas>`. `data:` URL src updates defer JPEG
+  decode + paint to the rendering thread; canvas would buy composite
+  control v1.3 doesn't need. If a future slice adds cursor overlays or
+  click ripples on the frame surface, swap to canvas as a contained
+  renderer change — the `(source) => {element, dispose}` contract
+  stays.
+
+- c243dd2: Sensitivity-gate audit event — turns the shipped fail-closed gate from invisible-but-correct into observable-and-provable.
+
+  ```ts
+  enum EventType {
+    // ...
+    SensitivityGateFired = "sensitivity_gate_fired",
+  }
+
+  type SensitivityGateEntry =
+    | "sendMessage"
+    | "sendMessageStreaming"
+    | "generateActivation"
+    | "generateCompletion"
+    | "outbound_tool";
+
+  type SensitivityElevationSource = "session" | "slab_item";
+
+  interface SensitivityGateFiredPayload {
+    readonly entry: SensitivityGateEntry;
+    readonly session_sensitivity: SensitivityLevel;
+    readonly effective_sensitivity: SensitivityLevel;
+    readonly provider_mode: "on-device" | "motebit-cloud" | "byok" | "unset";
+    readonly elevated_by?: {
+      readonly via: SensitivityElevationSource;
+      readonly slab_item_id?: string;
+    };
+    readonly tool_name?: string;
+  }
+  ```
+
+  Every `assertSensitivityPermitsAiCall` block now emits a structured `SensitivityGateFired` event to the EventStore BEFORE throwing `SovereignTierRequiredError`. The four shipped egress closures (session-elevated state, drops, tool outputs, memory writes) all leave inspectable evidence. Audit consumers query via `events.query({ event_types: [EventType.SensitivityGateFired] })` for the trail of every blocked egress crossing.
+
+  **Strictly metadata.** Payload contains entry name, session/effective tier, provider mode, elevation attribution (with content-free slab item ID for forensic correlation), and tool name when applicable. NEVER raw drop content, tool result bytes, slab item payloads, or prompt strings. Logging the payload that triggered the block would itself be a leak surface — same kind of leak the gate exists to prevent. Field naming choice (`elevated_by.via` rather than `source`) avoids false-positives in `check-mode-contract-readers` (#76) where the destructure-detection regex can't distinguish object-literal write from contract-field read.
+
+  Companion change: `MotebitRuntime.assertSensitivityPermitsAiCall` promoted from `private` to public. The gate predicate is motebit's named primitive for sensitivity-tier-vs-provider routing — the mechanism every commit in the four-egress-shape arc is built around. Surfaces, tests, and audit tooling now have a typed entry point. Internal sites (sendMessage, sendMessageStreaming, generateActivation, generateCompletion, the outbound-tool wrap) call the same method — the public promotion adds no new code path, it just names what was already the architectural seam.
+
+  Doctrine: `motebit-computer.md` §"Mode contract — six declarations per mode." Closes the audit-trail pivot named after the four-egress-shape arc.
+
+- 7b87916: Sensitivity ladder algebra graduates to the protocol layer.
+
+  `rankSensitivity`, `maxSensitivity`, and `sensitivityPermits` are now
+  exported from `@motebit/protocol` (and re-exported through `@motebit/sdk`
+  via the existing `export *`). Pure deterministic math over the closed
+  `SensitivityLevel` enum — qualifies as a permissive-floor primitive
+  per `packages/protocol/CLAUDE.md` rule 1 ("deterministic math").
+
+  ```text
+  rankSensitivity(level): number               // None=0 .. Secret=4
+  maxSensitivity(a, b):   SensitivityLevel     // join-semilattice composition
+  sensitivityPermits(upper, candidate): bool   // candidate <= upper
+  ```
+
+  The ladder is interop law. Every motebit implementation must agree on
+  which tier dominates which, or the cross-implementation gate isn't
+  interoperable: device A persisting a turn at "secret" must mean the
+  same thing to device B's session-tier filter. Hosting the math at the
+  protocol layer makes the ordering a one-file change at the canonical
+  source rather than four duplicated copies that drift independently.
+
+  Graduation history: `rankSensitivity` had three local copies as of
+  2026-05-07 (runtime/motebit-runtime.ts, runtime/conversation.ts,
+  ai-core/loop.ts) plus a fourth-shaped table (`LEVEL_RANK` +
+  `higherLevel` in policy-invariants/computer-sensitivity.ts). The
+  ai-core copy's JSDoc explicitly named the trigger: "if a third reader
+  appears, the helper graduates." Past trigger.
+
+  Three runtime/ai-core copies are removed and the consumers now import
+  from `@motebit/sdk`. policy-invariants's local `LEVEL_RANK` table is
+  left in place because it operates on a separate string-literal
+  `SensitivityLevel` type for computer-use sensitivity classification —
+  cross-package type unification is a separate concern and not load-
+  bearing for the gate-composition arc.
+
+  Math properties verified by 13 new protocol-package tests:
+
+  ```text
+  rankSensitivity:    strictly monotonic; every adjacent pair differs by 1
+  maxSensitivity:     None is identity; idempotent; commutative; associative
+  sensitivityPermits: dual of maxSensitivity (max(upper, c) === upper iff
+                      sensitivityPermits(upper, c)); reflexive
+  ```
+
+  `@motebit/sdk` is patch because it picks up the new exports through
+  `export * from "@motebit/protocol"` without changing its own surface
+  intentionally.
+
+  Added to `PERMISSIVE_ALLOWED_FUNCTIONS` in `scripts/check-deps.ts`
+  with a load-bearing review note tying the entries to the graduation
+  trigger and the interop-law justification.
+
+- f78a82a: Add `"skill_audit"` to `RuntimeStoreId` and register a `consolidation_flush` retention shape for it in `RUNTIME_RETENTION_REGISTRY`. Mirrors the existing `tool_audit` registration — append-only operator-act ledger with a `sensitivity` column on the `skill_consent_granted` variant; the consolidation cycle's flush phase respects sensitivity-tier retention ceilings. No min-floor resolver because skill audit doesn't gate settlement.
+
+  The new store ships with the durable consent-audit arc on web (`packages/browser-persistence/src/idb-skill-audit.ts`) and mobile (`apps/mobile/src/adapters/expo-sqlite.ts` — `ExpoSqliteSkillAuditSink` over the `skill_audit` SQLite table). Closes the consent-gate arc's runtime gap: `SkillConsentGrantedEvent` now lands in a registered, retention-aware durable store instead of the protocol-only type slot it occupied before.
+
+- 0c6196c: Extend `ContentArtifactType` registry from 3 → 12 types — one per state-export endpoint in `services/relay/src/state-export.ts`. New named constants: `STATE_SNAPSHOT_ARTIFACT`, `GOAL_LIST_ARTIFACT`, `CONVERSATION_LIST_ARTIFACT`, `CONVERSATION_MESSAGES_ARTIFACT`, `DEVICE_LIST_ARTIFACT`, `PLAN_LIST_ARTIFACT`, `PLAN_DETAIL_ARTIFACT`, `GRADIENT_HISTORY_ARTIFACT`, `SYNC_PULL_ARTIFACT` (9 added; `AUDIT_TRAIL_ARTIFACT`, `MEMORY_EXPORT_ARTIFACT`, `EXECUTION_LEDGER_ARTIFACT` carried over).
+
+  ```ts
+  import {
+    type ContentArtifactType,
+    STATE_SNAPSHOT_ARTIFACT,
+    GOAL_LIST_ARTIFACT,
+    PLAN_DETAIL_ARTIFACT,
+    // ...
+    ALL_CONTENT_ARTIFACT_TYPES,
+    isContentArtifactType,
+  } from "@motebit/protocol";
+  ```
+
+  Closes the doctrine §8 coherency gap (`docs/doctrine/nist-alignment.md`): every state-export endpoint now wraps its body in a relay-asserted `ContentArtifactManifest` emitted via the `X-Motebit-Content-Manifest` HTTP header. The registry expansion follows the same closure-by-construction pattern as `TokenAudience` and `SuiteId`. Sixth closed-registry drift gate (`check-state-export-signed`, drift-defense #86) makes consumer-side coherency permanent.
+
+  Type-level note: the literal union was introduced 2026-05-10; this extension expands the union from 3 → 12 members. Consumers that exhaustively switch on `ContentArtifactType` (rare — most callers narrow via `isContentArtifactType` or compare against specific named constants) will see TypeScript narrowing flag any missing cases.
+
+- ee5f70f: `ToolResult` gains optional `reason?: string` — a structured
+  failure category set by handlers that wrap a typed error carrying
+  its own `reason` field (e.g. `ComputerDispatcherError` from
+  `@motebit/runtime`). Lets downstream consumers route on category
+  without parsing the human-readable `error` text.
+
+  v1 carrier: `not_in_control` — Slice 1 co-browse gate denial.
+  The runtime's slab projection uses the structured field to
+  suppress a body `tool_call` item; the slab control band
+  (Slice 2b doorbell) is the canonical surface for the resolution
+  affordance, and a duplicate body card competes for attention.
+
+  Replaces the earlier string-prefix probe on the failure message,
+  which silently broke when `@motebit/tools`'s `computer` handler
+  started wrapping the error as `"computer: ${msg}"` (witnessed
+  2026-05-08: a wall of denial text on the slab body next to an
+  already-shown Grant/Deny band). Doctrine pre-authorized the
+  graduation in `motebit-runtime.ts` §"if more reasons land later,
+  graduate to a structured `failure_reason` field rather than
+  extending the prefix list."
+
+  Open string-literal — additive. New reason categories land
+  without breaking existing consumers (route on values you care
+  about; ignore the rest).
+
+  Wire path: `ComputerDispatcherError(reason, msg)` →
+  tools-package handler's catch (lifts `.reason` onto the
+  envelope) → ai-core's `done` chunk
+  (`AgenticChunk.tool_status.reason`) → runtime's
+  `StreamChunk.tool_status.reason` → `projectSlabForTurn`'s
+  `isControlStateFailure` check.
+
+- ef49992: typed-intent-implicit-grant — `UserActionAttestation` widens from a
+  fixed `kind: "user-drag"` interface to a discriminated union over
+  `"user-drag" | "user-typed-intent"`. The new arm carries a typed
+  chat-input submit through perception alongside the existing drag
+  gesture; producers stay structurally compatible, consumers gain a
+  second case to discriminate on.
+
+  **Why this matters.** The runtime threads
+  `options.userActionAttestation` through `sendMessageStreaming` so
+  tools that need consent can distinguish a user-driven turn from
+  proactive idle work. The first consumer is `request_control` on
+  the web cloud-browser surface: when the AI's reach for `computer`
+  fails with `not_in_control` inside a turn the user typed and sent,
+  the `request_control` flow auto-grants instead of opening the
+  slab band's Grant/Deny doorbell. Re-confirming what the user can
+  already see they did would violate the calm-software doctrine
+  (`CLAUDE.md` § UI). Proactive paths (`generateActivation`,
+  idle-tick consolidation) never run through `sendMessageStreaming`,
+  so they never get a typed-intent attestation — the prompt band
+  fires as before, fail-closed by default.
+
+  **`@motebit/protocol` (minor):**
+
+  ```text
+  - export interface UserActionAttestation { kind: "user-drag"; ... }
+  + export type UserActionAttestation =
+  +   | { kind: "user-drag"; timestamp; surface; contentHashSha256? }
+  +   | { kind: "user-typed-intent"; timestamp; surface };
+  ```
+
+  Additive new arm; the existing `user-drag` shape is preserved
+  field-for-field. Exhaustive consumers that switch on `kind` gain
+  one new case to handle.
+
+  **`@motebit/sdk` (minor):** re-exports the widened type through
+  `* from "@motebit/protocol"`. Surfaces that construct the
+  attestation pass `kind: "user-typed-intent"` from chat-input
+  handlers (today: web; sibling stamp on desktop / mobile when
+  they grow a virtual_browser surface). The minor cascade is
+  the structural one — the SDK's own surface didn't gain new
+  exports.
+
+  **Audit shape.** Auto-grant emits both control transitions
+  (`request_control` initiated by motebit, `grant` initiated by
+  user) synchronously in the same JS task; the band's reactive
+  subscribers see `handoff_pending → motebit` back-to-back before
+  the browser repaints, so no visible band flicker. The audit log
+  reads identically to a band-tap grant; the differentiator
+  (typed-intent vs band-tap) lives in the surface's chat history
+  alongside the message timestamp.
+
+### Patch Changes
+
+- b0f38a8: Break init-order cycle in `sensitivity.ts` so the bundled dist boots.
+
+  Switched the `SensitivityLevel` import to `import type` and replaced
+  enum-member computed keys (`[SensitivityLevel.None]`) with the
+  string-literal keys the enum's runtime values evaluate to (`none`).
+
+  The bundled tsup output evaluates modules in linear order — `sensitivity.ts`
+  initializes its `SENSITIVITY_RANK` record before `index.ts` assigns the
+  enum's runtime values, so `[SensitivityLevel.None]: 0` crashed on first
+  access ("Cannot read properties of undefined (reading 'None')"). vitest
+  masked this with live TS bindings; the dist-smoke gate caught it on the
+  companion minor's push attempt.
+
+  No public-API change: the `Record<SensitivityLevel, number>` type still
+  binds keys to the enum at the type layer, so a future tier rename
+  remains a single-file edit at the enum site. Pairs with the same-PR
+  `feat(protocol): sensitivity ladder algebra` minor.
+
+- 28added: **Third slice of PR 1 of the agent-surface pivot — cobrowse-as-mode reshape (protocol half).** Adds `yield_control` to the `CO_BROWSE_TRANSITION_KINDS` closed registry. Symmetric protocol-level partner to `release_control` (motebit yields to user) on the user side, closing the polarity-asymmetry where the protocol named "user takes" (`reclaim_control`) but not "user gives." Implicit when the user was the always-default driver; named explicitly now that motebit-default is the new register. Doctrine: [`chrome-as-state-render.md`](https://github.com/hakimlabs/motebit/blob/main/docs/doctrine/chrome-as-state-render.md) § "user register — cobrowse mode entered."
+
+  Why a distinct transition rather than re-using `request_control + grant_control` as a compound: a single explicit `yield_control` produces one audit event with the right semantics ("user handed back"); the request-then-grant compound would produce two events that a verifier would have to recognize as a paired pattern. The audit log is the source of truth for "who was driving when"; one transition kind keeps the log legible.
+
+  Additive `@alpha` registry entry; existing verifiers see the new kind as an unknown literal and reject (closed-set discipline). API-extractor baseline regenerated. The runtime-side counterpart — `yieldControl(by: "user")` method on `CoBrowseControlMachine`, web-side `/back` slash command + "motebit waiting" chip-button + handler wiring — ships in the ignored sibling `.changeset/slab-chrome-cobrowse-as-mode-ignored.md`.
+
 ## 1.2.0
 
 ### Minor Changes

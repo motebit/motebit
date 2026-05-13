@@ -1,5 +1,558 @@
 # @motebit/sdk Changelog
 
+## 1.2.0
+
+### Minor Changes
+
+- f1ba621: audit-chain-runtime-wire — `ChainedAuditSink` is now a composable
+  wrapper that auto-wires when surfaces supply both a `toolAuditSink`
+  and an `auditChainStore` adapter. Closes the gap from audit-chain-1
+  - audit-chain-2 where the primitives existed but had zero consumers
+    in production.
+
+  **`@motebit/protocol` (minor):** new `AuditChainEntry` and
+  `AuditChainStoreAdapter` interfaces. Wire-format permissive-floor
+  types so `StorageAdapters.auditChainStore` can reference them
+  without sdk crossing into BSL `@motebit/policy`. Concrete primitives
+  (`appendAuditEntry`, `verifyAuditChain`, the `crypto.subtle`
+  hashing) stay in `@motebit/policy/audit-chain.ts` — only the type
+  moves; same algorithm. `@motebit/policy` re-exports
+  `AuditEntry` / `AuditChainStore` as type aliases for backward
+  compatibility with existing in-package callers.
+
+  **`@motebit/sdk` (minor):** `StorageAdapters.auditChainStore?:
+AuditChainStoreAdapter` — surfaces opt in by passing
+  `new SqliteAuditChainStore(driver)` (cli, web, future surfaces with
+  SQLite) or omitting (in-tree tests, minimal sandboxes).
+
+  **Runtime auto-wire:** when both `toolAuditSink` and
+  `auditChainStore` are present, the runtime constructs
+  `new ChainedAuditSink({ inner: toolAuditSink, chainStore, motebitId })`
+  and passes the wrap to `PolicyGate`. Inner sink keeps doing what it
+  does (persistence, sync queries); chain layer runs in parallel for
+  tamper-evidence.
+
+  **ChainedAuditSink refactor — composable wrapper, not extends-
+  in-memory:** the prior shape extended `InMemoryAuditSink`,
+  duplicating the persistence layer. New shape implements
+  `AuditLogSink` directly and delegates `append` / `query` /
+  `getAll` / `queryStatsSince` / `queryByRunId` / `enumerateForFlush`
+  to the supplied `inner` sink. Cleaner architecturally, surface-
+  agnostic — the same primitive composes over `SqliteToolAuditSink`,
+  `TauriToolAuditSink`, `ExpoToolAuditSink`, or any future
+  implementation.
+
+  **MotebitDatabase exposes `auditChainStore: SqliteAuditChainStore`**
+  alongside the existing `toolAuditSink`. CLI threads both into its
+  `StorageAdapters`; the runtime auto-wraps. Web + mobile surfaces
+  follow the same pattern when they migrate.
+
+- 52ba36c: **Foundation-model agility — DeepSeek lands as the fourth `ByokVendor`.** The closed-set additive registry `ByokVendor = "anthropic" | "openai" | "google"` gains `"deepseek"`. Fourth instance of `agility-as-role` (alongside cryptosuite agility, permissive-floor, settlement-rail custody split); the role is "foundation-model vendor accessible via OpenAI-compatible (or Anthropic's) wire protocol." Same closure pattern as `SuiteId` — additive at the registry, exhaustive-switch enforced at the dispatch, baseline-locked at the api-extractor surface.
+
+  **Why this fourth instance.** Motebit's founding doctrine claim from `CLAUDE.md` — _"A motebit is a droplet of intelligence under surface tension. You own the identity. The intelligence is pluggable."_ — was structurally contradicted by a 3-vendor BYOK registry of exclusively-expensive Big Tech providers (Anthropic, OpenAI, Google). Adding DeepSeek restores the doctrinal claim: the registry stays closed at the wire-vocab boundary (per `protocol/CLAUDE.md` rule 5) but the additive shape demonstrates "pluggable" is real. DeepSeek V3 (`deepseek-chat`) is roughly Claude-Sonnet-class on tool-use benchmarks at ~10× cheaper pricing ($0.27/M input · $1.10/M output vs Claude Sonnet's $3/$15), served via DeepSeek's OpenAI-compatible API at `https://api.deepseek.com`. The affordability path lands NOW for capital-constrained users.
+
+  **What's in the SDK surface:**
+  - `ByokVendor` union extended to `"anthropic" | "openai" | "google" | "deepseek"`
+  - `DEEPSEEK_MODELS = ["deepseek-chat"] as const` in `models.ts` (single-entry today; expandable when `deepseek-reasoner` / R1 tool-use support is verified)
+  - `DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"` for the default-tier convention
+  - `DEEPSEEK_CANONICAL_URL = "https://api.deepseek.com"` in `provider-resolver.ts`
+  - `defaultModelForVendor("deepseek")` returns `DEFAULT_DEEPSEEK_MODEL`
+  - `canonicalVendorBaseUrl("deepseek")` returns `DEEPSEEK_CANONICAL_URL`
+  - Resolver's `byok` arm: DeepSeek dispatches as `wireProtocol: "openai"` (same arm as Google — DeepSeek's hosted API exposes the OpenAI chat-completions schema)
+
+  **Important conceptual note for integrators.** DeepSeek is _open-source weights_ served via DeepSeek's hosted API. It belongs in BYOK (cloud inference, API key) not on-device (sovereign local inference). The on-device path stays for smaller open models that fit on consumer hardware (Llama 3.2, Qwen 7B-32B, Phi-4); the BYOK-DeepSeek path is for affordable cloud access to a Sonnet-class open-source model. Two distinct affordability/sovereignty paths, both real, both shipping.
+
+  **Tests.** New "byok deepseek" describe block in `provider-resolver.test.ts` covering: dispatch to `wireProtocol: "openai"` at the canonical URL; default model fallback; CORS-proxy substitution via `env.cloudBaseUrl`. `defaultModelForVendor` + `canonicalVendorBaseUrl` exhaustive-vendor tests extended. Type-invariants config array gets `{ mode: "byok", vendor: "deepseek", apiKey: "k" }`.
+
+  **API surface.** `sdk.api.md` baseline regenerated. Additive — `@public` exports (`ByokVendor`, `DEEPSEEK_CANONICAL_URL`, `DEEPSEEK_MODELS`, `DEFAULT_DEEPSEEK_MODEL`) ship with the union extension. No removals; closed-set additive entry.
+
+  **Doctrine.** `docs/doctrine/agility-as-role.md` updated — fourth named instance ("Foundation-model agility") with full role/instance/migration/defense notes. The doctrine memo now closes the asymmetry it carried before this slice (the "intelligence is pluggable" doctrine claim ↔ "vendors are a closed additive registry" protocol shape now structurally aligned).
+
+  Closed-registry discipline holds. The next vendor add (OpenRouter as meta-vendor, Groq, Together, Fireworks, or any sibling) is a registry append + three dispatch arms + a default model entry + parallel surface UIs. Mechanical template-match against this slice.
+
+- 6347e9a: **Groq lands as the fifth `ByokVendor` — American-hosted open-source counterpart to DeepSeek.** The closed-set additive registry `ByokVendor = "anthropic" | "openai" | "google" | "deepseek"` gains `"groq"`. Same closure pattern + dispatch shape as the prior DeepSeek slice (registry append + three exhaustive-switch arms + a `*_MODELS` constant + parallel surface UIs). Fifth instance of `agility-as-role`; the pattern is now demonstrably mechanical for future open-source-via-API additions.
+
+  **Why Groq specifically as the next vendor.** Two slices ago we added DeepSeek (open-source, Chinese-hosted, cheapest) to close the founding "intelligence is pluggable" doctrine contradiction. Groq is the natural sibling: open-source weights (Meta Llama 3.3 70B + OpenAI's GPT-OSS releases), American-hosted, fastest available inference (~280 tok/sec via Groq's LPU hardware). Cross-geography parity — users uncomfortable with Chinese hosting now have a comparable open-source option without falling back to the three closed-source Big Tech providers. Two distinct optimization targets surfaced via the same selector: DeepSeek for cheapest ($0.27/M input), Groq for fastest American ($0.59/M input). Both ~5–10× cheaper than American closed-source alternatives.
+
+  **What's in the SDK surface:**
+  - `ByokVendor` union extended to `"anthropic" | "openai" | "google" | "deepseek" | "groq"`
+  - `GROQ_MODELS = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"] as const` in `models.ts` (Llama 3.3 70B is the default tool-use workhorse; GPT-OSS 120B is OpenAI's open-weights release hosted competitively only via Groq, MoE architecture comparable to GPT-4 class on tool benchmarks)
+  - `DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"`
+  - `GROQ_CANONICAL_URL = "https://api.groq.com/openai/v1"` in `provider-resolver.ts` (note the `/openai/v1` namespace — Groq explicitly versions the OpenAI-shape API)
+  - `defaultModelForVendor("groq")` returns `DEFAULT_GROQ_MODEL`
+  - `canonicalVendorBaseUrl("groq")` returns `GROQ_CANONICAL_URL`
+  - Resolver's `byok` arm: Groq dispatches as `wireProtocol: "openai"` (same arm as Google / DeepSeek — Groq's hosted API is OpenAI-compatible with minor caveats around logprobs / logit_bias / certain audio formats which don't affect motebit's tool-use loop)
+
+  **Notable industry context (preserved for doctrine fidelity).** In December 2025 NVIDIA entered a $20B _non-exclusive licensing agreement_ with Groq, paying $20B to license Groq's LPU inference chip architecture and hire founder Jonathan Ross + most of the engineering leadership. Groq remains operationally independent under new CEO Simon Edwards; the API service continues unchanged. The structure is reportedly a "reverse acqui-hire" designed to avoid antitrust filing requirements (licensing deals are exempt from Hart-Scott-Rodino premerger notification). For motebit's vendor-agnostic stance this is _exactly_ the kind of consolidation the `agility-as-role` pattern absorbs cleanly — the role (foundation-model vendor accessible via OpenAI-compatible wire protocol) survives the instance's corporate relationships. Today the Groq API works as a first-class BYOK option; tomorrow, if NVIDIA fully absorbs Groq into their inference stack, the registry pattern can swap or supplement it without touching consumer code. This is the structural value of the agility-as-role discipline.
+
+  **Tests.** New "byok groq" describe block in `provider-resolver.test.ts` covering: dispatch to `wireProtocol: "openai"` at the canonical URL; default model fallback; CORS-proxy substitution via `env.cloudBaseUrl`. `defaultModelForVendor` + `canonicalVendorBaseUrl` exhaustive-vendor tests extended (now 5 vendors). Type-invariants config array gets `{ mode: "byok", vendor: "groq", apiKey: "k" }`. 49/49 SDK tests green.
+
+  **API surface.** `sdk.api.md` baseline regenerated. Additive — `@public` exports (`ByokVendor` union extension, `GROQ_CANONICAL_URL`, `GROQ_MODELS`, `DEFAULT_GROQ_MODEL`) ship with the union extension. No removals.
+
+  **Doctrine.** `docs/doctrine/agility-as-role.md` updated — "four entries" → "five entries," with the cross-geography distinguishing-axis framing (DeepSeek = cheapest Chinese, Groq = fastest American) and the NVIDIA-licensing-agreement context preserved as a doctrinal example of how the role survives instance-level corporate shifts.
+
+  Mechanical template-match against the prior DeepSeek slice. Future open-source-via-API additions (OpenRouter as meta-vendor, Together, Fireworks, Mistral La Plateforme) follow the same shape.
+
+- 3b77bf0: ConversationMessage carries an optional `sensitivity` tier; runtime filters trimmed history at AI-context construction time.
+
+  Closes the read side of the fifth (and final) egress-write boundary in the
+  sensitivity-floor arc. Each variant of the `ConversationMessage` discriminated
+  union (`user` / `assistant` / `tool`) now carries an optional
+  `sensitivity?: SensitivityLevel` field, and the runtime's
+  `ConversationManager.trimmed()` filters messages tagged above the current
+  effective session tier before the conversation is handed to the AI loop.
+
+  Untagged messages (legacy data persisted before the v1 floor, fixtures
+  without a runtime) flow through unchanged for backward compat.
+
+  Closes the cross-device leak shape: a Secret-effective turn on device A
+  persists user/assistant messages at Secret (write-side floor, shipped in
+  the prior commit); cross-device sync surfaces them to device B whose
+  session is at None tier; the pre-call AI gate sees None × None and passes;
+  trimmed history would carry the persisted-at-Secret messages into BYOK
+  without this filter. The read-side filter closes the bypass — tagged
+  messages above the current effective tier are excluded from trimmed
+  history regardless of what the gate permits, because trimmed history is
+  itself an egress shape.
+
+  ```text
+  ConversationManager.trimmed():
+    1. compute effective = getEffectiveSensitivity?() ?? None
+    2. filter messages: keep msg if msg.sensitivity == null OR
+         rankSensitivity(msg.sensitivity) <= rankSensitivity(effective)
+    3. trim filtered history into the token budget
+  ```
+
+  The filter is dynamic — driven by the runtime's `getEffectiveSessionSensitivity`
+  getter at each call — not a static `CONTEXT_SAFE_SENSITIVITY` constant. A
+  session whose tier elevates mid-conversation regains access to its own
+  elevated messages; a session at None excludes Secret messages even if
+  they are load-bearing for the current turn. Same posture the pre-call AI
+  gate enforces upstream.
+
+  Doctrine: `motebit-computer.md` §"Mode contract" — fifth boundary of the
+  egress-shape arc, now both write and read closed.
+
+- b7f79b2: Drag-drop perception substrate — protocol-layer types for the gesture the slab doctrine has named since landing.
+
+  ```ts
+  export type DropPayloadKind = "url" | "text" | "image" | "file" | "artifact";
+
+  export type DropTarget = "slab" | "creature" | "ambient";
+
+  export type DropPayload =
+    | {
+        kind: "url";
+        url: string;
+        sourceFrame?: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      }
+    | {
+        kind: "text";
+        text: string;
+        mimeType?: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      }
+    | {
+        kind: "image";
+        bytes: Uint8Array;
+        mimeType: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      }
+    | {
+        kind: "file";
+        bytes: Uint8Array;
+        filename: string;
+        mimeType: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      }
+    | {
+        kind: "artifact";
+        receiptHash: string;
+        payloadJson: string;
+        target?: DropTarget;
+        attestation: UserActionAttestation;
+      };
+
+  export interface UserActionAttestation {
+    readonly kind: "user-drag";
+    readonly timestamp: number;
+    readonly surface: "web" | "desktop" | "mobile" | "spatial" | "cli";
+    readonly contentHashSha256?: string;
+  }
+
+  export function resolveDropTarget(payload: DropPayload): DropTarget;
+  ```
+
+  Two-level pattern, same shape as `SuiteId` / `GuestRail` / `ToolMode` (the agility-as-role pattern in `docs/doctrine/agility-as-role.md`). Categorical drop kinds are closed at the protocol layer — adding a kind is a protocol bump (additive, registry append). Per-kind handlers are runtime-extensible via `MotebitRuntime.registerDropHandler(kind, handler)`; v1 default handlers stage slab items for `url`, `text`, `image` in **`shared_gaze` mode** — the user is the driver, motebit is the observer, source is `user-source`, consent fires per-source. (`mind` would be a category error: `mind` is interior cognition, not user-fed external material.) The doctrine's three drop targets (`slab` / `creature` / `ambient`) carry as an optional hint defaulting to `slab`; spatial Phase 1B unlocks the other two without a wire-format change.
+
+  `UserActionAttestation` is **attestation of intentional delivery, not content authenticity.** The user's gesture proves they meant to deliver the payload — it does NOT prove the payload is authentic, unforged, or what it claims to be. A user can drag a forged PDF; the gesture still attests only that delivery was intentional. Authenticity comes from separate provenance — a source URL the runtime fetched, a cryptographic signature on the bytes, an `ExecutionReceipt`, or a content hash a trusted source previously published. Audit prose must keep the two distinct.
+
+  The three `DropTarget` values are **not equivalent drop zones with different visual effects.** They carry meaningfully different persistence and governance: `slab` is turn/session-scoped perception, `creature` is identity-adjacent state mutation requiring explicit confirmation / signed user intent, `ambient` is workspace-scoped reference with source-consent + expiration. v1 surfaces only ever set `slab`; `creature` and `ambient` unlock together with the per-target governance UX in spatial Phase 1B (never separately).
+
+  **Ambient invariant: consultable context, not automatic prompt context.** The motebit can reach for an ambient drop when a turn calls for it (retrieval-shaped), but the drop itself does NOT auto-fill the prompt at the next AI call. Future implementations will be tempted to dump ambient bytes into every turn's context pack; this invariant exists to prevent that failure mode.
+
+  **Dimensionality is not the gate; governance is.** A 2D web surface CAN distinguish the three targets via raycast pick at drop time (creature mesh hit, slab plane hit, no hit ≡ ambient). The actual gate is the per-target governance UX (creature confirmation modal + chosen mutation semantic; ambient consultable-context store + retrieval API). Until those exist, `MotebitRuntime.feedPerception` fails closed on non-slab targets with `DropTargetGovernanceRequiredError` (re-exported from `@motebit/runtime`) — same fail-closed pattern as `SovereignTierRequiredError`. The error names the missing consumer so a future implementer can wire it up by replacing the rejection with the governance-aware handler.
+
+  Drop-out provenance — when a motebit-produced artifact leaves the slab toward another destination — uses `ExecutionReceipt` (already in the protocol). This release covers the in-direction substrate.
+
+  Drift gate `check-drop-handlers` (#77) enforces both arms: every `DropPayloadKind` has a registered handler or an explicit allowlist entry, AND every per-surface drop handler routes through `runtime.feedPerception` (never constructs a prompt and calls `sendMessage` — the prompt-backdoor failure mode named in `motebit-computer.md` §"Failure modes specific to supervised agency").
+
+  Doctrine: `motebit-computer.md` §"Perception input — drop kinds and handlers" + `liquescentia-as-substrate.md` §"Cohesive permeability" (the membrane physics every drop crosses under conditions).
+
+- 28306ef: Vision-1 — pixel governance composes three gates instead of always
+  stripping. The previous `projectForAi` rule ("AI never sees pixel
+  bytes") was a safe floor mistakenly comment-elevated to doctrine; the
+  endgame is provider-mode + sensitivity + consent-aware passthrough.
+
+  Pixels are governed evidence, not automatic external context.
+
+  New exports from `@motebit/sdk`:
+  - `PixelConsentState` — `"denied" | "session"`. Per-session consent
+    for pixel passthrough to external AI providers. Default `"denied"`
+    is fail-closed; the user grants for a session via the `/vision
+grant` slash command on web (and the future VisionConsentBand).
+    Sovereign (`on-device`) providers bypass this gate entirely — bytes
+    never cross a network boundary.
+  - `DEFAULT_PIXEL_CONSENT` — `"denied"`. The fail-closed default for
+    fresh sessions.
+  - `PixelOmittedReason` — `"consent_required" | "sensitivity_blocked" |
+"no_capability"`. Carried on the `bytes_omitted` directive when
+    pixels are stripped, so the AI's perception doctrine routes to
+    the right typed remediation surface (`/vision grant`,
+    `/sensitivity none`, switch-providers) rather than parsing human
+    text. Future variants are additive — consumers route on the cases
+    they care about and ignore the rest.
+
+  Composition (in `@motebit/ai-core`'s `projectForAi`):
+
+  ```text
+  sovereign provider                   → bytes pass (private)
+  external + sensitivity > none        → strip, reason: sensitivity_blocked
+  external + sensitivity = none + !consent → strip, reason: consent_required
+  external + sensitivity = none + consent  → bytes pass (governed)
+  ```
+
+  Sensitivity composition matches `assertSensitivityPermitsAiCall` for
+  outbound text — the same primitive now governs pixels at the same
+  boundary. The receipts trail (`ToolInvocationReceipt` per
+  `@motebit/mcp-client`) records every visual transfer; no new
+  receipt infrastructure.
+
+  Doctrine: `motebit-computer.md` §"Mode contract" composes pixels
+  through the same three-axis decision (provider, sensitivity,
+  consent) the rest of the runtime uses for outbound governance.
+  `surface-determinism.md` (#90) forbids the AI from asking "may I
+  see?" via prompt — consent is granted via the typed
+  `/vision grant` affordance.
+
+  Open string-literal unions — additive new states (e.g.
+  `{ kind: "domain"; domains: string[] }` for per-domain remembered
+  consent) land without breaking existing consumers.
+
+- 2490143: Add optional `staleBytesOmissionReason` field to `SessionStateSnapshot` — typed-truth signal for "a prior tool result's `bytes_omitted_reason` is no longer the current gate's verdict."
+
+  Additive (optional field). The runtime computes the staleness by tracking the most recent omission reason emitted by `projectForAi` and comparing against the current gate state at snapshot time. When the gate that fired has since flipped (consent denied → session, sensitivity elevated → none, etc.), the snapshot carries the prior reason so the prompt's PERCEPTION_DOCTRINE clause can teach the AI to re-take rather than re-recommend the affordance for the stale reason.
+
+  Closes the failure mode where the AI tells the user "type /vision grant" after the user has already granted it — witnessed 2026-05-11 on the Google CAPTCHA flow. Same typed-truth-perception shape as `frame_stale` and `not_in_control`.
+
+- 8b1d660: Add optional `task_step_narration?: string` field to `AIResponse` — the wire foundation for the slab chrome's `motebit × virtual_browser` register per [`docs/doctrine/chrome-as-state-render.md`](../docs/doctrine/chrome-as-state-render.md). The field carries a single first-person present-tense sentence ("Reading the page" / "Filling in the form" / "Hit a paywall — need your input") at the supervisor-cares-about granularity. Optional and additive: existing consumers ignore it; absence means the chrome recedes to the empty register.
+
+  The field is typed-truth-validated at runtime (`validateTaskStepNarration` in `@motebit/ai-core`'s `narration-validation.ts`) before the chrome reads it — the third graduation of [`runtime-invariants-over-prompt-rules.md`](../docs/doctrine/runtime-invariants-over-prompt-rules.md), the typed-truth-perception triple applied to in-flight motebit-voiced text. A narration that contradicts wire-level typed truth (claims "Reading apple.com" while the page is on google.com) gets falsified and replaced with a runtime-templated fallback before the chrome renders it. The chrome's narration register's trust contract is: every line shown is wire-true regardless of what the model proposed.
+
+  PR 1 first slice — the wire foundation. Subsequent slices add the chrome's state-driven render against `controlState × embodimentMode`, the `motebit × virtual_browser` register that consumes this field, the `user × virtual_browser` register (cobrowse-as-mode), and the `/wheel` + chip-tap handoff affordance per the doctrine memo's PR 1 scope.
+
+  Backward-compatible (additive optional field). No consumer code changes required to keep working; consumers wanting the new register read the field when present and skip when absent.
+
+- c243dd2: Sensitivity-gate audit event — turns the shipped fail-closed gate from invisible-but-correct into observable-and-provable.
+
+  ```ts
+  enum EventType {
+    // ...
+    SensitivityGateFired = "sensitivity_gate_fired",
+  }
+
+  type SensitivityGateEntry =
+    | "sendMessage"
+    | "sendMessageStreaming"
+    | "generateActivation"
+    | "generateCompletion"
+    | "outbound_tool";
+
+  type SensitivityElevationSource = "session" | "slab_item";
+
+  interface SensitivityGateFiredPayload {
+    readonly entry: SensitivityGateEntry;
+    readonly session_sensitivity: SensitivityLevel;
+    readonly effective_sensitivity: SensitivityLevel;
+    readonly provider_mode: "on-device" | "motebit-cloud" | "byok" | "unset";
+    readonly elevated_by?: {
+      readonly via: SensitivityElevationSource;
+      readonly slab_item_id?: string;
+    };
+    readonly tool_name?: string;
+  }
+  ```
+
+  Every `assertSensitivityPermitsAiCall` block now emits a structured `SensitivityGateFired` event to the EventStore BEFORE throwing `SovereignTierRequiredError`. The four shipped egress closures (session-elevated state, drops, tool outputs, memory writes) all leave inspectable evidence. Audit consumers query via `events.query({ event_types: [EventType.SensitivityGateFired] })` for the trail of every blocked egress crossing.
+
+  **Strictly metadata.** Payload contains entry name, session/effective tier, provider mode, elevation attribution (with content-free slab item ID for forensic correlation), and tool name when applicable. NEVER raw drop content, tool result bytes, slab item payloads, or prompt strings. Logging the payload that triggered the block would itself be a leak surface — same kind of leak the gate exists to prevent. Field naming choice (`elevated_by.via` rather than `source`) avoids false-positives in `check-mode-contract-readers` (#76) where the destructure-detection regex can't distinguish object-literal write from contract-field read.
+
+  Companion change: `MotebitRuntime.assertSensitivityPermitsAiCall` promoted from `private` to public. The gate predicate is motebit's named primitive for sensitivity-tier-vs-provider routing — the mechanism every commit in the four-egress-shape arc is built around. Surfaces, tests, and audit tooling now have a typed entry point. Internal sites (sendMessage, sendMessageStreaming, generateActivation, generateCompletion, the outbound-tool wrap) call the same method — the public promotion adds no new code path, it just names what was already the architectural seam.
+
+  Doctrine: `motebit-computer.md` §"Mode contract — six declarations per mode." Closes the audit-trail pivot named after the four-egress-shape arc.
+
+- eec271d: Prompt-1 — runtime session-state surfaced to the AI's prompt as a
+  `[Now]` block. Closes the runtime-state-confabulation hallucination
+  class witnessed across the co-browse arc: the AI claims continuity
+  ("the browser is already open on Hacker News") from conversation
+  memory after a refresh / runtime restart / dispose — when the
+  actual session is closed.
+
+  New exports from `@motebit/sdk`:
+  - `BrowserSessionInfo` — surface-supplied cloud-browser state.
+    `status: "closed" | "open"`, plus optional `url` and
+    `control: ControlState`. Surfaces register a provider via
+    `runtime.setBrowserSessionProvider(...)`; absent provider →
+    `{ status: "closed" }` default.
+  - `SessionStateSnapshot` — the full runtime-side composition: the
+    surface's `BrowserSessionInfo` plus the runtime's
+    `sensitivity` and `pixelConsent` fields. Built by
+    `runtime.getSessionStateSnapshot()` once per AI turn and threaded
+    into `ContextPack.sessionState`.
+  - `ContextPack.sessionState?: SessionStateSnapshot` — the new
+    context-pack field. Loop threads it on every iteration (state
+    can shift mid-turn — `/vision grant` flips consent; control
+    transitions happen via the band).
+
+  Wire path:
+
+  ```text
+  surface (web)              runtime                    ai-core
+     │                          │                         │
+     ├─ setBrowserSession        │                         │
+     │  Provider(() => …)        │                         │
+     │                          │                         │
+                                getSessionStateSnapshot()
+                                composes BrowserSessionInfo
+                                + sensitivity + pixelConsent
+                                │                         │
+                                │   sendMessageStreaming  │
+                                │   sessionState: …       │
+                                │  ────────────────────►  │
+                                │                         │
+                                │                  contextPack
+                                │                  .sessionState
+                                │                         │
+                                │                  formatSessionState
+                                │                  → "[Now] Browser:
+                                │                  open at … · Control:
+                                │                  motebit driving · …"
+  ```
+
+  Format restraint — only emit lines that have something to say.
+  Default state (closed browser, none sensitivity, denied consent)
+  collapses to `[Now] Browser: closed`. Elevated tiers and granted
+  consent get their own `·`-separated lines.
+
+  The PERCEPTION*DOCTRINE block in `packages/ai-core/src/prompt.ts`
+  extends with a rule: *"Runtime state is in the [Now] block — read
+  it, don't infer it. Do NOT claim 'the browser is already open' or
+  'we're on Hacker News' from conversation memory after a session
+  resumption — page refreshes, runtime restarts, and explicit
+  dispose calls all close sessions while leaving conversation
+  history intact. The [Now] block is the truth this turn."\_
+
+  Block named `[Now]` (not `[Session]`) to avoid collision with the
+  existing `[Session]` block, which describes conversation
+  continuity (when the user last spoke).
+
+  Open string-literal — additive new fields (e.g. desktop_drive
+  embodiment status, future per-domain consent) land without
+  breaking existing consumers.
+
+- ef49992: typed-intent-implicit-grant — `UserActionAttestation` widens from a
+  fixed `kind: "user-drag"` interface to a discriminated union over
+  `"user-drag" | "user-typed-intent"`. The new arm carries a typed
+  chat-input submit through perception alongside the existing drag
+  gesture; producers stay structurally compatible, consumers gain a
+  second case to discriminate on.
+
+  **Why this matters.** The runtime threads
+  `options.userActionAttestation` through `sendMessageStreaming` so
+  tools that need consent can distinguish a user-driven turn from
+  proactive idle work. The first consumer is `request_control` on
+  the web cloud-browser surface: when the AI's reach for `computer`
+  fails with `not_in_control` inside a turn the user typed and sent,
+  the `request_control` flow auto-grants instead of opening the
+  slab band's Grant/Deny doorbell. Re-confirming what the user can
+  already see they did would violate the calm-software doctrine
+  (`CLAUDE.md` § UI). Proactive paths (`generateActivation`,
+  idle-tick consolidation) never run through `sendMessageStreaming`,
+  so they never get a typed-intent attestation — the prompt band
+  fires as before, fail-closed by default.
+
+  **`@motebit/protocol` (minor):**
+
+  ```text
+  - export interface UserActionAttestation { kind: "user-drag"; ... }
+  + export type UserActionAttestation =
+  +   | { kind: "user-drag"; timestamp; surface; contentHashSha256? }
+  +   | { kind: "user-typed-intent"; timestamp; surface };
+  ```
+
+  Additive new arm; the existing `user-drag` shape is preserved
+  field-for-field. Exhaustive consumers that switch on `kind` gain
+  one new case to handle.
+
+  **`@motebit/sdk` (minor):** re-exports the widened type through
+  `* from "@motebit/protocol"`. Surfaces that construct the
+  attestation pass `kind: "user-typed-intent"` from chat-input
+  handlers (today: web; sibling stamp on desktop / mobile when
+  they grow a virtual_browser surface). The minor cascade is
+  the structural one — the SDK's own surface didn't gain new
+  exports.
+
+  **Audit shape.** Auto-grant emits both control transitions
+  (`request_control` initiated by motebit, `grant` initiated by
+  user) synchronously in the same JS task; the band's reactive
+  subscribers see `handoff_pending → motebit` back-to-back before
+  the browser repaints, so no visible band flicker. The audit log
+  reads identically to a band-tap grant; the differentiator
+  (typed-intent vs band-tap) lives in the surface's chat history
+  alongside the message timestamp.
+
+### Patch Changes
+
+- 2b897ed: **Reorder the `ByokVendor` union — DeepSeek last to surface its geographic outlier-ness.** Changed from `"anthropic" | "openai" | "google" | "deepseek" | "groq"` to `"anthropic" | "openai" | "google" | "groq" | "deepseek"`. The four American-hosted vendors group first; DeepSeek (the sole Chinese-hosted instance) reads last so the geographic asymmetry surfaces as intentional structural ordering rather than oversight.
+
+  Pure reorder — no breaking change. The union's membership is unchanged; switch statements and consumers that already handle all five vendors keep working identically. Test assertion order and sdk.api.md baseline regenerated to match the new declared order. Pairs naturally with the UI calm-down commit that immediately preceded this slice: DeepSeek's "Hosted in China" disclosure is the only descriptive note in the entire BYOK row, and it's now at the end of the row where the geographic-outlier framing reads cleanly.
+
+  Sibling reorders on every surface (web HTML buttons + sections, desktop HTML buttons, mobile IntelligenceTab radio buttons + conditional sections, CLI VALID_PROVIDERS array + default-model fallback chain) land in the same commit per CLAUDE.md's one-pass-delivery principle. Doctrine `docs/doctrine/agility-as-role.md` updated with a one-line framing note explaining the order.
+
+- bd6ed97: Slice 2i — model registry drift fix. Caught during the live smoke
+  of the slab arc: the Settings dropdown advertised
+  `claude-opus-4-6 — most capable`, a model that doesn't exist
+  (current Opus is 4.7).
+
+  **Root cause** — single source of truth was already in
+  `packages/sdk/src/models.ts` (`ANTHROPIC_MODELS`), but
+  `apps/web/src/ui/settings.ts` had a duplicate literal list with the
+  stale entry. Two files, two truths; sdk's was a version behind.
+
+  **Fix:**
+  - `ANTHROPIC_MODELS` and `PROXY_MODELS` updated to `claude-opus-4-7`
+    (matches the canonical Claude 4.X family — Opus 4.7 / Sonnet 4.6
+    / Haiku 4.5).
+  - `apps/web/src/ui/settings.ts` no longer redeclares the Anthropic
+    list — imports `ANTHROPIC_MODELS` from `@motebit/sdk` and maps to
+    UI labels via a local `ANTHROPIC_MODEL_LABELS` lookup. Single
+    source of truth for the IDs; surface owns the human-readable
+    copy.
+  - OpenAI / Google dropdowns intentionally diverge from sdk's
+    `OPENAI_MODELS` / `GOOGLE_MODELS` — sdk's lists are the
+    proxy-routed gpt-5.4 / gemini-2.5 cost tiers; the BYOK dropdown
+    shows older models users may already pay for. Different intent,
+    not a shadow. Only Anthropic is unified because only Anthropic
+    has aligned intent.
+  - `check-preset-imports` (drift gate #40) gains an entry for
+    `ANTHROPIC_MODELS` — future surfaces that try to redeclare it
+    fail CI before merge. Same lock as `APPROVAL_PRESET_CONFIGS` /
+    `COLOR_PRESETS` / etc.
+
+  Doctrine: `packages/sdk/CLAUDE.md` § "Model registry" + Rule 4
+  ("Surfaces must not shadow canonical identifiers").
+
+- 7b87916: Sensitivity ladder algebra graduates to the protocol layer.
+
+  `rankSensitivity`, `maxSensitivity`, and `sensitivityPermits` are now
+  exported from `@motebit/protocol` (and re-exported through `@motebit/sdk`
+  via the existing `export *`). Pure deterministic math over the closed
+  `SensitivityLevel` enum — qualifies as a permissive-floor primitive
+  per `packages/protocol/CLAUDE.md` rule 1 ("deterministic math").
+
+  ```text
+  rankSensitivity(level): number               // None=0 .. Secret=4
+  maxSensitivity(a, b):   SensitivityLevel     // join-semilattice composition
+  sensitivityPermits(upper, candidate): bool   // candidate <= upper
+  ```
+
+  The ladder is interop law. Every motebit implementation must agree on
+  which tier dominates which, or the cross-implementation gate isn't
+  interoperable: device A persisting a turn at "secret" must mean the
+  same thing to device B's session-tier filter. Hosting the math at the
+  protocol layer makes the ordering a one-file change at the canonical
+  source rather than four duplicated copies that drift independently.
+
+  Graduation history: `rankSensitivity` had three local copies as of
+  2026-05-07 (runtime/motebit-runtime.ts, runtime/conversation.ts,
+  ai-core/loop.ts) plus a fourth-shaped table (`LEVEL_RANK` +
+  `higherLevel` in policy-invariants/computer-sensitivity.ts). The
+  ai-core copy's JSDoc explicitly named the trigger: "if a third reader
+  appears, the helper graduates." Past trigger.
+
+  Three runtime/ai-core copies are removed and the consumers now import
+  from `@motebit/sdk`. policy-invariants's local `LEVEL_RANK` table is
+  left in place because it operates on a separate string-literal
+  `SensitivityLevel` type for computer-use sensitivity classification —
+  cross-package type unification is a separate concern and not load-
+  bearing for the gate-composition arc.
+
+  Math properties verified by 13 new protocol-package tests:
+
+  ```text
+  rankSensitivity:    strictly monotonic; every adjacent pair differs by 1
+  maxSensitivity:     None is identity; idempotent; commutative; associative
+  sensitivityPermits: dual of maxSensitivity (max(upper, c) === upper iff
+                      sensitivityPermits(upper, c)); reflexive
+  ```
+
+  `@motebit/sdk` is patch because it picks up the new exports through
+  `export * from "@motebit/protocol"` without changing its own surface
+  intentionally.
+
+  Added to `PERMISSIVE_ALLOWED_FUNCTIONS` in `scripts/check-deps.ts`
+  with a load-bearing review note tying the entries to the graduation
+  trigger and the interop-law justification.
+
+- Updated dependencies [f1ba621]
+- Updated dependencies [a5bf96e]
+- Updated dependencies [1f5b8aa]
+- Updated dependencies [45aff03]
+- Updated dependencies [891a11b]
+- Updated dependencies [f083b7a]
+- Updated dependencies [f4aa40d]
+- Updated dependencies [f9fd8f2]
+- Updated dependencies [a2daccd]
+- Updated dependencies [f174164]
+- Updated dependencies [5851a24]
+- Updated dependencies [5286de2]
+- Updated dependencies [ea6dc4d]
+- Updated dependencies [88d8550]
+- Updated dependencies [22b6a39]
+- Updated dependencies [b7f79b2]
+- Updated dependencies [b42cee1]
+- Updated dependencies [9c39980]
+- Updated dependencies [3f2e370]
+- Updated dependencies [e383c63]
+- Updated dependencies [eeebf19]
+- Updated dependencies [9def0cd]
+- Updated dependencies [91299fd]
+- Updated dependencies [7ba2761]
+- Updated dependencies [c243dd2]
+- Updated dependencies [7b87916]
+- Updated dependencies [b0f38a8]
+- Updated dependencies [f78a82a]
+- Updated dependencies [28added]
+- Updated dependencies [0c6196c]
+- Updated dependencies [ee5f70f]
+- Updated dependencies [ef49992]
+  - @motebit/protocol@1.3.0
+
 ## 1.1.0
 
 ### Minor Changes
