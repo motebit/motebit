@@ -27,7 +27,7 @@ The following are **convenience-tier properties** that motebit-cloud subscriptio
 - Bundled AI inference credits (relay-hosted proxy with 20% margin baked into per-token billing)
 - Bundled voice provider credits (Premium tier — Inworld / ElevenLabs / Deepgram auto-routed)
 - Compliance attestations (Sovereign tier — SOC 2 Type II, HIPAA BAA, GDPR DPA)
-- Extended audit log retention (Sovereign tier — 7 years vs default 30/90/365-day sensitivity ceilings per [`retention-policy.md`](retention-policy.md))
+- Extended audit log retention _within sensitivity ceilings_ (Sovereign tier — operational retention extended to 7 years for `none` / `personal`-tier data; ceilings for `medical` / `financial` / `secret` remain protocol-level and apply uniformly across all tiers per [`retention-policy.md`](retention-policy.md). The convenience tier extends retention within the ceilings, never above them — the ceilings are interop law, not per-deployment defaults)
 - Hardware-attestation-as-admission-policy (Sovereign tier — converts the additive scoring from [`hardware-attestation.md`](hardware-attestation.md) into a procurement gate)
 - SLA grade + dedicated support
 
@@ -48,6 +48,8 @@ Every closed-source AI platform's business model **requires** owning the user's 
 
 The competitive moat is not "better tech." Incumbents have more capital and more tech. The moat is **a posture incumbents can't adopt without dismantling their own business.** The protocol-first commitment is the moat.
 
+The constraint is reinforced at the capital-structure layer. Growth-stage and public-market investors evaluate AI-company traction on net-revenue-retention, customer-lifetime-value, and switching-cost — all metrics that require the company to own user identity. Even an incumbent's product team that wanted to open the identity layer would face investor rejection of a revenue model that doesn't match the proven enterprise-SaaS playbook. The moat is product-architecturally inaccessible AND capital-structurally inaccessible to every closed-source incumbent. Two reinforcing constraints, one structural position.
+
 If motebit-cloud ever starts gating identity, trust, or receipts behind subscription tiers — even subtly, even just in pitch language — the moat collapses. Motebit becomes structurally identical to ChatGPT Plus With Crypto Primitives. Federation peers have no reason to trust the protocol because the company de facto owns it. The whole strategic position rests on the two-layer separability.
 
 ## The protocol-first audit
@@ -64,6 +66,26 @@ Three possible answers:
 
 3. **It's complicated.** Recurse: which sub-properties are protocol-level and which are convenience? Decompose until every sub-property is unambiguously in one of the two categories. **Never describe a mixed feature as if it were entirely tier-gated — that's the drift class this audit exists to catch.**
 
+**Worked example.** Suppose someone proposes the feature _"federation-broadcast announcement on motebit-cloud subscribers."_ Run the audit by decomposition:
+
+- **federation-broadcast** as a capability — works identically for any motebit, paid or unpaid → protocol-level. Describe as "every motebit can broadcast federation announcements."
+- **announcement-routing** as a managed scheduling service (priority queue, delivery confirmation, retry logic, dedicated relay capacity) — requires motebit-cloud's managed infrastructure → convenience-tier. Describe as motebit-cloud Premium's "managed announcement routing."
+
+The combined feature gets described in **two registers**: "every motebit can broadcast federation announcements; motebit-cloud Premium adds managed routing convenience on top." Never described as "Premium tier unlocks federation broadcast" — the broadcast capability isn't gated; only the routing-management bundle is.
+
+**Where the audit applies (touchpoints).** The audit fires on every surface where motebit-cloud's relationship to the protocol is articulated, code OR prose:
+
+- Tier configuration in `services/relay/src/subscriptions.ts` — `DEPOSIT_MODELS`, credit-pool sizing, tier-specific routing, retention windows
+- Tier UI copy in surface settings panels (`apps/web/src/ui/settings.ts`, `apps/desktop/src/ui/settings.ts`, `apps/mobile/src/components/settings/IntelligenceTab.tsx`)
+- Pricing-page copy on `motebit.com` (what each tier "includes")
+- Marketing-site language about what motebit "is"
+- YC application + investor pitch materials + sales decks
+- PR descriptions for motebit-cloud features (the PR template should prompt the audit)
+- Public statements (X / blog posts / podcast interviews / talks) about motebit-cloud's value prop
+- Doctrine memos themselves, **recursively** — this memo had to pass the audit on its own retention-window claim, which is how the within-ceilings clarifier above was caught during review
+
+Most of the drift class in real conversation happens on **prose surfaces, not code surfaces**. Code change without doctrinal articulation is structurally safe (the runtime enforces protocol-first by construction); doctrinal articulation without code change still requires the audit because pitch language and tier descriptions can break the moat even when no code moves.
+
 The cost of getting this wrong is large. The cost of doing the audit is one sentence of thought per decision.
 
 ## What motebit-cloud is, and is not
@@ -74,7 +96,7 @@ The cost of getting this wrong is large. The cost of doing the audit is one sent
 - A convenience layer that captures ~10% margin on inference-as-served plus breakage on expired credits
 - A customer-acquisition funnel for the relay-fee scale revenue
 - One specific bundling product on top of a vendor-agnostic protocol
-- Optional — sovereignty trumps tier-gating per [`feedback_sovereignty_orthogonal`](../../).
+- Optional — sovereignty trumps tier-gating per _feedback_sovereignty_orthogonal_.
 
 **Motebit-cloud IS NOT:**
 
@@ -92,10 +114,10 @@ When someone proposes a motebit-cloud feature, the question is never "what does 
 
 - [`services/relay/CLAUDE.md`](../../services/relay/CLAUDE.md) rule 6 — "Relay is a convenience layer, not a trust root." The same principle at the relay layer.
 - [`protocol-model.md`](protocol-model.md) — the three-layer permissive / BSL / accumulated-state model. The two-layer protocol-vs-business split is downstream of the three-layer license split.
-- [`feedback_sovereignty_orthogonal`](../../) — "Tier and provider mode are orthogonal: never gate BYOK behind subscription."
-- [`feedback_intelligence_commodity`](../../) — "Don't sell intelligence as the product. Charge for relay, include AI as convenience."
-- [`feedback_endgame_not_mvp`](../../) — "Build endgame patterns, not MVPs." The protocol-first ordering is endgame by construction.
-- [`strategy_open_source_moat`](../../) — "Open-source protocol (adoption), never open-source accumulated state." The open protocol is the substrate; private accumulated state is the company's data moat. The ordering matches this doctrine's protocol-first / company-on-top framing.
+- _feedback_sovereignty_orthogonal_ (memory anchor) — "Tier and provider mode are orthogonal: never gate BYOK behind subscription."
+- _feedback_intelligence_commodity_ (memory anchor) — "Don't sell intelligence as the product. Charge for relay, include AI as convenience."
+- _feedback_endgame_not_mvp_ (memory anchor) — "Build endgame patterns, not MVPs." The protocol-first ordering is endgame by construction.
+- _strategy_open_source_moat_ (memory anchor) — "Open-source protocol (adoption), never open-source accumulated state." The open protocol is the substrate; private accumulated state is the company's data moat. The ordering matches this doctrine's protocol-first / company-on-top framing.
 - [`agility-as-role.md`](agility-as-role.md) — vendor optionality at the protocol layer means motebit-cloud has no exclusives. Every BYOK vendor is also available outside motebit-cloud.
 - [`retention-policy.md`](retention-policy.md) — sensitivity ceilings are interop law (protocol-level); operational retention windows are reference defaults (per-deployment, including motebit-cloud's specific tier choices).
 
