@@ -758,6 +758,17 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
             break;
           }
 
+          case "task_step_narration": {
+            // Feed the validated narration into the slab's chrome for
+            // the `motebit × virtual_browser` register. The runtime
+            // already corrected wire-truth contradictions via
+            // `validateTaskStepNarration` before the chunk left the
+            // loop, so the chrome renders `text` verbatim. Doctrine:
+            // `chrome-as-state-render.md` § "Hybrid narration source."
+            ctx.app.setTaskStepNarration(chunk.text);
+            break;
+          }
+
           case "approval_expired": {
             addMessage("system", `Tool "${chunk.tool_name}" approval expired — auto-denied.`);
             break;
@@ -786,6 +797,12 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
 
           case "result": {
             streamingTTS.flush();
+            // Clear the task-step narration at turn end so the
+            // chrome's `motebit × virtual_browser` register recedes
+            // to its empty state before the next turn begins. A
+            // stale narration would otherwise render against an
+            // unrelated state on a subsequent /computer interaction.
+            ctx.app.setTaskStepNarration(null);
             // Emerge the receipt bubble after the review text settles. 200ms
             // beat preserves the review-as-primary, receipt-as-witness order.
             if (capturedReceipt) {
@@ -824,6 +841,11 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
       addMessage("system", systemMsg);
     } finally {
       setProcessing(false);
+      // Clear any in-flight narration so an aborted turn doesn't
+      // leave the chrome's `motebit × virtual_browser` register
+      // claiming motebit is doing something it isn't. Idempotent
+      // with the `result` chunk's clear on the success path.
+      ctx.app.setTaskStepNarration(null);
     }
   }
 

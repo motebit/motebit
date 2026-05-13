@@ -1254,6 +1254,67 @@ describe("runTurnStreaming (agentic loop)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// task_step_narration — wire-truth-validated chrome content
+// ---------------------------------------------------------------------------
+//
+// The loop emits one `task_step_narration` chunk per iteration when the
+// provider's `AIResponse.task_step_narration` is non-empty. The chunk
+// reaches the chrome already passed through `validateTaskStepNarration`
+// against the per-turn `toolResultsLog`, so the contract is "any chunk
+// the chrome reads is wire-true." Doctrine: `chrome-as-state-render.md`
+// § "Hybrid narration source as the third typed-truth-perception
+// triple."
+
+describe("runTurnStreaming — task_step_narration emission", () => {
+  it("emits a task_step_narration chunk when the provider supplies narration", async () => {
+    const provider = makeMockProvider([
+      {
+        text: "Looking at this page.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        task_step_narration: "Reading the page",
+      },
+    ]);
+    const deps = makeDepsWithProvider(provider);
+
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "Look at this")) {
+      chunks.push(chunk);
+    }
+
+    const narrationChunks = chunks.filter((c) => c.type === "task_step_narration") as Array<{
+      type: "task_step_narration";
+      text: string;
+      valid: boolean;
+    }>;
+    expect(narrationChunks).toHaveLength(1);
+    expect(narrationChunks[0]!.text).toBe("Reading the page");
+    expect(narrationChunks[0]!.valid).toBe(true);
+  });
+
+  it("omits the chunk when no narration is supplied (chrome recedes to empty register)", async () => {
+    const provider = makeMockProvider([
+      {
+        text: "Hello there!",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      },
+    ]);
+    const deps = makeDepsWithProvider(provider);
+
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "Hi")) {
+      chunks.push(chunk);
+    }
+
+    const narrationChunks = chunks.filter((c) => c.type === "task_step_narration");
+    expect(narrationChunks).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // projectForAi pixel gate — sovereignty / sensitivity / consent composition
 // ---------------------------------------------------------------------------
 //

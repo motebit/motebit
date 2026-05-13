@@ -25,7 +25,8 @@ import {
   computeSlabHomeAffordances,
   type SlabHomeAffordance,
 } from "./ui/slab-home.js";
-import { renderCoBrowseChrome, animateMarkForReceipt } from "./ui/cobrowse-chrome";
+import { animateMarkForReceipt } from "./ui/cobrowse-chrome";
+import { renderSlabChrome } from "./ui/slab-chrome";
 import { urlHasTrustHeld } from "./cookie-host-match.js";
 import type { LiveBrowserElementHandle, SlabBodyRegister } from "@motebit/render-engine";
 import type {
@@ -287,6 +288,22 @@ export class WebApp {
    * to kill the "browser is on HN" memory-confabulation pattern.
    */
   private _currentBrowserUrl: string | null = null;
+  /**
+   * Latest task-step narration delivered by the runtime in the current
+   * (or most recent) turn. Consumed by the slab's chrome in the
+   * `motebit × virtual_browser` register as the chrome's primary
+   * content ("Reading the page" / "Filling in the form"). Null when
+   * the model hasn't emitted a narration this turn — the register
+   * recedes to the empty state.
+   *
+   * Cleared at turn end (the result chunk) so a stale narration from
+   * a previous turn doesn't render against an unrelated state. The
+   * runtime's `validateTaskStepNarration` already corrected wire-truth
+   * contradictions before this reaches the surface, so the chrome
+   * renders the string verbatim. Doctrine:
+   * `chrome-as-state-render.md` § "The principle."
+   */
+  private _taskStepNarration: string | null = null;
   /**
    * Effective slab-body state machine — two orthogonal axes
    * (URL-derived base + focus-derived overlay) composed into the
@@ -2180,6 +2197,23 @@ export class WebApp {
   }
 
   /**
+   * Set the task-step narration for the current turn and refresh the
+   * slab chrome so the `motebit × virtual_browser` register picks up
+   * the new content. Called by stream consumers (chat.ts) when a
+   * `task_step_narration` chunk arrives. Pass null to clear the
+   * narration at turn end so the register recedes to the empty state
+   * before the next turn begins.
+   *
+   * Idempotent across identical inputs — refresh fires regardless so
+   * the chrome stays in lockstep with the typed signal even if the
+   * caller re-emits the same string.
+   */
+  setTaskStepNarration(narration: string | null): void {
+    this._taskStepNarration = narration;
+    this.refreshSlabChrome();
+  }
+
+  /**
    * Compute the slab home view's forward-framed affordances by
    * querying the motebit's `UserInputForwarded` event log for past
    * navigate events (host-redacted audit format per `co-browse.ts`
@@ -2502,12 +2536,15 @@ export class WebApp {
     const state = machine?.getState();
     if (!state || !machine) return;
 
-    // Unified chrome strip — always present, content shifts with
-    // state. The mark reads from the runtime's interior color so
-    // the tiny glyph mirrors the main creature; chrome-1b adds
-    // sensitivity ring + pixel-consent eye decorations sourced
-    // from runtime state.
-    const chrome = renderCoBrowseChrome(state, machine, {
+    // State-driven chrome via the matrix-shaped dispatcher
+    // (`renderSlabChrome` = `f(controlState × embodimentMode)`). PR 1
+    // fills the `* × virtual_browser` column; the
+    // `motebit × virtual_browser` register renders the task-step
+    // narration the runtime validated this turn, while the other
+    // cells delegate to the existing cobrowse chrome unchanged.
+    // Other embodiment columns are named in the dispatcher and
+    // deferred. Doctrine: `chrome-as-state-render.md`.
+    const chrome = renderSlabChrome(state, "virtual_browser", machine, {
       forwardEvent,
       interiorColor: this._interiorColor,
       sensitivity: this.runtime?.getSessionSensitivity(),
@@ -2524,6 +2561,7 @@ export class WebApp {
       // `_persistedCookies` cache is populated by the cookies arc's
       // lazy-load gate on first session open and stays warm.
       trustHeld: urlHasTrustHeld(this._currentBrowserUrl, this._persistedCookies),
+      taskStepNarration: this._taskStepNarration,
     });
 
     // No live_browser handle = no session = nothing to control.
@@ -2533,6 +2571,16 @@ export class WebApp {
     // chrome on the floor — the next state transition after mount
     // will reapply it.
     if (!handle) return;
+
+    // The dispatcher returns null for embodiment columns deferred to
+    // PR N; web's live_browser always renders `virtual_browser`, so
+    // the chrome is always an element in this code path. Belt-and-
+    // suspenders: clear the slot if the dispatcher ever returns null.
+    if (!chrome) {
+      handle.controlBandSlot.replaceChildren();
+      handle.addressBarSlot.replaceChildren();
+      return;
+    }
 
     handle.controlBandSlot.replaceChildren(chrome);
     // The address-bar slot is now empty by design — the unified

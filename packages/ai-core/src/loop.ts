@@ -22,6 +22,7 @@ import { inferStateFromText } from "./infer-state.js";
 import { isSelfReferential, withStageTimeout, STAGE_TIMEOUTS_MS } from "./core.js";
 import { detectDishonestClosing } from "./dishonest-closing.js";
 import type { ToolResultLogEntry } from "./dishonest-closing.js";
+import { validateTaskStepNarration } from "./narration-validation.js";
 
 // === Constants ===
 
@@ -624,6 +625,32 @@ export type AgenticChunk =
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | {
       /**
+       * Task-step narration — what motebit is currently doing at the
+       * supervisor-cares-about granularity. Emitted after each iteration's
+       * AIResponse is captured, before tool execution, so the slab's
+       * `motebit × virtual_browser` register can render the narration
+       * while the act is in flight (not after the turn closes).
+       *
+       * `text` is the post-validation narration string — already passed
+       * through `validateTaskStepNarration` against the per-turn
+       * `toolResultsLog`, so a model claim that contradicts wire-level
+       * typed truth ("Reading apple.com" while the URL is google.com)
+       * arrives at the chrome already corrected, never as raw model
+       * output. `valid: false` carriers expose the override to consumers
+       * that want to render trust-calibration treatment; `valid: true`
+       * means the model's proposal passed through unchanged.
+       *
+       * Doctrine: `chrome-as-state-render.md` § "Hybrid narration source
+       * as the third typed-truth-perception triple." Wire field on
+       * `AIResponse.task_step_narration`; this chunk is the in-flight
+       * carrier from the loop through the runtime to the chrome.
+       */
+      type: "task_step_narration";
+      text: string;
+      valid: boolean;
+    }
+  | {
+      /**
        * Emitted when `options.deferMemoryFormation === true`. Carries the
        * candidates + relevantMemories snapshot the formation pass would
        * have consumed. The runtime catches this chunk and queues formation
@@ -869,6 +896,32 @@ export async function* runTurnStreaming(
 
     finalText = aiResponse.text;
     finalResponse = aiResponse;
+
+    // Task-step narration — emit per-iteration so the slab's
+    // `motebit × virtual_browser` register can render the narration
+    // while the act is in flight (not after the turn closes). The
+    // model's proposal passes through `validateTaskStepNarration`
+    // against the per-turn `toolResultsLog` first: contradictions
+    // are corrected at the runtime (this is the third graduation of
+    // typed-truth-perception — the chrome never sees the raw model
+    // claim). Empty / absent narration is dropped (no chunk emitted)
+    // so the chrome recedes to the empty register rather than
+    // rendering blank text. Doctrine:
+    // `runtime-invariants-over-prompt-rules.md` § "The four-part
+    // typed-truth structure" + `chrome-as-state-render.md`.
+    if (aiResponse.task_step_narration !== undefined) {
+      const narrationResult = validateTaskStepNarration({
+        proposedNarration: aiResponse.task_step_narration,
+        toolResultsLog,
+      });
+      if (narrationResult.narration.trim() !== "") {
+        yield {
+          type: "task_step_narration",
+          text: narrationResult.narration,
+          valid: narrationResult.valid,
+        };
+      }
+    }
 
     // If no tool calls or no tool registry, exit the loop
     if (!aiResponse.tool_calls || aiResponse.tool_calls.length === 0 || !deps.tools) {

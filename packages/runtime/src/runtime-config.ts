@@ -353,6 +353,31 @@ export type StreamChunk =
     }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | { type: "approval_expired"; tool_name: string }
+  | {
+      /**
+       * Task-step narration — what motebit is currently doing at the
+       * supervisor-cares-about granularity. The slab's chrome consumes
+       * this in the `motebit × virtual_browser` register; voice
+       * surfaces and ambient indicators on other embodiments inherit
+       * the same information shape ([`chrome-as-state-render.md`]
+       * §"Spatial-as-endgame validation").
+       *
+       * `text` is the post-validation narration string — ai-core's
+       * `validateTaskStepNarration` already corrected any contradictions
+       * against the per-turn `toolResultsLog` before the chunk left the
+       * loop, so consumers render `text` verbatim. `valid: false`
+       * means the runtime overrode a model claim; consumers may render
+       * differently for trust calibration but the contract is the same.
+       *
+       * Emitted at most once per iteration, after the model's response
+       * is captured and before tool execution. Absent narration (model
+       * didn't emit a `<narration>` tag) does NOT produce a chunk —
+       * the chrome recedes to the empty register.
+       */
+      type: "task_step_narration";
+      text: string;
+      valid: boolean;
+    }
   | { type: "result"; result: TurnResult }
   | { type: "task_result"; receipt: ExecutionReceipt }
   | { type: "delegation_start"; server: string; tool: string; motebit_id?: string }
