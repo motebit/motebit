@@ -103,7 +103,10 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
   // from page response (remote, RTT-bound) — the cloud-gaming /
   // visionOS pattern that makes ~200ms RTT feel responsive enough.
   // The tabIndex=0 below (line ~116) makes the img focusable for
-  // the wheel handler's `document.activeElement === img` check.
+  // keyboard events (the document-level keydown handler requires
+  // `document.activeElement === img`). Wheel was previously also
+  // gated on focus, but as of 2026-05-12 wheel routes through a
+  // hover-OR-focus check — see onWheel below for the rationale.
   const cursorHalo = mountCursorHalo(img, soulTint);
 
   // Make the img focusable so it can receive keyboard events. Save
@@ -221,10 +224,26 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
     });
   }
 
+  // Hover state — tracks whether the user's cursor is currently over
+  // the slab img. Universal "scrollable region" pattern: the thing
+  // the cursor is over should scroll on wheel, no explicit focus
+  // click required. Apps like Notion, Linear, Figma, VS Code panels,
+  // and every browser's inner frame use hover-not-focus for in-region
+  // scroll. Initialized false (cursor starts outside the img); the
+  // mouseenter/mouseleave handlers below maintain it.
+  let isMouseOverImg = false;
+
   function onWheel(e: WheelEvent): void {
-    // Only capture wheel when the slab is focused — otherwise we'd
-    // steal scroll from the page itself.
-    if (document.activeElement !== img) return;
+    // Capture wheel when the user is interacting with the slab —
+    // either hovering over it (the common case: page loads, user
+    // moves cursor over the slab to scroll) OR after an explicit
+    // click on the img has focused it (the keyboard-shortcut path
+    // that the tabIndex=0 supports). Hover-OR-focus is permissive
+    // by design: both signals mean "user is interacting with the
+    // slab"; gating on only one of them was the 2026-05-12 bug —
+    // users coming from a chat-typed URL never click the img and
+    // their wheel events were silently dropped.
+    if (!isMouseOverImg && document.activeElement !== img) return;
     // Suppress browser-default page scroll on the slab img. The
     // wheel is heading to Chromium, not to scroll motebit.com.
     e.preventDefault();
@@ -259,9 +278,11 @@ export function attachInputCapture(deps: AttachInputCaptureDeps): () => void {
     moveCursorHalo(cursorHalo, img, e);
   }
   function onMouseEnter(): void {
+    isMouseOverImg = true;
     showCursorHalo(cursorHalo);
   }
   function onMouseLeave(): void {
+    isMouseOverImg = false;
     hideCursorHalo(cursorHalo);
   }
 

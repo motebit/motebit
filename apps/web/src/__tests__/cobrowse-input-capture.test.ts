@@ -465,13 +465,57 @@ describe("attachInputCapture — wheel coalescing", () => {
     }
   });
 
-  it("does NOT capture wheel when the img is not focused", async () => {
+  it("does NOT capture wheel when the img is neither focused nor hovered (cursor away)", async () => {
+    // Calm-software invariant: don't steal page scroll when the user
+    // isn't interacting with the slab. Both focus AND hover must be
+    // absent for the wheel to fall through to page scroll.
     const img = makeImg(640, 400);
     const other = document.createElement("input");
     document.body.appendChild(other);
     const { forward, events } = makeForward();
     attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
     other.focus();
+    // No mouseenter fired → hover state stays false.
+
+    img.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 200, deltaY: 100 }));
+    await new Promise((resolve) => setTimeout(resolve, 32));
+
+    expect(events).toHaveLength(0);
+  });
+
+  // 2026-05-12 — primary scroll bug fix. Users coming from a chat-typed
+  // URL never click the slab img directly, so document.activeElement
+  // is the chat input (or empty). Previously wheel events were silently
+  // dropped. Now: hover triggers wheel capture via the same path focus
+  // does. Universal "scroll the thing under my cursor" pattern.
+  it("CAPTURES wheel on hover even when img is NOT focused (primary scroll fix)", async () => {
+    const img = makeImg(640, 400);
+    const other = document.createElement("input");
+    document.body.appendChild(other);
+    const { forward, events } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+    // Focus lives elsewhere (chat input, etc.) — the common state
+    // after the user typed a URL and the page loaded.
+    other.focus();
+    expect(document.activeElement).toBe(other);
+
+    // Mouse enters the slab img — hover state becomes true.
+    img.dispatchEvent(new MouseEvent("mouseenter"));
+
+    img.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 200, deltaY: 100 }));
+    await new Promise((resolve) => setTimeout(resolve, 32));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "wheel", dy: 100 });
+  });
+
+  it("STOPS capturing wheel when mouse leaves the img (no stuck-hovered state)", async () => {
+    const img = makeImg(640, 400);
+    const { forward, events } = makeForward();
+    attachInputCapture({ img, forwardEvent: forward, fallbackWidth: 1280, fallbackHeight: 800 });
+    // Hover in, then hover out — final state should drop wheel.
+    img.dispatchEvent(new MouseEvent("mouseenter"));
+    img.dispatchEvent(new MouseEvent("mouseleave"));
 
     img.dispatchEvent(new WheelEvent("wheel", { clientX: 320, clientY: 200, deltaY: 100 }));
     await new Promise((resolve) => setTimeout(resolve, 32));
