@@ -62,9 +62,12 @@ import { Toast } from "./components/Toast";
 import { AnimatedBubble } from "./components/AnimatedBubble";
 import { SlashAutocomplete } from "./components/SlashAutocomplete";
 import { Banner } from "./components/Banner";
+import { SlabChrome } from "./components/SlabChrome";
 import { ThemeContext, resolveTheme, type ThemeColors } from "./theme";
 import { runSlashCommand } from "./slash-commands";
 import { useChatStream } from "./use-chat-stream";
+import { dispatchSlabChrome } from "./slab-chrome";
+import type { ControlState } from "@motebit/sdk";
 import { usePairing } from "./use-pairing";
 import { useVoice } from "./use-voice";
 
@@ -122,6 +125,24 @@ export default function App(): React.ReactElement {
   const [showMemoryPanel, setShowMemoryPanel] = useState(false);
   const [showConversationPanel, setShowConversationPanel] = useState(false);
   const [showGoalsPanel, setShowGoalsPanel] = useState(false);
+
+  // Slab chrome — task-step narration register for the
+  // `motebit × virtual_browser` cell. The runtime emits a typed
+  // `task_step_narration` chunk per turn after `validateTaskStepNarration`
+  // corrects any wire-truth contradictions; the chat-stream consumer
+  // routes the validated text here and clears at turn end on every
+  // termination path (success / catch / aborted). Null = the chrome
+  // recedes; mobile renders nothing in its place. Doctrine:
+  // `chrome-as-state-render.md` § "PR 2 scope (mobile)."
+  const [taskStepNarration, setTaskStepNarration] = useState<string | null>(null);
+  // ControlState for the slab chrome dispatcher. Mobile has no live
+  // cobrowse session today, so the state defaults to `{kind: "motebit"}`
+  // — the new doctrine default per `chrome-as-state-render.md` §
+  // "The principle" (motebit-driving with task-step narration is the
+  // baseline). The dispatcher's full matrix-shape is preserved for
+  // when a mobile cloud-browser surface lands; until then the
+  // `motebit-narration` cell is the only one that actually fires.
+  const [controlState] = useState<ControlState>({ kind: "motebit" });
   const [showCredentialsPanel, setShowCredentialsPanel] = useState(false);
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
   const [showSkillsPanel, setShowSkillsPanel] = useState(false);
@@ -665,6 +686,7 @@ export default function App(): React.ReactElement {
     setIsProcessing,
     pendingApprovalRef,
     pendingGoalApprovalRef,
+    setTaskStepNarration,
   });
 
   // === Settings save ===
@@ -982,6 +1004,22 @@ export default function App(): React.ReactElement {
             onDismiss={dismissBanner}
           />
         )}
+
+        {/* Slab chrome — `motebit × virtual_browser` register and
+            siblings. Mobile's analog of web's controlBandSlot on
+            the live_browser slab item. The dispatcher returns null
+            for embodiment columns deferred to PR N AND for the
+            no-narration / no-URL empty register; renders nothing
+            in those cases (chat layout unaffected). Doctrine:
+            `chrome-as-state-render.md`. */}
+        <SlabChrome
+          cell={dispatchSlabChrome(controlState, "virtual_browser", {
+            taskStepNarration,
+            currentUrl: null,
+          })}
+          onTakeWheel={() => handleSlashCommand("wheel", "")}
+          onHandBack={() => handleSlashCommand("back", "")}
+        />
 
         {/* Chat Messages */}
         <FlatList<ChatMessage>

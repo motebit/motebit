@@ -1570,6 +1570,22 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-slab-chrome-coverage",
+    proves:
+      'flags a slab-chrome dispatcher silently regressing to a partial-matrix shape. Drift class: the doctrine line `chrome-as-state-render.md` § \'each register is an information shape, not a UI component\' is satisfied by every cell of the (controlState × embodimentMode) matrix being NAMED in the dispatcher\'s source — code literal or JSDoc, doctrine accepts either. A refactor that drops a `case "paused":` AND the corresponding doctrine-comment reference would regress the matrix to 3-of-4 states with no compile-time signal; the gate catches the structural-erasure shape. Probe rewrites every `paused` literal in `apps/mobile/src/slab-chrome.ts` to `PAUSED_REMOVED`; the gate must surface `control state "paused" not handled`. byte-identical restoration on cleanup via mutateFile.',
+    perturb: () =>
+      // Remove every `paused` literal from the mobile dispatcher. The
+      // gate scans for state-name literals in backtick/quote-quoted
+      // form; rewriting every occurrence to a non-matching token
+      // strips the structural mention and forces the missing-state
+      // failure mode without altering compilation semantics
+      // (TypeScript won't fail since `paused` is a string-literal in
+      // the source, not a type member name in this file).
+      mutateFile(`apps/mobile/src/slab-chrome.ts`, (src) =>
+        src.replace(/paused/g, "PAUSED_REMOVED"),
+      ),
+  },
+  {
     script: "check-execution-ledger-receipts-archived",
     proves:
       "flags the execution-ledger reconstruction silently regressing back to v1.0 summary-only semantics. Drift class: the operator-trust gap — without `signed_receipts` sourced from the byte-identical archive, verifiers cannot check inner motebit signatures and the relay's word becomes the trust floor.",

@@ -70,6 +70,19 @@ export interface UseChatStreamDeps {
   pendingApprovalRef: React.MutableRefObject<string | null>;
   /** Ref owned by the caller so the goals callback can set it too. */
   pendingGoalApprovalRef: React.MutableRefObject<boolean>;
+  /**
+   * Setter for the chat surface's task-step narration register
+   * (the `motebit × virtual_browser` cell of the slab chrome
+   * matrix). Called on every `task_step_narration` chunk with the
+   * validated text; called with `null` on every termination path
+   * (success, abort, catch) so a stale narration never outlives
+   * the turn that emitted it. Mirrors web's clear-on-every-path
+   * discipline in `apps/web/src/ui/chat.ts` — `result` chunk +
+   * the surrounding `finally`. Doctrine: `chrome-as-state-render.md`
+   * § "Hybrid narration source"; memory anchor
+   * `feedback_streaming_state_cleanup_every_path`.
+   */
+  setTaskStepNarration: (narration: string | null) => void;
 }
 
 export interface UseChatStreamResult {
@@ -87,6 +100,7 @@ export function useChatStream(deps: UseChatStreamDeps): UseChatStreamResult {
     setIsProcessing,
     pendingApprovalRef,
     pendingGoalApprovalRef,
+    setTaskStepNarration,
   } = deps;
 
   const consumeStream = useCallback(
@@ -100,111 +114,137 @@ export function useChatStream(deps: UseChatStreamDeps): UseChatStreamResult {
         { id: assistantId, role: "assistant", content: "...", timestamp: Date.now() },
       ]);
 
-      for await (const chunk of stream) {
-        switch (chunk.type) {
-          case "text":
-            assistantContent += chunk.text;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, content: stripPartialActionTag(assistantContent) }
-                  : m,
-              ),
-            );
-            pushTTSChunk(chunk.text);
-            break;
+      try {
+        for await (const chunk of stream) {
+          switch (chunk.type) {
+            case "text":
+              assistantContent += chunk.text;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: stripPartialActionTag(assistantContent) }
+                    : m,
+                ),
+              );
+              pushTTSChunk(chunk.text);
+              break;
 
-          case "tool_status":
-            if (chunk.status === "calling") {
-              addSystemMessage(`Calling ${chunk.name}...`);
+            case "tool_status":
+              if (chunk.status === "calling") {
+                addSystemMessage(`Calling ${chunk.name}...`);
+              }
+              break;
+
+            case "task_step_narration": {
+              // Feed the validated narration into the slab chrome's
+              // `motebit × virtual_browser` register. The runtime's
+              // `validateTaskStepNarration` already corrected wire-
+              // truth contradictions before the chunk left the loop,
+              // so the chrome renders `text` verbatim. Doctrine:
+              // `chrome-as-state-render.md` § "Hybrid narration
+              // source." Mirrors `apps/web/src/ui/chat.ts` —
+              // chrome-as-state-render's task-step narration triple
+              // (wire field + prompt clause + runtime validation)
+              // now feeds two surfaces from one wire.
+              setTaskStepNarration(chunk.text);
+              break;
             }
-            break;
 
-          case "approval_request": {
-            const approvalId = crypto.randomUUID();
-            pendingApprovalRef.current = approvalId;
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: approvalId,
-                role: "approval",
-                content: "",
-                timestamp: Date.now(),
-                toolName: chunk.name,
-                toolArgs: chunk.args,
-                riskLevel: chunk.risk_level,
-                approvalResolved: false,
-              },
-            ]);
-            // Stream pauses here — will resume via handleApproval
-            return;
-          }
-
-          case "delegation_start":
-            addSystemMessage(`Delegating to ${chunk.server}...`);
-            break;
-
-          case "delegation_complete": {
-            // If a full signed receipt arrived, emerge it as a receipt
-            // artifact message — renders via <ReceiptArtifact>, verifies
-            // locally with Ed25519. Falls back to the short system line
-            // when only a receipt summary is present (motebit-tool
-            // delegations without signed chain).
-            if (chunk.full_receipt) {
-              const full = chunk.full_receipt;
+            case "approval_request": {
+              const approvalId = crypto.randomUUID();
+              pendingApprovalRef.current = approvalId;
               setMessages((prev) => [
                 ...prev,
                 {
-                  id: crypto.randomUUID(),
-                  role: "receipt",
+                  id: approvalId,
+                  role: "approval",
                   content: "",
                   timestamp: Date.now(),
-                  receipt: full,
+                  toolName: chunk.name,
+                  toolArgs: chunk.args,
+                  riskLevel: chunk.risk_level,
+                  approvalResolved: false,
                 },
               ]);
-            } else {
-              const status =
-                chunk.receipt != null && chunk.receipt.status === "failed" ? "\u2717" : "\u2713";
-              const toolInfo =
-                chunk.receipt != null
-                  ? ` (${chunk.receipt.tools_used.length} tool${chunk.receipt.tools_used.length !== 1 ? "s" : ""})`
-                  : "";
-              addSystemMessage(`Delegated to ${chunk.server} ${status}${toolInfo}`);
+              // Stream pauses here — will resume via handleApproval
+              return;
             }
-            break;
+
+            case "delegation_start":
+              addSystemMessage(`Delegating to ${chunk.server}...`);
+              break;
+
+            case "delegation_complete": {
+              // If a full signed receipt arrived, emerge it as a receipt
+              // artifact message — renders via <ReceiptArtifact>, verifies
+              // locally with Ed25519. Falls back to the short system line
+              // when only a receipt summary is present (motebit-tool
+              // delegations without signed chain).
+              if (chunk.full_receipt) {
+                const full = chunk.full_receipt;
+                setMessages((prev) => [
+                  ...prev,
+                  {
+                    id: crypto.randomUUID(),
+                    role: "receipt",
+                    content: "",
+                    timestamp: Date.now(),
+                    receipt: full,
+                  },
+                ]);
+              } else {
+                const status =
+                  chunk.receipt != null && chunk.receipt.status === "failed" ? "\u2717" : "\u2713";
+                const toolInfo =
+                  chunk.receipt != null
+                    ? ` (${chunk.receipt.tools_used.length} tool${chunk.receipt.tools_used.length !== 1 ? "s" : ""})`
+                    : "";
+                addSystemMessage(`Delegated to ${chunk.server} ${status}${toolInfo}`);
+              }
+              break;
+            }
+
+            case "injection_warning":
+              addSystemMessage(`Warning: injection patterns detected in ${chunk.tool_name}`);
+              break;
+
+            case "result":
+              // Final update
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: stripTags(assistantContent) || "...", timestamp: Date.now() }
+                    : m,
+                ),
+              );
+              break;
           }
-
-          case "injection_warning":
-            addSystemMessage(`Warning: injection patterns detected in ${chunk.tool_name}`);
-            break;
-
-          case "result":
-            // Final update
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, content: stripTags(assistantContent) || "...", timestamp: Date.now() }
-                  : m,
-              ),
-            );
-            break;
         }
-      }
 
-      // Ensure final content is set and speak via TTS if voice enabled
-      if (assistantContent) {
-        const finalText = stripTags(assistantContent);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, content: finalText, timestamp: Date.now() } : m,
-          ),
-        );
+        // Ensure final content is set and speak via TTS if voice enabled
+        if (assistantContent) {
+          const finalText = stripTags(assistantContent);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, content: finalText, timestamp: Date.now() } : m,
+            ),
+          );
 
-        // TTS — flush remaining streamed speech
-        flushTTS();
+          // TTS — flush remaining streamed speech
+          flushTTS();
+        }
+      } finally {
+        // Per-turn streaming-surface state must clear on EVERY
+        // termination path: success exit (after the for-await
+        // drains), the approval-request `return`, AND propagated
+        // errors. A stale narration would otherwise render against
+        // an unrelated state on a subsequent turn — same hazard
+        // `apps/web/src/ui/chat.ts` clears in its `finally`.
+        // Memory anchor: `feedback_streaming_state_cleanup_every_path`.
+        setTaskStepNarration(null);
       }
     },
-    [setMessages, addSystemMessage, pushTTSChunk, flushTTS],
+    [setMessages, addSystemMessage, pushTTSChunk, flushTTS, setTaskStepNarration],
   );
 
   const handleApproval = useCallback(

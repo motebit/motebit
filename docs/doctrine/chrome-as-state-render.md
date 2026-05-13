@@ -149,6 +149,21 @@ PR 2 polishes the affordance: explicit "take the wheel" button, gesture-based ha
 - Animation rhythms for state transitions. (Existing 0.3 Hz breathing applies; specifics emerge.)
 - Visual polish on the `take-the-wheel` affordance (button, gesture, cue choreography).
 
+## PR 2 scope (mobile, shipped 2026-05-13)
+
+PR 2 ships the **second surface dispatcher against the same matrix**, lifting the doctrine from one-instance-deep (web alone could be a special case) to a generalizable pattern.
+
+**Shape:**
+
+- Pure dispatcher in `apps/mobile/src/slab-chrome.ts` exports `dispatchSlabChrome(state, embodimentMode, opts) → SlabChromeCell | null`. The cell description is surface-agnostic — a discriminated union over the four `controlState` registers — and the React Native component (`apps/mobile/src/components/SlabChrome.tsx`) maps each variant to a subtree.
+- Splitting pure description from surface render makes the doctrine's "each register is an information shape, not a UI component" line legible in code: the dispatcher's return type IS the information shape, and the render is downstream. A future spatial renderer would consume the same `SlabChromeCell` shape without rewriting the dispatcher.
+- `task_step_narration` chunk handling lands in `apps/mobile/src/use-chat-stream.ts` (alongside web's `apps/web/src/ui/chat.ts`): set on chunk arrival, cleared in a `try/finally` so a stale narration never outlives the turn (every-termination-path discipline per [`feedback_streaming_state_cleanup_every_path`]).
+- `/wheel` and `/back` slash commands ship in `apps/mobile/src/slash-commands.ts` as the surface-deterministic affordance counterparts; the URL-chip and "motebit waiting" chip in the dispatcher's rendered cells dispatch the same slash commands.
+
+**Structural lock:** `check-slab-chrome-coverage` (drift-defense #94) asserts each surface in the `SLAB_SURFACES` registry handles every `ControlState` and references every deferred embodiment in its dispatcher source. Adding a new surface (desktop, spatial) extends the registry and the gate forces matrix completeness in the new dispatcher.
+
+**Mobile-as-renderer:** mobile has no live cobrowse session yet (cloud-browser dispatcher remains web-only at the consumer layer), so the `user × virtual_browser` / `handoff_pending × virtual_browser` / `paused × virtual_browser` cells are present in the dispatcher but inert at runtime today. The wire is set; the moment a mobile cloud-browser surface lands, the chrome's cells route through the existing `CoBrowseControlMachine` capability without further dispatcher work.
+
 ## Spatial-as-endgame validation
 
 The registers are correct **only if they translate to surfaces without chrome**.

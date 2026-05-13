@@ -619,6 +619,30 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
     case "propose":
       addSystemMessage("Collaborative proposals use CLI: motebit propose <agent-ids> <goal>");
       break;
+    case "wheel":
+    case "back": {
+      // Cobrowse-as-mode surfaces — mirror of `/wheel` and `/back` on
+      // web (apps/web/src/ui/slash-commands.ts). The web dispatcher
+      // routes through a CustomEvent → `machine.yieldControl("user")` /
+      // `machine.reclaimControl()`; mobile would call the same
+      // `CoBrowseControlMachine` capability directly the moment the
+      // runtime exposes a per-session machine to MobileApp. Today
+      // mobile has no live browser session (cloud-browser dispatcher
+      // is web-only at the consumer layer), so the affordance
+      // surfaces but recedes calmly. The slash + chip-tap remain
+      // registered so the chrome's deterministic affordance contract
+      // (`surface-determinism.md`) is unbroken — the surface invokes
+      // the typed slash dispatcher, not a constructed prompt; the
+      // dispatcher's effect is a function of the available wiring,
+      // not a heuristic. Doctrine: `chrome-as-state-render.md` §
+      // "Take-the-wheel affordance in PR 1" + "PR 2 scope (mobile)."
+      addSystemMessage(
+        command === "wheel"
+          ? "No active browser session — /wheel will hand control to user when a cobrowse session is live."
+          : "No active browser session — /back will hand control back to motebit when a cobrowse session is live.",
+      );
+      break;
+    }
     case "sensitivity": {
       // User-facing entry point for the runtime sensitivity gate.
       // Mirrors apps/cli + apps/desktop semantics: /sensitivity with
@@ -679,6 +703,8 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
           "/propose — propose collab plan (CLI)\n" +
           "/withdraw — request withdrawal (CLI)\n" +
           "/sensitivity [<level>] — show or set session sensitivity\n" +
+          "/wheel — hand cobrowse control to user (when session active)\n" +
+          "/back — hand cobrowse control back to motebit (when session active)\n" +
           "/help — show this message",
       );
       break;

@@ -750,3 +750,30 @@ describe("runSlashCommand CLI stubs and help", () => {
     expect(deps._messages[0]).toContain("Unknown command");
   });
 });
+
+describe("runSlashCommand cobrowse-as-mode (/wheel, /back)", () => {
+  // Surface affordances per `chrome-as-state-render.md` §
+  // "Take-the-wheel affordance in PR 1." Mobile registers the slash
+  // dispatcher entries so the chrome's chip-tap and the typed
+  // command both route through `runSlashCommand` — surface-
+  // determinism preserved (no constructed prompts, no AI-loop
+  // routing).
+  it("/wheel emits a system line that names the user-direction transition", () => {
+    const deps = makeDeps();
+    runSlashCommand("wheel", "", deps);
+    expect(deps._messages[0]).toContain("hand control to user");
+  });
+
+  it("/back emits a system line that names the motebit-direction transition", () => {
+    const deps = makeDeps();
+    runSlashCommand("back", "", deps);
+    expect(deps._messages[0]).toContain("hand control back to motebit");
+  });
+
+  it("/help advertises /wheel and /back so the affordance is discoverable", () => {
+    const deps = makeDeps();
+    runSlashCommand("help", "", deps);
+    expect(deps._messages[0]).toContain("/wheel");
+    expect(deps._messages[0]).toContain("/back");
+  });
+});
