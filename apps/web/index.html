@@ -81,6 +81,15 @@
        * `docs/doctrine/liquescentia-as-substrate.md` (the substrate
        * is THE medium, propagates uniformly across surfaces).
        *
+       * Sibling file: `apps/desktop/index.html` — desktop and web
+       * share the same theme-token vocabulary because they share
+       * the same UX shape (Tauri wraps the same panel architecture).
+       * When the material registers change here, mirror the change
+       * there (and vice versa). Drift between the two is doctrinally
+       * a substrate violation. If theme tokens drift again under
+       * future migrations, that's the moment a `check-theme-token-
+       * coherence` drift gate earns its slot.
+       *
        * Three alpha registers correspond to three doctrinal categories:
        *
        *   - `--bg-glass`         ~0.06-0.28 — chrome-strip / act register
@@ -206,14 +215,18 @@
 
       /* === Accessibility: prefers-reduced-transparency ===
        *
-       * macOS / iOS / Android all expose "reduce transparency" as a
-       * system-level accessibility preference. When the OS reports it,
-       * restore higher panel alphas and drop the backdrop-filter blur
-       * so panels read as opaque surfaces. This is NOT a per-app
-       * toggle (calm software, single visual language); it's WCAG-
-       * grade respect for the user's existing OS-level intent.
-       * Identical pattern to `prefers-reduced-motion` killing the
-       * creature's 0.3 Hz breathing when the OS asks.
+       * macOS / iOS / Android / Windows all expose "reduce
+       * transparency" as a system-level accessibility preference.
+       * When the OS reports it, restore higher panel alphas and
+       * drop the backdrop-filter blur so panels read as opaque
+       * surfaces. NOT a per-app toggle (calm software, single
+       * visual language); WCAG-grade respect for the user's
+       * existing OS-level intent. Identical pattern to
+       * `prefers-reduced-motion` killing the creature's 0.3 Hz
+       * breathing when the OS asks.
+       *
+       * Mirror of the same block in `apps/desktop/index.html` —
+       * keep the two in sync when either changes.
        *
        * Affects: --bg-glass-strong (the 7 panels + dialogs),
        * --bg-primary (settings modal + provider tab), and the
