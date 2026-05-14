@@ -3000,6 +3000,32 @@
       #goal-create-btn:hover {
         background: var(--accent-hover);
       }
+      /* Receipt-summary row — collapsed-view per-fire audit trail per
+         docs/doctrine/goal-results.md §"Phase-3 deferral close". Same
+         visual shape as web's `.goal-card-receipt`: 10px ghost-color
+         monospace, "ran 5m ago" verb pair, dot-separator "signed"
+         chip in the accent-soft color when a manifest was minted. */
+      .goal-item-receipt {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 6px;
+        font-size: 10px;
+        color: var(--text-muted);
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      .goal-item-receipt.errored {
+        color: #f59e0b;
+      }
+      .goal-item-receipt-signed::before {
+        content: "·";
+        margin-right: 6px;
+        color: var(--text-faint);
+      }
+      .goal-item-receipt-signed {
+        color: var(--accent-soft, #a78bfa);
+      }
+
       /* Budget envelope render — runtime-register commitment cap. v1
          axis = tokens; the bar visualizes (spent / cap) at axis-native
          scale, with the headline label showing tokens (not cost) per

@@ -47,6 +47,12 @@ describe("tauri-migrations — DESKTOP_MIGRATIONS registry", () => {
     expect(v2!.statements).toContain("ALTER TABLE goals ADD COLUMN budget_tokens INTEGER");
     expect(v2!.statements).toContain("ALTER TABLE goal_outcomes ADD COLUMN tokens_used INTEGER");
   });
+
+  it("declares the v4 goal-results Phase-3 deferral close migration (signed_manifest)", () => {
+    const v4 = DESKTOP_MIGRATIONS.find((m) => m.version === 4);
+    expect(v4).toBeDefined();
+    expect(v4!.statements).toContain("ALTER TABLE goal_outcomes ADD COLUMN signed_manifest TEXT");
+  });
 });
 
 describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => {
@@ -116,6 +122,9 @@ describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => 
       name: string;
     }>;
     expect(outcomeCols.some((c) => c.name === "tokens_used")).toBe(true);
+    // v3 + v4 columns — artifact preservation + Phase-3 deferral close
+    expect(outcomeCols.some((c) => c.name === "response_full")).toBe(true);
+    expect(outcomeCols.some((c) => c.name === "signed_manifest")).toBe(true);
 
     const version = db.prepare("PRAGMA user_version").get() as { user_version: number };
     expect(version.user_version).toBe(latest);

@@ -106,6 +106,15 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
             ? g.last_outcome_id
             : null;
         const lastTurnId = lastOutcomeId != null ? slabTurnIdForRun(lastOutcomeId) : null;
+        // Phase-3 deferral close: the Rust projection emits
+        // `last_manifest_signed` as a boolean derived from the latest
+        // outcome's `signed_manifest IS NOT NULL` (only for completed
+        // outcomes; failed → null via the CASE projection). The
+        // panels runner's `ScheduledGoal.last_manifest_signed`
+        // surfaces the same shape as web so the receipt-summary row's
+        // "signed" indicator renders identically across surfaces.
+        const lastManifestSigned =
+          typeof g.last_manifest_signed === "boolean" ? g.last_manifest_signed : null;
         return {
           goal_id: String(g.goal_id),
           prompt: ipcString(g.prompt),
@@ -120,6 +129,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
           last_response_preview: lastResponsePreview,
           last_response_full: lastResponseFull,
           last_turn_id: lastTurnId,
+          last_manifest_signed: lastManifestSigned,
         };
       });
     },
@@ -489,6 +499,42 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       }
 
       item.appendChild(metaDiv);
+
+      // Receipt-summary row — collapsed-view per-fire audit trail per
+      // docs/doctrine/goal-results.md §"Phase-3 deferral close". Same
+      // wire shape as web's `.goal-card-receipt` block so the
+      // "signed" indicator reads identically across surfaces.
+      // Renders when the goal has fired at least once:
+      //   "ran 5m ago · signed"  ← successful fire, manifest minted
+      //   "ran 5m ago"           ← successful fire, no manifest
+      //   "failed 5m ago"        ← last fire errored (amber)
+      if (goal.last_run_at != null) {
+        const receipt = document.createElement("div");
+        receipt.className = "goal-item-receipt";
+        const seconds = Math.floor((Date.now() - goal.last_run_at) / 1000);
+        const ago =
+          seconds < 60
+            ? "just now"
+            : seconds < 3600
+              ? `${Math.floor(seconds / 60)}m ago`
+              : seconds < 86400
+                ? `${Math.floor(seconds / 3600)}h ago`
+                : `${Math.floor(seconds / 86400)}d ago`;
+        const failed = status === "failed" || goal.last_error != null;
+        if (failed) receipt.classList.add("errored");
+        const statusSpan = document.createElement("span");
+        statusSpan.textContent = `${failed ? "failed" : "ran"} ${ago}`;
+        receipt.appendChild(statusSpan);
+        if (goal.last_manifest_signed === true) {
+          const signedMark = document.createElement("span");
+          signedMark.className = "goal-item-receipt-signed";
+          signedMark.textContent = "signed";
+          signedMark.title =
+            "Result wrapped as a signed ContentArtifactManifest — independently verifiable via motebit-verify";
+          receipt.appendChild(signedMark);
+        }
+        item.appendChild(receipt);
+      }
 
       // Budget envelope — runtime-register's commitment cap. Axis-native
       // unit ("12k / 50k tokens") is the headline; cost translation is

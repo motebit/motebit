@@ -79,6 +79,28 @@ export const DESKTOP_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE goal_outcomes ADD COLUMN response_full TEXT",
     ],
   },
+  {
+    version: 4,
+    description: "goal_outcomes.signed_manifest — persisted ContentArtifactManifest per goal fire",
+    statements: [
+      // Closes the Phase-3 deferral named in
+      // docs/doctrine/goal-results.md §"Deferred from Phase 3":
+      // desktop's scheduler now wraps every successful fire's
+      // `response_full` as a signed `ContentArtifactManifest`
+      // (suite-dispatched via `@motebit/crypto`, currently
+      // `motebit-jcs-ed25519-hex-v1`). The manifest JSON lands here
+      // alongside the artifact bytes so the receipt-category surface
+      // — the goal card's new collapsed-view receipt-summary row —
+      // can render the "signed" indicator on the same wire shape as
+      // web. NULL when identity wasn't loaded at fire-time / content
+      // was empty / signer threw (calm-software degradation; no
+      // placeholder signatures). The SQL projection in
+      // `list_goals_with_meta` derives `last_manifest_signed` as
+      // `(latest_outcome.signed_manifest IS NOT NULL)`. Sibling entry:
+      // mobile's expo-sqlite-migrations v24 lands the same column.
+      "ALTER TABLE goal_outcomes ADD COLUMN signed_manifest TEXT",
+    ],
+  },
 ];
 
 interface UserVersionRow {

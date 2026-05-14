@@ -364,9 +364,20 @@ export class GoalScheduler {
         params: [now, goalId],
       });
 
+      // Same signing path as the cadence-driven INSERT below: sign
+      // the accumulated artifact bytes, persist the manifest JSON
+      // alongside the artifact. Approval-resume IS a completed turn,
+      // and Phase-3-deferral-close says every completed goal-fire's
+      // artifact ships with a `ContentArtifactManifest`.
+      const signedManifestJson = await this.signArtifactManifestJson(
+        accumulated,
+        goalId,
+        outcomeId,
+      );
+
       await invoke<number>("db_execute", {
-        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, response_full)
-              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?)`,
+        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, response_full, signed_manifest)
+              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?, ?)`,
         params: [
           outcomeId,
           goalId,
@@ -378,6 +389,7 @@ export class GoalScheduler {
           // path. Approval-resume IS the goal's completed turn — the
           // accumulated text is the full artifact.
           accumulated.length > 0 ? accumulated : null,
+          signedManifestJson,
         ],
       });
 
@@ -483,6 +495,34 @@ export class GoalScheduler {
   }
 
   /**
+   * Sign a goal-fire's artifact bytes as a `ContentArtifactManifest`
+   * (JCS-canonical + suite-dispatched signing via `@motebit/crypto`)
+   * and return the JSON for persistence into
+   * `goal_outcomes.signed_manifest`. Returns `null` when content is
+   * empty, identity isn't loaded, or the signer throws — calm-software
+   * degradation per `docs/doctrine/goal-results.md` §"Phase-3 deferral
+   * close" (no placeholder signatures, ever). The SQL projection in
+   * `list_goals_with_meta` reads `signed_manifest IS NOT NULL` to
+   * surface the receipt-summary row's "signed" indicator; null here
+   * cleanly maps to the row rendering without the chip.
+   */
+  private async signArtifactManifestJson(
+    content: string,
+    goalId: string,
+    runId: string,
+  ): Promise<string | null> {
+    if (content.length === 0) return null;
+    const runtime = this.deps.getRuntime();
+    if (!runtime) return null;
+    try {
+      const manifest = await runtime.signGoalArtifact(content, { goalId, runId });
+      return manifest != null ? JSON.stringify(manifest) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Immediately run a single active goal, bypassing cadence. Invoked by
    * the Goals-panel "Run now" affordance. Silently skips if another
    * goal is executing or the runtime is mid-turn (same semantics as the
@@ -568,9 +608,23 @@ export class GoalScheduler {
         params: [now, goal.goal_id],
       });
 
+      // Sign the artifact bytes per the Phase-3 deferral close
+      // (docs/doctrine/goal-results.md §"Phase-3 deferral close"):
+      // every successful fire's `response_full` lands as a signed
+      // `ContentArtifactManifest` next to the artifact itself.
+      // `signArtifactManifestJson` returns `null` calm-software-
+      // gracefully on every degradation path (empty / no identity /
+      // signer throws); the SQL projection reads NULL as "no
+      // indicator on the card."
+      const signedManifestJson = await this.signArtifactManifestJson(
+        result.responseText,
+        goal.goal_id,
+        runId,
+      );
+
       await invoke<number>("db_execute", {
-        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full)
-              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?, ?)`,
+        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest)
+              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?, ?, ?)`,
         params: [
           runId,
           goal.goal_id,
@@ -583,9 +637,10 @@ export class GoalScheduler {
           // `docs/doctrine/goal-results.md` §"The three categories".
           // `summary` (500-char) feeds the executions-panel preview;
           // `response_full` is the artifact the slab already rendered
-          // via `motebit-runtime.ts` `restItem` and the Phase-3
-          // sibling commit signs as `ContentArtifactManifest`.
+          // via `motebit-runtime.ts` `restItem`; `signed_manifest`
+          // is the cryptographic attestation on the same row.
           result.responseText.length > 0 ? result.responseText : null,
+          signedManifestJson,
         ],
       });
 

@@ -200,7 +200,21 @@ CREATE TABLE IF NOT EXISTS goal_outcomes (
   -- `ContentArtifactManifest` (`@motebit/crypto::signContentArtifact`)
   -- at fire-time when motebit identity is loaded. tauri-migrations v3
   -- adds the column to existing installs.
-  response_full TEXT
+  response_full TEXT,
+  -- Signed `ContentArtifactManifest` JSON for the artifact bytes in
+  -- `response_full`. Minted at fire-time by the desktop scheduler via
+  -- `@motebit/runtime::signGoalArtifact(content, { goalId, runId })`
+  -- (suite-dispatched through `@motebit/crypto`, currently
+  -- `motebit-jcs-ed25519-hex-v1`). NULL when identity wasn't loaded
+  -- at fire-time, when content was empty, or when the signer threw —
+  -- never silently signed with a placeholder. The SQL projection in
+  -- `list_goals_with_meta` derives `last_manifest_signed` as
+  -- `(latest_outcome.signed_manifest IS NOT NULL)` so the panels
+  -- runner's `ScheduledGoal.last_manifest_signed` field is populated
+  -- on the same wire shape as web (Phase-3-deferral close per
+  -- docs/doctrine/goal-results.md). tauri-migrations v4 adds the
+  -- column to existing installs.
+  signed_manifest TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
 
@@ -761,7 +775,11 @@ fn goals_list(state: State<AppState>, motebit_id: String) -> Result<Vec<JsonValu
                        WHERE goal_id = g.goal_id ORDER BY ran_at DESC LIMIT 1) AS latest_response_full, \
                     (SELECT CASE WHEN status = 'completed' THEN outcome_id ELSE NULL END \
                        FROM goal_outcomes WHERE goal_id = g.goal_id \
-                       ORDER BY ran_at DESC LIMIT 1) AS latest_outcome_id \
+                       ORDER BY ran_at DESC LIMIT 1) AS latest_outcome_id, \
+                    (SELECT CASE WHEN status = 'completed' AND signed_manifest IS NOT NULL \
+                                 THEN 1 ELSE 0 END \
+                       FROM goal_outcomes WHERE goal_id = g.goal_id \
+                       ORDER BY ran_at DESC LIMIT 1) AS latest_manifest_signed \
              FROM goals g \
              LEFT JOIN goal_outcomes o ON o.goal_id = g.goal_id \
              WHERE g.motebit_id = ? \
@@ -827,6 +845,24 @@ fn goals_list(state: State<AppState>, motebit_id: String) -> Result<Vec<JsonValu
                 "last_outcome_id".into(),
                 match latest_outcome_id {
                     Some(v) => JsonValue::String(v),
+                    None => JsonValue::Null,
+                },
+            );
+            // Latest outcome's `signed_manifest IS NOT NULL`,
+            // projected as a 0/1 integer by the CASE expression above
+            // and surfaced to the renderer as `last_manifest_signed`
+            // (boolean) for the receipt-summary row's "signed" chip.
+            // NULL on goals with no completed outcomes (renderer omits
+            // the indicator); 1 on completed + signed; 0 on completed
+            // + signing-skipped (identity not loaded / empty / threw).
+            // Mirrors web's `last_manifest_signed` semantic exactly so
+            // the cross-surface receipt-summary row reads identically.
+            let latest_manifest_signed: Option<i64> = row.get(13)?;
+            obj.insert(
+                "last_manifest_signed".into(),
+                match latest_manifest_signed {
+                    Some(1) => JsonValue::Bool(true),
+                    Some(_) => JsonValue::Bool(false),
                     None => JsonValue::Null,
                 },
             );
