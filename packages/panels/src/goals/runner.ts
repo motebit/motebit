@@ -296,6 +296,13 @@ export function createGoalsRunner(
     }
     if (result.outcome === "fired") {
       patch.last_response_preview = result.responsePreview ?? null;
+      // Preserve the full artifact content per
+      // `docs/doctrine/goal-results.md` §"The three categories" Phase 2.
+      // Adapters that don't yet carry the full content (legacy, plan-
+      // mode pre-token-attribution, etc.) omit `responseFull` —
+      // `?? null` keeps the field present-but-null so renderers can
+      // fall back to `last_response_preview` cleanly.
+      patch.last_response_full = result.responseFull ?? null;
       patch.last_error = null;
       if (goal.mode === "once") {
         patch.status = "completed";
@@ -310,8 +317,11 @@ export function createGoalsRunner(
       // when both are set; clearing the preview makes the error the
       // most-recent visible signal. A subsequent successful fire
       // repopulates `last_response_preview` and clears `last_error`
-      // above, so the toggle is symmetric.
+      // above, so the toggle is symmetric. Same clear-on-error
+      // semantic applies to `last_response_full` (the artifact) so
+      // the most-recent visible signal is consistently the error.
       patch.last_response_preview = null;
+      patch.last_response_full = null;
       if (goal.mode === "once") {
         patch.status = "failed";
       } else {

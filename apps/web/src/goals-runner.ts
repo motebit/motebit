@@ -114,6 +114,14 @@ export function createWebGoalsRunner(app: WebApp): GoalsRunner {
       // fire and the goal pauses with status="budget_exhausted" when
       // the cap is crossed (doctrine: panel-temporal-registers.md
       // §"Bounded commitment is multi-dimensional").
+      //
+      // Phase 2 of the goal-results arc: the adapter returns BOTH
+      // `responsePreview` (160-char card-meta truncation) AND
+      // `responseFull` (untruncated artifact content) so the runner
+      // can preserve the artifact per `docs/doctrine/goal-results.md`
+      // §"The three categories". Phase 3 will wrap `responseFull` as
+      // a signed `ContentArtifactManifest` and route to the slab as
+      // a mind-mode item.
       let accumulated = "";
       let tokensUsed: number | undefined;
       try {
@@ -130,10 +138,12 @@ export function createWebGoalsRunner(app: WebApp): GoalsRunner {
         const msg = err instanceof Error ? err.message : String(err);
         return { outcome: "error", error: msg, ...(tokensUsed != null ? { tokensUsed } : {}) };
       }
-      const responsePreview = accumulated.trim().slice(0, 160) || null;
+      const trimmed = accumulated.trim();
+      const responsePreview = trimmed.slice(0, 160) || null;
       return {
         outcome: "fired",
         responsePreview,
+        ...(trimmed.length > 0 ? { responseFull: trimmed } : {}),
         ...(tokensUsed != null ? { tokensUsed } : {}),
       };
     },

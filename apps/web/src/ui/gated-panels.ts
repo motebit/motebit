@@ -446,10 +446,35 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       const expandInner = document.createElement("div");
       expandInner.className = "goal-card-expand-inner";
 
-      if (goal.last_response_preview != null && goal.last_response_preview !== "") {
+      // Per `docs/doctrine/goal-results.md` §"The three categories":
+      // prefer `last_response_full` (the artifact) when present, fall
+      // back to `last_response_preview` (the 160-char card-meta
+      // truncation) when only the preview is available. The card
+      // detail shows a longer preview — first paragraph or ~500 chars
+      // — NOT the full content (that's the slab's job in Phase 3).
+      // Trim at a sentence boundary if available to avoid mid-word cuts.
+      const fullArtifact = goal.last_response_full;
+      const shortPreview = goal.last_response_preview;
+      if (fullArtifact != null && fullArtifact !== "") {
         const preview = document.createElement("div");
         preview.className = "goal-card-expand-preview";
-        preview.textContent = goal.last_response_preview;
+        const trimmed = fullArtifact.trim();
+        // Show first paragraph (up to first double-newline) or first
+        // 500 chars, whichever is shorter. Suffix an ellipsis when
+        // the artifact has more content the slab will eventually show.
+        const paragraphEnd = trimmed.indexOf("\n\n");
+        const sliceEnd =
+          paragraphEnd > 0 && paragraphEnd < 500 ? paragraphEnd : Math.min(500, trimmed.length);
+        const sliced = trimmed.slice(0, sliceEnd);
+        const hasMore = sliced.length < trimmed.length;
+        preview.textContent = hasMore ? `${sliced}…` : sliced;
+        expandInner.appendChild(preview);
+      } else if (shortPreview != null && shortPreview !== "") {
+        // Backward-compat path: adapter didn't carry `responseFull`.
+        // Surface the 160-char preview as before.
+        const preview = document.createElement("div");
+        preview.className = "goal-card-expand-preview";
+        preview.textContent = shortPreview;
         expandInner.appendChild(preview);
       } else if (goal.last_error != null && goal.last_error !== "") {
         const errPreview = document.createElement("div");

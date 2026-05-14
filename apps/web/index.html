@@ -4043,12 +4043,18 @@
         flex-direction: column;
         gap: 6px;
       }
+      /* Card-detail preview: longer than the 160-char card-meta
+         truncation now that `last_response_full` is preserved (Phase
+         2 of the goal-results arc per docs/doctrine/goal-results.md).
+         Caps at ~12em (~10 lines) to keep cards visually scannable;
+         the full artifact lives on the slab in Phase 3, not here. */
       .goal-card-expand-preview {
         color: var(--text-secondary);
         line-height: 1.4;
-        max-height: 4em;
+        max-height: 12em;
         overflow: hidden;
         text-overflow: ellipsis;
+        white-space: pre-wrap;
       }
       .goal-card-expand-meta {
         display: flex;

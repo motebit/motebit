@@ -75,8 +75,22 @@ export interface ScheduledGoal {
    */
   next_run_at?: number;
 
-  /** Preview of the most recent successful response (runner-populated). */
+  /** Preview of the most recent successful response (runner-populated).
+   *  Truncated to ~160 chars for card-meta display. Renderers prefer
+   *  `last_response_full` when present (longer preview / slab handoff
+   *  per `docs/doctrine/goal-results.md` §"The three categories"). */
   last_response_preview?: string | null;
+
+  /** Full result content from the most recent successful fire — the
+   *  **artifact** per `docs/doctrine/goal-results.md`. Populated when
+   *  the adapter's fire() returns `responseFull`. Today rendered as a
+   *  longer in-card preview (~500 chars / first paragraph); future
+   *  (Phase 3 of the goal-results arc) wraps as a signed
+   *  `ContentArtifactManifest` per `docs/doctrine/receipts-unified.md`
+   *  and routes to the slab as a mind-mode slab item. Cleared on
+   *  error fires the same way `last_response_preview` is, so the
+   *  surfaced "latest outcome" stays honest. */
+  last_response_full?: string | null;
 
   /** Error message from the most recent failed run (runner-populated). */
   last_error?: string | null;
@@ -148,6 +162,19 @@ export interface GoalRunRecord {
  * multi-dimensional" and `ScheduledGoal.spent_tokens`.
  */
 export type GoalFireResult =
-  | { outcome: "fired"; responsePreview?: string | null; tokensUsed?: number }
+  | {
+      outcome: "fired";
+      responsePreview?: string | null;
+      /** Full result content — the artifact. Untruncated text the
+       *  adapter accumulated during the fire. Runner stores as
+       *  `goal.last_response_full`. See `docs/doctrine/goal-results.md`
+       *  §"The three categories" for the architectural intent
+       *  (Phase 2 content preservation; Phase 3 routes to the slab
+       *  as a `mind`-mode slab item with `ContentArtifactManifest`
+       *  signing). Omit when the adapter doesn't (yet) carry the
+       *  full content. */
+      responseFull?: string;
+      tokensUsed?: number;
+    }
   | { outcome: "skipped" }
   | { outcome: "error"; error: string; tokensUsed?: number };

@@ -207,6 +207,76 @@ describe("createGoalsRunner — runNow + fire reconciliation", () => {
     expect(after?.status).toBe("active");
   });
 
+  it("fired with responseFull preserves the full artifact on the goal record", async () => {
+    // Phase 2 of the goal-results arc: artifacts (full result
+    // content) are preserved alongside the truncated preview. The
+    // doctrine (`docs/doctrine/goal-results.md`) distinguishes
+    // commitment / receipt / artifact as three categories; this
+    // assertion locks the artifact's storage shape.
+    const full = "A very long synthesized result that motebit produced for the goal. ".repeat(20);
+    const { adapter } = makeAdapter(async () => ({
+      outcome: "fired",
+      responsePreview: full.slice(0, 160),
+      responseFull: full,
+    }));
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+    await runner.runNow("g1");
+    const goal = runner.getState().goals[0];
+    // Both fields populated; renderers prefer `_full` for longer
+    // previews and the eventual slab handoff (Phase 3).
+    expect(goal?.last_response_preview).toBe(full.slice(0, 160));
+    expect(goal?.last_response_full).toBe(full);
+  });
+
+  it("fired without responseFull stores null (adapters can opt in incrementally)", async () => {
+    // Backward-compat: adapters that don't carry the full content
+    // (legacy / plan-mode pre-token-attribution) omit `responseFull`.
+    // The runner stores null so renderers can fall back to
+    // `last_response_preview` cleanly.
+    const { adapter } = makeAdapter(async () => ({
+      outcome: "fired",
+      responsePreview: "preview only",
+    }));
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+    await runner.runNow("g1");
+    const goal = runner.getState().goals[0];
+    expect(goal?.last_response_preview).toBe("preview only");
+    expect(goal?.last_response_full).toBeNull();
+  });
+
+  it("error clears last_response_full symmetrically with last_response_preview", async () => {
+    // The latest-outcome semantic applies to the artifact too — a
+    // stale prior-success artifact would be just as misleading as a
+    // stale prior-success preview. Both fields clear on error so
+    // the renderer's expanded card surfaces the error consistently.
+    let nextResult: GoalFireResult = {
+      outcome: "fired",
+      responsePreview: "preview",
+      responseFull: "full artifact content",
+    };
+    const adapter = {
+      loadGoals: (): ScheduledGoal[] => [],
+      saveGoals: (): void => {},
+      loadRuns: (): GoalRunRecord[] => [],
+      saveRuns: (): void => {},
+      fire: async (): Promise<GoalFireResult> => nextResult,
+    };
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.last_response_full).toBe("full artifact content");
+
+    nextResult = { outcome: "error", error: "boom" };
+    await runner.runNow("g1");
+    const after = runner.getState().goals[0];
+    expect(after?.last_error).toBe("boom");
+    expect(after?.last_response_preview).toBeNull();
+    expect(after?.last_response_full).toBeNull();
+  });
+
   it("skipped: next_run_at unchanged (retried on next tick)", async () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "skipped" }));
     let n = 100;
