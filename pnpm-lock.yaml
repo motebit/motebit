@@ -1587,6 +1587,9 @@ importers:
       '@motebit/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../sdk
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

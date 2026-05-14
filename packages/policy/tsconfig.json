@@ -8,6 +8,9 @@
   "references": [
     {
       "path": "../protocol"
+    },
+    {
+      "path": "../sdk"
     }
   ]
 }

@@ -19,6 +19,13 @@ export type { MemoryGovernanceConfig, MemoryDecision } from "./memory-governance
 export { computeReputationScore } from "./reputation.js";
 export { dispatchRouting, applyBalanceFilter, REFERENCE_ROUTING_POLICY } from "./auto-router.js";
 export {
+  BYOK_MODEL_CATALOG,
+  buildByokCatalog,
+  describeByokRoutingDecision,
+  dispatchByokRouting,
+  extractTaskShape,
+} from "./byok-router.js";
+export {
   appendAuditEntry,
   verifyAuditChain,
   getChainHead,

@@ -266,7 +266,9 @@ import {
   signContentArtifact,
   type ContentArtifactManifest,
 } from "@motebit/crypto";
-import { GOAL_RESULT_ARTIFACT } from "@motebit/protocol";
+// `GOAL_RESULT_ARTIFACT` is re-exported via `@motebit/sdk` per the sdk
+// CLAUDE.md re-export rule — every protocol type accessible through sdk.
+import { GOAL_RESULT_ARTIFACT } from "@motebit/sdk";
 import { buildMerkleTree, canonicalSha256 } from "@motebit/encryption";
 import type { ConsolidationAnchor, ConsolidationReceipt, ChainAnchorSubmitter } from "@motebit/sdk";
 import type { AgentTrustDeps } from "./agent-trust.js";
