@@ -782,9 +782,9 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
     for (const agent of state.known) {
       const item = document.createElement("div");
-      // sov-list-card carries glass material + lift; agent-item is
+      // panel-list-card carries glass material + lift; agent-item is
       // preserved for trust-badge / hardware-attestation selector hooks.
-      item.className = "sov-list-card agent-item";
+      item.className = "panel-list-card agent-item";
 
       const idDiv = document.createElement("div");
       idDiv.className = "agent-item-id";
@@ -870,9 +870,9 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
     for (const agent of state.discovered) {
       const item = document.createElement("div");
-      // sov-list-card carries glass material + lift; agent-item is
+      // panel-list-card carries glass material + lift; agent-item is
       // preserved for trust-badge / hardware-attestation selector hooks.
-      item.className = "sov-list-card agent-item";
+      item.className = "panel-list-card agent-item";
 
       const idDiv = document.createElement("div");
       idDiv.className = "agent-item-id";

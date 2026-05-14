@@ -375,7 +375,7 @@ function renderBudget(
 
   if (sovereignAddress) {
     const fundSovBtn = document.createElement("button");
-    fundSovBtn.className = "sov-action-pill";
+    fundSovBtn.className = "panel-action-pill";
     fundSovBtn.textContent = "Fund";
     fundSovBtn.addEventListener("click", () => {
       const mid = ctx.app.motebitId;
@@ -459,7 +459,7 @@ function renderBudget(
     // Only render the affordance when balance data exists; pre-data
     // there's nothing meaningful to top up.
     const fundOpLink = document.createElement("button");
-    fundOpLink.className = "sov-action-ghost";
+    fundOpLink.className = "panel-action-ghost";
     fundOpLink.textContent = "Top up";
     fundOpLink.addEventListener("click", () => {
       ctx.showToast("Open the Subscription panel to top up");
@@ -600,7 +600,7 @@ function renderBudget(
   // calm row, not absent. The panel reads "inhabited but empty" instead
   // of "incomplete render."
   const activityHeader = document.createElement("div");
-  activityHeader.className = "sov-section-header";
+  activityHeader.className = "panel-section-header";
   activityHeader.textContent = "Activity";
   budgetSummary.appendChild(activityHeader);
 
@@ -635,7 +635,7 @@ function renderBudget(
     // shape as slab-home.ts's "Anywhere." watermark — the affordance
     // is the antecedent, not the absence.
     const activityEmpty = document.createElement("div");
-    activityEmpty.className = "sov-empty-row";
+    activityEmpty.className = "panel-empty-row";
     activityEmpty.textContent = "Recent transactions appear here";
     budgetSummary.appendChild(activityEmpty);
   }
@@ -644,7 +644,7 @@ function renderBudget(
   // exists, show the metric pair + per-allocation rows. When absent,
   // show a calm dashed empty register so the slab reads inhabited.
   const allocSectionHeader = document.createElement("div");
-  allocSectionHeader.className = "sov-section-header";
+  allocSectionHeader.className = "panel-section-header";
   allocSectionHeader.textContent = "Allocations";
   budgetSummary.appendChild(allocSectionHeader);
 
@@ -686,13 +686,13 @@ function renderBudget(
       }
     } else {
       const allocEmpty = document.createElement("div");
-      allocEmpty.className = "sov-empty-row";
+      allocEmpty.className = "panel-empty-row";
       allocEmpty.textContent = "Allocations appear when budgets are locked";
       budgetSummary.appendChild(allocEmpty);
     }
   } else {
     const allocEmpty = document.createElement("div");
-    allocEmpty.className = "sov-empty-row";
+    allocEmpty.className = "panel-empty-row";
     allocEmpty.textContent = "Allocations appear when budgets are locked";
     budgetSummary.appendChild(allocEmpty);
   }
@@ -779,13 +779,13 @@ function renderSuccession(
   // Key rotations section — always rendered, holds either the timeline
   // (when rotations exist) or a forward-framed empty register.
   const rotationsHeader = document.createElement("div");
-  rotationsHeader.className = "sov-section-header";
+  rotationsHeader.className = "panel-section-header";
   rotationsHeader.textContent = "Key rotations";
   successionContent.appendChild(rotationsHeader);
 
   if (data.chain.length === 0) {
     const empty = document.createElement("div");
-    empty.className = "sov-empty-row";
+    empty.className = "panel-empty-row";
     empty.textContent = "Rotations appear here as the identity evolves";
     successionContent.appendChild(empty);
     return;

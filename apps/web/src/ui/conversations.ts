@@ -51,7 +51,7 @@ export function initConversations(
 
     if (conversations.length === 0) {
       const empty = document.createElement("div");
-      empty.className = "sov-empty-row";
+      empty.className = "panel-empty-row";
       empty.textContent = "Conversations appear here";
       convList.appendChild(empty);
       return;
@@ -61,11 +61,11 @@ export function initConversations(
 
     for (const entry of conversations) {
       const item = document.createElement("div");
-      // sov-list-card carries the glass material + hover lift + active
+      // panel-list-card carries the glass material + hover lift + active
       // selection state; conv-item is preserved for backwards-compat
       // with any selector hooks elsewhere.
       item.className =
-        "sov-list-card conv-item" + (entry.conversationId === activeId ? " active" : "");
+        "panel-list-card conv-item" + (entry.conversationId === activeId ? " active" : "");
 
       const titleDiv = document.createElement("div");
       titleDiv.className = "conv-item-title";

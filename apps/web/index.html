@@ -2130,7 +2130,7 @@
         color: var(--status-error-fg);
       }
 
-      /* Memory items — list-card material per .sov-list-card pattern.
+      /* Memory items — list-card material per .panel-list-card pattern.
          Each memory is its own discrete glass card with subtle lift,
          so the slab reads as a stack of recollections rather than
          line-separated text. Existing .memory-item-content / meta /
@@ -4135,18 +4135,26 @@
         display: flex;
         flex-direction: column;
       }
-      /* Empty state: vertically-centered caption in the cards-area.
-         When goals exist, JS hides this and the cards take over. */
+      /* Empty state: caption anchored to the BOTTOM of the cards
+         area — sits just above the form so the introduction is
+         visually bound to the action it introduces. Void above is
+         calm empty-list space (where cards would go), not "lost"
+         space surrounding a floating caption. When goals exist, JS
+         hides this and the cards stack from the top. */
       #goal-cards-area .goal-empty-commit {
-        margin: auto;
+        margin-top: auto;
+        padding-bottom: 18px;
       }
       #goal-list {
         flex: 0 0 auto;
       }
+      /* Form sits softly at the bottom — no hard border-top divider.
+         The slight glass-tint distinguishes the form region from the
+         cards area without compartmentalizing it. Caption above flows
+         into the form without a visible seam. */
       #goal-commit-form {
         flex-shrink: 0;
-        padding: 14px;
-        border-top: 1px solid var(--border-light);
+        padding: 14px 14px 16px;
         background: var(--bg-glass);
       }
       .goal-commit-field {
@@ -5442,7 +5450,7 @@
       .sov-hero-card + .sov-hero-card {
         margin-top: 10px;
       }
-      .sov-section-header {
+      .panel-section-header {
         font-size: 10px;
         font-weight: 600;
         text-transform: uppercase;
@@ -5457,7 +5465,7 @@
          single-line text under their header. Avoids the inverted-
          hierarchy where empty placeholders compete visually with
          loaded hero data. */
-      .sov-empty-row {
+      .panel-empty-row {
         padding: 2px 18px 14px;
         color: var(--text-ghost);
         font-size: 12px;
@@ -5503,7 +5511,7 @@
         background: var(--bg-btn);
         margin-top: 2px;
       }
-      .sov-action-pill {
+      .panel-action-pill {
         flex: 0 0 auto;
         padding: 9px 18px;
         border-radius: 999px;
@@ -5517,17 +5525,17 @@
           background-color 0.15s ease-out,
           transform 0.1s ease-out;
       }
-      .sov-action-pill:hover:not(:disabled) {
+      .panel-action-pill:hover:not(:disabled) {
         background: var(--accent-hover);
       }
-      .sov-action-pill:active:not(:disabled) {
+      .panel-action-pill:active:not(:disabled) {
         transform: scale(0.97);
       }
-      .sov-action-pill:disabled {
+      .panel-action-pill:disabled {
         opacity: 0.6;
         cursor: default;
       }
-      .sov-action-ghost {
+      .panel-action-ghost {
         flex: 0 0 auto;
         padding: 9px 16px;
         border-radius: 999px;
@@ -5539,7 +5547,7 @@
         cursor: pointer;
         transition: background-color 0.15s ease-out;
       }
-      .sov-action-ghost:hover {
+      .panel-action-ghost:hover {
         background: var(--bg-btn-hover);
       }
 
@@ -5561,7 +5569,7 @@
          same material family as .sov-hero-card, lighter weight: --bg-glass
          instead of -strong. Padding accommodates input + button rhythm
          instead of label+value+subtitle. */
-      .sov-form-card {
+      .panel-form-card {
         margin: 12px 14px 0;
         padding: 14px 16px;
         border-radius: 14px;
@@ -5569,7 +5577,7 @@
         border: 1px solid var(--border-light);
         box-shadow: inset 0 1px 0 var(--inset-highlight);
       }
-      .sov-form-textarea {
+      .panel-form-textarea {
         width: 100%;
         min-height: 60px;
         max-height: 140px;
@@ -5585,13 +5593,13 @@
         margin-bottom: 10px;
         box-sizing: border-box;
       }
-      .sov-form-textarea:focus {
+      .panel-form-textarea:focus {
         border-color: var(--accent-border);
       }
-      .sov-form-textarea::placeholder {
+      .panel-form-textarea::placeholder {
         color: var(--text-ghost);
       }
-      .sov-form-select {
+      .panel-form-select {
         width: 100%;
         padding: 8px 12px;
         border: 1px solid var(--border-input);
@@ -5605,7 +5613,7 @@
         cursor: pointer;
         box-sizing: border-box;
       }
-      .sov-form-select:focus {
+      .panel-form-select:focus {
         border-color: var(--accent-border);
       }
 
@@ -5615,7 +5623,7 @@
          subtle shadow lift) but compact for row-density. Subtle hover
          lift signals interactivity; .active variant marks the current
          row when the panel supports selection. */
-      .sov-list-card {
+      .panel-list-card {
         display: block;
         margin: 8px 14px 0;
         padding: 12px 14px;
@@ -5630,17 +5638,17 @@
           background-color 0.15s ease-out,
           transform 0.1s ease-out;
       }
-      .sov-list-card:hover {
+      .panel-list-card:hover {
         background: var(--bg-glass-hover);
       }
-      .sov-list-card:active {
+      .panel-list-card:active {
         transform: scale(0.99);
       }
-      .sov-list-card.active {
+      .panel-list-card.active {
         border-color: var(--accent-border);
         background: var(--accent-bg);
       }
-      .sov-list-card-title {
+      .panel-list-card-title {
         font-size: 13px;
         font-weight: 500;
         color: var(--text-heading);
@@ -5649,17 +5657,17 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      .sov-list-card-meta {
+      .panel-list-card-meta {
         display: flex;
         gap: 8px;
         font-size: 11px;
         color: var(--text-ghost);
       }
-      .sov-list-card-meta-spacer {
+      .panel-list-card-meta-spacer {
         flex: 1;
       }
 
-      /* Error register — visually distinct from .sov-empty-row so the
+      /* Error register — visually distinct from .panel-empty-row so the
          user reads "something went wrong, recoverable" vs "this slot is
          ready, waiting." Subtle warning hue + Retry affordance. */
       .sov-error-row {
@@ -6468,7 +6476,7 @@
       /* Sub-tab bar — mirrors .agents-tabs / .agents-tab so the two
          runtime-register panels (Capabilities + Agents) share visual
          language. The tab is the structural switch between Skills and
-         Connections; the empty registers per tab follow .sov-empty-row. */
+         Connections; the empty registers per tab follow .panel-empty-row. */
       .capabilities-tabs {
         display: flex;
         border-bottom: 1px solid var(--border);
@@ -7263,7 +7271,7 @@
         <span class="mem-panel-title">Memories</span>
         <button class="mem-panel-close" id="memory-close-btn">&times;</button>
       </div>
-      <div id="memory-empty" class="sov-empty-row">
+      <div id="memory-empty" class="panel-empty-row">
         Memories appear here as conversations build
       </div>
       <div id="memory-list"></div>
@@ -7386,13 +7394,13 @@
       </div>
       <div id="agents-known-pane" class="agents-pane active">
         <div id="agents-list" style="flex: 1; overflow-y: auto; padding: 0"></div>
-        <div id="agents-empty" class="sov-empty-row">
+        <div id="agents-empty" class="panel-empty-row">
           Known agents appear here as your motebit discovers them through delegation
         </div>
       </div>
       <div id="agents-discover-pane" class="agents-pane" style="display: none">
         <div id="agents-discover-list" style="flex: 1; overflow-y: auto; padding: 0"></div>
-        <div id="agents-discover-empty" class="sov-empty-row">
+        <div id="agents-discover-empty" class="panel-empty-row">
           Connect to a relay to discover agents on the network
         </div>
       </div>
@@ -7426,11 +7434,11 @@
       </div>
       <!-- Credentials pane -->
       <div class="sov-pane active" id="sov-pane-credentials">
-        <div class="sov-section-header" id="cred-section-header">Issued credentials</div>
+        <div class="panel-section-header" id="cred-section-header">Issued credentials</div>
         <div id="cred-list"></div>
-        <div id="cred-empty" class="sov-empty-row">Issued credentials appear here</div>
+        <div id="cred-empty" class="panel-empty-row">Issued credentials appear here</div>
         <div style="margin: 14px 14px 0">
-          <button id="cred-present-btn" class="sov-action-ghost" style="width: 100%">
+          <button id="cred-present-btn" class="panel-action-ghost" style="width: 100%">
             Bundle Presentation
           </button>
         </div>
@@ -7441,22 +7449,22 @@
           </div>
           <pre id="cred-vp-json"></pre>
         </div>
-        <div class="sov-section-header">Verify credential</div>
-        <div class="sov-form-card">
+        <div class="panel-section-header">Verify credential</div>
+        <div class="panel-form-card">
           <textarea
             id="cred-verify-input"
-            class="sov-form-textarea"
+            class="panel-form-textarea"
             placeholder="Paste credential JSON here…"
           ></textarea>
-          <button id="cred-verify-btn" class="sov-action-pill">Verify</button>
+          <button id="cred-verify-btn" class="panel-action-pill">Verify</button>
           <div id="cred-verify-result" style="display: none; margin-top: 10px"></div>
         </div>
       </div>
       <!-- Ledger pane -->
       <div class="sov-pane" id="sov-pane-ledger">
-        <div class="sov-section-header">Execution history</div>
+        <div class="panel-section-header">Execution history</div>
         <div id="ledger-list"></div>
-        <div id="ledger-empty" class="sov-empty-row">
+        <div id="ledger-empty" class="panel-empty-row">
           Execution ledgers appear here when goals complete
         </div>
       </div>
@@ -7469,7 +7477,7 @@
       <!-- Identity pane -->
       <div class="sov-pane" id="sov-pane-identity">
         <div id="succession-content"></div>
-        <div id="succession-empty" class="sov-empty-row" style="display: none">
+        <div id="succession-empty" class="panel-empty-row" style="display: none">
           Key rotations appear here
         </div>
       </div>
@@ -7520,7 +7528,7 @@
       <div id="cap-pane-connections" class="capabilities-pane" style="display: none">
         <div style="padding: 12px">
           <div id="mcp-server-list" style="margin-bottom: 8px"></div>
-          <div id="mcp-empty" class="sov-empty-row">
+          <div id="mcp-empty" class="panel-empty-row">
             Connect a tool server to extend what motebit can do
           </div>
           <button class="mcp-add-btn" id="mcp-add-toggle">+ Add Server</button>
