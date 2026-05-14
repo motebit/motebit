@@ -1000,7 +1000,7 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
 // === Goal Types ===
 
 export type GoalMode = "recurring" | "once";
-export type GoalStatus = "active" | "completed" | "failed" | "paused";
+export type GoalStatus = "active" | "completed" | "failed" | "paused" | "budget_exhausted";
 
 export interface Goal {
   goal_id: string;
@@ -1015,6 +1015,10 @@ export interface Goal {
   parent_goal_id: string | null;
   max_retries: number;
   consecutive_failures: number;
+  /** v1 axis of the bounded-commitment envelope per
+   *  `docs/doctrine/panel-temporal-registers.md` §"Bounded commitment
+   *  is multi-dimensional." `null` = no cap. */
+  budget_tokens: number | null;
 }
 
 export interface GoalOutcome {
@@ -1027,6 +1031,9 @@ export interface GoalOutcome {
   tool_calls_made: number;
   memories_formed: number;
   error_message: string | null;
+  /** Token usage for this run. Sums per goal feed the budget envelope's
+   *  `spent_tokens` rollup. `null` on pre-v22 rows (treated as 0). */
+  tokens_used: number | null;
 }
 
 interface GoalRow {
@@ -1042,6 +1049,7 @@ interface GoalRow {
   parent_goal_id: string | null;
   max_retries: number;
   consecutive_failures: number;
+  budget_tokens: number | null;
 }
 
 interface GoalOutcomeRow {
@@ -1054,6 +1062,7 @@ interface GoalOutcomeRow {
   tool_calls_made: number;
   memories_formed: number;
   error_message: string | null;
+  tokens_used: number | null;
 }
 
 function rowToGoal(row: GoalRow): Goal {
@@ -1070,12 +1079,14 @@ function rowToGoal(row: GoalRow): Goal {
     parent_goal_id: row.parent_goal_id,
     max_retries: row.max_retries ?? 3,
     consecutive_failures: row.consecutive_failures ?? 0,
+    budget_tokens: row.budget_tokens ?? null,
   };
 }
 
 function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
   return {
     outcome_id: row.outcome_id,
+    tokens_used: row.tokens_used ?? null,
     goal_id: row.goal_id,
     motebit_id: row.motebit_id,
     ran_at: row.ran_at,
@@ -1123,8 +1134,8 @@ export class ExpoGoalStore {
   insertOutcome(outcome: GoalOutcome): void {
     this.db.runSync(
       `INSERT OR REPLACE INTO goal_outcomes
-       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         outcome.outcome_id,
         outcome.goal_id,
@@ -1135,7 +1146,39 @@ export class ExpoGoalStore {
         outcome.tool_calls_made,
         outcome.memories_formed,
         outcome.error_message,
+        outcome.tokens_used,
       ],
+    );
+  }
+
+  /**
+   * COALESCE-summed token rollup. Treats pre-v22 rows (NULL
+   * tokens_used) as 0 — correct semantic since we don't know what
+   * they consumed. Mirrors `SqliteGoalStore.getSpentTokens` in
+   * @motebit/persistence (the cli's adapter).
+   */
+  getSpentTokens(goalId: string): number {
+    const row = this.db.getFirstSync<{ spent: number | null }>(
+      "SELECT COALESCE(SUM(tokens_used), 0) AS spent FROM goal_outcomes WHERE goal_id = ?",
+      [goalId],
+    );
+    return Number(row?.spent ?? 0);
+  }
+
+  /**
+   * Raise / lower / clear the token cap on a goal's bounded-commitment
+   * envelope. Re-evaluates `budget_exhausted` against current spend:
+   * cap above spend flips to 'active'; cap at-or-below pushes to
+   * 'budget_exhausted'. Terminal (completed/failed) statuses immune.
+   */
+  setBudgetTokens(goalId: string, budgetTokens: number | null): void {
+    this.db.runSync("UPDATE goals SET budget_tokens = ? WHERE goal_id = ?", [budgetTokens, goalId]);
+    const spent = this.getSpentTokens(goalId);
+    const nextStatus =
+      budgetTokens != null && spent >= budgetTokens ? "budget_exhausted" : "active";
+    this.db.runSync(
+      "UPDATE goals SET status = ? WHERE goal_id = ? AND status NOT IN ('completed', 'failed')",
+      [nextStatus, goalId],
     );
   }
 
@@ -1167,13 +1210,14 @@ export class ExpoGoalStore {
     prompt: string,
     intervalMs: number,
     mode: GoalMode = "recurring",
+    budgetTokens: number | null = null,
   ): string {
     const goalId = crypto.randomUUID();
     const now = Date.now();
     this.db.runSync(
-      `INSERT INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures)
-       VALUES (?, ?, ?, ?, NULL, 1, ?, ?, 'active', NULL, 3, 0)`,
-      [goalId, motebitId, prompt, intervalMs, now, mode],
+      `INSERT INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, budget_tokens)
+       VALUES (?, ?, ?, ?, NULL, 1, ?, ?, 'active', NULL, 3, 0, ?)`,
+      [goalId, motebitId, prompt, intervalMs, now, mode, budgetTokens],
     );
     return goalId;
   }

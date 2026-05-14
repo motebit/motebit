@@ -212,6 +212,22 @@ export class MobileGoalScheduler {
         if (elapsed < goal.interval_ms) continue;
         if (runtime.isProcessing) break;
 
+        // Pre-fire budget gate. The v1 axis is `tokens`; sum spent
+        // tokens against the goal's cap and flip status to
+        // `budget_exhausted` on exhaustion. listActiveGoals naturally
+        // skips exhausted goals on the next tick because it filters
+        // status='active' — raising the cap via setBudgetTokens flips
+        // status back to active and the goal resumes. Doctrine:
+        // panel-temporal-registers.md §"Bounded commitment is
+        // multi-dimensional."
+        if (goal.budget_tokens != null) {
+          const spent = goalStore.getSpentTokens(goal.goal_id);
+          if (spent >= goal.budget_tokens) {
+            goalStore.setStatus(goal.goal_id, "budget_exhausted");
+            continue;
+          }
+        }
+
         this._goalExecuting = true;
         this._currentGoalId = goal.goal_id;
         this._goalStatusCallback?.(true);
@@ -225,12 +241,12 @@ export class MobileGoalScheduler {
           if (planEngine && loopDeps) {
             const result = await this.executePlanGoal(goal, outcomes);
             if (result.suspended) return; // Waiting for approval
-            this.finishGoalSuccess(goal, result.summary, now);
+            this.finishGoalSuccess(goal, result.summary, now, result.tokensUsed);
           } else {
             // Fallback: single-turn streaming
             const result = await this.executeSingleTurnGoal(goal, outcomes, now);
             if (result.suspended) return;
-            this.finishGoalSuccess(goal, result.summary, now);
+            this.finishGoalSuccess(goal, result.summary, now, result.tokensUsed);
           }
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -253,14 +269,14 @@ export class MobileGoalScheduler {
 
   /** Execute a goal with PlanEngine multi-step decomposition. */
   private async executePlanGoal(
-    goal: { goal_id: string; prompt: string; mode: string },
+    goal: { goal_id: string; prompt: string; mode: string; budget_tokens?: number | null },
     outcomes: Array<{
       ran_at: number;
       status: string;
       summary: string | null;
       error_message: string | null;
     }>,
-  ): Promise<{ suspended: boolean; summary: string }> {
+  ): Promise<{ suspended: boolean; summary: string; tokensUsed: number | null }> {
     const runtime = this.deps.getRuntime()!;
     const planEngine = this.deps.getPlanEngine()!;
     const loopDeps = runtime.getLoopDeps()!;
@@ -298,9 +314,9 @@ export class MobileGoalScheduler {
   /** Consume a PlanEngine stream, handling approval requests. */
   private async consumePlanStream(
     stream: AsyncGenerator<PlanChunk>,
-    goal: { goal_id: string; prompt: string; mode: string },
+    goal: { goal_id: string; prompt: string; mode: string; budget_tokens?: number | null },
     planId: string,
-  ): Promise<{ suspended: boolean; summary: string }> {
+  ): Promise<{ suspended: boolean; summary: string; tokensUsed: number | null }> {
     let accumulated = "";
 
     for await (const chunk of stream) {
@@ -324,7 +340,10 @@ export class MobileGoalScheduler {
             args: chunk.chunk.type === "approval_request" ? chunk.chunk.args : {},
             riskLevel: chunk.chunk.type === "approval_request" ? chunk.chunk.risk_level : undefined,
           });
-          return { suspended: true, summary: accumulated.slice(0, 500) };
+          // Plan-side token attribution lands when plan_completed
+          // carries per-step or aggregate token counts; for now the
+          // plan-mode goal accumulates spent_tokens=0 (advisory).
+          return { suspended: true, summary: accumulated.slice(0, 500), tokensUsed: null };
         }
         case "plan_completed":
         case "plan_failed":
@@ -332,12 +351,12 @@ export class MobileGoalScheduler {
       }
     }
 
-    return { suspended: false, summary: accumulated.slice(0, 500) };
+    return { suspended: false, summary: accumulated.slice(0, 500), tokensUsed: null };
   }
 
   /** Execute a goal with simple single-turn streaming (fallback). */
   private async executeSingleTurnGoal(
-    goal: { goal_id: string; prompt: string; mode: string },
+    goal: { goal_id: string; prompt: string; mode: string; budget_tokens?: number | null },
     outcomes: Array<{
       ran_at: number;
       status: string;
@@ -345,7 +364,7 @@ export class MobileGoalScheduler {
       error_message: string | null;
     }>,
     now: number,
-  ): Promise<{ suspended: boolean; summary: string }> {
+  ): Promise<{ suspended: boolean; summary: string; tokensUsed: number | null }> {
     const runtime = this.deps.getRuntime()!;
     let context = `You are executing a scheduled goal.\n\nGoal: ${goal.prompt}`;
     if (outcomes.length > 0) {
@@ -366,9 +385,15 @@ export class MobileGoalScheduler {
     }
 
     let accumulated = "";
+    let tokensUsed: number | null = null;
     for await (const chunk of runtime.sendMessageStreaming(context)) {
       if (chunk.type === "text") {
         accumulated += chunk.text;
+      } else if (chunk.type === "result" && typeof chunk.result.totalTokens === "number") {
+        // TurnResult.totalTokens is sum across the agentic loop's LLM
+        // calls in this turn. Feeds the runtime register's budget
+        // envelope (v1 axis = tokens).
+        tokensUsed = chunk.result.totalTokens;
       } else if (chunk.type === "approval_request") {
         this._pendingGoalApproval = {
           goalId: goal.goal_id,
@@ -382,17 +407,18 @@ export class MobileGoalScheduler {
           args: chunk.args,
           riskLevel: chunk.risk_level,
         });
-        return { suspended: true, summary: accumulated.slice(0, 500) };
+        return { suspended: true, summary: accumulated.slice(0, 500), tokensUsed };
       }
     }
 
-    return { suspended: false, summary: accumulated.slice(0, 500) };
+    return { suspended: false, summary: accumulated.slice(0, 500), tokensUsed };
   }
 
   private finishGoalSuccess(
-    goal: { goal_id: string; prompt: string; mode: string },
+    goal: { goal_id: string; prompt: string; mode: string; budget_tokens?: number | null },
     summary: string,
     now: number,
+    tokensUsed: number | null = null,
   ): void {
     const goalStore = this.deps.getStorage()?.goalStore;
     if (!goalStore) return;
@@ -411,10 +437,21 @@ export class MobileGoalScheduler {
       tool_calls_made: 0,
       memories_formed: 0,
       error_message: null,
+      tokens_used: tokensUsed,
     });
 
     if (goal.mode === "once") {
       goalStore.setStatus(goal.goal_id, "completed");
+    } else if (goal.budget_tokens != null) {
+      // Recurring goal under a cap — re-evaluate post-run to catch the
+      // crossing-point case where this fire's tokens push spent past
+      // cap. Next tick already filters status='active', so flipping
+      // here gates the next firing immediately rather than waiting for
+      // the next tick's cap-check.
+      const spent = goalStore.getSpentTokens(goal.goal_id);
+      if (spent >= goal.budget_tokens) {
+        goalStore.setStatus(goal.goal_id, "budget_exhausted");
+      }
     }
 
     this._goalCompleteCallback?.({
@@ -427,7 +464,7 @@ export class MobileGoalScheduler {
   }
 
   private finishGoalFailure(
-    goal: { goal_id: string; prompt: string; mode: string },
+    goal: { goal_id: string; prompt: string; mode: string; budget_tokens?: number | null },
     error: string,
     now: number,
   ): void {
@@ -446,6 +483,7 @@ export class MobileGoalScheduler {
         tool_calls_made: 0,
         memories_formed: 0,
         error_message: error,
+        tokens_used: null,
       });
     } catch {
       /* non-fatal */

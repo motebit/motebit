@@ -389,4 +389,22 @@ export const MOBILE_MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX IF NOT EXISTS idx_skill_audit_type ON skill_audit (type, at)",
     ],
   },
+  {
+    version: 22,
+    description:
+      "goals.budget_tokens + goal_outcomes.tokens_used — runtime-register budget envelope",
+    statements: [
+      // v1 axis of the goal's bounded-commitment envelope per
+      // docs/doctrine/panel-temporal-registers.md §"Bounded commitment
+      // is multi-dimensional." Sibling entries: web's localStorage
+      // adapter rolls up `spent_tokens` on the goal record directly;
+      // desktop's tauri-migrations v2 lands the same columns;
+      // persistence has them from #36 (already shipped). The
+      // tokens_used column on goal_outcomes was already added to the
+      // cli scheduler via persistence migration #11 — mobile mirrors
+      // here so the rollup query is shape-aligned across surfaces.
+      "ALTER TABLE goals ADD COLUMN budget_tokens INTEGER",
+      "ALTER TABLE goal_outcomes ADD COLUMN tokens_used INTEGER",
+    ],
+  },
 ];

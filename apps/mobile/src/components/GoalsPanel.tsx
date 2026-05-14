@@ -27,11 +27,28 @@ const INTERVAL_OPTIONS: { label: string; ms: number }[] = [
   { label: "Weekly", ms: 604_800_000 },
 ];
 
+// v1 axis of the bounded-commitment envelope per
+// docs/doctrine/panel-temporal-registers.md §"Bounded commitment is
+// multi-dimensional." `null` = no cap. The chip label is named for
+// what the user sees ("No cap"), not the numeric value.
+const BUDGET_OPTIONS: { label: string; tokens: number | null }[] = [
+  { label: "10k", tokens: 10_000 },
+  { label: "50k", tokens: 50_000 },
+  { label: "200k", tokens: 200_000 },
+  { label: "No cap", tokens: null },
+];
+
 function formatInterval(ms: number): string {
   if (ms <= 3_600_000) return "Hourly";
   if (ms <= 86_400_000) return "Daily";
   if (ms <= 604_800_000) return "Weekly";
   return `${Math.round(ms / 86_400_000)}d`;
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}k`;
+  return String(n);
 }
 
 function formatTimeAgo(ts: number): string {
@@ -56,16 +73,40 @@ function createMobileGoalsAdapter(app: MobileApp): GoalsFetchAdapter {
   return {
     listGoals: () => {
       const store = app.getGoalStore();
-      return Promise.resolve(store ? (store.listGoals(identity.motebitId) as ScheduledGoal[]) : []);
+      if (!store) return Promise.resolve([]);
+      // Project the persistence-shaped Goal into the panel's
+      // ScheduledGoal shape, summing spent_tokens per goal so the
+      // budget envelope renders without a second query.
+      const goals = store.listGoals(identity.motebitId).map((g): ScheduledGoal => {
+        const spent = store.getSpentTokens(g.goal_id);
+        return {
+          ...(g as unknown as ScheduledGoal),
+          budget_tokens: g.budget_tokens,
+          spent_tokens: spent,
+        };
+      });
+      return Promise.resolve(goals);
     },
     addGoal: (input) => {
       const store = app.getGoalStore();
-      if (store) store.addGoal(identity.motebitId, input.prompt, input.interval_ms, input.mode);
+      if (store)
+        store.addGoal(
+          identity.motebitId,
+          input.prompt,
+          input.interval_ms,
+          input.mode,
+          input.budget_tokens ?? null,
+        );
       return Promise.resolve();
     },
     setEnabled: (goalId, enabled) => {
       const store = app.getGoalStore();
       if (store) store.toggleGoal(goalId, enabled);
+      return Promise.resolve();
+    },
+    setBudgetTokens: (goalId, budgetTokens) => {
+      const store = app.getGoalStore();
+      if (store) store.setBudgetTokens(goalId, budgetTokens);
       return Promise.resolve();
     },
     removeGoal: (goalId) => {
@@ -82,6 +123,9 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
   const [newPrompt, setNewPrompt] = useState("");
   const [newIntervalIdx, setNewIntervalIdx] = useState(0);
   const [newMode, setNewMode] = useState<GoalMode>("recurring");
+  // Defaults: 50k tokens (idx 1) matches web + desktop defaults so the
+  // commitment envelope is sized identically across surfaces.
+  const [newBudgetIdx, setNewBudgetIdx] = useState(1);
 
   const ctrlRef = useRef<ReturnType<typeof createGoalsController> | null>(null);
   const [state, setState] = useState<GoalsState>(() => ({
@@ -113,9 +157,21 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
     if (!prompt) return;
     const interval = INTERVAL_OPTIONS[newIntervalIdx];
     if (!interval) return;
+    const budget = BUDGET_OPTIONS[newBudgetIdx];
     void ctrlRef.current
-      ?.addGoal({ prompt, interval_ms: interval.ms, mode: newMode })
+      ?.addGoal({
+        prompt,
+        interval_ms: interval.ms,
+        mode: newMode,
+        budget_tokens: budget?.tokens ?? null,
+      })
       .then(() => setNewPrompt(""));
+  };
+
+  const handleRaiseCap = (goal: ScheduledGoal): void => {
+    const cap = goal.budget_tokens;
+    if (cap == null) return;
+    void ctrlRef.current?.setBudgetTokens?.(goal.goal_id, cap * 2);
   };
 
   const handleRemove = (goalId: string): void => {
@@ -129,52 +185,96 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
     ]);
   };
 
-  const renderGoal = ({ item: goal }: { item: ScheduledGoal }): React.ReactElement => (
-    <View style={styles.goalRow}>
-      <View style={styles.goalInfo}>
-        <Text style={styles.goalPrompt} numberOfLines={2}>
-          {goal.prompt}
-        </Text>
-        <View style={styles.goalMeta}>
-          <Text style={styles.goalMetaText}>{formatInterval(goal.interval_ms)}</Text>
-          <Text style={styles.goalMetaText}>{goal.mode}</Text>
-          <Text
-            style={[
-              styles.goalMetaText,
-              (goal.status === "paused" || goal.status === "failed") && styles.goalMetaWarning,
-            ]}
-          >
-            {goal.status}
+  const renderGoal = ({ item: goal }: { item: ScheduledGoal }): React.ReactElement => {
+    const cap = goal.budget_tokens;
+    const spent = goal.spent_tokens ?? 0;
+    const exhausted = goal.status === "budget_exhausted";
+    const ratio = cap != null && cap > 0 ? Math.min(spent / cap, 1.2) : 0;
+    const fillPct = Math.min(ratio * 100, 100);
+    const fillColor =
+      ratio >= 1 ? colors.statusError : ratio >= 0.8 ? "#f59e0b" : colors.accentSoft;
+
+    return (
+      <View style={styles.goalRow}>
+        <View style={styles.goalInfo}>
+          <Text style={styles.goalPrompt} numberOfLines={2}>
+            {goal.prompt}
           </Text>
-          {goal.last_run_at != null ? (
-            <Text style={styles.goalMetaText}>ran {formatTimeAgo(goal.last_run_at)}</Text>
-          ) : null}
-          {goal.consecutive_failures != null && goal.consecutive_failures > 0 ? (
-            <Text style={styles.goalMetaWarning}>
-              {goal.consecutive_failures}/{goal.max_retries ?? "?"} failures
+          <View style={styles.goalMeta}>
+            <Text style={styles.goalMetaText}>{formatInterval(goal.interval_ms)}</Text>
+            <Text style={styles.goalMetaText}>{goal.mode}</Text>
+            <Text
+              style={[
+                styles.goalMetaText,
+                (goal.status === "paused" ||
+                  goal.status === "failed" ||
+                  goal.status === "budget_exhausted") &&
+                  styles.goalMetaWarning,
+              ]}
+            >
+              {goal.status}
             </Text>
+            {goal.last_run_at != null ? (
+              <Text style={styles.goalMetaText}>ran {formatTimeAgo(goal.last_run_at)}</Text>
+            ) : null}
+            {goal.consecutive_failures != null && goal.consecutive_failures > 0 ? (
+              <Text style={styles.goalMetaWarning}>
+                {goal.consecutive_failures}/{goal.max_retries ?? "?"} failures
+              </Text>
+            ) : null}
+          </View>
+          {/* Budget envelope — runtime-register commitment cap.
+              Axis-native unit is the headline ("12k / 50k tokens"),
+              never cost. Doctrine: panel-temporal-registers.md
+              §"Bounded commitment is multi-dimensional." */}
+          {cap != null ? (
+            <View style={styles.budgetEnvelope}>
+              <Text
+                style={[styles.budgetLabel, exhausted && styles.budgetLabelExhausted]}
+                numberOfLines={1}
+              >
+                {exhausted
+                  ? "Token budget exhausted"
+                  : `${formatTokens(spent)} / ${formatTokens(cap)} tokens`}
+              </Text>
+              <View style={styles.budgetBar}>
+                <View
+                  style={[styles.budgetFill, { width: `${fillPct}%`, backgroundColor: fillColor }]}
+                />
+              </View>
+              {exhausted ? (
+                <TouchableOpacity
+                  style={styles.raiseCapBtn}
+                  onPress={() => handleRaiseCap(goal)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.raiseCapText}>Raise to {formatTokens(cap * 2)}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           ) : null}
         </View>
+        <View style={styles.goalActions}>
+          <Switch
+            value={goal.enabled ?? goal.status === "active"}
+            onValueChange={(v) => void ctrlRef.current?.setEnabled(goal.goal_id, v)}
+            trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+            thumbColor={
+              (goal.enabled ?? goal.status === "active") ? colors.textPrimary : colors.textMuted
+            }
+            disabled={exhausted}
+          />
+          <TouchableOpacity
+            onPress={() => handleRemove(goal.goal_id)}
+            activeOpacity={0.7}
+            style={styles.goalDeleteBtn}
+          >
+            <Text style={styles.goalDeleteText}>X</Text>
+          </TouchableOpacity>
+        </View>
       </View>
-      <View style={styles.goalActions}>
-        <Switch
-          value={goal.enabled ?? goal.status === "active"}
-          onValueChange={(v) => void ctrlRef.current?.setEnabled(goal.goal_id, v)}
-          trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
-          thumbColor={
-            (goal.enabled ?? goal.status === "active") ? colors.textPrimary : colors.textMuted
-          }
-        />
-        <TouchableOpacity
-          onPress={() => handleRemove(goal.goal_id)}
-          activeOpacity={0.7}
-          style={styles.goalDeleteBtn}
-        >
-          <Text style={styles.goalDeleteText}>X</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
+    );
+  };
 
   return (
     <Modal visible={visible} animationType="slide" transparent statusBarTranslucent>
@@ -192,7 +292,9 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
 
           {state.goals.length === 0 ? (
             <Text style={styles.emptyText}>
-              {goalStore ? "No goals yet. Add one below." : "Goal store not available."}
+              {goalStore
+                ? "Commit motebit to a goal · describe one below"
+                : "Goal store not available."}
             </Text>
           ) : (
             <FlatList
@@ -240,13 +342,32 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
                   </Text>
                 </TouchableOpacity>
               </View>
+              {/* Token-budget chips — runtime register's commitment cap
+                  declared at create time, not buried in settings.
+                  Doctrine: panel-temporal-registers.md §"Bounded
+                  commitment is multi-dimensional." */}
+              <View style={styles.optionsRow}>
+                <Text style={styles.budgetFieldLabel}>Budget</Text>
+                {BUDGET_OPTIONS.map((opt, idx) => (
+                  <TouchableOpacity
+                    key={opt.label}
+                    style={[styles.chip, newBudgetIdx === idx && styles.chipActive]}
+                    onPress={() => setNewBudgetIdx(idx)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.chipText, newBudgetIdx === idx && styles.chipTextActive]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
               <TouchableOpacity
                 style={[styles.addButton, !newPrompt.trim() && styles.addButtonDisabled]}
                 onPress={handleAdd}
                 disabled={!newPrompt.trim()}
                 activeOpacity={0.7}
               >
-                <Text style={styles.addButtonText}>Add Goal</Text>
+                <Text style={styles.addButtonText}>Commit goal</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -356,5 +477,41 @@ function createStyles(c: ThemeColors) {
     },
     addButtonDisabled: { opacity: 0.4 },
     addButtonText: { color: c.buttonPrimaryText, fontSize: 15, fontWeight: "600" },
+    // Budget envelope render — axis-native unit headline + thin
+    // progress bar + raise-cap CTA on exhaustion. Mirrors the web +
+    // desktop visual rhythm.
+    budgetEnvelope: { marginTop: 8 },
+    budgetLabel: {
+      color: c.textMuted,
+      fontSize: 11,
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+      marginBottom: 4,
+    },
+    budgetLabelExhausted: { color: c.statusError },
+    budgetBar: {
+      height: 3,
+      borderRadius: 2,
+      backgroundColor: c.bgSecondary,
+      overflow: "hidden",
+    },
+    budgetFill: { height: "100%", borderRadius: 2 },
+    raiseCapBtn: {
+      marginTop: 8,
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderRadius: 8,
+      backgroundColor: c.accentSoft,
+      alignSelf: "flex-start",
+    },
+    raiseCapText: { color: c.buttonPrimaryText, fontSize: 12, fontWeight: "600" },
+    budgetFieldLabel: {
+      color: c.textMuted,
+      fontSize: 11,
+      letterSpacing: 0.5,
+      fontWeight: "600",
+      textTransform: "uppercase",
+      alignSelf: "center",
+      marginRight: 4,
+    },
   });
 }
