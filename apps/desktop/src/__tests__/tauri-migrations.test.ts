@@ -32,13 +32,20 @@ function createMockInvoke(db: Database.Database): InvokeFn {
 
 describe("tauri-migrations — DESKTOP_MIGRATIONS registry", () => {
   it("declares the v1 phase-5-ship sensitivity migration", () => {
-    expect(DESKTOP_MIGRATIONS).toHaveLength(1);
+    expect(DESKTOP_MIGRATIONS.length).toBeGreaterThanOrEqual(1);
     const v1 = DESKTOP_MIGRATIONS[0]!;
     expect(v1.version).toBe(1);
     expect(v1.statements).toContain(
       "ALTER TABLE conversation_messages ADD COLUMN sensitivity TEXT",
     );
     expect(v1.statements).toContain("ALTER TABLE tool_audit_log ADD COLUMN sensitivity TEXT");
+  });
+
+  it("declares the v2 runtime-register budget envelope migration", () => {
+    const v2 = DESKTOP_MIGRATIONS.find((m) => m.version === 2);
+    expect(v2).toBeDefined();
+    expect(v2!.statements).toContain("ALTER TABLE goals ADD COLUMN budget_tokens INTEGER");
+    expect(v2!.statements).toContain("ALTER TABLE goal_outcomes ADD COLUMN tokens_used INTEGER");
   });
 });
 
@@ -47,9 +54,9 @@ describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => 
 
   beforeEach(() => {
     db = new Database(":memory:");
-    // Pre-create the tables the v1 migration ALTERs (the Tauri Rust
+    // Pre-create the tables every migration ALTERs (the Tauri Rust
     // backend creates these at boot per src-tauri/src/main.rs; the
-    // mock re-creates them to give the migration something to alter).
+    // mock re-creates them to give the migrations something to alter).
     db.exec(`
       CREATE TABLE conversation_messages (
         message_id TEXT PRIMARY KEY,
@@ -61,6 +68,20 @@ describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => 
         turn_id TEXT,
         tool TEXT
       );
+      CREATE TABLE goals (
+        goal_id TEXT PRIMARY KEY,
+        motebit_id TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        interval_ms INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE goal_outcomes (
+        outcome_id TEXT PRIMARY KEY,
+        goal_id TEXT NOT NULL,
+        ran_at INTEGER NOT NULL,
+        status TEXT NOT NULL
+      );
     `);
   });
 
@@ -68,15 +89,15 @@ describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => 
     db.close();
   });
 
-  it("runs migrations from version 0 to 1 — applies the sensitivity ALTERs", async () => {
+  it("runs migrations from 0 to the latest declared version", async () => {
     const invoke = createMockInvoke(db);
+    const latest = Math.max(...DESKTOP_MIGRATIONS.map((m) => m.version));
     const result = await runDesktopMigrations(invoke);
 
     expect(result.from).toBe(0);
-    expect(result.to).toBe(1);
-    expect(result.applied).toEqual([1]);
+    expect(result.to).toBe(latest);
 
-    // Verify the sensitivity columns now exist.
+    // v1 columns
     const convCols = db.prepare("PRAGMA table_info(conversation_messages)").all() as Array<{
       name: string;
     }>;
@@ -87,18 +108,26 @@ describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => 
     }>;
     expect(toolCols.some((c) => c.name === "sensitivity")).toBe(true);
 
-    // PRAGMA user_version was bumped to 1.
+    // v2 columns — budget envelope foundation
+    const goalCols = db.prepare("PRAGMA table_info(goals)").all() as Array<{ name: string }>;
+    expect(goalCols.some((c) => c.name === "budget_tokens")).toBe(true);
+
+    const outcomeCols = db.prepare("PRAGMA table_info(goal_outcomes)").all() as Array<{
+      name: string;
+    }>;
+    expect(outcomeCols.some((c) => c.name === "tokens_used")).toBe(true);
+
     const version = db.prepare("PRAGMA user_version").get() as { user_version: number };
-    expect(version.user_version).toBe(1);
+    expect(version.user_version).toBe(latest);
   });
 
-  it("is idempotent — second run is a no-op (already at v1)", async () => {
+  it("is idempotent — second run is a no-op", async () => {
     const invoke = createMockInvoke(db);
-    await runDesktopMigrations(invoke);
+    const first = await runDesktopMigrations(invoke);
     const second = await runDesktopMigrations(invoke);
 
-    expect(second.from).toBe(1);
-    expect(second.to).toBe(1);
+    expect(second.from).toBe(first.to);
+    expect(second.to).toBe(first.to);
     expect(second.applied).toEqual([]);
   });
 });

@@ -104,6 +104,10 @@ interface GoalRow {
   parent_goal_id: string | null;
   max_retries: number;
   consecutive_failures: number;
+  /** v1 axis of the bounded-commitment envelope. NULL = no cap. See
+   *  docs/doctrine/panel-temporal-registers.md §"Bounded commitment is
+   *  multi-dimensional." */
+  budget_tokens: number | null;
 }
 
 interface OutcomeRow {
@@ -423,6 +427,16 @@ export class GoalScheduler {
         if (elapsed < goal.interval_ms) continue;
         if (runtime.isProcessing) break;
 
+        // Pre-fire budget gate. Sum spent tokens, compare against cap,
+        // and on exhaustion flip status to `budget_exhausted` so the
+        // next tick skips this goal until the user raises the cap via
+        // `goals_set_budget_tokens` (which re-evaluates and flips back
+        // to `active` when the new cap clears spend). Auto-pause is a
+        // synthesized state from (cap, spent), never sticky.
+        if (await this.checkBudgetExhausted(goal, invoke)) {
+          continue;
+        }
+
         const suspended = await this.executeGoalOnce(goal, invoke, motebitId, now);
         if (suspended) return;
       }
@@ -431,6 +445,30 @@ export class GoalScheduler {
       this._currentGoalId = null;
       this._goalStatusCallback?.(false);
     }
+  }
+
+  /**
+   * Returns true if the goal's tokens-axis budget envelope is
+   * exhausted. On exhaustion: persists `status='budget_exhausted'`
+   * (idempotent against the active-status pre-condition) so the
+   * surface picks up the state on the next refresh. Mirrors the
+   * runtime's `checkGoalBudget` in `@motebit/runtime/goals.ts` —
+   * inlined here for the v1 single-axis case because the desktop
+   * scheduler doesn't yet round-trip multi-axis caps.
+   */
+  private async checkBudgetExhausted(goal: GoalRow, invoke: InvokeFn): Promise<boolean> {
+    if (goal.budget_tokens == null) return false;
+    const rows = await invoke<Array<{ spent: number | null }>>("db_query", {
+      sql: "SELECT COALESCE(SUM(tokens_used), 0) AS spent FROM goal_outcomes WHERE goal_id = ?",
+      params: [goal.goal_id],
+    });
+    const spent = Number(rows[0]?.spent ?? 0);
+    if (spent < goal.budget_tokens) return false;
+    await invoke<number>("db_execute", {
+      sql: "UPDATE goals SET status = 'budget_exhausted' WHERE goal_id = ? AND status NOT IN ('completed', 'failed')",
+      params: [goal.goal_id],
+    }).catch(() => {});
+    return true;
   }
 
   /**

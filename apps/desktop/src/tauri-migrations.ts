@@ -34,6 +34,25 @@ export const DESKTOP_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE tool_audit_log ADD COLUMN sensitivity TEXT",
     ],
   },
+  {
+    version: 2,
+    description:
+      "goals.budget_tokens + goal_outcomes.tokens_used — runtime-register budget envelope",
+    statements: [
+      // v1 axis of the goal's bounded-commitment envelope per
+      // docs/doctrine/panel-temporal-registers.md §"Bounded commitment
+      // is multi-dimensional." Sibling entries: web's localStorage
+      // adapter rolls up `spent_tokens` on the goal record directly;
+      // mobile lands the same column in expo-sqlite migration v22;
+      // persistence has the column from #36 (already shipped). The
+      // tokens_used column on goal_outcomes was referenced in
+      // goal-scheduler.ts:523 since 7a52cd59 (2026-02) but never added
+      // to the Tauri schema — INSERTs against it silently failed on
+      // fresh desktop installs. This migration closes that gap.
+      "ALTER TABLE goals ADD COLUMN budget_tokens INTEGER",
+      "ALTER TABLE goal_outcomes ADD COLUMN tokens_used INTEGER",
+    ],
+  },
 ];
 
 interface UserVersionRow {

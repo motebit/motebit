@@ -3000,6 +3000,47 @@
       #goal-create-btn:hover {
         background: var(--accent-hover);
       }
+      /* Budget envelope render — runtime-register commitment cap. v1
+         axis = tokens; the bar visualizes (spent / cap) at axis-native
+         scale, with the headline label showing tokens (not cost) per
+         panel-temporal-registers.md §"Bounded commitment is
+         multi-dimensional." */
+      .goal-item-budget {
+        margin-top: 6px;
+      }
+      .goal-item-budget-label {
+        font-size: 10px;
+        color: var(--text-muted);
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        margin-bottom: 3px;
+      }
+      .goal-item-budget-bar {
+        height: 3px;
+        border-radius: 2px;
+        background: var(--bg-input);
+        overflow: hidden;
+      }
+      .goal-item-budget-fill {
+        height: 100%;
+        background: var(--accent-soft);
+        transition: width 0.3s ease;
+      }
+      /* Raise-cap is the primary surface action on budget_exhausted
+         goals — overflow is a state the user must consciously resolve. */
+      .goal-item-actions .goal-raise-cap {
+        background: var(--accent-soft);
+        color: #fff;
+        border-color: transparent;
+      }
+      .goal-item-actions .goal-raise-cap:hover {
+        background: var(--accent-hover);
+      }
+      /* budget_exhausted status indicator — matches the runtime
+         register's "Token budget exhausted" labeling. */
+      .goal-status-dot.budget_exhausted {
+        background: #f87171;
+        box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.18);
+      }
       .goal-outcomes {
         display: none;
         margin-top: 6px;
@@ -6223,8 +6264,13 @@
         <span class="plan-history-toggle">&#9660;</span>
       </div>
       <div id="plan-history-list"></div>
+      <!-- Commit-a-goal form. Runtime register per docs/doctrine/
+           panel-temporal-registers.md — primary CTA is "Commit" because
+           the panel models commitments. Budget envelope (v1 axis = tokens)
+           is part of the create flow so envelope sizing is a deliberate
+           choice, not a buried setting. -->
       <div id="goal-add-form">
-        <textarea id="goal-prompt" placeholder="What should the agent do?"></textarea>
+        <textarea id="goal-prompt" placeholder="Describe the outcome — motebit figures out how"></textarea>
         <div class="goal-form-row">
           <select id="goal-interval">
             <option value="1800000">Every 30m</option>
@@ -6237,7 +6283,15 @@
             <option value="once">Once</option>
           </select>
         </div>
-        <button id="goal-create-btn">Create Goal</button>
+        <div class="goal-form-row">
+          <select id="goal-budget">
+            <option value="10000">10k tokens</option>
+            <option value="50000" selected>50k tokens</option>
+            <option value="200000">200k tokens</option>
+            <option value="">No cap</option>
+          </select>
+        </div>
+        <button id="goal-create-btn">Commit goal</button>
       </div>
     </div>
     <button id="agents-btn" title="Agents" aria-label="Known agents">

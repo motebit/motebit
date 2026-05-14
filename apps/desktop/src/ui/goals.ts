@@ -40,6 +40,12 @@ function formatInterval(ms: number): string {
   return `${Math.round(ms / 1000)}s`;
 }
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}k`;
+  return String(n);
+}
+
 export function initGoals(ctx: DesktopContext): GoalsAPI {
   // Track active progress card state
   let progressCard: HTMLDivElement | null = null;
@@ -71,6 +77,8 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
           mode === "recurring" && intervalMs > 0
             ? (lastRunAt ?? createdAt) + intervalMs
             : undefined;
+        const budgetTokens = g.budget_tokens == null ? null : Number(g.budget_tokens);
+        const spentTokens = Number(g.spent_tokens) || 0;
         return {
           goal_id: String(g.goal_id),
           prompt: ipcString(g.prompt),
@@ -80,6 +88,8 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
           last_run_at: lastRunAt,
           ...(nextRunAt !== undefined ? { next_run_at: nextRunAt } : {}),
           created_at: createdAt,
+          budget_tokens: budgetTokens,
+          spent_tokens: spentTokens,
         };
       });
     },
@@ -95,6 +105,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         prompt: input.prompt,
         intervalMs: input.interval_ms,
         mode: input.mode,
+        budgetTokens: input.budget_tokens ?? null,
       });
     },
     setEnabled: async (goalId, _enabled) => {
@@ -104,6 +115,11 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       // can accept the explicit target; until then the controller's
       // `enabled` argument is informational and refresh reconciles.
       await config.invoke("goals_toggle", { goalId });
+    },
+    setBudgetTokens: async (goalId, budgetTokens) => {
+      const config = ctx.getConfig();
+      if (config?.isTauri !== true || config.invoke == null) return;
+      await config.invoke("goals_set_budget_tokens", { goalId, budgetTokens });
     },
     removeGoal: async (goalId) => {
       const config = ctx.getConfig();
@@ -444,10 +460,61 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
       item.appendChild(metaDiv);
 
+      // Budget envelope — runtime-register's commitment cap. Axis-native
+      // unit ("12k / 50k tokens") is the headline; cost translation is
+      // deliberately absent per panel-temporal-registers.md §"Bounded
+      // commitment is multi-dimensional."
+      const cap = goal.budget_tokens;
+      if (cap != null) {
+        const spent = goal.spent_tokens ?? 0;
+        const ratio = cap > 0 ? Math.min(spent / cap, 1.2) : 1;
+        const fillPct = Math.min(ratio * 100, 100);
+        const exhausted = status === "budget_exhausted";
+
+        const budget = document.createElement("div");
+        budget.className = "goal-item-budget";
+
+        const label = document.createElement("div");
+        label.className = "goal-item-budget-label";
+        if (exhausted) {
+          label.textContent = "Token budget exhausted";
+          label.style.color = "rgba(248, 113, 113, 0.85)";
+        } else {
+          label.textContent = `${formatTokens(spent)} / ${formatTokens(cap)} tokens · ${Math.round((spent / Math.max(cap, 1)) * 100)}%`;
+        }
+        budget.appendChild(label);
+
+        const bar = document.createElement("div");
+        bar.className = "goal-item-budget-bar";
+        const fill = document.createElement("div");
+        fill.className = "goal-item-budget-fill";
+        fill.style.width = `${fillPct}%`;
+        if (ratio >= 1) fill.style.background = "#f87171";
+        else if (ratio >= 0.8) fill.style.background = "#f59e0b";
+        bar.appendChild(fill);
+        budget.appendChild(bar);
+
+        item.appendChild(budget);
+      }
+
       const actions = document.createElement("div");
       actions.className = "goal-item-actions";
 
       const goalId = goal.goal_id;
+
+      // Raise-cap is the primary affordance on budget_exhausted rows —
+      // overflow is a state the user must consciously resolve per the
+      // doctrine. Hidden when the adapter doesn't expose
+      // setBudgetTokens (graceful for older adapters).
+      if (status === "budget_exhausted" && cap != null && goalsCtrl.setBudgetTokens) {
+        const raiseBtn = document.createElement("button");
+        raiseBtn.className = "goal-raise-cap";
+        raiseBtn.textContent = `Raise to ${formatTokens(cap * 2)}`;
+        raiseBtn.addEventListener("click", () => {
+          void goalsCtrl.setBudgetTokens?.(goalId, cap * 2);
+        });
+        actions.appendChild(raiseBtn);
+      }
 
       if (status === "active" || status === "paused") {
         const toggleBtn = document.createElement("button");
@@ -908,15 +975,25 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     const promptEl = document.getElementById("goal-prompt") as HTMLTextAreaElement;
     const intervalEl = document.getElementById("goal-interval") as HTMLSelectElement;
     const modeEl = document.getElementById("goal-mode") as HTMLSelectElement;
+    const budgetEl = document.getElementById("goal-budget") as HTMLSelectElement;
 
     const prompt = promptEl.value.trim();
     if (!prompt) return;
 
     const intervalMs = parseInt(intervalEl.value, 10);
     const mode = (modeEl.value as "recurring" | "once") ?? "recurring";
+    // Empty option value = "No cap" → null on the wire. Numeric values
+    // route through as token caps on the v1 axis.
+    const budgetRaw = budgetEl?.value ?? "";
+    const budgetTokens = budgetRaw === "" ? null : parseInt(budgetRaw, 10);
 
     const before = goalsCtrl.getState().error;
-    await goalsCtrl.addGoal({ prompt, interval_ms: intervalMs, mode });
+    await goalsCtrl.addGoal({
+      prompt,
+      interval_ms: intervalMs,
+      mode,
+      budget_tokens: budgetTokens,
+    });
     const s = goalsCtrl.getState();
     if (s.error && s.error !== before) {
       addMessage("system", `Failed to create goal: ${s.error}`);

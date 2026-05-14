@@ -165,7 +165,14 @@ CREATE TABLE IF NOT EXISTS goals (
   status TEXT NOT NULL DEFAULT 'active',
   parent_goal_id TEXT,
   max_retries INTEGER NOT NULL DEFAULT 3,
-  consecutive_failures INTEGER NOT NULL DEFAULT 0
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  -- v1 axis of the goal's bounded-commitment envelope per
+  -- docs/doctrine/panel-temporal-registers.md §"Bounded commitment is
+  -- multi-dimensional." Token cap; NULL = no cap. Future axes
+  -- (voice_seconds, tool_calls, wall_clock_ms, ...) land as additive
+  -- sibling columns; this one is not renamed. tauri-migrations v2 adds
+  -- the column to pre-v2 installs.
+  budget_tokens INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_goals_motebit ON goals (motebit_id);
 
@@ -178,7 +185,11 @@ CREATE TABLE IF NOT EXISTS goal_outcomes (
   summary TEXT,
   tool_calls_made INTEGER NOT NULL DEFAULT 0,
   memories_formed INTEGER NOT NULL DEFAULT 0,
-  error_message TEXT
+  error_message TEXT,
+  -- Token usage for this run. Sums per goal feed the runtime register's
+  -- spent_tokens for the budget envelope; NULL on legacy rows (treated
+  -- as 0 by the rollup). tauri-migrations v2 adds the column.
+  tokens_used INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
 
@@ -708,10 +719,20 @@ fn transcribe_audio(audio_base64: String) -> Result<String, String> {
 #[tauri::command]
 fn goals_list(state: State<AppState>, motebit_id: String) -> Result<Vec<JsonValue>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
+    // LEFT JOIN + COALESCE rolls up tokens_used per goal so the runtime
+    // register can render the budget envelope without a second query.
+    // Pre-token-tracking outcome rows (NULL tokens_used) contribute 0 —
+    // correct semantic since we don't know what they consumed.
     let mut stmt = db
         .prepare(
-            "SELECT goal_id, prompt, interval_ms, mode, status, consecutive_failures, created_at, last_run_at \
-             FROM goals WHERE motebit_id = ? ORDER BY created_at DESC",
+            "SELECT g.goal_id, g.prompt, g.interval_ms, g.mode, g.status, g.consecutive_failures, \
+                    g.created_at, g.last_run_at, g.budget_tokens, \
+                    COALESCE(SUM(o.tokens_used), 0) AS spent_tokens \
+             FROM goals g \
+             LEFT JOIN goal_outcomes o ON o.goal_id = g.goal_id \
+             WHERE g.motebit_id = ? \
+             GROUP BY g.goal_id \
+             ORDER BY g.created_at DESC",
         )
         .map_err(|e| e.to_string())?;
 
@@ -738,6 +759,15 @@ fn goals_list(state: State<AppState>, motebit_id: String) -> Result<Vec<JsonValu
                     None => JsonValue::Null,
                 },
             );
+            let budget_tokens: Option<i64> = row.get(8)?;
+            obj.insert(
+                "budget_tokens".into(),
+                match budget_tokens {
+                    Some(v) => JsonValue::Number(v.into()),
+                    None => JsonValue::Null,
+                },
+            );
+            obj.insert("spent_tokens".into(), JsonValue::Number(row.get::<_, i64>(9)?.into()));
             Ok(JsonValue::Object(obj))
         })
         .map_err(|e| e.to_string())?;
@@ -757,6 +787,7 @@ fn goals_create(
     prompt: String,
     interval_ms: i64,
     mode: String,
+    budget_tokens: Option<i64>,
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let now = std::time::SystemTime::now()
@@ -764,9 +795,49 @@ fn goals_create(
         .map_err(|e| e.to_string())?
         .as_millis() as i64;
     db.execute(
-        "INSERT INTO goals (goal_id, motebit_id, prompt, interval_ms, mode, status, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6)",
-        rusqlite::params![goal_id, motebit_id, prompt, interval_ms, mode, now],
+        "INSERT INTO goals (goal_id, motebit_id, prompt, interval_ms, mode, status, created_at, budget_tokens) \
+         VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7)",
+        rusqlite::params![goal_id, motebit_id, prompt, interval_ms, mode, now, budget_tokens],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn goals_set_budget_tokens(
+    state: State<AppState>,
+    goal_id: String,
+    budget_tokens: Option<i64>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    // Update the cap, then re-evaluate budget_exhausted in one
+    // transaction: a raised cap above current spend flips the goal back
+    // to 'active'; a lowered cap below current spend pushes to
+    // 'budget_exhausted'. Terminal statuses (completed/failed) are
+    // immune — caps don't reopen them.
+    db.execute(
+        "UPDATE goals SET budget_tokens = ?1 WHERE goal_id = ?2",
+        rusqlite::params![budget_tokens, goal_id],
+    )
+    .map_err(|e| e.to_string())?;
+    // Re-evaluate. Compute spent first via a separate query to avoid a
+    // correlated subquery in the UPDATE (rusqlite/SQLite handle it but
+    // the explicit form is clearer about intent).
+    let spent: i64 = db
+        .query_row(
+            "SELECT COALESCE(SUM(tokens_used), 0) FROM goal_outcomes WHERE goal_id = ?1",
+            [&goal_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let next_status = match budget_tokens {
+        Some(cap) if spent >= cap => "budget_exhausted",
+        _ => "active",
+    };
+    db.execute(
+        "UPDATE goals SET status = ?1 \
+         WHERE goal_id = ?2 AND status NOT IN ('completed', 'failed')",
+        rusqlite::params![next_status, goal_id],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -923,6 +994,7 @@ fn main() {
             transcribe_audio,
             goals_list,
             goals_create,
+            goals_set_budget_tokens,
             goals_toggle,
             goals_delete,
             goals_outcomes,
