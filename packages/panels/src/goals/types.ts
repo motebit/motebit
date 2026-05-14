@@ -112,6 +112,22 @@ export interface ScheduledGoal {
   /** Error message from the most recent failed run (runner-populated). */
   last_error?: string | null;
 
+  /** Whether the most recent successful fire's artifact was wrapped
+   *  as a signed `ContentArtifactManifest` per
+   *  `docs/doctrine/goal-results.md` §"The three categories". The
+   *  goal card's receipt-summary row reads this to render the
+   *  "signed" indicator next to "ran Xm ago". `true` = manifest
+   *  was minted and persisted (web localStorage / desktop +
+   *  mobile `goal_outcomes.signed_manifest` column); `false` =
+   *  fire succeeded but signing was skipped (identity not loaded,
+   *  empty content, or signing threw); `null` / absent = never
+   *  run, or the adapter doesn't yet carry signing wire (legacy
+   *  surfaces degrade to no indicator, which is the calm-software
+   *  fallback). Cleared symmetrically with `last_response_full` on
+   *  error fires so the indicator never outlives the artifact it
+   *  attested. */
+  last_manifest_signed?: boolean | null;
+
   consecutive_failures?: number;
   max_retries?: number;
   created_at?: number;
@@ -202,6 +218,14 @@ export type GoalFireResult =
        *  runner falls back to no affordance, which is the correct
        *  calm-software degradation. */
       turnId?: string;
+      /** Whether the adapter wrapped this fire's artifact as a signed
+       *  `ContentArtifactManifest` (web: localStorage manifest written;
+       *  desktop / mobile: `signed_manifest` column populated on the
+       *  outcome row). Runner stores as `goal.last_manifest_signed`.
+       *  Omit on adapters that don't yet wire signing — runner stores
+       *  `null` and the renderer omits the indicator. Doctrine:
+       *  `docs/doctrine/goal-results.md` §"The three categories". */
+      manifestSigned?: boolean;
       tokensUsed?: number;
     }
   | { outcome: "skipped" }

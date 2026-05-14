@@ -177,6 +177,14 @@ export function createWebGoalsRunner(app: WebApp): GoalsRunner {
       // placeholder) and the manifest stays absent — the renderer
       // simply omits the "Signed" indicator. A future fire with
       // identity loaded re-signs.
+      //
+      // `manifestSigned` is the receipt-row indicator on the goal
+      // card: `true` if the manifest was minted and persisted,
+      // `false` if signing was skipped (identity-not-loaded or
+      // signer threw). Threaded back through `GoalFireResult` so
+      // the runner stores `last_manifest_signed` and the panel
+      // controller exposes it to the renderer.
+      let manifestSigned = false;
       const runtime = app.getRuntime();
       if (trimmed.length > 0 && runtime != null) {
         try {
@@ -189,6 +197,7 @@ export function createWebGoalsRunner(app: WebApp): GoalsRunner {
           // `motebit-verify content-artifact`) reads `trimmed` +
           // this manifest and re-verifies offline.
           writeJson(`${ARTIFACT_MANIFEST_PREFIX}${goal.goal_id}`, manifest);
+          manifestSigned = manifest != null;
         } catch {
           // Signing failure is non-fatal — the artifact bytes are
           // still preserved on the goal record. Drop the manifest
@@ -208,6 +217,7 @@ export function createWebGoalsRunner(app: WebApp): GoalsRunner {
         // pinch mechanic per docs/doctrine/motebit-computer.md
         // §"Three end states") long after the fire completes.
         turnId: slabTurnIdForRun(runId),
+        manifestSigned,
         ...(tokensUsed != null ? { tokensUsed } : {}),
       };
     },

@@ -311,6 +311,13 @@ export function createGoalsRunner(
       // degrades to no "View result" affordance, which is the
       // correct calm-software fallback — better than a stale link.
       patch.last_turn_id = result.turnId ?? null;
+      // Signed-manifest receipt indicator per
+      // `docs/doctrine/goal-results.md` §"The three categories".
+      // Adapters that wrap the artifact as a `ContentArtifactManifest`
+      // pass `manifestSigned: true`; identity-load-pending or empty-
+      // content fires pass `false`; legacy adapters omit and we
+      // store `null` so the renderer omits the indicator entirely.
+      patch.last_manifest_signed = result.manifestSigned ?? null;
       patch.last_error = null;
       if (goal.mode === "once") {
         patch.status = "completed";
@@ -333,6 +340,11 @@ export function createGoalsRunner(
       patch.last_response_preview = null;
       patch.last_response_full = null;
       patch.last_turn_id = null;
+      // Clear the signed-manifest indicator on error fires for the
+      // same reason `last_response_full` is cleared: the indicator
+      // attests an artifact that no longer exists on this goal
+      // record. A subsequent success repopulates it.
+      patch.last_manifest_signed = null;
       if (goal.mode === "once") {
         patch.status = "failed";
       } else {

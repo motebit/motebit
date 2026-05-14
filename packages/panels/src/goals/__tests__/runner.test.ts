@@ -327,6 +327,75 @@ describe("createGoalsRunner — runNow + fire reconciliation", () => {
     expect(runner.getState().goals[0]?.last_turn_id).toBeNull();
   });
 
+  it("fired with manifestSigned persists last_manifest_signed (receipt indicator)", async () => {
+    // Phase-3-deferral close: the goal card surfaces a "signed"
+    // indicator next to "ran Xm ago" when the fire's artifact was
+    // wrapped as a `ContentArtifactManifest`. The adapter reports
+    // signing success via `manifestSigned: true` on the fire result;
+    // runner persists it so the renderer can decide per-card.
+    // Doctrine: `docs/doctrine/goal-results.md` §"The three
+    // categories".
+    const { adapter } = makeAdapter(async () => ({
+      outcome: "fired",
+      responsePreview: "preview",
+      responseFull: "full",
+      manifestSigned: true,
+    }));
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.last_manifest_signed).toBe(true);
+  });
+
+  it("fired with manifestSigned=false persists false (signing skipped, not unknown)", async () => {
+    // Signing-skipped is a meaningful state — identity not loaded,
+    // empty content, or the signer threw. Distinct from
+    // "adapter doesn't yet wire signing" (which omits and stores
+    // null). The renderer can render the row WITHOUT the indicator
+    // in both cases; downstream tooling (verifier export, drift
+    // detection) reads `false` as "intentionally unsigned this fire"
+    // and `null` as "this surface doesn't sign at all yet."
+    const { adapter } = makeAdapter(async () => ({
+      outcome: "fired",
+      responsePreview: "preview",
+      manifestSigned: false,
+    }));
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.last_manifest_signed).toBe(false);
+  });
+
+  it("error clears last_manifest_signed symmetrically (indicator must not outlive artifact)", async () => {
+    // Same latest-outcome semantic as `last_response_full` and
+    // `last_turn_id`: an error fire clears the prior-success
+    // artifact, so the "signed" indicator (which attested THAT
+    // artifact) must also clear. A stale `true` would falsely
+    // suggest the error's failed fire produced a signed result.
+    let nextResult: GoalFireResult = {
+      outcome: "fired",
+      responsePreview: "p",
+      responseFull: "full",
+      manifestSigned: true,
+    };
+    const adapter = {
+      loadGoals: (): ScheduledGoal[] => [],
+      saveGoals: (): void => {},
+      loadRuns: (): GoalRunRecord[] => [],
+      saveRuns: (): void => {},
+      fire: async (): Promise<GoalFireResult> => nextResult,
+    };
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.last_manifest_signed).toBe(true);
+
+    nextResult = { outcome: "error", error: "boom" };
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.last_manifest_signed).toBeNull();
+  });
+
   it("skipped: next_run_at unchanged (retried on next tick)", async () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "skipped" }));
     let n = 100;

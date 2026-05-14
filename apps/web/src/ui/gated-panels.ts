@@ -400,6 +400,52 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
       card.appendChild(headerRow);
 
+      // Receipt-summary row \u2014 the per-fire audit trail surfaced on the
+      // commitment card per `docs/doctrine/goal-results.md` \u00a7"The
+      // three categories" (Receipt category). Renders when the goal
+      // has fired at least once. Format:
+      //
+      //   ran 5m ago \u00b7 signed     \u2190 successful fire, manifest minted
+      //   ran 5m ago              \u2190 successful fire, no manifest
+      //   failed 5m ago           \u2190 last fire errored (amber tint)
+      //
+      // The `\u00b7 signed` chip closes the Phase-3-deferral on this
+      // surface \u2014 the Phase 3 doctrine assumed web rendered a Signed
+      // indicator alongside the receipt summary; web actually only
+      // persisted the manifest. This row makes that attestation
+      // visible alongside the existing pulse / budget / countdown
+      // signals that already render the receipt category piecemeal.
+      if (goal.last_run_at != null) {
+        const receipt = document.createElement("div");
+        receipt.className = "goal-card-receipt" + (goal.last_error != null ? " errored" : "");
+        const seconds = Math.floor((now - goal.last_run_at) / 1000);
+        const ago =
+          seconds < 60
+            ? "just now"
+            : seconds < 3600
+              ? `${Math.floor(seconds / 60)}m ago`
+              : seconds < 86400
+                ? `${Math.floor(seconds / 3600)}h ago`
+                : `${Math.floor(seconds / 86400)}d ago`;
+        const verb = goal.last_error != null ? "failed" : "ran";
+        const status = document.createElement("span");
+        status.textContent = `${verb} ${ago}`;
+        receipt.appendChild(status);
+        if (goal.last_manifest_signed === true) {
+          const signedMark = document.createElement("span");
+          signedMark.className = "goal-card-receipt-signed";
+          signedMark.textContent = "signed";
+          // Title attribute: the receipt row reads as glanceable
+          // verb-and-time; the hover-disclosure names what's
+          // attested so the user can map "signed" to motebit's
+          // unified-receipt doctrine without a docs trip.
+          signedMark.title =
+            "Result wrapped as a signed ContentArtifactManifest \u2014 independently verifiable via motebit-verify";
+          receipt.appendChild(signedMark);
+        }
+        card.appendChild(receipt);
+      }
+
       // Budget envelope \u2014 axis-native unit is the headline ("12k / 50k
       // tokens"); cost translation would land as additive disclosure
       // when computable, never as the headline (per panel-temporal-
@@ -519,21 +565,14 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
         expandInner.appendChild(errPreview);
       }
 
+      // The "ran Xm ago" / "failed Xm ago" line moved to the
+      // collapsed-view receipt-summary row (`.goal-card-receipt`) so
+      // the receipt category is glanceable without expanding the
+      // card. The expanded-meta block now only surfaces the
+      // consecutive-failures counter, which is a deeper-disclosure
+      // signal not glanceable enough for the collapsed row.
       const meta = document.createElement("div");
       meta.className = "goal-card-expand-meta";
-      if (goal.last_run_at != null) {
-        const ran = document.createElement("span");
-        const seconds = Math.floor((now - goal.last_run_at) / 1000);
-        ran.textContent =
-          seconds < 60
-            ? "ran just now"
-            : seconds < 3600
-              ? `ran ${Math.floor(seconds / 60)}m ago`
-              : seconds < 86400
-                ? `ran ${Math.floor(seconds / 3600)}h ago`
-                : `ran ${Math.floor(seconds / 86400)}d ago`;
-        meta.appendChild(ran);
-      }
       if (
         goal.consecutive_failures != null &&
         goal.consecutive_failures > 0 &&

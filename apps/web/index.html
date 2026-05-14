@@ -3994,6 +3994,35 @@
         font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
         flex-shrink: 0;
       }
+      /* Receipt-summary row — collapsed-view per-fire audit trail
+         per docs/doctrine/goal-results.md §"The three categories".
+         Format: "ran 5m ago · signed" / "ran 5m ago" / "failed 5m ago".
+         Lives between the header row and the budget bar; size matches
+         the cadence pill (10px, ghost color) so the card reads
+         calm rather than busy. */
+      .goal-card-receipt {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 6px;
+        font-size: 10px;
+        color: var(--text-ghost);
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      .goal-card-receipt.errored {
+        color: var(--status-warning-fg);
+      }
+      /* The "signed" chip — separated from the time-ago by a middle-
+         dot. No box, no glyph: the dot separator carries the visual
+         weight and the title attribute discloses what's attested. */
+      .goal-card-receipt-signed::before {
+        content: "·";
+        margin-right: 6px;
+        color: var(--text-muted);
+      }
+      .goal-card-receipt-signed {
+        color: var(--accent-soft);
+      }
       .goal-card-budget {
         margin-top: 8px;
       }
