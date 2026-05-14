@@ -45,38 +45,52 @@ export const SIDE_RAIL_PANELS: readonly SideRailPanel[] = [
 // ── Panel presentation modes ───────────────────────────────────────
 //
 // Closed registry per `docs/doctrine/panel-presentation-modes.md`.
-// A panel renders as `f(panel × presentationMode)`. Information shape
-// is constant; embodiment is the variable. Same closed-union pattern
-// as `SuiteId` (cryptosuite agility), `EmbodimentMode` (slab), and
-// `GoalBudgetAxis` (bounded commitment).
+// A panel renders as `f(panel × presentationMode)` on flat surfaces.
+// Information shape is constant; embodiment is the variable. Same
+// closed-union pattern as `SuiteId` (cryptosuite agility),
+// `EmbodimentMode` (slab), and `GoalBudgetAxis` (bounded commitment).
 //
-// `modal` is structurally absent — modals are a category error per the
-// doctrine. If a creation flow needs a different shape, rotate the
-// panel's interior register, don't pop a second panel-shaped surface.
+// **Scope: flat surfaces only.** Panels exist on web / desktop /
+// mobile — surfaces with viewport chrome that admits rectangular
+// records-areas attached to edges. They do NOT exist on spatial.
+// `docs/doctrine/spatial-as-endgame.md` enumerates the five spatial
+// primitives (creature / satellite / environment / attractor /
+// presentation) and explicitly forbids window-manager panels:
+// "Surfaces emerge from the motebit's gesture and recede when work
+// ends." A "spatial panel" would fail all three of that doctrine's
+// tests (user-summoned, free-floating, persistent chrome). In
+// spatial, the same controller state renders as a Presentation
+// primitive — the 5th spatial primitive, anchored to the creature.
+// The categorical translation happens in the renderer, not via a
+// new presentation-mode entry.
+//
+// `modal` and `spatial` are both structurally absent. Modals because
+// they're a category error per the doctrine (rotate interior register
+// instead). Spatial because panels-in-spatial is a categorical
+// boundary violation per `spatial-as-endgame.md`.
 
-export type PanelPresentationMode = "rail" | "immersive" | "spatial";
+export type PanelPresentationMode = "rail" | "immersive";
 
-/** Surfaces that compose panels. */
-export type PanelSurface = "web" | "desktop" | "mobile" | "spatial";
+/** Surfaces that compose panels. Spatial intentionally excluded —
+ *  the spatial app composes scene primitives per
+ *  `spatial-as-endgame.md`, not panels. */
+export type PanelSurface = "web" | "desktop" | "mobile";
 
 /**
  * Per-surface availability matrix. A "–" cell in the doctrine memo
  * maps to absence from the per-surface tuple here. The type system
  * rejects attempts to render a panel in an unavailable mode at the
- * call site (e.g. `rail` on mobile, `spatial` on web today). The
- * table is not aspirational — it's typed, frozen, and enforced.
+ * call site (e.g. `rail` on mobile). The table is not aspirational —
+ * it's typed, frozen, and enforced.
  *
- * `spatial` lands as an available mode on the spatial app (and as
- * `immersive` for the "pull-close" register on the same surface).
- * Web / desktop / mobile get `spatial` when the panel renderer
- * composes into a 3D scene; that's a per-surface adapter ship, not a
- * doctrine extension.
+ * Spatial is absent from this table by design: see the registry
+ * comment above + `panel-presentation-modes.md` §"Spatial: panels
+ * become Presentations" for the categorical translation.
  */
 export const PANEL_PRESENTATION_AVAILABILITY = {
   web: ["rail", "immersive"],
   desktop: ["rail", "immersive"],
   mobile: ["immersive"],
-  spatial: ["immersive", "spatial"],
 } as const satisfies Record<PanelSurface, readonly PanelPresentationMode[]>;
 
 /**

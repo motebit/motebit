@@ -4,11 +4,15 @@ Panels are records (per [`records-vs-acts`](records-vs-acts.md)). Records have a
 
 The axis is named `PanelPresentationMode`. It's a closed registry. It composes with the closed `EmbodimentMode` registry in [`chrome-as-state-render`](chrome-as-state-render.md) by the same logic: information shape is constant; render shape is a function of the mode. New modes are registry additions, never wire-format breaks.
 
+## Scope: flat surfaces only
+
+Panels are a **flat-surface concept**. They live on web, desktop, and mobile — surfaces with viewport chrome that admits rectangular records-areas attached to edges. They do **not** exist on spatial. The spatial app composes scene primitives per [`spatial-as-endgame`](spatial-as-endgame.md) (creature / satellite / environment / attractor / presentation), and that doctrine explicitly forbids window-manager panels. In spatial, the same controller state that renders as a panel on web/desktop/mobile renders as a **Presentation primitive** (a surface motebit holds and shows, anchored to the creature's gesture, that recedes when work ends). The category translates; the controller doesn't. See §"Spatial: panels become Presentations" below.
+
 ## The two-axis split
 
 A panel has **two** orthogonal axes that compose:
 
-- **Presentation mode** — _how_ the panel embodies on the surface (rail / immersive / spatial). Cross-surface; mode availability depends on the surface.
+- **Presentation mode** — _how_ the panel embodies on the flat surface (rail / immersive). Cross-surface across web/desktop/mobile; mode availability depends on the surface.
 - **Interior register** — _what_ the panel is currently showing (list / create / detail / ...). Per-panel; opaque to the doctrine, modeled by the controller.
 
 The Goals "Commit a goal" affordance is an **interior register** change, not a presentation-mode change. It does not get a separate surface; the panel's interior flips from `list` to `create`. Same panel, same width, same controller — the body of the panel becomes the form. Cancel returns to `list`. This is the iOS Reminders pattern (`+` flips the row into edit register inline) generalized.
@@ -17,40 +21,58 @@ The category error this doctrine forbids is **modals**. A modal is a panel-shape
 
 ## The closed `PanelPresentationMode` registry
 
-v1 ships three entries:
+v1 ships two entries:
 
 - **`rail`** — fixed-width side rail on a flat surface (~280px on web/desktop). The panel sits alongside the body. Records visible without dismissing the act surface. Today's default on web + desktop.
 - **`immersive`** — the panel fills the available viewport. Body recedes. Same content as rail, just no compromise on space. Native default on mobile (the phone is too narrow for a real rail; iOS slide-up sheets are already immersive). On web/desktop it's a deliberate "focus on this commitment" register — Goals at 200 commitments needs immersive; Goals at 3 commitments does not.
-- **`spatial`** — the panel detaches from the surface chrome and floats as a glass object in motebit's space. Deferred for v1. This is the AR-glasses endgame per [`spatial-as-endgame`](spatial-as-endgame.md): on glasses there is no rail and no viewport — only the user's real world as `Liquescentia` per [`liquescentia-as-substrate`](liquescentia-as-substrate.md). When `spatial` lands it becomes the **sixth spatial primitive** alongside creature / satellite / environment / attractor / presentation.
 
-Closed-union, additive-extension shape — same as `SuiteId` ([`agility-as-role`](agility-as-role.md)), `EmbodimentMode` ([`motebit-computer`](motebit-computer.md) §"Six embodiment modes"), `GoalBudgetAxis` ([`panel-temporal-registers`](panel-temporal-registers.md) §"Bounded commitment is multi-dimensional"). When a fourth mode is needed (e.g. `peer-presented` — a panel rendered through a peer's viewport during shared gaze), it lands as a registry addition; existing call sites compile unchanged.
+Closed-union, additive-extension shape — same as `SuiteId` ([`agility-as-role`](agility-as-role.md)), `EmbodimentMode` ([`motebit-computer`](motebit-computer.md) §"Six embodiment modes"), `GoalBudgetAxis` ([`panel-temporal-registers`](panel-temporal-registers.md) §"Bounded commitment is multi-dimensional"). When a third flat-surface mode is needed (e.g. `peer-presented` — a panel rendered through a peer's viewport during shared gaze), it lands as a registry addition; existing call sites compile unchanged. **A `spatial` mode is not coming** — the spatial surface composes Presentation primitives, not panels (see §"Spatial: panels become Presentations" below).
 
 ## Per-surface availability matrix
 
-Not every mode applies to every surface. This is per-surface availability, not a universal toggle:
+Not every mode applies to every flat surface. This is per-surface availability, not a universal toggle:
 
-| Surface | `rail`                | `immersive`        | `spatial`          |
-| ------- | --------------------- | ------------------ | ------------------ |
-| Web     | ✓ (default)           | ✓ (focus register) | deferred           |
-| Desktop | ✓ (default)           | ✓ (focus register) | deferred           |
-| Mobile  | – (screen too narrow) | ✓ (native default) | deferred           |
-| Spatial | – (no rail surface)   | ✓ (pull-close)     | ✓ (native default) |
+| Surface | `rail`                | `immersive`        |
+| ------- | --------------------- | ------------------ |
+| Web     | ✓ (default)           | ✓ (focus register) |
+| Desktop | ✓ (default)           | ✓ (focus register) |
+| Mobile  | – (screen too narrow) | ✓ (native default) |
 
-A "–" means the mode is **structurally unavailable** on that surface — not a v1 deferral, but a category mismatch. There is no rail on glasses because there is no surface chrome to attach a rail to. There is no rail on a phone because 280px on a 390px-wide screen leaves no body. The availability table is not aspirational; it's typed.
+A "–" means the mode is **structurally unavailable** on that surface — not a v1 deferral, but a category mismatch. There is no rail on a phone because 280px on a 390px-wide screen leaves no body. The availability table is not aspirational; it's typed.
 
-Transitions form a sensible graph within each surface:
+The spatial surface is **deliberately absent** from this table — panels don't exist on spatial. See the next section.
+
+Transitions form a sensible graph within each flat surface:
 
 - Web / desktop: `rail` ↔ `immersive`. Default `rail`; user toggles to `immersive` for focus-mode work.
 - Mobile: `immersive` only. No transitions needed — the mode is the native default.
-- Spatial: `spatial` ↔ `immersive`. Default `spatial` (panel lives as a glass object in the room); user pulls it close and it fills their field of view (`immersive` on glasses ≠ filling a rectangle — it fills the visual register the user is foveating on).
 
-## The spatial endgame
+## Spatial: panels become Presentations
 
-`spatial` is named in v1 even though no code ships it. The reason is doctrine-shaped, not roadmap-shaped: when AR glasses arrive (the 5–10 year horizon per [`spatial-as-endgame`](spatial-as-endgame.md)), the panel must already be a typed primitive that the spatial renderer can pick up — not a retrofit. Naming it now prevents the panel layer from accumulating rail-shaped assumptions ("a panel is a rectangle"; "a panel has a width"; "a panel has a close button") that would have to be unwound under deadline pressure later.
+[`spatial-as-endgame`](spatial-as-endgame.md) §"The five spatial primitives" enumerates the closed registry of what exists in motebit's 3D scene: **creature / satellite / environment / attractor / presentation**. The doctrine explicitly forbids panels under §"The refined 'no panels' rule":
 
-The spatial panel is the **slab's sibling**. The slab is motebit's first-person perceptual field per [`motebit-computer`](motebit-computer.md). The spatial panel is the user's window into motebit's accumulated state — a glass object alongside the slab, both inhabiting the same `Liquescentia` substrate. On glasses, the slab and the spatial panels float in the user's room and recede when work ends. The doctrine of calm-AR (surfaces emerge from gesture, recede when done) applies identically to both. The spatial panel is the runtime/identity register made spatial; the slab is the body's act surface made spatial.
+> Surfaces emerge from the motebit's gesture and recede when work ends. The creature is the source; surfaces are presented, held, shown. Disconnected window-manager panels — surfaces with no relationship to the creature's body or attention — remain the anti-goal.
 
-When `spatial` lands, the panel controller does not change. Same `getState()`, same `subscribe()`, same actions. The renderer changes — instead of `domElement.appendChild`, it's a Three.js / WebXR scene-graph entry the spatial app composes alongside the creature. The information is constant; the embodiment is the variable.
+A "spatial panel" — a glass object the user opens via a window-manager affordance, that floats in user-space, that persists as chrome — **fails all three of `spatial-as-endgame.md`'s tests**:
+
+1. Window-manager-summoned (the user clicks "open panel") → wrong; motebit must be the summoning agent.
+2. Free-floating in user-space → wrong; spatial surfaces are anchored to the creature.
+3. Persistent chrome → wrong; spatial surfaces recede when work ends.
+
+So in spatial, **there is no `PanelPresentationMode`**. The same controller state that renders as a rail or immersive panel on web/desktop/mobile renders as a **Presentation primitive** on spatial — the 5th spatial primitive, anchored to the creature's act of showing. The user says "show me my goals"; motebit summons + holds + dissolves a held-tablet shape with the goals content rendered inside. Same controller. Different render category. Different summoning semantics.
+
+The render-target translation is per-surface, not per-mode:
+
+| Surface                 | Records render category      | Summoning semantics                                         |
+| ----------------------- | ---------------------------- | ----------------------------------------------------------- |
+| Web (flat viewport)     | **Panel** (rail / immersive) | User opens panel                                            |
+| Desktop (flat viewport) | **Panel** (rail / immersive) | User opens panel                                            |
+| Mobile (flat viewport)  | **Panel** (immersive sheet)  | User opens panel                                            |
+| Spatial (3D scene)      | **Presentation** primitive   | User expresses intent → motebit summons / holds / dissolves |
+
+When the spatial app builds out, the Goals controller does not change. Its `getState()`, `subscribe()`, and action methods are renderer-agnostic. The spatial app implements a renderer that **does not consume `PanelPresentationMode`** — it composes a Presentation primitive instead, sourced from the same controller. The information is constant; the embodiment changes categorically, not modally.
+
+**This doctrine memo's scope ends at flat surfaces.** The spatial render category is governed by [`spatial-as-endgame`](spatial-as-endgame.md), not here. Don't add `spatial` to `PanelPresentationMode` — that's the doctrine collision corrected in this memo's history.
 
 ## Inline > transition > modal-forbidden
 
@@ -71,36 +93,37 @@ The arc of three shapes is itself the worked lesson: reach for shape 1 first. On
 [`packages/panels/src/registry.ts`](../../packages/panels/src/registry.ts) ships the closed `PanelPresentationMode` type and the per-surface availability table. Both are `as const` so the type system pins them:
 
 ```ts
-export type PanelPresentationMode = "rail" | "immersive" | "spatial";
+export type PanelPresentationMode = "rail" | "immersive";
+
+export type PanelSurface = "web" | "desktop" | "mobile";
 
 export const PANEL_PRESENTATION_AVAILABILITY = {
   web: ["rail", "immersive"],
   desktop: ["rail", "immersive"],
   mobile: ["immersive"],
-  spatial: ["immersive", "spatial"],
 } as const;
 ```
 
-A surface that tries to render a panel in an unavailable mode is a type error at the call site. A future contributor proposing a `modal` mode hits the closed-union rejection — there is no slot for it.
+A surface that tries to render a panel in an unavailable mode is a type error at the call site. A future contributor proposing a `modal` mode hits the closed-union rejection — there is no slot for it. A future contributor proposing a `spatial` mode hits the same rejection — `PanelSurface` does not include `"spatial"`, and adding it would cross the categorical boundary [`spatial-as-endgame`](spatial-as-endgame.md) draws.
 
-This is the same shape as `PanelPrimitive` (which deliberately omits `governance` so governance-as-panel cannot be declared). The structural unrepresentability of modals is the doctrine working as intended.
+This is the same shape as `PanelPrimitive` (which deliberately omits `governance` so governance-as-panel cannot be declared). The structural unrepresentability of modals AND of spatial panels is the doctrine working as intended.
 
 ## Cross-references
 
 - [`records-vs-acts`](records-vs-acts.md) — **parent**. Records sit on panels; acts pass through the body. This memo refines _how_ the records side embodies.
 - [`panel-temporal-registers`](panel-temporal-registers.md) — sibling. That memo named the temporal axis (identity vs runtime register); this one names the presentation axis. Two orthogonal axes on the records surface.
-- [`chrome-as-state-render`](chrome-as-state-render.md) — sibling. Chrome renders as `f(controlState × embodimentMode)` for the slab; panels render as `f(panel × presentationMode)` for the records side. Same shape.
-- [`motebit-computer`](motebit-computer.md) — the slab's typed `EmbodimentMode` is the structural twin of `PanelPresentationMode`. Both close their unions; both ship the spatial entry now to keep the AR-glasses endgame typed.
-- [`liquescentia-as-substrate`](liquescentia-as-substrate.md) — on glasses, the user's real world is the medium. Spatial panels inherit `Liquescentia` from the substrate, just as the slab and the creature do.
-- [`spatial-as-endgame`](spatial-as-endgame.md) — when `spatial` lands, panels become the sixth primitive alongside creature / satellite / environment / attractor / presentation.
-- [`always-already-slab`](always-already-slab.md) — the slab is always-already there; the panel inherits the same property through the substrate. A `create` register inside an empty panel is READY, not absent.
+- [`chrome-as-state-render`](chrome-as-state-render.md) — sibling. Chrome renders as `f(controlState × embodimentMode)` for the slab; panels render as `f(panel × presentationMode)` for the records side on flat surfaces. Same shape on the flat-surface side; the spatial render category is different per `spatial-as-endgame.md`.
+- [`spatial-as-endgame`](spatial-as-endgame.md) — **categorical boundary**. The five spatial primitives are creature / satellite / environment / attractor / presentation. Panels are not among them and explicitly cannot be. On spatial, the same controller state renders as a Presentation primitive (motebit-summoned, anchored to the creature, recedes when work ends), not as a panel-with-spatial-mode. This memo's `PanelPresentationMode` scope is flat surfaces only.
+- [`motebit-computer`](motebit-computer.md) — the slab's typed `EmbodimentMode` is partially analogous to `PanelPresentationMode` (both close their unions), but the slab is a scene-graph primitive across all surfaces (3D today even on flat viewports), whereas panels are flat-surface DOM overlays whose spatial counterpart is the Presentation primitive in `spatial-as-endgame.md`. Don't conflate them.
+- [`always-already-slab`](always-already-slab.md) — the slab is always-already there; the panel inherits the always-already property on its flat-surface substrate. A `create` register inside an empty panel is READY, not absent.
 - [`agility-as-role`](agility-as-role.md) — closed-union, additive-registry pattern. Eighth instance: cryptosuite / license-floor / settlement-rail / TaskShape / EmbodimentMode / GoalBudgetAxis / PanelPresentationMode.
 
 ## How to apply
 
-Before adding any panel-shaped surface or creation flow, answer two questions:
+Before adding any panel-shaped surface or creation flow, answer three questions:
 
-1. **Is this a different panel, or the same panel showing different content?** Same panel + different content = interior register change. Different panel = different `SIDE_RAIL_PANELS` entry. If the answer is "I want a modal," the doctrine is telling you the category is wrong — pick one of the two.
-2. **What presentation mode does this surface support?** Check `PANEL_PRESENTATION_AVAILABILITY`. If you're trying to render `rail` on mobile or `spatial` on web today, the type system rejects you — and rightly. The availability table is not negotiable per-feature.
+1. **Is this a flat surface (web / desktop / mobile) or a spatial surface?** If spatial, this doctrine does not apply — see [`spatial-as-endgame`](spatial-as-endgame.md) for the Presentation primitive that replaces the panel category there. The same controller renders as a Presentation in spatial; the categorical translation happens in the renderer, not via a new presentation-mode entry.
+2. **Is this a different panel, or the same panel showing different content?** Same panel + different content = interior register change. Different panel = different `SIDE_RAIL_PANELS` entry. If the answer is "I want a modal," the doctrine is telling you the category is wrong — pick one of the two.
+3. **What presentation mode does this flat surface support?** Check `PANEL_PRESENTATION_AVAILABILITY`. If you're trying to render `rail` on mobile, the type system rejects you. The availability table is not negotiable per-feature.
 
-If both answers come out clean, you're applying the doctrine. If either is muddy, you have a category error to resolve before any pixels move.
+If all three come out clean, you're applying the doctrine. If any is muddy, you have a category error to resolve before any pixels move.
