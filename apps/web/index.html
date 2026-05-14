@@ -4096,66 +4096,21 @@
         color: var(--status-error-fg);
       }
 
-      /* ── Empty register — calm, commitment-bearing ─────────────────
-         Vertically-centered in the cards area above the always-visible
-         form. The Reminders/Photos empty-state pattern: small caption
-         floating in the space, action affordance below (the form). */
-      .goal-empty-commit {
-        padding: 0 16px;
-        text-align: center;
-      }
-      .goal-empty-commit .goal-pulse {
-        margin: 0 auto 14px;
-        width: 9px;
-        height: 9px;
-        animation: goalPulseBreathe 3.33s ease-in-out infinite;
-        background: var(--accent-soft);
-        opacity: 0.45;
-      }
-      .goal-empty-commit-title {
-        font-size: 13px;
-        color: var(--text-secondary);
-        margin-bottom: 4px;
-      }
-      .goal-empty-commit-sub {
-        font-size: 11px;
-        color: var(--text-ghost);
-      }
-
-      /* ── Goals layout — always-visible inline affordance ───────────
-         Apple Reminders bottom-bar pattern per
+      /* ── Goals pane — top-down sequential sections ─────────────────
+         Mirrors Sovereign's pane shape: section headers anchor each
+         subsection at the top; records/empty rows / form cards flow
+         beneath; calm void naturally lives at the bottom. No
+         bottom-pinning, no flex-stretch, no centered pulse — the
+         panel-* vocabulary already shipped for Sovereign is the same
+         vocabulary every panel composes against. Per
          docs/doctrine/panel-presentation-modes.md §"Inline >
-         transition > modal-forbidden". Cards (or empty caption)
-         scroll in the area above; form is pinned to the bottom of
-         the panel, always visible, never transitioned to. */
-      #goal-cards-area {
+         transition > modal-forbidden", the form is a sequential
+         section (panel-form-card), not a pinned bottom bar. */
+      #goals-pane {
         flex: 1;
         min-height: 0;
         overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-      }
-      /* Empty state: caption anchored to the BOTTOM of the cards
-         area — sits just above the form so the introduction is
-         visually bound to the action it introduces. Void above is
-         calm empty-list space (where cards would go), not "lost"
-         space surrounding a floating caption. When goals exist, JS
-         hides this and the cards stack from the top. */
-      #goal-cards-area .goal-empty-commit {
-        margin-top: auto;
-        padding-bottom: 18px;
-      }
-      #goal-list {
-        flex: 0 0 auto;
-      }
-      /* Form sits softly at the bottom — no hard border-top divider.
-         The slight glass-tint distinguishes the form region from the
-         cards area without compartmentalizing it. Caption above flows
-         into the form without a visible seam. */
-      #goal-commit-form {
-        flex-shrink: 0;
-        padding: 14px 14px 16px;
-        background: var(--bg-glass);
+        padding-bottom: 24px;
       }
       .goal-commit-field {
         margin-top: 12px;
@@ -4167,24 +4122,6 @@
         color: var(--text-muted);
         margin-bottom: 6px;
         font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-      }
-      .goal-commit-modal textarea {
-        width: 100%;
-        padding: 9px 11px;
-        border: 1px solid var(--border-medium);
-        border-radius: 9px;
-        background: var(--bg-input);
-        color: var(--text-input);
-        font-size: 13px;
-        font-family: "SF Mono", Menlo, Consolas, monospace;
-        outline: none;
-        resize: vertical;
-        min-height: 56px;
-        max-height: 140px;
-        box-sizing: border-box;
-      }
-      .goal-commit-modal textarea:focus {
-        border-color: var(--accent-border);
       }
       .goal-commit-chips {
         display: flex;
@@ -4209,16 +4146,13 @@
         background: var(--accent-bg);
         color: var(--text-primary);
       }
-      .goal-commit-budget-row {
-        display: flex;
-        gap: 6px;
-        margin-top: 6px;
-      }
       .goal-commit-budget-input {
-        flex: 1;
-        padding: 7px 10px;
-        border: 1px solid var(--border-medium);
-        border-radius: 8px;
+        display: block;
+        width: 100%;
+        margin-top: 8px;
+        padding: 8px 11px;
+        border: 1px solid var(--border-input);
+        border-radius: 10px;
         background: var(--bg-input);
         color: var(--text-input);
         font-size: 12px;
@@ -4229,29 +4163,10 @@
       .goal-commit-budget-input:focus {
         border-color: var(--accent-border);
       }
-      /* Always-visible commit form's submit. Full-width per the
-         always-visible-inline-affordance pattern — there's no Cancel
-         to share space with because the form is perpetual. */
-      #goal-commit-form .commit-btn {
-        width: 100%;
+      /* Submit button uses .panel-action-pill (shared vocab); only
+         the form-context margin lives here. */
+      #goal-commit-submit {
         margin-top: 14px;
-        padding: 10px 0;
-        border: none;
-        border-radius: 10px;
-        background: var(--accent-soft);
-        color: #fff;
-        font-size: 13px;
-        font-weight: 500;
-        cursor: pointer;
-        font-family: inherit;
-        transition: background-color 0.15s ease;
-      }
-      #goal-commit-form .commit-btn:hover {
-        background: var(--accent-hover);
-      }
-      #goal-commit-form .commit-btn:disabled {
-        opacity: 0.5;
-        cursor: default;
       }
 
       /* Goal status indicator */
@@ -7295,63 +7210,57 @@
     </button>
     <div id="goals-backdrop"></div>
     <div id="goals-panel" aria-label="Goals panel">
-      <!-- Goals panel: always-visible inline affordance per
-           docs/doctrine/panel-presentation-modes.md §"Inline >
-           transition > modal-forbidden". The form is light enough
-           (textarea + two chip rows + commit button) to coexist with
-           the cards list. Cards (or the empty caption) scroll in the
-           area above; the form lives permanently at the bottom. No
-           register transitions; no separate page. The Reminders
-           bottom-bar pattern, generalized. -->
+      <!-- Goals panel: top-down sequential sections, mirroring
+           Sovereign's pattern. Section header → records/empty row →
+           next section header → form card. Content flows from the
+           top; calm void naturally lives at the bottom. No
+           bottom-pinning, no flex-stretch, no centered pulse. The
+           panel-* vocabulary that Sovereign / Memory / Agents /
+           Capabilities already share is the runtime-register's
+           shape too — Goals does not need a new pattern. -->
       <div class="goals-panel-header">
         <span class="goals-panel-title">Goals</span>
         <button class="goals-panel-close" id="goals-close-btn">&times;</button>
       </div>
 
-      <!-- Cards area: scrollable when populated; vertically-centered
-           empty caption when not. The pulse + headline are READY (per
-           always-already-slab.md inheritance), not absent. -->
-      <div id="goal-cards-area">
-        <div id="goal-empty" class="goal-empty-commit" style="display: none">
-          <div class="goal-pulse"></div>
-          <div class="goal-empty-commit-title">Commit motebit to a goal</div>
-          <div class="goal-empty-commit-sub">a recurring task · or a one-shot plan</div>
-        </div>
+      <div id="goals-pane">
+        <div class="panel-section-header">Active commitments</div>
         <div id="goal-list"></div>
-      </div>
-
-      <!-- Always-visible commit form. No title (panel header already
-           names the surface). No Cancel (nothing to cancel — the form
-           is perpetual). Submit clears the form in place. -->
-      <div id="goal-commit-form">
-        <div class="goal-commit-field">
-          <div class="goal-commit-field-label">What</div>
-          <textarea
-            id="goal-commit-prompt"
-            placeholder="Describe the outcome — motebit figures out how"
-            rows="3"
-          ></textarea>
+        <div id="goal-empty" class="panel-empty-row">
+          Commit motebit to a goal · a recurring task or a one-shot plan
         </div>
 
-        <div class="goal-commit-field">
-          <div class="goal-commit-field-label">Cadence</div>
-          <div id="goal-commit-cadence-chips" class="goal-commit-chips">
-            <button class="goal-commit-chip" data-cadence="once">Once</button>
-            <button class="goal-commit-chip" data-cadence="hourly">Hourly</button>
-            <button class="goal-commit-chip selected" data-cadence="daily">Daily</button>
-            <button class="goal-commit-chip" data-cadence="weekly">Weekly</button>
+        <div class="panel-section-header">Commit a goal</div>
+        <div class="panel-form-card">
+          <div class="goal-commit-field">
+            <div class="goal-commit-field-label">What</div>
+            <textarea
+              id="goal-commit-prompt"
+              class="panel-form-textarea"
+              placeholder="Describe the outcome — motebit figures out how"
+              rows="3"
+              style="min-height: 60px; resize: none"
+            ></textarea>
           </div>
-        </div>
 
-        <div class="goal-commit-field">
-          <div class="goal-commit-field-label">Token budget</div>
-          <div id="goal-commit-budget-chips" class="goal-commit-chips">
-            <button class="goal-commit-chip" data-budget="10000">10k</button>
-            <button class="goal-commit-chip selected" data-budget="50000">50k</button>
-            <button class="goal-commit-chip" data-budget="200000">200k</button>
-            <button class="goal-commit-chip" data-budget="0">No cap</button>
+          <div class="goal-commit-field">
+            <div class="goal-commit-field-label">Cadence</div>
+            <div id="goal-commit-cadence-chips" class="goal-commit-chips">
+              <button class="goal-commit-chip" data-cadence="once">Once</button>
+              <button class="goal-commit-chip" data-cadence="hourly">Hourly</button>
+              <button class="goal-commit-chip selected" data-cadence="daily">Daily</button>
+              <button class="goal-commit-chip" data-cadence="weekly">Weekly</button>
+            </div>
           </div>
-          <div class="goal-commit-budget-row">
+
+          <div class="goal-commit-field">
+            <div class="goal-commit-field-label">Token budget</div>
+            <div id="goal-commit-budget-chips" class="goal-commit-chips">
+              <button class="goal-commit-chip" data-budget="10000">10k</button>
+              <button class="goal-commit-chip selected" data-budget="50000">50k</button>
+              <button class="goal-commit-chip" data-budget="200000">200k</button>
+              <button class="goal-commit-chip" data-budget="0">No cap</button>
+            </div>
             <input
               id="goal-commit-budget-custom"
               type="number"
@@ -7360,9 +7269,11 @@
               min="1"
             />
           </div>
-        </div>
 
-        <button id="goal-commit-submit" class="commit-btn">Commit goal</button>
+          <button id="goal-commit-submit" class="panel-action-pill" style="width: 100%">
+            Commit goal
+          </button>
+        </div>
       </div>
     </div>
 
