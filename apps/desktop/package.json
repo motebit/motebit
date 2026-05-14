@@ -32,6 +32,7 @@
     "@motebit/memory-graph": "workspace:*",
     "@motebit/panels": "workspace:*",
     "@motebit/planner": "workspace:*",
+    "@motebit/policy": "workspace:*",
     "@motebit/policy-invariants": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
     "@motebit/protocol": "workspace:*",

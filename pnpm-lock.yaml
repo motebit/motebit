@@ -298,6 +298,9 @@ importers:
       '@motebit/planner':
         specifier: workspace:*
         version: link:../../packages/planner
+      '@motebit/policy':
+        specifier: workspace:*
+        version: link:../../packages/policy
       '@motebit/policy-invariants':
         specifier: workspace:*
         version: link:../../packages/policy-invariants
@@ -568,6 +571,9 @@ importers:
       '@motebit/planner':
         specifier: workspace:*
         version: link:../../packages/planner
+      '@motebit/policy':
+        specifier: workspace:*
+        version: link:../../packages/policy
       '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../../packages/privacy-layer

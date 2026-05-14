@@ -52,7 +52,8 @@ import {
   type GovernanceConfig,
   type AppearanceConfig,
 } from "@motebit/sdk";
-import type { UnifiedProviderConfig, ProviderSpec, ResolverEnv } from "@motebit/sdk";
+import type { UnifiedProviderConfig, ProviderSpec, ResolverEnv, ByokVendor } from "@motebit/sdk";
+import { dispatchByokRouting } from "@motebit/policy";
 import { InMemoryEventStore, type EventStoreAdapter } from "@motebit/event-log";
 import { InMemoryMemoryStorage } from "@motebit/memory-graph";
 import { InMemoryIdentityStorage } from "@motebit/core-identity";
@@ -167,6 +168,19 @@ export interface DesktopAIConfig {
   model?: string;
   apiKey?: string;
   /**
+   * BYOK auto-routing opt-in — when `true` AND `provider` is a BYOK
+   * vendor (anthropic / openai / google / groq / deepseek), the desktop
+   * surface consumes the second-half of the auto-routing primitive
+   * (`@motebit/policy::dispatchByokRouting`) per turn to pick the best
+   * model for the message's `TaskShape` from the vendor's catalog. When
+   * `false` or omitted, the surface uses the single configured `model`
+   * (backward-compat default). Doctrine:
+   * `docs/doctrine/auto-routing-as-protocol-primitive.md` § "PR 2 —
+   * BYOK consumer". The web sibling shipped 2026-05-14; desktop mirrors
+   * the same shape per the one-pass-delivery doctrine.
+   */
+  autoRoute?: boolean;
+  /**
    * Local inference server URL (Ollama, LM Studio, llama.cpp, Jan, vLLM, …).
    * Defaults to `DEFAULT_OLLAMA_URL` (http://127.0.0.1:11434). Users running
    * the server on a LAN machine can point at that host here. Persisted as
@@ -248,6 +262,14 @@ export interface DesktopAIConfig {
  * exposes.
  */
 function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig {
+  // `autoRoute` flag — only meaningful on BYOK vendors; spread into
+  // every BYOK arm so the surface can dispatch per turn (web/desktop
+  // /mobile mirror same shape). Per the auto-routing doctrine
+  // (`docs/doctrine/auto-routing-as-protocol-primitive.md` § "PR 2"),
+  // motebit-cloud + local-server consumers don't honor this field —
+  // motebit-cloud has its own dispatcher at the proxy (PR 1); local-
+  // server is awaiting PR 3.
+  const autoRoute = config.autoRoute === true ? { autoRoute: true as const } : {};
   switch (config.provider) {
     case "local-server":
       return {
@@ -264,6 +286,7 @@ function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig 
         apiKey: config.apiKey ?? "",
         model: config.model,
         maxTokens: config.maxTokens,
+        ...autoRoute,
       };
     case "openai":
       return {
@@ -272,6 +295,7 @@ function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig 
         apiKey: config.apiKey ?? "",
         model: config.model,
         maxTokens: config.maxTokens,
+        ...autoRoute,
       };
     case "google":
       return {
@@ -280,6 +304,7 @@ function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig 
         apiKey: config.apiKey ?? "",
         model: config.model,
         maxTokens: config.maxTokens,
+        ...autoRoute,
       };
     case "deepseek":
       return {
@@ -288,6 +313,7 @@ function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig 
         apiKey: config.apiKey ?? "",
         model: config.model,
         maxTokens: config.maxTokens,
+        ...autoRoute,
       };
     case "groq":
       return {
@@ -296,6 +322,7 @@ function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig 
         apiKey: config.apiKey ?? "",
         model: config.model,
         maxTokens: config.maxTokens,
+        ...autoRoute,
       };
     case "proxy":
       return {
@@ -744,6 +771,20 @@ export class DesktopApp {
 
   /** The active provider type or null if not initialized. */
   private _activeProvider: DesktopProvider | null = null;
+  /**
+   * BYOK auto-router state — second-consumer half of the auto-routing
+   * primitive per `docs/doctrine/auto-routing-as-protocol-primitive.md`
+   * § "PR 2 — BYOK consumer". When `initAI` lands a BYOK config with
+   * `autoRoute: true`, the DesktopApp holds the vendor + a reference
+   * to the StreamingProvider so `sendMessageStreaming` can dispatch
+   * + `setModel` per turn before forwarding to the runtime.
+   *
+   * Mirror of web's `_byokAutoRouteVendor` + `_currentProvider` pair;
+   * desktop consumer site registered in the drift gate
+   * `check-routing-decision-coverage` (#95) as `byok-runtime-desktop`.
+   */
+  private _byokAutoRouteVendor: ByokVendor | null = null;
+  private _currentProvider: AnthropicProvider | OpenAIProvider | null = null;
 
   get currentProvider(): DesktopProvider | null {
     return this._activeProvider;
@@ -918,6 +959,18 @@ export class DesktopApp {
 
     // Track the active provider on the surface for the model indicator.
     this._activeProvider = config.provider;
+    // BYOK auto-router state — mirror of web's connectProvider
+    // population per `docs/doctrine/auto-routing-as-protocol-primitive.md`
+    // § "PR 2 — BYOK consumer". Stored alongside the StreamingProvider
+    // reference so `sendMessageStreaming` can dispatch per turn.
+    // Captured on every initAI so a config swap from BYOK→cloud or
+    // autoRoute-off cleanly clears the state.
+    this._currentProvider = provider;
+    if (unified.mode === "byok" && unified.autoRoute === true) {
+      this._byokAutoRouteVendor = unified.vendor;
+    } else {
+      this._byokAutoRouteVendor = null;
+    }
 
     // Apply pending schema migrations before any storage adapter touches a
     // table. Runs through Tauri IPC against the rusqlite-hosted DB; the
@@ -1264,6 +1317,39 @@ export class DesktopApp {
 
   async *sendMessageStreaming(text: string, runId?: string): AsyncGenerator<StreamChunk> {
     if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
+    // BYOK auto-router consumer site (mirror of web's wire-up per
+    // `docs/doctrine/auto-routing-as-protocol-primitive.md` § "PR 2 —
+    // BYOK consumer"). Per-turn: dispatch over the user's vendor
+    // catalog → mutate the StreamingProvider's model → forward to
+    // the runtime unchanged. No balance filter (BYOK pays vendors
+    // directly); the dispatcher stays consumer-neutral. Handles
+    // every `RoutingDecision.kind` value (`route`, `fallback`,
+    // `deny`) per the contract enforced by
+    // `check-routing-decision-coverage` (#95).
+    if (this._byokAutoRouteVendor && this._currentProvider) {
+      const decision = dispatchByokRouting(text, this._byokAutoRouteVendor);
+      switch (decision.kind) {
+        case "route": {
+          this._currentProvider.setModel(decision.model);
+          break;
+        }
+        case "fallback": {
+          // Policy preference wasn't in this vendor's catalog;
+          // honor the backup the dispatcher picked from the
+          // vendor's catalog ordering.
+          this._currentProvider.setModel(decision.backup);
+          break;
+        }
+        case "deny": {
+          // Constraints filtered every catalog entry — leave the
+          // provider on its currently-set model (the user's
+          // configured default). Calm-software fallback; the
+          // observability surface (chrome narration of
+          // `decision.reason`) is a separate arc.
+          break;
+        }
+      }
+    }
     yield* this.runtime.sendMessageStreaming(text, runId);
   }
 

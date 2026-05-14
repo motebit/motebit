@@ -81,6 +81,24 @@ const CONSUMERS: ReadonlyArray<RoutingConsumer> = [
     // the consumer's source (same shape as PR 1's proxy site).
     entry: "dispatchByokRouting",
   },
+  {
+    // Desktop mirror — same wire-up shape as web; populated in
+    // `initAI` from `unified.mode === "byok" && unified.autoRoute`;
+    // per-turn dispatch + `setModel` inside `sendMessageStreaming`.
+    name: "byok-runtime-desktop",
+    file: "apps/desktop/src/index.ts",
+    entry: "dispatchByokRouting",
+  },
+  {
+    // Mobile mirror — same wire-up shape as web + desktop. On-device
+    // providers (LocalInferenceProvider) are excluded from the
+    // `_currentProvider` field via `instanceof` narrowing; only the
+    // cloud BYOK providers participate in per-turn dispatch (the
+    // ones with `setModel`).
+    name: "byok-runtime-mobile",
+    file: "apps/mobile/src/mobile-app.ts",
+    entry: "dispatchByokRouting",
+  },
 ];
 
 /**
