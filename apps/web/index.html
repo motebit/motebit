@@ -4096,21 +4096,30 @@
         color: var(--status-error-fg);
       }
 
-      /* ── Goals pane — top-down sequential sections ─────────────────
-         Mirrors Sovereign's pane shape: section headers anchor each
-         subsection at the top; records/empty rows / form cards flow
-         beneath; calm void naturally lives at the bottom. No
-         bottom-pinning, no flex-stretch, no centered pulse — the
-         panel-* vocabulary already shipped for Sovereign is the same
-         vocabulary every panel composes against. Per
-         docs/doctrine/panel-presentation-modes.md §"Inline >
-         transition > modal-forbidden", the form is a sequential
-         section (panel-form-card), not a pinned bottom bar. */
+      /* ── Goals pane — single-section panel, no section headers ─────
+         Goals has one section (commitments + commit form, tightly
+         coupled); the panel title "Goals" is the section identity.
+         Adding section headers would over-organize a single-purpose
+         surface. Adding a form-card border would wrap a form that has
+         nothing to separate from. Per the sibling-audit lesson in
+         [[feedback_panel_shared_vocabulary]]: use shared panel-*
+         vocabulary classes when the surface earns them; don't apply
+         Sovereign's multi-section structural pattern where the
+         structure isn't required. */
       #goals-pane {
         flex: 1;
         min-height: 0;
         overflow-y: auto;
-        padding-bottom: 24px;
+        padding: 18px 0 24px;
+      }
+      #goal-commit-form {
+        padding: 0 18px;
+      }
+      /* First field in the form gets extra top margin to breathe
+         clear of the empty-row/cards-list above. Subsequent fields
+         use the standard 12px stack rhythm. */
+      #goal-commit-form > .goal-commit-field:first-child {
+        margin-top: 18px;
       }
       .goal-commit-field {
         margin-top: 12px;
@@ -7223,15 +7232,19 @@
         <button class="goals-panel-close" id="goals-close-btn">&times;</button>
       </div>
 
+      <!-- Single-section panel: no section headers needed (panel title
+           "Goals" is the section identity), no form-card containment
+           (form is the only content, has nothing to separate from).
+           panel-* vocabulary still used for the elements that earn it:
+           panel-empty-row for the empty state, panel-form-textarea for
+           the input, panel-action-pill for the submit. -->
       <div id="goals-pane">
-        <div class="panel-section-header">Active commitments</div>
         <div id="goal-list"></div>
         <div id="goal-empty" class="panel-empty-row">
           Commit motebit to a goal · a recurring task or a one-shot plan
         </div>
 
-        <div class="panel-section-header">Commit a goal</div>
-        <div class="panel-form-card">
+        <div id="goal-commit-form">
           <div class="goal-commit-field">
             <div class="goal-commit-field-label">What</div>
             <textarea
