@@ -137,9 +137,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     if (view.length === 0) {
       memoryEmpty.style.display = "block";
       memoryEmpty.textContent =
-        state.memories.length === 0
-          ? "No memories yet. Start a conversation to build memory."
-          : "No matching memories.";
+        state.memories.length === 0 ? "Memories appear here as conversations build" : "No matches";
       return;
     }
 
@@ -648,7 +646,9 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     if (state.discovered.length === 0) {
       discoverList.innerHTML = "";
       discoverEmpty.textContent =
-        state.error != null ? "Could not reach relay." : "No agents on the network yet.";
+        state.error != null
+          ? "Couldn't reach the relay"
+          : "Agents appear here as the network grows";
       discoverEmpty.style.display = "block";
       return;
     }

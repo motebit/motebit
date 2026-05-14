@@ -193,7 +193,7 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
   // -------------------------------------------------------------------------
 
   async function refresh(): Promise<void> {
-    list.innerHTML = renderEmpty("Loading…");
+    list.innerHTML = "";
     countBadge.textContent = "…";
 
     const ctrl = tryAttachController();
@@ -252,11 +252,7 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
         ctrl === null
           ? renderEmpty("Skills storage is starting up…")
           : installed.length === 0
-            ? renderEmpty(
-                searchQuery !== ""
-                  ? "No installed skills match your search."
-                  : "No skills installed yet. Browse and install one below.",
-              )
+            ? renderEmpty(searchQuery !== "" ? "No matches" : "Installed skills appear here")
             : `<div class="skills-installed-list">${installed.map(renderInstalledRow).join("")}</div>`
       }
     `);
@@ -269,8 +265,8 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
           : filteredBrowse.length === 0
             ? renderEmpty(
                 browseEntries.length === 0
-                  ? "No published skills on this relay yet."
-                  : "No browse results match your search.",
+                  ? "Published skills appear here as the registry grows"
+                  : "No matches",
               )
             : `<div class="skills-browse-list">${filteredBrowse.map(renderBrowseRow).join("")}</div>`
       }
@@ -453,7 +449,7 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
     const ctrl = controller;
     if (ctrl === null) return;
     detail.style.display = "flex";
-    detailBody.innerHTML = renderEmpty("Loading…");
+    detailBody.innerHTML = "";
     await ctrl.selectSkill(name);
     const selected = ctrl.getState().selectedSkill;
     if (selected === null) {
@@ -470,7 +466,7 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
 
   async function showBrowseDetail(submitter: string, name: string, version: string): Promise<void> {
     detail.style.display = "flex";
-    detailBody.innerHTML = renderEmpty("Loading…");
+    detailBody.innerHTML = "";
     const url = `${resolveRelayUrl()}/api/v1/skills/${encodeURIComponent(submitter)}/${encodeURIComponent(name)}/${encodeURIComponent(version)}`;
     let resp: Response;
     try {

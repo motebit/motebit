@@ -432,12 +432,18 @@ export function initActivityPanel(ctx: WebContext): ActivityPanelAPI {
       return;
     }
     if (state.loading && view.length === 0) {
-      list!.innerHTML = `<div class="activity-empty">Loading…</div>`;
+      // No literal "Loading…" string per CLAUDE.md UI § anti-pattern.
+      // Empty container reads calm while events stream in; transitions
+      // invisibly into the forward-framed empty register if load
+      // resolves to zero events.
+      list!.innerHTML = "";
       return;
     }
     if (view.length === 0) {
       list!.innerHTML = `<div class="activity-empty">${
-        state.events.length === 0 ? "No activity recorded yet." : "No activity matches your filter."
+        state.events.length === 0
+          ? "Activity appears here as events occur"
+          : "No matches for this filter"
       }</div>`;
       return;
     }

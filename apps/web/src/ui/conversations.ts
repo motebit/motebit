@@ -53,7 +53,7 @@ export function initConversations(
       const empty = document.createElement("div");
       empty.style.cssText =
         "font-size:12px;color:var(--text-ghost);padding:16px;text-align:center;";
-      empty.textContent = "No conversations yet";
+      empty.textContent = "Conversations appear here";
       convList.appendChild(empty);
       return;
     }
