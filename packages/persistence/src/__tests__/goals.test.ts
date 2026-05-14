@@ -29,6 +29,7 @@ describe("SqliteGoalStore", () => {
       consecutive_failures: 0,
       wall_clock_ms: null,
       project_id: null,
+      budget_tokens: null,
       ...overrides,
     };
   }
@@ -145,6 +146,86 @@ describe("SqliteGoalStore", () => {
     moteDb.goalStore.add(makeGoal({ goal_id: "once-goal", mode: "once" }));
     const goal = moteDb.goalStore.get("once-goal")!;
     expect(goal.mode).toBe("once");
+  });
+
+  it("round-trips budget_tokens through add → get → list", () => {
+    moteDb.goalStore.add(makeGoal({ goal_id: "budgeted", budget_tokens: 50_000 }));
+    moteDb.goalStore.add(makeGoal({ goal_id: "uncapped", budget_tokens: null }));
+    expect(moteDb.goalStore.get("budgeted")!.budget_tokens).toBe(50_000);
+    expect(moteDb.goalStore.get("uncapped")!.budget_tokens).toBeNull();
+    const all = moteDb.goalStore.list("mote-abc");
+    expect(all.find((g) => g.goal_id === "budgeted")?.budget_tokens).toBe(50_000);
+    expect(all.find((g) => g.goal_id === "uncapped")?.budget_tokens).toBeNull();
+  });
+
+  it("setBudgetTokens raises and clears the cap idempotently", () => {
+    moteDb.goalStore.add(makeGoal({ goal_id: "g1", budget_tokens: null }));
+    moteDb.goalStore.setBudgetTokens("g1", 10_000);
+    expect(moteDb.goalStore.get("g1")!.budget_tokens).toBe(10_000);
+    moteDb.goalStore.setBudgetTokens("g1", 25_000);
+    expect(moteDb.goalStore.get("g1")!.budget_tokens).toBe(25_000);
+    moteDb.goalStore.setBudgetTokens("g1", null);
+    expect(moteDb.goalStore.get("g1")!.budget_tokens).toBeNull();
+  });
+
+  it("getSpentTokens sums goal_outcomes.tokens_used", () => {
+    moteDb.goalStore.add(makeGoal({ goal_id: "g1" }));
+    expect(moteDb.goalStore.getSpentTokens("g1")).toBe(0);
+    moteDb.goalOutcomeStore.add({
+      outcome_id: "o1",
+      goal_id: "g1",
+      motebit_id: "mote-abc",
+      ran_at: Date.now(),
+      status: "completed",
+      summary: "ok",
+      tool_calls_made: 0,
+      memories_formed: 0,
+      error_message: null,
+      tokens_used: 1_200,
+    });
+    moteDb.goalOutcomeStore.add({
+      outcome_id: "o2",
+      goal_id: "g1",
+      motebit_id: "mote-abc",
+      ran_at: Date.now(),
+      status: "completed",
+      summary: "ok",
+      tool_calls_made: 0,
+      memories_formed: 0,
+      error_message: null,
+      tokens_used: 800,
+    });
+    expect(moteDb.goalStore.getSpentTokens("g1")).toBe(2_000);
+  });
+
+  it("getSpentTokens treats outcomes with NULL tokens_used as 0 (pre-#11 rows)", () => {
+    moteDb.goalStore.add(makeGoal({ goal_id: "g1" }));
+    moteDb.goalOutcomeStore.add({
+      outcome_id: "legacy",
+      goal_id: "g1",
+      motebit_id: "mote-abc",
+      ran_at: Date.now(),
+      status: "completed",
+      summary: "ok",
+      tool_calls_made: 0,
+      memories_formed: 0,
+      error_message: null,
+      // tokens_used omitted → NULL in the row
+    });
+    moteDb.goalOutcomeStore.add({
+      outcome_id: "newer",
+      goal_id: "g1",
+      motebit_id: "mote-abc",
+      ran_at: Date.now(),
+      status: "completed",
+      summary: "ok",
+      tool_calls_made: 0,
+      memories_formed: 0,
+      error_message: null,
+      tokens_used: 500,
+    });
+    // Legacy row contributes 0; only the newer row counts.
+    expect(moteDb.goalStore.getSpentTokens("g1")).toBe(500);
   });
 });
 

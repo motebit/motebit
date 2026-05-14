@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
-import { createGoalsEmitter, type GoalLifecycleStatus } from "../goals.js";
+import { checkGoalBudget, createGoalsEmitter, type GoalLifecycleStatus } from "../goals.js";
 
 /**
  * Minimal in-memory event store stub matching the slice of `EventStore`
@@ -189,5 +189,58 @@ describe("createGoalsEmitter — failure tolerance", () => {
       goal_id: "g-1",
       error: "db write failed",
     });
+  });
+});
+
+// ── Budget envelope (per docs/doctrine/panel-temporal-registers.md) ──────
+
+describe("checkGoalBudget — runtime cap-check", () => {
+  it("allows fire when budget_tokens is null (no cap)", () => {
+    const result = checkGoalBudget(null, 10_000);
+    expect(result.allowed).toBe(true);
+    expect(result.reason).toBe("no_budget");
+    expect(result.spent_tokens).toBe(10_000);
+    expect(result.budget_tokens).toBeNull();
+  });
+
+  it("allows fire when budget_tokens is undefined (older row, no cap)", () => {
+    const result = checkGoalBudget(undefined, 0);
+    expect(result.allowed).toBe(true);
+    expect(result.reason).toBe("no_budget");
+  });
+
+  it("allows fire when spent < budget", () => {
+    const result = checkGoalBudget(50_000, 12_345);
+    expect(result.allowed).toBe(true);
+    expect(result.reason).toBe("under_cap");
+    expect(result.spent_tokens).toBe(12_345);
+    expect(result.budget_tokens).toBe(50_000);
+  });
+
+  it("blocks fire when spent === budget (cap reached, fail-closed)", () => {
+    const result = checkGoalBudget(50_000, 50_000);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("exhausted");
+  });
+
+  it("blocks fire when spent > budget (cap exceeded)", () => {
+    const result = checkGoalBudget(50_000, 75_000);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("exhausted");
+  });
+
+  it("re-allows fire after the cap is raised — schedulers re-check on every tick", () => {
+    // Initially exhausted.
+    expect(checkGoalBudget(10_000, 10_000).allowed).toBe(false);
+    // User raises the cap; the next scheduler call sees the new budget
+    // against the same spent and allows the goal to fire again. No
+    // separate "resume" path needed — the auto-pause is purely a
+    // synthesized state from (spent, budget), not a sticky decision.
+    expect(checkGoalBudget(20_000, 10_000).allowed).toBe(true);
+  });
+
+  it("blocks at exactly zero budget regardless of spent (zero is a valid cap meaning 'no fires')", () => {
+    expect(checkGoalBudget(0, 0).allowed).toBe(false);
+    expect(checkGoalBudget(0, 5).allowed).toBe(false);
   });
 });

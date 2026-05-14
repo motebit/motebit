@@ -55,7 +55,71 @@ import type {
 import type { EventStore } from "@motebit/event-log";
 
 /** Status values a `getGoalStatus` resolver may return; `null` means the goal is unknown to the resolver. */
-export type GoalLifecycleStatus = "active" | "paused" | "completed" | "failed" | null;
+export type GoalLifecycleStatus =
+  | "active"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "budget_exhausted"
+  | null;
+
+// ── Budget check ──────────────────────────────────────────────────────────
+//
+// Per-goal budget envelope is the runtime-register's commitment cap per
+// `docs/doctrine/panel-temporal-registers.md`. Tokens is the only unit
+// that means the same thing across motebit-cloud / BYOK / on-device
+// (USD would bake cloud-mode assumptions into the goal record). The
+// check is pure — schedulers across surfaces call it with the goal's
+// `budget_tokens` and the rollup from
+// `goalStore.getSpentTokens(goalId)`; on `!allowed` they set status
+// `budget_exhausted` and skip the fire.
+
+export interface BudgetCheckResult {
+  /** True iff the goal may fire. False = cap reached. */
+  readonly allowed: boolean;
+  /** Why the answer is what it is — drives the status set on cap reach. */
+  readonly reason: "no_budget" | "under_cap" | "exhausted";
+  /** Tokens consumed across all prior runs of this goal. */
+  readonly spent_tokens: number;
+  /** Cap from the goal record. `null` = no cap. */
+  readonly budget_tokens: number | null;
+}
+
+/**
+ * Check whether a goal may fire under its budget envelope. Pure
+ * function; no I/O. Schedulers (cli, desktop, mobile, web runner) call
+ * this before each fire and pause the goal with status
+ * `budget_exhausted` when `!result.allowed`. Re-checked on every fire,
+ * so raising the cap auto-resumes the goal the next tick — no
+ * separate "resume" action needed.
+ */
+export function checkGoalBudget(
+  budgetTokens: number | null | undefined,
+  spentTokens: number,
+): BudgetCheckResult {
+  if (budgetTokens == null) {
+    return {
+      allowed: true,
+      reason: "no_budget",
+      spent_tokens: spentTokens,
+      budget_tokens: null,
+    };
+  }
+  if (spentTokens >= budgetTokens) {
+    return {
+      allowed: false,
+      reason: "exhausted",
+      spent_tokens: spentTokens,
+      budget_tokens: budgetTokens,
+    };
+  }
+  return {
+    allowed: true,
+    reason: "under_cap",
+    spent_tokens: spentTokens,
+    budget_tokens: budgetTokens,
+  };
+}
 
 export interface GoalsEmitterDeps {
   motebitId: string;

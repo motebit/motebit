@@ -299,4 +299,22 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX IF NOT EXISTS idx_audit_chain_timestamp ON audit_chain (timestamp)",
     ],
   },
+  {
+    version: 36,
+    description: "goals.budget_tokens — per-goal budget envelope",
+    statements: [
+      // Per-goal token cap per docs/doctrine/panel-temporal-registers.md
+      // (runtime-register design language: budget envelopes per
+      // commitment). NULL = no cap. Tokens is the protocol-primacy-clean
+      // unit — universal across motebit-cloud / BYOK / on-device, where
+      // a USD field would bake motebit-cloud assumptions into the goal
+      // record. Spent rollup is derived on read by summing
+      // goal_outcomes.tokens_used (added in v11) for the goal_id, not
+      // persisted as a counter — single source of truth, no
+      // double-bookkeeping. The runtime checks
+      // `spent_tokens >= budget_tokens` before fire and pauses with
+      // status='budget_exhausted'.
+      "ALTER TABLE goals ADD COLUMN budget_tokens INTEGER",
+    ],
+  },
 ];

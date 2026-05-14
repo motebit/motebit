@@ -96,8 +96,13 @@ export {
   buildPrecisionContext,
 } from "./gradient.js";
 export { AgentGraphManager } from "./agent-graph.js";
-export { createGoalsEmitter } from "./goals.js";
-export type { GoalsEmitter, GoalsEmitterDeps, GoalLifecycleStatus } from "./goals.js";
+export { createGoalsEmitter, checkGoalBudget } from "./goals.js";
+export type {
+  GoalsEmitter,
+  GoalsEmitterDeps,
+  GoalLifecycleStatus,
+  BudgetCheckResult,
+} from "./goals.js";
 
 export { createComputerSessionManager, ComputerDispatcherError } from "./computer-use.js";
 export type {

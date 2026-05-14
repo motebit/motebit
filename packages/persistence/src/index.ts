@@ -174,7 +174,12 @@ CREATE TABLE IF NOT EXISTS goals (
   -- motebit up --prune never touches rows where routine_id IS NULL.
   routine_id TEXT,
   routine_source TEXT,
-  routine_hash TEXT
+  routine_hash TEXT,
+  -- Per-goal budget envelope in tokens. NULL = no cap. Migration #36
+  -- adds the column to existing installs. See ScheduledGoal.budget_tokens
+  -- in @motebit/panels for the unit rationale. Spent rollup is derived
+  -- on read by summing goal_outcomes.tokens_used (no separate counter).
+  budget_tokens INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS goal_outcomes (
@@ -1091,7 +1096,7 @@ export class SqliteToolAuditSink implements AuditLogSink {
 // === Goal Store ===
 
 export type GoalMode = "recurring" | "once";
-export type GoalStatus = "active" | "completed" | "failed" | "paused";
+export type GoalStatus = "active" | "completed" | "failed" | "paused" | "budget_exhausted";
 
 export interface Goal {
   goal_id: string;
@@ -1110,6 +1115,19 @@ export interface Goal {
   wall_clock_ms: number | null;
   /** Project ID for grouping related goals. Goals with same project_id share context. */
   project_id: string | null;
+  /**
+   * Per-goal budget cap in tokens (input + output, summed across runs).
+   * `null` or absent = no cap. Migration #36. Tokens is the
+   * protocol-primacy-clean unit per
+   * `docs/doctrine/panel-temporal-registers.md`: meaningful across
+   * motebit-cloud / BYOK / on-device, where USD would bake cloud-mode
+   * assumptions into the goal record. The runtime checks
+   * `getSpentTokens(goal_id) >= budget_tokens` before fire and pauses
+   * the goal with status='budget_exhausted' on cap reach. Optional on
+   * the interface so legacy creators don't need to know about budgets;
+   * the row mapper normalizes missing to null.
+   */
+  budget_tokens?: number | null;
   /**
    * Declarative-routine metadata. Present when this goal was compiled from a
    * `motebit.yaml` routine via `motebit up`; null/undefined for goals added
@@ -1144,6 +1162,7 @@ interface GoalRow {
   routine_id: string | null;
   routine_source: string | null;
   routine_hash: string | null;
+  budget_tokens: number | null;
 }
 
 function rowToGoal(row: GoalRow): Goal {
@@ -1165,6 +1184,7 @@ function rowToGoal(row: GoalRow): Goal {
     routine_id: row.routine_id ?? null,
     routine_source: row.routine_source ?? null,
     routine_hash: row.routine_hash ?? null,
+    budget_tokens: row.budget_tokens ?? null,
   };
 }
 
@@ -1181,10 +1201,13 @@ export class SqliteGoalStore {
   private stmtListChildren: PreparedStatement;
   private stmtListByProject: PreparedStatement;
 
+  private stmtSetBudget: PreparedStatement;
+  private stmtSpentTokens: PreparedStatement;
+
   constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
-      `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, wall_clock_ms, project_id, routine_id, routine_source, routine_hash)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, wall_clock_ms, project_id, routine_id, routine_source, routine_hash, budget_tokens)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtRemove = db.prepare(`DELETE FROM goals WHERE goal_id = ?`);
     this.stmtList = db.prepare(`SELECT * FROM goals WHERE motebit_id = ? ORDER BY created_at ASC`);
@@ -1203,6 +1226,16 @@ export class SqliteGoalStore {
     );
     this.stmtListByProject = db.prepare(
       `SELECT * FROM goals WHERE project_id = ? AND motebit_id = ? ORDER BY created_at ASC`,
+    );
+    this.stmtSetBudget = db.prepare(`UPDATE goals SET budget_tokens = ? WHERE goal_id = ?`);
+    // Sum tokens_used across the goal's outcomes. COALESCE gives 0 for
+    // goals with no outcomes yet (NULL → 0). This is the canonical
+    // spent-rollup query — derived on read, no maintained counter to
+    // drift. Migration #11 added the column; pre-#11 outcomes carry
+    // tokens_used = NULL and contribute 0 to the rollup, which is the
+    // correct semantic (we don't know what they consumed).
+    this.stmtSpentTokens = db.prepare(
+      `SELECT COALESCE(SUM(tokens_used), 0) AS spent FROM goal_outcomes WHERE goal_id = ?`,
     );
   }
 
@@ -1225,7 +1258,29 @@ export class SqliteGoalStore {
       goal.routine_id ?? null,
       goal.routine_source ?? null,
       goal.routine_hash ?? null,
+      goal.budget_tokens ?? null,
     );
+  }
+
+  /**
+   * Set the per-goal token budget cap. `null` clears the cap (goal
+   * runs unbounded again). Idempotent; the runtime cap-check runs on
+   * fire and lifts the `budget_exhausted` status as soon as `spent <
+   * budget` again — i.e. raising the cap auto-resumes a paused goal
+   * the next tick.
+   */
+  setBudgetTokens(goalId: string, budgetTokens: number | null): void {
+    this.stmtSetBudget.run(budgetTokens, goalId);
+  }
+
+  /**
+   * Total tokens consumed across all runs of `goalId`. Sums
+   * `goal_outcomes.tokens_used`; pre-#11 outcomes (column NULL)
+   * contribute 0 because we don't know what they cost.
+   */
+  getSpentTokens(goalId: string): number {
+    const row = this.stmtSpentTokens.get(goalId) as { spent: number } | undefined;
+    return row?.spent ?? 0;
   }
 
   remove(goalId: string): void {

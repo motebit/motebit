@@ -25,8 +25,21 @@ export type GoalMode = "recurring" | "once";
  * Goal lifecycle states. A `(string & {})` fallback opens the union to
  * forward-compat daemon additions without collapsing autocomplete —
  * idiomatic TS.
+ *
+ * `budget_exhausted` is set fail-closed by the runtime when a goal's
+ * `spent_tokens >= budget_tokens` before the next fire. Per
+ * `docs/doctrine/panel-temporal-registers.md` — the runtime register
+ * makes commitments visible; the budget envelope is the cap on that
+ * commitment, and overflow is a state the user must consciously
+ * resolve (raise the budget or close the goal).
  */
-export type GoalStatus = "active" | "paused" | "suspended" | "completed" | "failed";
+export type GoalStatus =
+  | "active"
+  | "paused"
+  | "suspended"
+  | "completed"
+  | "failed"
+  | "budget_exhausted";
 
 /**
  * The client-facing goal shape. Matches what renderers subscribe to across
@@ -65,6 +78,27 @@ export interface ScheduledGoal {
   consecutive_failures?: number;
   max_retries?: number;
   created_at?: number;
+
+  /**
+   * Per-goal budget cap in tokens (input + output, summed across runs).
+   * `null` (or absent) = no cap. Tokens is the protocol-primacy-clean
+   * unit per `docs/doctrine/panel-temporal-registers.md` substrate-vs-
+   * accumulation: every provider mode (motebit-cloud, BYOK, on-device)
+   * generates tokens, so the cap means the same thing everywhere; USD
+   * would bake motebit-cloud assumptions into the goal record and
+   * break for BYOK/on-device.
+   */
+  budget_tokens?: number | null;
+
+  /**
+   * Total tokens consumed across all runs of this goal so far. Derived
+   * by the daemon/runner by summing `goal_outcomes.tokens_used` for
+   * `goal_id`. Renderers compare against `budget_tokens` to draw the
+   * envelope. The runtime checks `spent_tokens >= budget_tokens`
+   * before fire and pauses with `status === "budget_exhausted"` when
+   * the cap is reached.
+   */
+  spent_tokens?: number;
 }
 
 // ── Run records (runner-only) ─────────────────────────────────────────────
