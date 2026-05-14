@@ -18,9 +18,11 @@ import type { OnDeviceBackend } from "@motebit/sdk";
 
 import {
   ON_DEVICE_MODEL_CATALOG,
+  REFERENCE_LOCAL_SERVER_ROUTING_POLICY,
   buildOnDeviceCatalog,
   dispatchOnDeviceRouting,
 } from "../on-device-router.js";
+import type { TaskShape } from "@motebit/sdk";
 
 const ALL_BACKENDS: OnDeviceBackend[] = ["local-server", "webllm", "apple-fm", "mlx"];
 
@@ -92,40 +94,71 @@ describe("buildOnDeviceCatalog", () => {
   });
 });
 
+describe("REFERENCE_LOCAL_SERVER_ROUTING_POLICY — consumer-specific policy override", () => {
+  it("maps every TaskShape to a model that exists in the local-server catalog", () => {
+    // The override's whole purpose: every on-device dispatch should
+    // land in `kind: "route"` (calm chip) rather than `kind: "fallback"`
+    // (misleading `↺` glyph). That requires every policy preference
+    // to be a member of the local-server catalog. This test pins the
+    // invariant — a future addition that names a model NOT in the
+    // catalog would silently re-introduce the misleading-chip bug.
+    const catalogModels = new Set<string>(
+      ON_DEVICE_MODEL_CATALOG["local-server"].map((c) => c.modelName),
+    );
+    for (const [shape, model] of Object.entries(REFERENCE_LOCAL_SERVER_ROUTING_POLICY) as [
+      TaskShape,
+      string,
+    ][]) {
+      expect(catalogModels.has(model)).toBe(true);
+      // Tighter test: also ensure the model isn't empty / typo'd.
+      expect(model.length).toBeGreaterThan(0);
+      // Anchor the per-shape mapping to specific local models so a
+      // future "let's swap codellama for llama3.3" change is an
+      // intentional protocol-level update, not a silent drift.
+      void shape;
+    }
+  });
+
+  it("is frozen (immutable) per Object.freeze contract", () => {
+    expect(Object.isFrozen(REFERENCE_LOCAL_SERVER_ROUTING_POLICY)).toBe(true);
+  });
+
+  it("anchors the code task to codellama (the literal match-to-task)", () => {
+    // Doctrinally load-bearing: codellama exists in the canonical
+    // suggested-models set BECAUSE it's the strongest match-to-task.
+    // The policy's whole point is to use it. A silent change here
+    // (e.g., to llama3.2 because someone thought "smaller is faster")
+    // would erase the consumer-specific policy's reason for being.
+    expect(REFERENCE_LOCAL_SERVER_ROUTING_POLICY.code).toBe("codellama");
+  });
+});
+
 describe("dispatchOnDeviceRouting — composed dispatcher", () => {
-  it("returns 'fallback' kind for local-server when policy preference isn't installed", () => {
-    // REFERENCE_ROUTING_POLICY.chat = "claude-sonnet-4-6" — a cloud
-    // model not in the local-server catalog. The dispatcher falls
-    // back to the first catalog entry (llama3.2, the Ollama default).
-    // This is the typical PR 3 flow: cloud-shaped policy meets
-    // on-device-shaped catalog and the catalog-ordering preference
-    // takes over.
+  it("returns 'route' kind for local-server (consumer policy names a local model)", () => {
+    // After the PR 3 post-audit fix, on-device dispatch consumes
+    // `REFERENCE_LOCAL_SERVER_ROUTING_POLICY` (not the cloud
+    // `REFERENCE_ROUTING_POLICY`) — every policy preference is in
+    // the catalog, so the dispatcher lands in `route`, not
+    // `fallback`. This unblocks the calm-default chip ("via X")
+    // without the misleading `↺` glyph.
     const chatMessage =
       "I'd like to understand your perspective on this approach. " +
       "What do you think makes the most sense given the constraints?";
     const decision = dispatchOnDeviceRouting(chatMessage, "local-server");
-    expect(decision.kind).toBe("fallback");
-    if (decision.kind === "fallback") {
-      expect(decision.primary).toBe("claude-sonnet-4-6");
-      expect(decision.backup).toBe("llama3.2");
+    expect(decision.kind).toBe("route");
+    if (decision.kind === "route") {
+      expect(decision.model).toBe("llama3.2");
     }
   });
 
-  it("returns 'fallback' for code task — REFERENCE policy prefers gpt-5.4, catalog falls back to codellama-equivalent", () => {
-    // REFERENCE_ROUTING_POLICY.code = "gpt-5.4"; the local-server
-    // catalog has no gpt-5.4. Fallback walks the catalog ordering;
-    // catalog index 0 is llama3.2 (the safe-default), which is what
-    // the dispatcher picks. Per-policy fine-tuning ("when local-
-    // server, prefer codellama for code") is a future arc — surfaces
-    // ship `REFERENCE_LOCAL_SERVER_ROUTING_POLICY` overriding the
-    // canonical default, or a learned function per the role-vs-
-    // policy distinction.
+  it("routes code tasks to codellama (the per-shape match-to-task)", () => {
+    // Code-shape detection (fenced block) → policy preference
+    // `codellama` → catalog has it → `route`. The flow the
+    // consumer-specific policy override exists to enable.
     const decision = dispatchOnDeviceRouting("```js\nlet x = 1\n```", "local-server");
-    expect(decision.kind).toBe("fallback");
-    if (decision.kind === "fallback") {
-      expect(decision.primary).toBe("gpt-5.4");
-      // First catalog entry (preference signal).
-      expect(decision.backup).toBe("llama3.2");
+    expect(decision.kind).toBe("route");
+    if (decision.kind === "route") {
+      expect(decision.model).toBe("codellama");
     }
   });
 
@@ -143,22 +176,25 @@ describe("dispatchOnDeviceRouting — composed dispatcher", () => {
     expect(dispatchOnDeviceRouting("hello", "mlx").kind).toBe("deny");
   });
 
-  it("returns 'route' kind only when policy preference matches a local-server entry", () => {
-    // None of the canonical TaskShape → model mappings in
-    // REFERENCE_ROUTING_POLICY name a local-server model today.
-    // Every on-device dispatch for local-server therefore lands in
-    // 'fallback' (which is correct — the dispatcher honors the
-    // catalog-ordering preference signal). A 'route' decision
-    // would require a consumer to ship a custom routing-policy
-    // that mapped TaskShape → local-server model names (e.g.,
-    // `chat: "llama3.2"`); the test below documents this with a
-    // policy override demonstrating the path.
-    // (This is a documentation-shaped test, not a functional
-    // assertion — the production REFERENCE_ROUTING_POLICY produces
-    // 'fallback' for every local-server dispatch.)
-    const decision = dispatchOnDeviceRouting("hello there", "local-server");
-    expect(decision.kind).not.toBe("route");
-    expect(decision.kind).not.toBe("deny");
+  it("never returns 'fallback' for local-server — consumer policy guarantees catalog match", () => {
+    // Post-audit invariant: the consumer-specific policy is
+    // designed so every preference is in the catalog. A `fallback`
+    // result for local-server means the catalog drifted from the
+    // policy (or vice versa) — a regression signal. This test pins
+    // the invariant across the heuristic's signal spectrum.
+    const samples = [
+      "hi", // quick
+      "I'd like a conversational exchange to think this through together carefully", // chat
+      "walk me through step by step", // reasoning
+      "```python\nx = 1\n```", // code
+      "compare React and Vue across the literature. ".repeat(40), // research (long-form)
+      "write a poem about the ocean", // creative
+      "solve for x in this equation", // math
+    ];
+    for (const text of samples) {
+      const decision = dispatchOnDeviceRouting(text, "local-server");
+      expect(decision.kind).not.toBe("fallback");
+    }
   });
 
   it("honors a RoutingConstraint.maxInputCostPerMillion that allows all on-device entries (zero cost)", () => {

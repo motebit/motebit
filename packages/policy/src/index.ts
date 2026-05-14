@@ -32,6 +32,7 @@ export {
 } from "./byok-router.js";
 export {
   ON_DEVICE_MODEL_CATALOG,
+  REFERENCE_LOCAL_SERVER_ROUTING_POLICY,
   buildOnDeviceCatalog,
   dispatchOnDeviceRouting,
 } from "./on-device-router.js";

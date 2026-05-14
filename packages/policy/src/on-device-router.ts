@@ -73,9 +73,14 @@
  */
 
 import type { OnDeviceBackend } from "@motebit/sdk";
-import type { ProviderCapability, RoutingConstraint, RoutingDecision } from "@motebit/protocol";
+import type {
+  ProviderCapability,
+  RoutingConstraint,
+  RoutingDecision,
+  TaskShape,
+} from "@motebit/protocol";
 
-import { dispatchRouting, REFERENCE_ROUTING_POLICY } from "./auto-router.js";
+import { dispatchRouting } from "./auto-router.js";
 import { extractTaskShape } from "./byok-router.js";
 
 // === On-device model catalog ===============================================
@@ -200,6 +205,70 @@ export function buildOnDeviceCatalog(backend: OnDeviceBackend): readonly Provide
   return ON_DEVICE_MODEL_CATALOG[backend];
 }
 
+// === On-device routing policy ===============================================
+
+/**
+ * Reference routing policy for on-device consumers. Maps each
+ * `TaskShape` to a local-server model from `LOCAL_SERVER_SUGGESTED_MODELS`
+ * — the canonical safe-defaults users typically pull first.
+ *
+ * **Why a separate policy from `REFERENCE_ROUTING_POLICY`.** The
+ * doctrine (`docs/doctrine/auto-routing-as-protocol-primitive.md`)
+ * names routing-policy as a consumer-side function, NOT a closed
+ * registry. The protocol-layer `REFERENCE_ROUTING_POLICY` names
+ * cloud models (`gpt-5.4` for code, `claude-opus-4-6` for
+ * reasoning); applying it to an on-device catalog produces
+ * `fallback` on every turn because the cloud model isn't installed
+ * locally. The fallback chip ("via llama3.2 ↺") then misleads the
+ * user — the `↺` glyph implies "we swapped from your preference"
+ * but the user never picked the cloud model; the canonical policy
+ * did.
+ *
+ * Shipping this on-device-specific policy means on-device
+ * dispatches land in `kind: "route"` (calm-default chip, no
+ * misleading glyph) when the policy's preferred model is in the
+ * user's local-server catalog. The role-vs-policy distinction the
+ * doctrine names (`agility-as-role.md` — TaskShape is the role;
+ * routing-policy is a consumer-side function) is structurally
+ * proven by this override.
+ *
+ * Mapping rationale (per-model strengths reflected in the
+ * suggested-models list):
+ *
+ *   - `quick` → llama3.2 (3B-class; sub-second feel on consumer
+ *     hardware; same model that ships as `DEFAULT_OLLAMA_MODEL`)
+ *   - `chat` → llama3.2 (conversational default; same model as
+ *     `quick` because tier semantic on-device is more about
+ *     "what's the workhorse" than "what's faster")
+ *   - `reasoning` → qwen2 (Qwen2's reasoning benchmarks edge out
+ *     Llama at the same parameter class)
+ *   - `code` → codellama (literally trained for code; the strongest
+ *     match-to-task in the canonical local set)
+ *   - `research` → llama3.1 (longer context window than llama3.2)
+ *   - `creative` → mistral (Mistral's prose generation reads
+ *     stronger than Llama at base sizes)
+ *   - `math` → qwen2 (Qwen2's math benchmarks lead the canonical
+ *     set; CodeLlama is code-specific and Llama at base sizes
+ *     underperforms on symbolic math)
+ *
+ * Users override per-installation: surfaces ship a settings
+ * affordance (deferred per the doctrine's "settings UI toggle"
+ * follow-up) OR consumers pass a custom policy to `dispatchRouting`
+ * directly. The `REFERENCE_` prefix follows the `protocol-model.md`
+ * §"Naming: interop law vs reference default" convention —
+ * implementers MAY override.
+ */
+export const REFERENCE_LOCAL_SERVER_ROUTING_POLICY: Readonly<Record<TaskShape, string>> =
+  Object.freeze({
+    quick: "llama3.2",
+    chat: "llama3.2",
+    reasoning: "qwen2",
+    code: "codellama",
+    research: "llama3.1",
+    creative: "mistral",
+    math: "qwen2",
+  });
+
 // === Composed dispatcher ===================================================
 
 /**
@@ -234,5 +303,15 @@ export function dispatchOnDeviceRouting(
 ): RoutingDecision {
   const taskShape = extractTaskShape(text);
   const catalog = buildOnDeviceCatalog(backend);
-  return dispatchRouting(taskShape, catalog, constraints, REFERENCE_ROUTING_POLICY);
+  // Consumer-specific routing policy — `REFERENCE_LOCAL_SERVER_ROUTING_POLICY`
+  // names local-server models per TaskShape (not the cloud models
+  // `REFERENCE_ROUTING_POLICY` names). Without this override, every
+  // on-device dispatch would land in `fallback` because the catalog
+  // never contains the cloud model the canonical policy prefers — the
+  // chip would render with the `↺` glyph implying "we swapped from
+  // your preference" when the user never picked a cloud model. The
+  // role-vs-policy distinction (TaskShape is the role; policy is a
+  // consumer-side function) the doctrine names is what makes this
+  // override clean.
+  return dispatchRouting(taskShape, catalog, constraints, REFERENCE_LOCAL_SERVER_ROUTING_POLICY);
 }

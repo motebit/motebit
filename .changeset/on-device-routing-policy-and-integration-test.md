@@ -1,0 +1,18 @@
+---
+"@motebit/policy": minor
+---
+
+Post-PR-4 audit fixes — three architectural gaps the principal-engineer review surfaced on 2026-05-14:
+
+**1. `REFERENCE_LOCAL_SERVER_ROUTING_POLICY` lands.** Before this fix, `dispatchOnDeviceRouting` consumed the protocol-layer `REFERENCE_ROUTING_POLICY` which names cloud models (`gpt-5.4` for code, `claude-opus-4-6` for reasoning). Every on-device dispatch landed in `kind: "fallback"` because no on-device catalog contains those models — the chip then rendered `via codellama ↺` (or similar) with the `↺` glyph implying "we swapped from your preference." The user never picked a cloud model; the canonical policy did. **The chip was honest about the data-shape and dishonest about the UX semantic.**
+
+The new consumer-specific policy ships local-server model names per `TaskShape`: `code → codellama` (literal match-to-task), `chat / quick → llama3.2` (canonical Ollama default), `reasoning / math → qwen2` (Qwen2's reasoning + math benchmarks lead the canonical suggested-models set), `research → llama3.1` (longer context window), `creative → mistral` (prose generation reads stronger). `dispatchOnDeviceRouting` now consumes this; every on-device turn lands in `kind: "route"` (calm chip — `via codellama`) rather than `fallback`. The role-vs-policy distinction the doctrine names (TaskShape is the role; routing-policy is a consumer-side function per `agility-as-role.md`) is now structurally proven by a real consumer-specific override.
+
+Three new test invariants pin the post-fix state: (a) every `REFERENCE_LOCAL_SERVER_ROUTING_POLICY` entry's model is in `ON_DEVICE_MODEL_CATALOG["local-server"]` — closes the silent-drift risk where adding a model to the policy without adding it to the catalog would re-introduce the misleading-chip bug; (b) `code` maps to `codellama` specifically (doctrinally load-bearing — codellama exists in the canonical suggested set BECAUSE it's the strongest match-to-task; a silent change would erase the policy's reason for being); (c) on-device dispatch NEVER returns `fallback` across the heuristic's signal spectrum.
+
+**2. End-to-end integration test for BYOK auto-routing.** Drift gate `check-routing-decision-coverage` verifies consumer sites import the dispatcher + reference every `RoutingDecision.kind`; unit tests cover the dispatcher's pure logic. Neither caught the integration shape: "BYOK config with `autoRoute: true` → `sendMessageStreaming` → `provider.setModel` was called with the dispatcher's pick." A silent regression that disconnected the intercept from the provider would pass both layers. `apps/web/src/__tests__/web-app.test.ts` § "BYOK auto-routing — integration" adds three tests pinning the wire: (a) chat-shape → `setModel("claude-sonnet-4-6")` (route path), (b) code-shape on Anthropic → `setModel("claude-opus-4-7")` (fallback path), (c) `autoRoute` off → `setModel` not called (backward-compat default).
+
+**3. Two known-unfinished shapes named honestly in the doctrine.** Added § "Two known shapes the auto-routing arc deliberately ships unfinished" to `docs/doctrine/auto-routing-as-protocol-primitive.md` covering: (a) `autoRoute` ships behind hidden config (no settings UI; trigger to ship the toggle named explicitly), and (b) the intercept logic is duplicated 3× across surfaces — per `architecture_synchronization_invariants` this is exactly the shape that drifts. Consolidation deferred pending the second-divergence-fix trigger. The integration test + drift-gate-plus-consumer-registry is the structural defense the duplication needs until then.
+
+`pnpm --filter @motebit/policy test`: 433/433 (+3 new for the policy-override invariants).
+`pnpm --filter @motebit/web test`: 486/486 (+3 new BYOK integration tests).

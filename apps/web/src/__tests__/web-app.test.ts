@@ -311,6 +311,152 @@ describe("Provider management", () => {
   });
 });
 
+describe("BYOK auto-routing — integration", () => {
+  // Closes the audit-named integration gap on the auto-routing PR 2
+  // arc (`docs/doctrine/auto-routing-as-protocol-primitive.md` § "PR
+  // 2 — BYOK consumer"). Drift gate `check-routing-decision-coverage`
+  // verifies the consumer site IMPORTS the dispatcher + references
+  // every decision kind; unit tests cover the dispatcher's pure
+  // logic. Neither catches the integration shape: "BYOK config with
+  // autoRoute=true → sendMessageStreaming → provider.setModel was
+  // called with the dispatcher's pick." A future regression that
+  // silently disconnected the intercept from the provider would
+  // pass both layers but break the live behavior. These tests pin
+  // the integration.
+
+  it("mutates provider.setModel per turn when BYOK autoRoute is on", async () => {
+    const app = new WebApp();
+    await app.init(null as unknown as HTMLCanvasElement);
+    await app.bootstrap();
+
+    // Capture the mocked StreamingProvider's setModel spy. The
+    // module mock above returns a fresh-each-call object but vi.fn
+    // is reset each test by `vi.restoreAllMocks` in afterEach.
+    const providers = await import("../providers.js");
+    const setModelSpy = vi.fn();
+    vi.mocked(providers.createProvider).mockReturnValue({
+      generateStream: vi.fn(),
+      generate: vi.fn(),
+      setModel: setModelSpy,
+      getModel: vi.fn().mockReturnValue("anthropic-default"),
+    } as never);
+
+    // Connect Anthropic BYOK with autoRoute. The dispatcher's
+    // Anthropic catalog includes claude-sonnet-4-6 (the canonical
+    // policy's "chat" preference); a chat-shaped message should
+    // route to it.
+    app.connectProvider({
+      mode: "byok",
+      vendor: "anthropic",
+      apiKey: "sk-test",
+      model: "claude-sonnet-4-6",
+      autoRoute: true,
+    });
+
+    // The runtime mock setup doesn't fully wire streaming so we
+    // can't await the full generator without setProvider plumbing
+    // through to ai-core. The intercept runs BEFORE the runtime
+    // forward, so we only need to invoke the wrapper and let it
+    // throw on the runtime side — the setModel assertion fires
+    // first regardless of downstream errors.
+    const chatMessage =
+      "I'd like to understand your perspective on this approach. " +
+      "What do you think makes the most sense given the constraints?";
+    try {
+      for await (const _chunk of app.sendMessageStreaming(chatMessage)) {
+        // Drain — the runtime mock may yield nothing or throw.
+      }
+    } catch {
+      // Expected — the runtime mock doesn't fully wire the stream.
+      // The intercept-before-forward shape means setModel still
+      // fires before the throw, which is the invariant the test
+      // pins.
+    }
+
+    // The doctrine-stated payoff: dispatcher.dispatch ran, decision
+    // was `route` (catalog has claude-sonnet-4-6 for the chat
+    // preference), provider.setModel got the pick.
+    expect(setModelSpy).toHaveBeenCalledWith("claude-sonnet-4-6");
+
+    app.stop();
+  });
+
+  it("routes code-shape messages to gpt-5.4's fallback (claude-opus-4-7) on Anthropic catalog", async () => {
+    // REFERENCE_ROUTING_POLICY.code = "gpt-5.4"; Anthropic catalog
+    // doesn't have it → dispatcher returns `fallback` with backup =
+    // claude-opus-4-7 (first catalog entry, tier-strong-to-fast).
+    // The intercept's `fallback` arm calls setModel(backup).
+    const app = new WebApp();
+    await app.init(null as unknown as HTMLCanvasElement);
+    await app.bootstrap();
+
+    const providers = await import("../providers.js");
+    const setModelSpy = vi.fn();
+    vi.mocked(providers.createProvider).mockReturnValue({
+      generateStream: vi.fn(),
+      generate: vi.fn(),
+      setModel: setModelSpy,
+      getModel: vi.fn().mockReturnValue("anthropic-default"),
+    } as never);
+
+    app.connectProvider({
+      mode: "byok",
+      vendor: "anthropic",
+      apiKey: "sk-test",
+      model: "claude-sonnet-4-6",
+      autoRoute: true,
+    });
+
+    try {
+      for await (const _chunk of app.sendMessageStreaming("```js\nlet x = 1\n```")) {
+        // Drain.
+      }
+    } catch {
+      /* Expected — runtime mock doesn't fully wire. */
+    }
+
+    expect(setModelSpy).toHaveBeenCalledWith("claude-opus-4-7");
+
+    app.stop();
+  });
+
+  it("does NOT call setModel when BYOK autoRoute is off (backward-compat default)", async () => {
+    const app = new WebApp();
+    await app.init(null as unknown as HTMLCanvasElement);
+    await app.bootstrap();
+
+    const providers = await import("../providers.js");
+    const setModelSpy = vi.fn();
+    vi.mocked(providers.createProvider).mockReturnValue({
+      generateStream: vi.fn(),
+      generate: vi.fn(),
+      setModel: setModelSpy,
+      getModel: vi.fn().mockReturnValue("anthropic-default"),
+    } as never);
+
+    app.connectProvider({
+      mode: "byok",
+      vendor: "anthropic",
+      apiKey: "sk-test",
+      model: "claude-sonnet-4-6",
+      // autoRoute omitted (default false) — backward-compat path.
+    });
+
+    try {
+      for await (const _chunk of app.sendMessageStreaming("hello")) {
+        /* Drain. */
+      }
+    } catch {
+      /* Expected. */
+    }
+
+    // The user's configured model stands — no per-turn mutation.
+    expect(setModelSpy).not.toHaveBeenCalled();
+
+    app.stop();
+  });
+});
+
 describe("Streaming chat", () => {
   it("throws when runtime not initialized", async () => {
     const app = new WebApp();
