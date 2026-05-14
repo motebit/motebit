@@ -51,8 +51,7 @@ export function initConversations(
 
     if (conversations.length === 0) {
       const empty = document.createElement("div");
-      empty.style.cssText =
-        "font-size:12px;color:var(--text-ghost);padding:16px;text-align:center;";
+      empty.className = "sov-empty-row";
       empty.textContent = "Conversations appear here";
       convList.appendChild(empty);
       return;
