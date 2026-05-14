@@ -52,8 +52,14 @@ import {
   type GovernanceConfig,
   type AppearanceConfig,
 } from "@motebit/sdk";
-import type { UnifiedProviderConfig, ProviderSpec, ResolverEnv, ByokVendor } from "@motebit/sdk";
-import { dispatchByokRouting } from "@motebit/policy";
+import type {
+  UnifiedProviderConfig,
+  ProviderSpec,
+  ResolverEnv,
+  ByokVendor,
+  OnDeviceBackend,
+} from "@motebit/sdk";
+import { dispatchByokRouting, dispatchOnDeviceRouting } from "@motebit/policy";
 import { InMemoryEventStore, type EventStoreAdapter } from "@motebit/event-log";
 import { InMemoryMemoryStorage } from "@motebit/memory-graph";
 import { InMemoryIdentityStorage } from "@motebit/core-identity";
@@ -278,6 +284,12 @@ function desktopConfigToUnified(config: DesktopAIConfig): UnifiedProviderConfig 
         model: config.model,
         endpoint: config.localServerEndpoint,
         maxTokens: config.maxTokens,
+        // On-device auto-routing — PR 3 of the auto-routing arc.
+        // `local-server` is the multi-model on-device backend (Ollama
+        // umbrella); single-model backends (apple-fm / mlx / webllm)
+        // are not present on desktop. Thread the flag for the runtime
+        // intercept's switch.
+        ...autoRoute,
       };
     case "anthropic":
       return {
@@ -784,6 +796,27 @@ export class DesktopApp {
    * `check-routing-decision-coverage` (#95) as `byok-runtime-desktop`.
    */
   private _byokAutoRouteVendor: ByokVendor | null = null;
+  /**
+   * On-device auto-router state — third-consumer half of the auto-
+   * routing primitive per the same doctrine § "PR 3 — on-device
+   * consumer". When `initAI` lands an on-device config with
+   * `autoRoute: true` AND the backend is multi-model (`local-server`
+   * today), the DesktopApp holds the backend so `sendMessageStreaming`
+   * can dispatch + `setModel` per turn. Single-model backends
+   * (`apple-fm`, `mlx`, `webllm`) ship empty catalogs; the dispatcher
+   * denies them by design and the consumer falls through to the
+   * configured model.
+   *
+   * Parallel to `_byokAutoRouteVendor` — they're mutually exclusive
+   * (the unified config is one mode at a time). Desktop's
+   * `_currentProvider` field is shared between both: per-turn
+   * `setModel` works the same way regardless of which dispatcher
+   * decided the model.
+   *
+   * Desktop consumer site registered in the drift gate as
+   * `on-device-runtime-desktop`.
+   */
+  private _onDeviceAutoRouteBackend: OnDeviceBackend | null = null;
   private _currentProvider: AnthropicProvider | OpenAIProvider | null = null;
 
   get currentProvider(): DesktopProvider | null {
@@ -959,17 +992,24 @@ export class DesktopApp {
 
     // Track the active provider on the surface for the model indicator.
     this._activeProvider = config.provider;
-    // BYOK auto-router state — mirror of web's connectProvider
-    // population per `docs/doctrine/auto-routing-as-protocol-primitive.md`
-    // § "PR 2 — BYOK consumer". Stored alongside the StreamingProvider
-    // reference so `sendMessageStreaming` can dispatch per turn.
-    // Captured on every initAI so a config swap from BYOK→cloud or
-    // autoRoute-off cleanly clears the state.
+    // Auto-router state — populates exactly one of two fields based
+    // on the unified config (the modes are mutually exclusive). BYOK
+    // is the PR 2 consumer (`docs/doctrine/auto-routing-as-protocol-
+    // primitive.md` § "PR 2 — BYOK consumer"); on-device is PR 3
+    // (§ "PR 3 — on-device consumer"). Stored alongside the
+    // StreamingProvider reference so `sendMessageStreaming` can
+    // dispatch per turn. Captured on every initAI so a config swap
+    // (BYOK→cloud, on-device→BYOK, autoRoute-off) cleanly clears.
     this._currentProvider = provider;
     if (unified.mode === "byok" && unified.autoRoute === true) {
       this._byokAutoRouteVendor = unified.vendor;
+      this._onDeviceAutoRouteBackend = null;
+    } else if (unified.mode === "on-device" && unified.autoRoute === true) {
+      this._byokAutoRouteVendor = null;
+      this._onDeviceAutoRouteBackend = unified.backend;
     } else {
       this._byokAutoRouteVendor = null;
+      this._onDeviceAutoRouteBackend = null;
     }
 
     // Apply pending schema migrations before any storage adapter touches a
@@ -1317,14 +1357,16 @@ export class DesktopApp {
 
   async *sendMessageStreaming(text: string, runId?: string): AsyncGenerator<StreamChunk> {
     if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
-    // BYOK auto-router consumer site (mirror of web's wire-up per
-    // `docs/doctrine/auto-routing-as-protocol-primitive.md` § "PR 2 —
-    // BYOK consumer"). Per-turn: dispatch over the user's vendor
-    // catalog → mutate the StreamingProvider's model → forward to
-    // the runtime unchanged. No balance filter (BYOK pays vendors
-    // directly); the dispatcher stays consumer-neutral. Handles
-    // every `RoutingDecision.kind` value (`route`, `fallback`,
-    // `deny`) per the contract enforced by
+    // Auto-router consumer site — branches between the two
+    // consumers (PR 2 BYOK, PR 3 on-device) the desktop surface
+    // wires per `docs/doctrine/auto-routing-as-protocol-primitive.md`.
+    // The two state fields are mutually exclusive (one mode per
+    // unified config); the branch is structural. Each branch
+    // dispatches over a different catalog source through the same
+    // `dispatchRouting` primitive, mutates the StreamingProvider's
+    // model via `setModel`, and forwards to the runtime unchanged.
+    // Both branches handle every `RoutingDecision.kind` value
+    // (`route`, `fallback`, `deny`) per the contract enforced by
     // `check-routing-decision-coverage` (#95).
     if (this._byokAutoRouteVendor && this._currentProvider) {
       const decision = dispatchByokRouting(text, this._byokAutoRouteVendor);
@@ -1343,9 +1385,30 @@ export class DesktopApp {
         case "deny": {
           // Constraints filtered every catalog entry — leave the
           // provider on its currently-set model (the user's
-          // configured default). Calm-software fallback; the
-          // observability surface (chrome narration of
-          // `decision.reason`) is a separate arc.
+          // configured default). Calm-software fallback.
+          break;
+        }
+      }
+    } else if (this._onDeviceAutoRouteBackend && this._currentProvider) {
+      // On-device dispatch — same shape as BYOK, different catalog
+      // (per-backend `ON_DEVICE_MODEL_CATALOG`). Single-model
+      // backends (apple-fm / mlx / webllm) return `deny` from the
+      // dispatcher because their catalog is empty by design; the
+      // local-server backend falls back to the catalog-ordering
+      // preference (llama3.2 first).
+      const decision = dispatchOnDeviceRouting(text, this._onDeviceAutoRouteBackend);
+      switch (decision.kind) {
+        case "route": {
+          this._currentProvider.setModel(decision.model);
+          break;
+        }
+        case "fallback": {
+          this._currentProvider.setModel(decision.backup);
+          break;
+        }
+        case "deny": {
+          // Single-model backend (or every catalog entry filtered);
+          // leave the provider on its configured model.
           break;
         }
       }

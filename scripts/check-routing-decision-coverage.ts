@@ -99,6 +99,19 @@ const CONSUMERS: ReadonlyArray<RoutingConsumer> = [
     file: "apps/mobile/src/mobile-app.ts",
     entry: "dispatchByokRouting",
   },
+  {
+    // On-device PR 3 consumer — same desktop file as `byok-runtime-
+    // desktop`, different dispatcher entry (`dispatchOnDeviceRouting`).
+    // The same surface file can host multiple registered consumers
+    // when it imports multiple dispatchers; each entry independently
+    // verifies "import + call + all three `RoutingDecision.kind`
+    // values referenced." Closes the three-instance-deep validation
+    // of the auto-routing doctrine (motebit-cloud + BYOK +
+    // on-device).
+    name: "on-device-runtime-desktop",
+    file: "apps/desktop/src/index.ts",
+    entry: "dispatchOnDeviceRouting",
+  },
 ];
 
 /**

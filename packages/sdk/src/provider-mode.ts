@@ -65,6 +65,32 @@ export interface OnDeviceProviderConfig {
   temperature?: number;
   /** Optional max_tokens override. */
   maxTokens?: number;
+  /**
+   * Opt into auto-routing across the on-device backend's available
+   * models per turn. When `true` AND `backend` supports multi-model
+   * routing (`local-server` today; `apple-fm` / `mlx` / `webllm` are
+   * single-model surfaces where per-turn routing has no models to
+   * choose between), surface runtimes consume the third-consumer
+   * half of the auto-routing primitive
+   * (`@motebit/policy::dispatchOnDeviceRouting`) to pick the best
+   * model for each turn's `TaskShape` from the backend's catalog.
+   * When `false` or omitted, the surface uses the single configured
+   * `model` (backward-compat default).
+   *
+   * Doctrine: `docs/doctrine/auto-routing-as-protocol-primitive.md`
+   * § "PR 3 — on-device consumer". The primitive lives in
+   * `@motebit/policy/on-device-router.ts`; surface wiring is the
+   * consumer site registered in the drift gate
+   * `check-routing-decision-coverage` (#95). No balance filter —
+   * on-device runs on the user's hardware with zero marginal
+   * $/token cost.
+   *
+   * Per `feedback_sovereignty_orthogonal`: orthogonal to tier —
+   * on-device auto-routing is never subscription-gated. The user
+   * owns the hardware; the surface's job is to compose the
+   * canonical dispatcher over it.
+   */
+  autoRoute?: boolean;
 }
 
 /** Motebit Cloud mode config — the subscription-backed product. */

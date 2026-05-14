@@ -61,7 +61,7 @@ Three coordinated commitments:
 **Out of scope (named here, deferred to PR 2-N):**
 
 - ~~BYOK consumer (PR 2)~~ **SHIPPED 2026-05-14** in commits `4762229d` (primitive) + the PR 2b sibling (web wire-up + drift gate + this doctrine close). See § "PR 2 — BYOK consumer" below.
-- On-device consumer (PR 3): runtime consumes the dispatcher with locally-available models (WebLLM/Ollama). Adds on-device to CONSUMERS registry.
+- ~~On-device consumer (PR 3)~~ **SHIPPED 2026-05-14** in commits `f1d3308e` (primitive) + the PR 3b sibling (desktop wire-up + drift gate + this doctrine close). See § "PR 3 — on-device consumer" below.
 - Chrome narration of routing decisions (PR 4): split into 4a (data plumbing — `RoutingDecision.reason` surfaces on the proxy response as `X-Motebit-Routing-Reason` header, shipped post-PR-1) and 4b (UX decision — chrome narration surface vs inspector panel vs trail slot; deferred pending UX design pass).
 - Routing-decision receipts: receipt-schema extension to make "the system picked model X because Y" auditable in the ledger.
 - Learned routing function replacing `REFERENCE_ROUTING_POLICY` at motebit-cloud (ModelLab as the eventual host).
@@ -103,6 +103,50 @@ Three different concerns; one dispatcher. The doctrine claim — auto-routing is
 - Settings-side UI toggle exposing `autoRoute`. The flag is in the config type and respected by the runtime; the BYOK settings panel doesn't yet surface a toggle. Users today opt-in by editing localStorage or via a future settings UI commit.
 - Classifier-mode shape detection. The heuristic shape detector is the cheap default; surfaces that want LLM-classifier-level accuracy compose their own detector and pass directly to `dispatchRouting`. Future arc: a small token-shape ML classifier (~1ms, mediocre but fast) replaces the heuristic — pure-function signature swap.
 
+## PR 3 — on-device consumer (shipped 2026-05-14)
+
+**The three-instance-deep validation closes.** PR 1 shipped the proxy as the first consumer; PR 2 shipped BYOK across three flat surfaces as the second; PR 3 (this section) ships the on-device consumer as the third. The role-as-instance pattern (7th instance of `agility-as-role.md`) was doctrine-shaped after PR 1, validated by a second concrete consumer after PR 2, and is now structurally proven across all three sovereignty postures (subscription / pay-per-call / zero-marginal) after PR 3.
+
+**On-device's structural differences from PR 1 + PR 2:**
+
+- **Cost** — zero marginal $/token. `inputCostPerMillion: 0` + `outputCostPerMillion: 0` on every catalog entry. The dispatcher uses `<=` for the cost filter so a `maxInputCostPerMillion: 0` constraint doesn't filter them out (locked by test).
+- **Host** — `"local-server"`, a new `InferenceHost` registry entry. The user's own inference server (Ollama / LM Studio / llama.cpp / Jan / vLLM — all expose `/v1/chat/completions` via the OpenAI-compat shim), NOT a remote provider. The proxy NEVER routes to this host; defensive arms in `services/proxy/src/app/v1/messages/route.ts::getProviderApiKey` + `buildProviderRequest` name the structural violation.
+- **Catalog shape** — per `OnDeviceBackend` rather than per `ByokVendor`. Multi-model backends (`local-server` today) ship a populated catalog; single-model backends (`apple-fm` / `mlx` / `webllm`) ship empty catalogs by design. The dispatcher denies single-model backends — the honest signal ("nothing to auto-route across"); consumers fall through to the configured model. The same `RoutingDecision.kind === "deny"` channel covers both "constraints empty the catalog" (BYOK) and "catalog was empty to begin with" (on-device single-model). One shape; two semantic origins.
+
+**Shipped in two commits:**
+
+1. **`f1d3308e`** — protocol expansion + policy primitive:
+   - `@motebit/protocol`: `InferenceHost` += `"local-server"`; `ModelLab` += `"mistral" | "microsoft" | "alibaba"` (the new labs the canonical `LOCAL_SERVER_SUGGESTED_MODELS` set draws from). Defensive arms in proxy's exhaustive switches.
+   - `@motebit/policy/on-device-router.ts`: `ON_DEVICE_MODEL_CATALOG: Record<OnDeviceBackend, readonly ProviderCapability[]>` (8 local-server entries mirroring `LOCAL_SERVER_SUGGESTED_MODELS`; empty catalogs for single-model backends); `buildOnDeviceCatalog`; `dispatchOnDeviceRouting`. Reuses `extractTaskShape` from `byok-router.ts` (the heuristic detector is the right shape for any consumer that can't afford per-message LLM classification).
+   - 11 new pure-function tests pinning catalog coverage / zero-marginal-cost / host invariant / lab coverage / dispatcher behavior across multi-model + single-model paths.
+
+2. **PR 3b** (this commit) — desktop consumer + drift gate + doctrine close:
+   - `OnDeviceProviderConfig.autoRoute?: boolean` added to `@motebit/sdk`. Additive, backward-compat. Per `feedback_sovereignty_orthogonal`: orthogonal to tier — on-device auto-routing is never subscription-gated.
+   - `desktopConfigToUnified` threads `autoRoute` through the on-device arm (alongside the 5 BYOK arms PR 2 already populated).
+   - `DesktopApp` gains `_onDeviceAutoRouteBackend: OnDeviceBackend | null` parallel to `_byokAutoRouteVendor`. The two state fields are mutually exclusive (one mode per unified config); `initAI` populates exactly one based on the config's mode + autoRoute flag. `_currentProvider` is shared.
+   - `sendMessageStreaming` extends the PR 2 BYOK intercept with a parallel on-device branch. Both branches handle all three `RoutingDecision.kind` values; one dispatches `dispatchByokRouting`, the other `dispatchOnDeviceRouting`.
+   - Drift gate `check-routing-decision-coverage` (#95) gains `on-device-runtime-desktop` entry pointing at the same desktop file with `entry: "dispatchOnDeviceRouting"`. Gate now enforces **5 consumers × 3 decision kinds**.
+
+**What PR 3 validates structurally (extending the PR 2 table):**
+
+| Concern                    | Proxy (PR 1)                                  | BYOK (PR 2)                           | On-device (PR 3)                      | Same primitive?                                                   |
+| -------------------------- | --------------------------------------------- | ------------------------------------- | ------------------------------------- | ----------------------------------------------------------------- |
+| Catalog source             | `getProviderCatalog()` (proxy `MODEL_CONFIG`) | `BYOK_MODEL_CATALOG[vendor]`          | `ON_DEVICE_MODEL_CATALOG[backend]`    | YES                                                               |
+| Cost filter                | `applyBalanceFilter` wrapper                  | (none — direct vendor billing)        | (none — zero marginal cost)           | YES (wrapper optional)                                            |
+| Jurisdiction               | `{ jurisdiction: "US" }` constraint           | (none — vendor choice = jurisdiction) | (none — user's device = jurisdiction) | YES                                                               |
+| Shape detection            | LLM (`classifyTask` Haiku call)               | Heuristic (`extractTaskShape`)        | Heuristic (same `extractTaskShape`)   | YES (shape is the input; how you produce it is consumer's choice) |
+| Routing policy             | `REFERENCE_ROUTING_POLICY`                    | `REFERENCE_ROUTING_POLICY`            | `REFERENCE_ROUTING_POLICY`            | YES                                                               |
+| `RoutingDecision` handling | All three kinds                               | All three kinds                       | All three kinds                       | YES (gate enforces)                                               |
+| Cost model                 | Balance-based ($/token tier)                  | Pay-per-call ($/token direct)         | Zero marginal cost (user hardware)    | YES                                                               |
+
+Three fundamentally different cost models flowing through the same dispatcher. The doctrine claim is now structurally proven across the full sovereignty spectrum. PR 3 ships without ANY changes to the dispatcher's signature, the `RoutingDecision` discriminated union, the `REFERENCE_ROUTING_POLICY`, or the closed `TaskShape` registry. The only protocol surface that grew was the closed-registry expansions for `InferenceHost` + `ModelLab` — additive, backward-compat, exhaustive-switch-enforced.
+
+**Deferred from PR 3, not deferred indefinitely:**
+
+- Web + mobile on-device consumer mirror. Web's WebLLM has download-cost per model swap making per-turn routing inappropriate (the catalog is single-model on web today; the dispatcher denies it cleanly). Mobile's local-server is less common than desktop's Ollama. Mirror lands when there's surface-side signal.
+- Per-policy on-device routing — surface-specific `REFERENCE_LOCAL_SERVER_ROUTING_POLICY` mapping TaskShape → local model names (e.g., `code: "codellama"`, `chat: "llama3.2"`) so the dispatcher returns `kind: "route"` instead of `kind: "fallback"` for typical local-server flows. Today every on-device dispatch lands in fallback because the canonical `REFERENCE_ROUTING_POLICY` names cloud models. The role-vs-policy distinction (TaskShape is the role; routing-policy is a consumer-side function) makes this a clean swap when desktop wants it.
+- Multi-model `apple-fm` / `mlx` / `webllm` catalogs. Today these backends are single-model; when per-backend multi-model support lands (e.g., MLX with multiple loaded models, WebLLM with cached model swap), the catalog grows additively.
+
 ## TaskShape agility — the 7th instance of agility-as-role
 
 `TaskShape` is the 7th instance of [`agility-as-role.md`](agility-as-role.md)'s pattern (after cryptosuite, license-floor, settlement-rail, inference-host, model-lab, jurisdiction-as-predicate). The role names a closed registry of swappable entries; the routing-policy itself is **a consumer-side function**, NOT a role.
@@ -142,7 +186,7 @@ The registers are correct **only if they translate to all three consumers withou
 
 - **motebit-cloud (proxy):** classifyTask → TaskShape → applyBalanceFilter(catalog, balance) → dispatchRouting → RoutingDecision → invoke API.
 - **BYOK (PR 2, shipped 2026-05-14):** heuristic-classified intent (`extractTaskShape`) → TaskShape → dispatchRouting(`BYOK_MODEL_CATALOG[vendor]`, no balance filter) → mutate StreamingProvider model → invoke user's provider with user's key. Composed via `dispatchByokRouting` in `@motebit/policy/byok-router.ts`; web consumer site in `apps/web/src/web-app.ts`.
-- **On-device (PR 3):** intent (user-explicit or local heuristic) → TaskShape → dispatchRouting(catalog from local WebLLM/Ollama capabilities, no balance filter) → invoke local model.
+- **On-device (PR 3, shipped 2026-05-14):** heuristic-classified intent (`extractTaskShape`, reused from BYOK) → TaskShape → dispatchRouting(`ON_DEVICE_MODEL_CATALOG[backend]`, no balance filter, no jurisdiction filter — user's device IS the jurisdiction) → mutate StreamingProvider model → invoke user's local inference server. Composed via `dispatchOnDeviceRouting` in `@motebit/policy/on-device-router.ts`; desktop consumer site in `apps/desktop/src/index.ts`. Single-model backends (`apple-fm` / `mlx` / `webllm`) ship empty catalogs by design → dispatcher denies → consumer falls through to configured model.
 
 If any consumer requires routing semantics that can't be expressed via `TaskShape + ProviderCapability + RoutingConstraint + Policy`, that's a doctrine refinement signal — not a one-off feature. The matrix-as-primitive claim survives only if all three consumers share the dispatcher.
 
