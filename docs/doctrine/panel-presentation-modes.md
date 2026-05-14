@@ -52,14 +52,19 @@ The spatial panel is the **slab's sibling**. The slab is motebit's first-person 
 
 When `spatial` lands, the panel controller does not change. Same `getState()`, same `subscribe()`, same actions. The renderer changes — instead of `domElement.appendChild`, it's a Three.js / WebXR scene-graph entry the spatial app composes alongside the creature. The information is constant; the embodiment is the variable.
 
-## What this means for `interior register`
+## Inline > transition > modal-forbidden
 
-The doctrine does not enumerate interior registers — those are panel-specific and live in the controller. But it sets the rule: **creation, editing, and detail flows are interior-register transitions, not modal overlays**. The Goals panel's "Commit a goal" affordance is the worked example:
+There are three shapes a creation / edit / detail flow can take on a panel. Listed in **preference order** — pick the leftmost that fits the form weight:
 
-- **Wrong (pre-2026-05-14):** rail panel + modal-shaped sheet stacked on the same column. The sheet had no panel semantics; it was a UI accident.
-- **Right:** the panel's body flips register from `list` to `create`. Same width, same controller, same subscription. Cancel returns to `list`. On mobile (immersive presentation), the same register flip happens — the form takes over the immersive surface. On spatial (future), the same flip happens — the glass object's interior shows the form. **The interior register is presentation-mode-agnostic.**
+1. **Inline always-visible affordance** _(Apple Reminders bottom-bar pattern)._ The form lives permanently at the bottom of the panel. Cards (or the empty caption) scroll in the area above. No transition, no second page, no register flip. Submit clears the form in place and re-seeds defaults for consecutive commits. **This is the preferred shape when the form is light enough to coexist with the list** — roughly < 40% of the panel's vertical real estate.
+2. **Interior-register transition** _(list ↔ create, list ↔ detail)._ The panel rotates between registers in place; same width, same controller, same subscription. **Use this when the form is too heavy to coexist** — multi-step wizards, large detail surfaces, anything that would crowd the records list if always visible. Mobile's immersive presentation often lands here naturally; on rail the transition is the escape hatch when the form genuinely doesn't fit.
+3. **Modal overlay** — **structurally unrepresentable.** `modal` is not a member of `PanelPresentationMode` and never will be. A modal-shaped surface stacked over a panel is a category error: two panel-shaped things on the same canvas, neither with clean panel semantics. If your form needs more space than a transition gives, the right escape is the `immersive` presentation mode (the panel grows to fill the viewport), not a modal.
 
-This generalizes beyond Goals. Sovereign's "Add credential" should be a `create` register inside the Sovereign panel, not a modal. Capabilities' "Connect MCP server" should be a `create` register inside the Capabilities panel, not a modal. Conversations' message detail should be a `detail` register inside Conversations, not a side-by-side split. When you find yourself reaching for a modal, you have a category error: rotate the panel's interior register instead.
+**Worked example: Goals.** Pre-2026-05-14 the "Commit a goal" affordance shipped as shape 3 — a slide-down sheet over the rail panel. Caught and fixed in commit `6dddf10d` as shape 2 — `list` ↔ `create` register transition. Caught again the same day and shipped as shape 1 (commit landing this clarification): the form is ~280px tall and coexists comfortably with the cards list, so the transition was over-engineering. The form now lives at the bottom of the Goals panel always-visible; the empty register shows a vertically-centered "Commit motebit to a goal" caption in the cards area above. **Single page. No transition. No dismiss.** This is the Apple-grade calm pattern: the action is always one click away; the introduction sits above; the form's own commit button is the action affordance.
+
+The arc of three shapes is itself the worked lesson: reach for shape 1 first. Only escalate to shape 2 when the form's weight forces it. Shape 3 is never the answer.
+
+**Generalizes to other panels.** Sovereign's "Add credential": light form → shape 1 (inline at bottom). Capabilities' "Connect MCP server": medium form (auth config, scope selection) → shape 1 today, shape 2 if it grows. Conversations' message detail: heavy surface → shape 2 (`detail` register transition). When you find yourself reaching for shape 3 (modal), you have a category error: drop down to shape 2; if shape 2 doesn't fit either, your form genuinely needs `immersive` presentation, not a modal.
 
 ## Typed enforcement
 

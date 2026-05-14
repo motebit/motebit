@@ -220,19 +220,17 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   // Each card is a living commitment; click expands per-card detail
   // (last response, next run, raise budget, pause, remove).
   //
-  // Interior register per docs/doctrine/panel-presentation-modes.md
-  // §"What this means for interior register": the panel rotates
-  // between `list` and `create` in place — no modal surface. The CTA
-  // ("Commit a goal" / "Commit your first goal") flips the panel's
-  // body to the commit form; Cancel flips back. Same panel, same
-  // width, same controller — the embodiment doesn't change, the
-  // interior register does.
+  // Layout per docs/doctrine/panel-presentation-modes.md §"Inline >
+  // transition > modal-forbidden": single-page, form always visible
+  // at the bottom of the panel (Apple Reminders bottom-bar pattern).
+  // Cards (or the empty caption) scroll in the area above; the form
+  // is perpetual. No register transition, no separate page — the
+  // form is light enough to coexist with the list, so the inline
+  // affordance is the right shape.
   const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
   const goalsBackdrop = document.getElementById("goals-backdrop") as HTMLDivElement;
-  const goalsPanelTitle = document.getElementById("goals-panel-title") as HTMLSpanElement;
   const goalList = document.getElementById("goal-list") as HTMLDivElement;
   const goalEmpty = document.getElementById("goal-empty") as HTMLDivElement;
-  const goalCommitTrigger = document.getElementById("goal-commit-trigger") as HTMLButtonElement;
   const goalCommitPrompt = document.getElementById("goal-commit-prompt") as HTMLTextAreaElement;
   const goalCommitCadenceChips = document.getElementById(
     "goal-commit-cadence-chips",
@@ -243,15 +241,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   const goalCommitBudgetCustom = document.getElementById(
     "goal-commit-budget-custom",
   ) as HTMLInputElement;
-  const goalCommitCancel = document.getElementById("goal-commit-cancel") as HTMLButtonElement;
   const goalCommitSubmit = document.getElementById("goal-commit-submit") as HTMLButtonElement;
-
-  // Interior-register state. `list` is the default; `create` is the
-  // in-panel commit-flow register. Per panel-presentation-modes.md,
-  // these flow inline — no modal surface, no second panel.
-  type GoalsInteriorRegister = "list" | "create";
-  let goalsRegister: GoalsInteriorRegister = "list";
-  goalsPanel.classList.add("register-list");
 
   let goalsSubscribed = false;
   // Per-card expansion is renderer-state, not runner-state: lives in
@@ -333,7 +323,6 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     if (!runner) {
       goalList.innerHTML = "";
       goalEmpty.style.display = "block";
-      goalCommitTrigger.style.display = "none";
       return;
     }
     const state = runner.getState();
@@ -344,13 +333,9 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     goalList.innerHTML = "";
     if (panelGoals.length === 0) {
       goalEmpty.style.display = "block";
-      goalCommitTrigger.textContent = "Commit your first goal";
-      goalCommitTrigger.style.display = "block";
       return;
     }
     goalEmpty.style.display = "none";
-    goalCommitTrigger.textContent = "Commit a goal";
-    goalCommitTrigger.style.display = "block";
 
     const now = Date.now();
 
@@ -644,7 +629,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     }
   });
 
-  function resetCreateRegister(): void {
+  function resetCommitForm(): void {
     goalCommitPrompt.value = "";
     goalCommitBudgetCustom.value = "";
     commitCadence = "daily";
@@ -652,31 +637,6 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     selectChip(goalCommitCadenceChips, "daily", "data-cadence");
     selectChip(goalCommitBudgetChips, "50000", "data-budget");
   }
-
-  function setGoalsRegister(next: GoalsInteriorRegister): void {
-    goalsRegister = next;
-    goalsPanel.classList.toggle("register-list", next === "list");
-    goalsPanel.classList.toggle("register-create", next === "create");
-    // Title tracks the register so the panel header names what the
-    // user is doing right now — "Goals" while reviewing commitments,
-    // "Commit a goal" while declaring one. Same panel, different
-    // interior register; same close button returns to body either
-    // way.
-    goalsPanelTitle.textContent = next === "create" ? "Commit a goal" : "Goals";
-  }
-
-  function enterCreateRegister(): void {
-    resetCreateRegister();
-    setGoalsRegister("create");
-    goalCommitPrompt.focus();
-  }
-
-  function exitCreateRegister(): void {
-    setGoalsRegister("list");
-  }
-
-  goalCommitTrigger.addEventListener("click", enterCreateRegister);
-  goalCommitCancel.addEventListener("click", exitCreateRegister);
 
   goalCommitSubmit.addEventListener("click", () => {
     const runner = ctx.app.getGoalsRunner?.();
@@ -693,7 +653,10 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
         budget_tokens: commitBudgetTokens,
       });
     }
-    exitCreateRegister();
+    // Form-always-visible: clear in place after submit; defaults
+    // re-seed (Daily cadence, 50k tokens) so consecutive commits
+    // require minimum effort. No transition, no dismiss.
+    resetCommitForm();
   });
 
   function openGoals(): void {
@@ -713,10 +676,6 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
         goalsSubscribed = true;
       }
     }
-    // Open always lands on the `list` register — a re-open after a
-    // mid-create dismiss starts clean. The user re-enters `create`
-    // explicitly via the CTA.
-    setGoalsRegister("list");
     renderGoals();
     goalsPanel.classList.add("open");
     goalsBackdrop.classList.add("open");
@@ -725,8 +684,6 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   function closeGoals(): void {
     goalsPanel.classList.remove("open");
     goalsBackdrop.classList.remove("open");
-    // Drop create-register state on close so the next open is clean.
-    if (goalsRegister === "create") setGoalsRegister("list");
   }
 
   document.getElementById("goals-btn")!.addEventListener("click", openGoals);

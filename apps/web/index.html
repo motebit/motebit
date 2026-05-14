@@ -4096,13 +4096,16 @@
         color: var(--status-error-fg);
       }
 
-      /* ── Empty register — calm, commitment-bearing ───────────────── */
+      /* ── Empty register — calm, commitment-bearing ─────────────────
+         Vertically-centered in the cards area above the always-visible
+         form. The Reminders/Photos empty-state pattern: small caption
+         floating in the space, action affordance below (the form). */
       .goal-empty-commit {
-        margin: 24px 16px;
+        padding: 0 16px;
         text-align: center;
       }
       .goal-empty-commit .goal-pulse {
-        margin: 0 auto 16px;
+        margin: 0 auto 14px;
         width: 9px;
         height: 9px;
         animation: goalPulseBreathe 3.33s ease-in-out infinite;
@@ -4117,52 +4120,34 @@
       .goal-empty-commit-sub {
         font-size: 11px;
         color: var(--text-ghost);
-        margin-bottom: 16px;
       }
 
-      /* ── Goals interior registers — list ↔ create ─────────────────
-         The Goals panel composes two interior registers per
-         docs/doctrine/panel-presentation-modes.md §"What this means
-         for interior register". `register-list` shows cards + the
-         "Commit a goal" CTA. `register-create` replaces the list
-         body in place with the commitment form. No modal surface;
-         the panel itself rotates between registers. */
-      .goal-register-list,
-      .goal-register-create {
-        display: none;
+      /* ── Goals layout — always-visible inline affordance ───────────
+         Apple Reminders bottom-bar pattern per
+         docs/doctrine/panel-presentation-modes.md §"Inline >
+         transition > modal-forbidden". Cards (or empty caption)
+         scroll in the area above; form is pinned to the bottom of
+         the panel, always visible, never transitioned to. */
+      #goal-cards-area {
         flex: 1;
         min-height: 0;
+        overflow-y: auto;
+        display: flex;
         flex-direction: column;
       }
-      #goals-panel.register-list .goal-register-list {
-        display: flex;
+      /* Empty state: vertically-centered caption in the cards-area.
+         When goals exist, JS hides this and the cards take over. */
+      #goal-cards-area .goal-empty-commit {
+        margin: auto;
       }
-      #goals-panel.register-create .goal-register-create {
-        display: flex;
-        padding: 16px;
-        overflow-y: auto;
+      #goal-list {
+        flex: 0 0 auto;
       }
-      /* register-list internals: cards scroll, CTA pinned bottom */
-      #goals-panel.register-list #goal-list {
-        flex: 1;
-        overflow-y: auto;
-      }
-      #goal-commit-trigger {
-        margin: 12px;
-        padding: 10px 16px;
-        border-radius: 999px;
-        border: none;
-        background: var(--accent-soft);
-        color: #fff;
-        font-size: 13px;
-        font-weight: 500;
-        cursor: pointer;
-        font-family: inherit;
+      #goal-commit-form {
         flex-shrink: 0;
-        transition: background-color 0.15s ease;
-      }
-      #goal-commit-trigger:hover {
-        background: var(--accent-hover);
+        padding: 14px;
+        border-top: 1px solid var(--border-light);
+        background: var(--bg-glass);
       }
       .goal-commit-field {
         margin-top: 12px;
@@ -4236,42 +4221,29 @@
       .goal-commit-budget-input:focus {
         border-color: var(--accent-border);
       }
-      .goal-commit-actions {
-        display: flex;
-        gap: 8px;
-        margin-top: 18px;
-      }
-      .goal-commit-actions .commit-btn {
-        flex: 1;
-        padding: 9px 0;
+      /* Always-visible commit form's submit. Full-width per the
+         always-visible-inline-affordance pattern — there's no Cancel
+         to share space with because the form is perpetual. */
+      #goal-commit-form .commit-btn {
+        width: 100%;
+        margin-top: 14px;
+        padding: 10px 0;
         border: none;
-        border-radius: 8px;
+        border-radius: 10px;
         background: var(--accent-soft);
         color: #fff;
         font-size: 13px;
         font-weight: 500;
         cursor: pointer;
         font-family: inherit;
+        transition: background-color 0.15s ease;
       }
-      .goal-commit-actions .commit-btn:hover {
+      #goal-commit-form .commit-btn:hover {
         background: var(--accent-hover);
       }
-      .goal-commit-actions .commit-btn:disabled {
+      #goal-commit-form .commit-btn:disabled {
         opacity: 0.5;
         cursor: default;
-      }
-      .goal-commit-actions .cancel-btn {
-        padding: 9px 14px;
-        border: 1px solid var(--border-medium);
-        border-radius: 8px;
-        background: transparent;
-        color: var(--text-muted);
-        font-size: 12px;
-        cursor: pointer;
-        font-family: inherit;
-      }
-      .goal-commit-actions .cancel-btn:hover {
-        color: var(--text-primary);
       }
 
       /* Goal status indicator */
@@ -7315,37 +7287,35 @@
     </button>
     <div id="goals-backdrop"></div>
     <div id="goals-panel" aria-label="Goals panel">
-      <!-- Goals panel has two interior registers per
-           docs/doctrine/panel-presentation-modes.md §"What this means
-           for interior register": `list` and `create`. The panel
-           toggles `register-list` / `register-create` classes; each
-           register occupies the same panel body. No modal. -->
+      <!-- Goals panel: always-visible inline affordance per
+           docs/doctrine/panel-presentation-modes.md §"Inline >
+           transition > modal-forbidden". The form is light enough
+           (textarea + two chip rows + commit button) to coexist with
+           the cards list. Cards (or the empty caption) scroll in the
+           area above; the form lives permanently at the bottom. No
+           register transitions; no separate page. The Reminders
+           bottom-bar pattern, generalized. -->
       <div class="goals-panel-header">
-        <span class="goals-panel-title" id="goals-panel-title">Goals</span>
+        <span class="goals-panel-title">Goals</span>
         <button class="goals-panel-close" id="goals-close-btn">&times;</button>
       </div>
 
-      <!-- list register: empty state OR cards + commit CTA -->
-      <div class="goal-register-list">
-        <!-- Empty register: calm, commitment-bearing language. The
-             runtime register's mood is "living capability" per
-             panel-temporal-registers.md — the empty state is READY
-             (per always-already-slab.md inheritance into panel
-             surfaces), not absent. -->
+      <!-- Cards area: scrollable when populated; vertically-centered
+           empty caption when not. The pulse + headline are READY (per
+           always-already-slab.md inheritance), not absent. -->
+      <div id="goal-cards-area">
         <div id="goal-empty" class="goal-empty-commit" style="display: none">
           <div class="goal-pulse"></div>
           <div class="goal-empty-commit-title">Commit motebit to a goal</div>
           <div class="goal-empty-commit-sub">a recurring task · or a one-shot plan</div>
         </div>
         <div id="goal-list"></div>
-        <button id="goal-commit-trigger">Commit a goal</button>
       </div>
 
-      <!-- create register: replaces the list in place. Same panel,
-           same width, same controller. Cancel returns to list. No
-           second panel-shaped surface — modals are unrepresentable
-           per panel-presentation-modes.md. -->
-      <div class="goal-register-create">
+      <!-- Always-visible commit form. No title (panel header already
+           names the surface). No Cancel (nothing to cancel — the form
+           is perpetual). Submit clears the form in place. -->
+      <div id="goal-commit-form">
         <div class="goal-commit-field">
           <div class="goal-commit-field-label">What</div>
           <textarea
@@ -7384,10 +7354,7 @@
           </div>
         </div>
 
-        <div class="goal-commit-actions">
-          <button id="goal-commit-cancel" class="cancel-btn">Cancel</button>
-          <button id="goal-commit-submit" class="commit-btn">Commit goal</button>
-        </div>
+        <button id="goal-commit-submit" class="commit-btn">Commit goal</button>
       </div>
     </div>
 
