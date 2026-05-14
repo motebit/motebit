@@ -10,6 +10,7 @@ import {
   type GoalsState,
   type ScheduledGoal,
 } from "@motebit/panels";
+import { slabTurnIdForRun } from "@motebit/runtime";
 
 // === DOM Refs ===
 
@@ -93,6 +94,18 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
           typeof g.last_response_preview === "string" ? g.last_response_preview : null;
         const lastResponseFull =
           typeof g.last_response_full === "string" ? g.last_response_full : null;
+        // Apply the canonical `slabTurnIdForRun` formula at the
+        // projection boundary so a future rename of the wire shape
+        // can't silently break desktop's slab navigation. The Rust
+        // side projects `last_outcome_id` from the latest COMPLETED
+        // outcome only — failed outcomes degrade to null here, which
+        // matches the panels runner's symmetric clear-on-error on web
+        // (`docs/doctrine/goal-results.md` §"The three categories").
+        const lastOutcomeId =
+          typeof g.last_outcome_id === "string" && g.last_outcome_id !== ""
+            ? g.last_outcome_id
+            : null;
+        const lastTurnId = lastOutcomeId != null ? slabTurnIdForRun(lastOutcomeId) : null;
         return {
           goal_id: String(g.goal_id),
           prompt: ipcString(g.prompt),
@@ -106,6 +119,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
           spent_tokens: spentTokens,
           last_response_preview: lastResponsePreview,
           last_response_full: lastResponseFull,
+          last_turn_id: lastTurnId,
         };
       });
     },
@@ -557,6 +571,25 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
           void goalsCtrl.runNow?.(goalId);
         });
         actions.appendChild(runNowBtn);
+      }
+
+      // Slab navigational anchor — opens the resting `stream`/`mind`
+      // slab item the runtime created during the fire so the user
+      // can read the full artifact in its mind-mode embodiment.
+      // Renders only when the latest completed outcome carries a
+      // turn id (pre-Phase-3 fires and plan-mode goals degrade to
+      // no affordance, the correct calm-software default).
+      // Doctrine: `docs/doctrine/goal-results.md` §"The three
+      // categories"; `panel-action-ghost` is the secondary-affordance
+      // vocab per `feedback_panel_shared_vocabulary`.
+      if (goal.last_turn_id != null && goal.last_turn_id !== "") {
+        const viewBtn = document.createElement("button");
+        viewBtn.className = "panel-action-ghost goal-view-result";
+        viewBtn.textContent = "View result";
+        viewBtn.addEventListener("click", () => {
+          ctx.app.getRenderer().setSlabVisible?.(true);
+        });
+        actions.appendChild(viewBtn);
       }
 
       const historyBtn = document.createElement("button");

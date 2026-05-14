@@ -768,7 +768,16 @@ export class GoalScheduler {
     let toolCallsMade = 0;
     let tokensUsed = 0;
 
-    for await (const chunk of runtime.sendMessageStreaming(context, runId)) {
+    // Phase 3 of the goal-results arc — annotate the resting slab
+    // item with goalContext so it's *legible* as the goal's artifact
+    // per `docs/doctrine/goal-results.md` §"The three categories".
+    // The slab item's id is `slabTurnIdForRun(runId)`; the desktop
+    // scheduler already uses `runId` as `goal_outcomes.outcome_id`,
+    // so `goals_list` projects `slab-turn-${outcome_id}` onto
+    // `ScheduledGoal.last_turn_id` without a separate column.
+    for await (const chunk of runtime.sendMessageStreaming(context, runId, {
+      goalContext: { goal_id: goal.goal_id, goal_prompt: goal.prompt },
+    })) {
       if (signal?.aborted === true) {
         throw signal.reason instanceof Error ? signal.reason : new Error("Goal aborted");
       }

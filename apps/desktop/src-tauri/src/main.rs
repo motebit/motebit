@@ -734,13 +734,22 @@ fn goals_list(state: State<AppState>, motebit_id: String) -> Result<Vec<JsonValu
     // register can render the budget envelope without a second query.
     // Pre-token-tracking outcome rows (NULL tokens_used) contribute 0 —
     // correct semantic since we don't know what they consumed.
-    // Project the latest outcome's `summary` and `response_full` onto
-    // each goal row so the panels controller can surface
-    // `last_response_preview` and `last_response_full` without a
-    // second query. Doctrine: `docs/doctrine/goal-results.md`
-    // §"The three categories" + the runner's symmetric clear-on-error
-    // (a failed fire's NULL `summary` naturally projects as no preview;
-    // the most-recent visible signal stays honest).
+    // Project the latest outcome's `summary`, `response_full`, and
+    // `outcome_id` (used as the slab turn-id seed) onto each goal row
+    // so the panels controller can surface `last_response_preview`,
+    // `last_response_full`, and `last_turn_id` without a second
+    // query. Doctrine: `docs/doctrine/goal-results.md` §"The three
+    // categories" + the runner's symmetric clear-on-error (a failed
+    // fire's NULL `summary` naturally projects as no preview; the
+    // most-recent visible signal stays honest). The slab item id is
+    // `slab-turn-${runId}`; the desktop scheduler uses `runId` as the
+    // outcome_id, so the latest outcome's outcome_id IS the slab
+    // turn-id seed — the TypeScript adapter applies the
+    // `slabTurnIdForRun` formula at projection time so the wire
+    // shape stays single-sourced (rename-resistant). Only completed
+    // outcomes contribute the seed; failed outcomes' outcome_id
+    // points at a dissolved slab item, so we project NULL there to
+    // match the runner's clear-on-error semantic on web.
     let mut stmt = db
         .prepare(
             "SELECT g.goal_id, g.prompt, g.interval_ms, g.mode, g.status, g.consecutive_failures, \
@@ -749,7 +758,10 @@ fn goals_list(state: State<AppState>, motebit_id: String) -> Result<Vec<JsonValu
                     (SELECT summary FROM goal_outcomes \
                        WHERE goal_id = g.goal_id ORDER BY ran_at DESC LIMIT 1) AS latest_summary, \
                     (SELECT response_full FROM goal_outcomes \
-                       WHERE goal_id = g.goal_id ORDER BY ran_at DESC LIMIT 1) AS latest_response_full \
+                       WHERE goal_id = g.goal_id ORDER BY ran_at DESC LIMIT 1) AS latest_response_full, \
+                    (SELECT CASE WHEN status = 'completed' THEN outcome_id ELSE NULL END \
+                       FROM goal_outcomes WHERE goal_id = g.goal_id \
+                       ORDER BY ran_at DESC LIMIT 1) AS latest_outcome_id \
              FROM goals g \
              LEFT JOIN goal_outcomes o ON o.goal_id = g.goal_id \
              WHERE g.motebit_id = ? \
@@ -802,6 +814,18 @@ fn goals_list(state: State<AppState>, motebit_id: String) -> Result<Vec<JsonValu
             obj.insert(
                 "last_response_full".into(),
                 match latest_response_full {
+                    Some(v) => JsonValue::String(v),
+                    None => JsonValue::Null,
+                },
+            );
+            // Latest completed outcome's outcome_id IS the runId the
+            // desktop scheduler passed to runtime.sendMessageStreaming,
+            // which is what `slabTurnIdForRun` consumes. Surface
+            // applies the formula at projection time.
+            let latest_outcome_id: Option<String> = row.get(12)?;
+            obj.insert(
+                "last_outcome_id".into(),
+                match latest_outcome_id {
                     Some(v) => JsonValue::String(v),
                     None => JsonValue::Null,
                 },

@@ -303,12 +303,77 @@ function headRow(glyph: string, label: string): HTMLDivElement {
 
 // ── Per-kind renderers ───────────────────────────────────────────────
 
+interface StreamPayload {
+  readonly text?: string;
+  /** Goal-context annotation per `docs/doctrine/goal-results.md`
+   *  §"The three categories" — threaded by the runtime's
+   *  `sendMessageStreaming` `goalContext` option through
+   *  `projectSlabForTurn`'s payload so the slab item is *legible*
+   *  as the goal's artifact. Mirrored on web's slab-items.ts. */
+  readonly goalContext?: { readonly goal_id: string; readonly goal_prompt: string };
+}
+
+function renderGoalContextChrome(goalPrompt: string): HTMLElement {
+  // Minimal "from goal · <prompt>" chrome — non-interactive; the
+  // goal card in the Goals panel owns the commitment surface, and
+  // the slab item simply names its origin. Byte-aligned with the
+  // web sibling (`apps/web/src/ui/slab-items.ts`) per the local
+  // markdown renderer's "intentionally inlined" comment below.
+  const chrome = document.createElement("div");
+  chrome.className = "slab-item-goal-chrome";
+  chrome.style.display = "flex";
+  chrome.style.alignItems = "center";
+  chrome.style.gap = "8px";
+  chrome.style.padding = "6px 14px 0";
+  chrome.style.fontSize = "10.5px";
+  chrome.style.letterSpacing = "0.06em";
+  chrome.style.textTransform = "uppercase";
+  chrome.style.fontWeight = "600";
+  chrome.style.color = "rgba(55, 72, 110, 0.7)";
+
+  const mark = document.createElement("span");
+  mark.textContent = "from goal";
+  mark.style.flex = "0 0 auto";
+  chrome.appendChild(mark);
+
+  const sep = document.createElement("span");
+  sep.textContent = "·";
+  sep.style.opacity = "0.5";
+  sep.style.flex = "0 0 auto";
+  chrome.appendChild(sep);
+
+  const prompt = document.createElement("span");
+  prompt.className = "slab-item-goal-prompt";
+  prompt.textContent = goalPrompt;
+  prompt.style.flex = "1 1 auto";
+  prompt.style.overflow = "hidden";
+  prompt.style.textOverflow = "ellipsis";
+  prompt.style.whiteSpace = "nowrap";
+  prompt.style.textTransform = "none";
+  prompt.style.letterSpacing = "0";
+  prompt.style.fontWeight = "400";
+  prompt.style.color = "rgba(55, 72, 110, 0.82)";
+  chrome.appendChild(prompt);
+
+  return chrome;
+}
+
 function renderStream(item: SlabItem): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-stream");
   // Stream is the motebit's response — a document view, not a status
   // chip. No URL bar or prompt chrome; clean rendered prose fills
   // the window like a reader view.
+  //
+  // Phase 3 of the goal-results arc: when the payload carries
+  // `goalContext`, prepend a "from goal · <prompt>" chrome row so the
+  // resting slab item reads as the goal's artifact rather than an
+  // anonymous turn. Byte-aligned with web's renderer.
+  const payload = item.payload as StreamPayload | null;
+  if (payload?.goalContext && typeof payload.goalContext.goal_prompt === "string") {
+    card.classList.add("slab-item-stream-goal");
+    card.appendChild(renderGoalContextChrome(payload.goalContext.goal_prompt));
+  }
   const body = cardBody();
   body.style.padding = "14px 16px";
   const text = document.createElement("div");
@@ -319,7 +384,6 @@ function renderStream(item: SlabItem): HTMLElement {
   text.style.maxHeight = "260px";
   text.style.overflow = "auto";
   text.style.wordBreak = "break-word";
-  const payload = item.payload as { text?: string } | null;
   text.innerHTML = renderStreamMarkdown(payload?.text ?? "");
   body.appendChild(text);
   card.appendChild(body);
@@ -328,7 +392,7 @@ function renderStream(item: SlabItem): HTMLElement {
 
 function updateStream(item: SlabItem, element: HTMLElement): void {
   const text = element.querySelector(".slab-item-text");
-  const payload = item.payload as { text?: string } | null;
+  const payload = item.payload as StreamPayload | null;
   if (text instanceof HTMLElement) {
     // Preserve scroll position if the user has scrolled up to read;
     // stick to the bottom when they're already at the bottom. This
@@ -337,6 +401,16 @@ function updateStream(item: SlabItem, element: HTMLElement): void {
     const atBottom = text.scrollTop + text.clientHeight >= text.scrollHeight - 8;
     text.innerHTML = renderStreamMarkdown(payload?.text ?? "");
     if (atBottom) text.scrollTop = text.scrollHeight;
+  }
+  // Idempotent goal chrome mount — mirrored from web.
+  if (payload?.goalContext && typeof payload.goalContext.goal_prompt === "string") {
+    if (!element.querySelector(".slab-item-goal-chrome")) {
+      element.classList.add("slab-item-stream-goal");
+      element.insertBefore(
+        renderGoalContextChrome(payload.goalContext.goal_prompt),
+        element.firstChild,
+      );
+    }
   }
 }
 
