@@ -92,6 +92,7 @@
     "check-transparency-processors-canonical": "npx tsx scripts/check-transparency-processors-canonical.ts",
     "check-publishable-package-metadata": "npx tsx scripts/check-publishable-package-metadata.ts",
     "check-slab-chrome-coverage": "npx tsx scripts/check-slab-chrome-coverage.ts",
+    "check-routing-decision-coverage": "npx tsx scripts/check-routing-decision-coverage.ts",
     "check-execution-ledger-receipts-archived": "npx tsx scripts/check-execution-ledger-receipts-archived.ts",
     "check-execution-ledger-inner-receipt-verified": "npx tsx scripts/check-execution-ledger-inner-receipt-verified.ts",
     "check-readme-public-exports": "npx tsx scripts/check-readme-public-exports.ts",

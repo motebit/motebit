@@ -17,6 +17,7 @@ export type { PolicyConfig } from "./policy-gate.js";
 export { MemoryGovernor, MemoryClass, DEFAULT_MEMORY_GOVERNANCE } from "./memory-governance.js";
 export type { MemoryGovernanceConfig, MemoryDecision } from "./memory-governance.js";
 export { computeReputationScore } from "./reputation.js";
+export { dispatchRouting, applyBalanceFilter, REFERENCE_ROUTING_POLICY } from "./auto-router.js";
 export {
   appendAuditEntry,
   verifyAuditChain,

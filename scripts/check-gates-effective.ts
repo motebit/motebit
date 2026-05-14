@@ -1586,6 +1586,21 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-routing-decision-coverage",
+    proves:
+      "flags an auto-router CONSUMER silently inlining routing logic instead of dispatching through the protocol primitive. Drift class: a future PR that 'optimizes' the proxy's auto-routing by reverting to inline TASK_MODEL_MAP lookup without consuming `dispatchRouting` from @motebit/policy regresses the protocol-first / matrix-as-primitive commitment. The gate catches the missing import + missing call structurally. Probe renames the `dispatchRouting` import (and its call sites) in `services/proxy/src/app/v1/messages/route.ts`; gate must surface the missing-import and missing-entry-call violations. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      // Rename the dispatchRouting import + call sites in the proxy's
+      // auto-routing path. The gate's import regex looks for
+      // `dispatchRouting` in `from "@motebit/policy"` context;
+      // rewriting the identifier strips both the import and the call
+      // sites at once, triggering BOTH the missing-import and
+      // missing-entry-call violations the gate is designed to catch.
+      mutateFile(`services/proxy/src/app/v1/messages/route.ts`, (src) =>
+        src.replace(/dispatchRouting/g, "routingFnDisabled"),
+      ),
+  },
+  {
     script: "check-execution-ledger-receipts-archived",
     proves:
       "flags the execution-ledger reconstruction silently regressing back to v1.0 summary-only semantics. Drift class: the operator-trust gap — without `signed_receipts` sourced from the byte-identical archive, verifiers cannot check inner motebit signatures and the relay's word becomes the trust floor.",

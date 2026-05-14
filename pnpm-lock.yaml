@@ -2278,6 +2278,12 @@ importers:
       '@motebit/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
+      '@motebit/policy':
+        specifier: workspace:*
+        version: link:../../packages/policy
+      '@motebit/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@vercel/kv':
         specifier: ^2.0.0
         version: 2.0.0

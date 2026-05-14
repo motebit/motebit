@@ -42,6 +42,7 @@ const relayFee = PLATFORM_FEE_RATE; // 0.05 — the universal 5% relay fee.
 - **Policy** — `ToolDefinition`, `PolicyDecision`, `RiskLevel`, `SensitivityLevel`
 - **Storage adapters** — pluggable persistence contracts for any backend
 - **Cryptosuite registry** — `SuiteId` union for crypto-agile wire artifacts
+- **Auto-router registry** — `TaskShape` closed union (`ALL_TASK_SHAPES`, `isTaskShape`) for the model-selection primitive; named constants `QUICK_TASK_SHAPE`, `CHAT_TASK_SHAPE`, `REASONING_TASK_SHAPE`, `CODE_TASK_SHAPE`, `RESEARCH_TASK_SHAPE`, `CREATIVE_TASK_SHAPE`, `MATH_TASK_SHAPE`. Paired with `ProviderCapability` + `RoutingConstraint` + `RoutingDecision` types consumed by `@motebit/policy::dispatchRouting`
 
 Product-level types (state vectors, creature behavior, rendering spec) live in [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk), which re-exports everything here plus the product vocabulary.
 

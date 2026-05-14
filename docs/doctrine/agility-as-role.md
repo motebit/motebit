@@ -2,7 +2,7 @@
 
 Every architectural axis where motebit reserves the right to swap concretes follows the same shape: name the **role** in code, gates, types, and prose; treat the **instance** as a registry entry whose value can change without touching consumers. Migration becomes a registry append, not a wire-format break or a codebase rewrite.
 
-The pattern is unstated but load-bearing. Six instances run through it today, with a typed admission predicate layered atop the most recent pair. Future architectural decisions involving a chosen technology should ask the test in [§ When to apply](#when-to-apply) on day one — the cost of indirection is one type alias, the cost of retrofitting later is the migration that motivates the decision.
+The pattern is unstated but load-bearing. Seven instances run through it today, with a typed admission predicate layered atop the intelligence-source pair. Future architectural decisions involving a chosen technology should ask the test in [§ When to apply](#when-to-apply) on day one — the cost of indirection is one type alias, the cost of retrofitting later is the migration that motivates the decision.
 
 ## The pattern
 
@@ -11,7 +11,7 @@ The pattern is unstated but load-bearing. Six instances run through it today, wi
 - **Migration** is one entry added or substituted in the registry. Consumers continue to consume the role; the registry resolves to the new instance. No callsite changes.
 - **Drift defenses** check the role, never the literal instance. A gate that hardcodes `Ed25519` would fire spuriously the moment ML-DSA-65 is added; a gate that asks "every signed artifact carries a registered `SuiteId`" survives the migration unchanged.
 
-## Six instances in motebit
+## Seven instances in motebit
 
 ### Cryptosuite agility
 
@@ -58,6 +58,15 @@ The pattern is unstated but load-bearing. Six instances run through it today, wi
 - **Instances today:** `anthropic`, `openai`, `google`, `meta` (four entries). Anthropic/OpenAI/Google each appear in both `InferenceHost` and `ModelLab` because vertical integration — the same company trains and hosts. Meta appears in `ModelLab` only (publishes Llama weights, doesn't run hosted inference). OpenAI appears twice: as `host` for proprietary GPT-5.4 hosted at api.openai.com, and as `lab` for gpt-oss-120b which they released as open weights and Groq hosts.
 - **Migration shape:** adding a new lab (Mistral, Cohere, Qwen) is a registry append. `ModelLab` is currently a data-field axis without a shipping consumer (Path C auto-routing by model-family preference and surface-level UI attribution would be future consumers) — the field is populated because the property is factually true of every entry, not because code branches on it today. _Data fields document reality; behavior fields commit to future code branches._ The asymmetry is intentional: facts don't need consumers to justify their existence; abstractions do. See `feedback_data_fields_vs_behavior_fields` for the meta-principle.
 - **Defenses:** TypeScript exhaustive enforcement (every `MODEL_CONFIG` entry must declare a `lab` value drawn from the closed union).
+
+### TaskShape agility (the 7th instance)
+
+- **Role:** `TaskShape` in `@motebit/protocol/src/routing.ts` — closed union of task categories the auto-router branches on (`"quick" | "chat" | "reasoning" | "code" | "research" | "creative" | "math"` today). Every consumer of `dispatchRouting` (`@motebit/policy`) accepts a `TaskShape` as input and returns a `RoutingDecision`. No consumer is allowed to inline its own routing logic outside the dispatcher.
+- **Instances today:** seven task categories lifted from `services/proxy/src/validation.ts`'s `TASK_MODEL_MAP` (the production set since the intelligence-source-agility refactor). Each shape maps to a preferred model in `REFERENCE_ROUTING_POLICY` (the reference default in `@motebit/policy`).
+- **Migration shape:** adding a shape (`"voice-conversation"`, `"image-generation"`, `"agentic"`, etc.) is a registry append in `@motebit/protocol` + a new arm in `REFERENCE_ROUTING_POLICY` + drift-gate-induced coverage in every CONSUMER. Compile-time enforced via the dispatcher's exhaustive switch with `never` fallthrough — the type system refuses to ship until every arm is added.
+- **Defenses:** `check-routing-decision-coverage` (#95) — CONSUMERS-registry coverage (motebit-cloud proxy at PR 1; BYOK at PR 2; on-device at PR 3). Sibling-alignment: gate's `TASK_SHAPES_REFERENCE` mirrors `ALL_TASK_SHAPES` from protocol. **TaskShape literal scanning is NOT in the gate** — the dispatcher's exhaustive switch enforces per-shape coverage structurally; a textual gate would be redundant ceremony.
+- **Critical distinction — TaskShape is the role; routing-policy is a consumer-side function, NOT a role.** A routing-policy (`Record<TaskShape, string>` today, potentially a learned function of the same signature in the future) is **dependency-injected** at the `dispatchRouting` call site. New policies are new function implementations, not closed-registry entries. Distinguishing role (registry-shape) from policy (function-shape) avoids the same vocabulary conflation the codebase corrected for `Provider → InferenceHost`. The 2026-05-13 plan-review session caught this exact misframe in an earlier draft of the auto-router doctrine; the correction is preserved here as a doctrinal anchor.
+- **Doctrine:** `docs/doctrine/auto-routing-as-protocol-primitive.md` (`f(TaskShape × ProviderCapability × Constraints) → RoutingDecision`).
 
 ### Jurisdiction admission predicate (not a role)
 

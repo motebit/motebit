@@ -4,6 +4,15 @@
  */
 
 import { verifyBySuite } from "@motebit/crypto/suite-dispatch";
+import type { InferenceHost, ModelLab, Jurisdiction, TaskShape } from "@motebit/protocol";
+import { REFERENCE_ROUTING_POLICY } from "@motebit/policy";
+
+// Re-export the lifted unions for back-compat with proxy-internal
+// callers. The canonical home is `@motebit/protocol/src/routing.ts`;
+// this re-export keeps the existing `import { InferenceHost } from
+// "./validation"` paths working without churn. New code should
+// import from `@motebit/protocol` directly.
+export type { InferenceHost, ModelLab, Jurisdiction, TaskShape };
 
 // --- Constants ---
 
@@ -49,44 +58,17 @@ export interface ProxyTokenPayload {
   exp: number;
 }
 
-// ── Intelligence-source agility (agility-as-role instances 6 + 7) ───────
+// ── Intelligence-source agility ──────────────────────────────────────────
 //
-// The proxy routes data to inference hosts; the weights running there
-// were trained by model labs; the host operates from a legal jurisdiction.
-// These are three structurally distinct axes flattened into one `Provider`
-// field pre-this-refactor, which made the doctrine claim "intelligence is
-// pluggable" partially aspirational — the code conflated WHO trained the
-// weights (lab) with WHERE the data flows (host). The split makes that
-// claim load-bearing.
+// `InferenceHost`, `ModelLab`, `Jurisdiction` lifted to
+// `@motebit/protocol/src/routing.ts` (Apache-2.0). The 5/13 commit
+// established the role/predicate distinction; this PR lands the
+// canonical home in protocol so the auto-router primitive
+// (`@motebit/policy::dispatchRouting`) can consume the same types.
+// Doctrine: `docs/doctrine/auto-routing-as-protocol-primitive.md`.
 //
-// Naming: InferenceHost / ModelLab are role names; entries are registry
-// additions. Same agility-as-role pattern as SuiteId, permissive floor,
-// GuestRail/SovereignRail, ByokVendor, foundation-model agility (the 5
-// instances documented in docs/doctrine/agility-as-role.md — this is the
-// 6th and 7th).
-//
-// Jurisdiction is NOT a role — it's a typed admission predicate that
-// lifts the previously-tribal "DeepSeek-not-in-motebit-cloud-because-
-// Chinese-hosted" decision into structural enforcement. You can't swap a
-// host's jurisdiction; the registry reflects legal reality.
-
-/** Where the HTTP request actually goes. The processor that receives the
- *  prompt bytes. Anthropic/OpenAI/Google appear here because they run their
- *  own hosted inference; Groq appears here because they host other labs'
- *  open-source weights on LPU hardware. */
-export type InferenceHost = "anthropic" | "openai" | "google" | "groq";
-
-/** Who trained the weights. Anthropic/OpenAI/Google appear here because
- *  they trained Claude/GPT/Gemini respectively; Meta appears here because
- *  Llama 3.3 70B is Meta's model (Groq just hosts it). OpenAI appears
- *  twice (host="openai" for gpt-5.4 hosted at api.openai.com; lab="openai"
- *  for gpt-oss-120b which they released as open weights and Groq hosts).
- *  That's structurally correct — same entity can serve different roles. */
-export type ModelLab = "anthropic" | "openai" | "google" | "meta";
-
-/** Legal locus of the host. Reflective of physical/legal reality, not
- *  pluggable. Drives the motebit-cloud admission predicate below. */
-export type Jurisdiction = "US" | "CN" | "EU";
+// Re-exported above for proxy-internal back-compat. New code
+// imports from `@motebit/protocol` directly.
 
 /** Jurisdictions motebit-cloud (services/proxy) routes to. The earlier
  *  "DeepSeek is BYOK-only because Chinese-hosted" decision is now a typed
@@ -244,16 +226,17 @@ export const CLASSIFIER_MODEL = "claude-haiku-4-5-20251001";
 /** Cheapest model across all providers — used as last-resort fallback when balance is near zero. */
 export const CHEAPEST_MODEL = "gemini-2.5-flash-lite";
 
-/** Model recommendations by task type. */
-const TASK_MODEL_MAP: Record<string, string> = {
-  quick: "claude-haiku-4-5-20251001",
-  chat: "claude-sonnet-4-6",
-  reasoning: "claude-opus-4-6",
-  code: "gpt-5.4",
-  research: "gemini-2.5-pro",
-  creative: "claude-sonnet-4-6",
-  math: "claude-opus-4-6",
-};
+/**
+ * Model recommendations by task type — alias to the canonical
+ * `REFERENCE_ROUTING_POLICY` lifted to `@motebit/policy`. The proxy
+ * historically held the source-of-truth here; PR-1 of the auto-router
+ * makes the policy a protocol-layer primitive consumed via
+ * `dispatchRouting`. This local alias preserves the proxy-internal
+ * callsites (`getModelForTaskType`, `getAffordableModelForTask`)
+ * during the lift; new code consumes `REFERENCE_ROUTING_POLICY` and
+ * `dispatchRouting` from `@motebit/policy` directly.
+ */
+const TASK_MODEL_MAP: Readonly<Record<string, string>> = REFERENCE_ROUTING_POLICY;
 
 /** Default model when classifier fails or returns unknown type. */
 export const AUTO_DEFAULT_MODEL = "claude-sonnet-4-6";
@@ -296,6 +279,29 @@ export function getModelForTaskType(taskType: string): string {
 /** Get the inference host for a model. Returns null for unknown models. */
 export function getModelHost(model: string): InferenceHost | null {
   return MODEL_CONFIG[model]?.host ?? null;
+}
+
+/**
+ * Return the proxy's model catalog as `ProviderCapability[]` for
+ * `dispatchRouting`. Translates the proxy-internal `ModelEntry`
+ * shape (`input`/`output`) to the canonical `ProviderCapability`
+ * shape (`inputCostPerMillion`/`outputCostPerMillion`) from
+ * `@motebit/protocol`. Catalog ordering is preserved — the
+ * dispatcher honors order as the consumer's preference signal.
+ *
+ * Note: returning a fresh array each call is acceptable for the
+ * proxy's edge-runtime call rate; if hot-path perf demands, this
+ * could memoize at module load.
+ */
+export function getProviderCatalog(): import("@motebit/protocol").ProviderCapability[] {
+  return Object.entries(MODEL_CONFIG).map(([modelName, entry]) => ({
+    modelName,
+    host: entry.host,
+    lab: entry.lab,
+    jurisdiction: entry.jurisdiction,
+    inputCostPerMillion: entry.input,
+    outputCostPerMillion: entry.output,
+  }));
 }
 
 /** Backwards-compatible alias preserved for callers that imported the

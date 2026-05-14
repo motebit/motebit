@@ -9,11 +9,13 @@ import {
   parseProxyToken,
   calculateCostMicro,
   getModelProvider,
-  getAffordableModelForTask,
+  getProviderCatalog,
   resolveModelAlias,
   CLASSIFIER_MODEL,
   AUTO_DEFAULT_MODEL,
 } from "../../../validation";
+import { isTaskShape, type RoutingConstraint } from "@motebit/protocol";
+import { dispatchRouting, applyBalanceFilter, REFERENCE_ROUTING_POLICY } from "@motebit/policy";
 
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
@@ -354,29 +356,91 @@ export async function POST(request: Request): Promise<Response> {
     resolvedModel = resolveModelAlias(resolvedModel);
   }
 
-  // Auto-routing: classify with Haiku, pick the best model the balance can afford (Sonnet → Haiku → Flash-Lite)
+  // Auto-routing: classify with Haiku, then dispatch through the
+  // protocol-layer auto-router primitive. The proxy is the first
+  // CONSUMER registered in `check-routing-decision-coverage` (drift
+  // gate #95); BYOK and on-device add as PR 2/3. Doctrine:
+  // `docs/doctrine/auto-routing-as-protocol-primitive.md`.
+  //
+  // Flow:
+  //   classifyTask (LLM intent classifier; proxy-internal) → TaskShape
+  //   → applyBalanceFilter (motebit-cloud-specific wrapper; protocol-
+  //     neutral primitive stays consumer-agnostic)
+  //   → dispatchRouting (protocol primitive in @motebit/policy)
+  //   → handle RoutingDecision { route | fallback | deny }
   let classifierCost = 0;
+  let routingReason: string | undefined;
   if (resolvedModel === "auto" && !isBYOK) {
     const classifierKey = process.env.ANTHROPIC_API_KEY;
     if (classifierKey) {
       const lastMsg = (body.messages as Array<{ content: string }>)?.at(-1)?.content ?? "";
-      const taskType = await classifyTask(classifierKey, lastMsg);
-      // Pick best model within balance — downgrades Opus → Sonnet → Haiku → Flash-Lite if needed
+      const classifiedTaskType = await classifyTask(classifierKey, lastMsg);
+      // Narrow to the closed TaskShape registry. Unknown classifier
+      // outputs fall back to "chat" (the conversational default).
+      const taskShape = isTaskShape(classifiedTaskType) ? classifiedTaskType : "chat";
       const balance = tokenPayload?.bal ?? 0;
-      const picked = getAffordableModelForTask(taskType, balance);
-      // Check if the picked model's provider is configured
-      const pickedProvider = getModelProvider(picked);
-      if (pickedProvider && getProviderApiKey(pickedProvider)) {
-        resolvedModel = picked;
-      } else {
-        resolvedModel = AUTO_DEFAULT_MODEL; // fallback to Sonnet
+      // Pre-filter the catalog by motebit-cloud balance affordability
+      // (consumer-side wrapper; protocol layer stays consumer-neutral).
+      const fullCatalog = getProviderCatalog();
+      const affordableCatalog = applyBalanceFilter(fullCatalog, balance);
+      // Constrain to motebit-cloud-allowed jurisdiction (US-only today).
+      const constraints: RoutingConstraint = { jurisdiction: "US" };
+      const decision = dispatchRouting(
+        taskShape,
+        affordableCatalog,
+        constraints,
+        REFERENCE_ROUTING_POLICY,
+      );
+      // Honor the typed RoutingDecision discriminator. Every consumer
+      // of dispatchRouting MUST handle route + fallback + deny per the
+      // structural contract enforced by `check-routing-decision-
+      // coverage` (#95).
+      switch (decision.kind) {
+        case "route": {
+          // Confirm the picked model's provider key is configured;
+          // otherwise fall back to the auto-default (Sonnet).
+          const pickedProvider = getModelProvider(decision.model);
+          if (pickedProvider && getProviderApiKey(pickedProvider)) {
+            resolvedModel = decision.model;
+            routingReason = decision.reason;
+          } else {
+            resolvedModel = AUTO_DEFAULT_MODEL;
+            routingReason = `picked model ${decision.model} but no provider key configured; using default ${AUTO_DEFAULT_MODEL}`;
+          }
+          break;
+        }
+        case "fallback": {
+          const pickedProvider = getModelProvider(decision.backup);
+          if (pickedProvider && getProviderApiKey(pickedProvider)) {
+            resolvedModel = decision.backup;
+            routingReason = decision.reason;
+          } else {
+            resolvedModel = AUTO_DEFAULT_MODEL;
+            routingReason = `fallback model ${decision.backup} but no provider key configured; using default ${AUTO_DEFAULT_MODEL}`;
+          }
+          break;
+        }
+        case "deny": {
+          // No catalog entry survived constraints — fall back to
+          // AUTO_DEFAULT_MODEL. Real production policy: surface the
+          // deny to the user (HTTP 4xx) rather than silently picking
+          // Sonnet; this preserves PR-1's no-regression posture.
+          resolvedModel = AUTO_DEFAULT_MODEL;
+          routingReason = `dispatch denied (${decision.reason}); using default ${AUTO_DEFAULT_MODEL}`;
+          break;
+        }
       }
       // Estimate classifier cost (~200 tokens in + ~20 tokens out via Haiku)
       classifierCost = calculateCostMicro(CLASSIFIER_MODEL, 200, 20);
     } else {
       resolvedModel = AUTO_DEFAULT_MODEL;
+      routingReason = `ANTHROPIC_API_KEY not configured; using default ${AUTO_DEFAULT_MODEL}`;
     }
   }
+  // routingReason is captured for observability — future PR threads
+  // it into the proxy response so chrome narration can surface the
+  // routing decision (PR 4 of the auto-router arc).
+  void routingReason;
 
   if (authMode === "proxy-token" && tokenPayload) {
     // "auto" is always allowed; for specific models check the allowlist

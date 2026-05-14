@@ -2617,6 +2617,36 @@ export { rankSensitivity, maxSensitivity, sensitivityPermits } from "./sensitivi
 export { MICRO, CENTS, toMicro, fromMicro, toCents, fromCents } from "./money.js";
 
 // Token audiences — closed registry of `aud` claim values for the
+// Routing primitive — closed-registry types for the auto-router.
+// `TaskShape` is the role (closed registry); the routing-policy
+// is a consumer-side function in BSL `@motebit/policy`. Also
+// lifts `InferenceHost`, `ModelLab`, `Jurisdiction` from the
+// proxy's `validation.ts` (intelligence-source agility's
+// anticipated landing site). Drift gate `check-routing-decision-
+// coverage` enforces every registered consumer imports +
+// dispatches through `dispatchRouting`. See `./routing.ts`
+// header + `docs/doctrine/auto-routing-as-protocol-primitive.md`.
+export type {
+  InferenceHost,
+  ModelLab,
+  Jurisdiction,
+  TaskShape,
+  ProviderCapability,
+  RoutingConstraint,
+  RoutingDecision,
+} from "./routing.js";
+export {
+  ALL_TASK_SHAPES,
+  isTaskShape,
+  QUICK_TASK_SHAPE,
+  CHAT_TASK_SHAPE,
+  REASONING_TASK_SHAPE,
+  CODE_TASK_SHAPE,
+  RESEARCH_TASK_SHAPE,
+  CREATIVE_TASK_SHAPE,
+  MATH_TASK_SHAPE,
+} from "./routing.js";
+
 // audience-bound signed-token primitive. Cross-endpoint replay
 // prevention; every signed bearer carries `aud` and verifiers reject
 // unexpected values fail-closed. Same closure pattern as `SuiteId`,

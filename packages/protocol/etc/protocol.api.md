@@ -244,6 +244,9 @@ export const ALL_CONTENT_ARTIFACT_TYPES: readonly ContentArtifactType[];
 export const ALL_SUITE_IDS: readonly SuiteId[];
 
 // @public
+export const ALL_TASK_SHAPES: readonly TaskShape[];
+
+// @public
 export const ALL_TOKEN_AUDIENCES: readonly TokenAudience[];
 
 // Warning: (ae-forgotten-export) The symbol "Brand" needs to be exported by the entry point index.d.ts
@@ -517,6 +520,9 @@ export interface ChainAnchorSubmitter {
 export type CharacterClass = "letter" | "digit" | "punct" | "whitespace" | "control" | "modifier" | "unknown";
 
 // @public
+export const CHAT_TASK_SHAPE: TaskShape;
+
+// @public
 export interface Citation {
     locator: string;
     receipt_task_id?: string;
@@ -577,6 +583,9 @@ export interface CoBrowseControlChangedPayload {
 
 // @alpha (undocumented)
 export type CoBrowseTransitionKind = (typeof CO_BROWSE_TRANSITION_KINDS)[number];
+
+// @public
+export const CODE_TASK_SHAPE: TaskShape;
 
 // @public (undocumented)
 export interface CollaborativePlanProposal {
@@ -861,6 +870,9 @@ export interface ConversationSyncResult {
 
 // @public
 export const CostSemiring: Semiring<number>;
+
+// @public
+export const CREATIVE_TASK_SHAPE: TaskShape;
 
 // @public
 export interface CredentialAnchorBatch {
@@ -1806,6 +1818,9 @@ export interface IdentityStorage {
     saveDevice?(device: DeviceRegistration): Promise<void>;
 }
 
+// @public
+export type InferenceHost = "anthropic" | "openai" | "google" | "groq";
+
 // @public (undocumented)
 export interface InjectionWarning {
     // (undocumented)
@@ -1837,10 +1852,16 @@ export function isSignedTransparencyDeclaration(value: unknown): value is Signed
 export function isSuiteId(value: unknown): value is SuiteId;
 
 // @public
+export function isTaskShape(value: unknown): value is TaskShape;
+
+// @public
 export function isTokenAudience(value: unknown): value is TokenAudience;
 
 // @public
 export function joinParallelRoutes(scores: number[]): number;
+
+// @public
+export type Jurisdiction = "US" | "CN" | "EU";
 
 // @alpha
 export interface KeyAction {
@@ -1946,6 +1967,9 @@ export interface MarketConfig {
     // (undocumented)
     weight_trust: number;
 }
+
+// @public
+export const MATH_TASK_SHAPE: TaskShape;
 
 // @public
 export const MAX_RETENTION_DAYS_BY_SENSITIVITY: Readonly<{
@@ -2106,6 +2130,9 @@ export interface MigrationToken {
     suite: "motebit-jcs-ed25519-b64-v1";
     token_id: string;
 }
+
+// @public
+export type ModelLab = "anthropic" | "openai" | "google" | "meta";
 
 // @public (undocumented)
 export type MotebitId = Brand<string, "MotebitId">;
@@ -2495,6 +2522,16 @@ export interface ProposalStepCounter {
 }
 
 // @public
+export interface ProviderCapability {
+    readonly host: InferenceHost;
+    readonly inputCostPerMillion: number;
+    readonly jurisdiction: Jurisdiction;
+    readonly lab: ModelLab;
+    readonly modelName: string;
+    readonly outputCostPerMillion: number;
+}
+
+// @public
 export const PUSH_REGISTER_AUDIENCE: TokenAudience;
 
 // @public
@@ -2510,6 +2547,9 @@ export interface PushTokenRegistration {
     push_token: string;
     registered_at: number;
 }
+
+// @public
+export const QUICK_TASK_SHAPE: TaskShape;
 
 // @public
 export function rankSensitivity(level: SensitivityLevel): number;
@@ -2576,6 +2616,9 @@ export interface ReadPageResult {
 }
 
 // @public
+export const REASONING_TASK_SHAPE: TaskShape;
+
+// @public
 export function recordSemiring<R extends Record<string, unknown>>(fields: {
     [K in keyof R]: Semiring<R[K]>;
 }): Semiring<R>;
@@ -2638,6 +2681,9 @@ export interface ReputationCredentialSubject {
     // (undocumented)
     trust_score: number;
 }
+
+// @public
+export const RESEARCH_TASK_SHAPE: TaskShape;
 
 // @public
 export function resolveDropTarget(payload: DropPayload): DropTarget;
@@ -2733,6 +2779,30 @@ export interface RouteScore {
         availability: number;
     };
 }
+
+// @public
+export interface RoutingConstraint {
+    readonly jurisdiction?: Jurisdiction;
+    readonly maxInputCostPerMillion?: number;
+    readonly maxOutputCostPerMillion?: number;
+    readonly requiresToolUse?: boolean;
+    readonly sensitivityCeiling?: SensitivityLevel;
+}
+
+// @public
+export type RoutingDecision = {
+    readonly kind: "route";
+    readonly model: string;
+    readonly reason: string;
+} | {
+    readonly kind: "fallback";
+    readonly primary: string;
+    readonly backup: string;
+    readonly reason: string;
+} | {
+    readonly kind: "deny";
+    readonly reason: string;
+};
 
 // @public
 export const RUNTIME_RETENTION_REGISTRY: Readonly<Record<RuntimeStoreId, RetentionShapeDeclaration>>;
@@ -3370,6 +3440,9 @@ export interface SyncPlanStep {
 
 // @public
 export const TASK_SUBMIT_AUDIENCE: TokenAudience;
+
+// @public
+export type TaskShape = "quick" | "chat" | "reasoning" | "code" | "research" | "creative" | "math";
 
 // @public
 export function toCents(dollars: number): number;
