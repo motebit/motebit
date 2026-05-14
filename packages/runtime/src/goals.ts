@@ -91,6 +91,21 @@ export type GoalLifecycleStatus =
 // axis later means populating the new key at the call site, no
 // signature change.
 //
+// **Soft cap at fire boundary, never mid-LLM-call abort.** This
+// helper is the gate before a fire starts. Once a fire has started,
+// it runs to completion — the in-flight LLM call streams to its
+// natural end and the outcome row is written atomically even if
+// this fire pushes cumulative spend over the cap. Status flips to
+// `budget_exhausted` after the fire commits; next tick skips.
+// Mid-LLM-call abort is a closed path: a shattered fire (half-
+// written email, half-made tool call, no outcome row) costs more
+// user trust than a one-fire overshoot bounded by the per-run
+// wall-clock + tool-call caps already enforced one layer up. The
+// future bounding mechanism is iteration-boundary wind-down inside
+// the agentic loop (`packages/ai-core/src/loop.ts`), not a mid-call
+// interrupt. See `docs/doctrine/panel-temporal-registers.md`
+// §"Soft cap at fire boundary" + §"Iteration-boundary wind-down".
+//
 // Distinct from the sovereign-panel `BudgetAllocation` primitive
 // (`packages/panels/src/sovereign/controller.ts`) — that's a
 // per-task delegation cap, USD-shaped, single-axis because the peer
