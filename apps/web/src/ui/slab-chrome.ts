@@ -65,6 +65,31 @@ export interface SlabChromeOpts {
    * render path doesn't second-guess the text.
    */
   readonly taskStepNarration?: string | null;
+  /**
+   * Routing-decision chip text — second narration source the chrome
+   * absorbs alongside task-step narration. Per
+   * `docs/doctrine/auto-routing-as-protocol-primitive.md` § "PR 4 —
+   * chrome narration of routing decisions": every `RoutingDecision`
+   * the dispatcher produces carries a `reason` field that today is
+   * doctrine-stated observability without a render surface. The chip
+   * closes that gap by surfacing the chosen model (and, on
+   * `fallback`, the swap) as a small label after the narration text.
+   *
+   * Pre-formatted by `formatRoutingChip` (`@motebit/policy`) at the
+   * consumer site — surfaces pass a string here, not a
+   * `RoutingDecision` object, so the chrome stays UX-agnostic of
+   * the dispatcher's discriminated union. `null` / undefined → no
+   * chip rendered (calm-software default; `deny` decisions also
+   * format to null per the helper). The chip is non-interactive in
+   * PR 4 (informational); future arcs may wire hover-reveal of the
+   * full `decision.reason` text.
+   *
+   * Second consumer of the chrome's narration channel after
+   * `taskStepNarration` — validates `chrome-as-state-render.md`'s
+   * matrix-as-primitive abstraction handles multiple sources
+   * without forcing chrome-shape changes.
+   */
+  readonly routingNarration?: string | null;
 }
 
 /**
@@ -192,7 +217,8 @@ function renderMotebitVirtualBrowserRegister(
   });
 
   const narration = opts.taskStepNarration?.trim();
-  if (!narration) {
+  const routing = opts.routingNarration?.trim();
+  if (!narration && !routing) {
     // Empty register — leave the existing middle slot (URL display)
     // as the chrome's content. The register reads as "motebit is
     // here, page is loaded, no current task-step" — calm-default.
@@ -200,11 +226,17 @@ function renderMotebitVirtualBrowserRegister(
   }
 
   // Replace the middle slot's URL display with a narration strip that
-  // inlines the URL as a read-only chip after the narration text. The
-  // mark + trail remain untouched.
+  // inlines the URL as a read-only chip after the narration text and
+  // the routing chip after the URL chip. The mark + trail remain
+  // untouched. PR 4 of `auto-routing-as-protocol-primitive.md` lands
+  // the routing chip as the chrome's second narration source.
   const middle = strip.querySelector(".cobrowse-chrome-middle");
   if (!middle) return strip;
-  const narrationStrip = buildNarrationStrip(narration, opts.currentUrl ?? null);
+  const narrationStrip = buildNarrationStrip(
+    narration ?? null,
+    opts.currentUrl ?? null,
+    routing ?? null,
+  );
   middle.replaceWith(narrationStrip);
   return strip;
 }
@@ -231,7 +263,11 @@ function renderMotebitVirtualBrowserRegister(
  * typography / chip affordance signal / animation cadence stay
  * emergent through dogfooding.
  */
-function buildNarrationStrip(narration: string, currentUrl: string | null): HTMLDivElement {
+function buildNarrationStrip(
+  narration: string | null,
+  currentUrl: string | null,
+  routingNarration: string | null,
+): HTMLDivElement {
   const wrap = document.createElement("div");
   wrap.className = "cobrowse-chrome-middle slab-chrome-narration";
   wrap.style.flex = "1 1 auto";
@@ -243,19 +279,63 @@ function buildNarrationStrip(narration: string, currentUrl: string | null): HTML
   wrap.style.whiteSpace = "nowrap";
   wrap.style.textOverflow = "ellipsis";
 
-  const text = document.createElement("span");
-  text.className = "slab-chrome-narration-text";
-  text.textContent = narration;
-  text.style.color = "rgba(40, 55, 90, 0.92)";
-  text.style.overflow = "hidden";
-  text.style.textOverflow = "ellipsis";
-  wrap.appendChild(text);
+  if (narration) {
+    const text = document.createElement("span");
+    text.className = "slab-chrome-narration-text";
+    text.textContent = narration;
+    text.style.color = "rgba(40, 55, 90, 0.92)";
+    text.style.overflow = "hidden";
+    text.style.textOverflow = "ellipsis";
+    wrap.appendChild(text);
+  }
 
   if (currentUrl) {
     wrap.appendChild(buildUrlChip(currentUrl));
   }
 
+  if (routingNarration) {
+    wrap.appendChild(buildRoutingChip(routingNarration));
+  }
+
   return wrap;
+}
+
+/**
+ * Routing-decision chip — small, faint, non-interactive label that
+ * surfaces which model the dispatcher chose for this turn. Closes
+ * the doctrine-stated observability gap (`docs/doctrine/auto-routing-
+ * as-protocol-primitive.md` § "PR 4 — chrome narration of routing
+ * decisions"): every `RoutingDecision` carries a `reason` field that
+ * today is structurally invisible to the user; this chip is the
+ * minimal honest render.
+ *
+ * Calm-software register — the chip styling deliberately reads as
+ * supplementary, not as a control. Lower opacity than the URL chip,
+ * no hover affordance in PR 4 (informational). Future arcs may wire
+ * a hover-reveal of the full decision reason (`fallback`'s "wanted
+ * X, got Y because Z").
+ *
+ * Receives the pre-formatted chip string from
+ * `formatRoutingChip(decision)` at the consumer site, NOT the
+ * `RoutingDecision` object — the chrome stays UX-agnostic of the
+ * dispatcher's discriminated union. The chip's content is the only
+ * surface contract.
+ */
+function buildRoutingChip(routingNarration: string): HTMLSpanElement {
+  const chip = document.createElement("span");
+  chip.className = "slab-chrome-routing-chip";
+  chip.textContent = `via ${routingNarration}`;
+  // Lower-opacity register than the URL chip — surface affordance is
+  // none, just observability of the routing choice. Same calm
+  // typography family as the strip; differentiation by opacity not
+  // by font / weight (matches the chrome's overall minimalism).
+  chip.style.color = "rgba(40, 55, 90, 0.48)";
+  chip.style.flex = "0 0 auto";
+  chip.style.fontSize = "0.85em";
+  chip.style.letterSpacing = "0.02em";
+  chip.style.userSelect = "none";
+  chip.style.whiteSpace = "nowrap";
+  return chip;
 }
 
 /**

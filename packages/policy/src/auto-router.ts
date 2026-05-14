@@ -199,6 +199,47 @@ export function dispatchRouting(
 }
 
 /**
+ * Format a `RoutingDecision` as a short chip-shaped label for chrome
+ * surfaces. Doctrine: `docs/doctrine/auto-routing-as-protocol-primitive.md`
+ * § "PR 4 — chrome narration of routing decisions". Calm-software
+ * default — the chip is supplementary observability, not a control.
+ *
+ *   - `route` → just the model name. Routine path; no decoration.
+ *   - `fallback` → backup model + `"↺"` glyph naming the swap. The
+ *     glyph + chip-on-hover surface the reason from
+ *     `describeByokRoutingDecision` (or equivalent) when surfaces
+ *     wire interactive observability.
+ *   - `deny` → null. No model was picked; the consumer fell through
+ *     to its configured default. Calm-software default: no chip
+ *     rendered (the chrome doesn't fabricate a label when no
+ *     routing happened).
+ *
+ * Returns `null` only on `deny`. Surface chrome interprets `null` as
+ * "no routing chip to render" (consistent with `task_step_narration`'s
+ * absent-string-means-no-strip semantic).
+ *
+ * Per the doctrine's "every variant carries `reason` for
+ * observability — the dispatcher's choice should always be human-
+ * legible." This helper is the chip-level rendering; the full
+ * reason surfaces via `describeByokRoutingDecision`-shaped helpers
+ * on hover / inspector panel surfaces.
+ */
+export function formatRoutingChip(decision: RoutingDecision): string | null {
+  switch (decision.kind) {
+    case "route":
+      return decision.model;
+    case "fallback":
+      // The `↺` glyph is the visual cue that something was swapped.
+      // Surfaces can hover-reveal `decision.reason` for the full
+      // story. Calm-default — the glyph reads as "this is a
+      // routing-aware swap," not as an error indicator.
+      return `${decision.backup} ↺`;
+    case "deny":
+      return null;
+  }
+}
+
+/**
  * Exhaustive lookup helper. Pulls policy[taskShape] with a
  * `never`-fallthrough switch so a new `TaskShape` addition to the
  * protocol registry is a TypeScript error here until the policy

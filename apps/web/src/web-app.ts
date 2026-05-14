@@ -39,7 +39,7 @@ import type {
 } from "@motebit/sdk";
 import { DeviceCapability, EventType, BROWSER_SANDBOX_GRANT_AUDIENCE } from "@motebit/sdk";
 import type { ByokVendor } from "@motebit/sdk";
-import { dispatchByokRouting } from "@motebit/policy";
+import { dispatchByokRouting, formatRoutingChip } from "@motebit/policy";
 import { ThreeJSAdapter, buildComputerSessionReceiptArtifact } from "@motebit/render-engine";
 import type { AudioReactivity } from "@motebit/render-engine";
 import type { StreamingProvider } from "@motebit/ai-core/browser";
@@ -322,6 +322,28 @@ export class WebApp {
    * `chrome-as-state-render.md` § "The principle."
    */
   private _taskStepNarration: string | null = null;
+  /**
+   * Routing-decision chip text — second narration source the chrome
+   * absorbs alongside `_taskStepNarration`. Populated per turn by
+   * the BYOK auto-router intercept in `sendMessageStreaming` (the
+   * surface that runs the dispatcher locally); cleared when no
+   * routing decision applies (motebit-cloud / BYOK-without-autoRoute
+   * paths). The chrome's `routingNarration` opt reads this on every
+   * `applyChromeToCurrentState`.
+   *
+   * Doctrine: `docs/doctrine/auto-routing-as-protocol-primitive.md`
+   * § "PR 4 — chrome narration of routing decisions". The doctrine
+   * names every `RoutingDecision.reason` as observability surface;
+   * this field is the WebApp's render-time slot for the chip
+   * `formatRoutingChip(decision)` produces.
+   *
+   * Proxy/motebit-cloud routing reasons live in the
+   * `X-Motebit-Routing-Reason` response header (PR 4a, already
+   * shipped at the proxy); consuming the header from the runtime's
+   * HTTP layer + threading into this field is a follow-up arc
+   * (the consumer-side mirror of the producer-side header).
+   */
+  private _routingNarration: string | null = null;
   /**
    * Effective slab-body state machine — two orthogonal axes
    * (URL-derived base + focus-derived overlay) composed into the
@@ -1430,6 +1452,13 @@ export class WebApp {
     } else {
       this._byokAutoRouteVendor = null;
     }
+    // PR 4 — clear any stale routing chip when the provider config
+    // changes. A BYOK→cloud swap, for example, would otherwise leave
+    // the chip showing the last BYOK fire's chosen model even though
+    // the next turn routes through the proxy (where the surface
+    // doesn't know the chosen model until the header-parsing arc
+    // lands).
+    this._routingNarration = null;
     if (this.runtime) {
       this.runtime.setProvider(provider);
     }
@@ -1659,6 +1688,12 @@ export class WebApp {
 
     this._isProcessing = true;
     try {
+      // PR 4 — clear any stale routing chip from a prior turn at
+      // entry. The BYOK / on-device intercept below repopulates if
+      // it dispatches; absence leaves the chip null (chrome reads
+      // null → no chip). Calm-software default: the chip never
+      // outlives its own turn.
+      this._routingNarration = null;
       // BYOK auto-router consumer site (PR 2 of auto-routing arc).
       // Doctrine: `docs/doctrine/auto-routing-as-protocol-primitive.md`
       // § "PR 2 — BYOK consumer". Per-turn: dispatch over the user's
@@ -1686,15 +1721,18 @@ export class WebApp {
           case "deny": {
             // Constraints filtered every catalog entry — leave the
             // provider on its currently-set model (the user's
-            // configured default). Calm-software fallback: the user
-            // gets honest behavior without a forced override; if
-            // they hit `deny` repeatedly the surface should expose
-            // `decision.reason` via observability chrome (Phase 3+
-            // of the doctrine — chrome narration of routing
-            // decisions is a separate arc).
+            // configured default). Calm-software fallback.
             break;
           }
         }
+        // PR 4 — surface the chosen model in the slab chrome's
+        // routing-narration channel. `formatRoutingChip` returns
+        // null on `deny` (consistent calm-default — no chip when
+        // no routing happened); the chrome's optional
+        // `routingNarration` reads this on the next
+        // `applyChromeToCurrentState`.
+        this._routingNarration = formatRoutingChip(decision);
+        this.applyChromeToCurrentState();
       }
       yield* this.runtime.sendMessageStreaming(text, runId, options);
     } finally {
@@ -2694,6 +2732,12 @@ export class WebApp {
       // lazy-load gate on first session open and stays warm.
       trustHeld: urlHasTrustHeld(this._currentBrowserUrl, this._persistedCookies),
       taskStepNarration: this._taskStepNarration,
+      // PR 4 of the auto-routing arc — second narration source the
+      // chrome absorbs. Populated by the BYOK / on-device auto-
+      // router intercepts in `sendMessageStreaming` (the surface
+      // that runs the dispatcher locally). Null on motebit-cloud /
+      // BYOK-without-autoRoute paths — calm-software default.
+      routingNarration: this._routingNarration,
     });
 
     // No live_browser handle = no session = nothing to control.

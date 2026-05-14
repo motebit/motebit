@@ -26,7 +26,12 @@ import {
   type ProviderCapability,
   type RoutingConstraint,
 } from "@motebit/protocol";
-import { dispatchRouting, applyBalanceFilter, REFERENCE_ROUTING_POLICY } from "../auto-router.js";
+import {
+  dispatchRouting,
+  applyBalanceFilter,
+  formatRoutingChip,
+  REFERENCE_ROUTING_POLICY,
+} from "../auto-router.js";
 
 // Catalog mirroring `services/proxy/src/validation.ts`'s MODEL_CONFIG
 // (the 11 production models, US-jurisdiction). Test fixtures are kept
@@ -437,5 +442,36 @@ describe("RoutingDecision — discriminated union exhaustiveness", () => {
 
     const deny = dispatchRouting("chat", [], NO_CONSTRAINTS, REFERENCE_ROUTING_POLICY);
     expect(["route", "fallback", "deny"]).toContain(deny.kind);
+  });
+});
+
+describe("formatRoutingChip — chrome narration of routing decisions (PR 4)", () => {
+  it("returns the model name for a 'route' decision", () => {
+    // Calm-default: the chip surfaces just the model name when the
+    // policy preference was available in the catalog. No decoration —
+    // routine path doesn't need a visual cue.
+    expect(formatRoutingChip({ kind: "route", model: "claude-sonnet-4-6", reason: "ok" })).toBe(
+      "claude-sonnet-4-6",
+    );
+  });
+
+  it("returns the backup model + swap glyph for a 'fallback' decision", () => {
+    // The `↺` glyph is the visual cue that something was swapped.
+    // Surfaces can hover-reveal `decision.reason` for the full story.
+    expect(
+      formatRoutingChip({
+        kind: "fallback",
+        primary: "gpt-5.4",
+        backup: "claude-opus-4-7",
+        reason: "Policy preferred gpt-5.4 for code, but it's not in the filtered catalog",
+      }),
+    ).toBe("claude-opus-4-7 ↺");
+  });
+
+  it("returns null for a 'deny' decision — no chip rendered (calm-software default)", () => {
+    // `deny` means no model was picked; the consumer fell through to
+    // its configured default. The chrome doesn't fabricate a label
+    // when no routing happened.
+    expect(formatRoutingChip({ kind: "deny", reason: "No catalog entries" })).toBeNull();
   });
 });

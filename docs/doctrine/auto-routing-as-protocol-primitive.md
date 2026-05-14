@@ -62,7 +62,7 @@ Three coordinated commitments:
 
 - ~~BYOK consumer (PR 2)~~ **SHIPPED 2026-05-14** in commits `4762229d` (primitive) + the PR 2b sibling (web wire-up + drift gate + this doctrine close). See § "PR 2 — BYOK consumer" below.
 - ~~On-device consumer (PR 3)~~ **SHIPPED 2026-05-14** in commits `f1d3308e` (primitive) + the PR 3b sibling (desktop wire-up + drift gate + this doctrine close). See § "PR 3 — on-device consumer" below.
-- Chrome narration of routing decisions (PR 4): split into 4a (data plumbing — `RoutingDecision.reason` surfaces on the proxy response as `X-Motebit-Routing-Reason` header, shipped post-PR-1) and 4b (UX decision — chrome narration surface vs inspector panel vs trail slot; deferred pending UX design pass).
+- ~~Chrome narration of routing decisions (PR 4)~~ **SHIPPED 2026-05-14**. PR 4a (data plumbing — `RoutingDecision.reason` surfaces on the proxy response as `X-Motebit-Routing-Reason` header) shipped post-PR-1. PR 4b (chrome surface) shipped today in one commit: `formatRoutingChip` helper in `@motebit/policy/auto-router.ts` formats the typed decision as a short chip-string ("claude-sonnet-4-6", "claude-opus-4-7 ↺", or null on `deny`); web's slab chrome renders the chip in the `motebit × virtual_browser` register as a second narration source alongside task-step narration. See § "PR 4 — chrome narration of routing decisions" below.
 - Routing-decision receipts: receipt-schema extension to make "the system picked model X because Y" auditable in the ledger.
 - Learned routing function replacing `REFERENCE_ROUTING_POLICY` at motebit-cloud (ModelLab as the eventual host).
 - TaskShape taxonomy refinement (capability-shaped vs categorical — current 7 are categorical; capability-shaped would be `"tool-heavy" | "long-context" | "vision" | ...`).
@@ -147,6 +147,38 @@ Three fundamentally different cost models flowing through the same dispatcher. T
 - Per-policy on-device routing — surface-specific `REFERENCE_LOCAL_SERVER_ROUTING_POLICY` mapping TaskShape → local model names (e.g., `code: "codellama"`, `chat: "llama3.2"`) so the dispatcher returns `kind: "route"` instead of `kind: "fallback"` for typical local-server flows. Today every on-device dispatch lands in fallback because the canonical `REFERENCE_ROUTING_POLICY` names cloud models. The role-vs-policy distinction (TaskShape is the role; routing-policy is a consumer-side function) makes this a clean swap when desktop wants it.
 - Multi-model `apple-fm` / `mlx` / `webllm` catalogs. Today these backends are single-model; when per-backend multi-model support lands (e.g., MLX with multiple loaded models, WebLLM with cached model swap), the catalog grows additively.
 
+## PR 4 — chrome narration of routing decisions (shipped 2026-05-14)
+
+**Closing the doctrine-stated observability gap.** Every `RoutingDecision` the dispatcher returns carries a `reason` field whose purpose is observability — per § "Routing decision": "every variant carries `reason` for observability — the dispatcher's choice should always be human-legible, even when the choice is 'I couldn't pick anything.'" Until PR 4, that doctrine was code-stated but render-absent: the field existed, no consumer read it. PR 4 closes the gap by surfacing routing decisions in the slab chrome.
+
+**The architectural shape — second narration source for chrome-as-state-render.**
+
+PR 1 of [`chrome-as-state-render.md`](chrome-as-state-render.md) named task-step narration as the chrome's content for the `motebit × virtual_browser` register. PR 4 extends the chrome to absorb a second narration source — routing decisions — without forcing chrome-shape changes. This validates the matrix-as-primitive abstraction: the chrome doesn't fork by narration-type; it grows ADDITIVELY by accepting more typed opts. The two narration sources have distinct semantic registers:
+
+| Source                  | Register                                                            | Producer                                                                                | Position in strip                                      |
+| ----------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| **Task-step narration** | "What motebit is doing in the world" — first-person voice           | The AI loop (`extractNarrationTag` in `@motebit/ai-core`)                               | Middle slot (replaces URL display when present)        |
+| **Routing narration**   | "Which model the dispatcher chose under the hood" — system metadata | The surface's auto-router intercept (`dispatchByokRouting` / `dispatchOnDeviceRouting`) | After URL chip in the middle strip; lower-opacity chip |
+
+The two are intentionally NOT collapsed into a single narration string ("Routing to Opus · Reading the page"). They surface separately because they answer different questions. A user looking at the chrome sees both registers as distinct calm-software cues.
+
+**Shipped in one commit:**
+
+- `@motebit/policy/auto-router.ts` gains `formatRoutingChip(decision: RoutingDecision): string | null` — pure helper that maps the typed decision to a short chip-string. `route` → just the model name; `fallback` → `${backup} ↺` (the `↺` glyph signals a swap from the policy preference); `deny` → null (calm-software default: no chip when no routing happened). The chrome stays UX-agnostic of the discriminated union — surfaces pass a pre-formatted string, not the `RoutingDecision` object.
+- `apps/web/src/ui/slab-chrome.ts` `SlabChromeOpts` gains `routingNarration?: string | null`. `renderMotebitVirtualBrowserRegister` builds a routing chip inside the existing narration strip after the URL chip when present. The chip is non-interactive in PR 4 (informational); future arcs may wire hover-reveal of the full `decision.reason`.
+- `apps/web/src/web-app.ts` adds `_routingNarration: string | null` parallel to `_taskStepNarration`. Populated in `sendMessageStreaming`'s BYOK intercept via `formatRoutingChip(decision)` AFTER the existing `setModel` mutation, then `applyChromeToCurrentState` is called explicitly so the chip flickers in alongside the model swap. Cleared at the START of every `sendMessageStreaming` (the chip never outlives its own turn) AND in `connectProvider` (a BYOK→cloud config swap drops the chip cleanly).
+
+**Three tests pin the chip semantic** in `auto-router.test.ts`: `route` returns just the model name; `fallback` returns model + glyph; `deny` returns null.
+
+**The user-visible payoff.** A BYOK user with `autoRoute: true` opens the slab (cobrowser / computer-use), types a code question, sees the chrome strip render "via gpt-5.4 ↺" (the dispatcher's fallback — Anthropic catalog asked for the code task → fell back to claude-opus-4-7). The dispatcher's reason is doctrine-stated; the chip is the doctrine made visible. Same for on-device — desktop user with Ollama + `autoRoute: true` sees "via llama3.2" (the fallback the dispatcher always lands on today for local-server until a per-policy local-server routing override ships).
+
+**Deferred from PR 4, not deferred indefinitely:**
+
+- Desktop + mobile slab-chrome routing chip mirror. Today only the web slab chrome renders the chip (web has the most-developed virtual_browser chrome surface). Desktop/mobile chrome surfaces would mirror the `routingNarration` opt + chip rendering when their chrome surfaces grow to match web's matrix-shape.
+- Proxy/cloud routing reason surfacing. PR 4a shipped the `X-Motebit-Routing-Reason` header at the producer; the consumer-side mirror (HTTP layer parses the header → emits a chunk → WebApp sets `_routingNarration`) is a follow-up arc. Today the chip only surfaces for BYOK + on-device (where the surface knows the decision locally); motebit-cloud users see no chip until the consumer arc ships.
+- Hover-reveal of full `decision.reason`. PR 4's chip is informational; an interactive variant (hover or tap) revealing the full reason text ("wanted gpt-5.4, used claude-opus-4-7 because policy preferred gpt-5.4 for code, but it's not in the filtered catalog") is the natural follow-up.
+- Chat-log-level routing chip. PR 4 surfaces the chip in the slab chrome (visible when slab is open + in virtual_browser register). For chat-only flows (slab closed), the routing decision per-message would render next to each AI response in the chat log. Separate surface arc.
+
 ## TaskShape agility — the 7th instance of agility-as-role
 
 `TaskShape` is the 7th instance of [`agility-as-role.md`](agility-as-role.md)'s pattern (after cryptosuite, license-floor, settlement-rail, inference-host, model-lab, jurisdiction-as-predicate). The role names a closed registry of swappable entries; the routing-policy itself is **a consumer-side function**, NOT a role.
@@ -211,7 +243,7 @@ These decisions stay emergent. Specifying them now ossifies what should remain i
 - **The shape of a learned routing function.** `REFERENCE_ROUTING_POLICY` is a static `Record<TaskShape, string>` today. The eventual replacement (ModelLab as host) has the same signature `(TaskShape, ProviderCapability[], RoutingConstraint) → RoutingDecision` but with learned weights. The training shape, the data source, the deployment cadence — all emerge.
 - **Per-consumer policy overrides.** PR 2's BYOK consumer might ship `REFERENCE_BYOK_ROUTING_POLICY`; PR 3's on-device might ship `REFERENCE_ON_DEVICE_ROUTING_POLICY`. Or they might all share `REFERENCE_ROUTING_POLICY`. The choice belongs to the PR that adds the consumer, not this doctrine.
 - **TaskShape refinement.** Adding `"voice-conversation"`, `"image-generation"`, `"agentic"`, etc. is a future protocol-level append. The current 7 are the production set as of 2026-05-13; refinement waits for actual consumer pull.
-- **Chrome narration of routing decisions.** PR 4+. Threading `RoutingDecision.reason` into `task_step_narration` so the slab chrome surfaces "Routing to Opus for reasoning · Reading the page" is a follow-up.
+- ~~**Chrome narration of routing decisions.**~~ **SHIPPED 2026-05-14** — see § "PR 4 — chrome narration of routing decisions" for the architectural shape. The chrome treats routing narration as a SEPARATE narration source from task-step narration (different semantic register: task-step is "what motebit is doing in the world"; routing is "which model the dispatcher chose under the hood"), surfaced as a faint chip after the URL chip in the existing strip rather than collapsed into the task-step narration text.
 - **Routing receipts.** Making each decision auditable in the signed receipt ledger is a receipt-schema extension, not part of this primitive's contract.
 
 The contract this doctrine freezes is the architectural primitive (`f(TaskShape × ProviderCapability × Constraints) → RoutingDecision`), the closed registries (`TaskShape`, `InferenceHost`, `ModelLab`, `Jurisdiction`), the consumer-neutrality of `RoutingConstraint`, the role-vs-policy distinction (`TaskShape` is the role; routing-policy is a consumer-side function), and PR 1's scope. Everything else stays in motion.
