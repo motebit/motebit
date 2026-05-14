@@ -1551,8 +1551,11 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     mcpServerList.innerHTML = "";
     if (servers.length === 0) {
       const empty = document.createElement("div");
-      empty.style.cssText = "font-size:12px;color:rgba(255,255,255,0.3);padding:8px 0;";
-      empty.textContent = "No MCP servers configured";
+      // Theme-aware ghost text — hardcoded white-at-30% was invisible
+      // on the light-mode lavender substrate. --text-ghost flips with
+      // [data-theme="dark"] so the register reads in both modes.
+      empty.style.cssText = "font-size:12px;color:var(--text-ghost);padding:8px 0;";
+      empty.textContent = "MCP servers appear here when configured";
       mcpServerList.appendChild(empty);
       return;
     }

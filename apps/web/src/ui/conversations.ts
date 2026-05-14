@@ -62,7 +62,11 @@ export function initConversations(
 
     for (const entry of conversations) {
       const item = document.createElement("div");
-      item.className = "conv-item" + (entry.conversationId === activeId ? " active" : "");
+      // sov-list-card carries the glass material + hover lift + active
+      // selection state; conv-item is preserved for backwards-compat
+      // with any selector hooks elsewhere.
+      item.className =
+        "sov-list-card conv-item" + (entry.conversationId === activeId ? " active" : "");
 
       const titleDiv = document.createElement("div");
       titleDiv.className = "conv-item-title";

@@ -324,7 +324,9 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       const status = panelStatus(goal, state.runs);
 
       const item = document.createElement("div");
-      item.className = "goal-item";
+      // sov-list-card carries glass material + lift; goal-item is
+      // preserved for status/cadence/prompt selector hooks.
+      item.className = "sov-list-card goal-item";
 
       const header = document.createElement("div");
       header.className = "goal-item-header";
@@ -572,7 +574,9 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
     for (const agent of state.known) {
       const item = document.createElement("div");
-      item.className = "agent-item";
+      // sov-list-card carries glass material + lift; agent-item is
+      // preserved for trust-badge / hardware-attestation selector hooks.
+      item.className = "sov-list-card agent-item";
 
       const idDiv = document.createElement("div");
       idDiv.className = "agent-item-id";
@@ -638,7 +642,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     const syncUrl = loadSyncUrl();
     if (!syncUrl) {
       discoverList.innerHTML = "";
-      discoverEmpty.textContent = "Connect to a relay in Settings to discover agents.";
+      discoverEmpty.textContent = "Connect to a relay in Settings to discover agents";
       discoverEmpty.style.display = "block";
       return;
     }
@@ -658,7 +662,9 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
     for (const agent of state.discovered) {
       const item = document.createElement("div");
-      item.className = "agent-item";
+      // sov-list-card carries glass material + lift; agent-item is
+      // preserved for trust-badge / hardware-attestation selector hooks.
+      item.className = "sov-list-card agent-item";
 
       const idDiv = document.createElement("div");
       idDiv.className = "agent-item-id";
