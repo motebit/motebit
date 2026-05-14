@@ -437,10 +437,12 @@ export async function POST(request: Request): Promise<Response> {
       routingReason = `ANTHROPIC_API_KEY not configured; using default ${AUTO_DEFAULT_MODEL}`;
     }
   }
-  // routingReason is captured for observability — future PR threads
-  // it into the proxy response so chrome narration can surface the
-  // routing decision (PR 4 of the auto-router arc).
-  void routingReason;
+  // routingReason surfaces on the successful response paths below as
+  // the `X-Motebit-Routing-Reason` header (sibling-shape of
+  // `X-Motebit-Content-Manifest` — observability metadata, plain
+  // string vs structured manifest). Chrome rendering of the reason
+  // (chrome narration surface vs inspector panel) is PR 4b's UX
+  // decision; PR 4a (this) only plumbs the data through.
 
   if (authMode === "proxy-token" && tokenPayload) {
     // "auto" is always allowed; for specific models check the allowlist
@@ -608,6 +610,7 @@ export async function POST(request: Request): Promise<Response> {
         ...cors,
         "Content-Type": providerRes.headers.get("Content-Type") ?? "text/event-stream",
         "Cache-Control": "no-cache",
+        ...(routingReason ? { "X-Motebit-Routing-Reason": routingReason } : {}),
       },
     });
   }
@@ -619,6 +622,7 @@ export async function POST(request: Request): Promise<Response> {
       ...cors,
       "Content-Type": providerRes.headers.get("Content-Type") ?? "text/event-stream",
       "Cache-Control": "no-cache",
+      ...(routingReason ? { "X-Motebit-Routing-Reason": routingReason } : {}),
     },
   });
 }

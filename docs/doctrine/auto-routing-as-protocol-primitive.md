@@ -62,7 +62,7 @@ Three coordinated commitments:
 
 - BYOK consumer (PR 2): web/desktop/mobile providers consume the dispatcher with the user's BYOK provider catalog. Adds BYOK to CONSUMERS registry; drift gate forces coverage.
 - On-device consumer (PR 3): runtime consumes the dispatcher with locally-available models (WebLLM/Ollama). Adds on-device to CONSUMERS registry.
-- Chrome narration of routing decisions (PR 4+): the `RoutingDecision.reason` field is captured in the proxy today but not yet threaded into `task_step_narration` for slab-chrome observability.
+- Chrome narration of routing decisions (PR 4): split into 4a (data plumbing — `RoutingDecision.reason` surfaces on the proxy response as `X-Motebit-Routing-Reason` header, shipped post-PR-1) and 4b (UX decision — chrome narration surface vs inspector panel vs trail slot; deferred pending UX design pass).
 - Routing-decision receipts: receipt-schema extension to make "the system picked model X because Y" auditable in the ledger.
 - Learned routing function replacing `REFERENCE_ROUTING_POLICY` at motebit-cloud (ModelLab as the eventual host).
 - TaskShape taxonomy refinement (capability-shaped vs categorical — current 7 are categorical; capability-shaped would be `"tool-heavy" | "long-context" | "vision" | ...`).
