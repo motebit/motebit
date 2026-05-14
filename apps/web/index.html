@@ -900,12 +900,12 @@
         color: #818cf8;
       }
       .tier-ultra {
-        background: rgba(234, 179, 8, 0.15);
-        color: #facc15;
+        background: var(--status-warning-bg);
+        color: var(--status-warning-fg);
       }
       .tier-byok {
-        background: rgba(34, 197, 94, 0.15);
-        color: #4ade80;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .upgrade-btn {
         font-size: 13px;
@@ -928,7 +928,7 @@
         background: rgba(234, 179, 8, 0.08);
       }
       .upgrade-ultra:hover {
-        background: rgba(234, 179, 8, 0.15);
+        background: var(--status-warning-bg);
       }
       .card-title {
         font-size: 12px;
@@ -1259,7 +1259,7 @@
         padding: 2px 4px;
       }
       .mcp-remove-btn:hover {
-        color: #f87171;
+        color: var(--status-error-fg);
       }
       .mcp-connect-btn {
         background: none;
@@ -1355,12 +1355,12 @@
       }
 
       .verify-valid {
-        background: rgba(0, 200, 100, 0.15);
-        color: #4ade80;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .verify-invalid {
-        background: rgba(255, 60, 60, 0.15);
-        color: #f87171;
+        background: var(--status-error-bg);
+        color: var(--status-error-fg);
       }
 
       /* Audit activity — governance card */
@@ -1406,16 +1406,16 @@
         flex-shrink: 0;
       }
       .audit-decision-badge.allowed {
-        background: rgba(74, 222, 128, 0.15);
-        color: #22c55e;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .audit-decision-badge.denied {
-        background: rgba(248, 113, 113, 0.15);
-        color: #ef4444;
+        background: var(--status-error-bg);
+        color: var(--status-error-fg);
       }
       .audit-decision-badge.approval {
-        background: rgba(245, 158, 11, 0.15);
-        color: #f59e0b;
+        background: var(--status-warning-bg);
+        color: var(--status-warning-fg);
       }
       .audit-time {
         font-size: 10px;
@@ -1567,16 +1567,16 @@
         font-weight: 500;
       }
       .audit-inline-badge.allowed {
-        background: rgba(74, 222, 128, 0.15);
-        color: #22c55e;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .audit-inline-badge.denied {
-        background: rgba(248, 113, 113, 0.15);
-        color: #ef4444;
+        background: var(--status-error-bg);
+        color: var(--status-error-fg);
       }
       .audit-inline-badge.approval {
-        background: rgba(245, 158, 11, 0.15);
-        color: #f59e0b;
+        background: var(--status-warning-bg);
+        color: var(--status-warning-fg);
       }
       .audit-inline-duration {
         color: var(--text-ghost);
@@ -2098,15 +2098,15 @@
         transition: background 0.15s ease;
       }
       .approval-btn.approve {
-        background: rgba(34, 197, 94, 0.15);
-        color: #22c55e;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .approval-btn.approve:hover {
         background: rgba(34, 197, 94, 0.25);
       }
       .approval-btn.deny {
-        background: rgba(239, 68, 68, 0.15);
-        color: #ef4444;
+        background: var(--status-error-bg);
+        color: var(--status-error-fg);
       }
       .approval-btn.deny:hover {
         background: rgba(239, 68, 68, 0.25);
@@ -2118,16 +2118,16 @@
         border-radius: 4px;
       }
       .approval-risk-badge.risk-1 {
-        background: rgba(34, 197, 94, 0.15);
-        color: #22c55e;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .approval-risk-badge.risk-2 {
-        background: rgba(234, 179, 8, 0.15);
+        background: var(--status-warning-bg);
         color: #eab308;
       }
       .approval-risk-badge.risk-3 {
-        background: rgba(239, 68, 68, 0.15);
-        color: #ef4444;
+        background: var(--status-error-bg);
+        color: var(--status-error-fg);
       }
 
       /* Memory items — list-card material per .sov-list-card pattern.
@@ -2341,13 +2341,13 @@
         padding: 2px 0;
       }
       .goal-step.completed {
-        color: #4ade80;
+        color: var(--status-success-fg);
       }
       .goal-step.running {
-        color: #facc15;
+        color: var(--status-warning-fg);
       }
       .goal-step.failed {
-        color: #f87171;
+        color: var(--status-error-fg);
       }
 
       /* Sovereignty ceiling CTA */
@@ -2850,7 +2850,7 @@
       }
       #pin-error {
         font-size: 12px;
-        color: #f87171;
+        color: var(--status-error-fg);
         text-align: center;
         min-height: 16px;
       }
@@ -3156,7 +3156,7 @@
         margin-left: auto;
       }
       .conv-delete-btn:hover {
-        color: #f87171;
+        color: var(--status-error-fg);
       }
       .conv-export-group {
         position: relative;
@@ -3397,16 +3397,16 @@
         color: #3b82f6;
       }
       .mem-sensitivity-badge.medical {
-        background: rgba(245, 158, 11, 0.12);
-        color: #f59e0b;
+        background: var(--status-warning-bg);
+        color: var(--status-warning-fg);
       }
       .mem-sensitivity-badge.financial {
-        background: rgba(34, 197, 94, 0.12);
-        color: #22c55e;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .mem-sensitivity-badge.secret {
-        background: rgba(239, 68, 68, 0.12);
-        color: #ef4444;
+        background: var(--status-error-bg);
+        color: var(--status-error-fg);
       }
       .mem-pin-btn {
         position: absolute;
@@ -3451,11 +3451,11 @@
         line-height: 1;
       }
       .mem-delete-btn:hover {
-        color: #f87171;
+        color: var(--status-error-fg);
       }
       .mem-delete-confirming .mem-delete-btn {
         font-size: 11px;
-        color: #ef4444;
+        color: var(--status-error-fg);
         font-weight: 600;
       }
       .mem-delete-confirming .mem-delete-btn:hover {
@@ -3575,7 +3575,7 @@
       .mem-cert-label {
         font-size: 11px;
         font-weight: 600;
-        color: #ef4444;
+        color: var(--status-error-fg);
       }
       .mem-cert-hash {
         font-size: 10px;
@@ -3760,7 +3760,7 @@
         color: var(--text-secondary);
       }
       .goal-item-actions .goal-delete-btn:hover {
-        color: #f87171;
+        color: var(--status-error-fg);
         border-color: rgba(248, 113, 113, 0.3);
       }
       #goal-add-form {
@@ -4048,12 +4048,12 @@
         flex-shrink: 0;
       }
       .goal-recent-status.completed {
-        background: rgba(74, 222, 128, 0.15);
-        color: #22c55e;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .goal-recent-status.failed {
-        background: rgba(248, 113, 113, 0.15);
-        color: #ef4444;
+        background: var(--status-error-bg);
+        color: var(--status-error-fg);
       }
       .goal-recent-prompt {
         font-size: 12px;
@@ -4165,12 +4165,12 @@
         color: #6366f1;
       }
       .plan-status-badge.completed {
-        background: rgba(74, 222, 128, 0.15);
-        color: #22c55e;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .plan-status-badge.failed {
-        background: rgba(248, 113, 113, 0.15);
-        color: #ef4444;
+        background: var(--status-error-bg);
+        color: var(--status-error-fg);
       }
       .plan-status-badge.paused {
         background: rgba(251, 191, 36, 0.15);
@@ -4481,8 +4481,8 @@
         letter-spacing: 0.03em;
       }
       .agent-trust-badge.verified {
-        background: rgba(34, 197, 94, 0.15);
-        color: #22c55e;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .agent-trust-badge.first-contact {
         background: rgba(59, 130, 246, 0.15);
@@ -4493,8 +4493,8 @@
         color: #a855f7;
       }
       .agent-trust-badge.blocked {
-        background: rgba(239, 68, 68, 0.15);
-        color: #ef4444;
+        background: var(--status-error-bg);
+        color: var(--status-error-fg);
       }
       .agent-trust-badge.unknown {
         background: rgba(156, 163, 175, 0.15);
@@ -4820,12 +4820,12 @@
         font-weight: 500;
       }
       .cred-verify-badge.valid {
-        background: rgba(74, 222, 128, 0.15);
-        color: #22c55e;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .cred-verify-badge.invalid {
-        background: rgba(248, 113, 113, 0.15);
-        color: #ef4444;
+        background: var(--status-error-bg);
+        color: var(--status-error-fg);
       }
 
       /* Ledger items */
@@ -4904,8 +4904,8 @@
         font-weight: 500;
       }
       .ledger-sig-badge.verified {
-        background: rgba(74, 222, 128, 0.15);
-        color: #22c55e;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .ledger-sig-badge.unsigned {
         background: var(--bg-btn);
@@ -5003,12 +5003,12 @@
         flex-shrink: 0;
       }
       .budget-alloc-status.locked {
-        background: rgba(245, 158, 11, 0.15);
-        color: #f59e0b;
+        background: var(--status-warning-bg);
+        color: var(--status-warning-fg);
       }
       .budget-alloc-status.settled {
-        background: rgba(74, 222, 128, 0.15);
-        color: #22c55e;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .budget-alloc-status.released {
         background: var(--bg-btn);
@@ -5032,11 +5032,11 @@
       }
       .budget-settlement-badge.settled {
         background: rgba(74, 222, 128, 0.1);
-        color: #22c55e;
+        color: var(--status-success-fg);
       }
       .budget-settlement-badge.refunded {
         background: rgba(248, 113, 113, 0.1);
-        color: #f87171;
+        color: var(--status-error-fg);
       }
 
       /* Budget hero cards — Apple-grade balance display.
@@ -5943,10 +5943,10 @@
         margin-top: 6px;
       }
       .ollama-status.connected {
-        color: #4ade80;
+        color: var(--status-success-fg);
       }
       .ollama-status.error {
-        color: #f87171;
+        color: var(--status-error-fg);
       }
 
       /* WebLLM status + progress */
@@ -6155,11 +6155,11 @@
         border-radius: 8px;
       }
       .skill-prov-verified {
-        background: rgba(74, 222, 128, 0.15);
-        color: #22c55e;
+        background: var(--status-success-bg);
+        color: var(--status-success-fg);
       }
       .skill-prov-trusted_unsigned {
-        background: rgba(245, 158, 11, 0.15);
+        background: var(--status-warning-bg);
         color: #d97706;
       }
       .skill-prov-unsigned {
@@ -6167,8 +6167,8 @@
         color: var(--text-muted);
       }
       .skill-prov-unverified {
-        background: rgba(248, 113, 113, 0.15);
-        color: #f87171;
+        background: var(--status-error-bg);
+        color: var(--status-error-fg);
       }
       .skill-sens {
         font-size: 10px;
@@ -6231,7 +6231,7 @@
         cursor: default;
       }
       .skill-action-remove {
-        color: #f87171;
+        color: var(--status-error-fg);
       }
       .skill-row-installed.skill-disabled {
         opacity: 0.55;
