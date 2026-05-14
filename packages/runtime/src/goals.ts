@@ -66,58 +66,109 @@ export type GoalLifecycleStatus =
 // ── Budget check ──────────────────────────────────────────────────────────
 //
 // Per-goal budget envelope is the runtime-register's commitment cap per
-// `docs/doctrine/panel-temporal-registers.md`. Tokens is the only unit
-// that means the same thing across motebit-cloud / BYOK / on-device
-// (USD would bake cloud-mode assumptions into the goal record). The
-// check is pure — schedulers across surfaces call it with the goal's
-// `budget_tokens` and the rollup from
-// `goalStore.getSpentTokens(goalId)`; on `!allowed` they set status
-// `budget_exhausted` and skip the fire.
+// `docs/doctrine/panel-temporal-registers.md` §"Bounded commitment is
+// multi-dimensional." A goal commits motebit to do work; the cap on
+// that commitment has to cover every dimension along which the goal
+// can consume resource (inference work, voice synthesis seconds,
+// paid tool-call invocations, wall-clock time, ...) — not just the
+// loudest one.
+//
+// `tokens` is the v1 axis: the only doctrinally-clean unit available
+// today (universal across motebit-cloud / BYOK / on-device — USD
+// would bake cloud-mode assumptions into the goal record), and it
+// captures the dominant slice (inference is ~80%+ of cost for most
+// goals today). The closed-union `GoalBudgetAxis` is intentionally
+// extensible; future axes are registry additions, not signature
+// changes.
+//
+// The helper is pure — schedulers across surfaces call it with the
+// caps + spents for whichever axes are tracked, and on `!allowed`
+// they set the goal's status to `budget_exhausted` and skip the fire.
+// Re-checked every tick, so raising any cap auto-resumes the goal
+// the next fire — auto-pause is purely a synthesized state from
+// (caps, spents), never sticky. Schedulers that don't yet track
+// non-token axes simply omit them from the input record; adding an
+// axis later means populating the new key at the call site, no
+// signature change.
+//
+// Distinct from the sovereign-panel `BudgetAllocation` primitive
+// (`packages/panels/src/sovereign/controller.ts`) — that's a
+// per-task delegation cap, USD-shaped, single-axis because the peer
+// agent absorbs the multi-axis execution on their end. Goal budget
+// is self-execution; task budget is peer-delegation. Don't collapse
+// them.
+
+/**
+ * Closed union of bounded resource axes a goal can commit to. v1
+ * ships only `"tokens"` (inference work). Future axes are additions
+ * to this union, with corresponding `budget_<axis>` columns on the
+ * goal record + `spent_<axis>` rollups. Adding an axis is purely
+ * additive — the helper signature, the result shape, and the surface
+ * UI all generalize without breaking changes.
+ */
+export type GoalBudgetAxis = "tokens";
+
+export interface AxisCheckResult {
+  /** True iff `spent < cap` for this axis. */
+  readonly allowed: boolean;
+  /** Why the answer is what it is — for telemetry / UI disclosure. */
+  readonly reason: "under_cap" | "exhausted";
+  /** Cap the caller passed in (axis-native unit). */
+  readonly cap: number;
+  /** Spend the caller passed in (axis-native unit). */
+  readonly spent: number;
+}
 
 export interface BudgetCheckResult {
-  /** True iff the goal may fire. False = cap reached. */
+  /** True iff every provided axis allows the fire. */
   readonly allowed: boolean;
-  /** Why the answer is what it is — drives the status set on cap reach. */
-  readonly reason: "no_budget" | "under_cap" | "exhausted";
-  /** Tokens consumed across all prior runs of this goal. */
-  readonly spent_tokens: number;
-  /** Cap from the goal record. `null` = no cap. */
-  readonly budget_tokens: number | null;
+  /**
+   * First axis that exhausted, or `null` if all caps allow. Drives
+   * surface copy on pause: "Token budget exhausted" vs (future)
+   * "Voice-minutes exhausted". Lets the UI tell the user *which*
+   * dimension paused the goal.
+   */
+  readonly exhausted_axis: GoalBudgetAxis | null;
+  /** Per-axis result for every axis the caller provided. */
+  readonly axes: Partial<Record<GoalBudgetAxis, AxisCheckResult>>;
 }
 
 /**
  * Check whether a goal may fire under its budget envelope. Pure
- * function; no I/O. Schedulers (cli, desktop, mobile, web runner) call
- * this before each fire and pause the goal with status
- * `budget_exhausted` when `!result.allowed`. Re-checked on every fire,
- * so raising the cap auto-resumes the goal the next tick — no
- * separate "resume" action needed.
+ * function; no I/O. Strict semantics: a present axis means "enforce
+ * this cap"; an omitted axis means "no cap on this dimension." The
+ * empty input `{}` always allows (no caps to check). Zero is a valid
+ * cap meaning "no fires" (defense-in-depth against accidental
+ * zero-budget commits).
  */
 export function checkGoalBudget(
-  budgetTokens: number | null | undefined,
-  spentTokens: number,
+  axes: Partial<Record<GoalBudgetAxis, { cap: number; spent: number }>>,
 ): BudgetCheckResult {
-  if (budgetTokens == null) {
-    return {
-      allowed: true,
-      reason: "no_budget",
-      spent_tokens: spentTokens,
-      budget_tokens: null,
+  const results: Partial<Record<GoalBudgetAxis, AxisCheckResult>> = {};
+  let firstExhausted: GoalBudgetAxis | null = null;
+  // Iteration order matters for `exhausted_axis` — the first axis
+  // hit reports. Object.keys order on a typed Partial<Record> is
+  // insertion order in V8/JSC, which matches the closed-union
+  // declaration order in practice. When the union grows, prefer
+  // explicit ordering if a particular axis should report first.
+  for (const axis of Object.keys(axes) as GoalBudgetAxis[]) {
+    const entry = axes[axis];
+    if (entry === undefined) continue;
+    const exhausted = entry.spent >= entry.cap;
+    results[axis] = {
+      allowed: !exhausted,
+      reason: exhausted ? "exhausted" : "under_cap",
+      cap: entry.cap,
+      spent: entry.spent,
     };
-  }
-  if (spentTokens >= budgetTokens) {
-    return {
-      allowed: false,
-      reason: "exhausted",
-      spent_tokens: spentTokens,
-      budget_tokens: budgetTokens,
-    };
+    if (exhausted && firstExhausted === null) {
+      firstExhausted = axis;
+    }
   }
   return {
-    allowed: true,
-    reason: "under_cap",
-    spent_tokens: spentTokens,
-    budget_tokens: budgetTokens,
+    allowed: firstExhausted === null,
+    exhausted_axis: firstExhausted,
+    axes: results,
   };
 }
 

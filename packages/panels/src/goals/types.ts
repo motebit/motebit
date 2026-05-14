@@ -26,12 +26,18 @@ export type GoalMode = "recurring" | "once";
  * forward-compat daemon additions without collapsing autocomplete —
  * idiomatic TS.
  *
- * `budget_exhausted` is set fail-closed by the runtime when a goal's
- * `spent_tokens >= budget_tokens` before the next fire. Per
- * `docs/doctrine/panel-temporal-registers.md` — the runtime register
+ * `budget_exhausted` is set fail-closed by the runtime when **any
+ * axis** of the goal's bounded-commitment envelope is exhausted before
+ * the next fire. Per `docs/doctrine/panel-temporal-registers.md`
+ * §"Bounded commitment is multi-dimensional" — the runtime register
  * makes commitments visible; the budget envelope is the cap on that
- * commitment, and overflow is a state the user must consciously
- * resolve (raise the budget or close the goal).
+ * commitment across every dimension the goal consumes resource in.
+ * v1 ships only the `tokens` axis but the status is intentionally
+ * axis-agnostic; surfaces use `BudgetCheckResult.exhausted_axis` from
+ * `@motebit/runtime` to render axis-specific copy ("Token budget
+ * exhausted", "Voice-minutes exhausted", ...). Overflow is a state
+ * the user must consciously resolve (raise the cap on the exhausted
+ * axis, or close the goal).
  */
 export type GoalStatus =
   | "active"
@@ -80,23 +86,32 @@ export interface ScheduledGoal {
   created_at?: number;
 
   /**
-   * Per-goal budget cap in tokens (input + output, summed across runs).
-   * `null` (or absent) = no cap. Tokens is the protocol-primacy-clean
-   * unit per `docs/doctrine/panel-temporal-registers.md` substrate-vs-
-   * accumulation: every provider mode (motebit-cloud, BYOK, on-device)
-   * generates tokens, so the cap means the same thing everywhere; USD
-   * would bake motebit-cloud assumptions into the goal record and
-   * break for BYOK/on-device.
+   * v1 axis of the multi-dimensional bounded-commitment envelope per
+   * `docs/doctrine/panel-temporal-registers.md` §"Bounded commitment
+   * is multi-dimensional". Token cap on inference work (input +
+   * output, summed across runs). `null` or absent = no cap on this
+   * axis. Tokens is the only doctrinally-clean axis available today —
+   * every provider mode (motebit-cloud, BYOK, on-device) generates
+   * tokens, so the cap means the same thing everywhere; USD would
+   * bake cloud-mode assumptions and break for BYOK / on-device.
+   * Future axes (`budget_voice_seconds`, `budget_tool_calls`,
+   * `budget_wall_clock_ms`, ...) land as additive sibling fields; this
+   * one is not renamed.
    */
   budget_tokens?: number | null;
 
   /**
-   * Total tokens consumed across all runs of this goal so far. Derived
-   * by the daemon/runner by summing `goal_outcomes.tokens_used` for
-   * `goal_id`. Renderers compare against `budget_tokens` to draw the
-   * envelope. The runtime checks `spent_tokens >= budget_tokens`
-   * before fire and pauses with `status === "budget_exhausted"` when
-   * the cap is reached.
+   * Total tokens consumed across all runs of this goal so far —
+   * derived rollup, not a maintained counter. Daemons/runners
+   * populate by summing `goal_outcomes.tokens_used` for `goal_id`.
+   * Renderers compare against `budget_tokens` to draw the envelope
+   * at axis-native scale ("Inference: 12k/50k tokens"); cost
+   * translation ("· ≈$0.30 on Sonnet") is additive disclosure when
+   * computable, never the headline. The runtime's `checkGoalBudget`
+   * helper (`@motebit/runtime`) accepts per-axis `{ cap, spent }`
+   * records and pauses the goal with `status="budget_exhausted"` on
+   * first-axis-exhausted; multi-axis surfaces will populate
+   * `spent_voice_seconds` etc. alongside this.
    */
   spent_tokens?: number;
 }

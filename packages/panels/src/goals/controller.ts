@@ -33,10 +33,13 @@ export interface NewGoalInput {
   interval_ms: number;
   mode: GoalMode;
   /**
-   * Optional budget envelope in tokens (input + output, summed across
-   * runs). `null` or absent = no cap. See `ScheduledGoal.budget_tokens`
-   * for the protocol-primacy rationale (tokens is the only unit that
-   * means the same thing across motebit-cloud, BYOK, and on-device).
+   * v1 axis of the goal's bounded-commitment envelope — token cap on
+   * inference work. `null` or absent = no cap on this axis. See
+   * `ScheduledGoal.budget_tokens` for the multi-axis framing and the
+   * doctrine pointer (`docs/doctrine/panel-temporal-registers.md`
+   * §"Bounded commitment is multi-dimensional"). Future axes
+   * (`budget_voice_seconds`, ...) land as additive fields on this
+   * input shape, not as replacements.
    */
   budget_tokens?: number | null;
 }

@@ -175,10 +175,14 @@ CREATE TABLE IF NOT EXISTS goals (
   routine_id TEXT,
   routine_source TEXT,
   routine_hash TEXT,
-  -- Per-goal budget envelope in tokens. NULL = no cap. Migration #36
-  -- adds the column to existing installs. See ScheduledGoal.budget_tokens
-  -- in @motebit/panels for the unit rationale. Spent rollup is derived
-  -- on read by summing goal_outcomes.tokens_used (no separate counter).
+  -- v1 axis of the multi-dimensional bounded-commitment envelope per
+  -- docs/doctrine/panel-temporal-registers.md §"Bounded commitment is
+  -- multi-dimensional". Token cap on inference work; NULL = no cap on
+  -- this axis. Migration #36 adds the column to existing installs.
+  -- Future axes (voice_seconds, tool_calls, wall_clock_ms, ...) land
+  -- as additive sibling columns; this one is not renamed. Spent
+  -- rollup is derived on read from goal_outcomes.tokens_used (no
+  -- separate counter).
   budget_tokens INTEGER
 );
 
@@ -1116,16 +1120,24 @@ export interface Goal {
   /** Project ID for grouping related goals. Goals with same project_id share context. */
   project_id: string | null;
   /**
-   * Per-goal budget cap in tokens (input + output, summed across runs).
-   * `null` or absent = no cap. Migration #36. Tokens is the
-   * protocol-primacy-clean unit per
-   * `docs/doctrine/panel-temporal-registers.md`: meaningful across
-   * motebit-cloud / BYOK / on-device, where USD would bake cloud-mode
-   * assumptions into the goal record. The runtime checks
-   * `getSpentTokens(goal_id) >= budget_tokens` before fire and pauses
-   * the goal with status='budget_exhausted' on cap reach. Optional on
-   * the interface so legacy creators don't need to know about budgets;
-   * the row mapper normalizes missing to null.
+   * v1 axis of the multi-dimensional bounded-commitment envelope per
+   * `docs/doctrine/panel-temporal-registers.md` §"Bounded commitment is
+   * multi-dimensional". Token cap on inference work; `null` or absent
+   * = no cap on this axis. Migration #36.
+   *
+   * Tokens is the only doctrinally-clean axis available today
+   * (universal across motebit-cloud / BYOK / on-device — a USD field
+   * would bake cloud-mode assumptions into the goal record) and
+   * captures the dominant cost slice. Future axes — voice_seconds,
+   * tool_calls, wall_clock_ms — land as additive sibling columns on
+   * this table and as additive entries on the `GoalBudgetAxis` closed
+   * union in `@motebit/runtime`; this column is not renamed.
+   *
+   * The runtime calls `checkGoalBudget` (from `@motebit/runtime`) with
+   * the cap + `getSpentTokens(goalId)` before each fire; on
+   * first-axis-exhausted the goal pauses with `status='budget_exhausted'`.
+   * Optional on the interface so legacy creators don't need to know
+   * about budgets; the row mapper normalizes missing to null.
    */
   budget_tokens?: number | null;
   /**

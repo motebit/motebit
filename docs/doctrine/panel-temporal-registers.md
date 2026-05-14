@@ -73,6 +73,20 @@ Implications: cards-as-commitments, live status pulses (working/waiting/done), m
 
 A runtime-register panel rendered in identity-register language reads as MVP. The current Goals panel — text input + frequency dropdown + create button — is the worked example: cron + LLM is identity-shaped (a form, a list) when the doctrine demands runtime-shaped (a commitment card, a living status, a ceremony of declaration).
 
+## Bounded commitment is multi-dimensional
+
+"Budget envelopes per commitment" is one of the runtime-register's design-language pillars above. The shape of that envelope deserves its own clause because the wrong framing slips into API + UX vocabulary and is much harder to undo there than in prose.
+
+A goal is a commitment to do work. The cap on that commitment has to cover **every dimension along which the goal can consume resource**, not just the loudest one. Inference tokens, voice synthesis seconds, paid tool-call invocations, wall-clock time, risk surface — each is an axis the user would want bounded if it became significant. Asking "what unit?" foregrounds the loudest current axis (tokens, ~80%+ of cost today) and bakes its assumptions into the schema and the call sites; asking "what does it mean to bound a commitment?" surfaces that the answer is multi-dimensional and the schema has to be too.
+
+**v1 ships a single axis: `tokens`.** It's the only doctrinally-clean unit available today — universal across motebit-cloud / BYOK / on-device, where USD would bake cloud-mode assumptions into the goal record and break protocol-primacy for the BYOK + on-device modes the auto-router doctrine names. It also captures the dominant cost slice. v1 is correct as far as it goes; what would be wrong is positioning it as **the** unit rather than **an** axis.
+
+**Endgame is N axes, additively.** The runtime helper accepts a record of axes — `checkGoalBudget({ tokens?: { cap, spent }, voice_seconds?: { cap, spent }, ... })` — and returns the first exhausted one. Adding an axis later is a closed-union extension on `GoalBudgetAxis` plus a new `budget_<axis>` column on the goal record plus a corresponding `spent_<axis>` rollup; no signature break, no call-site rewrite. Surface UI displays the envelope per-axis at the unit-native scale ("Inference: 12k/50k tokens") with cost translation as additive disclosure when computable ("· ≈$0.30 on Sonnet"), never as the headline — the universal unit is the axis-native one, the cost is the mode-specific augment.
+
+**Distinct from `BudgetAllocation` in the sovereign panel.** `packages/panels/src/sovereign/controller.ts` ships an existing `BudgetAllocation` primitive — that's a per-task delegation cap, USD-shaped, single-axis because the peer agent absorbs the multi-axis execution on their end. Goal budget = self-execution cap, multi-axis. Task budget = peer-delegation cap, single-axis USD. The two share the word "budget" but model orthogonal commitments; don't collapse them in a future refactor. (When motebit acts as a peer for someone else, the inverse holds — they pay you a single-axis USD task budget and you absorb your own multi-axis goal budgets.)
+
+**Implementation enforcement** ([`packages/runtime/src/goals.ts`](../../packages/runtime/src/goals.ts) `checkGoalBudget`): pure record-input function returning `{ allowed, exhausted_axis, axes }`. Schedulers across surfaces (cli, desktop, mobile, web runner) call it before each fire and pause the goal with status `budget_exhausted` on `!result.allowed`. Re-checked every tick — raising any axis cap auto-resumes the goal next fire. The `exhausted_axis` field drives axis-specific surface copy (today only "Token budget exhausted"; tomorrow naturally extends to "Voice-minutes exhausted" without a new field on the result type). The `feedback_framing_slips_propagate_to_api_and_ux` memory anchor names the discipline that produced this section: catching the framing slip ("tokens is the unit" → "tokens is v1 axis") at write-time so the API + UX never encode the loose claim.
+
 ## What is not a panel
 
 Two categories sit outside the six and must not be folded in.

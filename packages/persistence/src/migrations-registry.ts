@@ -301,19 +301,25 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
   },
   {
     version: 36,
-    description: "goals.budget_tokens — per-goal budget envelope",
+    description: "goals.budget_tokens — v1 axis of multi-dimensional goal budget",
     statements: [
-      // Per-goal token cap per docs/doctrine/panel-temporal-registers.md
-      // (runtime-register design language: budget envelopes per
-      // commitment). NULL = no cap. Tokens is the protocol-primacy-clean
-      // unit — universal across motebit-cloud / BYOK / on-device, where
-      // a USD field would bake motebit-cloud assumptions into the goal
-      // record. Spent rollup is derived on read by summing
-      // goal_outcomes.tokens_used (added in v11) for the goal_id, not
-      // persisted as a counter — single source of truth, no
-      // double-bookkeeping. The runtime checks
-      // `spent_tokens >= budget_tokens` before fire and pauses with
-      // status='budget_exhausted'.
+      // Per-goal token cap. The v1 axis of the multi-dimensional
+      // bounded-commitment shape per docs/doctrine/panel-temporal-
+      // registers.md §"Bounded commitment is multi-dimensional".
+      // Tokens is the only doctrinally-clean axis available today
+      // (universal across motebit-cloud / BYOK / on-device, where a
+      // USD field would bake cloud-mode assumptions into the goal
+      // record) and it captures the dominant cost slice (~80%+ of
+      // most goals today). NULL = no cap on this axis. Spent rollup
+      // is derived on read by summing goal_outcomes.tokens_used
+      // (column added in v11) — single source of truth, no
+      // double-bookkeeping. Future axes (voice_seconds, tool_calls,
+      // wall_clock_ms, ...) land as additive sibling columns and
+      // additive entries on the `GoalBudgetAxis` closed union;
+      // adding one doesn't break the existing schema or helper API.
+      // The runtime helper `checkGoalBudget` in @motebit/runtime
+      // checks every provided axis and pauses the goal with
+      // status='budget_exhausted' on first-exhausted-axis.
       "ALTER TABLE goals ADD COLUMN budget_tokens INTEGER",
     ],
   },

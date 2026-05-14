@@ -101,6 +101,8 @@ export type {
   GoalsEmitter,
   GoalsEmitterDeps,
   GoalLifecycleStatus,
+  GoalBudgetAxis,
+  AxisCheckResult,
   BudgetCheckResult,
 } from "./goals.js";
 
