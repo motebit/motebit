@@ -60,12 +60,48 @@ Three coordinated commitments:
 
 **Out of scope (named here, deferred to PR 2-N):**
 
-- BYOK consumer (PR 2): web/desktop/mobile providers consume the dispatcher with the user's BYOK provider catalog. Adds BYOK to CONSUMERS registry; drift gate forces coverage.
+- ~~BYOK consumer (PR 2)~~ **SHIPPED 2026-05-14** in commits `4762229d` (primitive) + the PR 2b sibling (web wire-up + drift gate + this doctrine close). See § "PR 2 — BYOK consumer" below.
 - On-device consumer (PR 3): runtime consumes the dispatcher with locally-available models (WebLLM/Ollama). Adds on-device to CONSUMERS registry.
 - Chrome narration of routing decisions (PR 4): split into 4a (data plumbing — `RoutingDecision.reason` surfaces on the proxy response as `X-Motebit-Routing-Reason` header, shipped post-PR-1) and 4b (UX decision — chrome narration surface vs inspector panel vs trail slot; deferred pending UX design pass).
 - Routing-decision receipts: receipt-schema extension to make "the system picked model X because Y" auditable in the ledger.
 - Learned routing function replacing `REFERENCE_ROUTING_POLICY` at motebit-cloud (ModelLab as the eventual host).
 - TaskShape taxonomy refinement (capability-shaped vs categorical — current 7 are categorical; capability-shaped would be `"tool-heavy" | "long-context" | "vision" | ...`).
+
+## PR 2 — BYOK consumer (shipped 2026-05-14)
+
+**The architectural payoff of PR 1.** With only one consumer, the role-as-instance pattern had the same risk shape as the old single-cryptosuite world — looks right, doctrine-shaped, but unproven structurally. PR 2 validates that `dispatchRouting(TaskShape × ProviderCapability × Constraints) → RoutingDecision` is consumer-neutral as the doctrine claims by landing a second concrete consumer with a DIFFERENT catalog source, DIFFERENT cost profile (no balance filter), and DIFFERENT shape-detection strategy (heuristic vs LLM classifier).
+
+**Shipped in two commits:**
+
+1. **`4762229d`** — primitive lands in `@motebit/policy/byok-router.ts`:
+   - `BYOK_MODEL_CATALOG: Record<ByokVendor, readonly ProviderCapability[]>` — per-vendor `ProviderCapability` catalog with pricing, jurisdiction, lab, host. Sourced from the same `MODEL_CONFIG` table the proxy uses (`services/proxy/src/validation.ts`) for the four vendors the proxy hosts; DeepSeek added as the BYOK-only fifth vendor (jurisdiction `CN`, excluded from proxy by `MOTEBIT_CLOUD_ALLOWED_JURISDICTIONS`, accepted via the BYOK sovereignty path). `as const satisfies Record<ByokVendor, ...>` enforces registry-mirror at the type system.
+   - `extractTaskShape(text): TaskShape` — heuristic shape detector. BYOK consumers can't afford the LLM-classifier roundtrip the proxy uses (a Haiku call per turn billed at vendor rates would double the user's cost). Signal order: code (fenced block / function shape / HTML tag pair / refactor cue) → math (LaTeX / equation operators) → research (long-form cue + length > 800) → reasoning (chain-of-thought cues OR 400-800-char deliberation length) → creative (write a poem / imagine / pretend) → quick (< 80 chars) → chat (default). Consumers wanting classifier-level accuracy compose their own detector.
+   - `dispatchByokRouting(text, vendor, constraints?)` — composed entry point: extract shape → build catalog → dispatch → typed `RoutingDecision`. Surfaces handle all three discriminator values.
+
+2. **PR 2b** (this commit) — web consumer wire-up:
+   - `apps/web/src/web-app.ts` holds `_byokAutoRouteVendor: ByokVendor | null` + `_currentProvider: StreamingProvider | null`; `connectProvider` populates both from `UnifiedProviderConfig`.
+   - `WebApp.sendMessageStreaming` intercepts per-turn: when BYOK + `autoRoute` is active, dispatch `dispatchByokRouting(text, vendor)` → mutate the StreamingProvider's `setModel(...)` per the typed decision → forward to runtime unchanged. Every `RoutingDecision.kind` (`route` | `fallback` | `deny`) handled in the switch (the contract enforced by `check-routing-decision-coverage` #95).
+   - `ByokProviderConfig` gains `autoRoute?: boolean` (additive, backward-compat; the surface defaults to false → the user's single configured model wins as before).
+   - Drift gate `check-routing-decision-coverage`: `byok-runtime-web` registered as the 2nd CONSUMER. The gate now enforces 2 consumers × 3 decision kinds.
+
+**What PR 2 validates about the doctrine:**
+
+| Concern                    | Proxy (PR 1)                                   | BYOK (PR 2)                                           | Same primitive?                                                     |
+| -------------------------- | ---------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------- |
+| Catalog source             | `getProviderCatalog()` (proxy `MODEL_CONFIG`)  | `BYOK_MODEL_CATALOG[vendor]` (per-vendor sub-catalog) | YES                                                                 |
+| Cost filter                | `applyBalanceFilter(catalog, balance)` wrapper | (none — BYOK pays vendors directly)                   | YES (wrapper is optional)                                           |
+| Jurisdiction               | `{ jurisdiction: "US" }` constraint            | (none — user's vendor choice = jurisdiction)          | YES                                                                 |
+| Shape detection            | LLM (`classifyTask` Haiku call)                | Heuristic (`extractTaskShape`)                        | YES (input is `TaskShape`; how you produce it is consumer's choice) |
+| Routing policy             | `REFERENCE_ROUTING_POLICY`                     | `REFERENCE_ROUTING_POLICY`                            | YES                                                                 |
+| `RoutingDecision` handling | All three kinds                                | All three kinds                                       | YES (gate enforces)                                                 |
+
+Three different concerns; one dispatcher. The doctrine claim — auto-routing is consumer-neutral — is now structurally proven, not just asserted.
+
+**Deferred from PR 2 (not deferred indefinitely):**
+
+- Desktop + mobile mirror of the web consumer wire-up. Same shape as web (`_byokAutoRouteVendor` + `_currentProvider` + `setModel` per turn); cross-surface mirror follows per the one-pass-delivery doctrine. Each surface adds its own `byok-runtime-{desktop,mobile}` entry to the drift gate's CONSUMERS registry.
+- Settings-side UI toggle exposing `autoRoute`. The flag is in the config type and respected by the runtime; the BYOK settings panel doesn't yet surface a toggle. Users today opt-in by editing localStorage or via a future settings UI commit.
+- Classifier-mode shape detection. The heuristic shape detector is the cheap default; surfaces that want LLM-classifier-level accuracy compose their own detector and pass directly to `dispatchRouting`. Future arc: a small token-shape ML classifier (~1ms, mediocre but fast) replaces the heuristic — pure-function signature swap.
 
 ## TaskShape agility — the 7th instance of agility-as-role
 
@@ -105,7 +141,7 @@ What the gate (`check-routing-decision-coverage`, #95) DOES enforce structurally
 The registers are correct **only if they translate to all three consumers without semantic loss**.
 
 - **motebit-cloud (proxy):** classifyTask → TaskShape → applyBalanceFilter(catalog, balance) → dispatchRouting → RoutingDecision → invoke API.
-- **BYOK (PR 2):** user-explicit-or-LLM-classified intent → TaskShape → dispatchRouting(catalog from user's BYOK config, no balance filter) → invoke user's provider with user's key.
+- **BYOK (PR 2, shipped 2026-05-14):** heuristic-classified intent (`extractTaskShape`) → TaskShape → dispatchRouting(`BYOK_MODEL_CATALOG[vendor]`, no balance filter) → mutate StreamingProvider model → invoke user's provider with user's key. Composed via `dispatchByokRouting` in `@motebit/policy/byok-router.ts`; web consumer site in `apps/web/src/web-app.ts`.
 - **On-device (PR 3):** intent (user-explicit or local heuristic) → TaskShape → dispatchRouting(catalog from local WebLLM/Ollama capabilities, no balance filter) → invoke local model.
 
 If any consumer requires routing semantics that can't be expressed via `TaskShape + ProviderCapability + RoutingConstraint + Policy`, that's a doctrine refinement signal — not a one-off feature. The matrix-as-primitive claim survives only if all three consumers share the dispatcher.

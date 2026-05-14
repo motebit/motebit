@@ -70,6 +70,17 @@ const CONSUMERS: ReadonlyArray<RoutingConsumer> = [
     file: "services/proxy/src/app/v1/messages/route.ts",
     entry: "dispatchRouting",
   },
+  {
+    name: "byok-runtime-web",
+    file: "apps/web/src/web-app.ts",
+    // BYOK consumers route via the composed `dispatchByokRouting`
+    // entry point in `@motebit/policy/byok-router.ts`, which wraps
+    // `dispatchRouting` with the per-vendor catalog + heuristic
+    // shape detector. The gate's discriminator-coverage check
+    // enforces every `RoutingDecision.kind` value is referenced in
+    // the consumer's source (same shape as PR 1's proxy site).
+    entry: "dispatchByokRouting",
+  },
 ];
 
 /**

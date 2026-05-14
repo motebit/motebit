@@ -93,6 +93,27 @@ export interface ByokProviderConfig {
   baseUrl?: string;
   temperature?: number;
   maxTokens?: number;
+  /**
+   * Opt into auto-routing across the vendor's available models per turn.
+   * When `true`, surface runtimes consume the second-consumer half of the
+   * auto-routing primitive (`@motebit/policy::dispatchByokRouting`) to
+   * pick the best model for each turn's `TaskShape` from the vendor's
+   * catalog. When `false` or omitted, the surface uses the single
+   * configured `model` (backward-compat default).
+   *
+   * Doctrine: `docs/doctrine/auto-routing-as-protocol-primitive.md`
+   * § "PR 2 — BYOK consumer". The primitive lives in `@motebit/policy`;
+   * the per-surface wiring (web today; desktop/mobile mirror following)
+   * is the consumer site registered in the drift gate
+   * `check-routing-decision-coverage` (#95). No balance filter — BYOK
+   * users pay providers directly; balance is motebit-cloud-specific.
+   *
+   * Per `feedback_sovereignty_orthogonal`: this flag is orthogonal to
+   * tier — BYOK auto-routing is never subscription-gated. The user
+   * already has the vendor's key; the surface's job is to compose the
+   * canonical dispatcher over it.
+   */
+  autoRoute?: boolean;
 }
 
 /** Union of all three modes. Surfaces persist this shape. */

@@ -38,6 +38,8 @@ import type {
   UserInputForwardedPayload,
 } from "@motebit/sdk";
 import { DeviceCapability, EventType, BROWSER_SANDBOX_GRANT_AUDIENCE } from "@motebit/sdk";
+import type { ByokVendor } from "@motebit/sdk";
+import { dispatchByokRouting } from "@motebit/policy";
 import { ThreeJSAdapter, buildComputerSessionReceiptArtifact } from "@motebit/render-engine";
 import type { AudioReactivity } from "@motebit/render-engine";
 import type { StreamingProvider } from "@motebit/ai-core/browser";
@@ -147,6 +149,22 @@ export class WebApp {
   private renderer = new ThreeJSAdapter();
   private cursorPresence = new CursorPresence();
   private runtime: MotebitRuntime | null = null;
+  /**
+   * BYOK auto-router state — second-consumer half of the auto-routing
+   * primitive per `docs/doctrine/auto-routing-as-protocol-primitive.md`
+   * § "PR 2 — BYOK consumer". When `connectProvider` lands a BYOK
+   * config with `autoRoute: true`, the WebApp holds the vendor + a
+   * reference to the StreamingProvider so `sendMessageStreaming` can
+   * dispatch + `setModel` per turn before forwarding to the runtime.
+   *
+   * Null when the active provider isn't BYOK + autoRoute — turns then
+   * use the user's single configured model (backward-compat default).
+   * The dispatch logic lives in `@motebit/policy::dispatchByokRouting`;
+   * this class is the consumer site registered in the drift gate
+   * `check-routing-decision-coverage` (#95).
+   */
+  private _byokAutoRouteVendor: ByokVendor | null = null;
+  private _currentProvider: StreamingProvider | null = null;
   /**
    * Slab bridge unsub — set after the runtime is constructed and the
    * slab controller is bound to the render adapter via
@@ -1403,12 +1421,27 @@ export class WebApp {
 
   connectProvider(config: ProviderConfig): void {
     const provider = createProvider(config) as StreamingProvider;
+    this._currentProvider = provider;
+    // BYOK auto-router opt-in (per-turn `dispatchByokRouting` consumer
+    // site). Captured on every connectProvider so a config swap from
+    // BYOK→cloud / autoRoute-off cleanly clears the state.
+    if (config.mode === "byok" && config.autoRoute === true) {
+      this._byokAutoRouteVendor = config.vendor;
+    } else {
+      this._byokAutoRouteVendor = null;
+    }
     if (this.runtime) {
       this.runtime.setProvider(provider);
     }
   }
 
   setProviderDirect(provider: StreamingProvider): void {
+    this._currentProvider = provider;
+    // Direct-set bypass — caller supplied a custom provider class, no
+    // ProviderConfig in hand. Disable BYOK auto-routing since we can't
+    // tell what the provider is configured for; the caller composes
+    // their own routing if they want it.
+    this._byokAutoRouteVendor = null;
     if (this.runtime) {
       this.runtime.setProvider(provider);
     }
@@ -1626,6 +1659,43 @@ export class WebApp {
 
     this._isProcessing = true;
     try {
+      // BYOK auto-router consumer site (PR 2 of auto-routing arc).
+      // Doctrine: `docs/doctrine/auto-routing-as-protocol-primitive.md`
+      // § "PR 2 — BYOK consumer". Per-turn: dispatch over the user's
+      // vendor catalog → mutate the StreamingProvider's model →
+      // forward to the runtime unchanged. No balance filter (BYOK
+      // pays vendors directly); the dispatcher stays consumer-
+      // neutral. Handles every `RoutingDecision.kind` value (`route`,
+      // `fallback`, `deny`) per the contract enforced by
+      // `check-routing-decision-coverage` (#95).
+      if (this._byokAutoRouteVendor && this._currentProvider) {
+        const decision = dispatchByokRouting(text, this._byokAutoRouteVendor);
+        switch (decision.kind) {
+          case "route": {
+            this._currentProvider.setModel?.(decision.model);
+            break;
+          }
+          case "fallback": {
+            // Policy preference wasn't in this vendor's catalog;
+            // honor the backup the dispatcher picked from the
+            // vendor's catalog ordering (which is the consumer's
+            // preference signal per the dispatcher contract).
+            this._currentProvider.setModel?.(decision.backup);
+            break;
+          }
+          case "deny": {
+            // Constraints filtered every catalog entry — leave the
+            // provider on its currently-set model (the user's
+            // configured default). Calm-software fallback: the user
+            // gets honest behavior without a forced override; if
+            // they hit `deny` repeatedly the surface should expose
+            // `decision.reason` via observability chrome (Phase 3+
+            // of the doctrine — chrome narration of routing
+            // decisions is a separate arc).
+            break;
+          }
+        }
+      }
       yield* this.runtime.sendMessageStreaming(text, runId, options);
     } finally {
       this._isProcessing = false;
