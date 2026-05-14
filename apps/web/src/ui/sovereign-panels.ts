@@ -108,8 +108,8 @@ function renderCredentials(
   if (state.credentials.length === 0) {
     credEmpty.style.display = "block";
     credEmpty.textContent = hasRelay
-      ? "No credentials issued yet."
-      : "No local credentials. Connect to a relay for more.";
+      ? "Issued credentials appear here"
+      : "Connect to a relay to see issued credentials";
     return;
   }
 
@@ -170,13 +170,13 @@ function renderLedger(
 
   if (!hasRelay) {
     ledgerEmpty.style.display = "block";
-    ledgerEmpty.textContent = "Connect to a relay to view execution ledger.";
+    ledgerEmpty.textContent = "Connect to a relay to see execution history";
     return;
   }
 
   if (state.goals.length === 0) {
     ledgerEmpty.style.display = "block";
-    ledgerEmpty.textContent = "No completed goals yet. Execute a goal to generate a ledger.";
+    ledgerEmpty.textContent = "Execution ledgers appear here when goals complete";
     return;
   }
 
@@ -319,36 +319,64 @@ function renderBudget(
   // Sovereign reserve + operating balance, rendered with the sweep readout so
   // the UX teaches "relay is a utility, not a jail". Web adds a "Fund sovereign"
   // CTA that routes through openSovereignFundingFlow (Stripe onramp session).
+  // Both balances render as .sov-hero-card sub-surfaces: the number is the
+  // hero (display weight + tabular-nums), label sits small above it, subtitle
+  // below. Cold-load uses a breathing skeleton — never the literal "Loading…"
+  // string (anti-pattern per CLAUDE.md UI § + always-already-slab doctrine).
   const balancesSection = document.createElement("div");
   balancesSection.className = "budget-balance-section";
-  balancesSection.style.cssText = "display:flex;flex-direction:column;gap:10px;";
+  balancesSection.style.cssText = "display:flex;flex-direction:column;gap:12px;";
 
   const sovereignAddress = state.sovereignAddress;
 
-  const sovereignRow = document.createElement("div");
-  sovereignRow.className = "balance-row balance-row-sovereign";
-  sovereignRow.style.cssText =
-    "display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border-subtle, rgba(255,255,255,0.06));";
-  const sovText =
-    state.sovereignBalanceUsdc != null
-      ? `${state.sovereignBalanceUsdc.toFixed(2)} USDC`
-      : sovereignAddress
-        ? "Loading…"
-        : "—";
-  sovereignRow.innerHTML = `
-    <div style="flex:1;">
-      <div style="font-size:11px;color:var(--text-secondary);">Sovereign reserve</div>
-      <div style="font-size:18px;font-weight:600;">${sovText}</div>
-      <div style="font-size:10px;color:var(--text-ghost);margin-top:2px;">
-        ${sovereignAddress ? "onchain USDC, yours" : "no wallet configured"}
-      </div>
-    </div>
-  `;
+  const sovereignCard = document.createElement("div");
+  sovereignCard.className = "sov-hero-card";
+
+  const sovBody = document.createElement("div");
+  sovBody.className = "sov-hero-body";
+
+  const sovLabel = document.createElement("div");
+  sovLabel.className = "sov-hero-label";
+  sovLabel.textContent = "Sovereign reserve";
+  sovBody.appendChild(sovLabel);
+
+  if (state.sovereignBalanceUsdc != null) {
+    const sovValue = document.createElement("div");
+    sovValue.className = "sov-hero-value";
+    sovValue.innerHTML = `${escapeHtml(state.sovereignBalanceUsdc.toFixed(2))}<span class="sov-hero-unit">USDC</span>`;
+    sovBody.appendChild(sovValue);
+  } else if (sovereignAddress) {
+    // Breathing skeleton at the size the number will occupy — the
+    // slot is always-already there, the substance is in flight. 0.3 Hz
+    // Rayleigh rhythm matches the slab/body breath (see slab-home.ts).
+    const sovSkeleton = document.createElement("div");
+    sovSkeleton.className = "sov-hero-skeleton";
+    sovBody.appendChild(sovSkeleton);
+    if (typeof sovSkeleton.animate === "function") {
+      sovSkeleton.animate([{ opacity: 0.5 }, { opacity: 0.85 }, { opacity: 0.5 }], {
+        duration: 1000 / 0.3,
+        iterations: Infinity,
+        easing: "ease-in-out",
+      });
+    }
+  } else {
+    const sovValue = document.createElement("div");
+    sovValue.className = "sov-hero-value";
+    sovValue.textContent = "—";
+    sovBody.appendChild(sovValue);
+  }
+
+  const sovSubtitle = document.createElement("div");
+  sovSubtitle.className = "sov-hero-subtitle";
+  sovSubtitle.textContent = sovereignAddress ? "onchain USDC, yours" : "no wallet configured";
+  sovBody.appendChild(sovSubtitle);
+
+  sovereignCard.appendChild(sovBody);
+
   if (sovereignAddress) {
     const fundSovBtn = document.createElement("button");
-    fundSovBtn.className = "btn btn-small";
-    fundSovBtn.textContent = "Fund sovereign";
-    fundSovBtn.style.cssText = "flex:0 0 auto;";
+    fundSovBtn.className = "sov-action-pill";
+    fundSovBtn.textContent = "Fund";
     fundSovBtn.addEventListener("click", () => {
       const mid = ctx.app.motebitId;
       if (!mid) {
@@ -365,54 +393,83 @@ function renderBudget(
         fundSovBtn.textContent = original;
       });
     });
-    sovereignRow.appendChild(fundSovBtn);
+    sovereignCard.appendChild(fundSovBtn);
   }
-  balancesSection.appendChild(sovereignRow);
+  balancesSection.appendChild(sovereignCard);
+
+  // Operating balance card — always rendered (symmetric with sovereign
+  // reserve above), so the slab carries both balance slots regardless
+  // of whether relay data has landed yet. Skeleton + ghost subtitle
+  // when state.balance is null; real number + sweep config + Top-up
+  // affordance when loaded.
+  const operatingCard = document.createElement("div");
+  operatingCard.className = "sov-hero-card";
+
+  const opBody = document.createElement("div");
+  opBody.className = "sov-hero-body";
+
+  const opLabel = document.createElement("div");
+  opLabel.className = "sov-hero-label";
+  opLabel.textContent = "Operating balance";
+  opBody.appendChild(opLabel);
 
   if (state.balance) {
     const balance = state.balance;
-    const operatingRow = document.createElement("div");
-    operatingRow.className = "balance-row balance-row-operating";
-    operatingRow.style.cssText =
-      "display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border-subtle, rgba(255,255,255,0.06));";
 
-    const holdLines: string[] = [];
+    const opValue = document.createElement("div");
+    opValue.className = "sov-hero-value";
+    opValue.innerHTML = `${escapeHtml(balance.balance.toFixed(2))}<span class="sov-hero-unit">${escapeHtml(balance.currency)}</span>`;
+    opBody.appendChild(opValue);
+
+    const opSubParts: string[] = ["relay ledger, instant settlement"];
     const disputeHold = balance.dispute_window_hold ?? 0;
-    if (disputeHold > 0) {
-      holdLines.push(
-        `<span style="color:var(--text-ghost);">on hold ${disputeHold.toFixed(2)}</span>`,
-      );
-    }
+    if (disputeHold > 0) opSubParts.push(`on hold ${disputeHold.toFixed(2)}`);
     const availableForWithdrawal = balance.available_for_withdrawal;
     if (availableForWithdrawal != null && availableForWithdrawal !== balance.balance) {
-      holdLines.push(
-        `<span style="color:var(--text-ghost);">available ${availableForWithdrawal.toFixed(2)}</span>`,
-      );
+      opSubParts.push(`available ${availableForWithdrawal.toFixed(2)}`);
     }
+    const opSubtitle = document.createElement("div");
+    opSubtitle.className = "sov-hero-subtitle";
+    opSubtitle.textContent = opSubParts.join(" · ");
+    opBody.appendChild(opSubtitle);
+  } else {
+    // Same breathing-skeleton pattern as sovereign — the slot is
+    // always-already there, the substance is in flight or absent.
+    const opSkeleton = document.createElement("div");
+    opSkeleton.className = "sov-hero-skeleton";
+    opBody.appendChild(opSkeleton);
+    if (typeof opSkeleton.animate === "function") {
+      opSkeleton.animate([{ opacity: 0.5 }, { opacity: 0.85 }, { opacity: 0.5 }], {
+        duration: 1000 / 0.3,
+        iterations: Infinity,
+        easing: "ease-in-out",
+      });
+    }
+    const opSubtitle = document.createElement("div");
+    opSubtitle.className = "sov-hero-subtitle";
+    opSubtitle.textContent = "relay ledger, instant settlement";
+    opBody.appendChild(opSubtitle);
+  }
 
-    operatingRow.innerHTML = `
-      <div style="flex:1;">
-        <div style="font-size:11px;color:var(--text-secondary);">Operating balance</div>
-        <div style="font-size:18px;font-weight:600;">
-          ${balance.balance.toFixed(2)} ${escapeHtml(balance.currency)}
-        </div>
-        <div style="font-size:10px;color:var(--text-ghost);margin-top:2px;">
-          relay ledger, instant settlement${holdLines.length > 0 ? " · " + holdLines.join(" · ") : ""}
-        </div>
-      </div>
-    `;
+  operatingCard.appendChild(opBody);
 
-    // "Fund operating" lives in the Subscription panel's top-up UI — routing
-    // through it keeps one checkout path, one cached balance.
+  if (state.balance) {
+    // "Fund operating" lives in the Subscription panel's top-up UI —
+    // routing through it keeps one checkout path, one cached balance.
+    // Only render the affordance when balance data exists; pre-data
+    // there's nothing meaningful to top up.
     const fundOpLink = document.createElement("button");
-    fundOpLink.className = "btn btn-small btn-ghost";
+    fundOpLink.className = "sov-action-ghost";
     fundOpLink.textContent = "Top up";
-    fundOpLink.style.cssText = "flex:0 0 auto;";
     fundOpLink.addEventListener("click", () => {
       ctx.showToast("Open the Subscription panel to top up");
     });
-    operatingRow.appendChild(fundOpLink);
-    balancesSection.appendChild(operatingRow);
+    operatingCard.appendChild(fundOpLink);
+  }
+  balancesSection.appendChild(operatingCard);
+
+  if (state.balance) {
+    const balance = state.balance;
 
     // Sweep-config inline editor — three states per the desktop pattern.
     const effectiveAddress = balance.settlement_address ?? sovereignAddress;
@@ -538,46 +595,63 @@ function renderBudget(
 
   budgetSummary.appendChild(balancesSection);
 
-  // Recent transactions
-  if (state.balance) {
-    const recentTxns = state.balance.transactions.slice(0, 5);
-    if (recentTxns.length > 0) {
-      const txnSection = document.createElement("div");
-      const txnHeader = document.createElement("div");
-      txnHeader.style.cssText =
-        "font-size:11px;font-weight:600;color:var(--text-secondary);margin:8px 0 4px;";
-      txnHeader.textContent = "Recent Transactions";
-      txnSection.appendChild(txnHeader);
+  // Activity slot \u2014 always-already-slab: the section header + container
+  // render whether or not transactions exist. Empty state is a dashed
+  // calm row, not absent. The panel reads "inhabited but empty" instead
+  // of "incomplete render."
+  const activityHeader = document.createElement("div");
+  activityHeader.className = "sov-section-header";
+  activityHeader.textContent = "Activity";
+  budgetSummary.appendChild(activityHeader);
 
-      for (const txn of recentTxns) {
-        const txnRow = document.createElement("div");
-        txnRow.style.cssText =
-          "display:flex;align-items:center;gap:8px;padding:4px 0;font-size:11px;border-bottom:1px solid var(--border-subtle, rgba(255,255,255,0.06));";
+  const recentTxns = state.balance?.transactions.slice(0, 5) ?? [];
+  if (recentTxns.length > 0) {
+    const txnSection = document.createElement("div");
+    txnSection.style.cssText = "margin:0 4px;";
+    for (const txn of recentTxns) {
+      const txnRow = document.createElement("div");
+      txnRow.style.cssText =
+        "display:flex;align-items:center;gap:8px;padding:6px 8px;font-size:11px;border-bottom:1px solid var(--border-light);";
 
-        const isCredit =
-          txn.type === "deposit" ||
-          txn.type === "settlement_credit" ||
-          txn.type === "allocation_release";
-        const sign = isCredit ? "+" : "\u2212";
-        const color = isCredit ? "var(--accent-green, #4ade80)" : "var(--text-secondary)";
+      const isCredit =
+        txn.type === "deposit" ||
+        txn.type === "settlement_credit" ||
+        txn.type === "allocation_release";
+      const sign = isCredit ? "+" : "\u2212";
+      const color = isCredit ? "var(--accent-green, #4ade80)" : "var(--text-secondary)";
 
-        txnRow.innerHTML = `
-          <span style="flex:0 0 auto;padding:1px 6px;border-radius:3px;background:var(--bg-card, rgba(255,255,255,0.04));color:var(--text-ghost);font-size:10px;">${escapeHtml(txn.type)}</span>
-          <span style="flex:1;color:var(--text-ghost);">${escapeHtml(txn.description ?? "")}</span>
-          <span style="color:${color};font-weight:500;white-space:nowrap;">${sign}${Math.abs(txn.amount).toFixed(4)}</span>
-          <span style="color:var(--text-ghost);font-size:10px;white-space:nowrap;">${formatDate(txn.created_at)}</span>
-        `;
-        txnSection.appendChild(txnRow);
-      }
-      budgetSummary.appendChild(txnSection);
+      txnRow.innerHTML = `
+        <span style="flex:0 0 auto;padding:1px 6px;border-radius:3px;background:var(--bg-btn);color:var(--text-ghost);font-size:10px;">${escapeHtml(txn.type)}</span>
+        <span style="flex:1;color:var(--text-ghost);">${escapeHtml(txn.description ?? "")}</span>
+        <span style="color:${color};font-weight:500;white-space:nowrap;font-variant-numeric:tabular-nums;">${sign}${Math.abs(txn.amount).toFixed(4)}</span>
+        <span style="color:var(--text-ghost);font-size:10px;white-space:nowrap;">${formatDate(txn.created_at)}</span>
+      `;
+      txnSection.appendChild(txnRow);
     }
+    budgetSummary.appendChild(txnSection);
+  } else {
+    // Forward-framed empty register — describes what the slot holds,
+    // not what it lacks (always-already-slab: slot is READY). Same
+    // shape as slab-home.ts's "Anywhere." watermark — the affordance
+    // is the antecedent, not the absence.
+    const activityEmpty = document.createElement("div");
+    activityEmpty.className = "sov-empty-row";
+    activityEmpty.textContent = "Recent transactions appear here";
+    budgetSummary.appendChild(activityEmpty);
   }
 
-  // Budget allocations
+  // Allocations slot \u2014 same always-rendered pattern. When budget data
+  // exists, show the metric pair + per-allocation rows. When absent,
+  // show a calm dashed empty register so the slab reads inhabited.
+  const allocSectionHeader = document.createElement("div");
+  allocSectionHeader.className = "sov-section-header";
+  allocSectionHeader.textContent = "Allocations";
+  budgetSummary.appendChild(allocSectionHeader);
+
   if (state.budget) {
     const budget = state.budget;
     const allocHeader = document.createElement("div");
-    allocHeader.style.cssText = "display:flex;gap:12px;margin:8px 0;";
+    allocHeader.style.cssText = "display:flex;gap:12px;margin:0 4px 8px;";
     allocHeader.innerHTML = `
       <div class="budget-metric">
         <span class="budget-metric-label">Total Locked</span>
@@ -610,72 +684,133 @@ function renderBudget(
         `;
         budgetList.appendChild(row);
       }
+    } else {
+      const allocEmpty = document.createElement("div");
+      allocEmpty.className = "sov-empty-row";
+      allocEmpty.textContent = "Allocations appear when budgets are locked";
+      budgetSummary.appendChild(allocEmpty);
     }
+  } else {
+    const allocEmpty = document.createElement("div");
+    allocEmpty.className = "sov-empty-row";
+    allocEmpty.textContent = "Allocations appear when budgets are locked";
+    budgetSummary.appendChild(allocEmpty);
   }
 }
 
 function renderSuccession(
   state: SovereignState,
   hasRelay: boolean,
+  ctrl: SovereignController,
   successionContent: HTMLDivElement,
   successionEmpty: HTMLDivElement,
 ): void {
   successionContent.innerHTML = "";
+  successionEmpty.style.display = "none";
 
   if (!hasRelay) {
     successionEmpty.style.display = "block";
-    successionEmpty.textContent = "Connect to a relay to view identity succession.";
+    successionEmpty.textContent = "Connect to a relay to see identity succession";
     return;
   }
 
   const data = state.succession;
-  if (!data || data.chain.length === 0) {
-    successionEmpty.style.display = "block";
-    successionEmpty.textContent = data ? "No key rotations." : "Failed to load succession chain.";
+
+  // Error register — fetch failed. Distinct from empty (no rotations
+  // exist) by presenting a Retry affordance. Empty registers are calm
+  // "this slot is ready" states; errors are recoverable problems.
+  if (!data) {
+    const errorRow = document.createElement("div");
+    errorRow.className = "sov-error-row";
+    const errorText = document.createElement("span");
+    errorText.className = "sov-error-row-text";
+    errorText.textContent = "Couldn't load succession chain";
+    const retryBtn = document.createElement("button");
+    retryBtn.className = "sov-error-row-retry";
+    retryBtn.textContent = "Retry";
+    retryBtn.addEventListener("click", () => {
+      retryBtn.disabled = true;
+      retryBtn.textContent = "Retrying…";
+      void ctrl.refresh().finally(() => {
+        retryBtn.disabled = false;
+        retryBtn.textContent = "Retry";
+      });
+    });
+    errorRow.appendChild(errorText);
+    errorRow.appendChild(retryBtn);
+    successionContent.appendChild(errorRow);
     return;
   }
 
-  successionEmpty.style.display = "none";
+  // Loaded — always render the current identity as the hero card. The
+  // identity is the most foundational fact in this tab; per the same
+  // hero-card pattern as Sovereign reserve in Budget, it gets display
+  // material weight whether or not rotations exist.
+  const identityCard = document.createElement("div");
+  identityCard.className = "sov-hero-card";
 
-  const summary = document.createElement("div");
-  summary.style.cssText = "margin-bottom:12px;";
-  const genesisKey = data.chain[0]!.old_public_key;
-  summary.innerHTML = `
-    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">
-      <span style="font-weight:600;">Rotations:</span> ${data.chain.length}
-    </div>
-    <div style="font-size:11px;color:var(--text-ghost);margin-bottom:4px;">
-      <span style="font-weight:600;">Genesis key:</span> <code style="font-size:10px;">${escapeHtml(truncate(genesisKey, 24))}</code>
-    </div>
-    <div style="font-size:11px;color:var(--text-ghost);">
-      <span style="font-weight:600;">Current key:</span> <code style="font-size:10px;">${escapeHtml(truncate(data.current_public_key, 24))}</code>
-    </div>
-  `;
-  successionContent.appendChild(summary);
+  const idBody = document.createElement("div");
+  idBody.className = "sov-hero-body";
 
-  const timelineHeader = document.createElement("div");
-  timelineHeader.style.cssText =
-    "font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;";
-  timelineHeader.textContent = "Rotation Timeline";
-  successionContent.appendChild(timelineHeader);
+  const idLabel = document.createElement("div");
+  idLabel.className = "sov-hero-label";
+  idLabel.textContent = "Current identity";
+  idBody.appendChild(idLabel);
 
+  const idValue = document.createElement("div");
+  idValue.className = "sov-hero-value-code";
+  idValue.textContent = truncate(data.current_public_key, 32);
+  idBody.appendChild(idValue);
+
+  const idSubtitle = document.createElement("div");
+  idSubtitle.className = "sov-hero-subtitle";
+  if (data.chain.length > 0) {
+    const genesisKey = data.chain[0]!.old_public_key;
+    const rotationWord = data.chain.length === 1 ? "rotation" : "rotations";
+    idSubtitle.textContent = `${data.chain.length} ${rotationWord} · genesis ${truncate(genesisKey, 12)}`;
+  } else {
+    idSubtitle.textContent = "Ed25519 sovereign key";
+  }
+  idBody.appendChild(idSubtitle);
+
+  identityCard.appendChild(idBody);
+  successionContent.appendChild(identityCard);
+
+  // Key rotations section — always rendered, holds either the timeline
+  // (when rotations exist) or a forward-framed empty register.
+  const rotationsHeader = document.createElement("div");
+  rotationsHeader.className = "sov-section-header";
+  rotationsHeader.textContent = "Key rotations";
+  successionContent.appendChild(rotationsHeader);
+
+  if (data.chain.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "sov-empty-row";
+    empty.textContent = "Rotations appear here as the identity evolves";
+    successionContent.appendChild(empty);
+    return;
+  }
+
+  const timeline = document.createElement("div");
+  timeline.style.cssText = "margin: 0 14px;";
   for (const entry of data.chain) {
     const item = document.createElement("div");
     item.style.cssText =
-      "padding:8px;margin-bottom:6px;border-radius:6px;background:var(--bg-card, rgba(255,255,255,0.04));font-size:11px;";
+      "padding: 10px 14px; margin-bottom: 6px; border-radius: 10px; background: var(--bg-card); font-size: 11px;";
     item.innerHTML = `
-      <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-        <span style="color:var(--text-secondary);">${formatDate(entry.timestamp)}</span>
-        ${entry.reason ? `<span style="color:var(--text-ghost);font-style:italic;">${escapeHtml(entry.reason)}</span>` : ""}
+      <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+        <span style="color: var(--text-secondary);">${formatDate(entry.timestamp)}</span>
+        ${entry.reason ? `<span style="color: var(--text-ghost); font-style: italic;">${escapeHtml(entry.reason)}</span>` : ""}
       </div>
-      <div style="color:var(--text-ghost);">
-        <code style="font-size:10px;">${escapeHtml(truncate(entry.old_public_key, 16))}</code>
-        <span style="margin:0 4px;">&#x2192;</span>
-        <code style="font-size:10px;">${escapeHtml(truncate(entry.new_public_key, 16))}</code>
+      <div style="color: var(--text-ghost); font-family: 'SF Mono', 'Menlo', monospace;">
+        <code style="font-size: 10px;">${escapeHtml(truncate(entry.old_public_key, 16))}</code>
+        <span style="margin: 0 4px;">&#x2192;</span>
+        <code style="font-size: 10px;">${escapeHtml(truncate(entry.new_public_key, 16))}</code>
       </div>
     `;
-    successionContent.appendChild(item);
+    timeline.appendChild(item);
   }
+  successionContent.appendChild(timeline);
 }
 
 // --- Init ---
@@ -731,7 +866,7 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
     renderCredentials(state, hasRelayConfigured, credList, credEmpty);
     renderLedger(state, hasRelayConfigured, ctrl, ledgerList, ledgerEmpty);
     renderBudget(state, hasRelayConfigured, ctx, ctrl, budgetSummary, budgetList, budgetEmpty);
-    renderSuccession(state, hasRelayConfigured, successionContent, successionEmpty);
+    renderSuccession(state, hasRelayConfigured, ctrl, successionContent, successionEmpty);
   }
 
   ctrl.subscribe(renderAll);

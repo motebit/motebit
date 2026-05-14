@@ -4923,7 +4923,7 @@
       /* Budget */
       .budget-summary {
         display: flex;
-        gap: 12px;
+        flex-direction: column;
         margin-bottom: 8px;
       }
       .budget-metric {
@@ -5001,6 +5001,220 @@
         background: rgba(248, 113, 113, 0.1);
         color: #f87171;
       }
+
+      /* Budget hero cards — Apple-grade balance display.
+         Sub-surface card inside the sovereign panel's glass: --bg-card
+         tint per the panel doctrine, single inset highlight for material
+         affordance, no extra blur (the panel already carries the glass).
+         The number is the hero — display weight + tabular-nums sit above
+         a small uppercase label. Cold-load swaps the number for a
+         breathing skeleton (sized to the eventual number) instead of
+         "Loading…" text, per CLAUDE.md UI § anti-patterns and
+         always-already-slab doctrine. */
+      .sov-hero-card {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 18px 20px;
+        margin: 12px 14px 0;
+        border-radius: 14px;
+        background: var(--bg-glass-strong);
+        border: 1px solid var(--border-medium);
+        box-shadow:
+          inset 0 1px 0 var(--inset-highlight),
+          0 1px 2px var(--shadow-sm),
+          0 4px 16px var(--shadow-md);
+      }
+      .sov-hero-card + .sov-hero-card {
+        margin-top: 10px;
+      }
+      .sov-section-header {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-muted);
+        margin: 22px 18px 6px;
+      }
+      /* Empty register — no card material. Section header carries the
+         identity; the empty state is just ghost text on the substrate.
+         Apple-grade pattern (iOS Mail "No mail", Wallet empty
+         categories): heroes are cards, empty registers are calm
+         single-line text under their header. Avoids the inverted-
+         hierarchy where empty placeholders compete visually with
+         loaded hero data. */
+      .sov-empty-row {
+        padding: 2px 18px 14px;
+        color: var(--text-ghost);
+        font-size: 12px;
+        text-align: left;
+        letter-spacing: 0;
+      }
+      .sov-hero-body {
+        flex: 1;
+        min-width: 0;
+      }
+      .sov-hero-label {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-muted);
+        margin: 0 0 8px;
+      }
+      .sov-hero-value {
+        font-size: 34px;
+        font-weight: 300;
+        letter-spacing: -0.02em;
+        line-height: 1.05;
+        color: var(--text-heading);
+        font-variant-numeric: tabular-nums;
+        margin: 0;
+      }
+      .sov-hero-unit {
+        font-size: 18px;
+        font-weight: 400;
+        color: var(--text-muted);
+        margin-left: 6px;
+      }
+      .sov-hero-subtitle {
+        font-size: 11px;
+        color: var(--text-ghost);
+        margin-top: 8px;
+      }
+      .sov-hero-skeleton {
+        height: 36px;
+        width: 160px;
+        border-radius: 8px;
+        background: var(--bg-btn);
+        margin-top: 2px;
+      }
+      .sov-action-pill {
+        flex: 0 0 auto;
+        padding: 9px 18px;
+        border-radius: 999px;
+        border: none;
+        background: var(--accent-soft);
+        color: #fff;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition:
+          background-color 0.15s ease-out,
+          transform 0.1s ease-out;
+      }
+      .sov-action-pill:hover:not(:disabled) {
+        background: var(--accent-hover);
+      }
+      .sov-action-pill:active:not(:disabled) {
+        transform: scale(0.97);
+      }
+      .sov-action-pill:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      .sov-action-ghost {
+        flex: 0 0 auto;
+        padding: 9px 16px;
+        border-radius: 999px;
+        background: var(--bg-btn);
+        border: 1px solid var(--border-light);
+        color: var(--text-secondary);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.15s ease-out;
+      }
+      .sov-action-ghost:hover {
+        background: var(--bg-btn-hover);
+      }
+
+      /* Code-shaped hero value — for identity keys, hashes, addresses.
+         Drops display weight + tabular-nums (built for numbers); uses
+         monospace at a smaller size so the truncated key reads as a
+         technical identifier, not a balance. */
+      .sov-hero-value-code {
+        font-size: 15px;
+        font-weight: 500;
+        line-height: 1.2;
+        color: var(--text-heading);
+        font-family: "SF Mono", "Menlo", monospace;
+        margin: 0;
+        word-break: break-all;
+      }
+
+      /* Form card — wraps form affordances (textarea + submit) in the
+         same material family as .sov-hero-card, lighter weight: --bg-glass
+         instead of -strong. Padding accommodates input + button rhythm
+         instead of label+value+subtitle. */
+      .sov-form-card {
+        margin: 12px 14px 0;
+        padding: 14px 16px;
+        border-radius: 14px;
+        background: var(--bg-glass);
+        border: 1px solid var(--border-light);
+        box-shadow: inset 0 1px 0 var(--inset-highlight);
+      }
+      .sov-form-textarea {
+        width: 100%;
+        min-height: 60px;
+        max-height: 140px;
+        padding: 10px 12px;
+        border: 1px solid var(--border-input);
+        border-radius: 10px;
+        background: var(--bg-input);
+        color: var(--text-input);
+        font-size: 13px;
+        font-family: "SF Mono", "Menlo", monospace;
+        outline: none;
+        resize: vertical;
+        margin-bottom: 10px;
+        box-sizing: border-box;
+      }
+      .sov-form-textarea:focus {
+        border-color: var(--accent-border);
+      }
+      .sov-form-textarea::placeholder {
+        color: var(--text-ghost);
+      }
+
+      /* Error register — visually distinct from .sov-empty-row so the
+         user reads "something went wrong, recoverable" vs "this slot is
+         ready, waiting." Subtle warning hue + Retry affordance. */
+      .sov-error-row {
+        padding: 12px 18px 14px;
+        margin: 0 14px;
+        border-radius: 12px;
+        background: var(--bg-glass);
+        border: 1px solid var(--border-light);
+        box-shadow: inset 0 1px 0 var(--inset-highlight);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .sov-error-row-text {
+        flex: 1;
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+      .sov-error-row-retry {
+        flex: 0 0 auto;
+        padding: 6px 14px;
+        border-radius: 999px;
+        background: var(--bg-btn);
+        border: 1px solid var(--border-light);
+        color: var(--text-secondary);
+        font-size: 11px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.15s ease-out;
+      }
+      .sov-error-row-retry:hover {
+        background: var(--bg-btn-hover);
+      }
+
       .sov-empty {
         font-size: 12px;
         color: var(--text-ghost);
@@ -6700,24 +6914,14 @@
       </div>
       <!-- Credentials pane -->
       <div class="sov-pane active" id="sov-pane-credentials">
+        <div class="sov-section-header" id="cred-section-header">Issued credentials</div>
         <div id="cred-list"></div>
-        <div id="cred-empty" class="sov-empty">No credentials issued yet.</div>
-        <button
-          id="cred-present-btn"
-          style="
-            margin-top: 6px;
-            padding: 6px 14px;
-            border: 1px solid var(--accent-border);
-            border-radius: 6px;
-            background: var(--accent-bg);
-            color: var(--accent-text);
-            font-size: 11px;
-            cursor: pointer;
-            font-family: inherit;
-          "
-        >
-          Bundle Presentation
-        </button>
+        <div id="cred-empty" class="sov-empty-row">Issued credentials appear here</div>
+        <div style="margin: 14px 14px 0">
+          <button id="cred-present-btn" class="sov-action-ghost" style="width: 100%">
+            Bundle Presentation
+          </button>
+        </div>
         <div id="cred-vp-output" class="cred-vp-output" style="display: none">
           <div class="cred-vp-header">
             <span class="cred-vp-label">Verifiable Presentation</span>
@@ -6725,17 +6929,24 @@
           </div>
           <pre id="cred-vp-json"></pre>
         </div>
-        <div class="cred-verify-section">
-          <div class="cred-verify-label">Verify Credential</div>
-          <textarea id="cred-verify-input" placeholder="Paste credential JSON here..."></textarea>
-          <button id="cred-verify-btn">Verify</button>
-          <div id="cred-verify-result" style="display: none"></div>
+        <div class="sov-section-header">Verify credential</div>
+        <div class="sov-form-card">
+          <textarea
+            id="cred-verify-input"
+            class="sov-form-textarea"
+            placeholder="Paste credential JSON here…"
+          ></textarea>
+          <button id="cred-verify-btn" class="sov-action-pill">Verify</button>
+          <div id="cred-verify-result" style="display: none; margin-top: 10px"></div>
         </div>
       </div>
       <!-- Ledger pane -->
       <div class="sov-pane" id="sov-pane-ledger">
+        <div class="sov-section-header">Execution history</div>
         <div id="ledger-list"></div>
-        <div id="ledger-empty" class="sov-empty">No completed goals yet.</div>
+        <div id="ledger-empty" class="sov-empty-row">
+          Execution ledgers appear here when goals complete
+        </div>
       </div>
       <!-- Budget pane -->
       <div class="sov-pane" id="sov-pane-budget">
@@ -6746,7 +6957,9 @@
       <!-- Identity pane -->
       <div class="sov-pane" id="sov-pane-identity">
         <div id="succession-content"></div>
-        <div id="succession-empty" class="sov-empty">No key rotations.</div>
+        <div id="succession-empty" class="sov-empty-row" style="display: none">
+          Key rotations appear here
+        </div>
       </div>
     </div>
 
