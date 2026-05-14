@@ -27,7 +27,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: "discover", description: "Discover agents on relay" },
   { name: "serve", description: "Toggle accepting delegations" },
   { name: "goals", description: "Browse goals" },
-  { name: "skills", description: "Browse and install skills" },
+  { name: "capabilities", description: "Browse skills and tool-server connections" },
   { name: "plan", description: "Break down a complex goal" },
   { name: "balance", description: "Account balance" },
   { name: "operator", description: "Operator mode status" },

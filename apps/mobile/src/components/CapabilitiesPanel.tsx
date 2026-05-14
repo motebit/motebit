@@ -1,22 +1,29 @@
 /**
- * Mobile Skills panel — closes the cross-surface arc started 2026-05-04
- * (web + desktop dev-mode shipped earlier the same day; mobile is the
- * third real consumer of `RegistryBackedSkillsPanelAdapter` from
- * `@motebit/panels`).
+ * Mobile Capabilities panel — capability-primitive surface per
+ * `docs/doctrine/panel-temporal-registers.md` substrate-vs-accumulation.
+ * Hosts two sibling sub-tabs:
  *
- * Two sections, installed-first:
- *   • Installed — `SkillRegistry.list()` over `ExpoSqliteSkillStorageAdapter`.
- *     Per-row Enable/Disable + Trust/Untrust + Remove. Tap row → detail.
- *   • Browse — public-read `/api/v1/skills/discover` from the configured
- *     relay. Per-row Install button fetches the bundle from
- *     `/api/v1/skills/:submitter/:name/:version` and routes through the
- *     controller's `installFromSource({ kind: "url" })`.
+ *   • **Skills** — agentskills.io procedural-knowledge bundles. Two
+ *     sections, installed-first: Installed (`SkillRegistry.list()` over
+ *     `ExpoSqliteSkillStorageAdapter`, per-row Enable/Disable + Trust +
+ *     Remove) and Browse (`/api/v1/skills/discover` from the configured
+ *     relay; per-row Install routes through the controller's
+ *     `installFromSource({ kind: "url" })`).
  *
- * Privilege boundary: install + envelope-bytes verification run in the
- * same JS context as the panel UI — same trade-off web + desktop-dev
- * carry. The `requestInstallConsent` callback opens a native Alert
- * (calm-software discipline: Cancel is the default action; only
- * medical/financial/secret tiers prompt). See
+ *   • **Connections** — MCP tool servers. The render is delegated to
+ *     `ToolsTab` (lifted from Settings → Intelligence during the
+ *     2026-05-13 migration); state lives in App.tsx and threads through
+ *     props. Persistence path stays at the device's MCP server store —
+ *     UI moved, persistence didn't.
+ *
+ * Skills + MCP are siblings, not merged: different shapes, different
+ * storage, different lifecycles, different packages.
+ *
+ * Privilege boundary (Skills): install + envelope-bytes verification run
+ * in the same JS context as the panel UI — same trade-off web +
+ * desktop-dev carry. The `requestInstallConsent` callback opens a
+ * native Alert (calm-software discipline: Cancel is the default
+ * action; only medical/financial/secret tiers prompt). See
  * `packages/skills/CLAUDE.md` rule 5.
  */
 
@@ -47,6 +54,7 @@ import type { SkillRegistryBundle, SkillRegistryEntry, SkillRegistryListing } fr
 
 import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
+import { ToolsTab, type ToolsTabProps } from "./settings/ToolsTab";
 
 // ── UX constants ──────────────────────────────────────────────────────
 
@@ -104,15 +112,32 @@ const showConsentAlert: RequestInstallConsentFn = (request) =>
 
 // ── Component ─────────────────────────────────────────────────────────
 
-interface SkillsPanelProps {
+type SubTab = "skills" | "connections";
+
+interface CapabilitiesPanelProps {
   visible: boolean;
   app: MobileApp;
   onClose: () => void;
+  /** MCP server list + handlers — lifted from SettingsModal/ToolsTab so
+   *  the Connections sub-tab can render the same control surface. */
+  mcpServers?: ToolsTabProps["servers"];
+  onAddMcpServer?: ToolsTabProps["onAdd"];
+  onRemoveMcpServer?: ToolsTabProps["onRemove"];
+  onToggleMcpTrust?: ToolsTabProps["onToggleTrust"];
 }
 
-export function SkillsPanel({ visible, app, onClose }: SkillsPanelProps): React.ReactElement {
+export function CapabilitiesPanel({
+  visible,
+  app,
+  onClose,
+  mcpServers,
+  onAddMcpServer,
+  onRemoveMcpServer,
+  onToggleMcpTrust,
+}: CapabilitiesPanelProps): React.ReactElement {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const [activeTab, setActiveTab] = useState<SubTab>("skills");
 
   const ctrlRef = useRef<ReturnType<typeof createSkillsController> | null>(null);
 
@@ -265,68 +290,108 @@ export function SkillsPanel({ visible, app, onClose }: SkillsPanelProps): React.
       <View style={styles.container}>
         <View style={styles.header}>
           <View style={styles.headerLeft}>
-            <Text style={styles.headerTitle}>Skills</Text>
-            <Text style={styles.countBadge}>{installed.length}</Text>
+            <Text style={styles.headerTitle}>Capabilities</Text>
+            {activeTab === "skills" && <Text style={styles.countBadge}>{installed.length}</Text>}
           </View>
           <TouchableOpacity onPress={onClose} activeOpacity={0.7}>
             <Text style={styles.closeBtn}>Done</Text>
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-          {registryUnavailable && (
-            <Text style={styles.emptyText}>Skills storage is starting up…</Text>
-          )}
-
-          {/* Installed section */}
-          <Text style={styles.sectionHeader}>INSTALLED</Text>
-          {state.loading && installed.length === 0 ? (
-            <View style={styles.loadingRow}>
-              <ActivityIndicator color={colors.textMuted} />
-            </View>
-          ) : installed.length === 0 ? (
-            <Text style={styles.emptyText}>
-              No skills installed yet. Browse and install one below.
+        {/* Sub-tab bar — Skills + Connections, mirrors the desktop +
+            web pattern. Skills active by default. */}
+        <View style={styles.subTabBar}>
+          <TouchableOpacity
+            style={[styles.subTab, activeTab === "skills" && styles.subTabActive]}
+            onPress={() => setActiveTab("skills")}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.subTabText, activeTab === "skills" && styles.subTabTextActive]}>
+              Skills
             </Text>
-          ) : (
-            <FlatList
-              data={installed}
-              keyExtractor={(item) => item.name}
-              scrollEnabled={false}
-              renderItem={({ item }) => (
-                <InstalledRow
-                  skill={item}
-                  styles={styles}
-                  onToggleEnabled={() => handleEnabledToggle(item)}
-                  onToggleTrusted={() => handleTrustToggle(item)}
-                  onRemove={() => {
-                    handleRemove(item);
-                  }}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.subTab, activeTab === "connections" && styles.subTabActive]}
+            onPress={() => setActiveTab("connections")}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[styles.subTabText, activeTab === "connections" && styles.subTabTextActive]}
+            >
+              Connections
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+          {activeTab === "skills" && (
+            <>
+              {registryUnavailable && (
+                <Text style={styles.emptyText}>Skills storage is starting up…</Text>
+              )}
+
+              {/* Installed section */}
+              <Text style={styles.sectionHeader}>INSTALLED</Text>
+              {state.loading && installed.length === 0 ? (
+                <View style={styles.loadingRow}>
+                  <ActivityIndicator color={colors.textMuted} />
+                </View>
+              ) : installed.length === 0 ? (
+                <Text style={styles.emptyText}>
+                  No skills installed yet. Browse and install one below.
+                </Text>
+              ) : (
+                <FlatList
+                  data={installed}
+                  keyExtractor={(item) => item.name}
+                  scrollEnabled={false}
+                  renderItem={({ item }) => (
+                    <InstalledRow
+                      skill={item}
+                      styles={styles}
+                      onToggleEnabled={() => handleEnabledToggle(item)}
+                      onToggleTrusted={() => handleTrustToggle(item)}
+                      onRemove={() => {
+                        handleRemove(item);
+                      }}
+                    />
+                  )}
                 />
               )}
-            />
+
+              {/* Browse section */}
+              <Text style={styles.sectionHeader}>BROWSE</Text>
+              {browseError !== null ? (
+                <Text style={styles.emptyText}>{browseError}</Text>
+              ) : browseEntries.length === 0 ? (
+                <Text style={styles.emptyText}>No published skills on this relay yet.</Text>
+              ) : (
+                <FlatList
+                  data={browseEntries}
+                  keyExtractor={(item) =>
+                    `${item.submitter_motebit_id}/${item.name}@${item.version}`
+                  }
+                  scrollEnabled={false}
+                  renderItem={({ item }) => (
+                    <BrowseRow
+                      entry={item}
+                      styles={styles}
+                      installing={installingName === item.name}
+                      needsConsent={requiresInstallConsent(item.sensitivity)}
+                      onInstall={() => handleInstall(item)}
+                    />
+                  )}
+                />
+              )}
+            </>
           )}
 
-          {/* Browse section */}
-          <Text style={styles.sectionHeader}>BROWSE</Text>
-          {browseError !== null ? (
-            <Text style={styles.emptyText}>{browseError}</Text>
-          ) : browseEntries.length === 0 ? (
-            <Text style={styles.emptyText}>No published skills on this relay yet.</Text>
-          ) : (
-            <FlatList
-              data={browseEntries}
-              keyExtractor={(item) => `${item.submitter_motebit_id}/${item.name}@${item.version}`}
-              scrollEnabled={false}
-              renderItem={({ item }) => (
-                <BrowseRow
-                  entry={item}
-                  styles={styles}
-                  installing={installingName === item.name}
-                  needsConsent={requiresInstallConsent(item.sensitivity)}
-                  onInstall={() => handleInstall(item)}
-                />
-              )}
+          {activeTab === "connections" && (
+            <ToolsTab
+              servers={mcpServers ?? []}
+              onAdd={onAddMcpServer}
+              onRemove={onRemoveMcpServer}
+              onToggleTrust={onToggleMcpTrust}
             />
           )}
         </ScrollView>
@@ -528,6 +593,21 @@ function createStyles(c: ThemeColors) {
       overflow: "hidden",
     },
     closeBtn: { color: c.accent, fontSize: 16, fontWeight: "600" },
+    subTabBar: {
+      flexDirection: "row",
+      paddingHorizontal: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderPrimary,
+    },
+    subTab: {
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      borderBottomWidth: 2,
+      borderBottomColor: "transparent",
+    },
+    subTabActive: { borderBottomColor: c.textPrimary },
+    subTabText: { color: c.textMuted, fontSize: 12 },
+    subTabTextActive: { color: c.textPrimary },
     scroll: { flex: 1 },
     scrollContent: { padding: 16 },
     sectionHeader: {

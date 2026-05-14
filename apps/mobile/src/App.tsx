@@ -53,7 +53,7 @@ import { SettingsModal, deriveInteriorColor } from "./components/SettingsModal";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { SovereignPanel } from "./components/SovereignPanel";
 import { AgentsPanel } from "./components/AgentsPanel";
-import { SkillsPanel } from "./components/SkillsPanel";
+import { CapabilitiesPanel } from "./components/CapabilitiesPanel";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { VoiceIndicator } from "./components/VoiceIndicator";
@@ -145,7 +145,7 @@ export default function App(): React.ReactElement {
   const [controlState] = useState<ControlState>({ kind: "motebit" });
   const [showCredentialsPanel, setShowCredentialsPanel] = useState(false);
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
-  const [showSkillsPanel, setShowSkillsPanel] = useState(false);
+  const [showCapabilitiesPanel, setShowCapabilitiesPanel] = useState(false);
   const [showActivityPanel, setShowActivityPanel] = useState(false);
 
   // Pairing state + handlers live in ./use-pairing.ts — the hook is
@@ -615,7 +615,7 @@ export default function App(): React.ReactElement {
         setShowMemoryPanel,
         setShowGoalsPanel,
         setShowSettings,
-        setShowSkillsPanel,
+        setShowCapabilitiesPanel,
         setShowActivityPanel,
       });
     },
@@ -1155,10 +1155,6 @@ export default function App(): React.ReactElement {
             visible={showSettings}
             app={app.current}
             settings={settings}
-            mcpServers={mcpServers}
-            onAddMcpServer={handleAddMcpServer}
-            onRemoveMcpServer={handleRemoveMcpServer}
-            onToggleMcpTrust={handleToggleMcpTrust}
             onSave={(s, ai) => void handleSettingsSave(s, ai)}
             onClose={() => setShowSettings(false)}
             customHue={settings.appearance.customHue ?? 220}
@@ -1219,10 +1215,14 @@ export default function App(): React.ReactElement {
           onClose={() => setShowAgentsPanel(false)}
         />
 
-        <SkillsPanel
-          visible={showSkillsPanel}
+        <CapabilitiesPanel
+          visible={showCapabilitiesPanel}
           app={app.current}
-          onClose={() => setShowSkillsPanel(false)}
+          onClose={() => setShowCapabilitiesPanel(false)}
+          mcpServers={mcpServers}
+          onAddMcpServer={handleAddMcpServer}
+          onRemoveMcpServer={handleRemoveMcpServer}
+          onToggleMcpTrust={handleToggleMcpTrust}
         />
 
         {/* Pairing Modal */}

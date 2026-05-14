@@ -8,7 +8,11 @@ export { AppearanceTab } from "./AppearanceTab";
 export { IntelligenceTab } from "./IntelligenceTab";
 export { GovernanceTab } from "./GovernanceTab";
 export { IdentityTab } from "./IdentityTab";
-export { ToolsTab } from "./ToolsTab";
+// ToolsTab moved to the Capabilities panel (Connections sub-tab) on
+// 2026-05-13 per docs/doctrine/panel-temporal-registers.md
+// substrate-vs-accumulation. The component file stays under
+// settings/ for source-tree continuity; CapabilitiesPanel imports
+// directly from `./settings/ToolsTab`.
 export {
   TABS,
   PRESET_COLORS,

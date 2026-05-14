@@ -15,7 +15,12 @@
  *                                         (includes the inner OnDeviceSection)
  *   - `./settings/GovernanceTab.tsx`    — operator mode + approval preset + memory
  *   - `./settings/IdentityTab.tsx`      — ID display + copy + rotate key + export
- *   - `./settings/ToolsTab.tsx`         — MCP server list + add form
+ *
+ * MCP server list + add form was lifted to the Capabilities panel
+ * (Connections sub-tab) on 2026-05-13 per
+ * docs/doctrine/panel-temporal-registers.md substrate-vs-accumulation —
+ * accumulative capability sources belong on the capability-primitive
+ * panel, not in Settings.
  *
  * This file stays as `SettingsModal.tsx` for import-stability — every
  * App.tsx reference keeps working unchanged. `deriveInteriorColor` is
@@ -55,7 +60,6 @@ import {
   IntelligenceTab,
   GovernanceTab,
   IdentityTab,
-  ToolsTab,
   deriveInteriorColor,
   useSettingsStyles,
   type Tab,
@@ -70,23 +74,6 @@ interface SettingsModalProps {
   visible: boolean;
   app: MobileApp;
   settings: MobileSettings;
-  mcpServers?: Array<{
-    name: string;
-    url: string;
-    connected: boolean;
-    toolCount: number;
-    trusted: boolean;
-    motebit: boolean;
-    motebitPublicKey?: string;
-  }>;
-  onAddMcpServer?: (
-    url: string,
-    name: string,
-    trusted?: boolean,
-    motebit?: boolean,
-  ) => Promise<void>;
-  onRemoveMcpServer?: (name: string) => Promise<void>;
-  onToggleMcpTrust?: (name: string, trusted: boolean) => Promise<void>;
   onSave: (settings: MobileSettings, aiConfig?: MobileAIConfig) => void;
   onClose: () => void;
   onRequestPin: (mode: "setup" | "verify" | "reset") => void;
@@ -101,10 +88,6 @@ export function SettingsModal({
   visible,
   app,
   settings,
-  mcpServers,
-  onAddMcpServer,
-  onRemoveMcpServer,
-  onToggleMcpTrust,
   onSave,
   onClose,
   onRequestPin,
@@ -389,12 +372,6 @@ export function SettingsModal({
                 onChangeVoice={(patch) => updateDraft({ voice: { ...draft.voice, ...patch } })}
                 onChangeOpenaiKey={setOpenaiKey}
                 onChangeElevenLabsKey={setElevenLabsKey}
-              />
-              <ToolsTab
-                servers={mcpServers ?? []}
-                onAdd={onAddMcpServer}
-                onRemove={onRemoveMcpServer}
-                onToggleTrust={onToggleMcpTrust}
               />
             </>
           )}

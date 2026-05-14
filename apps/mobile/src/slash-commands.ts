@@ -54,7 +54,7 @@ export interface SlashCommandDeps {
   setShowMemoryPanel: (show: boolean) => void;
   setShowGoalsPanel: (show: boolean) => void;
   setShowSettings: (show: boolean) => void;
-  setShowSkillsPanel: (show: boolean) => void;
+  setShowCapabilitiesPanel: (show: boolean) => void;
   setShowActivityPanel: (show: boolean) => void;
 }
 
@@ -69,7 +69,7 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
     setShowMemoryPanel,
     setShowGoalsPanel,
     setShowSettings,
-    setShowSkillsPanel,
+    setShowCapabilitiesPanel,
     setShowActivityPanel,
   } = deps;
 
@@ -473,8 +473,8 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
     case "goals":
       setShowGoalsPanel(true);
       break;
-    case "skills":
-      setShowSkillsPanel(true);
+    case "capabilities":
+      setShowCapabilitiesPanel(true);
       break;
     case "activity":
       setShowActivityPanel(true);
