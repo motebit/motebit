@@ -252,6 +252,127 @@ describe("createGoalsRunner — tick", () => {
   });
 });
 
+describe("createGoalsRunner — budget envelope (tokens axis)", () => {
+  it("addGoal persists budget_tokens and zeroes spent_tokens", () => {
+    const { adapter, stores } = makeAdapter(async () => ({ outcome: "fired" }));
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    const goal = runner.addGoal({
+      prompt: "x",
+      mode: "recurring",
+      cadence: "hourly",
+      budget_tokens: 50_000,
+    });
+    expect(goal.budget_tokens).toBe(50_000);
+    expect(goal.spent_tokens).toBe(0);
+    expect(stores.goals[0]?.budget_tokens).toBe(50_000);
+  });
+
+  it("fired result with tokensUsed accumulates spent_tokens", async () => {
+    const { adapter } = makeAdapter(async () => ({
+      outcome: "fired",
+      responsePreview: "ok",
+      tokensUsed: 7_500,
+    }));
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "x", mode: "recurring", cadence: "hourly", budget_tokens: 50_000 });
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.spent_tokens).toBe(7_500);
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.spent_tokens).toBe(15_000);
+  });
+
+  it("fired without tokensUsed leaves spent_tokens monotonic (no NaN)", async () => {
+    const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "x", mode: "recurring", cadence: "hourly", budget_tokens: 50_000 });
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.spent_tokens).toBe(0);
+  });
+
+  it("crossing the cap on a recurring fire transitions to budget_exhausted", async () => {
+    const { adapter } = makeAdapter(async () => ({
+      outcome: "fired",
+      responsePreview: "ok",
+      tokensUsed: 60_000,
+    }));
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "x", mode: "recurring", cadence: "hourly", budget_tokens: 50_000 });
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.status).toBe("budget_exhausted");
+  });
+
+  it("budget_exhausted goals are skipped by the tick (auto-pause synthesis)", async () => {
+    const fired: string[] = [];
+    const { adapter } = makeAdapter(async (g) => {
+      fired.push(g.goal_id);
+      return { outcome: "fired", tokensUsed: 0 };
+    });
+    const tickHolder: { fn: (() => void) | null } = { fn: null };
+    let nowMs = 0;
+    const runner = createGoalsRunner(adapter, {
+      now: () => nowMs,
+      generateId: () => "g1",
+      setInterval: (h) => {
+        tickHolder.fn = h;
+        return 1 as unknown as ReturnType<typeof setInterval>;
+      },
+      clearInterval: () => {},
+    });
+    const goal = runner.addGoal({
+      prompt: "x",
+      mode: "recurring",
+      cadence: "hourly",
+      budget_tokens: 100,
+    });
+    // Force the goal into budget_exhausted by spending past the cap.
+    runner.setBudgetTokens(goal.goal_id, 0);
+    expect(runner.getState().goals[0]?.status).toBe("budget_exhausted");
+    nowMs = 10_000_000;
+    runner.start();
+    tickHolder.fn?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fired).toHaveLength(0);
+  });
+
+  it("setBudgetTokens raises cap and flips budget_exhausted back to active", () => {
+    const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "x", mode: "recurring", cadence: "hourly", budget_tokens: 100 });
+    // Synthesize exhaustion via setBudgetTokens(0) — same shape as a
+    // real exhausted goal after a high-token fire.
+    runner.setBudgetTokens("g1", 0);
+    expect(runner.getState().goals[0]?.status).toBe("budget_exhausted");
+    runner.setBudgetTokens("g1", 50_000);
+    expect(runner.getState().goals[0]?.status).toBe("active");
+  });
+
+  it("setBudgetTokens(null) clears the cap and returns to active", () => {
+    const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "x", mode: "recurring", cadence: "hourly", budget_tokens: 100 });
+    runner.setBudgetTokens("g1", 0);
+    expect(runner.getState().goals[0]?.status).toBe("budget_exhausted");
+    runner.setBudgetTokens("g1", null);
+    expect(runner.getState().goals[0]?.budget_tokens).toBeNull();
+    expect(runner.getState().goals[0]?.status).toBe("active");
+  });
+
+  it("terminal status (completed/failed) is immune to cap re-evaluation", async () => {
+    const { adapter } = makeAdapter(async () => ({
+      outcome: "fired",
+      responsePreview: "done",
+      tokensUsed: 25,
+    }));
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "x", mode: "once", budget_tokens: 50 });
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.status).toBe("completed");
+    runner.setBudgetTokens("g1", 0);
+    expect(runner.getState().goals[0]?.status).toBe("completed");
+  });
+});
+
 describe("createGoalsRunner — dispose + start/stop", () => {
   it("dispose stops the tick and blocks emissions", () => {
     const clearCalls: unknown[] = [];

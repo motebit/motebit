@@ -66,7 +66,12 @@ export function createWebGoalsRunner(app: WebApp): GoalsRunner {
 
       if (goal.mode === "once") {
         // Once goals use plan-decomposition execution. Web's Goals panel
-        // is the only surface that creates these.
+        // is the only surface that creates these. Plan-mode chunks don't
+        // yet carry token attribution; spent_tokens on once goals is
+        // recorded as 0 (the runner accepts `undefined` as zero), which
+        // means the budget envelope is effectively advisory for once
+        // goals today. Future: thread plan-side token counters through
+        // plan_completed.
         let summary = "";
         let failed = false;
         let failureReason: string | null = null;
@@ -102,21 +107,35 @@ export function createWebGoalsRunner(app: WebApp): GoalsRunner {
         };
       }
 
-      // Recurring goals use single-turn execution.
+      // Recurring goals use single-turn execution. The runtime's
+      // `result` chunk carries `TurnResult.totalTokens` when the
+      // provider reports usage; we forward it to the runner so the
+      // bounded-commitment envelope's `tokens` axis accumulates per
+      // fire and the goal pauses with status="budget_exhausted" when
+      // the cap is crossed (doctrine: panel-temporal-registers.md
+      // §"Bounded commitment is multi-dimensional").
       let accumulated = "";
+      let tokensUsed: number | undefined;
       try {
         for await (const chunk of app.sendMessageStreaming(goal.prompt, undefined, {
           suppressHistory: true,
         })) {
           onChunk?.(chunk);
           if (chunk.type === "text") accumulated += chunk.text;
+          else if (chunk.type === "result" && typeof chunk.result.totalTokens === "number") {
+            tokensUsed = chunk.result.totalTokens;
+          }
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return { outcome: "error", error: msg };
+        return { outcome: "error", error: msg, ...(tokensUsed != null ? { tokensUsed } : {}) };
       }
       const responsePreview = accumulated.trim().slice(0, 160) || null;
-      return { outcome: "fired", responsePreview };
+      return {
+        outcome: "fired",
+        responsePreview,
+        ...(tokensUsed != null ? { tokensUsed } : {}),
+      };
     },
   };
 

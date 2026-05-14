@@ -44,25 +44,6 @@ export interface GatedPanelsAPI {
   closeAll(): void;
 }
 
-/**
- * UI-facing status for the Goals panel, derived from (goal.status, latest
- * run for this goal).
- *
- *   pending   — active, never run
- *   running   — has an in-flight run
- *   completed — terminal success
- *   failed    — terminal failure
- */
-type GoalPanelStatus = "pending" | "running" | "completed" | "failed";
-
-function panelStatus(goal: ScheduledGoal, runs: GoalRunRecord[]): GoalPanelStatus {
-  if (goal.status === "completed") return "completed";
-  if (goal.status === "failed") return "failed";
-  const latest = runs.find((r) => r.goal_id === goal.goal_id);
-  if (latest?.status === "running") return "running";
-  return "pending";
-}
-
 function formatTimeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
   if (seconds < 60) return "just now";
@@ -234,19 +215,38 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   memoryBackdrop.addEventListener("click", closeMemory);
 
   // === Goals Panel (functional) ===
-  // Reads from the shared GoalsRunner in @motebit/panels — shows ALL
-  // user-declared goals regardless of mode. One-shot goals show an
-  // Execute button and stream plan chunks inline; recurring goals show
-  // a cadence badge, countdown, and pause/run-now controls.
+  // Runtime register per docs/doctrine/panel-temporal-registers.md —
+  // cards-as-commitments, status pulses, axis-native budget envelopes.
+  // Each card is a living commitment; click expands per-card detail
+  // (last response, next run, raise budget, pause, remove). Creation
+  // goes through a "Commit goal" modal — the verb names the doctrine.
   const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
   const goalsBackdrop = document.getElementById("goals-backdrop") as HTMLDivElement;
   const goalList = document.getElementById("goal-list") as HTMLDivElement;
   const goalEmpty = document.getElementById("goal-empty") as HTMLDivElement;
-  const goalPromptInput = document.getElementById("goal-prompt") as HTMLTextAreaElement;
-  const goalCadenceSelect = document.getElementById("goal-cadence") as HTMLSelectElement;
-  const goalAddBtn = document.getElementById("goal-add-btn") as HTMLButtonElement;
+  const goalCommitTrigger = document.getElementById("goal-commit-trigger") as HTMLButtonElement;
+  const goalCommitModal = document.getElementById("goal-commit-modal") as HTMLDivElement;
+  const goalCommitBackdrop = document.getElementById(
+    "goal-commit-modal-backdrop",
+  ) as HTMLDivElement;
+  const goalCommitPrompt = document.getElementById("goal-commit-prompt") as HTMLTextAreaElement;
+  const goalCommitCadenceChips = document.getElementById(
+    "goal-commit-cadence-chips",
+  ) as HTMLDivElement;
+  const goalCommitBudgetChips = document.getElementById(
+    "goal-commit-budget-chips",
+  ) as HTMLDivElement;
+  const goalCommitBudgetCustom = document.getElementById(
+    "goal-commit-budget-custom",
+  ) as HTMLInputElement;
+  const goalCommitCancel = document.getElementById("goal-commit-cancel") as HTMLButtonElement;
+  const goalCommitSubmit = document.getElementById("goal-commit-submit") as HTMLButtonElement;
 
   let goalsSubscribed = false;
+  // Per-card expansion is renderer-state, not runner-state: lives in
+  // this Set so the runtime-register card behaves like Reminders /
+  // Focus — tap to reveal the commitment's full body, tap to collapse.
+  const expandedGoalIds = new Set<string>();
 
   function renderPlanChunk(container: HTMLElement, chunk: PlanChunk): void {
     const el = document.createElement("div");
@@ -290,13 +290,31 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       case 604_800_000:
         return "weekly";
       default:
-        return "custom";
+        return goal.mode === "once" ? "once" : "custom";
     }
   }
 
-  // `formatCountdown` was the gated-panels local copy of the same
-  // formatter goals-runner.ts shipped. Both collapsed onto the single
-  // source in @motebit/panels when desktop grew a third consumer.
+  function formatTokens(n: number): string {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}k`;
+    return String(n);
+  }
+
+  // The pulse class drives both color and breathing animation.
+  // Recurring + active = breathing at 0.3Hz (Liquescentia rate, so
+  // the card is medium-coherent with the slab and the creature);
+  // running = faster fire pulse; budget_exhausted = static red with
+  // shadow ring; etc.
+  function pulseClass(goal: ScheduledGoal, runs: GoalRunRecord[]): string {
+    const latestRun = runs.find((r) => r.goal_id === goal.goal_id);
+    if (latestRun?.status === "running") return "running";
+    if (goal.status === "budget_exhausted") return "budget_exhausted";
+    if (goal.status === "paused") return "paused";
+    if (goal.status === "completed") return "completed";
+    if (goal.status === "failed") return "failed";
+    return "active";
+  }
+
   const formatCountdown = formatCountdownUntil;
 
   function renderGoals(): void {
@@ -304,6 +322,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     if (!runner) {
       goalList.innerHTML = "";
       goalEmpty.style.display = "block";
+      goalCommitTrigger.style.display = "none";
       return;
     }
     const state = runner.getState();
@@ -314,102 +333,230 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     goalList.innerHTML = "";
     if (panelGoals.length === 0) {
       goalEmpty.style.display = "block";
+      goalCommitTrigger.textContent = "Commit your first goal";
+      goalCommitTrigger.style.display = "block";
       return;
     }
     goalEmpty.style.display = "none";
+    goalCommitTrigger.textContent = "Commit a goal";
+    goalCommitTrigger.style.display = "block";
 
     const now = Date.now();
 
     for (const goal of panelGoals) {
-      const status = panelStatus(goal, state.runs);
+      const goalStatus = String(goal.status);
+      const isExpanded = expandedGoalIds.has(goal.goal_id);
 
-      const item = document.createElement("div");
-      // sov-list-card carries glass material + lift; goal-item is
-      // preserved for status/cadence/prompt selector hooks.
-      item.className = "sov-list-card goal-item";
+      const card = document.createElement("div");
+      card.className = `goal-card ${goalStatus}${isExpanded ? " expanded" : ""}`;
 
-      const header = document.createElement("div");
-      header.className = "goal-item-header";
+      // Header row: pulse \u00b7 prompt \u00b7 cadence \u00b7 countdown.
+      const headerRow = document.createElement("div");
+      headerRow.className = "goal-card-row";
 
-      const dot = document.createElement("span");
-      dot.className = `goal-status-dot ${status}`;
-      header.appendChild(dot);
+      const pulse = document.createElement("span");
+      pulse.className = `goal-pulse ${pulseClass(goal, state.runs)}`;
+      headerRow.appendChild(pulse);
 
-      if (goal.mode === "recurring") {
-        const badge = document.createElement("span");
-        badge.className = "goal-cadence-badge";
-        badge.textContent = cadenceLabel(goal);
-        header.appendChild(badge);
-      }
+      const promptText = document.createElement("span");
+      promptText.className = "goal-card-prompt";
+      promptText.textContent = goal.prompt;
+      promptText.title = goal.prompt;
+      headerRow.appendChild(promptText);
 
-      const text = document.createElement("span");
-      text.className = "goal-prompt-text";
-      text.textContent = goal.prompt;
-      text.title = goal.prompt;
-      header.appendChild(text);
+      const cadence = document.createElement("span");
+      cadence.className = "goal-card-cadence";
+      cadence.textContent = cadenceLabel(goal);
+      headerRow.appendChild(cadence);
 
       if (goal.mode === "recurring" && typeof goal.next_run_at === "number") {
         const countdown = document.createElement("span");
-        countdown.className = "goal-countdown";
-        countdown.textContent =
-          goal.status === "paused" ? "paused" : formatCountdown(goal.next_run_at, now);
-        header.appendChild(countdown);
+        countdown.className = "goal-card-countdown";
+        if (goal.status === "paused") countdown.textContent = "paused";
+        else if (goal.status === "budget_exhausted") countdown.textContent = "over cap";
+        else countdown.textContent = formatCountdown(goal.next_run_at, now);
+        headerRow.appendChild(countdown);
       }
 
-      const actions = document.createElement("div");
-      actions.className = "goal-actions";
+      card.appendChild(headerRow);
 
-      if (goal.mode === "once" && status === "pending") {
+      // Budget envelope \u2014 axis-native unit is the headline ("12k / 50k
+      // tokens"); cost translation would land as additive disclosure
+      // when computable, never as the headline (per panel-temporal-
+      // registers.md \u00a7"Bounded commitment is multi-dimensional").
+      const cap = goal.budget_tokens;
+      if (cap != null) {
+        const spent = goal.spent_tokens ?? 0;
+        const ratio = cap > 0 ? Math.min(spent / cap, 1.2) : 1;
+        const fillPct = Math.min(ratio * 100, 100);
+        const fillClass = ratio >= 1 ? "over" : ratio >= 0.8 ? "near" : "";
+
+        const budget = document.createElement("div");
+        budget.className = "goal-card-budget";
+
+        const label = document.createElement("div");
+        const exhausted = goal.status === "budget_exhausted";
+        label.className = `goal-card-budget-label${exhausted ? " exhausted" : ""}`;
+        const headline = document.createElement("span");
+        headline.textContent = exhausted
+          ? "Token budget exhausted"
+          : `${formatTokens(spent)} / ${formatTokens(cap)} tokens`;
+        label.appendChild(headline);
+        if (!exhausted && cap > 0) {
+          const ratioSpan = document.createElement("span");
+          ratioSpan.textContent = `${Math.round((spent / cap) * 100)}%`;
+          label.appendChild(ratioSpan);
+        }
+        budget.appendChild(label);
+
+        const bar = document.createElement("div");
+        bar.className = "goal-card-budget-bar";
+        const fill = document.createElement("div");
+        fill.className = `goal-card-budget-fill ${fillClass}`.trim();
+        fill.style.width = `${fillPct}%`;
+        bar.appendChild(fill);
+        budget.appendChild(bar);
+
+        card.appendChild(budget);
+      }
+
+      // Expanded detail block \u2014 preview + meta + actions + step trace.
+      const expand = document.createElement("div");
+      expand.className = "goal-card-expand";
+      const expandInner = document.createElement("div");
+      expandInner.className = "goal-card-expand-inner";
+
+      if (goal.last_response_preview != null && goal.last_response_preview !== "") {
+        const preview = document.createElement("div");
+        preview.className = "goal-card-expand-preview";
+        preview.textContent = goal.last_response_preview;
+        expandInner.appendChild(preview);
+      } else if (goal.last_error != null && goal.last_error !== "") {
+        const errPreview = document.createElement("div");
+        errPreview.className = "goal-card-expand-preview";
+        errPreview.style.color = "var(--status-error-fg)";
+        errPreview.textContent = `Last error: ${goal.last_error}`;
+        expandInner.appendChild(errPreview);
+      }
+
+      const meta = document.createElement("div");
+      meta.className = "goal-card-expand-meta";
+      if (goal.last_run_at != null) {
+        const ran = document.createElement("span");
+        const seconds = Math.floor((now - goal.last_run_at) / 1000);
+        ran.textContent =
+          seconds < 60
+            ? "ran just now"
+            : seconds < 3600
+              ? `ran ${Math.floor(seconds / 60)}m ago`
+              : seconds < 86400
+                ? `ran ${Math.floor(seconds / 3600)}h ago`
+                : `ran ${Math.floor(seconds / 86400)}d ago`;
+        meta.appendChild(ran);
+      }
+      if (
+        goal.consecutive_failures != null &&
+        goal.consecutive_failures > 0 &&
+        goal.max_retries != null
+      ) {
+        const fails = document.createElement("span");
+        fails.style.color = "var(--status-warning-fg)";
+        fails.textContent = `${goal.consecutive_failures}/${goal.max_retries} failures`;
+        meta.appendChild(fails);
+      }
+      if (meta.children.length > 0) expandInner.appendChild(meta);
+
+      const actions = document.createElement("div");
+      actions.className = "goal-card-expand-actions";
+
+      if (goal.status === "budget_exhausted" && cap != null) {
+        const raiseBtn = document.createElement("button");
+        raiseBtn.className = "raise-cap";
+        raiseBtn.textContent = `Raise to ${formatTokens(cap * 2)}`;
+        raiseBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          runner.setBudgetTokens(goal.goal_id, cap * 2);
+        });
+        actions.appendChild(raiseBtn);
+      }
+
+      if (goal.mode === "once" && (goalStatus === "active" || goalStatus === "paused")) {
         const execBtn = document.createElement("button");
         execBtn.textContent = "Execute";
-        execBtn.addEventListener("click", () => void executeGoal(goal.goal_id));
+        execBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          void executeGoal(goal.goal_id);
+        });
         actions.appendChild(execBtn);
       }
 
-      if (goal.mode === "recurring" && goal.status !== "completed" && goal.status !== "failed") {
+      if (
+        goal.mode === "recurring" &&
+        goal.status !== "completed" &&
+        goal.status !== "failed" &&
+        goal.status !== "budget_exhausted"
+      ) {
         const paused = goal.status === "paused";
         const toggleBtn = document.createElement("button");
         toggleBtn.textContent = paused ? "Resume" : "Pause";
-        toggleBtn.addEventListener("click", () => runner.setPaused(goal.goal_id, !paused));
+        toggleBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          runner.setPaused(goal.goal_id, !paused);
+        });
         actions.appendChild(toggleBtn);
 
         if (!paused) {
           const runBtn = document.createElement("button");
           runBtn.textContent = "Run now";
-          runBtn.addEventListener("click", () => void runner.runNow(goal.goal_id));
+          runBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            void runner.runNow(goal.goal_id);
+          });
           actions.appendChild(runBtn);
         }
       }
 
-      const deleteBtn = document.createElement("button");
-      deleteBtn.textContent = "\u00d7";
-      deleteBtn.className = "goal-delete-btn";
-      let goalConfirmTimer: ReturnType<typeof setTimeout> | null = null;
-      deleteBtn.addEventListener("click", (e) => {
+      const removeBtn = document.createElement("button");
+      removeBtn.className = "remove";
+      removeBtn.textContent = "Remove";
+      let confirmTimer: ReturnType<typeof setTimeout> | null = null;
+      removeBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        if (deleteBtn.classList.contains("confirming")) {
-          if (goalConfirmTimer != null) clearTimeout(goalConfirmTimer);
+        if (removeBtn.classList.contains("confirming")) {
+          if (confirmTimer != null) clearTimeout(confirmTimer);
           runner.removeGoal(goal.goal_id);
         } else {
-          deleteBtn.classList.add("confirming");
-          deleteBtn.textContent = "Delete?";
-          goalConfirmTimer = setTimeout(() => {
-            deleteBtn.classList.remove("confirming");
-            deleteBtn.textContent = "\u00d7";
+          removeBtn.classList.add("confirming");
+          removeBtn.textContent = "Confirm";
+          confirmTimer = setTimeout(() => {
+            removeBtn.classList.remove("confirming");
+            removeBtn.textContent = "Remove";
           }, 3000);
         }
       });
-      actions.appendChild(deleteBtn);
+      actions.appendChild(removeBtn);
 
-      header.appendChild(actions);
-      item.appendChild(header);
+      expandInner.appendChild(actions);
 
       const stepsEl = document.createElement("div");
-      stepsEl.className = "goal-steps";
+      stepsEl.className = "goal-card-steps";
       stepsEl.id = `goal-steps-${goal.goal_id}`;
-      item.appendChild(stepsEl);
+      expandInner.appendChild(stepsEl);
 
-      goalList.appendChild(item);
+      expand.appendChild(expandInner);
+      card.appendChild(expand);
+
+      card.addEventListener("click", () => {
+        if (expandedGoalIds.has(goal.goal_id)) {
+          expandedGoalIds.delete(goal.goal_id);
+          card.classList.remove("expanded");
+        } else {
+          expandedGoalIds.add(goal.goal_id);
+          card.classList.add("expanded");
+        }
+      });
+
+      goalList.appendChild(card);
     }
   }
 
@@ -424,6 +571,10 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     const goalsBtn = document.getElementById("goals-btn");
     goalsBtn?.classList.add("executing");
 
+    // Auto-expand the card so plan chunks land in a visible container.
+    expandedGoalIds.add(goalId);
+    renderGoals();
+
     try {
       await runner.runNow(goalId, (chunk) => {
         const stepsEl = document.getElementById(`goal-steps-${goalId}`);
@@ -437,18 +588,92 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     }
   }
 
-  goalAddBtn.addEventListener("click", () => {
+  // === Commit-goal modal ===
+  // Default selections mirror the chip layout in index.html.
+  let commitCadence: "once" | "hourly" | "daily" | "weekly" = "daily";
+  // `null` = no cap. `0` from the "No cap" chip also maps to null
+  // (the chip's affordance is named for what the user sees, not the
+  // numeric value).
+  let commitBudgetTokens: number | null = 50_000;
+
+  function selectChip(container: HTMLDivElement, value: string, attr: string): void {
+    for (const child of Array.from(container.children)) {
+      const btn = child as HTMLElement;
+      btn.classList.toggle("selected", btn.getAttribute(attr) === value);
+    }
+  }
+
+  goalCommitCadenceChips.addEventListener("click", (e) => {
+    const target = e.target as HTMLElement;
+    const cadence = target.getAttribute("data-cadence");
+    if (!cadence) return;
+    commitCadence = cadence as typeof commitCadence;
+    selectChip(goalCommitCadenceChips, cadence, "data-cadence");
+  });
+
+  goalCommitBudgetChips.addEventListener("click", (e) => {
+    const target = e.target as HTMLElement;
+    const raw = target.getAttribute("data-budget");
+    if (raw == null) return;
+    const n = Number(raw);
+    commitBudgetTokens = n > 0 ? n : null;
+    selectChip(goalCommitBudgetChips, raw, "data-budget");
+    goalCommitBudgetCustom.value = "";
+  });
+
+  goalCommitBudgetCustom.addEventListener("input", () => {
+    const raw = goalCommitBudgetCustom.value.trim();
+    if (raw === "") return;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) {
+      commitBudgetTokens = Math.floor(n);
+      for (const child of Array.from(goalCommitBudgetChips.children)) {
+        (child as HTMLElement).classList.remove("selected");
+      }
+    }
+  });
+
+  function resetCommitModal(): void {
+    goalCommitPrompt.value = "";
+    goalCommitBudgetCustom.value = "";
+    commitCadence = "daily";
+    commitBudgetTokens = 50_000;
+    selectChip(goalCommitCadenceChips, "daily", "data-cadence");
+    selectChip(goalCommitBudgetChips, "50000", "data-budget");
+  }
+
+  function openCommitModal(): void {
+    resetCommitModal();
+    goalCommitModal.classList.add("open");
+    goalCommitBackdrop.classList.add("open");
+    goalCommitPrompt.focus();
+  }
+
+  function closeCommitModal(): void {
+    goalCommitModal.classList.remove("open");
+    goalCommitBackdrop.classList.remove("open");
+  }
+
+  goalCommitTrigger.addEventListener("click", openCommitModal);
+  goalCommitCancel.addEventListener("click", closeCommitModal);
+  goalCommitBackdrop.addEventListener("click", closeCommitModal);
+
+  goalCommitSubmit.addEventListener("click", () => {
     const runner = ctx.app.getGoalsRunner?.();
     if (!runner) return;
-    const prompt = goalPromptInput.value.trim();
+    const prompt = goalCommitPrompt.value.trim();
     if (!prompt) return;
-    const cadence = goalCadenceSelect.value as "once" | "hourly" | "daily" | "weekly";
-    if (cadence === "once") {
-      runner.addGoal({ prompt, mode: "once" });
+    if (commitCadence === "once") {
+      runner.addGoal({ prompt, mode: "once", budget_tokens: commitBudgetTokens });
     } else {
-      runner.addGoal({ prompt, mode: "recurring", cadence });
+      runner.addGoal({
+        prompt,
+        mode: "recurring",
+        cadence: commitCadence,
+        budget_tokens: commitBudgetTokens,
+      });
     }
-    goalPromptInput.value = "";
+    closeCommitModal();
   });
 
   function openGoals(): void {

@@ -3870,6 +3870,427 @@
         text-align: center;
       }
 
+      /* ── Goals runtime-register: cards-as-commitments ──────────────
+         The Goals panel is a runtime-register surface per
+         docs/doctrine/panel-temporal-registers.md §"Apple design-
+         language per register" — Shortcuts/Reminders/Focus shape, not
+         Health/Wallet/Photos. Each card is a live commitment with a
+         status pulse, an axis-native budget envelope (v1: tokens), and
+         per-card mutation affordances. The pulse breathes at the same
+         0.3Hz rate as the Liquescentia substrate, so the card's
+         heartbeat is medium-coherent with the slab and the creature. */
+      .goal-pulse {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        background: var(--text-faint);
+      }
+      .goal-pulse.active {
+        background: #4ade80;
+        animation: goalPulseBreathe 3.33s ease-in-out infinite;
+      }
+      .goal-pulse.running {
+        background: #60a5fa;
+        animation: goalPulseFire 1s ease-in-out infinite;
+      }
+      .goal-pulse.paused {
+        background: #facc15;
+      }
+      .goal-pulse.budget_exhausted {
+        background: #f87171;
+        box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.18);
+      }
+      .goal-pulse.completed {
+        background: #a78bfa;
+      }
+      .goal-pulse.failed {
+        background: #f87171;
+      }
+      @keyframes goalPulseBreathe {
+        0%,
+        100% {
+          opacity: 0.55;
+          transform: scale(0.92);
+        }
+        50% {
+          opacity: 1;
+          transform: scale(1.08);
+        }
+      }
+      @keyframes goalPulseFire {
+        0%,
+        100% {
+          opacity: 0.65;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
+      .goal-card {
+        margin: 8px 8px 0;
+        padding: 10px 12px 12px;
+        border-radius: 12px;
+        background: var(--bg-glass);
+        border: 1px solid var(--border-light);
+        cursor: pointer;
+        transition:
+          background-color 0.15s ease,
+          border-color 0.15s ease;
+      }
+      .goal-card:hover {
+        background: var(--bg-glass-strong);
+        border-color: var(--border-medium);
+      }
+      .goal-card.budget_exhausted {
+        border-color: rgba(248, 113, 113, 0.35);
+      }
+      .goal-card.completed,
+      .goal-card.failed {
+        opacity: 0.7;
+      }
+      .goal-card-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .goal-card-prompt {
+        flex: 1;
+        font-size: 13px;
+        color: var(--text-primary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+      .goal-card-cadence {
+        font-size: 9px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        flex-shrink: 0;
+      }
+      .goal-card-countdown {
+        font-size: 10px;
+        color: var(--text-ghost);
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        flex-shrink: 0;
+      }
+      .goal-card-budget {
+        margin-top: 8px;
+      }
+      .goal-card-budget-label {
+        display: flex;
+        justify-content: space-between;
+        font-size: 10px;
+        color: var(--text-muted);
+        margin-bottom: 4px;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      .goal-card-budget-label.exhausted {
+        color: rgba(248, 113, 113, 0.85);
+      }
+      .goal-card-budget-bar {
+        height: 3px;
+        border-radius: 2px;
+        background: var(--bg-input);
+        overflow: hidden;
+      }
+      .goal-card-budget-fill {
+        height: 100%;
+        background: var(--accent-soft);
+        transition: width 0.3s ease;
+      }
+      .goal-card-budget-fill.near {
+        background: #f59e0b;
+      }
+      .goal-card-budget-fill.over {
+        background: #f87171;
+      }
+      .goal-card-expand {
+        max-height: 0;
+        overflow: hidden;
+        transition: max-height 0.2s ease;
+      }
+      .goal-card.expanded .goal-card-expand {
+        max-height: 480px;
+      }
+      .goal-card-expand-inner {
+        padding-top: 10px;
+        margin-top: 10px;
+        border-top: 1px solid var(--border-light);
+        font-size: 11px;
+        color: var(--text-muted);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .goal-card-expand-preview {
+        color: var(--text-secondary);
+        line-height: 1.4;
+        max-height: 4em;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .goal-card-expand-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        font-size: 10px;
+        color: var(--text-ghost);
+      }
+      .goal-card-expand-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 4px;
+      }
+      .goal-card-expand-actions button {
+        padding: 4px 10px;
+        font-size: 11px;
+        border: 1px solid var(--border-medium);
+        border-radius: 6px;
+        background: var(--bg-input);
+        color: var(--text-secondary);
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .goal-card-expand-actions button:hover {
+        background: var(--bg-btn);
+        color: var(--text-primary);
+      }
+      .goal-card-expand-actions .raise-cap {
+        background: var(--accent-soft);
+        color: #fff;
+        border-color: transparent;
+      }
+      .goal-card-expand-actions .raise-cap:hover {
+        background: var(--accent-hover);
+      }
+      .goal-card-expand-actions .remove {
+        margin-left: auto;
+        color: var(--text-ghost);
+      }
+      .goal-card-expand-actions .remove:hover {
+        color: var(--status-error-fg);
+        border-color: rgba(248, 113, 113, 0.3);
+      }
+      .goal-card-steps {
+        margin-top: 4px;
+        padding-left: 4px;
+        font-size: 11px;
+      }
+      .goal-card-steps .goal-step {
+        padding: 2px 0;
+        color: var(--text-muted);
+      }
+      .goal-card-steps .goal-step.completed {
+        color: var(--status-success-fg);
+      }
+      .goal-card-steps .goal-step.running {
+        color: #60a5fa;
+      }
+      .goal-card-steps .goal-step.failed {
+        color: var(--status-error-fg);
+      }
+
+      /* ── Empty register — calm, commitment-bearing ───────────────── */
+      .goal-empty-commit {
+        margin: 24px 16px;
+        text-align: center;
+      }
+      .goal-empty-commit .goal-pulse {
+        margin: 0 auto 16px;
+        width: 9px;
+        height: 9px;
+        animation: goalPulseBreathe 3.33s ease-in-out infinite;
+        background: var(--accent-soft);
+        opacity: 0.45;
+      }
+      .goal-empty-commit-title {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-bottom: 4px;
+      }
+      .goal-empty-commit-sub {
+        font-size: 11px;
+        color: var(--text-ghost);
+        margin-bottom: 16px;
+      }
+
+      /* ── Commit-goal modal — slide-down sheet ────────────────────── */
+      #goal-commit-trigger {
+        margin: 12px;
+        padding: 10px 16px;
+        border-radius: 999px;
+        border: none;
+        background: var(--accent-soft);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        font-family: inherit;
+        transition: background-color 0.15s ease;
+      }
+      #goal-commit-trigger:hover {
+        background: var(--accent-hover);
+      }
+      #goal-commit-modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 26;
+        background: rgba(0, 0, 0, 0.35);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+      }
+      #goal-commit-modal-backdrop.open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      #goal-commit-modal {
+        position: fixed;
+        top: 0;
+        right: 0;
+        width: 280px;
+        z-index: 27;
+        background: var(--bg-glass-strong);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
+        border-left: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
+        border-bottom-left-radius: 16px;
+        transform: translateY(-100%);
+        transition: transform 0.25s ease;
+        padding: 16px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: var(--text-primary);
+      }
+      #goal-commit-modal.open {
+        transform: translateY(0);
+      }
+      .goal-commit-modal-title {
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+      .goal-commit-modal-sub {
+        font-size: 11px;
+        color: var(--text-ghost);
+        margin-bottom: 14px;
+      }
+      .goal-commit-field {
+        margin-top: 12px;
+      }
+      .goal-commit-field-label {
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 6px;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      .goal-commit-modal textarea {
+        width: 100%;
+        padding: 9px 11px;
+        border: 1px solid var(--border-medium);
+        border-radius: 9px;
+        background: var(--bg-input);
+        color: var(--text-input);
+        font-size: 13px;
+        font-family: "SF Mono", Menlo, Consolas, monospace;
+        outline: none;
+        resize: vertical;
+        min-height: 56px;
+        max-height: 140px;
+        box-sizing: border-box;
+      }
+      .goal-commit-modal textarea:focus {
+        border-color: var(--accent-border);
+      }
+      .goal-commit-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .goal-commit-chip {
+        padding: 5px 10px;
+        font-size: 11px;
+        border: 1px solid var(--border-medium);
+        border-radius: 999px;
+        background: var(--bg-input);
+        color: var(--text-secondary);
+        cursor: pointer;
+        font-family: inherit;
+        transition:
+          border-color 0.15s ease,
+          background-color 0.15s ease;
+      }
+      .goal-commit-chip.selected {
+        border-color: var(--accent-border);
+        background: var(--accent-bg);
+        color: var(--text-primary);
+      }
+      .goal-commit-budget-row {
+        display: flex;
+        gap: 6px;
+        margin-top: 6px;
+      }
+      .goal-commit-budget-input {
+        flex: 1;
+        padding: 7px 10px;
+        border: 1px solid var(--border-medium);
+        border-radius: 8px;
+        background: var(--bg-input);
+        color: var(--text-input);
+        font-size: 12px;
+        outline: none;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        box-sizing: border-box;
+      }
+      .goal-commit-budget-input:focus {
+        border-color: var(--accent-border);
+      }
+      .goal-commit-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 18px;
+      }
+      .goal-commit-actions .commit-btn {
+        flex: 1;
+        padding: 9px 0;
+        border: none;
+        border-radius: 8px;
+        background: var(--accent-soft);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .goal-commit-actions .commit-btn:hover {
+        background: var(--accent-hover);
+      }
+      .goal-commit-actions .commit-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .goal-commit-actions .cancel-btn {
+        padding: 9px 14px;
+        border: 1px solid var(--border-medium);
+        border-radius: 8px;
+        background: transparent;
+        color: var(--text-muted);
+        font-size: 12px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .goal-commit-actions .cancel-btn:hover {
+        color: var(--text-primary);
+      }
+
       /* Goal status indicator */
       #goal-status {
         position: fixed;
@@ -6915,32 +7336,75 @@
         <span class="goals-panel-title">Goals</span>
         <button class="goals-panel-close" id="goals-close-btn">&times;</button>
       </div>
-      <!-- Empty register sits ABOVE goal-list so it lands near the
-           panel title when no goals exist (mirrors the Sovereign Budget
-           pattern — empty registers up top, not floating in the middle
-           of an empty flex area). When goals exist, this hides and the
-           list takes the flex space. -->
-      <div id="goal-empty" class="sov-empty-row">
-        Goals appear here · describe one below to create
+      <!-- Empty register: calm, commitment-bearing language. The
+           runtime register's mood is "living capability" per
+           docs/doctrine/panel-temporal-registers.md — the empty state
+           is READY (per always-already-slab.md inheritance into
+           panel surfaces), not absent. -->
+      <div id="goal-empty" class="goal-empty-commit" style="display: none">
+        <div class="goal-pulse"></div>
+        <div class="goal-empty-commit-title">Commit motebit to a goal</div>
+        <div class="goal-empty-commit-sub">a recurring task · or a one-shot plan</div>
       </div>
-      <div id="goal-list" style="flex: 1; overflow-y: auto; padding: 0"></div>
-      <div class="sov-form-card" style="margin-bottom: 14px">
+      <div id="goal-list"></div>
+      <button id="goal-commit-trigger">Commit a goal</button>
+    </div>
+
+    <!-- Commit-goal modal — slide-down sheet attached to the goals
+         panel's right rail. Doctrine-shaped form: prompt + cadence +
+         budget envelope (v1 axis = tokens). Primary verb is "Commit"
+         because the panel models commitments, not list entries (per
+         panel-temporal-registers.md §"Apple design-language per
+         register" — runtime register, Shortcuts/Reminders/Focus
+         shape). -->
+    <div id="goal-commit-modal-backdrop"></div>
+    <div id="goal-commit-modal" aria-label="Commit a goal">
+      <div class="goal-commit-modal-title">Commit a goal</div>
+      <div class="goal-commit-modal-sub">
+        Declare an outcome · motebit pursues it under your envelope
+      </div>
+
+      <div class="goal-commit-field">
+        <div class="goal-commit-field-label">What</div>
         <textarea
-          id="goal-prompt"
-          class="sov-form-textarea"
-          placeholder="Describe what you want to accomplish…"
-          rows="2"
-          style="resize: none; min-height: 50px"
+          id="goal-commit-prompt"
+          placeholder="Describe the outcome — motebit figures out how"
+          rows="3"
         ></textarea>
-        <select id="goal-cadence" class="sov-form-select">
-          <option value="once">Run once</option>
-          <option value="hourly">Hourly</option>
-          <option value="daily">Daily</option>
-          <option value="weekly">Weekly</option>
-        </select>
-        <button id="goal-add-btn" class="sov-action-pill" style="width: 100%">
-          Create goal
-        </button>
+      </div>
+
+      <div class="goal-commit-field">
+        <div class="goal-commit-field-label">Cadence</div>
+        <div id="goal-commit-cadence-chips" class="goal-commit-chips">
+          <button class="goal-commit-chip" data-cadence="once">Once</button>
+          <button class="goal-commit-chip" data-cadence="hourly">Hourly</button>
+          <button class="goal-commit-chip selected" data-cadence="daily">Daily</button>
+          <button class="goal-commit-chip" data-cadence="weekly">Weekly</button>
+        </div>
+      </div>
+
+      <div class="goal-commit-field">
+        <div class="goal-commit-field-label">Token budget</div>
+        <div id="goal-commit-budget-chips" class="goal-commit-chips">
+          <button class="goal-commit-chip" data-budget="10000">10k</button>
+          <button class="goal-commit-chip selected" data-budget="50000">50k</button>
+          <button class="goal-commit-chip" data-budget="200000">200k</button>
+          <button class="goal-commit-chip" data-budget="0">No cap</button>
+        </div>
+        <div class="goal-commit-budget-row">
+          <input
+            id="goal-commit-budget-custom"
+            type="number"
+            class="goal-commit-budget-input"
+            placeholder="custom (tokens)"
+            min="1"
+          />
+        </div>
+      </div>
+
+      <div class="goal-commit-actions">
+        <button id="goal-commit-cancel" class="cancel-btn">Cancel</button>
+        <button id="goal-commit-submit" class="commit-btn">Commit goal</button>
       </div>
     </div>
 

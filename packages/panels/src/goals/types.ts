@@ -137,8 +137,17 @@ export interface GoalRunRecord {
  * the outcome: `fired` advances next_run_at and writes a success run;
  * `skipped` leaves next_run_at alone (next tick retries); `error` advances
  * next_run_at and records the failure.
+ *
+ * `tokensUsed` rides on `fired` / `error` outcomes so the runner can roll
+ * up `spent_tokens` per goal for the v1 axis of the bounded-commitment
+ * envelope. Omitted means "this fire didn't report token usage" — legacy
+ * adapters, plan-mode goals before plan-side token tracking lands, etc.
+ * The runner adds nothing when omitted (same behavior as zero); the
+ * doctrine cares about monotonic accumulation, not perfect attribution.
+ * See `docs/doctrine/panel-temporal-registers.md` §"Bounded commitment is
+ * multi-dimensional" and `ScheduledGoal.spent_tokens`.
  */
 export type GoalFireResult =
-  | { outcome: "fired"; responsePreview?: string | null }
+  | { outcome: "fired"; responsePreview?: string | null; tokensUsed?: number }
   | { outcome: "skipped" }
-  | { outcome: "error"; error: string };
+  | { outcome: "error"; error: string; tokensUsed?: number };

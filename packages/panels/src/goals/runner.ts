@@ -61,6 +61,14 @@ export interface NewGoalRunnerInput {
   cadence?: "hourly" | "daily" | "weekly" | "custom";
   /** Explicit interval in ms — used when cadence === "custom". */
   interval_ms?: number;
+  /**
+   * v1 axis of the bounded-commitment envelope per
+   * `docs/doctrine/panel-temporal-registers.md` §"Bounded commitment is
+   * multi-dimensional." Token cap on inference work, summed across runs.
+   * `null` or absent = no cap on this axis. Future axes (voice_seconds,
+   * tool_calls, wall_clock_ms, ...) land as additive sibling fields.
+   */
+  budget_tokens?: number | null;
 }
 
 export interface GoalsRunnerDeps {
@@ -77,6 +85,14 @@ export interface GoalsRunner {
   addGoal(input: NewGoalRunnerInput): ScheduledGoal;
   setPaused(goalId: string, paused: boolean): void;
   removeGoal(goalId: string): void;
+  /**
+   * Raise / lower / clear the token cap on a goal. Pass `null` to remove
+   * the cap entirely. Re-evaluates `budget_exhausted` synchronously so a
+   * raise-cap action transitions the goal back to `active` without
+   * waiting for the next tick. Pure local-state mutation; persistence
+   * happens via the adapter's saveGoals on the next emit.
+   */
+  setBudgetTokens(goalId: string, budgetTokens: number | null): void;
   /**
    * Trigger a goal run explicitly. Works for any goal regardless of mode —
    * once goals require this call to execute at all (the background tick
@@ -172,11 +188,49 @@ export function createGoalsRunner(
       // Recurring goals schedule against cadence; once goals require
       // explicit runNow (background tick skips them — Goals-panel UX).
       next_run_at: input.mode === "once" ? undefined : createdAt + interval,
+      // Budget cap on the tokens axis. `null`/omitted = no cap. Defense-
+      // in-depth: zero is a valid cap meaning "no fires," matching the
+      // runtime helper's contract.
+      budget_tokens: input.budget_tokens ?? null,
+      spent_tokens: 0,
     };
     state = { ...state, goals: [...state.goals, goal] };
     persistGoals();
     emit();
     return goal;
+  }
+
+  /**
+   * Inline cap-check on the tokens axis. Mirrors `checkGoalBudget` in
+   * `@motebit/runtime/goals.ts` for the v1 single-axis case; the
+   * runtime helper is the canonical multi-axis primitive for
+   * cli/desktop/mobile schedulers. Inlined here because `@motebit/panels`
+   * cannot import `@motebit/runtime` (sibling L5 BSL — would force a
+   * layer promotion per packages/panels/CLAUDE.md rule 2). When the axis
+   * union grows, extend this helper additively. Re-evaluated every tick
+   * so raising the cap auto-resumes the goal next fire — pause is a
+   * synthesized state, never sticky.
+   */
+  function tokensExhausted(goal: ScheduledGoal): boolean {
+    if (goal.budget_tokens == null) return false;
+    return (goal.spent_tokens ?? 0) >= goal.budget_tokens;
+  }
+
+  function setBudgetTokens(goalId: string, budgetTokens: number | null): void {
+    const goal = state.goals.find((g) => g.goal_id === goalId);
+    if (!goal) return;
+    const next: ScheduledGoal = { ...goal, budget_tokens: budgetTokens };
+    // Re-evaluate the synthesized budget_exhausted state under the new
+    // cap. Raising/clearing pulls the goal back to active; lowering
+    // below current spent pushes it to budget_exhausted. Terminal
+    // (completed/failed) statuses are immune — caps don't reopen them.
+    if (next.status !== "completed" && next.status !== "failed") {
+      next.status = tokensExhausted(next) ? "budget_exhausted" : "active";
+    }
+    const goals = state.goals.map((g) => (g.goal_id === goalId ? next : g));
+    state = { ...state, goals };
+    persistGoals();
+    emit();
   }
 
   function setPaused(goalId: string, paused: boolean): void {
@@ -230,6 +284,16 @@ export function createGoalsRunner(
     });
 
     const patch: Partial<ScheduledGoal> = { last_run_at: finishedAt };
+    // Roll up `spent_tokens` from the fire's reported usage. Adapters
+    // that don't carry token attribution (legacy / plan-mode) report
+    // `undefined`; absent treated as zero so the rollup stays monotonic
+    // without sprinkling nulls. v1 axis only — sibling axes
+    // (voice_seconds, tool_calls) will land additively.
+    const tokensUsed =
+      result.outcome === "fired" || result.outcome === "error" ? (result.tokensUsed ?? 0) : 0;
+    if (tokensUsed > 0) {
+      patch.spent_tokens = (goal.spent_tokens ?? 0) + tokensUsed;
+    }
     if (result.outcome === "fired") {
       patch.last_response_preview = result.responsePreview ?? null;
       patch.last_error = null;
@@ -247,6 +311,19 @@ export function createGoalsRunner(
       }
     }
     // `skipped` leaves next_run_at alone — next tick retries.
+    // After accumulating, re-evaluate the cap. Recurring goals that
+    // just exhausted their token budget transition to budget_exhausted
+    // so the next tick skips them; user raises cap to resume.
+    if (goal.mode === "recurring" && patch.status !== "completed" && patch.status !== "failed") {
+      const projected: ScheduledGoal = {
+        ...goal,
+        ...patch,
+        spent_tokens: patch.spent_tokens ?? goal.spent_tokens ?? 0,
+      };
+      if (tokensExhausted(projected)) {
+        patch.status = "budget_exhausted";
+      }
+    }
     updateGoal(goal.goal_id, patch);
     return result;
   }
@@ -267,11 +344,17 @@ export function createGoalsRunner(
       const t = now();
       // Tick auto-fires only recurring goals. Once goals must be
       // runNow-triggered — see addGoal's next_run_at assignment.
+      //
+      // Budget gate is structural: a recurring goal whose tokens axis
+      // is exhausted stays as status="budget_exhausted" and the tick
+      // skips it. Raising the cap via setBudgetTokens flips the status
+      // back to "active" synchronously and the next tick picks it up.
       const due = state.goals.filter(
         (g) =>
           g.mode === "recurring" &&
           g.status === "active" &&
           g.enabled !== false &&
+          !tokensExhausted(g) &&
           typeof g.next_run_at === "number" &&
           g.next_run_at <= t,
       );
@@ -319,6 +402,7 @@ export function createGoalsRunner(
     subscribe,
     addGoal,
     setPaused,
+    setBudgetTokens,
     removeGoal,
     runNow,
     start,

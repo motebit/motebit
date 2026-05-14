@@ -56,6 +56,15 @@ export interface GoalsFetchAdapter {
   setEnabled(goalId: string, enabled: boolean): Promise<void>;
   removeGoal(goalId: string): Promise<void>;
   /**
+   * Raise / lower / clear the token cap on the goal's bounded-commitment
+   * envelope (v1 axis = `tokens`). `null` removes the cap. Optional so
+   * adapters can stage the rollout — surfaces without `setBudgetTokens`
+   * just hide the raise-cap affordance per `if (ctrl.setBudgetTokens)`.
+   * Once present, daemons re-evaluate the goal's `budget_exhausted`
+   * status against the new cap and the next `listGoals` reflects it.
+   */
+  setBudgetTokens?(goalId: string, budgetTokens: number | null): Promise<void>;
+  /**
    * Trigger an immediate run of a recurring goal, bypassing cadence.
    * Optional — surfaces whose daemon doesn't expose a direct-fire path
    * may omit this. When absent, the controller does not surface
@@ -89,6 +98,14 @@ export interface GoalsController {
   addGoal(input: NewGoalInput): Promise<void>;
   setEnabled(goalId: string, enabled: boolean): Promise<void>;
   removeGoal(goalId: string): Promise<void>;
+  /**
+   * Present when and only when the adapter exposes `setBudgetTokens`.
+   * Routes the cap change through the adapter and refreshes state so
+   * the daemon's re-evaluated `budget_exhausted` status propagates.
+   * UIs surface a "Raise budget" affordance via
+   * `if (ctrl.setBudgetTokens)`.
+   */
+  setBudgetTokens?(goalId: string, budgetTokens: number | null): Promise<void>;
   /**
    * Present when and only when the adapter exposes `runNow`. Triggers
    * an immediate run of the goal, then refreshes state so the new
@@ -174,6 +191,21 @@ export function createGoalsController(adapter: GoalsFetchAdapter): GoalsControll
     }
   }
 
+  async function setBudgetTokensImpl(goalId: string, budgetTokens: number | null): Promise<void> {
+    if (!adapter.setBudgetTokens) return;
+    try {
+      await adapter.setBudgetTokens(goalId, budgetTokens);
+      if (disposed) return;
+      // Refresh so the daemon's re-evaluated status (budget_exhausted →
+      // active when the cap is raised above current spend) propagates.
+      await refresh();
+    } catch (err) {
+      if (!disposed) {
+        patch({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  }
+
   async function runNowImpl(goalId: string): Promise<void> {
     // Call through the object reference (not an extracted local) so
     // adapters that rely on `this` continue to work — the lint rule
@@ -216,8 +248,11 @@ export function createGoalsController(adapter: GoalsFetchAdapter): GoalsControll
     addGoal,
     setEnabled,
     removeGoal,
-    // Surface runNow only if the adapter does. UIs check presence.
+    // Surface runNow / setBudgetTokens only when the adapter does. UIs
+    // check presence to hide the affordance on surfaces that haven't
+    // wired the operation through their daemon yet.
     ...(adapter.runNow ? { runNow: runNowImpl } : {}),
+    ...(adapter.setBudgetTokens ? { setBudgetTokens: setBudgetTokensImpl } : {}),
     dispose,
   };
 }
