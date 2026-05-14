@@ -4120,7 +4120,33 @@
         margin-bottom: 16px;
       }
 
-      /* ── Commit-goal modal — slide-down sheet ────────────────────── */
+      /* ── Goals interior registers — list ↔ create ─────────────────
+         The Goals panel composes two interior registers per
+         docs/doctrine/panel-presentation-modes.md §"What this means
+         for interior register". `register-list` shows cards + the
+         "Commit a goal" CTA. `register-create` replaces the list
+         body in place with the commitment form. No modal surface;
+         the panel itself rotates between registers. */
+      .goal-register-list,
+      .goal-register-create {
+        display: none;
+        flex: 1;
+        min-height: 0;
+        flex-direction: column;
+      }
+      #goals-panel.register-list .goal-register-list {
+        display: flex;
+      }
+      #goals-panel.register-create .goal-register-create {
+        display: flex;
+        padding: 16px;
+        overflow-y: auto;
+      }
+      /* register-list internals: cards scroll, CTA pinned bottom */
+      #goals-panel.register-list #goal-list {
+        flex: 1;
+        overflow-y: auto;
+      }
       #goal-commit-trigger {
         margin: 12px;
         padding: 10px 16px;
@@ -4132,54 +4158,11 @@
         font-weight: 500;
         cursor: pointer;
         font-family: inherit;
+        flex-shrink: 0;
         transition: background-color 0.15s ease;
       }
       #goal-commit-trigger:hover {
         background: var(--accent-hover);
-      }
-      #goal-commit-modal-backdrop {
-        position: fixed;
-        inset: 0;
-        z-index: 26;
-        background: rgba(0, 0, 0, 0.35);
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.2s ease;
-      }
-      #goal-commit-modal-backdrop.open {
-        opacity: 1;
-        pointer-events: auto;
-      }
-      #goal-commit-modal {
-        position: fixed;
-        top: 0;
-        right: 0;
-        width: 280px;
-        z-index: 27;
-        background: var(--bg-glass-strong);
-        backdrop-filter: blur(40px) saturate(1.8);
-        -webkit-backdrop-filter: blur(40px) saturate(1.8);
-        border-left: 1px solid var(--border);
-        border-bottom: 1px solid var(--border);
-        border-bottom-left-radius: 16px;
-        transform: translateY(-100%);
-        transition: transform 0.25s ease;
-        padding: 16px;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        color: var(--text-primary);
-      }
-      #goal-commit-modal.open {
-        transform: translateY(0);
-      }
-      .goal-commit-modal-title {
-        font-size: 14px;
-        font-weight: 600;
-        margin-bottom: 4px;
-      }
-      .goal-commit-modal-sub {
-        font-size: 11px;
-        color: var(--text-ghost);
-        margin-bottom: 14px;
       }
       .goal-commit-field {
         margin-top: 12px;
@@ -7332,79 +7315,79 @@
     </button>
     <div id="goals-backdrop"></div>
     <div id="goals-panel" aria-label="Goals panel">
+      <!-- Goals panel has two interior registers per
+           docs/doctrine/panel-presentation-modes.md §"What this means
+           for interior register": `list` and `create`. The panel
+           toggles `register-list` / `register-create` classes; each
+           register occupies the same panel body. No modal. -->
       <div class="goals-panel-header">
-        <span class="goals-panel-title">Goals</span>
+        <span class="goals-panel-title" id="goals-panel-title">Goals</span>
         <button class="goals-panel-close" id="goals-close-btn">&times;</button>
       </div>
-      <!-- Empty register: calm, commitment-bearing language. The
-           runtime register's mood is "living capability" per
-           docs/doctrine/panel-temporal-registers.md — the empty state
-           is READY (per always-already-slab.md inheritance into
-           panel surfaces), not absent. -->
-      <div id="goal-empty" class="goal-empty-commit" style="display: none">
-        <div class="goal-pulse"></div>
-        <div class="goal-empty-commit-title">Commit motebit to a goal</div>
-        <div class="goal-empty-commit-sub">a recurring task · or a one-shot plan</div>
-      </div>
-      <div id="goal-list"></div>
-      <button id="goal-commit-trigger">Commit a goal</button>
-    </div>
 
-    <!-- Commit-goal modal — slide-down sheet attached to the goals
-         panel's right rail. Doctrine-shaped form: prompt + cadence +
-         budget envelope (v1 axis = tokens). Primary verb is "Commit"
-         because the panel models commitments, not list entries (per
-         panel-temporal-registers.md §"Apple design-language per
-         register" — runtime register, Shortcuts/Reminders/Focus
-         shape). -->
-    <div id="goal-commit-modal-backdrop"></div>
-    <div id="goal-commit-modal" aria-label="Commit a goal">
-      <div class="goal-commit-modal-title">Commit a goal</div>
-      <div class="goal-commit-modal-sub">
-        Declare an outcome · motebit pursues it under your envelope
-      </div>
-
-      <div class="goal-commit-field">
-        <div class="goal-commit-field-label">What</div>
-        <textarea
-          id="goal-commit-prompt"
-          placeholder="Describe the outcome — motebit figures out how"
-          rows="3"
-        ></textarea>
-      </div>
-
-      <div class="goal-commit-field">
-        <div class="goal-commit-field-label">Cadence</div>
-        <div id="goal-commit-cadence-chips" class="goal-commit-chips">
-          <button class="goal-commit-chip" data-cadence="once">Once</button>
-          <button class="goal-commit-chip" data-cadence="hourly">Hourly</button>
-          <button class="goal-commit-chip selected" data-cadence="daily">Daily</button>
-          <button class="goal-commit-chip" data-cadence="weekly">Weekly</button>
+      <!-- list register: empty state OR cards + commit CTA -->
+      <div class="goal-register-list">
+        <!-- Empty register: calm, commitment-bearing language. The
+             runtime register's mood is "living capability" per
+             panel-temporal-registers.md — the empty state is READY
+             (per always-already-slab.md inheritance into panel
+             surfaces), not absent. -->
+        <div id="goal-empty" class="goal-empty-commit" style="display: none">
+          <div class="goal-pulse"></div>
+          <div class="goal-empty-commit-title">Commit motebit to a goal</div>
+          <div class="goal-empty-commit-sub">a recurring task · or a one-shot plan</div>
         </div>
+        <div id="goal-list"></div>
+        <button id="goal-commit-trigger">Commit a goal</button>
       </div>
 
-      <div class="goal-commit-field">
-        <div class="goal-commit-field-label">Token budget</div>
-        <div id="goal-commit-budget-chips" class="goal-commit-chips">
-          <button class="goal-commit-chip" data-budget="10000">10k</button>
-          <button class="goal-commit-chip selected" data-budget="50000">50k</button>
-          <button class="goal-commit-chip" data-budget="200000">200k</button>
-          <button class="goal-commit-chip" data-budget="0">No cap</button>
+      <!-- create register: replaces the list in place. Same panel,
+           same width, same controller. Cancel returns to list. No
+           second panel-shaped surface — modals are unrepresentable
+           per panel-presentation-modes.md. -->
+      <div class="goal-register-create">
+        <div class="goal-commit-field">
+          <div class="goal-commit-field-label">What</div>
+          <textarea
+            id="goal-commit-prompt"
+            placeholder="Describe the outcome — motebit figures out how"
+            rows="3"
+          ></textarea>
         </div>
-        <div class="goal-commit-budget-row">
-          <input
-            id="goal-commit-budget-custom"
-            type="number"
-            class="goal-commit-budget-input"
-            placeholder="custom (tokens)"
-            min="1"
-          />
-        </div>
-      </div>
 
-      <div class="goal-commit-actions">
-        <button id="goal-commit-cancel" class="cancel-btn">Cancel</button>
-        <button id="goal-commit-submit" class="commit-btn">Commit goal</button>
+        <div class="goal-commit-field">
+          <div class="goal-commit-field-label">Cadence</div>
+          <div id="goal-commit-cadence-chips" class="goal-commit-chips">
+            <button class="goal-commit-chip" data-cadence="once">Once</button>
+            <button class="goal-commit-chip" data-cadence="hourly">Hourly</button>
+            <button class="goal-commit-chip selected" data-cadence="daily">Daily</button>
+            <button class="goal-commit-chip" data-cadence="weekly">Weekly</button>
+          </div>
+        </div>
+
+        <div class="goal-commit-field">
+          <div class="goal-commit-field-label">Token budget</div>
+          <div id="goal-commit-budget-chips" class="goal-commit-chips">
+            <button class="goal-commit-chip" data-budget="10000">10k</button>
+            <button class="goal-commit-chip selected" data-budget="50000">50k</button>
+            <button class="goal-commit-chip" data-budget="200000">200k</button>
+            <button class="goal-commit-chip" data-budget="0">No cap</button>
+          </div>
+          <div class="goal-commit-budget-row">
+            <input
+              id="goal-commit-budget-custom"
+              type="number"
+              class="goal-commit-budget-input"
+              placeholder="custom (tokens)"
+              min="1"
+            />
+          </div>
+        </div>
+
+        <div class="goal-commit-actions">
+          <button id="goal-commit-cancel" class="cancel-btn">Cancel</button>
+          <button id="goal-commit-submit" class="commit-btn">Commit goal</button>
+        </div>
       </div>
     </div>
 
