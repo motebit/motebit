@@ -156,3 +156,10 @@ export {
   type SkillInstallConsentRequest,
   type SkillRegistryShape,
 } from "./skills/registry-backed-adapter";
+
+export {
+  SIDE_RAIL_PANELS,
+  type PanelRegister,
+  type PanelPrimitive,
+  type SideRailPanel,
+} from "./registry";
