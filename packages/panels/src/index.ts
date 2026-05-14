@@ -159,7 +159,11 @@ export {
 
 export {
   SIDE_RAIL_PANELS,
+  PANEL_PRESENTATION_AVAILABILITY,
   type PanelRegister,
   type PanelPrimitive,
+  type PanelPresentationMode,
+  type PanelSurface,
+  type IsPresentationAvailable,
   type SideRailPanel,
 } from "./registry";
