@@ -1034,6 +1034,15 @@ export interface GoalOutcome {
   /** Token usage for this run. Sums per goal feed the budget envelope's
    *  `spent_tokens` rollup. `null` on pre-v22 rows (treated as 0). */
   tokens_used: number | null;
+  /** Full artifact bytes for this fire — the `artifact` category from
+   *  `docs/doctrine/goal-results.md` §"The three categories". Stored
+   *  untruncated alongside the 500-char `summary` (which feeds the
+   *  card-meta preview). `null` on failed fires (latest-outcome
+   *  semantic — a fresh failure clears the prior success surface)
+   *  and on pre-v23 rows (treated identically to a failed fire's
+   *  null). Phase-3 sibling: wrapped as `ContentArtifactManifest` at
+   *  fire-time when motebit identity is loaded. */
+  response_full: string | null;
 }
 
 interface GoalRow {
@@ -1063,6 +1072,7 @@ interface GoalOutcomeRow {
   memories_formed: number;
   error_message: string | null;
   tokens_used: number | null;
+  response_full: string | null;
 }
 
 function rowToGoal(row: GoalRow): Goal {
@@ -1095,6 +1105,7 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
     tool_calls_made: row.tool_calls_made,
     memories_formed: row.memories_formed,
     error_message: row.error_message,
+    response_full: row.response_full,
   };
 }
 
@@ -1134,8 +1145,8 @@ export class ExpoGoalStore {
   insertOutcome(outcome: GoalOutcome): void {
     this.db.runSync(
       `INSERT OR REPLACE INTO goal_outcomes
-       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         outcome.outcome_id,
         outcome.goal_id,
@@ -1147,8 +1158,29 @@ export class ExpoGoalStore {
         outcome.memories_formed,
         outcome.error_message,
         outcome.tokens_used,
+        outcome.response_full,
       ],
     );
+  }
+
+  /**
+   * Return the latest outcome row for a goal, regardless of status, or
+   * `null` if none exists. Used by the panels adapter to project
+   * `last_response_preview` and `last_response_full` onto
+   * `ScheduledGoal` for the runtime-register card. Mirrors the
+   * latest-outcome semantic the web runner enforces by clear-on-error:
+   * a failed fire's NULL summary naturally projects as no surfaced
+   * preview, so the most-recent visible signal stays honest. See
+   * `docs/doctrine/goal-results.md` §"The three categories" + the
+   * runner's symmetric clear-on-error in
+   * `packages/panels/src/goals/runner.ts`.
+   */
+  getLatestOutcome(goalId: string): GoalOutcome | null {
+    const row = this.db.getFirstSync<GoalOutcomeRow>(
+      "SELECT * FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT 1",
+      [goalId],
+    );
+    return row ? rowToGoalOutcome(row) : null;
   }
 
   /**

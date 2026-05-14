@@ -189,7 +189,18 @@ CREATE TABLE IF NOT EXISTS goal_outcomes (
   -- Token usage for this run. Sums per goal feed the runtime register's
   -- spent_tokens for the budget envelope; NULL on legacy rows (treated
   -- as 0 by the rollup). tauri-migrations v2 adds the column.
-  tokens_used INTEGER
+  tokens_used INTEGER,
+  -- Full artifact bytes for this fire — the `artifact` category per
+  -- docs/doctrine/goal-results.md §"The three categories." Stored
+  -- untruncated alongside the 500-char `summary` (which feeds the
+  -- executions-panel preview and the panels controller's
+  -- `last_response_preview`). NULL on failed fires (clear-on-error
+  -- semantic) and on pre-v3 rows (treated identically to a failed
+  -- fire's null). Phase-3 sibling commit wraps this as a signed
+  -- `ContentArtifactManifest` (`@motebit/crypto::signContentArtifact`)
+  -- at fire-time when motebit identity is loaded. tauri-migrations v3
+  -- adds the column to existing installs.
+  response_full TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_goal_outcomes_goal ON goal_outcomes (goal_id, ran_at DESC);
 
@@ -723,11 +734,22 @@ fn goals_list(state: State<AppState>, motebit_id: String) -> Result<Vec<JsonValu
     // register can render the budget envelope without a second query.
     // Pre-token-tracking outcome rows (NULL tokens_used) contribute 0 —
     // correct semantic since we don't know what they consumed.
+    // Project the latest outcome's `summary` and `response_full` onto
+    // each goal row so the panels controller can surface
+    // `last_response_preview` and `last_response_full` without a
+    // second query. Doctrine: `docs/doctrine/goal-results.md`
+    // §"The three categories" + the runner's symmetric clear-on-error
+    // (a failed fire's NULL `summary` naturally projects as no preview;
+    // the most-recent visible signal stays honest).
     let mut stmt = db
         .prepare(
             "SELECT g.goal_id, g.prompt, g.interval_ms, g.mode, g.status, g.consecutive_failures, \
                     g.created_at, g.last_run_at, g.budget_tokens, \
-                    COALESCE(SUM(o.tokens_used), 0) AS spent_tokens \
+                    COALESCE(SUM(o.tokens_used), 0) AS spent_tokens, \
+                    (SELECT summary FROM goal_outcomes \
+                       WHERE goal_id = g.goal_id ORDER BY ran_at DESC LIMIT 1) AS latest_summary, \
+                    (SELECT response_full FROM goal_outcomes \
+                       WHERE goal_id = g.goal_id ORDER BY ran_at DESC LIMIT 1) AS latest_response_full \
              FROM goals g \
              LEFT JOIN goal_outcomes o ON o.goal_id = g.goal_id \
              WHERE g.motebit_id = ? \
@@ -768,6 +790,22 @@ fn goals_list(state: State<AppState>, motebit_id: String) -> Result<Vec<JsonValu
                 },
             );
             obj.insert("spent_tokens".into(), JsonValue::Number(row.get::<_, i64>(9)?.into()));
+            let latest_summary: Option<String> = row.get(10)?;
+            obj.insert(
+                "last_response_preview".into(),
+                match latest_summary {
+                    Some(v) => JsonValue::String(v),
+                    None => JsonValue::Null,
+                },
+            );
+            let latest_response_full: Option<String> = row.get(11)?;
+            obj.insert(
+                "last_response_full".into(),
+                match latest_response_full {
+                    Some(v) => JsonValue::String(v),
+                    None => JsonValue::Null,
+                },
+            );
             Ok(JsonValue::Object(obj))
         })
         .map_err(|e| e.to_string())?;

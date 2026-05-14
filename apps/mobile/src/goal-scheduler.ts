@@ -168,14 +168,23 @@ export class MobileGoalScheduler {
             { goal_id: goalId, prompt, mode },
             planId,
           );
-          accumulated += planResult.summary;
+          accumulated += planResult.responseFull;
           if (planResult.suspended) return; // Another approval needed
         }
       }
 
-      // Record outcome
+      // Record outcome — `summary` stays the 500-char executions-panel
+      // preview; `responseFull` is the artifact bytes (full untruncated
+      // text). Per `docs/doctrine/goal-results.md` §"The three
+      // categories" Phase 2.
       const now = Date.now();
-      this.finishGoalSuccess({ goal_id: goalId, prompt, mode }, accumulated.slice(0, 500), now);
+      this.finishGoalSuccess(
+        { goal_id: goalId, prompt, mode },
+        accumulated.slice(0, 500),
+        now,
+        null,
+        accumulated,
+      );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       this.finishGoalFailure({ goal_id: goalId, prompt, mode }, msg, Date.now());
@@ -241,12 +250,24 @@ export class MobileGoalScheduler {
           if (planEngine && loopDeps) {
             const result = await this.executePlanGoal(goal, outcomes);
             if (result.suspended) return; // Waiting for approval
-            this.finishGoalSuccess(goal, result.summary, now, result.tokensUsed);
+            this.finishGoalSuccess(
+              goal,
+              result.summary,
+              now,
+              result.tokensUsed,
+              result.responseFull,
+            );
           } else {
             // Fallback: single-turn streaming
             const result = await this.executeSingleTurnGoal(goal, outcomes, now);
             if (result.suspended) return;
-            this.finishGoalSuccess(goal, result.summary, now, result.tokensUsed);
+            this.finishGoalSuccess(
+              goal,
+              result.summary,
+              now,
+              result.tokensUsed,
+              result.responseFull,
+            );
           }
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -276,7 +297,12 @@ export class MobileGoalScheduler {
       summary: string | null;
       error_message: string | null;
     }>,
-  ): Promise<{ suspended: boolean; summary: string; tokensUsed: number | null }> {
+  ): Promise<{
+    suspended: boolean;
+    summary: string;
+    responseFull: string;
+    tokensUsed: number | null;
+  }> {
     const runtime = this.deps.getRuntime()!;
     const planEngine = this.deps.getPlanEngine()!;
     const loopDeps = runtime.getLoopDeps()!;
@@ -316,7 +342,12 @@ export class MobileGoalScheduler {
     stream: AsyncGenerator<PlanChunk>,
     goal: { goal_id: string; prompt: string; mode: string; budget_tokens?: number | null },
     planId: string,
-  ): Promise<{ suspended: boolean; summary: string; tokensUsed: number | null }> {
+  ): Promise<{
+    suspended: boolean;
+    summary: string;
+    responseFull: string;
+    tokensUsed: number | null;
+  }> {
     let accumulated = "";
 
     for await (const chunk of stream) {
@@ -343,7 +374,12 @@ export class MobileGoalScheduler {
           // Plan-side token attribution lands when plan_completed
           // carries per-step or aggregate token counts; for now the
           // plan-mode goal accumulates spent_tokens=0 (advisory).
-          return { suspended: true, summary: accumulated.slice(0, 500), tokensUsed: null };
+          return {
+            suspended: true,
+            summary: accumulated.slice(0, 500),
+            responseFull: accumulated,
+            tokensUsed: null,
+          };
         }
         case "plan_completed":
         case "plan_failed":
@@ -351,7 +387,12 @@ export class MobileGoalScheduler {
       }
     }
 
-    return { suspended: false, summary: accumulated.slice(0, 500), tokensUsed: null };
+    return {
+      suspended: false,
+      summary: accumulated.slice(0, 500),
+      responseFull: accumulated,
+      tokensUsed: null,
+    };
   }
 
   /** Execute a goal with simple single-turn streaming (fallback). */
@@ -364,7 +405,12 @@ export class MobileGoalScheduler {
       error_message: string | null;
     }>,
     now: number,
-  ): Promise<{ suspended: boolean; summary: string; tokensUsed: number | null }> {
+  ): Promise<{
+    suspended: boolean;
+    summary: string;
+    responseFull: string;
+    tokensUsed: number | null;
+  }> {
     const runtime = this.deps.getRuntime()!;
     let context = `You are executing a scheduled goal.\n\nGoal: ${goal.prompt}`;
     if (outcomes.length > 0) {
@@ -407,11 +453,21 @@ export class MobileGoalScheduler {
           args: chunk.args,
           riskLevel: chunk.risk_level,
         });
-        return { suspended: true, summary: accumulated.slice(0, 500), tokensUsed };
+        return {
+          suspended: true,
+          summary: accumulated.slice(0, 500),
+          responseFull: accumulated,
+          tokensUsed,
+        };
       }
     }
 
-    return { suspended: false, summary: accumulated.slice(0, 500), tokensUsed };
+    return {
+      suspended: false,
+      summary: accumulated.slice(0, 500),
+      responseFull: accumulated,
+      tokensUsed,
+    };
   }
 
   private finishGoalSuccess(
@@ -419,6 +475,7 @@ export class MobileGoalScheduler {
     summary: string,
     now: number,
     tokensUsed: number | null = null,
+    responseFull: string | null = null,
   ): void {
     const goalStore = this.deps.getStorage()?.goalStore;
     if (!goalStore) return;
@@ -438,6 +495,13 @@ export class MobileGoalScheduler {
       memories_formed: 0,
       error_message: null,
       tokens_used: tokensUsed,
+      // Preserve the full artifact bytes per
+      // `docs/doctrine/goal-results.md` §"The three categories". The
+      // `summary` field stays a 500-char executions-panel preview;
+      // `response_full` is the artifact the slab already rendered via
+      // `motebit-runtime.ts` `restItem` and the verifier will sign in
+      // the Phase-3 sibling commit.
+      response_full: responseFull,
     });
 
     if (goal.mode === "once") {
@@ -484,6 +548,13 @@ export class MobileGoalScheduler {
         memories_formed: 0,
         error_message: error,
         tokens_used: null,
+        // Clear-on-error semantic. The runner's latest-outcome
+        // surfacing means a failed fire that follows a successful one
+        // must NOT inherit the prior artifact bytes; an absent
+        // response_full alongside an absent summary is the honest
+        // signal. Matches `packages/panels/src/goals/runner.ts`'s
+        // symmetric clear of `last_response_full` + `last_response_preview`.
+        response_full: null,
       });
     } catch {
       /* non-fatal */

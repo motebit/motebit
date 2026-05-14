@@ -407,4 +407,30 @@ export const MOBILE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE goal_outcomes ADD COLUMN tokens_used INTEGER",
     ],
   },
+  {
+    version: 23,
+    description: "goal_outcomes.response_full — preserve the artifact bytes per goal fire",
+    statements: [
+      // Per `docs/doctrine/goal-results.md` §"The three categories":
+      // every goal fire produces a **commitment** (the goal record), a
+      // **receipt** (signed audit row), and an **artifact** (the
+      // content motebit actually produced). Pre-Phase-3, the artifact
+      // was stored only as a 500-char `summary` on the outcome row;
+      // the full text was generated, surfaced through the slab's
+      // `restItem` (motebit-runtime.ts:1908), and then lost from
+      // durable storage. The `response_full` column closes that gap:
+      // the artifact bytes are now preserved alongside the receipt,
+      // available to (1) the longer card-detail preview the panels
+      // controller projects via `ScheduledGoal.last_response_full`,
+      // (2) the cross-device sync surface, and (3) the
+      // `ContentArtifactManifest` signing path (Phase-3 sibling
+      // commit). NULL on pre-v23 rows — the runner's clear-on-error
+      // semantic treats absence the same as a failed fire's null
+      // summary. Sibling entries: desktop's tauri-migrations v3 lands
+      // the same column shape; persistence (cli) inherits via its
+      // own migration ladder when the cli scheduler grows full-text
+      // preservation.
+      "ALTER TABLE goal_outcomes ADD COLUMN response_full TEXT",
+    ],
+  },
 ];

@@ -77,12 +77,25 @@ function createMobileGoalsAdapter(app: MobileApp): GoalsFetchAdapter {
       // Project the persistence-shaped Goal into the panel's
       // ScheduledGoal shape, summing spent_tokens per goal so the
       // budget envelope renders without a second query.
+      //
+      // Phase 2 of the goal-results arc (`docs/doctrine/goal-results.md`
+      // §"The three categories"): the latest outcome's `summary`
+      // becomes `last_response_preview` (card-meta) and its
+      // `response_full` becomes `last_response_full` (the artifact,
+      // available for the longer card-detail preview today and the
+      // signed `ContentArtifactManifest` path in the Phase-3 sibling
+      // commit). Latest-outcome semantic — a failed fire's NULL
+      // summary projects as absent so the most-recent visible signal
+      // stays honest.
       const goals = store.listGoals(identity.motebitId).map((g): ScheduledGoal => {
         const spent = store.getSpentTokens(g.goal_id);
+        const latest = store.getLatestOutcome(g.goal_id);
         return {
           ...(g as unknown as ScheduledGoal),
           budget_tokens: g.budget_tokens,
           spent_tokens: spent,
+          last_response_preview: latest?.summary ?? null,
+          last_response_full: latest?.response_full ?? null,
         };
       });
       return Promise.resolve(goals);

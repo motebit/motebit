@@ -79,6 +79,20 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
             : undefined;
         const budgetTokens = g.budget_tokens == null ? null : Number(g.budget_tokens);
         const spentTokens = Number(g.spent_tokens) || 0;
+        // Phase 2 of the goal-results arc (`docs/doctrine/goal-results.md`
+        // §"The three categories"): the latest outcome's `summary`
+        // becomes `last_response_preview` (card-meta), its
+        // `response_full` becomes `last_response_full` (the artifact,
+        // available for the longer card-detail preview today and the
+        // signed `ContentArtifactManifest` path in the Phase-3 sibling
+        // commit). `goals_list` joins the latest outcome row in the
+        // SQL so the runner's latest-outcome clear-on-error semantic
+        // (a failed fire's NULL summary projects as absent) holds on
+        // desktop identically to web.
+        const lastResponsePreview =
+          typeof g.last_response_preview === "string" ? g.last_response_preview : null;
+        const lastResponseFull =
+          typeof g.last_response_full === "string" ? g.last_response_full : null;
         return {
           goal_id: String(g.goal_id),
           prompt: ipcString(g.prompt),
@@ -90,6 +104,8 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
           created_at: createdAt,
           budget_tokens: budgetTokens,
           spent_tokens: spentTokens,
+          last_response_preview: lastResponsePreview,
+          last_response_full: lastResponseFull,
         };
       });
     },

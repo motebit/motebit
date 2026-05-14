@@ -365,9 +365,20 @@ export class GoalScheduler {
       });
 
       await invoke<number>("db_execute", {
-        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL)`,
-        params: [outcomeId, goalId, motebitId, now, accumulated.slice(0, 500), toolCallsMade],
+        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, response_full)
+              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?)`,
+        params: [
+          outcomeId,
+          goalId,
+          motebitId,
+          now,
+          accumulated.slice(0, 500),
+          toolCallsMade,
+          // Same artifact-preservation shape as the cadence-driven
+          // path. Approval-resume IS the goal's completed turn — the
+          // accumulated text is the full artifact.
+          accumulated.length > 0 ? accumulated : null,
+        ],
       });
 
       if (mode === "once") {
@@ -558,8 +569,8 @@ export class GoalScheduler {
       });
 
       await invoke<number>("db_execute", {
-        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used)
-              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?)`,
+        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full)
+              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?, ?)`,
         params: [
           runId,
           goal.goal_id,
@@ -568,6 +579,13 @@ export class GoalScheduler {
           result.responseText.slice(0, 500),
           result.toolCallsMade,
           result.tokensUsed ?? null,
+          // Preserve the full artifact bytes per
+          // `docs/doctrine/goal-results.md` §"The three categories".
+          // `summary` (500-char) feeds the executions-panel preview;
+          // `response_full` is the artifact the slab already rendered
+          // via `motebit-runtime.ts` `restItem` and the Phase-3
+          // sibling commit signs as `ContentArtifactManifest`.
+          result.responseText.length > 0 ? result.responseText : null,
         ],
       });
 
