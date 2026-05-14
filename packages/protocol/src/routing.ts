@@ -48,13 +48,26 @@ import type { SensitivityLevel } from "./index.js";
  * Where the HTTP request actually goes. The processor that receives
  * the prompt bytes. Anthropic/OpenAI/Google appear here because they
  * run their own hosted inference; Groq appears here because they
- * host other labs' open-source weights on LPU hardware.
+ * host other labs' open-source weights on LPU hardware. `local-server`
+ * is the on-device case: the request goes to the user's own
+ * inference server (Ollama, LM Studio, llama.cpp, Jan, vLLM,
+ * text-generation-webui — all expose `/v1/chat/completions` via
+ * the OpenAI-compat shim), so the "host" is the user's own
+ * machine. Mirrors the `OnDeviceBackend` value of the same name
+ * in `@motebit/sdk`.
+ *
+ * The proxy NEVER routes to `local-server` — it's the on-device
+ * consumer's host. The proxy's exhaustive switches throw
+ * defensively when they encounter this value, naming the
+ * structural violation rather than silently degrading. Doctrine:
+ * `docs/doctrine/auto-routing-as-protocol-primitive.md` § "PR 3 —
+ * on-device consumer".
  *
  * Closed registry — adding a host is a protocol-level append +
  * `MOTEBIT_CLOUD_ALLOWED_JURISDICTIONS` admission decision +
  * downstream consumer updates.
  */
-export type InferenceHost = "anthropic" | "openai" | "google" | "groq";
+export type InferenceHost = "anthropic" | "openai" | "google" | "groq" | "local-server";
 
 /**
  * Who trained the weights. Anthropic/OpenAI/Google appear here
@@ -65,9 +78,29 @@ export type InferenceHost = "anthropic" | "openai" | "google" | "groq";
  * gpt-oss-120b released as open weights and hosted by Groq). That's
  * structurally correct — same entity can serve different roles.
  *
+ * Mistral / Microsoft / Alibaba added 2026-05-14 alongside the PR 3
+ * on-device consumer landing: Mistral AI trains Mistral models,
+ * Microsoft trains Phi, Alibaba trains Qwen. All three appear as
+ * `lab` in the `ON_DEVICE_MODEL_CATALOG` (`@motebit/policy/on-device-router.ts`)
+ * since the canonical local-server suggested-models list
+ * (`@motebit/sdk::LOCAL_SERVER_SUGGESTED_MODELS`) includes Mistral,
+ * Phi-3, and Qwen2 alongside the existing Meta/Google entries. The
+ * proxy never sees these labs (it doesn't host their models); the
+ * registry expansion is purely consumer-side (the on-device
+ * dispatcher's catalog), which is why the registry's stated semantic
+ * "who trained the weights" generalizes cleanly without protocol-
+ * layer churn.
+ *
  * Closed registry — adding a lab requires a model entry citing it.
  */
-export type ModelLab = "anthropic" | "openai" | "google" | "meta";
+export type ModelLab =
+  | "anthropic"
+  | "openai"
+  | "google"
+  | "meta"
+  | "mistral"
+  | "microsoft"
+  | "alibaba";
 
 /**
  * Legal locus of the host. Reflective of physical/legal reality,

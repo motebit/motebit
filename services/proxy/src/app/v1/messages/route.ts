@@ -104,6 +104,18 @@ function getProviderApiKey(provider: InferenceHost): string | null {
       return process.env.GOOGLE_AI_API_KEY ?? null;
     case "groq":
       return process.env.GROQ_API_KEY ?? null;
+    case "local-server":
+      // On-device host — the user's own inference server, not a
+      // remote endpoint the proxy holds keys for. PR 3 of the
+      // auto-routing arc (`docs/doctrine/auto-routing-as-protocol-
+      // primitive.md`) added `local-server` to `InferenceHost`;
+      // the proxy never routes to this host (on-device consumers
+      // bypass the proxy entirely). Returning null here means any
+      // catalog entry with `host: "local-server"` fails the
+      // "provider key configured" check at `getProviderApiKey(...)`
+      // call sites — defense in depth against a future bug that
+      // smuggles an on-device model into the proxy's catalog.
+      return null;
   }
 }
 
@@ -216,6 +228,19 @@ function buildProviderRequest(
         }),
       };
     }
+
+    case "local-server":
+      // On-device consumer's host — the user's own machine. Proxy
+      // doesn't route here; the on-device runtime invokes the local
+      // server directly. Reaching this arm means a configuration
+      // bug at a call site upstream put an on-device model into the
+      // proxy's catalog — fail-closed throw so the bug surfaces
+      // rather than the proxy silently sending the request to the
+      // wrong endpoint. Doctrine: `docs/doctrine/auto-routing-as-
+      // protocol-primitive.md` § "PR 3 — on-device consumer".
+      throw new Error(
+        "proxy.buildProviderRequest: InferenceHost `local-server` is not routable through the proxy — on-device consumers invoke their own local inference server directly",
+      );
   }
 }
 

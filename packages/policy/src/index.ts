@@ -26,6 +26,11 @@ export {
   extractTaskShape,
 } from "./byok-router.js";
 export {
+  ON_DEVICE_MODEL_CATALOG,
+  buildOnDeviceCatalog,
+  dispatchOnDeviceRouting,
+} from "./on-device-router.js";
+export {
   appendAuditEntry,
   verifyAuditChain,
   getChainHead,
