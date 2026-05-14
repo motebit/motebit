@@ -303,6 +303,14 @@ export function createGoalsRunner(
       // `?? null` keeps the field present-but-null so renderers can
       // fall back to `last_response_preview` cleanly.
       patch.last_response_full = result.responseFull ?? null;
+      // Slab navigational anchor per
+      // `docs/doctrine/goal-results.md` §"The three categories" Phase 3.
+      // Adapters that thread an explicit `runId` to
+      // `sendMessageStreaming` compute the slab item id via
+      // `slabTurnIdForRun(runId)` and return it here; absence
+      // degrades to no "View result" affordance, which is the
+      // correct calm-software fallback — better than a stale link.
+      patch.last_turn_id = result.turnId ?? null;
       patch.last_error = null;
       if (goal.mode === "once") {
         patch.status = "completed";
@@ -318,10 +326,13 @@ export function createGoalsRunner(
       // most-recent visible signal. A subsequent successful fire
       // repopulates `last_response_preview` and clears `last_error`
       // above, so the toggle is symmetric. Same clear-on-error
-      // semantic applies to `last_response_full` (the artifact) so
-      // the most-recent visible signal is consistently the error.
+      // semantic applies to `last_response_full` (the artifact) AND
+      // `last_turn_id` (the slab navigational anchor — a failed
+      // turn's slab item dissolves rather than rests, so a stale
+      // link would 404 the renderer's id lookup).
       patch.last_response_preview = null;
       patch.last_response_full = null;
+      patch.last_turn_id = null;
       if (goal.mode === "once") {
         patch.status = "failed";
       } else {

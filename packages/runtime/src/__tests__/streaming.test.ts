@@ -486,6 +486,48 @@ describe("sendMessageStreaming", () => {
     expect(runtime.currentTypedIntent()).toBeNull();
   });
 
+  it("threads goalContext onto the slab item payload so the resting turn is legible as a goal artifact", async () => {
+    // Phase 3 of the goal-results arc — the runtime ALREADY lands
+    // every turn as a resting `stream`/`mind` slab item via
+    // `projectSlabForTurn` (no separate slab push needed). The
+    // `goalContext` option threads goal annotation onto the payload
+    // so the renderer can mark the slab item as the goal's artifact
+    // and the goal card can resolve `last_turn_id` →
+    // `slabTurnIdForRun(runId)` → this slab item for "View result".
+    // Doctrine: `docs/doctrine/goal-results.md` §"The three categories".
+    const observed: Array<{ phase: string; payload: unknown }> = [];
+    const unsub = runtime.slab.subscribe((state) => {
+      for (const [, item] of state.items) {
+        observed.push({ phase: item.phase, payload: item.payload });
+      }
+    });
+
+    const result = makeTurnResult("ok");
+    mockRunTurnStreaming.mockImplementation(() =>
+      (async function* () {
+        yield { type: "text" as const, text: "ok" };
+        yield { type: "result" as const, result };
+      })(),
+    );
+
+    await collectChunks(
+      runtime.sendMessageStreaming("hello", "run-42", {
+        goalContext: { goal_id: "goal-1", goal_prompt: "the goal's prompt" },
+      }),
+    );
+    unsub();
+
+    // Every emission for this turn's slab item carries goalContext —
+    // the open, the update on text, the rest on success.
+    const goalPayloads = observed
+      .map((o) => o.payload as { goalContext?: { goal_id: string; goal_prompt: string } })
+      .filter((p) => p?.goalContext != null);
+    expect(goalPayloads.length).toBeGreaterThan(0);
+    for (const p of goalPayloads) {
+      expect(p.goalContext).toEqual({ goal_id: "goal-1", goal_prompt: "the goal's prompt" });
+    }
+  });
+
   it("leaves currentTypedIntent null when the surface omits the attestation (proactive path default)", async () => {
     const result = makeTurnResult();
     let observedDuringTurn: ReturnType<typeof runtime.currentTypedIntent> = {

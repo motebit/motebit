@@ -92,6 +92,23 @@ export interface ScheduledGoal {
    *  surfaced "latest outcome" stays honest. */
   last_response_full?: string | null;
 
+  /** Slab turn id of the most recent successful fire — the navigational
+   *  anchor for the goal card's "View result" affordance. The runtime
+   *  already lands every turn as a resting `stream`/`mind` slab item
+   *  via `projectSlabForTurn` (`motebit-runtime.ts:1660` / `:1908`).
+   *  When the adapter passes an explicit `runId` to
+   *  `sendMessageStreaming`, the slab item's id is computable via
+   *  `slabTurnIdForRun(runId)` from `@motebit/runtime`. The adapter
+   *  returns that id on `GoalFireResult.fired.turnId`; the runner
+   *  persists it here; the surface reads it to render the affordance
+   *  and resolve the click. Cleared symmetrically with the artifact
+   *  on error fires — a failed fire's slab item dissolves rather than
+   *  rests, so a stale link would 404 the renderer's id lookup.
+   *  Doctrine: `docs/doctrine/goal-results.md` §"The three
+   *  categories" — Phase 3 makes the existing slab item *legible* as
+   *  the goal's artifact and *navigable* from the commitment card. */
+  last_turn_id?: string | null;
+
   /** Error message from the most recent failed run (runner-populated). */
   last_error?: string | null;
 
@@ -174,6 +191,17 @@ export type GoalFireResult =
        *  signing). Omit when the adapter doesn't (yet) carry the
        *  full content. */
       responseFull?: string;
+      /** Slab turn id for this fire — the navigational anchor the
+       *  goal card uses to open the resting `stream`/`mind` slab item
+       *  the runtime created during the fire. Computed by the
+       *  adapter via `slabTurnIdForRun(runId)` from
+       *  `@motebit/runtime` when the adapter passed an explicit
+       *  `runId` to `sendMessageStreaming`. Runner stores as
+       *  `goal.last_turn_id`. Adapters that don't yet thread the id
+       *  (legacy / plan-mode pre-step-id-attribution) omit; the
+       *  runner falls back to no affordance, which is the correct
+       *  calm-software degradation. */
+      turnId?: string;
       tokensUsed?: number;
     }
   | { outcome: "skipped" }

@@ -469,6 +469,41 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
         const hasMore = sliced.length < trimmed.length;
         preview.textContent = hasMore ? `${sliced}…` : sliced;
         expandInner.appendChild(preview);
+
+        // "View result" — slab navigational anchor per
+        // `docs/doctrine/goal-results.md` §"The three categories"
+        // Phase 3. The runtime already lands every goal fire as a
+        // resting `stream`/`mind` slab item via `projectSlabForTurn`;
+        // this affordance opens the slab so the user can read the
+        // full artifact in its mind-mode embodiment (and, if they
+        // want it persistently visible, pinch it via the existing
+        // Rayleigh-Plateau detach mechanic to a scene satellite per
+        // `docs/doctrine/motebit-computer.md` §"Three end states").
+        // Renders only when the adapter captured the turn id —
+        // pre-Phase-3 fires and plan-mode goals (which create N
+        // slab items, not one) degrade to no affordance, which is
+        // the correct calm-software default. `panel-action-ghost`
+        // is the secondary-affordance vocab (per
+        // `feedback_panel_shared_vocabulary`); primary
+        // `panel-action-pill` stays reserved for "Commit goal".
+        if (goal.last_turn_id != null && goal.last_turn_id !== "") {
+          const viewBtn = document.createElement("button");
+          viewBtn.type = "button";
+          viewBtn.className = "panel-action-ghost goal-card-view-result";
+          viewBtn.textContent = "View result";
+          viewBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            // Calm software: open the slab. The runtime's resting
+            // `stream`/`mind` slab item for this fire is already
+            // there if the session hasn't replaced it; if it has
+            // (e.g., after reload), Phase 4's ContentArtifactManifest
+            // signing will reconstruct it lazily — for now, the open
+            // gesture is honest about taking the user to "where
+            // motebit's outputs live."
+            ctx.app.getRenderer().setSlabVisible?.(true);
+          });
+          expandInner.appendChild(viewBtn);
+        }
       } else if (shortPreview != null && shortPreview !== "") {
         // Backward-compat path: adapter didn't carry `responseFull`.
         // Surface the 160-char preview as before.

@@ -312,12 +312,80 @@ function headRow(glyph: string, label: string): HTMLDivElement {
 
 // ── Per-kind renderers ───────────────────────────────────────────────
 
+interface StreamPayload {
+  readonly text?: string;
+  /** Goal-context annotation per `docs/doctrine/goal-results.md`
+   *  §"The three categories". Threaded by `sendMessageStreaming`'s
+   *  `goalContext` option through `projectSlabForTurn`'s payload so
+   *  the slab item is *legible* as the goal's artifact. Absent on
+   *  normal user turns. */
+  readonly goalContext?: { readonly goal_id: string; readonly goal_prompt: string };
+}
+
+function renderGoalContextChrome(goalPrompt: string): HTMLElement {
+  // Minimal chrome row: the small mark naming the slab item as a
+  // goal artifact, followed by the goal's prompt as a faint
+  // subtitle. Calm-software register — non-interactive, no
+  // navigation; the goal *card* in the Goals panel owns the
+  // commitment surface, and the slab item simply notes its origin.
+  const chrome = document.createElement("div");
+  chrome.className = "slab-item-goal-chrome";
+  chrome.style.display = "flex";
+  chrome.style.alignItems = "center";
+  chrome.style.gap = "8px";
+  chrome.style.padding = "6px 14px 0";
+  chrome.style.fontSize = "10.5px";
+  chrome.style.letterSpacing = "0.06em";
+  chrome.style.textTransform = "uppercase";
+  chrome.style.fontWeight = "600";
+  chrome.style.color = "rgba(55, 72, 110, 0.7)";
+
+  const mark = document.createElement("span");
+  mark.textContent = "from goal";
+  mark.style.flex = "0 0 auto";
+  chrome.appendChild(mark);
+
+  const sep = document.createElement("span");
+  sep.textContent = "·";
+  sep.style.opacity = "0.5";
+  sep.style.flex = "0 0 auto";
+  chrome.appendChild(sep);
+
+  const prompt = document.createElement("span");
+  prompt.className = "slab-item-goal-prompt";
+  prompt.textContent = goalPrompt;
+  prompt.style.flex = "1 1 auto";
+  prompt.style.overflow = "hidden";
+  prompt.style.textOverflow = "ellipsis";
+  prompt.style.whiteSpace = "nowrap";
+  prompt.style.textTransform = "none";
+  prompt.style.letterSpacing = "0";
+  prompt.style.fontWeight = "400";
+  prompt.style.color = "rgba(55, 72, 110, 0.82)";
+  chrome.appendChild(prompt);
+
+  return chrome;
+}
+
 function renderStream(item: SlabItem): HTMLElement {
   const card = baseCard();
   card.classList.add("slab-item-stream");
   // Stream is the motebit's response — a document view, not a status
   // chip. No URL bar or prompt chrome; clean rendered prose fills
   // the window like a reader view.
+  //
+  // Phase 3 of the goal-results arc: when the payload carries
+  // `goalContext`, prepend a tiny "from goal · <prompt>" chrome row
+  // so the resting slab item reads as the goal's artifact rather
+  // than an anonymous turn. The runtime threads this annotation
+  // through `projectSlabForTurn`'s payload at fire-time; the chrome
+  // is purely informational and does not alter the slab item's
+  // kind / mode / lifecycle.
+  const payload = item.payload as StreamPayload | null;
+  if (payload?.goalContext && typeof payload.goalContext.goal_prompt === "string") {
+    card.classList.add("slab-item-stream-goal");
+    card.appendChild(renderGoalContextChrome(payload.goalContext.goal_prompt));
+  }
   const body = cardBody();
   body.style.padding = "14px 16px";
   const text = document.createElement("div");
@@ -328,7 +396,6 @@ function renderStream(item: SlabItem): HTMLElement {
   text.style.maxHeight = "260px";
   text.style.overflow = "auto";
   text.style.wordBreak = "break-word";
-  const payload = item.payload as { text?: string } | null;
   text.innerHTML = renderStreamMarkdown(payload?.text ?? "");
   body.appendChild(text);
   card.appendChild(body);
@@ -337,7 +404,7 @@ function renderStream(item: SlabItem): HTMLElement {
 
 function updateStream(item: SlabItem, element: HTMLElement): void {
   const text = element.querySelector(".slab-item-text");
-  const payload = item.payload as { text?: string } | null;
+  const payload = item.payload as StreamPayload | null;
   if (text instanceof HTMLElement) {
     // Preserve scroll position if the user has scrolled up to read;
     // stick to the bottom when they're already at the bottom. This
@@ -346,6 +413,21 @@ function updateStream(item: SlabItem, element: HTMLElement): void {
     const atBottom = text.scrollTop + text.clientHeight >= text.scrollHeight - 8;
     text.innerHTML = renderStreamMarkdown(payload?.text ?? "");
     if (atBottom) text.scrollTop = text.scrollHeight;
+  }
+  // Goal-context chrome: present on every payload variant for a
+  // given turn (it's threaded through open/update/rest); the renderer
+  // is idempotent — if the chrome already exists, leave it alone;
+  // if it doesn't yet (item opened pre-Phase-3 path / payload
+  // changed shape mid-turn), mount it now. The prompt text is
+  // immutable per turn, so no update churn.
+  if (payload?.goalContext && typeof payload.goalContext.goal_prompt === "string") {
+    if (!element.querySelector(".slab-item-goal-chrome")) {
+      element.classList.add("slab-item-stream-goal");
+      element.insertBefore(
+        renderGoalContextChrome(payload.goalContext.goal_prompt),
+        element.firstChild,
+      );
+    }
   }
 }
 

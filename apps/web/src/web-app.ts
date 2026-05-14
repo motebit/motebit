@@ -1614,6 +1614,10 @@ export class WebApp {
       delegationScope?: string;
       suppressHistory?: boolean;
       userActionAttestation?: import("@motebit/sdk").UserActionAttestation;
+      /** See `MotebitRuntime.sendMessageStreaming` — goal fires
+       *  thread this so the resting slab item is *legible* as the
+       *  goal's artifact per `docs/doctrine/goal-results.md`. */
+      goalContext?: { goal_id: string; goal_prompt: string };
     },
   ): AsyncGenerator<StreamChunk> {
     if (!this.runtime) throw new Error("Runtime not initialized");

@@ -277,6 +277,56 @@ describe("createGoalsRunner — runNow + fire reconciliation", () => {
     expect(after?.last_response_full).toBeNull();
   });
 
+  it("fired with turnId persists last_turn_id (slab navigational anchor)", async () => {
+    // Phase 3 of the goal-results arc: the runtime already lands every
+    // goal fire as a resting `stream`/`mind` slab item via
+    // `projectSlabForTurn`. Adapters compute the slab item's id via
+    // `slabTurnIdForRun(runId)` and pass it back as `turnId` on the
+    // fire result so the card can render a "View result" affordance
+    // that opens / scrolls to that slab item. The runner persists it
+    // on the goal record.
+    const { adapter } = makeAdapter(async () => ({
+      outcome: "fired",
+      responsePreview: "preview",
+      responseFull: "full artifact",
+      turnId: "slab-turn-abc-123",
+    }));
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.last_turn_id).toBe("slab-turn-abc-123");
+  });
+
+  it("error clears last_turn_id symmetrically (stale anchor would 404 the renderer)", async () => {
+    // The slab navigational anchor obeys the same latest-outcome
+    // semantic as the preview + artifact: a failed turn's slab item
+    // dissolves rather than rests, so a stale `last_turn_id` would
+    // resolve to a missing item in the renderer's id lookup. Clear
+    // symmetrically so the card simply hides the affordance instead.
+    let nextResult: GoalFireResult = {
+      outcome: "fired",
+      responsePreview: "preview",
+      responseFull: "full",
+      turnId: "slab-turn-xyz-789",
+    };
+    const adapter = {
+      loadGoals: (): ScheduledGoal[] => [],
+      saveGoals: (): void => {},
+      loadRuns: (): GoalRunRecord[] => [],
+      saveRuns: (): void => {},
+      fire: async (): Promise<GoalFireResult> => nextResult,
+    };
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.last_turn_id).toBe("slab-turn-xyz-789");
+
+    nextResult = { outcome: "error", error: "boom" };
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.last_turn_id).toBeNull();
+  });
+
   it("skipped: next_run_at unchanged (retried on next tick)", async () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "skipped" }));
     let n = 100;

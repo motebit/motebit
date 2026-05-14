@@ -22,6 +22,7 @@ import {
   type GoalsRunnerAdapter,
   type ScheduledGoal,
 } from "@motebit/panels";
+import { slabTurnIdForRun } from "@motebit/runtime";
 
 import type { WebApp } from "./web-app";
 
@@ -119,14 +120,23 @@ export function createWebGoalsRunner(app: WebApp): GoalsRunner {
       // `responsePreview` (160-char card-meta truncation) AND
       // `responseFull` (untruncated artifact content) so the runner
       // can preserve the artifact per `docs/doctrine/goal-results.md`
-      // §"The three categories". Phase 3 will wrap `responseFull` as
-      // a signed `ContentArtifactManifest` and route to the slab as
-      // a mind-mode item.
+      // §"The three categories".
+      //
+      // Phase 3 (sibling commit) — slab legibility + navigation:
+      // generate an explicit `runId` so the slab item the runtime
+      // opens at `projectSlabForTurn` carries a predictable id; pass
+      // `goalContext` so that slab item is *legible* as the goal's
+      // artifact (renderer reads `payload.goalContext`); return
+      // `turnId` so the runner persists `last_turn_id` and the goal
+      // card can render a "View result" affordance that resolves
+      // back to this slab item.
+      const runId = crypto.randomUUID();
       let accumulated = "";
       let tokensUsed: number | undefined;
       try {
-        for await (const chunk of app.sendMessageStreaming(goal.prompt, undefined, {
+        for await (const chunk of app.sendMessageStreaming(goal.prompt, runId, {
           suppressHistory: true,
+          goalContext: { goal_id: goal.goal_id, goal_prompt: goal.prompt },
         })) {
           onChunk?.(chunk);
           if (chunk.type === "text") accumulated += chunk.text;
@@ -144,6 +154,13 @@ export function createWebGoalsRunner(app: WebApp): GoalsRunner {
         outcome: "fired",
         responsePreview,
         ...(trimmed.length > 0 ? { responseFull: trimmed } : {}),
+        // Slab navigational anchor — the runtime's projectSlabForTurn
+        // opens / updates / rests a slab item with this exact id.
+        // Stays on the slab as a `resting` `stream`/`mind` item the
+        // user can review (or detach via the existing Rayleigh-Plateau
+        // pinch mechanic per docs/doctrine/motebit-computer.md
+        // §"Three end states") long after the fire completes.
+        turnId: slabTurnIdForRun(runId),
         ...(tokensUsed != null ? { tokensUsed } : {}),
       };
     },

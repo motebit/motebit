@@ -258,6 +258,7 @@ export {
   MotebitRuntime,
   SovereignTierRequiredError,
   DropTargetGovernanceRequiredError,
+  slabTurnIdForRun,
 } from "./motebit-runtime.js";
 
 // === Activity Tracking (Ring 1) ===

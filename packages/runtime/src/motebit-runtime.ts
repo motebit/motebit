@@ -132,6 +132,24 @@ export class DropTargetGovernanceRequiredError extends Error {
     this.name = "DropTargetGovernanceRequiredError";
   }
 }
+
+/**
+ * Slab turn id formula — single source of truth for the wire shape
+ * `slab-turn-${runId}`. Used both by `projectSlabForTurn`'s
+ * `slab.openItem` call site and by adapters (goal fires today, peer
+ * delegation receipts tomorrow) that need to navigate to a resting
+ * slab item after the turn ends. Centralizing the template stops a
+ * future rename from silently breaking surface-side navigation.
+ *
+ * Doctrine: `docs/doctrine/goal-results.md` §"The three categories"
+ * — the resting `stream`/`mind` slab item is the today-render of a
+ * goal artifact; the card's "View result" affordance resolves via
+ * this id.
+ */
+export function slabTurnIdForRun(runId: string): string {
+  return `slab-turn-${runId}`;
+}
+
 import { EventStore } from "@motebit/event-log";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import {
@@ -1617,9 +1635,16 @@ export class MotebitRuntime {
    * while side-effecting `this.slab` calls so surfaces see the
    * motebit's work materialize on the liquid-glass plane. See
    * `docs/doctrine/motebit-computer.md` for the item kinds and end
-   * states. The method is architected as a projection wrapper rather
-   * than inline emission in `sendMessageStreaming` / `generateActivation`
-   * because:
+   * states.
+   *
+   * Slab turn id formula is `slab-turn-${runId}` — adapters that
+   * want to navigate to the resting slab item AFTER the turn ends
+   * (goal cards' "View result" affordance, history replay, peer
+   * delegation receipts referencing a prior turn) compute the same
+   * id via the exported `slabTurnIdForRun` helper so the wire shape
+   * stays single-sourced. The method is architected as a projection
+   * wrapper rather than inline emission in `sendMessageStreaming` /
+   * `generateActivation` because:
    *
    *   - The two callers (user turn, activation turn) have identical
    *     slab semantics — one implementation, two call sites.
@@ -1651,12 +1676,25 @@ export class MotebitRuntime {
    */
   private async *projectSlabForTurn(
     stream: AsyncGenerator<StreamChunk>,
-    options: { turnId: string; runId?: string; activationOnly?: boolean },
+    options: {
+      turnId: string;
+      runId?: string;
+      activationOnly?: boolean;
+      /**
+       * Goal-context annotation, threaded from
+       * `sendMessageStreaming`'s `goalContext` option. When present,
+       * the slab item's payload carries `goalContext` so the
+       * renderer can mark the item as the goal's artifact and the
+       * goal card can resolve `last_turn_id` → this item. Doctrine:
+       * `docs/doctrine/goal-results.md` §"The three categories".
+       */
+      goalContext?: { goal_id: string; goal_prompt: string };
+    },
   ): AsyncGenerator<StreamChunk> {
-    const { turnId, runId, activationOnly } = options;
+    const { turnId, runId, activationOnly, goalContext } = options;
     const basePayload = activationOnly
-      ? { text: "", runId, activationOnly: true as const }
-      : { text: "", runId };
+      ? { text: "", runId, activationOnly: true as const, ...(goalContext ? { goalContext } : {}) }
+      : { text: "", runId, ...(goalContext ? { goalContext } : {}) };
     this.slab.openItem({ id: turnId, kind: "stream", payload: basePayload });
 
     let accumulatedText = "";
@@ -1669,8 +1707,13 @@ export class MotebitRuntime {
         if (chunk.type === "text") {
           accumulatedText += chunk.text;
           const updatePayload = activationOnly
-            ? { text: accumulatedText, runId, activationOnly: true as const }
-            : { text: accumulatedText, runId };
+            ? {
+                text: accumulatedText,
+                runId,
+                activationOnly: true as const,
+                ...(goalContext ? { goalContext } : {}),
+              }
+            : { text: accumulatedText, runId, ...(goalContext ? { goalContext } : {}) };
           this.slab.updateItem(turnId, updatePayload);
         } else if (chunk.type === "delegation_start") {
           // Delegation to a peer motebit — doctrine (motebit-computer.md
@@ -1903,8 +1946,13 @@ export class MotebitRuntime {
       // still dissolve — there's nothing to hold.
       if (outcome.kind === "completed") {
         const restPayload = activationOnly
-          ? { text: accumulatedText, runId, activationOnly: true as const }
-          : { text: accumulatedText, runId };
+          ? {
+              text: accumulatedText,
+              runId,
+              activationOnly: true as const,
+              ...(goalContext ? { goalContext } : {}),
+            }
+          : { text: accumulatedText, runId, ...(goalContext ? { goalContext } : {}) };
         this.slab.restItem(turnId, restPayload);
       } else {
         this.slab.endItem(turnId, outcome);
@@ -1929,6 +1977,26 @@ export class MotebitRuntime {
        * so they fail closed to the explicit prompt band.
        */
       userActionAttestation?: UserActionAttestation;
+      /**
+       * Annotation that this turn IS a goal fire. Threaded onto the
+       * slab item the runtime opens at `projectSlabForTurn`'s
+       * `slab.openItem` call so the resting `stream`/`mind` slab item
+       * carries goal-context — the renderer can render a "from goal:
+       * …" chrome row, and the goal-card UI can resolve
+       * `last_turn_id` → slab-item navigation.
+       *
+       * Doctrine: `docs/doctrine/goal-results.md` §"The three
+       * categories" — every goal fire produces a commitment (the
+       * card), a receipt (signed audit row), and an artifact (the
+       * content motebit made). The artifact ALREADY lands on the
+       * slab as `restItem(turnId, { text, runId })`; this option
+       * is what makes that slab item *legible* as the goal's
+       * artifact rather than an anonymous turn. No new slab kind /
+       * mode is introduced — `stream`/`mind` stays the canonical
+       * shape per the doctrine's "Doesn't extend SlabItemKind or
+       * EmbodimentMode" non-negotiable.
+       */
+      goalContext?: { goal_id: string; goal_prompt: string };
     },
   ): AsyncGenerator<StreamChunk> {
     // Privacy doctrine gate. See `assertSensitivityPermitsAiCall` /
@@ -2005,14 +2073,18 @@ export class MotebitRuntime {
       });
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();
-      const slabTurnId = `slab-turn-${runId ?? crypto.randomUUID()}`;
+      const slabTurnId = slabTurnIdForRun(runId ?? crypto.randomUUID());
       const processed = this.streaming.processStream(
         this._catchDeferredFormationChunks(stream),
         text,
         runId,
         { suppressHistory: options?.suppressHistory === true },
       );
-      yield* this.projectSlabForTurn(processed, { turnId: slabTurnId, runId });
+      yield* this.projectSlabForTurn(processed, {
+        turnId: slabTurnId,
+        runId,
+        ...(options?.goalContext ? { goalContext: options.goalContext } : {}),
+      });
       // First-conversation guidance fades after a few exchanges
       if (this._isFirstConversation && this.conversation.getHistory().length >= 5) {
         this._isFirstConversation = false;
