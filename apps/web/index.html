@@ -4165,13 +4165,64 @@
         background: var(--accent-bg);
         color: var(--text-primary);
       }
-      .goal-commit-budget-input {
+      /* Budget mode swap — Reminders Date-row pattern. Presets-mode
+         is default (chip row + "Custom amount" link below). Custom-
+         mode replaces the chip row with [← back] + number input.
+         Mutually exclusive: only one mode visible at a time. The
+         field container toggles the `is-custom` class via JS. */
+      .goal-commit-budget-presets {
         display: block;
-        width: 100%;
+      }
+      .goal-commit-budget-custom-mode {
+        display: none;
+      }
+      #goal-commit-budget-field.is-custom .goal-commit-budget-presets {
+        display: none;
+      }
+      #goal-commit-budget-field.is-custom .goal-commit-budget-custom-mode {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .goal-commit-budget-custom-link {
+        display: inline-block;
         margin-top: 8px;
+        padding: 4px 0;
+        border: none;
+        background: none;
+        color: var(--accent);
+        font-size: 11px;
+        font-family: inherit;
+        cursor: pointer;
+        transition: color 0.15s ease;
+      }
+      .goal-commit-budget-custom-link:hover {
+        color: var(--accent-hover);
+      }
+      .goal-commit-budget-back {
+        flex-shrink: 0;
+        width: 30px;
+        height: 32px;
+        border: 1px solid var(--border-medium);
+        border-radius: 8px;
+        background: var(--bg-input);
+        color: var(--text-secondary);
+        font-size: 14px;
+        cursor: pointer;
+        font-family: inherit;
+        transition:
+          color 0.15s ease,
+          background-color 0.15s ease;
+      }
+      .goal-commit-budget-back:hover {
+        color: var(--text-primary);
+        background: var(--bg-btn);
+      }
+      .goal-commit-budget-input {
+        flex: 1;
         padding: 8px 11px;
         border: 1px solid var(--border-input);
-        border-radius: 10px;
+        border-radius: 8px;
         background: var(--bg-input);
         color: var(--text-input);
         font-size: 12px;
@@ -7280,21 +7331,46 @@
           </div>
         </div>
 
-        <div class="goal-commit-field">
+        <!-- Token budget — preset chips with a Reminders-pattern
+             "Custom amount" affordance that swaps the chip row for a
+             number input + back. Mutually exclusive states; the
+             custom input never coexists with the chip row so there's
+             no two-control ambiguity (no "is the typed value or the
+             selected chip the active cap?" question). -->
+        <div class="goal-commit-field" id="goal-commit-budget-field">
           <div class="goal-commit-field-label">Token budget</div>
-          <div id="goal-commit-budget-chips" class="goal-commit-chips">
-            <button class="goal-commit-chip" data-budget="10000">10k</button>
-            <button class="goal-commit-chip selected" data-budget="50000">50k</button>
-            <button class="goal-commit-chip" data-budget="200000">200k</button>
-            <button class="goal-commit-chip" data-budget="0">No cap</button>
+          <div class="goal-commit-budget-presets">
+            <div id="goal-commit-budget-chips" class="goal-commit-chips">
+              <button class="goal-commit-chip" data-budget="10000">10k</button>
+              <button class="goal-commit-chip selected" data-budget="50000">50k</button>
+              <button class="goal-commit-chip" data-budget="200000">200k</button>
+              <button class="goal-commit-chip" data-budget="0">No cap</button>
+            </div>
+            <button
+              id="goal-commit-budget-custom-toggle"
+              type="button"
+              class="goal-commit-budget-custom-link"
+            >
+              Custom amount
+            </button>
           </div>
-          <input
-            id="goal-commit-budget-custom"
-            type="number"
-            class="goal-commit-budget-input"
-            placeholder="custom (tokens)"
-            min="1"
-          />
+          <div class="goal-commit-budget-custom-mode">
+            <button
+              id="goal-commit-budget-back"
+              type="button"
+              class="goal-commit-budget-back"
+              aria-label="Back to budget presets"
+            >
+              ←
+            </button>
+            <input
+              id="goal-commit-budget-custom"
+              type="number"
+              class="goal-commit-budget-input"
+              placeholder="custom amount (tokens)"
+              min="1"
+            />
+          </div>
         </div>
 
         <button id="goal-commit-submit" class="panel-action-pill" style="width: 100%">

@@ -241,6 +241,15 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   const goalCommitBudgetCustom = document.getElementById(
     "goal-commit-budget-custom",
   ) as HTMLInputElement;
+  const goalCommitBudgetField = document.getElementById(
+    "goal-commit-budget-field",
+  ) as HTMLDivElement;
+  const goalCommitBudgetCustomToggle = document.getElementById(
+    "goal-commit-budget-custom-toggle",
+  ) as HTMLButtonElement;
+  const goalCommitBudgetBack = document.getElementById(
+    "goal-commit-budget-back",
+  ) as HTMLButtonElement;
   const goalCommitSubmit = document.getElementById("goal-commit-submit") as HTMLButtonElement;
 
   let goalsSubscribed = false;
@@ -607,25 +616,48 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     selectChip(goalCommitCadenceChips, cadence, "data-cadence");
   });
 
+  // Snapshot of the last preset selection so "Back" can restore it
+  // when the user cancels out of custom-amount mode. Default matches
+  // the chip flagged `selected` in the initial HTML markup.
+  let lastPresetBudgetTokens: number | null = 50_000;
+
   goalCommitBudgetChips.addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
     const raw = target.getAttribute("data-budget");
     if (raw == null) return;
     const n = Number(raw);
     commitBudgetTokens = n > 0 ? n : null;
+    lastPresetBudgetTokens = commitBudgetTokens;
     selectChip(goalCommitBudgetChips, raw, "data-budget");
+  });
+
+  // Custom-amount mode: swaps the chip row for [← back] + number
+  // input. Mutually exclusive with the presets row — never both
+  // visible at once. Apple Reminders Date-row pattern.
+  goalCommitBudgetCustomToggle.addEventListener("click", () => {
+    goalCommitBudgetField.classList.add("is-custom");
+    goalCommitBudgetCustom.focus();
+  });
+
+  goalCommitBudgetBack.addEventListener("click", () => {
+    goalCommitBudgetField.classList.remove("is-custom");
     goalCommitBudgetCustom.value = "";
+    // Restore the last preset selection: commit value reverts to
+    // whatever chip was last selected (default 50k).
+    commitBudgetTokens = lastPresetBudgetTokens;
   });
 
   goalCommitBudgetCustom.addEventListener("input", () => {
     const raw = goalCommitBudgetCustom.value.trim();
-    if (raw === "") return;
+    if (raw === "") {
+      // Empty input falls back to the last preset so submitting from
+      // an empty custom field still commits a coherent value.
+      commitBudgetTokens = lastPresetBudgetTokens;
+      return;
+    }
     const n = Number(raw);
     if (Number.isFinite(n) && n > 0) {
       commitBudgetTokens = Math.floor(n);
-      for (const child of Array.from(goalCommitBudgetChips.children)) {
-        (child as HTMLElement).classList.remove("selected");
-      }
     }
   });
 
@@ -634,8 +666,10 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     goalCommitBudgetCustom.value = "";
     commitCadence = "daily";
     commitBudgetTokens = 50_000;
+    lastPresetBudgetTokens = 50_000;
     selectChip(goalCommitCadenceChips, "daily", "data-cadence");
     selectChip(goalCommitBudgetChips, "50000", "data-budget");
+    goalCommitBudgetField.classList.remove("is-custom");
   }
 
   goalCommitSubmit.addEventListener("click", () => {
