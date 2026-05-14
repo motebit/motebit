@@ -4096,33 +4096,43 @@
         color: var(--status-error-fg);
       }
 
-      /* ── Goals pane — single-section panel, no section headers ─────
-         Goals has one section (commitments + commit form, tightly
-         coupled); the panel title "Goals" is the section identity.
-         Adding section headers would over-organize a single-purpose
-         surface. Adding a form-card border would wrap a form that has
-         nothing to separate from. Per the sibling-audit lesson in
-         [[feedback_panel_shared_vocabulary]]: use shared panel-*
-         vocabulary classes when the surface earns them; don't apply
-         Sovereign's multi-section structural pattern where the
-         structure isn't required. */
-      #goals-pane {
+      /* ── Goals layout — records + affordance ───────────────────────
+         Cards-area at top (flex:1, scrollable): the semantic home
+         where commitments grow. Form at bottom (flex-shrink:0): the
+         stable mutation affordance that never moves. The Apple
+         pattern across record+affordance surfaces (Reminders / Notes
+         / Mail / Wallet) — records grow from the top, the affordance
+         lives at the bottom. The void in cards-area when empty is
+         meaningful — it's the home future commitments will fill —
+         labeled by the empty caption anchored at its bottom edge,
+         just above the form. */
+      #goal-cards-area {
         flex: 1;
         min-height: 0;
         overflow-y: auto;
-        padding: 18px 0 24px;
+        display: flex;
+        flex-direction: column;
       }
+      /* Empty caption anchors to the bottom of cards-area when it's
+         the only visible child (margin-top: auto in a flex column).
+         When goals exist, goal-list contains cards stacking from the
+         top and #goal-empty is display:none. */
+      #goal-cards-area #goal-empty {
+        margin-top: auto;
+      }
+      /* Form pinned at the bottom of the panel. Padding rhythm + a
+         subtle top border so the form region is visually distinguished
+         from the cards-area above without imposing a heavy chrome. */
       #goal-commit-form {
-        padding: 0 18px;
-      }
-      /* First field in the form gets extra top margin to breathe
-         clear of the empty-row/cards-list above. Subsequent fields
-         use the standard 12px stack rhythm. */
-      #goal-commit-form > .goal-commit-field:first-child {
-        margin-top: 18px;
+        flex-shrink: 0;
+        padding: 14px 18px 18px;
+        border-top: 1px solid var(--border-light);
       }
       .goal-commit-field {
         margin-top: 12px;
+      }
+      .goal-commit-field:first-child {
+        margin-top: 0;
       }
       .goal-commit-field-label {
         font-size: 10px;
@@ -7219,74 +7229,77 @@
     </button>
     <div id="goals-backdrop"></div>
     <div id="goals-panel" aria-label="Goals panel">
-      <!-- Goals panel: top-down sequential sections, mirroring
-           Sovereign's pattern. Section header → records/empty row →
-           next section header → form card. Content flows from the
-           top; calm void naturally lives at the bottom. No
-           bottom-pinning, no flex-stretch, no centered pulse. The
-           panel-* vocabulary that Sovereign / Memory / Agents /
-           Capabilities already share is the runtime-register's
-           shape too — Goals does not need a new pattern. -->
+      <!-- Goals panel: records + affordance shape (Reminders / Notes /
+           Mail / Wallet pattern). Cards-area at the top is the
+           semantic home where commitments live and grow; the form is
+           pinned at the bottom of the panel as the stable mutation
+           affordance. The void in the cards-area when empty isn't
+           accidental — it's the space where future commitments will
+           appear. Empty caption sits at the bottom of cards-area,
+           just above the form, labeling the empty home.
+           panel-* vocabulary used for elements that earn it
+           (panel-empty-row, panel-form-textarea, panel-action-pill);
+           no section headers because the panel is single-section
+           (the panel title is the section identity); no form-card
+           containment because the form has nothing to separate from. -->
       <div class="goals-panel-header">
         <span class="goals-panel-title">Goals</span>
         <button class="goals-panel-close" id="goals-close-btn">&times;</button>
       </div>
 
-      <!-- Single-section panel: no section headers needed (panel title
-           "Goals" is the section identity), no form-card containment
-           (form is the only content, has nothing to separate from).
-           panel-* vocabulary still used for the elements that earn it:
-           panel-empty-row for the empty state, panel-form-textarea for
-           the input, panel-action-pill for the submit. -->
-      <div id="goals-pane">
+      <!-- Cards-area: home where records grow. Scrollable when
+           populated; empty caption anchored to its bottom when not. -->
+      <div id="goal-cards-area">
         <div id="goal-list"></div>
         <div id="goal-empty" class="panel-empty-row">
           Commit motebit to a goal · a recurring task or a one-shot plan
         </div>
+      </div>
 
-        <div id="goal-commit-form">
-          <div class="goal-commit-field">
-            <div class="goal-commit-field-label">What</div>
-            <textarea
-              id="goal-commit-prompt"
-              class="panel-form-textarea"
-              placeholder="Describe the outcome — motebit figures out how"
-              rows="3"
-              style="min-height: 60px; resize: none"
-            ></textarea>
-          </div>
-
-          <div class="goal-commit-field">
-            <div class="goal-commit-field-label">Cadence</div>
-            <div id="goal-commit-cadence-chips" class="goal-commit-chips">
-              <button class="goal-commit-chip" data-cadence="once">Once</button>
-              <button class="goal-commit-chip" data-cadence="hourly">Hourly</button>
-              <button class="goal-commit-chip selected" data-cadence="daily">Daily</button>
-              <button class="goal-commit-chip" data-cadence="weekly">Weekly</button>
-            </div>
-          </div>
-
-          <div class="goal-commit-field">
-            <div class="goal-commit-field-label">Token budget</div>
-            <div id="goal-commit-budget-chips" class="goal-commit-chips">
-              <button class="goal-commit-chip" data-budget="10000">10k</button>
-              <button class="goal-commit-chip selected" data-budget="50000">50k</button>
-              <button class="goal-commit-chip" data-budget="200000">200k</button>
-              <button class="goal-commit-chip" data-budget="0">No cap</button>
-            </div>
-            <input
-              id="goal-commit-budget-custom"
-              type="number"
-              class="goal-commit-budget-input"
-              placeholder="custom (tokens)"
-              min="1"
-            />
-          </div>
-
-          <button id="goal-commit-submit" class="panel-action-pill" style="width: 100%">
-            Commit goal
-          </button>
+      <!-- Form: pinned at the bottom of the panel. Always at the same
+           location, never moves when records appear or scroll. -->
+      <div id="goal-commit-form">
+        <div class="goal-commit-field">
+          <div class="goal-commit-field-label">What</div>
+          <textarea
+            id="goal-commit-prompt"
+            class="panel-form-textarea"
+            placeholder="Describe the outcome — motebit figures out how"
+            rows="3"
+            style="min-height: 60px; resize: none"
+          ></textarea>
         </div>
+
+        <div class="goal-commit-field">
+          <div class="goal-commit-field-label">Cadence</div>
+          <div id="goal-commit-cadence-chips" class="goal-commit-chips">
+            <button class="goal-commit-chip" data-cadence="once">Once</button>
+            <button class="goal-commit-chip" data-cadence="hourly">Hourly</button>
+            <button class="goal-commit-chip selected" data-cadence="daily">Daily</button>
+            <button class="goal-commit-chip" data-cadence="weekly">Weekly</button>
+          </div>
+        </div>
+
+        <div class="goal-commit-field">
+          <div class="goal-commit-field-label">Token budget</div>
+          <div id="goal-commit-budget-chips" class="goal-commit-chips">
+            <button class="goal-commit-chip" data-budget="10000">10k</button>
+            <button class="goal-commit-chip selected" data-budget="50000">50k</button>
+            <button class="goal-commit-chip" data-budget="200000">200k</button>
+            <button class="goal-commit-chip" data-budget="0">No cap</button>
+          </div>
+          <input
+            id="goal-commit-budget-custom"
+            type="number"
+            class="goal-commit-budget-input"
+            placeholder="custom (tokens)"
+            min="1"
+          />
+        </div>
+
+        <button id="goal-commit-submit" class="panel-action-pill" style="width: 100%">
+          Commit goal
+        </button>
       </div>
     </div>
 
