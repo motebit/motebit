@@ -71,7 +71,7 @@ Implications: chronological scaffolding, slow cadence, mutations as deliberate a
 
 Implications: cards-as-commitments, live status pulses (working/waiting/done), mutation-first affordances (CREATE, INVITE, INSTALL as primary verbs), receipts disclosed per item, budget envelopes per commitment.
 
-A runtime-register panel rendered in identity-register language reads as MVP. The current Goals panel — text input + frequency dropdown + create button — is the worked example: cron + LLM is identity-shaped (a form, a list) when the doctrine demands runtime-shaped (a commitment card, a living status, a ceremony of declaration).
+A runtime-register panel rendered in identity-register language reads as MVP. The pre-2026-05-14 Goals panel — text input + frequency dropdown + create button — was the worked example: cron + LLM rendered as identity-shaped (a form, a list) when the doctrine demands runtime-shaped (a commitment card, a living status, a ceremony of declaration). Goals migrated 2026-05-14 across web, desktop, and mobile — cards-as-commitments, 0.3 Hz status pulses (medium-coherent with the slab + creature), axis-native budget envelopes per goal, "Commit goal" as primary verb, raise-cap affordance on budget_exhausted. Failure-mode #1 below now resolved.
 
 ## Bounded commitment is multi-dimensional
 
@@ -116,7 +116,7 @@ Same trigger applies to any future surface that could go either way (inference-h
 
 ## Three failure modes
 
-1. **Designing a runtime panel in identity-register language.** Symptom: the panel looks like a form + list. Diagnostic: ask "what is the _commitment_ this panel holds?" If the answer is "an entry in a list," it's identity-shaped. If the answer is "a live binding the agent is currently honoring," it's runtime-shaped. Goals MVP fails this test today.
+1. **Designing a runtime panel in identity-register language.** Symptom: the panel looks like a form + list. Diagnostic: ask "what is the _commitment_ this panel holds?" If the answer is "an entry in a list," it's identity-shaped. If the answer is "a live binding the agent is currently honoring," it's runtime-shaped. Goals MVP failed this test pre-2026-05-14; resolved across surfaces that day (cards-as-commitments + budget envelopes + commit-verb framing).
 
 2. **Trying to make governance a panel.** Symptom: a "Privacy" or "Policy" panel proposal that surfaces sensitivity ceilings as a record list. Diagnostic: per records-vs-acts, governance is the membrane. It manifests _through_ the privacy layer at every boundary, not _on_ a records surface.
 
