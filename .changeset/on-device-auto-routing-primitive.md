@@ -1,6 +1,5 @@
 ---
 "@motebit/protocol": minor
-"@motebit/policy": minor
 ---
 
 Land the on-device auto-routing primitive — third-consumer half of the auto-router PR-3 arc (doctrine: `docs/doctrine/auto-routing-as-protocol-primitive.md` § "Three-instance endgame"). PR 1 (2026-05-13) shipped motebit-cloud-proxy; PR 2 (2026-05-14) shipped BYOK across web/desktop/mobile; PR 3 (this commit) closes the three-instance-deep validation by landing the third concrete consumer with fundamentally different cost semantics: zero marginal $/token (on-device runs on user hardware), no balance filter, no jurisdiction filter (the user's device IS the jurisdiction), dynamic catalog (what's installed locally varies per user).

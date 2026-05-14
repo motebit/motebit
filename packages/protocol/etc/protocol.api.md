@@ -771,7 +771,7 @@ export interface ConsolidationReceipt {
 }
 
 // @public
-export type ContentArtifactType = "state-snapshot" | "memory-export" | "goal-list" | "conversation-list" | "conversation-messages" | "device-list" | "audit-trail" | "plan-list" | "plan-detail" | "gradient-history" | "sync-pull" | "execution-ledger";
+export type ContentArtifactType = "state-snapshot" | "memory-export" | "goal-list" | "conversation-list" | "conversation-messages" | "device-list" | "audit-trail" | "plan-list" | "plan-detail" | "gradient-history" | "sync-pull" | "execution-ledger" | "goal-result";
 
 // @alpha
 export type ControlHolder = "user" | "motebit";
@@ -1624,6 +1624,9 @@ export function getSuiteEntry(id: string): SuiteEntry | undefined;
 export const GOAL_LIST_ARTIFACT: ContentArtifactType;
 
 // @public
+export const GOAL_RESULT_ARTIFACT: ContentArtifactType;
+
+// @public
 export interface GoalCompletedPayload {
     // (undocumented)
     readonly goal_id: string;
@@ -1819,7 +1822,7 @@ export interface IdentityStorage {
 }
 
 // @public
-export type InferenceHost = "anthropic" | "openai" | "google" | "groq";
+export type InferenceHost = "anthropic" | "openai" | "google" | "groq" | "local-server";
 
 // @public (undocumented)
 export interface InjectionWarning {
@@ -2132,7 +2135,7 @@ export interface MigrationToken {
 }
 
 // @public
-export type ModelLab = "anthropic" | "openai" | "google" | "meta";
+export type ModelLab = "anthropic" | "openai" | "google" | "meta" | "mistral" | "microsoft" | "alibaba";
 
 // @public (undocumented)
 export type MotebitId = Brand<string, "MotebitId">;

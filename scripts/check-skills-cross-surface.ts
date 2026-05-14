@@ -56,7 +56,12 @@ const SURFACE_CHECKS: ReadonlyArray<SurfaceCheck> = [
   },
   {
     surface: "desktop",
-    file: "apps/desktop/src/ui/skills.ts",
+    // Renamed from `skills.ts` → `capabilities.ts` in commit 01b87fc7
+    // (Capabilities panel migration — Skills moved under the umbrella
+    // Capabilities panel with sub-tabs). The gate followed the rename
+    // on 2026-05-14 after the principal-engineer audit caught the
+    // stale-target failure.
+    file: "apps/desktop/src/ui/capabilities.ts",
     signatures: [
       {
         description:

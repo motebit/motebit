@@ -130,6 +130,7 @@ export interface BrowserSessionInfo {
 export interface ByokProviderConfig {
     // (undocumented)
     apiKey: string;
+    autoRoute?: boolean;
     baseUrl?: string;
     // (undocumented)
     maxTokens?: number;
@@ -606,6 +607,7 @@ export type OnDeviceBackend = "apple-fm" | "mlx" | "webllm" | "local-server";
 
 // @public
 export interface OnDeviceProviderConfig {
+    autoRoute?: boolean;
     // (undocumented)
     backend: OnDeviceBackend;
     endpoint?: string;
