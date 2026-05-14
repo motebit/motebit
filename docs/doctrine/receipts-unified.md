@@ -4,17 +4,17 @@ Motebit's signed-receipt surface is three types in three packages, unified by on
 
 ## The three types
 
-| Type                      | Signed by                | Granularity               | Spec                                                                                     | Owner               |
-| ------------------------- | ------------------------ | ------------------------- | ---------------------------------------------------------------------------------------- | ------------------- |
-| `ExecutionReceipt`        | Agent (motebit identity) | Per-task / per-goal       | [`spec/execution-ledger-v1.md`](../../spec/execution-ledger-v1.md)                       | `@motebit/protocol` |
-| `ToolInvocationReceipt`   | Agent (motebit identity) | Per-tool-call             | [`spec/execution-ledger-v1.md`](../../spec/execution-ledger-v1.md) §4                    | `@motebit/protocol` |
-| `ContentArtifactManifest` | Relay identity           | Per-bundle (state export) | [`packages/protocol/src/artifact-type.ts`](../../packages/protocol/src/artifact-type.ts) | `@motebit/protocol` |
+| Type                      | Signed by                                   | Granularity                                          | Spec                                                                                     | Owner               |
+| ------------------------- | ------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------- |
+| `ExecutionReceipt`        | Agent (motebit identity)                    | Per-task / per-goal                                  | [`spec/execution-ledger-v1.md`](../../spec/execution-ledger-v1.md)                       | `@motebit/protocol` |
+| `ToolInvocationReceipt`   | Agent (motebit identity)                    | Per-tool-call                                        | [`spec/execution-ledger-v1.md`](../../spec/execution-ledger-v1.md) §4                    | `@motebit/protocol` |
+| `ContentArtifactManifest` | Relay identity **or** agent (`goal-result`) | Per-bundle (state export) / per-fire (`goal-result`) | [`packages/protocol/src/artifact-type.ts`](../../packages/protocol/src/artifact-type.ts) | `@motebit/protocol` |
 
 Three distinct types with three distinct attestation roles. They are NOT redundant — each answers a different question:
 
 - **`ExecutionReceipt`** — "what did this agent accomplish, end-to-end, on this goal?" Agent-signed; the whole-task proof.
 - **`ToolInvocationReceipt`** — "what did this agent do in this single tool call?" Agent-signed; per-step granularity for auditors who need to trace not just outcomes but each act.
-- **`ContentArtifactManifest`** — "the relay assembled this bundle of agent-signed artifacts at time T." Relay-signed wrapper that lets a third party verify bundle assembly without trusting the relay's word about agent identity (because the inner agent-signed receipts verify independently).
+- **`ContentArtifactManifest`** — until 2026-05-14, exclusively "the relay assembled this bundle of agent-signed artifacts at time T" (the 12 state-export endpoints — relay-signed wrappers for bundle assembly). The goal-results Phase 3 arc landed the first non-relay consumer: `goal-result` artifacts produced per-fire by a goal cadence, signed by the **agent's** motebit identity (not the relay). The closed `ContentArtifactType` registry is the unification surface; the _producer-identity_ dimension is orthogonal — the registry's stated semantic is "content-artifact category for C2PA-shape provenance," not "relay state-export bundle." See [`goal-results.md`](goal-results.md) §"Phase 3" for the producer + verification path.
 
 ## What unifies them
 

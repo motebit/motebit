@@ -29,6 +29,18 @@ import type { WebApp } from "./web-app";
 const GOALS_KEY = "motebit.goals";
 const RUNS_KEY = "motebit.goals_runs";
 
+/** localStorage key prefix for per-goal signed artifact manifests.
+ *  One latest-only entry per goal_id (overwritten on each successful
+ *  fire; cleared on failed fire, mirroring the runner's symmetric
+ *  clear-on-error semantic for `last_response_full`). The signed
+ *  `ContentArtifactManifest` JSON lands under `${prefix}${goal_id}`
+ *  so a future surface ("Verify result", export, cross-device sync)
+ *  can read it via the same shape used by `motebit-verify
+ *  content-artifact`. Doctrine: `docs/doctrine/goal-results.md`
+ *  §"The three categories"; `docs/doctrine/receipts-unified.md` for
+ *  the unified receipt family. */
+const ARTIFACT_MANIFEST_PREFIX = "motebit.goal_artifact_manifest.";
+
 function readJson<T>(key: string, fallback: T): T {
   if (typeof localStorage === "undefined") return fallback;
   try {
@@ -145,11 +157,46 @@ export function createWebGoalsRunner(app: WebApp): GoalsRunner {
           }
         }
       } catch (err) {
+        // Clear-on-error semantic — also drop any stale prior-success
+        // manifest so the renderer's "Signed" indicator doesn't
+        // outlive the artifact it attested.
+        writeJson(`${ARTIFACT_MANIFEST_PREFIX}${goal.goal_id}`, null);
         const msg = err instanceof Error ? err.message : String(err);
         return { outcome: "error", error: msg, ...(tokensUsed != null ? { tokensUsed } : {}) };
       }
       const trimmed = accumulated.trim();
       const responsePreview = trimmed.slice(0, 160) || null;
+
+      // Sign the artifact bytes as a `ContentArtifactManifest` per
+      // `docs/doctrine/goal-results.md` §"The three categories" Phase 3.
+      // Producer = motebit identity (not relay) — the first non-relay-
+      // state-export consumer of the closed `ContentArtifactType`
+      // registry. Identity-load-pending fires return null from
+      // `signGoalArtifact`; we treat null as the fail-safe "no
+      // signing this fire" state (never silently unsigned with a
+      // placeholder) and the manifest stays absent — the renderer
+      // simply omits the "Signed" indicator. A future fire with
+      // identity loaded re-signs.
+      const runtime = app.getRuntime();
+      if (trimmed.length > 0 && runtime != null) {
+        try {
+          const manifest = await runtime.signGoalArtifact(trimmed, {
+            goalId: goal.goal_id,
+            runId,
+          });
+          // null = identity not loaded; otherwise persist the
+          // manifest under the per-goal key. A verifier (e.g.
+          // `motebit-verify content-artifact`) reads `trimmed` +
+          // this manifest and re-verifies offline.
+          writeJson(`${ARTIFACT_MANIFEST_PREFIX}${goal.goal_id}`, manifest);
+        } catch {
+          // Signing failure is non-fatal — the artifact bytes are
+          // still preserved on the goal record. Drop the manifest
+          // to keep the surface honest about what was attested.
+          writeJson(`${ARTIFACT_MANIFEST_PREFIX}${goal.goal_id}`, null);
+        }
+      }
+
       return {
         outcome: "fired",
         responsePreview,

@@ -32,10 +32,19 @@
 
 /**
  * The closed set of content-artifact categories motebit currently
- * signs. Today's set covers the twelve state-export endpoints at
- * `services/relay/src/state-export.ts`, each wrapped in a
- * relay-asserted `ContentArtifactManifest` per the doctrine §8
- * recognition note (`docs/doctrine/nist-alignment.md`).
+ * signs. The first twelve cover the state-export endpoints at
+ * `services/relay/src/state-export.ts` (relay-assembled bundles
+ * the relay signs as a witness over its database state per the
+ * recognition note in `docs/doctrine/nist-alignment.md` §8). The
+ * thirteenth — `goal-result` — is the **first non-relay-state-export
+ * consumer**: a motebit-direct, per-fire artifact that the motebit
+ * itself signs as the producer (the agent's own work product, not
+ * a relay-assembled bundle). The expansion is doctrinally aligned —
+ * the registry's stated semantic is "content-artifact category for
+ * C2PA-shape provenance," not "relay state-export bundle." Goals
+ * is the first arc to prove the registry generalizes; future
+ * motebit-direct artifacts (chat-bundle exports, generated documents,
+ * tool-call-result bundles) compose against the same shape.
  *
  *   - `state-snapshot` — relay's stored state vector for a motebit
  *     (`/api/v1/state/:motebitId`)
@@ -64,6 +73,12 @@
  *     inner motebit-signed delegation receipt summaries; the
  *     canonical layered-signing consumer
  *     (`/api/v1/execution/:motebitId/:goalId`)
+ *   - `goal-result` — per-fire content motebit produced for a
+ *     scheduled goal. Producer = motebit identity (not relay).
+ *     Doctrine: `docs/doctrine/goal-results.md` §"The three
+ *     categories" — the artifact category's cryptographic
+ *     provenance envelope. Bound to the fire via `invocation`
+ *     (goal_id + execution-receipt id when present).
  *
  * Adding an endpoint is intentional protocol-level work: a new
  * `ContentArtifactType` entry here, a new named constant, a new
@@ -71,7 +86,9 @@
  * update in `scripts/check-artifact-type-canonical.ts`. Drift gate
  * `check-state-export-signed` enforces that every new `app.get(...)`
  * in `services/relay/src/state-export.ts` emits a manifest before
- * returning.
+ * returning — that gate scopes only to relay state-export endpoints,
+ * not to motebit-direct consumers like `goal-result`, which the
+ * runtime signs at fire-time through its own helper.
  */
 export type ContentArtifactType =
   | "state-snapshot"
@@ -85,7 +102,8 @@ export type ContentArtifactType =
   | "plan-detail"
   | "gradient-history"
   | "sync-pull"
-  | "execution-ledger";
+  | "execution-ledger"
+  | "goal-result";
 
 // === Named constants — same value, narrower type ============================
 //
@@ -136,6 +154,16 @@ export const SYNC_PULL_ARTIFACT: ContentArtifactType = "sync-pull";
  */
 export const EXECUTION_LEDGER_ARTIFACT: ContentArtifactType = "execution-ledger";
 
+/**
+ * Per-fire artifact bytes for a scheduled goal — the content motebit
+ * produced when the goal cadence fired (or the user invoked
+ * `runNow`). First non-relay-state-export consumer of the registry:
+ * the motebit identity signs as producer, not the relay. Doctrine:
+ * `docs/doctrine/goal-results.md` §"The three categories" — the
+ * artifact category's cryptographic provenance envelope.
+ */
+export const GOAL_RESULT_ARTIFACT: ContentArtifactType = "goal-result";
+
 // === Iteration + type guard =================================================
 
 /**
@@ -156,6 +184,7 @@ export const ALL_CONTENT_ARTIFACT_TYPES: readonly ContentArtifactType[] = Object
   "gradient-history",
   "sync-pull",
   "execution-ledger",
+  "goal-result",
 ]);
 
 /**

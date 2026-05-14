@@ -261,7 +261,12 @@ import {
   type ConsolidationCycleConfig,
   type ConsolidationCycleResult,
 } from "./consolidation-cycle.js";
-import { signConsolidationReceipt } from "@motebit/crypto";
+import {
+  signConsolidationReceipt,
+  signContentArtifact,
+  type ContentArtifactManifest,
+} from "@motebit/crypto";
+import { GOAL_RESULT_ARTIFACT } from "@motebit/protocol";
 import { buildMerkleTree, canonicalSha256 } from "@motebit/encryption";
 import type { ConsolidationAnchor, ConsolidationReceipt, ChainAnchorSubmitter } from "@motebit/sdk";
 import type { AgentTrustDeps } from "./agent-trust.js";
@@ -2962,6 +2967,55 @@ export class MotebitRuntime {
     if (stats.turnCount % 5 === 0) {
       void this.reflectAndStore();
     }
+  }
+
+  /**
+   * Sign a goal-fire artifact as a `ContentArtifactManifest`, returning
+   * the manifest for the surface to persist alongside the artifact
+   * bytes. Producer = this motebit's identity; not the relay.
+   *
+   * The first non-relay-state-export consumer of the closed
+   * `ContentArtifactType` registry. Doctrine:
+   * `docs/doctrine/goal-results.md` §"The three categories" — the
+   * artifact category's cryptographic provenance envelope.
+   *
+   * `content` is the untruncated artifact text the runtime
+   * accumulated at fire-time (mirror of what `last_response_full`
+   * stores on the goal record; the slab item already shows this text
+   * in its `mind`-mode embodiment via `projectSlabForTurn`'s
+   * `restItem` call). `goalId` and `runId` populate the manifest's
+   * `invocation` cross-reference so a verifier can correlate the
+   * artifact back to the goal record + the execution-ledger receipt
+   * for the fire.
+   *
+   * Returns `null` when identity isn't loaded — pre-bootstrap or
+   * transient null-key states fail safe to no-signing rather than
+   * sign with a placeholder. The surface should treat null as a
+   * `signing: "pending"` marker and re-attempt on the next identity
+   * load if desired (Phase-3-future arc).
+   *
+   * Pinned suite: `motebit-jcs-ed25519-hex-v1` (CONTENT_ARTIFACT_SUITE
+   * in `@motebit/crypto`). PQ migration is a SuiteId addition, not a
+   * wire-format break.
+   */
+  async signGoalArtifact(
+    content: string,
+    options: { goalId: string; runId?: string },
+  ): Promise<ContentArtifactManifest | null> {
+    const keys = this._signingKeys;
+    if (!keys) return null;
+    const bytes = new TextEncoder().encode(content);
+    return signContentArtifact(bytes, {
+      artifactType: GOAL_RESULT_ARTIFACT,
+      producer: `did:key:motebit:${this.motebitId}`,
+      producerPublicKey: keys.publicKey,
+      producerPrivateKey: keys.privateKey,
+      claimGenerator: "motebit-runtime/0.0.0",
+      invocation: {
+        ...(options.runId ? { task_id: options.runId } : {}),
+        receipt_id: options.goalId,
+      },
+    });
   }
 
   /** Issue a W3C Verifiable Credential containing this agent's current gradient. */

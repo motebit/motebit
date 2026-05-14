@@ -29,12 +29,18 @@ import {
   GRADIENT_HISTORY_ARTIFACT,
   SYNC_PULL_ARTIFACT,
   EXECUTION_LEDGER_ARTIFACT,
+  GOAL_RESULT_ARTIFACT,
   type ContentArtifactType,
 } from "../artifact-type.js";
 
 describe("ALL_CONTENT_ARTIFACT_TYPES", () => {
-  it("has exactly the twelve registered entries — one per state-export endpoint", () => {
-    expect(ALL_CONTENT_ARTIFACT_TYPES.length).toBe(12);
+  it("has exactly the thirteen registered entries — twelve relay state-export + one motebit-direct (goal-result)", () => {
+    // Twelve state-export endpoints (relay-signed) + the first non-relay
+    // consumer (`goal-result` — motebit-direct per-fire artifact, agent-
+    // signed) per `docs/doctrine/goal-results.md` §"Phase 3" and the
+    // `docs/doctrine/nist-alignment.md` §8 expansion. Future additions
+    // bump this count + the corresponding named constant assertion.
+    expect(ALL_CONTENT_ARTIFACT_TYPES.length).toBe(13);
   });
 
   it("enumerates every named constant exactly once", () => {
@@ -51,6 +57,7 @@ describe("ALL_CONTENT_ARTIFACT_TYPES", () => {
       GRADIENT_HISTORY_ARTIFACT,
       SYNC_PULL_ARTIFACT,
       EXECUTION_LEDGER_ARTIFACT,
+      GOAL_RESULT_ARTIFACT,
     ];
     expect([...named].sort()).toEqual([...ALL_CONTENT_ARTIFACT_TYPES].sort());
     expect(new Set(named).size).toBe(named.length);

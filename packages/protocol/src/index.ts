@@ -2699,6 +2699,7 @@ export {
   GRADIENT_HISTORY_ARTIFACT,
   SYNC_PULL_ARTIFACT,
   EXECUTION_LEDGER_ARTIFACT,
+  GOAL_RESULT_ARTIFACT,
 } from "./artifact-type.js";
 
 // Operator-transparency declaration — the trust-anchor primitive

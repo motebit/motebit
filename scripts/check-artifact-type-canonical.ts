@@ -71,6 +71,7 @@ const CANONICAL_ARTIFACT_TYPES = new Set<string>([
   "gradient-history",
   "sync-pull",
   "execution-ledger",
+  "goal-result",
 ]);
 
 /**

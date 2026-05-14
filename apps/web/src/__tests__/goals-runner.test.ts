@@ -19,6 +19,11 @@ interface MockApp {
     history?: unknown,
     opts?: unknown,
   ) => AsyncGenerator<{ type: string; text?: string }>;
+  /** Returns null when identity is not loaded — adapter's signing
+   *  path is fail-safe under that condition (no manifest written).
+   *  Tests that exercise the artifact-signing path can override
+   *  with a stub runtime that exposes `signGoalArtifact`. */
+  getRuntime: () => unknown;
 }
 
 /** Expose the adapter's fire() by reading runs after a forced runNow. */
@@ -31,6 +36,7 @@ function makeApp(overrides?: Partial<MockApp>): MockApp {
     async *sendMessageStreaming() {
       // overridable
     },
+    getRuntime: () => null,
   };
   return { ...base, ...overrides };
 }
