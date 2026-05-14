@@ -314,7 +314,9 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   // Recurring + active = breathing at 0.3Hz (Liquescentia rate, so
   // the card is medium-coherent with the slab and the creature);
   // running = faster fire pulse; budget_exhausted = static red with
-  // shadow ring; etc.
+  // shadow ring; errored = amber breathing (recurring goal whose last
+  // run errored, will retry next cadence — visible "degraded but
+  // alive" signal); etc.
   function pulseClass(goal: ScheduledGoal, runs: GoalRunRecord[]): string {
     const latestRun = runs.find((r) => r.goal_id === goal.goal_id);
     if (latestRun?.status === "running") return "running";
@@ -322,6 +324,11 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     if (goal.status === "paused") return "paused";
     if (goal.status === "completed") return "completed";
     if (goal.status === "failed") return "failed";
+    // Recurring goal that's still active but whose last run errored.
+    // Without this, an erroring recurring goal renders as green-
+    // breathing (healthy) which is dishonest. Amber says "alive,
+    // will retry, but you might want to check what happened."
+    if (goal.last_error != null && goal.status === "active") return "errored";
     return "active";
   }
 
@@ -351,9 +358,17 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     for (const goal of panelGoals) {
       const goalStatus = String(goal.status);
       const isExpanded = expandedGoalIds.has(goal.goal_id);
+      // `errored` is a derived visual state: recurring goal whose
+      // last run errored but whose status is still active (will
+      // retry). Carries an amber border-tint so the attention-need
+      // is visible at-a-glance, paired with the amber pulse dot.
+      const hasErrored = goal.last_error != null && goal.status === "active";
 
       const card = document.createElement("div");
-      card.className = `goal-card ${goalStatus}${isExpanded ? " expanded" : ""}`;
+      card.className =
+        `goal-card ${goalStatus}` +
+        (hasErrored ? " errored" : "") +
+        (isExpanded ? " expanded" : "");
 
       // Header row: pulse \u00b7 prompt \u00b7 cadence \u00b7 countdown.
       const headerRow = document.createElement("div");

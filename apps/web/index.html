@@ -3897,6 +3897,15 @@
       .goal-pulse.paused {
         background: #facc15;
       }
+      /* Errored: recurring goal whose last run errored, still active
+         (will retry next cadence). Amber-breathing — same rhythm as
+         green (alive) but the color signals "degraded but recovering."
+         Matches the budget-bar's `near` amber (#f59e0b) so attention-
+         needed signals are cohesive across the panel. */
+      .goal-pulse.errored {
+        background: #f59e0b;
+        animation: goalPulseBreathe 3.33s ease-in-out infinite;
+      }
       .goal-pulse.budget_exhausted {
         background: #f87171;
         box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.18);
@@ -3944,6 +3953,13 @@
       }
       .goal-card.budget_exhausted {
         border-color: rgba(248, 113, 113, 0.35);
+      }
+      /* Errored card: subtle amber border tint to surface "last run
+         errored, will retry." Paired with .goal-pulse.errored on the
+         status dot. Subtle enough to read as "attention available
+         when you look," not loud enough to alarm during normal use. */
+      .goal-card.errored {
+        border-color: rgba(245, 158, 11, 0.3);
       }
       .goal-card.completed,
       .goal-card.failed {

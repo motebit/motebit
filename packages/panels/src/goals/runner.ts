@@ -304,6 +304,14 @@ export function createGoalsRunner(
       }
     } else if (result.outcome === "error") {
       patch.last_error = result.error;
+      // Clear any prior success preview so the surfaced "latest
+      // outcome" reflects the error, not a stale earlier success.
+      // Renderers prefer `last_response_preview` over `last_error`
+      // when both are set; clearing the preview makes the error the
+      // most-recent visible signal. A subsequent successful fire
+      // repopulates `last_response_preview` and clears `last_error`
+      // above, so the toggle is symmetric.
+      patch.last_response_preview = null;
       if (goal.mode === "once") {
         patch.status = "failed";
       } else {

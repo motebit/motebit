@@ -171,6 +171,42 @@ describe("createGoalsRunner — runNow + fire reconciliation", () => {
     expect(goal?.last_error).toBe("oops");
   });
 
+  it("recurring error after a prior success clears last_response_preview", async () => {
+    // The latest-outcome semantic: when a recurring goal errors after
+    // previously succeeding, the prior success preview is stale and
+    // misleading. Runner clears it so renderers surface the error as
+    // the most-recent visible signal, not a stale earlier success.
+    let nextResult: GoalFireResult = {
+      outcome: "fired",
+      responsePreview: "earlier success",
+    };
+    const adapter = {
+      loadGoals: (): ScheduledGoal[] => [],
+      saveGoals: (): void => {},
+      loadRuns: (): GoalRunRecord[] => [],
+      saveRuns: (): void => {},
+      fire: async (): Promise<GoalFireResult> => nextResult,
+    };
+    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
+    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+
+    await runner.runNow("g1");
+    expect(runner.getState().goals[0]?.last_response_preview).toBe("earlier success");
+    expect(runner.getState().goals[0]?.last_error).toBeNull();
+
+    nextResult = { outcome: "error", error: "boom" };
+    await runner.runNow("g1");
+    const after = runner.getState().goals[0];
+    expect(after?.last_error).toBe("boom");
+    // Stale success preview must be cleared so the error is what
+    // surfaces in the renderer's expanded card.
+    expect(after?.last_response_preview).toBeNull();
+    // Goal stays active because it's recurring — the renderer will
+    // derive the `errored` visual state from `last_error != null
+    // && status === "active"`.
+    expect(after?.status).toBe("active");
+  });
+
   it("skipped: next_run_at unchanged (retried on next tick)", async () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "skipped" }));
     let n = 100;
