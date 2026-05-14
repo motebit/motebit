@@ -44,7 +44,7 @@
       #goals-panel,
       #agents-panel,
       #sovereign-panel,
-      #skills-panel,
+      #capabilities-panel,
       #activity-panel,
       #settings-modal {
         user-select: none;
@@ -55,7 +55,7 @@
       #goals-panel.open,
       #agents-panel.open,
       #sovereign-panel.open,
-      #skills-panel.open,
+      #capabilities-panel.open,
       #activity-panel.open,
       #settings-modal.open {
         user-select: text;
@@ -233,7 +233,7 @@
         #goals-panel,
         #agents-panel,
         #sovereign-panel,
-        #skills-panel,
+        #capabilities-panel,
         #activity-panel,
         #settings-modal,
         #pin-dialog,
@@ -5045,8 +5045,10 @@
         color: #f87171;
       }
 
-      /* Skills panel — slide-in from left, mirrors memory panel layout */
-      #skills-backdrop {
+      /* Capabilities panel — slide-in from left, mirrors memory panel
+         layout. Hosts Skills + Connections sub-tabs per
+         docs/doctrine/panel-temporal-registers.md substrate-vs-accumulation. */
+      #capabilities-backdrop {
         position: fixed;
         inset: 0;
         z-index: 24;
@@ -5055,11 +5057,11 @@
         pointer-events: none;
         transition: opacity 0.18s ease;
       }
-      #skills-backdrop.open {
+      #capabilities-backdrop.open {
         opacity: 1;
         pointer-events: auto;
       }
-      #skills-panel {
+      #capabilities-panel {
         position: fixed;
         top: 0;
         left: 0;
@@ -5077,10 +5079,10 @@
         display: flex;
         flex-direction: column;
       }
-      #skills-panel.open {
+      #capabilities-panel.open {
         transform: translateX(0);
       }
-      .skills-panel-header {
+      .capabilities-panel-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -5088,7 +5090,7 @@
         border-bottom: 1px solid var(--border);
         flex-shrink: 0;
       }
-      .skills-panel-title {
+      .capabilities-panel-title {
         font-size: 14px;
         font-weight: 600;
       }
@@ -5100,7 +5102,7 @@
         color: var(--text-muted);
         margin-left: 6px;
       }
-      .skills-panel-close {
+      .capabilities-panel-close {
         background: none;
         border: none;
         color: var(--text-muted);
@@ -5108,8 +5110,41 @@
         font-size: 18px;
         padding: 2px 6px;
       }
-      .skills-panel-close:hover {
+      .capabilities-panel-close:hover {
         color: var(--text-secondary);
+      }
+      /* Sub-tab bar — mirrors .agents-tabs visual language so the two
+         runtime-register panels share the dialect. */
+      .capabilities-tabs {
+        display: flex;
+        border-bottom: 1px solid var(--border);
+        padding: 0 12px;
+        flex-shrink: 0;
+      }
+      .capabilities-tab {
+        background: none;
+        border: none;
+        border-bottom: 2px solid transparent;
+        color: var(--text-ghost);
+        font-size: 12px;
+        padding: 8px 12px;
+        cursor: pointer;
+        transition:
+          color 0.15s,
+          border-color 0.15s;
+      }
+      .capabilities-tab:hover {
+        color: var(--text-muted);
+      }
+      .capabilities-tab.active {
+        color: var(--text-primary);
+        border-bottom-color: var(--text-primary);
+      }
+      .capabilities-pane {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
       }
       .skills-search-wrap {
         padding: 8px 12px;
@@ -5852,32 +5887,137 @@
          late-arriving 7th channel and broke the symmetry. The panel
          itself stays — open via the Settings → Intelligence "Skills"
          link or the /skills URL (web). -->
-    <div id="skills-backdrop"></div>
-    <div id="skills-panel" aria-label="Skills panel">
-      <div class="skills-panel-header">
-        <span class="skills-panel-title"
-          >Skills <span class="skills-count-badge" id="skills-count">0</span></span
+    <!--
+      Capabilities panel — runtime-register, capability primitive. Two
+      sibling sub-tabs: Skills (agentskills.io procedural knowledge) +
+      Connections (MCP tool servers, migrated from Settings → Intelligence
+      2026-05-13). Per docs/doctrine/panel-temporal-registers.md
+      substrate-vs-accumulation: both accumulate, both belong here.
+    -->
+    <div id="capabilities-backdrop"></div>
+    <div id="capabilities-panel" aria-label="Capabilities panel">
+      <div class="capabilities-panel-header">
+        <span class="capabilities-panel-title"
+          >Capabilities <span class="skills-count-badge" id="skills-count">0</span></span
         >
-        <button class="skills-panel-close" id="skills-close-btn">&times;</button>
+        <button class="capabilities-panel-close" id="capabilities-close-btn">&times;</button>
       </div>
-      <div class="skills-search-wrap">
-        <input id="skills-search" type="text" placeholder="Search skills..." autocomplete="off" />
+      <div class="capabilities-tabs">
+        <button class="capabilities-tab active" data-tab="skills">Skills</button>
+        <button class="capabilities-tab" data-tab="connections">Connections</button>
       </div>
-      <div class="skills-install-bar">
-        <input
-          id="skills-install-input"
-          type="text"
-          placeholder="Path to skill directory…"
-          autocomplete="off"
-        />
-        <button id="skills-install-btn">Install</button>
-      </div>
-      <div class="skills-list" id="skills-list"></div>
-      <div id="skills-detail-wrap">
-        <div class="skills-detail-header">
-          <button id="skills-detail-close" title="Close detail">&times;</button>
+      <!-- Skills sub-tab — installed registry + per-row enable / trust /
+           remove + dev-mode install bar. -->
+      <div id="cap-pane-skills" class="capabilities-pane">
+        <div class="skills-search-wrap">
+          <input id="skills-search" type="text" placeholder="Search skills..." autocomplete="off" />
         </div>
-        <div id="skills-detail-body"></div>
+        <div class="skills-install-bar">
+          <input
+            id="skills-install-input"
+            type="text"
+            placeholder="Path to skill directory…"
+            autocomplete="off"
+          />
+          <button id="skills-install-btn">Install</button>
+        </div>
+        <div class="skills-list" id="skills-list"></div>
+        <div id="skills-detail-wrap">
+          <div class="skills-detail-header">
+            <button id="skills-detail-close" title="Close detail">&times;</button>
+          </div>
+          <div id="skills-detail-body"></div>
+        </div>
+      </div>
+      <!-- Connections sub-tab — MCP tool servers (stdio + http on
+           desktop). Persistence path stays at the JSON config file's
+           `mcp_servers` key; the UI moved, the storage didn't. -->
+      <div id="cap-pane-connections" class="capabilities-pane" style="display: none">
+        <div style="padding: 12px; overflow-y: auto">
+          <div id="mcp-server-list" style="margin-bottom: 8px"></div>
+          <div id="mcp-empty" style="font-size:12px;color:rgba(255,255,255,0.3);padding:8px 0;">
+            No MCP servers configured
+          </div>
+          <button class="mcp-add-btn" id="mcp-add-toggle">+ Add Server</button>
+          <div id="mcp-add-form" style="display: none">
+            <div class="settings-field">
+              <label for="mcp-name">Name</label>
+              <input id="mcp-name" type="text" placeholder="e.g. filesystem" />
+            </div>
+            <div class="settings-field">
+              <label for="mcp-transport">Transport</label>
+              <select id="mcp-transport">
+                <option value="stdio">stdio</option>
+                <option value="http">HTTP</option>
+              </select>
+            </div>
+            <div class="settings-field" id="mcp-command-field">
+              <label for="mcp-command">Command</label>
+              <input
+                id="mcp-command"
+                type="text"
+                placeholder="e.g. npx @modelcontextprotocol/server-filesystem"
+              />
+            </div>
+            <div class="settings-field" id="mcp-url-field" style="display: none">
+              <label for="mcp-url">URL</label>
+              <input id="mcp-url" type="text" placeholder="http://localhost:3000/mcp" />
+            </div>
+            <div class="settings-field">
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Trusted</div>
+                  <div class="toggle-desc">Auto-approve all tools from this server</div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="mcp-trusted" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="settings-field">
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Motebit</div>
+                  <div class="toggle-desc">
+                    This server is a motebit — verify identity on connect
+                  </div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="mcp-motebit" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="settings-field" id="mcp-publickey-field" style="display: none">
+              <label for="mcp-publickey">Pinned Public Key</label>
+              <input
+                id="mcp-publickey"
+                type="text"
+                readonly
+                placeholder="Set on first verified connect"
+                style="font-family: monospace; font-size: 11px"
+              />
+            </div>
+            <div style="display: flex; gap: 6px; margin-top: 10px">
+              <button class="settings-outline-btn" id="mcp-add-cancel" style="flex: 1">
+                Cancel
+              </button>
+              <button
+                class="settings-outline-btn"
+                id="mcp-add-confirm"
+                style="
+                  flex: 1;
+                  background: rgba(99, 102, 241, 0.15);
+                  border-color: rgba(99, 102, 241, 0.3);
+                  color: #818cf8;
+                "
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -6635,97 +6775,25 @@
             <input id="settings-model-custom" type="text" hidden />
             <input id="settings-model" type="hidden" />
           </div>
+          <!-- Capabilities — accumulative capability sources (skills,
+               MCP tool servers) live in the Capabilities panel per
+               docs/doctrine/panel-temporal-registers.md
+               substrate-vs-accumulation. Settings holds the substrate
+               engine selection (provider/model above); the panel holds
+               what motebit accumulated. -->
           <div class="settings-card">
-            <div class="card-title">MCP Servers</div>
-            <div id="mcp-server-list"></div>
-            <button class="mcp-add-btn" id="mcp-add-toggle">+ Add Server</button>
-            <div id="mcp-add-form" style="display: none">
-              <div class="settings-field">
-                <label for="mcp-name">Name</label>
-                <input id="mcp-name" type="text" placeholder="e.g. filesystem" />
-              </div>
-              <div class="settings-field">
-                <label for="mcp-transport">Transport</label>
-                <select id="mcp-transport">
-                  <option value="stdio">stdio</option>
-                  <option value="http">HTTP</option>
-                </select>
-              </div>
-              <div class="settings-field" id="mcp-command-field">
-                <label for="mcp-command">Command</label>
-                <input
-                  id="mcp-command"
-                  type="text"
-                  placeholder="e.g. npx @modelcontextprotocol/server-filesystem"
-                />
-              </div>
-              <div class="settings-field" id="mcp-url-field" style="display: none">
-                <label for="mcp-url">URL</label>
-                <input id="mcp-url" type="text" placeholder="http://localhost:3000/mcp" />
-              </div>
-              <div class="settings-field">
-                <div class="toggle-row">
-                  <div>
-                    <div class="toggle-label">Trusted</div>
-                    <div class="toggle-desc">Auto-approve all tools from this server</div>
-                  </div>
-                  <label class="toggle-switch">
-                    <input type="checkbox" id="mcp-trusted" />
-                    <span class="slider"></span>
-                  </label>
-                </div>
-              </div>
-              <div class="settings-field">
-                <div class="toggle-row">
-                  <div>
-                    <div class="toggle-label">Motebit</div>
-                    <div class="toggle-desc">
-                      This server is a motebit — verify identity on connect
-                    </div>
-                  </div>
-                  <label class="toggle-switch">
-                    <input type="checkbox" id="mcp-motebit" />
-                    <span class="slider"></span>
-                  </label>
-                </div>
-              </div>
-              <div class="settings-field" id="mcp-publickey-field" style="display: none">
-                <label for="mcp-publickey">Pinned Public Key</label>
-                <input
-                  id="mcp-publickey"
-                  type="text"
-                  readonly
-                  placeholder="Set on first verified connect"
-                  style="font-family: monospace; font-size: 11px"
-                />
-              </div>
-              <div style="display: flex; gap: 6px; margin-top: 10px">
-                <button class="settings-outline-btn" id="mcp-add-cancel" style="flex: 1">
-                  Cancel
-                </button>
-                <button
-                  class="settings-outline-btn"
-                  id="mcp-add-confirm"
-                  style="
-                    flex: 1;
-                    background: rgba(99, 102, 241, 0.15);
-                    border-color: rgba(99, 102, 241, 0.3);
-                    color: #818cf8;
-                  "
-                >
-                  Add
-                </button>
-              </div>
-            </div>
-          </div>
-          <div class="settings-card">
-            <div class="card-title">Skills</div>
+            <div class="card-title">Capabilities</div>
             <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px">
-              Procedural-knowledge bundles your motebit can install — agentskills.io-compatible,
-              motebit-signed extensions. Browse, install, manage in the Skills panel.
+              Skills (agentskills.io-compatible procedural knowledge) and Connections (MCP tool
+              servers) — what your motebit can do. Browse, install, manage in the Capabilities
+              panel.
             </div>
-            <button class="settings-outline-btn" id="settings-open-skills" style="width: 100%">
-              Open Skills Panel
+            <button
+              class="settings-outline-btn"
+              id="settings-open-capabilities"
+              style="width: 100%"
+            >
+              Open Capabilities Panel
             </button>
           </div>
           <div class="settings-card">

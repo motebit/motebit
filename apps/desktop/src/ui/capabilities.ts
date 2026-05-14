@@ -1,3 +1,23 @@
+/**
+ * Capabilities panel — desktop. Hosts two sibling sub-tabs on the
+ * capability-primitive surface per
+ * `docs/doctrine/panel-temporal-registers.md` substrate-vs-accumulation:
+ *
+ *   • **Skills** — agentskills.io procedural-knowledge bundles. Installed
+ *     list (Tauri sidecar in production, IDB-backed in dev) + dev-mode
+ *     install bar + per-row enable / trust / remove + detail view. The
+ *     skills controller (`createSkillsController`) is untouched by the
+ *     rename.
+ *
+ *   • **Connections** — MCP tool servers. State + form lives in
+ *     `mcp-connections.ts`; this module only mounts it inside the
+ *     Connections sub-tab and triggers re-render on tab switch.
+ *
+ * Skills + MCP are siblings, not merged: different shapes, different
+ * storage, different lifecycles, different packages. The Capabilities
+ * panel hosts both; it does not absorb them.
+ */
+
 import {
   createSkillsController,
   RegistryBackedSkillsPanelAdapter,
@@ -18,11 +38,12 @@ import { SkillRegistry } from "@motebit/skills";
 import { TauriIpcSkillsPanelAdapter } from "../skills-ipc";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
+import { initMcpConnections } from "./mcp-connections";
 
 // === DOM Refs ===
 
-const skillsPanel = document.getElementById("skills-panel") as HTMLDivElement;
-const skillsBackdrop = document.getElementById("skills-backdrop") as HTMLDivElement;
+const capabilitiesPanel = document.getElementById("capabilities-panel") as HTMLDivElement;
+const capabilitiesBackdrop = document.getElementById("capabilities-backdrop") as HTMLDivElement;
 const skillsList = document.getElementById("skills-list") as HTMLDivElement;
 const skillsCount = document.getElementById("skills-count") as HTMLSpanElement;
 const skillsSearch = document.getElementById("skills-search") as HTMLInputElement;
@@ -32,12 +53,14 @@ const skillsDetailWrap = document.getElementById("skills-detail-wrap") as HTMLDi
 const skillsDetailBody = document.getElementById("skills-detail-body") as HTMLDivElement;
 const skillsDetailClose = document.getElementById("skills-detail-close") as HTMLButtonElement;
 
-// === Skills Panel ===
+// === Capabilities Panel ===
 
-export interface SkillsAPI {
+export interface CapabilitiesAPI {
   open(): void;
   close(): void;
 }
+
+type SubTab = "skills" | "connections";
 
 const PROVENANCE_LABEL: Record<string, string> = {
   verified: "verified",
@@ -54,7 +77,7 @@ const SENSITIVITY_LABEL: Record<string, string> = {
   secret: "secret",
 };
 
-export function initSkills(ctx: DesktopContext): SkillsAPI {
+export function initCapabilities(ctx: DesktopContext): CapabilitiesAPI {
   // Build a placeholder adapter that defers `invoke` lookup until the
   // first call. The desktop config (and hence `invoke`) isn't ready
   // when this module initializes — `loadDesktopConfig` runs later in
@@ -67,9 +90,37 @@ export function initSkills(ctx: DesktopContext): SkillsAPI {
     render(ctrl.getState());
   });
 
+  // Connections sub-tab — owns its own state in mcp-connections.ts;
+  // we just mount handlers and call render() when the tab is shown.
+  const mcpConnections = initMcpConnections(ctx);
+
+  // Sub-tab structure — Skills active by default. Mirrors the Agents
+  // Known/Discover tab pattern.
+  const tabBtns = Array.from(
+    capabilitiesPanel.querySelectorAll<HTMLButtonElement>(".capabilities-tab"),
+  );
+  const skillsPane = document.getElementById("cap-pane-skills") as HTMLDivElement;
+  const connectionsPane = document.getElementById("cap-pane-connections") as HTMLDivElement;
+
+  function switchTab(tab: SubTab): void {
+    for (const btn of tabBtns) {
+      btn.classList.toggle("active", btn.dataset.tab === tab);
+    }
+    skillsPane.style.display = tab === "skills" ? "" : "none";
+    connectionsPane.style.display = tab === "connections" ? "" : "none";
+    if (tab === "skills") {
+      void ctrl.refresh();
+    } else {
+      mcpConnections.render();
+    }
+  }
+  for (const btn of tabBtns) {
+    btn.addEventListener("click", () => switchTab((btn.dataset.tab as SubTab) ?? "skills"));
+  }
+
   function open(): void {
-    skillsPanel.classList.add("open");
-    skillsBackdrop.classList.add("open");
+    capabilitiesPanel.classList.add("open");
+    capabilitiesBackdrop.classList.add("open");
     renderDevModeBanner(ctx);
     // Directory installs require the Tauri sidecar's host-fs access;
     // in dev-mode (no Tauri) the path input is dead-on-arrival because
@@ -84,11 +135,12 @@ export function initSkills(ctx: DesktopContext): SkillsAPI {
       installBar.style.display = isTauriRuntime(ctx) ? "" : "none";
     }
     void ctrl.refresh();
+    mcpConnections.render();
   }
 
   function close(): void {
-    skillsPanel.classList.remove("open");
-    skillsBackdrop.classList.remove("open");
+    capabilitiesPanel.classList.remove("open");
+    capabilitiesBackdrop.classList.remove("open");
     void ctrl.selectSkill(null);
   }
 
@@ -313,14 +365,14 @@ export function initSkills(ctx: DesktopContext): SkillsAPI {
   });
 
   // The HUD-button entry was removed 2026-05-04 — the canonical 3-1-3
-  // HUD doesn't include Skills. Settings → Intelligence "Skills" link
-  // is the discoverability path now; settings.ts dispatches
-  // `motebit:open-skills` when the user clicks it. Custom-event wiring
-  // avoids leaking the skills module through every consumer's import
-  // graph.
-  document.addEventListener("motebit:open-skills", () => open());
-  document.getElementById("skills-close-btn")?.addEventListener("click", close);
-  skillsBackdrop.addEventListener("click", close);
+  // HUD doesn't include Capabilities. Settings → Intelligence
+  // "Capabilities" link is the discoverability path; settings.ts
+  // dispatches `motebit:open-capabilities` when the user clicks it.
+  // Custom-event wiring avoids leaking the panel module through every
+  // consumer's import graph.
+  document.addEventListener("motebit:open-capabilities", () => open());
+  document.getElementById("capabilities-close-btn")?.addEventListener("click", close);
+  capabilitiesBackdrop.addEventListener("click", close);
 
   return { open, close };
 }
@@ -432,7 +484,7 @@ function renderDevModeBanner(ctx: DesktopContext): void {
   banner.className = "skills-dev-mode-banner";
   banner.textContent =
     "Dev mode — skills stored in browser-private storage (not synced to ~/.motebit/skills). Install via the production Tauri build.";
-  const panelHeader = document.querySelector("#skills-panel .skills-panel-header");
+  const panelHeader = document.querySelector("#capabilities-panel .capabilities-panel-header");
   if (panelHeader !== null && panelHeader.parentElement !== null) {
     panelHeader.parentElement.insertBefore(banner, panelHeader.nextSibling);
   }

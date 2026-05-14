@@ -20,7 +20,7 @@ export interface SlashCommandDef {
 export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "model", description: "Show or switch AI model", hasArgs: true, argHint: "<name>" },
   { name: "memories", description: "Browse memories" },
-  { name: "skills", description: "Browse and install skills" },
+  { name: "capabilities", description: "Browse skills and tool-server connections" },
   {
     name: "activity",
     description: "View signed deletions, consents, and other audit-grade events",

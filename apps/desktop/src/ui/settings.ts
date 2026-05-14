@@ -1,5 +1,5 @@
-import type { DesktopAIConfig, InvokeFn, McpServerConfig } from "../index";
-import type { NameCollision } from "../mcp-discovery";
+import type { DesktopAIConfig, InvokeFn } from "../index";
+import { getMcpServersConfig } from "./mcp-connections";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 import { parseJsonSafe, classifyDecision, ipcString } from "./audit-utils";
@@ -77,7 +77,6 @@ const settingsMaxTokens = document.getElementById(
   "settings-max-tokens",
 ) as HTMLSelectElement | null;
 const settingsOperatorMode = document.getElementById("settings-operator-mode") as HTMLInputElement;
-const mcpServerList = document.getElementById("mcp-server-list") as HTMLDivElement;
 const persistenceThreshold = document.getElementById(
   "settings-persistence-threshold",
 ) as HTMLInputElement;
@@ -129,17 +128,6 @@ const pinHint = document.getElementById("pin-hint") as HTMLDivElement;
 const pinError = document.getElementById("pin-error") as HTMLDivElement;
 const pinTitle = document.getElementById("pin-title") as HTMLDivElement;
 
-// === MCP Add Form DOM Refs ===
-
-const mcpAddToggle = document.getElementById("mcp-add-toggle") as HTMLButtonElement;
-const mcpAddForm = document.getElementById("mcp-add-form") as HTMLDivElement;
-const mcpTransport = document.getElementById("mcp-transport") as HTMLSelectElement;
-const mcpCommandField = document.getElementById("mcp-command-field") as HTMLDivElement;
-const mcpUrlField = document.getElementById("mcp-url-field") as HTMLDivElement;
-const mcpMotebitCheckbox = document.getElementById("mcp-motebit") as HTMLInputElement;
-const mcpPublicKeyField = document.getElementById("mcp-publickey-field") as HTMLDivElement;
-const mcpPublicKeyInput = document.getElementById("mcp-publickey") as HTMLInputElement;
-
 // === Settings State ===
 
 let hasApiKeyInKeyring = false;
@@ -147,8 +135,6 @@ let hasElevenLabsKeyInKeyring = false;
 let hasInworldKeyInKeyring = false;
 let hasDeepgramKeyInKeyring = false;
 let selectedApprovalPreset = "balanced";
-let mcpServersConfig: McpServerConfig[] = [];
-let discoveryCollisions: NameCollision[] = [];
 let pinMode: "setup" | "verify" | "reset" = "verify";
 
 interface PendingSave {
@@ -183,9 +169,6 @@ export interface SettingsAPI {
   setHasDeepgramKeyInKeyring(v: boolean): void;
   getSelectedApprovalPreset(): string;
   setSelectedApprovalPreset(v: string): void;
-  getMcpServersConfig(): McpServerConfig[];
-  setMcpServersConfig(v: McpServerConfig[]): void;
-  setDiscoveryCollisions(v: NameCollision[]): void;
   isPinDialogOpen(): boolean;
   closePinDialog(): void;
   isRotateKeyDialogOpen(): boolean;
@@ -771,13 +754,14 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   // duplicate Identity-tab Credentials renderer was removed 2026-05-04
   // per the Settings vs Sovereign doctrine in CLAUDE.md.
 
-  // Skills panel — opens via custom event the skills.ts init listens
-  // for. Closes the Settings modal first so the panel isn't underneath
-  // the modal backdrop. Replaces the removed Skills HUD button as the
-  // canonical discoverability path for the Skills panel.
-  document.getElementById("settings-open-skills")?.addEventListener("click", () => {
+  // Capabilities panel — opens via custom event the capabilities.ts
+  // init listens for. Closes the Settings modal first so the panel
+  // isn't underneath the modal backdrop. Replaces the removed Skills
+  // HUD button as the canonical discoverability path for the
+  // Capabilities panel (Skills + Connections sub-tabs).
+  document.getElementById("settings-open-capabilities")?.addEventListener("click", () => {
     close();
-    document.dispatchEvent(new CustomEvent("motebit:open-skills"));
+    document.dispatchEvent(new CustomEvent("motebit:open-capabilities"));
   });
 
   // Export button
@@ -1387,185 +1371,10 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       });
   }
 
-  // === MCP Server List ===
-
-  function renderMcpServerList(): void {
-    mcpServerList.innerHTML = "";
-    const servers = ctx.app.getMcpStatus();
-    if (mcpServersConfig.length === 0) {
-      const empty = document.createElement("div");
-      empty.style.cssText = "font-size:12px;color:rgba(255,255,255,0.3);padding:8px 0;";
-      empty.textContent = "No MCP servers configured";
-      mcpServerList.appendChild(empty);
-      return;
-    }
-    for (const config of mcpServersConfig) {
-      const status = servers.find((s) => s.name === config.name);
-      const row = document.createElement("div");
-      row.className = "mcp-server-row";
-
-      const nameSpan = document.createElement("span");
-      nameSpan.className = "mcp-server-name";
-      nameSpan.textContent = config.name;
-      row.appendChild(nameSpan);
-
-      const transportBadge = document.createElement("span");
-      transportBadge.className = "mcp-badge";
-      transportBadge.textContent = config.transport;
-      row.appendChild(transportBadge);
-
-      if (config.source != null && config.source !== "") {
-        const discoveredBadge = document.createElement("span");
-        discoveredBadge.className = "mcp-badge discovered";
-        discoveredBadge.textContent = "discovered";
-        discoveredBadge.title = config.source;
-        row.appendChild(discoveredBadge);
-      }
-
-      if (config.trusted === true) {
-        const trustedBadge = document.createElement("span");
-        trustedBadge.className = "mcp-badge trusted";
-        trustedBadge.textContent = "trusted";
-        row.appendChild(trustedBadge);
-      }
-
-      if (config.motebit === true) {
-        const motebitBadge = document.createElement("span");
-        motebitBadge.className = "mcp-badge motebit";
-        motebitBadge.textContent = "motebit";
-        if (config.motebitPublicKey) {
-          motebitBadge.title = `Key: ${config.motebitPublicKey}`;
-        }
-        row.appendChild(motebitBadge);
-      }
-
-      const collision = discoveryCollisions.find((c) => c.name === config.name);
-      if (collision) {
-        const warnBadge = document.createElement("span");
-        warnBadge.className = "mcp-badge collision";
-        warnBadge.textContent = "collision";
-        warnBadge.title = `Discovered different config from ${collision.discoveredSource} (${collision.discoveredCommand})`;
-        row.appendChild(warnBadge);
-      }
-
-      const statusDot = document.createElement("span");
-      statusDot.className = "mcp-status-dot" + (status?.connected === true ? " connected" : "");
-      row.appendChild(statusDot);
-
-      // Connect button for disconnected servers
-      if (status?.connected !== true) {
-        const connectBtn = document.createElement("button");
-        connectBtn.className = "mcp-connect-btn";
-        connectBtn.textContent = "Connect";
-        connectBtn.addEventListener("click", () => {
-          const appConfig = ctx.getConfig();
-          if (appConfig?.invoke == null) return;
-          const inv = appConfig.invoke;
-          config.spawnApproved = true;
-          // Persist spawnApproved so we don't re-prompt after restart
-          void inv<string>("read_config")
-            .then((raw) => {
-              const parsed = JSON.parse(raw) as Record<string, unknown>;
-              parsed.mcp_servers = mcpServersConfig;
-              return inv("write_config", { json: JSON.stringify(parsed) });
-            })
-            .catch(() => {
-              /* non-fatal */
-            });
-          void ctx.app
-            .connectMcpServerViaTauri(config, inv)
-            .then((status) => {
-              if (status.manifestChanged === true) {
-                const diff = status.manifestDiff;
-                const parts = [`${config.name}: tools changed — trust revoked`];
-                if (diff) {
-                  if (diff.added.length) parts.push(`+${diff.added.length} added`);
-                  if (diff.removed.length) parts.push(`-${diff.removed.length} removed`);
-                }
-                ctx.showToast(parts.join(", "));
-              }
-              // Persist updated manifest hash
-              void inv<string>("read_config")
-                .then((raw) => {
-                  const parsed = JSON.parse(raw) as Record<string, unknown>;
-                  parsed.mcp_servers = mcpServersConfig;
-                  return inv("write_config", { json: JSON.stringify(parsed) });
-                })
-                .catch(() => {
-                  /* non-fatal */
-                });
-              renderMcpServerList();
-            })
-            .catch(() => {
-              renderMcpServerList();
-            });
-        });
-        row.appendChild(connectBtn);
-      }
-
-      const removeBtn = document.createElement("button");
-      removeBtn.className = "mcp-remove-btn";
-      removeBtn.textContent = "\u00d7";
-      removeBtn.addEventListener("click", () => {
-        mcpServersConfig = mcpServersConfig.filter((s) => s.name !== config.name);
-        void ctx.app.removeMcpServer(config.name);
-        renderMcpServerList();
-      });
-      row.appendChild(removeBtn);
-      mcpServerList.appendChild(row);
-    }
-  }
-
-  // MCP add form
-  mcpAddToggle.addEventListener("click", () => {
-    mcpAddForm.style.display = mcpAddForm.style.display === "none" ? "block" : "none";
-  });
-
-  mcpTransport.addEventListener("change", () => {
-    mcpCommandField.style.display = mcpTransport.value === "stdio" ? "flex" : "none";
-    mcpUrlField.style.display = mcpTransport.value === "http" ? "flex" : "none";
-  });
-
-  mcpMotebitCheckbox.addEventListener("change", () => {
-    mcpPublicKeyField.style.display =
-      mcpMotebitCheckbox.checked && mcpPublicKeyInput.value ? "flex" : "none";
-  });
-
-  document.getElementById("mcp-add-cancel")!.addEventListener("click", () => {
-    mcpAddForm.style.display = "none";
-  });
-
-  document.getElementById("mcp-add-confirm")!.addEventListener("click", () => {
-    const name = (document.getElementById("mcp-name") as HTMLInputElement).value.trim();
-    if (!name) return;
-    const transport = mcpTransport.value as "stdio" | "http";
-    const command = (document.getElementById("mcp-command") as HTMLInputElement).value.trim();
-    const url = (document.getElementById("mcp-url") as HTMLInputElement).value.trim();
-    const trusted = (document.getElementById("mcp-trusted") as HTMLInputElement).checked;
-    const motebit = mcpMotebitCheckbox.checked;
-
-    const config: McpServerConfig = { name, transport, trusted };
-    if (motebit) config.motebit = true;
-    if (transport === "stdio" && command) {
-      const parts = command.split(/\s+/);
-      config.command = parts[0];
-      config.args = parts.slice(1);
-    } else if (transport === "http" && url) {
-      config.url = url;
-    }
-
-    mcpServersConfig.push(config);
-    renderMcpServerList();
-    mcpAddForm.style.display = "none";
-    (document.getElementById("mcp-name") as HTMLInputElement).value = "";
-    (document.getElementById("mcp-command") as HTMLInputElement).value = "";
-    (document.getElementById("mcp-url") as HTMLInputElement).value = "";
-    (document.getElementById("mcp-trusted") as HTMLInputElement).checked = false;
-    mcpMotebitCheckbox.checked = false;
-    mcpPublicKeyField.style.display = "none";
-    mcpPublicKeyInput.value = "";
-  });
-
+  // MCP server list + add-server form moved to the Capabilities panel
+  // (Connections sub-tab) per docs/doctrine/panel-temporal-registers.md.
+  // State + handlers live in `ui/mcp-connections.ts`; persistence call
+  // sites in main.ts read via its exports.
   // === Link Device (Device A) ===
 
   document.getElementById("settings-link-device")!.addEventListener("click", () => {
@@ -1689,8 +1498,6 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     colorPicker.savePreviousState();
     colorPicker.buildColorSwatches();
 
-    renderMcpServerList();
-
     // Hydrate governance UI from canonical `config.governance`. This is the
     // single source of truth: the approval preset, persistence threshold,
     // reject-secrets toggle, and max-calls cap all derive from it.
@@ -1790,7 +1597,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         default_provider: provider,
         appearance: appearanceRecord,
         governance: governanceRecord,
-        mcp_servers: mcpServersConfig,
+        mcp_servers: getMcpServersConfig(),
         voice: {
           auto_send: voice.getVoiceAutoSend(),
           voice_response: voice.getVoiceResponseEnabled(),
@@ -2132,15 +1939,6 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     },
     setSelectedApprovalPreset(v: string) {
       selectedApprovalPreset = v;
-    },
-    getMcpServersConfig() {
-      return mcpServersConfig;
-    },
-    setMcpServersConfig(v: McpServerConfig[]) {
-      mcpServersConfig = v;
-    },
-    setDiscoveryCollisions(v: NameCollision[]) {
-      discoveryCollisions = v;
     },
     isPinDialogOpen() {
       return pinBackdrop.classList.contains("open");

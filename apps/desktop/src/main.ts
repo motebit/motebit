@@ -30,7 +30,12 @@ import { initGoals } from "./ui/goals";
 import { initMemory } from "./ui/memory";
 import { initActivity } from "./ui/activity";
 import { initPairing } from "./ui/pairing";
-import { initSkills } from "./ui/skills";
+import { initCapabilities } from "./ui/capabilities";
+import {
+  getMcpServersConfig,
+  setMcpServersConfig,
+  setDiscoveryCollisions,
+} from "./ui/mcp-connections";
 import { initVoice } from "./ui/voice";
 import { initSettings } from "./ui/settings";
 import {
@@ -82,7 +87,7 @@ const goals = initGoals(ctx);
 const memory = initMemory(ctx);
 const activity = initActivity(ctx);
 const pairing = initPairing(ctx);
-const skills = initSkills(ctx);
+const capabilities = initCapabilities(ctx);
 const sovereign = initSovereign(ctx);
 
 const voice = initVoice(ctx, {
@@ -146,7 +151,7 @@ const agentsPanel = document.getElementById("agents-panel") as HTMLDivElement;
 const sovereignPanel = document.getElementById("sovereign-panel") as HTMLDivElement;
 const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
 const memoryPanel = document.getElementById("memory-panel") as HTMLDivElement;
-const skillsPanel = document.getElementById("skills-panel") as HTMLDivElement;
+const capabilitiesPanel = document.getElementById("capabilities-panel") as HTMLDivElement;
 const conversationsPanel = document.getElementById("conversations-panel") as HTMLDivElement;
 const settingsModal = document.getElementById("settings-modal") as HTMLDivElement;
 const inputBarWrapper = document.getElementById("input-bar-wrapper") as HTMLDivElement;
@@ -182,8 +187,8 @@ document.addEventListener("keydown", (e) => {
       goals.close();
     } else if (memoryPanel.classList.contains("open")) {
       memory.close();
-    } else if (skillsPanel.classList.contains("open")) {
-      skills.close();
+    } else if (capabilitiesPanel.classList.contains("open")) {
+      capabilities.close();
     } else if (activity.isOpen()) {
       activity.close();
     } else if (conversationsPanel.classList.contains("open")) {
@@ -385,7 +390,7 @@ async function tryConnectMcpServer(
     }
     // Persist config if motebit public key was newly pinned
     if (mcpConfig.motebit === true && mcpConfig.motebitPublicKey) {
-      void persistMcpConfig(invoke, settings.getMcpServersConfig());
+      void persistMcpConfig(invoke, getMcpServersConfig());
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -401,8 +406,8 @@ async function tryConnectMcpServer(
         label: "Remove",
         onClick: () => {
           void app.removeMcpServer(mcpConfig.name);
-          const configs = settings.getMcpServersConfig().filter((c) => c.name !== mcpConfig.name);
-          settings.setMcpServersConfig(configs);
+          const configs = getMcpServersConfig().filter((c) => c.name !== mcpConfig.name);
+          setMcpServersConfig(configs);
         },
       },
     ]);
@@ -481,12 +486,12 @@ async function discoverAndConnectMcpServers(
   if (discovered.length === 0) return;
 
   const { merged, newServers, collisions } = mergeDiscoveredServers(
-    settings.getMcpServersConfig(),
+    getMcpServersConfig(),
     discovered,
   );
 
   // Surface collisions in Settings UI (always set, even if empty, to clear stale state)
-  settings.setDiscoveryCollisions(collisions);
+  setDiscoveryCollisions(collisions);
   for (const c of collisions) {
     // eslint-disable-next-line no-console
     console.warn(
@@ -497,7 +502,7 @@ async function discoverAndConnectMcpServers(
   if (newServers.length === 0) return;
 
   // Persist the merged config (both types get saved so they appear in Settings)
-  settings.setMcpServersConfig(merged);
+  setMcpServersConfig(merged);
   await persistMcpConfig(invoke, merged);
 
   // Split by transport type — unknown transports are not auto-connected
@@ -543,7 +548,7 @@ async function discoverAndConnectMcpServers(
               void tryConnectMcpServer(mcpConfig, invoke);
             }
             // Persist spawnApproved so we don't ask again
-            void persistMcpConfig(invoke, settings.getMcpServersConfig());
+            void persistMcpConfig(invoke, getMcpServersConfig());
             showToast(
               `Connecting ${spawnServers.length} MCP server${spawnServers.length !== 1 ? "s" : ""}`,
             );
@@ -650,7 +655,7 @@ function onAIReady(config: DesktopAIConfig): void {
   // Connect MCP servers via Tauri IPC bridge
   if (config.isTauri && config.invoke) {
     const invoke = config.invoke;
-    for (const mcpConfig of settings.getMcpServersConfig()) {
+    for (const mcpConfig of getMcpServersConfig()) {
       void tryConnectMcpServer(mcpConfig, invoke);
     }
 
@@ -744,7 +749,7 @@ async function bootstrap(): Promise<void> {
       }
     }
     if (Array.isArray(parsed.mcp_servers)) {
-      settings.setMcpServersConfig(parsed.mcp_servers as McpServerConfig[]);
+      setMcpServersConfig(parsed.mcp_servers as McpServerConfig[]);
     }
 
     // Hydrate governance UI + selected-preset state from the canonical
