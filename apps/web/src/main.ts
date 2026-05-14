@@ -46,7 +46,7 @@ import {
 import { loadVoiceConfig, getVendorKey } from "./storage";
 import { initGatedPanels } from "./ui/gated-panels";
 import { initSovereignPanels } from "./ui/sovereign-panels";
-import { initSkillsPanel } from "./ui/skills-panel";
+import { initCapabilitiesPanel } from "./ui/capabilities-panel";
 import { initActivityPanel } from "./ui/activity-panel";
 import { initTheme } from "./ui/theme";
 import { initSlashCommands } from "./ui/slash-commands";
@@ -239,7 +239,7 @@ initKeyboard({
 
 const gatedPanels = initGatedPanels(ctx);
 const sovereignPanels = initSovereignPanels(ctx);
-const skillsPanel = initSkillsPanel(ctx);
+const capabilitiesPanel = initCapabilitiesPanel(ctx);
 const activityPanel = initActivityPanel(ctx);
 
 // Drop handlers — DOM drag-drop translates into typed `feedPerception`
@@ -255,10 +255,10 @@ initDropHandlers({
   // against adapters that don't render a slab.
   onDragHover: (hovering) => app.getRenderer().setSlabDragHover?.(hovering),
 });
-// URL-driven entry: visiting /skills or /activity auto-opens the
+// URL-driven entry: visiting /capabilities or /activity auto-opens the
 // panel. The panel closes by popping the route back to /, so the
 // back button does the expected thing.
-skillsPanel.openIfRouted();
+capabilitiesPanel.openIfRouted();
 activityPanel.openIfRouted();
 
 // === Theme ===
@@ -275,15 +275,15 @@ const conversationsPanel = document.getElementById("conversations-panel") as HTM
 const memoryPanel = document.getElementById("memory-panel") as HTMLDivElement;
 const goalsPanel = document.getElementById("goals-panel") as HTMLDivElement;
 const sovereignPanel = document.getElementById("sovereign-panel") as HTMLDivElement;
-const skillsPanelEl = document.getElementById("skills-panel") as HTMLDivElement;
+const capabilitiesPanelEl = document.getElementById("capabilities-panel") as HTMLDivElement;
 const activityPanelEl = document.getElementById("activity-panel") as HTMLDivElement;
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (activityPanelEl.classList.contains("open")) {
       activityPanel.close();
-    } else if (skillsPanelEl.classList.contains("open")) {
-      skillsPanel.close();
+    } else if (capabilitiesPanelEl.classList.contains("open")) {
+      capabilitiesPanel.close();
     } else if (sovereignPanel.classList.contains("open")) {
       sovereignPanels.close();
     } else if (memoryPanel.classList.contains("open") || goalsPanel.classList.contains("open")) {

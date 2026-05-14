@@ -1,12 +1,15 @@
 /**
- * Skills panel — full lifecycle integration test on web.
+ * Capabilities panel — full lifecycle integration test on web (Skills
+ * sub-tab).
  *
  * Closes the silent-correctness gap: registry construction wired
- * through bootstrap, panel renders Browse + Installed sections, install
- * via the controller's `installFromSource({ kind: "url" })` path
- * persists through IDB, enable + remove round-trip through the
- * controller. The fetch stub returns a real signed envelope so the
- * registry's signature-verification path is exercised end-to-end.
+ * through bootstrap, the Skills sub-tab renders Browse + Installed
+ * sections, install via the controller's `installFromSource({ kind:
+ * "url" })` path persists through IDB, enable + remove round-trip
+ * through the controller. The fetch stub returns a real signed
+ * envelope so the registry's signature-verification path is exercised
+ * end-to-end. The Connections sub-tab is exercised by separate MCP
+ * unit tests; this scaffold stubs only the Skills-tab DOM.
  *
  * @vitest-environment jsdom
  */
@@ -51,7 +54,7 @@ import {
   openMotebitDB,
 } from "@motebit/browser-persistence";
 
-import { initSkillsPanel } from "../ui/skills-panel";
+import { initCapabilitiesPanel } from "../ui/capabilities-panel";
 import type { WebContext } from "../types";
 import type { WebApp } from "../web-app";
 
@@ -69,17 +72,22 @@ ed.hashes.sha512 = (msg: Uint8Array) => sha512(msg);
 ed.hashes.sha512Async = async (msg: Uint8Array) => sha512(msg);
 
 const PANEL_DOM = `
-  <div id="skills-backdrop"></div>
-  <div id="skills-panel">
+  <div id="capabilities-backdrop"></div>
+  <div id="capabilities-panel">
     <span id="skills-count">0</span>
-    <button id="skills-close-btn"></button>
-    <input id="skills-search" />
-    <input id="skills-include-unfeatured" type="checkbox" />
-    <div id="skills-list"></div>
-    <div id="skills-detail">
-      <button id="skills-detail-back"></button>
-      <div id="skills-detail-body"></div>
+    <button id="capabilities-close-btn"></button>
+    <button class="capabilities-tab active" data-tab="skills">Skills</button>
+    <button class="capabilities-tab" data-tab="connections">Connections</button>
+    <div id="cap-pane-skills">
+      <input id="skills-search" />
+      <input id="skills-include-unfeatured" type="checkbox" />
+      <div id="skills-list"></div>
+      <div id="skills-detail">
+        <button id="skills-detail-back"></button>
+        <div id="skills-detail-body"></div>
+      </div>
     </div>
+    <div id="cap-pane-connections" style="display: none"></div>
   </div>
   <div id="skills-consent-backdrop"></div>
   <div id="skills-consent-modal" role="dialog">
@@ -210,7 +218,7 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
       bootstrapProxy: () => Promise.resolve(false),
     };
 
-    const api = initSkillsPanel(ctx);
+    const api = initCapabilitiesPanel(ctx);
     api.open();
 
     // Wait for refresh: discover fetch + registry.list both settle.
@@ -342,7 +350,7 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
       showToast: () => undefined,
       bootstrapProxy: () => Promise.resolve(false),
     };
-    const api = initSkillsPanel(ctx);
+    const api = initCapabilitiesPanel(ctx);
     api.open();
     const list = document.getElementById("skills-list") as HTMLDivElement;
     await waitFor(() => {
@@ -471,7 +479,7 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
       showToast: () => undefined,
       bootstrapProxy: () => Promise.resolve(false),
     };
-    const api = initSkillsPanel(ctx);
+    const api = initCapabilitiesPanel(ctx);
     api.open();
     const list = document.getElementById("skills-list") as HTMLDivElement;
     await waitFor(() => {
@@ -568,7 +576,7 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
       showToast,
       bootstrapProxy: () => Promise.resolve(false),
     };
-    const api = initSkillsPanel(ctx);
+    const api = initCapabilitiesPanel(ctx);
     api.open();
     const list = document.getElementById("skills-list") as HTMLDivElement;
     await waitFor(() => {
@@ -665,7 +673,7 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
       showToast: () => undefined,
       bootstrapProxy: () => Promise.resolve(false),
     };
-    const api = initSkillsPanel(ctx);
+    const api = initCapabilitiesPanel(ctx);
     api.open();
     const list = document.getElementById("skills-list") as HTMLDivElement;
     await waitFor(() => {
@@ -763,7 +771,7 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
       showToast: () => undefined,
       bootstrapProxy: () => Promise.resolve(false),
     };
-    const api = initSkillsPanel(ctx);
+    const api = initCapabilitiesPanel(ctx);
     api.open();
     const list = document.getElementById("skills-list") as HTMLDivElement;
     await waitFor(() => {

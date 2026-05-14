@@ -67,7 +67,7 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "settings", description: "Open settings" },
   { name: "conversations", description: "Browse conversations" },
   { name: "memories", description: "Browse memories" },
-  { name: "skills", description: "Browse and install skills" },
+  { name: "capabilities", description: "Browse skills and tool-server connections" },
   {
     name: "activity",
     description: "View signed deletions, consents, and other audit-grade events",
@@ -248,9 +248,9 @@ export function initSlashCommands(
         chatInput.value = "";
         callbacks.openMemory();
         return;
-      case "skills":
+      case "capabilities":
         chatInput.value = "";
-        document.dispatchEvent(new CustomEvent("motebit:open-skills"));
+        document.dispatchEvent(new CustomEvent("motebit:open-capabilities"));
         return;
       case "activity":
         chatInput.value = "";
@@ -306,7 +306,10 @@ export function initSlashCommands(
         chatInput.value = "";
         const servers = ctx.app.getMcpServers();
         if (servers.length === 0) {
-          addMessage("system", "No MCP servers connected. Use Settings to add one.");
+          addMessage(
+            "system",
+            "No MCP servers connected. Open the Capabilities panel → Connections to add one.",
+          );
         } else {
           const lines = servers.map(
             (s) =>

@@ -21,9 +21,15 @@ The slight asymmetry — both registers span time, anchored at the present — i
 | **Sovereign**     | identity | identity   | What you are (accumulated → extant)               |
 | **Memories**      | identity | memory     | What motebit remembers (accumulated → extant)     |
 | **Conversations** | identity | memory     | What you've said (accumulated → extant)           |
-| **Skills**        | runtime  | capability | What motebit can do (extant → invocable)          |
+| **Capabilities**  | runtime  | capability | What motebit can do (extant → invocable)          |
 | **Goals**         | runtime  | execution  | What motebit will do (declared → committed)       |
 | **Agents**        | runtime  | delegation | Who motebit collaborates with (known → invocable) |
+
+The capability-primitive panel is named **Capabilities** (not Skills) because it
+hosts two sibling sub-tabs — **Skills** (agentskills.io procedural knowledge) and
+**Connections** (MCP tool servers, future capability sources) — both of which
+satisfy the substrate-vs-accumulation test below. The agentskills.io brand
+survives at the sub-tab level; the panel rises to name the primitive.
 
 The split is not aesthetic. It maps cleanly onto motebit's foundational primitive set (see "Why six, why three+three" below). When two independently-derived doctrines produce the same 3+3 split, the categories are being _discovered_, not designed.
 
@@ -39,7 +45,7 @@ Two doctrines already encode this shape from different angles. Codifying the pan
 
 **Runtime register** surfaces the agent-runtime primitives named in [`the-stack-one-layer-up.md`](the-stack-one-layer-up.md):
 
-1. _Capability bundle_ → Skills
+1. _Capability bundle_ → Capabilities (Skills + Connections sub-tabs)
 2. _Autonomous execution_ → Goals
 3. _Delegation graph_ → Agents
 
@@ -88,9 +94,7 @@ Settings and capability-primitive panels both surface "things motebit can use." 
 
 Substrate is the _engine_. Accumulation is the _kit motebit has acquired_. Both are "external reach" but they are different categories with different surface treatments.
 
-**The MCP placement implication.** MCP servers currently live in Settings → Intelligence (`apps/web/src/ui/settings.ts`). That's a category error caught by this test: MCP servers accumulate (you add many, each provides a set of tools that stack on the agent's available actions), so they belong on the capability-primitive panel alongside Skills, not in Settings alongside inference-host choice. Migration is queued; the doctrine names the destination.
-
-**Rename decided at migration time.** A vocabulary audit during the MCP migration scoping (web surface, 2026-05-13) confirmed the panel name needs to rise to match the primitive. Current Skills-narrow copy ("Installed skills appear here", "Published skills appear here", "Search skills…") reads wrong once MCP tool servers are sibling-displayed. Decision: the capability-primitive panel renames from **Skills** to **Capabilities** with two sub-tabs — **Skills** (agentskills.io procedural knowledge, controller untouched) and **Connections** (MCP tool servers, future capability sources). The agentskills.io ecosystem brand survives at the sub-tab level; the panel rises to name the primitive. Sequence: web first commit (rename + sub-tabs + MCP move + route `/skills` → `/capabilities`); desktop + mobile parity follow in same arc per the one-pass-delivery doctrine. Storage path (`motebit:mcp_servers` localStorage on web) stays put; UI migrates, persistence stays — decoupled concerns, separate commit if storage ever needs to move. The typed `SIDE_RAIL_PANELS` registry's `id: "skills"` → `id: "capabilities"` is part of the migration commit, not this doctrine update, so doctrine and code stay in lockstep through the transition.
+**The MCP placement implication, executed.** Pre-migration, MCP servers lived in Settings → Intelligence (`apps/web/src/ui/settings.ts`). That was a category error caught by this test: MCP servers accumulate (you add many, each provides a set of tools that stack on the agent's available actions), so they belong on the capability-primitive panel alongside Skills, not in Settings alongside inference-host choice. The web migration shipped 2026-05-13: panel renamed Skills → **Capabilities** with two sub-tabs — **Skills** (agentskills.io procedural knowledge, `createSkillsController` untouched) and **Connections** (MCP tool servers, future capability sources). Route flipped `/skills` → `/capabilities`. Typed `SIDE_RAIL_PANELS` registry id flipped `"skills"` → `"capabilities"` in the same commit so doctrine + code stay in lockstep. Storage path (`motebit:mcp_servers` localStorage) stayed put — UI migrated, persistence didn't; decoupled concerns, separate commit if storage ever needs to move. Skills controller was NOT absorbed: MCP is sibling, not merged — different shapes, different storage, different lifecycles, different package (`@motebit/mcp-client`). Desktop + mobile mirror in same arc per the one-pass-delivery doctrine. The agentskills.io ecosystem brand survives at the sub-tab level; the panel rises to name the primitive.
 
 **The voice-migration corollary.** Voice provider is currently substrate-shaped (single default TTS engine, one chosen voice). If motebit ever supports multi-voice — different voices per context, per agent, per surface, user-cloneable voice library — voice migrates to a capability-primitive panel. Same architectural property as MCP: capability that's substitutive in some configurations and accumulative in others. The test answers when to move: the day "add another voice" becomes a thing the user does, voice has crossed from substrate to accumulation.
 

@@ -585,13 +585,14 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       });
   });
 
-  // Skills panel — opens via custom event the skills-panel module
-  // listens for. Settings closes first so the panel renders cleanly.
-  // Replaces a HUD button slot — the canonical 3-1-3 HUD doesn't
-  // include Skills; Settings → Intelligence is the discoverability path.
-  document.getElementById("settings-open-skills")?.addEventListener("click", () => {
+  // Capabilities panel — opens via custom event the capabilities-panel
+  // module listens for. Settings closes first so the panel renders
+  // cleanly. Replaces a HUD button slot — the canonical 3-1-3 HUD
+  // doesn't include Capabilities; Settings → Intelligence is the
+  // discoverability path.
+  document.getElementById("settings-open-capabilities")?.addEventListener("click", () => {
     close();
-    document.dispatchEvent(new CustomEvent("motebit:open-skills"));
+    document.dispatchEvent(new CustomEvent("motebit:open-capabilities"));
   });
 
   // Export Data button
@@ -1107,7 +1108,6 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     colorPicker.buildColorSwatches();
     settingsBackdrop.classList.add("open");
     settingsModal.classList.add("open");
-    renderMcpServers();
 
     // Pre-fill governance config
     const govConfig = loadGovernanceConfig();
@@ -1517,120 +1517,6 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       ctx.showToast(`WebLLM failed: ${msg}`);
     }
   }
-
-  // === MCP Server Management ===
-
-  const mcpServerList = document.getElementById("mcp-server-list") as HTMLDivElement;
-  const mcpAddToggle = document.getElementById("mcp-add-toggle") as HTMLButtonElement;
-  const mcpAddForm = document.getElementById("mcp-add-form") as HTMLDivElement;
-  const mcpAddCancel = document.getElementById("mcp-add-cancel") as HTMLButtonElement;
-  const mcpAddName = document.getElementById("mcp-add-name") as HTMLInputElement;
-  const mcpAddUrl = document.getElementById("mcp-add-url") as HTMLInputElement;
-  const mcpAddTrusted = document.getElementById("mcp-add-trusted") as HTMLInputElement;
-  const mcpAddMotebit = document.getElementById("mcp-add-motebit") as HTMLInputElement;
-  const mcpAddBtn = document.getElementById("mcp-add-btn") as HTMLButtonElement;
-
-  // Toggle the form open/closed. Add Server stays anchored above the form
-  // — matches desktop, where the same affordance shows or hides the form.
-  function hideMcpForm(): void {
-    mcpAddForm.style.display = "none";
-    mcpAddName.value = "";
-    mcpAddUrl.value = "";
-    mcpAddTrusted.checked = false;
-    mcpAddMotebit.checked = false;
-  }
-  mcpAddToggle.addEventListener("click", () => {
-    const opening = mcpAddForm.style.display === "none";
-    mcpAddForm.style.display = opening ? "" : "none";
-    if (opening) mcpAddName.focus();
-  });
-  mcpAddCancel.addEventListener("click", hideMcpForm);
-
-  function renderMcpServers(): void {
-    const servers = ctx.app.getMcpServers();
-    mcpServerList.innerHTML = "";
-    if (servers.length === 0) {
-      const empty = document.createElement("div");
-      // Theme-aware ghost text — hardcoded white-at-30% was invisible
-      // on the light-mode lavender substrate. --text-ghost flips with
-      // [data-theme="dark"] so the register reads in both modes.
-      empty.style.cssText = "font-size:12px;color:var(--text-ghost);padding:8px 0;";
-      empty.textContent = "MCP servers appear here when configured";
-      mcpServerList.appendChild(empty);
-      return;
-    }
-    for (const server of servers) {
-      const item = document.createElement("div");
-      item.className = "mcp-server-item";
-
-      const dot = document.createElement("span");
-      dot.className = `mcp-server-dot ${server.connected ? "connected" : "disconnected"}`;
-      item.appendChild(dot);
-
-      const name = document.createElement("span");
-      name.className = "mcp-server-name";
-      name.textContent = server.name;
-      item.appendChild(name);
-
-      const tools = document.createElement("span");
-      tools.className = "mcp-server-tools";
-      tools.textContent = `${server.toolCount} tools`;
-      item.appendChild(tools);
-
-      const actions = document.createElement("div");
-      actions.className = "mcp-server-actions";
-
-      const trustBtn = document.createElement("button");
-      trustBtn.textContent = server.trusted ? "Untrust" : "Trust";
-      trustBtn.addEventListener("click", () => {
-        ctx.app.setMcpServerTrust(server.name, !server.trusted);
-        renderMcpServers();
-      });
-      actions.appendChild(trustBtn);
-
-      const removeBtn = document.createElement("button");
-      removeBtn.textContent = "Remove";
-      removeBtn.addEventListener("click", () => {
-        void ctx.app.removeMcpServer(server.name).then(() => renderMcpServers());
-      });
-      actions.appendChild(removeBtn);
-
-      item.appendChild(actions);
-      mcpServerList.appendChild(item);
-    }
-  }
-
-  mcpAddBtn.addEventListener("click", () => {
-    const name = mcpAddName.value.trim();
-    const url = mcpAddUrl.value.trim();
-    if (!name || !url) {
-      ctx.showToast("Name and URL are required");
-      return;
-    }
-    mcpAddBtn.disabled = true;
-    mcpAddBtn.textContent = "Connecting...";
-    void ctx.app
-      .addMcpServer({
-        name,
-        transport: "http",
-        url,
-        trusted: mcpAddTrusted.checked,
-        motebit: mcpAddMotebit.checked,
-      })
-      .then(() => {
-        hideMcpForm();
-        renderMcpServers();
-        ctx.showToast(`Connected to ${name}`);
-      })
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        ctx.showToast(`MCP failed: ${msg}`);
-      })
-      .finally(() => {
-        mcpAddBtn.disabled = false;
-        mcpAddBtn.textContent = "Add";
-      });
-  });
 
   // === Escape key ===
 

@@ -32,7 +32,7 @@ export const SIDE_RAIL_PANELS: readonly SideRailPanel[] = [
   { id: "memory", register: "identity", primitive: "memory" },
   { id: "conversations", register: "identity", primitive: "memory" },
   // Runtime register — prospective (present → future).
-  { id: "skills", register: "runtime", primitive: "capability" },
+  { id: "capabilities", register: "runtime", primitive: "capability" },
   { id: "goals", register: "runtime", primitive: "execution" },
   { id: "agents", register: "runtime", primitive: "delegation" },
 ] as const;

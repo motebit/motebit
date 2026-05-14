@@ -1,23 +1,27 @@
 /**
- * Skills panel — full lifecycle on web.
+ * Capabilities panel — capability-primitive surface per
+ * `docs/doctrine/panel-temporal-registers.md` (substrate-vs-accumulation).
+ * Hosts two sibling sub-tabs:
  *
- * Two sections:
+ *   • **Skills** — agentskills.io procedural-knowledge bundles. Two
+ *     sections inside this tab: Installed (IDB-backed registry, per-row
+ *     enable/disable + trust + remove) and Browse (relay
+ *     `/api/v1/skills/discover`, per-row install). The skills controller
+ *     (`createSkillsController`) is untouched by the rename.
  *
- *   • **Installed** — IDB-backed registry (`SkillRegistry` over
- *     `IdbSkillStorageAdapter`). Per-row enable/disable + trust/untrust
- *     + remove. Clicking a row opens the local detail (body bytes are
- *     already on disk).
+ *   • **Connections** — MCP tool servers. HTTP-only on web (stdio is
+ *     desktop-only). Per-row Trust / Remove; "Add Server" form for
+ *     new connections. Persistence stays at `motebit:mcp_servers`
+ *     localStorage; this surface owns the UI, not the storage path.
  *
- *   • **Browse** — public-read view of `/api/v1/skills/discover`.
- *     Per-row Install button fetches the byte-identical bundle from
- *     `/api/v1/skills/:submitter/:name/:version` and hands it to the
- *     controller's `installFromSource({ kind: "url" })`. Click opens
- *     the existing detail with copy-command + verify-locally.
+ * Skills + MCP are siblings, not merged: different shapes, different
+ * storage, different lifecycles, different packages. The Capabilities
+ * panel hosts both controllers; it does not absorb them.
  *
- * Privilege boundary: install + envelope-bytes verification run in this
- * same renderer context as the panel UI. There is no sidecar isolation
- * analogue in browsers — the platform sandbox is the only boundary.
- * See `packages/skills/CLAUDE.md` rule 5 for the cross-surface contract.
+ * Privilege boundary (Skills): install + envelope-bytes verification run
+ * in this same renderer context as the panel UI. There is no sidecar
+ * isolation analogue in browsers — the platform sandbox is the only
+ * boundary. See `packages/skills/CLAUDE.md` rule 5.
  *
  * Spec: spec/skills-v1.md, spec/skills-registry-v1.md.
  */
@@ -92,23 +96,32 @@ const SENSITIVITY_LABEL: Record<string, string> = {
   secret: "secret",
 };
 
-const SKILLS_ROUTE_PREFIX = "/skills";
+const CAPABILITIES_ROUTE_PREFIX = "/capabilities";
+
+type SubTab = "skills" | "connections";
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-export interface SkillsPanelAPI {
+export interface CapabilitiesPanelAPI {
   open(): void;
   close(): void;
-  /** Open if the current URL points at /skills. Called once at bootstrap. */
+  /** Open if the current URL points at /capabilities. Called once at bootstrap. */
   openIfRouted(): void;
 }
 
-export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
-  const panel = document.getElementById("skills-panel") as HTMLDivElement;
-  const backdrop = document.getElementById("skills-backdrop") as HTMLDivElement;
-  const closeBtn = document.getElementById("skills-close-btn") as HTMLButtonElement;
+export function initCapabilitiesPanel(ctx: WebContext): CapabilitiesPanelAPI {
+  const panel = document.getElementById("capabilities-panel") as HTMLDivElement;
+  const backdrop = document.getElementById("capabilities-backdrop") as HTMLDivElement;
+  const closeBtn = document.getElementById("capabilities-close-btn") as HTMLButtonElement;
+
+  // Sub-tab buttons + panes (Skills active by default).
+  const tabBtns = Array.from(panel.querySelectorAll<HTMLButtonElement>(".capabilities-tab"));
+  const skillsPane = document.getElementById("cap-pane-skills") as HTMLDivElement;
+  const connectionsPane = document.getElementById("cap-pane-connections") as HTMLDivElement;
+
+  // Skills sub-tab DOM (existing).
   const list = document.getElementById("skills-list") as HTMLDivElement;
   const countBadge = document.getElementById("skills-count") as HTMLSpanElement;
   const search = document.getElementById("skills-search") as HTMLInputElement;
@@ -118,6 +131,20 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
   const detail = document.getElementById("skills-detail") as HTMLDivElement;
   const detailBody = document.getElementById("skills-detail-body") as HTMLDivElement;
   const detailBack = document.getElementById("skills-detail-back") as HTMLButtonElement;
+
+  // Connections sub-tab DOM — MCP. Each is `null` in test scaffolds that
+  // only stub the Skills tab; the connections wiring no-ops cleanly when
+  // any element is missing.
+  const mcpServerList = document.getElementById("mcp-server-list") as HTMLDivElement | null;
+  const mcpAddToggle = document.getElementById("mcp-add-toggle") as HTMLButtonElement | null;
+  const mcpAddForm = document.getElementById("mcp-add-form") as HTMLDivElement | null;
+  const mcpAddCancel = document.getElementById("mcp-add-cancel") as HTMLButtonElement | null;
+  const mcpAddName = document.getElementById("mcp-add-name") as HTMLInputElement | null;
+  const mcpAddUrl = document.getElementById("mcp-add-url") as HTMLInputElement | null;
+  const mcpAddTrusted = document.getElementById("mcp-add-trusted") as HTMLInputElement | null;
+  const mcpAddMotebit = document.getElementById("mcp-add-motebit") as HTMLInputElement | null;
+  const mcpAddBtn = document.getElementById("mcp-add-btn") as HTMLButtonElement | null;
+  const mcpEmpty = document.getElementById("mcp-empty") as HTMLDivElement | null;
 
   // Browse-section state — discover endpoint + search query.
   let browseEntries: SkillRegistryEntry[] = [];
@@ -134,6 +161,8 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
   // tolerates null and shows an "unavailable" line.
   let controller: SkillsController | null = null;
   let unsubscribe: (() => void) | null = null;
+
+  let activeTab: SubTab = "skills";
 
   function tryAttachController(): SkillsController | null {
     if (controller !== null) return controller;
@@ -165,8 +194,8 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
   function open(): void {
     panel.classList.add("open");
     backdrop.classList.add("open");
-    if (window.location.pathname !== SKILLS_ROUTE_PREFIX) {
-      window.history.pushState({ skills: true }, "", SKILLS_ROUTE_PREFIX);
+    if (window.location.pathname !== CAPABILITIES_ROUTE_PREFIX) {
+      window.history.pushState({ capabilities: true }, "", CAPABILITIES_ROUTE_PREFIX);
     }
     void refresh();
   }
@@ -175,18 +204,40 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
     panel.classList.remove("open");
     backdrop.classList.remove("open");
     detail.style.display = "none";
-    if (window.location.pathname.startsWith(SKILLS_ROUTE_PREFIX)) {
+    if (window.location.pathname.startsWith(CAPABILITIES_ROUTE_PREFIX)) {
       window.history.pushState({}, "", "/");
     }
   }
 
   function openIfRouted(): void {
-    if (window.location.pathname.startsWith(SKILLS_ROUTE_PREFIX)) {
+    if (window.location.pathname.startsWith(CAPABILITIES_ROUTE_PREFIX)) {
       open();
     }
   }
 
-  document.addEventListener("motebit:open-skills", () => open());
+  document.addEventListener("motebit:open-capabilities", () => open());
+
+  // -------------------------------------------------------------------------
+  // Sub-tab switching — mirrors the Agents Known/Discover pattern.
+  // -------------------------------------------------------------------------
+
+  function switchTab(tab: SubTab): void {
+    activeTab = tab;
+    for (const btn of tabBtns) {
+      btn.classList.toggle("active", btn.dataset.tab === tab);
+    }
+    skillsPane.style.display = tab === "skills" ? "" : "none";
+    connectionsPane.style.display = tab === "connections" ? "" : "none";
+    if (tab === "skills") {
+      void refresh();
+    } else {
+      renderMcpServers();
+    }
+  }
+
+  for (const btn of tabBtns) {
+    btn.addEventListener("click", () => switchTab((btn.dataset.tab as SubTab) ?? "skills"));
+  }
 
   // -------------------------------------------------------------------------
   // Refresh — pulls Installed (controller) + Browse (HTTP) in parallel.
@@ -611,6 +662,116 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
   }
 
   // -------------------------------------------------------------------------
+  // Connections sub-tab — MCP server management. Lifted from settings.ts
+  // (commit-1 of the Capabilities migration); persistence path
+  // (`motebit:mcp_servers` localStorage) stays put — the UI moved, the
+  // storage didn't.
+  // -------------------------------------------------------------------------
+
+  function hideMcpForm(): void {
+    if (mcpAddForm === null) return;
+    mcpAddForm.style.display = "none";
+    if (mcpAddName !== null) mcpAddName.value = "";
+    if (mcpAddUrl !== null) mcpAddUrl.value = "";
+    if (mcpAddTrusted !== null) mcpAddTrusted.checked = false;
+    if (mcpAddMotebit !== null) mcpAddMotebit.checked = false;
+  }
+
+  function renderMcpServers(): void {
+    if (mcpServerList === null) return;
+    const servers = ctx.app.getMcpServers();
+    mcpServerList.innerHTML = "";
+    if (servers.length === 0) {
+      if (mcpEmpty !== null) mcpEmpty.style.display = "";
+      return;
+    }
+    if (mcpEmpty !== null) mcpEmpty.style.display = "none";
+    for (const server of servers) {
+      const item = document.createElement("div");
+      item.className = "mcp-server-item";
+
+      const dot = document.createElement("span");
+      dot.className = `mcp-server-dot ${server.connected ? "connected" : "disconnected"}`;
+      item.appendChild(dot);
+
+      const name = document.createElement("span");
+      name.className = "mcp-server-name";
+      name.textContent = server.name;
+      item.appendChild(name);
+
+      const tools = document.createElement("span");
+      tools.className = "mcp-server-tools";
+      tools.textContent = `${server.toolCount} tools`;
+      item.appendChild(tools);
+
+      const actions = document.createElement("div");
+      actions.className = "mcp-server-actions";
+
+      const trustBtn = document.createElement("button");
+      trustBtn.textContent = server.trusted ? "Untrust" : "Trust";
+      trustBtn.addEventListener("click", () => {
+        ctx.app.setMcpServerTrust(server.name, !server.trusted);
+        renderMcpServers();
+      });
+      actions.appendChild(trustBtn);
+
+      const removeBtn = document.createElement("button");
+      removeBtn.textContent = "Remove";
+      removeBtn.addEventListener("click", () => {
+        void ctx.app.removeMcpServer(server.name).then(() => renderMcpServers());
+      });
+      actions.appendChild(removeBtn);
+
+      item.appendChild(actions);
+      mcpServerList.appendChild(item);
+    }
+  }
+
+  if (mcpAddToggle !== null && mcpAddForm !== null) {
+    mcpAddToggle.addEventListener("click", () => {
+      const opening = mcpAddForm.style.display === "none";
+      mcpAddForm.style.display = opening ? "" : "none";
+      if (opening && mcpAddName !== null) mcpAddName.focus();
+    });
+  }
+  if (mcpAddCancel !== null) {
+    mcpAddCancel.addEventListener("click", hideMcpForm);
+  }
+  if (mcpAddBtn !== null) {
+    mcpAddBtn.addEventListener("click", () => {
+      const name = mcpAddName?.value.trim() ?? "";
+      const url = mcpAddUrl?.value.trim() ?? "";
+      if (!name || !url) {
+        ctx.showToast("Name and URL are required");
+        return;
+      }
+      mcpAddBtn.disabled = true;
+      mcpAddBtn.textContent = "Connecting...";
+      void ctx.app
+        .addMcpServer({
+          name,
+          transport: "http",
+          url,
+          trusted: mcpAddTrusted?.checked ?? false,
+          motebit: mcpAddMotebit?.checked ?? false,
+        })
+        .then(() => {
+          hideMcpForm();
+          renderMcpServers();
+          ctx.showToast(`Connected to ${name}`);
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.showToast(`MCP failed: ${msg}`);
+        })
+        .finally(() => {
+          mcpAddBtn.disabled = false;
+          mcpAddBtn.textContent = "Add";
+        });
+    });
+  }
+
+  // -------------------------------------------------------------------------
   // Consent modal — sensitive-tier install (medical / financial / secret).
   // The HTML markup lives in apps/web/index.html; this function shows
   // the modal, attaches one-shot Approve/Cancel handlers, and resolves
@@ -710,7 +871,7 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
   });
 
   window.addEventListener("popstate", () => {
-    if (!window.location.pathname.startsWith(SKILLS_ROUTE_PREFIX)) {
+    if (!window.location.pathname.startsWith(CAPABILITIES_ROUTE_PREFIX)) {
       panel.classList.remove("open");
       backdrop.classList.remove("open");
       detail.style.display = "none";
@@ -721,12 +882,13 @@ export function initSkillsPanel(ctx: WebContext): SkillsPanelAPI {
   });
 
   // The controller subscription lives for the lifetime of this panel
-  // (one per page load — bootstrap calls `initSkillsPanel` once). No
-  // teardown path is exposed because there's no consumer for one
+  // (one per page load — bootstrap calls `initCapabilitiesPanel` once).
+  // No teardown path is exposed because there's no consumer for one
   // today; if the panel ever needs reinitialization (hot-reload, web
   // worker swap, surface tear-down), expose `unsubscribe` on the
   // returned API and call it before re-init.
   void unsubscribe;
+  void activeTab;
 
   return { open, close, openIfRouted };
 }
