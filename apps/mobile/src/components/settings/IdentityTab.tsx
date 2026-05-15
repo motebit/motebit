@@ -28,6 +28,8 @@ export interface IdentityTabProps {
   onVerifyIdentity?: () => void;
   /** Open the multi-step Restore-from-motebit.md modal (parent owns the modal). */
   onRestoreFromMd?: () => void;
+  /** Open the Restore-from-recovery-seed flow (same modal as Md, mode="seed"). */
+  onRestoreFromSeed?: () => void;
   onLinkDevice?: () => void;
   onClaimDevice?: () => void;
   onRotateKey?: () => void;
@@ -46,6 +48,7 @@ export function IdentityTab({
   onExportIdentity,
   onVerifyIdentity,
   onRestoreFromMd,
+  onRestoreFromSeed,
   onLinkDevice,
   onClaimDevice,
   onRotateKey,
@@ -361,6 +364,16 @@ export function IdentityTab({
       {onRestoreFromMd && (
         <TouchableOpacity style={styles.exportButton} onPress={onRestoreFromMd} activeOpacity={0.7}>
           <Text style={styles.exportText}>Restore from motebit.md…</Text>
+        </TouchableOpacity>
+      )}
+
+      {onRestoreFromSeed && (
+        <TouchableOpacity
+          style={styles.exportButton}
+          onPress={onRestoreFromSeed}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.exportText}>Restore from recovery seed…</Text>
         </TouchableOpacity>
       )}
 

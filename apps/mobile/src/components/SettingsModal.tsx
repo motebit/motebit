@@ -99,6 +99,7 @@ export function SettingsModal({
   const styles = useSettingsStyles();
   const [tab, setTab] = useState<Tab>("appearance");
   const [restoreVisible, setRestoreVisible] = useState(false);
+  const [restoreMode, setRestoreMode] = useState<"file" | "seed">("file");
   const [draft, setDraft] = useState<MobileSettings>(settings);
   const [apiKey, setApiKey] = useState("");
   const [googleKey, setGoogleKey] = useState("");
@@ -458,7 +459,14 @@ export function SettingsModal({
                   }
                 })();
               }}
-              onRestoreFromMd={() => setRestoreVisible(true)}
+              onRestoreFromMd={() => {
+                setRestoreMode("file");
+                setRestoreVisible(true);
+              }}
+              onRestoreFromSeed={() => {
+                setRestoreMode("seed");
+                setRestoreVisible(true);
+              }}
               onLinkDevice={onLinkDevice}
               onClaimDevice={onClaimDevice}
               onRotateKey={() => {
@@ -494,6 +502,7 @@ export function SettingsModal({
       </View>
       <RestoreIdentityModal
         visible={restoreVisible}
+        mode={restoreMode}
         app={app}
         onClose={() => setRestoreVisible(false)}
         onRestored={() => {

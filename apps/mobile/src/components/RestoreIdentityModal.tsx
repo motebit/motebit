@@ -28,11 +28,36 @@ import { useSettingsStyles } from "./settings/settings-shared";
 
 export interface RestoreIdentityModalProps {
   visible: boolean;
+  /** Which entry point is being used. The file path opens the file
+   *  picker first; the seed path skips straight to the seed paste and
+   *  synthesizes minimal metadata after a valid seed is entered. */
+  mode: "file" | "seed";
   app: MobileApp;
   onClose: () => void;
   /** Fires after a successful restore. Parent should prompt the user to
    *  fully close + reopen the app so bootstrap picks up the new identity. */
   onRestored: () => void;
+}
+
+function synthesizeSeedOnlyMetadata(publicKeyHex: string): ImportedIdentityMetadata {
+  return {
+    motebitId:
+      typeof globalThis.crypto?.randomUUID === "function"
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`,
+    publicKey: publicKeyHex,
+    ownerId: "Mobile",
+    bornAt: new Date().toISOString(),
+    devices: [],
+    governance: {
+      trust_mode: "guarded",
+      max_risk_auto: "R1_DRAFT",
+      require_approval_above: "R1_DRAFT",
+      deny_above: "R4_MONEY",
+      operator_mode: false,
+    },
+    memory: { half_life_days: 7, confidence_threshold: 0.3, per_turn_limit: 5 },
+  };
 }
 
 function relativeBornAt(bornAt: string): string {
@@ -55,6 +80,7 @@ function shortAddress(pubHex: string): string {
 
 export function RestoreIdentityModal({
   visible,
+  mode,
   app,
   onClose,
   onRestored,
@@ -81,6 +107,45 @@ export function RestoreIdentityModal({
     setDerivedPrivateKey(null);
     setErrorMsg(null);
     setBusy(false);
+  }
+
+  /** Validate a pasted seed (length + hex), derive its public key, and
+   *  if valid synthesize metadata + advance to the preview step. Used by
+   *  the seed-only mode entry point — no .md file, no public-key guard
+   *  rail (the seed IS the authority). */
+  async function handleSeedOnlyNext(): Promise<void> {
+    const trimmed = seed.trim();
+    if (trimmed.length !== 64 || !/^[0-9a-fA-F]+$/.test(trimmed)) return;
+    try {
+      const privBytes = hexToBytes(trimmed);
+      const pubBytes = await getPublicKeyBySuite(privBytes, "motebit-jcs-ed25519-hex-v1");
+      const pubHex = bytesToHex(pubBytes);
+      const synthesized = synthesizeSeedOnlyMetadata(pubHex);
+      setMetadata(synthesized);
+      setOriginalContent(null);
+      setDerivedPrivateKey(trimmed);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setSeedStatus({ kind: "err", text: `Could not derive key — ${msg}` });
+    }
+  }
+
+  function evaluateSeedOnlyFormat(value: string): void {
+    setSeed(value);
+    const trimmed = value.trim();
+    if (trimmed === "") {
+      setSeedStatus({ kind: "none", text: "" });
+      return;
+    }
+    if (trimmed.length !== 64) {
+      setSeedStatus({ kind: "none", text: `${trimmed.length}/64 hex chars` });
+      return;
+    }
+    if (!/^[0-9a-fA-F]+$/.test(trimmed)) {
+      setSeedStatus({ kind: "err", text: "Seed must be 64 hex characters" });
+      return;
+    }
+    setSeedStatus({ kind: "ok", text: "✓ Valid seed" });
   }
 
   function handleClose(): void {
@@ -175,6 +240,8 @@ export function RestoreIdentityModal({
   const matchesPhrase = confirm.trim() === "REPLACE IDENTITY";
   const replaceEnabled = derivedPrivateKey !== null && matchesPhrase && !busy;
   const showPreviewStep = metadata !== null;
+  const seedOnlyMode = mode === "seed";
+  const seedFormatValid = seed.trim().length === 64 && /^[0-9a-fA-F]+$/.test(seed.trim());
 
   return (
     <Modal
@@ -184,7 +251,7 @@ export function RestoreIdentityModal({
       onRequestClose={handleClose}
     >
       <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
-        {!showPreviewStep ? (
+        {!showPreviewStep && !seedOnlyMode ? (
           <>
             <Text style={[styles.sectionTitle, { fontSize: 18, marginBottom: 12 }]}>
               Restore from motebit.md
@@ -211,47 +278,24 @@ export function RestoreIdentityModal({
               <Text style={styles.exportText}>Cancel</Text>
             </TouchableOpacity>
           </>
-        ) : (
+        ) : !showPreviewStep && seedOnlyMode ? (
           <>
             <Text style={[styles.sectionTitle, { fontSize: 18, marginBottom: 12 }]}>
-              Restore identity
+              Restore from recovery seed
             </Text>
             <Text
               style={{
                 fontSize: 13,
                 color: "#888",
-                marginBottom: 8,
-              }}
-            >
-              Restoring will activate:
-            </Text>
-            <View
-              style={{
-                backgroundColor: "#1c1c1e",
-                borderRadius: 10,
-                padding: 12,
+                lineHeight: 19,
                 marginBottom: 16,
               }}
             >
-              <Text
-                style={{ color: "#fff", fontFamily: "monospace", fontSize: 12, lineHeight: 18 }}
-              >
-                <Text style={{ color: "#888" }}>motebit </Text>
-                {metadata.motebitId.slice(0, 12)}…{"\n"}
-                <Text style={{ color: "#888" }}>Born </Text>
-                {relativeBornAt(metadata.bornAt)}
-                {"\n"}
-                <Text style={{ color: "#888" }}>Solana </Text>◆ {shortAddress(metadata.publicKey)}
-              </Text>
-            </View>
-
-            <Text
-              style={{
-                fontSize: 11,
-                color: "#888",
-                marginBottom: 4,
-              }}
-            >
+              Paste your 64-hex-char recovery seed. The original motebit_id cannot be recovered from
+              the seed alone — a new one will be assigned. Your cryptographic identity (private key
+              + Solana address + funds) is preserved.
+            </Text>
+            <Text style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>
               Recovery seed (64 hex chars)
             </Text>
             <TextInput
@@ -266,7 +310,7 @@ export function RestoreIdentityModal({
                 marginBottom: 4,
               }}
               value={seed}
-              onChangeText={(v) => void evaluateSeed(v)}
+              onChangeText={evaluateSeedOnlyFormat}
               placeholder="Paste your recovery seed"
               placeholderTextColor="#555"
               autoCapitalize="none"
@@ -288,6 +332,122 @@ export function RestoreIdentityModal({
             >
               {seedStatus.text}
             </Text>
+            <TouchableOpacity
+              style={[
+                styles.exportButton,
+                {
+                  marginBottom: 8,
+                  opacity: seedFormatValid ? 1 : 0.45,
+                  backgroundColor: seedFormatValid ? "#6e82f0" : undefined,
+                },
+              ]}
+              onPress={() => void handleSeedOnlyNext()}
+              activeOpacity={0.7}
+              disabled={!seedFormatValid}
+            >
+              <Text style={[styles.exportText, seedFormatValid && { color: "#fff" }]}>Next</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.exportButton} onPress={handleClose} activeOpacity={0.7}>
+              <Text style={styles.exportText}>Cancel</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <Text style={[styles.sectionTitle, { fontSize: 18, marginBottom: 12 }]}>
+              Restore identity
+            </Text>
+            <Text
+              style={{
+                fontSize: 13,
+                color: "#888",
+                marginBottom: 8,
+              }}
+            >
+              Restoring will activate:
+            </Text>
+            {seedOnlyMode ? (
+              <Text
+                style={{
+                  fontSize: 11,
+                  color: "#f0a030",
+                  backgroundColor: "rgba(240, 160, 48, 0.08)",
+                  padding: 10,
+                  borderRadius: 8,
+                  marginBottom: 12,
+                  lineHeight: 16,
+                }}
+              >
+                ⚠ Seed-only restore — original motebit_id not recoverable, a new one will be
+                assigned.
+              </Text>
+            ) : null}
+            <View
+              style={{
+                backgroundColor: "#1c1c1e",
+                borderRadius: 10,
+                padding: 12,
+                marginBottom: 16,
+              }}
+            >
+              <Text
+                style={{ color: "#fff", fontFamily: "monospace", fontSize: 12, lineHeight: 18 }}
+              >
+                <Text style={{ color: "#888" }}>motebit </Text>
+                {metadata!.motebitId.slice(0, 12)}…{"\n"}
+                <Text style={{ color: "#888" }}>Born </Text>
+                {relativeBornAt(metadata!.bornAt)}
+                {"\n"}
+                <Text style={{ color: "#888" }}>Solana </Text>◆ {shortAddress(metadata!.publicKey)}
+              </Text>
+            </View>
+
+            {seedOnlyMode ? null : (
+              <>
+                <Text
+                  style={{
+                    fontSize: 11,
+                    color: "#888",
+                    marginBottom: 4,
+                  }}
+                >
+                  Recovery seed (64 hex chars)
+                </Text>
+                <TextInput
+                  style={{
+                    borderWidth: 1,
+                    borderColor: "#3a3a3c",
+                    borderRadius: 10,
+                    padding: 10,
+                    color: "#fff",
+                    fontFamily: "monospace",
+                    fontSize: 12,
+                    marginBottom: 4,
+                  }}
+                  value={seed}
+                  onChangeText={(v) => void evaluateSeed(v)}
+                  placeholder="Paste your recovery seed"
+                  placeholderTextColor="#555"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  secureTextEntry
+                />
+                <Text
+                  style={{
+                    fontSize: 11,
+                    color:
+                      seedStatus.kind === "ok"
+                        ? "#6e82f0"
+                        : seedStatus.kind === "err"
+                          ? "#f0a030"
+                          : "#888",
+                    marginBottom: 16,
+                    minHeight: 14,
+                  }}
+                >
+                  {seedStatus.text}
+                </Text>
+              </>
+            )}
 
             <View
               style={{

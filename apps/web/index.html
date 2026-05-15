@@ -9151,6 +9151,17 @@
             <div style="font-size: 11px; color: var(--text-muted); margin-top: -2px">
               Full identity bundle. You'll also need your recovery seed.
             </div>
+            <button
+              class="settings-outline-btn"
+              id="settings-restore-seed"
+              style="text-align: left; margin-top: 4px"
+            >
+              Restore from recovery seed…
+            </button>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: -2px">
+              Raw key only. Reclaims funds + private key, but creates a new motebit_id
+              (the original UUID is not derivable from the seed).
+            </div>
           </div>
         </div>
       </div>
@@ -9204,7 +9215,7 @@
          See apps/web/src/ui/restore-identity.ts for the wiring. -->
     <div id="restore-backdrop" class="dialog-backdrop">
       <div id="restore-dialog" role="dialog" aria-modal="true" aria-label="Restore identity">
-        <!-- Step 1: pick file -->
+        <!-- Step 1a: pick file (motebit.md flow) -->
         <div id="restore-step-file" class="restore-step">
           <div class="restore-title">Restore from motebit.md</div>
           <div class="restore-body">
@@ -9216,12 +9227,41 @@
             <button id="restore-file-pick" class="restore-primary">Choose file…</button>
           </div>
         </div>
+        <!-- Step 1b: paste seed (seed-only flow). Skips the file step;
+             synthesized metadata advances to the preview step with a
+             warning banner that the original motebit_id is not recoverable. -->
+        <div id="restore-step-seed-only" class="restore-step" style="display: none">
+          <div class="restore-title">Restore from recovery seed</div>
+          <div class="restore-body">
+            Paste your 64-hex-char recovery seed. The original motebit_id cannot be
+            recovered from the seed alone — a new one will be assigned. Your
+            cryptographic identity (private key + Solana address + funds) is preserved.
+          </div>
+          <div class="restore-field-group">
+            <label class="restore-label" for="restore-seed-only-input">
+              Recovery seed (64 hex chars)
+            </label>
+            <input
+              id="restore-seed-only-input"
+              type="password"
+              autocomplete="off"
+              data-1p-ignore
+              data-lpignore="true"
+              placeholder="Paste your recovery seed"
+            />
+            <div id="restore-seed-only-status" class="restore-status"></div>
+          </div>
+          <div class="restore-actions">
+            <button id="restore-cancel-0" class="restore-cancel">Cancel</button>
+            <button id="restore-seed-only-next" class="restore-primary" disabled>Next</button>
+          </div>
+        </div>
         <!-- Step 2: preview, seed, type-to-confirm -->
         <div id="restore-step-preview" class="restore-step" style="display: none">
           <div class="restore-title">Restore identity</div>
           <div class="restore-body">Restoring will activate:</div>
           <div id="restore-preview" class="restore-preview"></div>
-          <div class="restore-field-group">
+          <div id="restore-seed-field-group" class="restore-field-group">
             <label class="restore-label" for="restore-seed">Recovery seed (64 hex chars)</label>
             <input
               id="restore-seed"
