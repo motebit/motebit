@@ -205,6 +205,11 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // Token audiences — pure type guard over a frozen closed-union
     // registry. Same shape as `isSuiteId` above.
     "isTokenAudience",
+    // Event-log vocabulary — pure type guard over the frozen
+    // `ALL_EVENT_TYPES` array. The sixth registered closed registry
+    // per docs/doctrine/registry-pattern-canonical.md. Same shape as
+    // `isSuiteId` / `isTokenAudience`.
+    "isEventType",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)
