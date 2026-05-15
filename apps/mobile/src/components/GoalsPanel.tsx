@@ -271,6 +271,22 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
               ) : null}
             </View>
           ) : null}
+          {/* Slab navigational anchor — closes the panel to reveal the
+              resting `stream`/`mind` slab item the runtime placed
+              during the fire. Mobile's slab is always-visible in the
+              main viewport (unlike desktop's setSlabVisible toggle),
+              so onClose() is the parity-equivalent affordance.
+              Renders only when the latest completed outcome carries a
+              turn id (pre-Phase-3 fires and plan-mode goals degrade
+              to no affordance — the correct calm-software default).
+              Doctrine: docs/doctrine/goal-results.md §"The three
+              categories"; mirror of desktop's `panel-action-ghost
+              goal-view-result` and web's `goal-card-view-result`. */}
+          {goal.last_turn_id != null && goal.last_turn_id !== "" ? (
+            <TouchableOpacity style={styles.viewResultBtn} onPress={onClose} activeOpacity={0.7}>
+              <Text style={styles.viewResultText}>View result</Text>
+            </TouchableOpacity>
+          ) : null}
           {/* Budget envelope — runtime-register commitment cap.
               Axis-native unit is the headline ("12k / 50k tokens"),
               never cost. Doctrine: panel-temporal-registers.md
@@ -559,6 +575,22 @@ function createStyles(c: ThemeColors) {
       alignSelf: "flex-start",
     },
     raiseCapText: { color: c.buttonPrimaryText, fontSize: 12, fontWeight: "600" },
+    // "View result" ghost button — parity with desktop's
+    // `panel-action-ghost goal-view-result` and web's
+    // `goal-card-view-result`. Ghost-style (transparent background,
+    // muted-secondary text color) to stay visually subordinate to
+    // the receipt-summary row above it.
+    viewResultBtn: {
+      marginTop: 6,
+      paddingVertical: 4,
+      paddingHorizontal: 0,
+      alignSelf: "flex-start",
+    },
+    viewResultText: {
+      color: c.accent,
+      fontSize: 12,
+      fontWeight: "500",
+    },
     budgetFieldLabel: {
       color: c.textMuted,
       fontSize: 11,
