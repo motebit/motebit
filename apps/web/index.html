@@ -2896,6 +2896,95 @@
         display: none;
       }
 
+      /* Identity-divergence banner — fixed-top warning surfaced when
+         bootstrap detected that the previous identity could not be loaded.
+         Visual register: warning-orange, calm but unambiguous. The three
+         action buttons match the restore-dialog accent palette. */
+      .divergence-banner {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 50;
+        background: var(--status-warning-bg, rgba(240, 160, 48, 0.12));
+        border-bottom: 1px solid var(--status-warning, rgba(240, 160, 48, 0.45));
+        backdrop-filter: blur(20px) saturate(1.4);
+        -webkit-backdrop-filter: blur(20px) saturate(1.4);
+        padding: 12px 18px;
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: var(--text-primary);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+      }
+      .divergence-banner-icon {
+        font-size: 18px;
+        color: var(--status-warning, #f0a030);
+        line-height: 1;
+        padding-top: 2px;
+      }
+      .divergence-banner-body {
+        flex: 1;
+        min-width: 0;
+      }
+      .divergence-banner-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-heading);
+        margin-bottom: 2px;
+      }
+      .divergence-banner-text {
+        font-size: 12px;
+        color: var(--text-secondary);
+        line-height: 1.4;
+      }
+      .divergence-banner-text code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        color: var(--text-heading);
+        background: rgba(0, 0, 0, 0.12);
+        padding: 1px 6px;
+        border-radius: 4px;
+      }
+      .divergence-banner-actions {
+        display: flex;
+        gap: 6px;
+        flex-shrink: 0;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .divergence-banner-actions button {
+        border: none;
+        border-radius: 8px;
+        padding: 6px 12px;
+        font-size: 12px;
+        cursor: pointer;
+        font-family: inherit;
+        white-space: nowrap;
+      }
+      .divergence-banner-primary {
+        background: var(--accent-soft, #6e82f0);
+        color: #fff;
+      }
+      .divergence-banner-primary:hover {
+        background: var(--accent-hover);
+      }
+      .divergence-banner-secondary {
+        background: var(--bg-btn);
+        color: var(--text-secondary);
+      }
+      .divergence-banner-secondary:hover {
+        background: var(--bg-btn-hover);
+      }
+      .divergence-banner-dismiss {
+        background: transparent;
+        color: var(--text-muted);
+      }
+      .divergence-banner-dismiss:hover {
+        color: var(--text-secondary);
+      }
+
       /* Restore-identity dialog — reuses the pin-dialog visual shape but
          wider and taller for the multi-field confirm flow. */
       #restore-backdrop {
@@ -7482,6 +7571,38 @@
   <body>
     <canvas id="motebit-canvas"></canvas>
     <div id="toast-container"></div>
+
+    <!-- Identity-divergence banner — shown when bootstrap detects that
+         the prior config claimed an identity but the keystore had no
+         matching private key. The banner offers the user a one-click
+         path to restore from motebit.md or recovery seed; dismissing
+         accepts the auto-recovered fresh identity. See
+         apps/web/src/ui/divergence-banner.ts for the wiring + the
+         doctrine memo at docs/doctrine/identity-restore.md for the
+         "probe + restore are co-load-bearing" framing. -->
+    <div id="divergence-banner" class="divergence-banner" style="display: none">
+      <div class="divergence-banner-icon">⚠</div>
+      <div class="divergence-banner-body">
+        <div class="divergence-banner-title">
+          Previous identity could not be loaded
+        </div>
+        <div class="divergence-banner-text">
+          The keystore had no matching private key for
+          <code id="divergence-banner-motebit-id">…</code>. A new identity was created on
+          this device. If you have a backup, restore it to recover funds, credentials, and
+          trust.
+        </div>
+      </div>
+      <div class="divergence-banner-actions">
+        <button class="divergence-banner-primary" id="divergence-restore-md">
+          Restore from motebit.md…
+        </button>
+        <button class="divergence-banner-secondary" id="divergence-restore-seed">
+          Restore from seed…
+        </button>
+        <button class="divergence-banner-dismiss" id="divergence-dismiss">Dismiss</button>
+      </div>
+    </div>
 
     <!-- Connect prompt overlay (shown when no provider) -->
     <div id="connect-prompt" class="connect-prompt hidden">

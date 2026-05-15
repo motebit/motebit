@@ -371,6 +371,18 @@ export class WebApp {
   private _motebitId = "";
   private _deviceId = "";
   private _publicKeyHex = "";
+  /**
+   * The orphaned motebit_id when bootstrap detected divergent state on
+   * launch (config claimed an identity but the keystore probe came back
+   * empty). `null` for the common path. Surfaces the field for the UI
+   * to render a recovery banner with restore CTAs. Set once at bootstrap
+   * — never updated after — so the banner can be dismissed cleanly by
+   * clearing the field via `clearDivergenceNotice()`.
+   *
+   * Co-load-bearing with [[feedback_sovereignty_primitives_audit_consumers]]
+   * and the typed `divergedFromMotebitId` field on `BootstrapResult`.
+   */
+  private _divergedFromMotebitId: string | null = null;
   private _isProcessing = false;
   private _interiorColor: InteriorColor | null = null;
   private _syncStatus: WebSyncStatus = "offline";
@@ -509,6 +521,7 @@ export class WebApp {
     this._motebitId = result.motebitId;
     this._deviceId = result.deviceId;
     this._publicKeyHex = result.publicKeyHex;
+    this._divergedFromMotebitId = result.divergedFromMotebitId ?? null;
     this._localEventStore = storage.eventStore;
 
     // Skills registry + audit sink — both share the same IDB handle.
@@ -1992,6 +2005,27 @@ export class WebApp {
 
   get motebitId(): string {
     return this._motebitId;
+  }
+
+  /**
+   * The orphaned motebit_id when bootstrap detected divergent state on
+   * launch — or `null` on the clean-bootstrap path. Surfaces UI reads
+   * this to show the recovery banner with restore CTAs; callable any
+   * time after `bootstrap()` resolves.
+   */
+  get divergedFromMotebitId(): string | null {
+    return this._divergedFromMotebitId;
+  }
+
+  /**
+   * Clear the divergence notice (called when the user dismisses the
+   * banner or completes a restore). Subsequent calls to
+   * `divergedFromMotebitId` return `null`; the field is only set once at
+   * bootstrap, so clearing here means "the user has acknowledged the
+   * orphaned identity".
+   */
+  clearDivergenceNotice(): void {
+    this._divergedFromMotebitId = null;
   }
 
   /**

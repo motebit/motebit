@@ -507,6 +507,19 @@ export class DesktopApp {
   get publicKey(): string {
     return this.identity.publicKey;
   }
+  /**
+   * Orphaned motebit_id when bootstrap detected divergent state on
+   * launch, or `null` on the clean-bootstrap path. Surfaces UI reads
+   * this to show the recovery banner with restore CTAs.
+   */
+  get divergedFromMotebitId(): string | null {
+    return this.identity.divergedFromMotebitId;
+  }
+  /** Clear the divergence notice — called when the user dismisses
+   *  the recovery banner. */
+  clearDivergenceNotice(): void {
+    this.identity.divergedFromMotebitId = null;
+  }
   private _governanceStatus: GovernanceStatus = { governed: false, reason: "not initialized" };
   private goals = new GoalScheduler({
     getRuntime: () => this.runtime,

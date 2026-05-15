@@ -93,6 +93,13 @@ export class IdentityManager {
   motebitId: string = "desktop-local";
   deviceId: string = "desktop-local";
   publicKey: string = "";
+  /**
+   * Set when bootstrap detected divergent state — see
+   * `BootstrapResult.divergedFromMotebitId` in `@motebit/core-identity`.
+   * Surfaces UI reads this via DesktopApp.divergedFromMotebitId to show
+   * the recovery banner with restore CTAs.
+   */
+  divergedFromMotebitId: string | null = null;
 
   /**
    * Bootstrap identity on first launch or load existing identity.
@@ -158,6 +165,7 @@ export class IdentityManager {
     this.motebitId = result.motebitId;
     this.deviceId = result.deviceId;
     this.publicKey = result.publicKeyHex;
+    this.divergedFromMotebitId = result.divergedFromMotebitId ?? null;
 
     // Generate motebit.md identity file on first launch (best-effort, desktop-specific)
     if (result.isFirstLaunch) {

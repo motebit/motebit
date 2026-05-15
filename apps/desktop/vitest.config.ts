@@ -49,6 +49,7 @@ export default defineMotebitTest({
     "src/ui/color-picker.ts",
     "src/ui/config.ts",
     "src/ui/conversations.ts",
+    "src/ui/divergence-banner.ts",
     "src/ui/drop.ts",
     "src/ui/focus.ts",
     "src/ui/goals.ts",

@@ -25,6 +25,7 @@ import {
   ActivityIndicator,
   Modal,
   Appearance,
+  Alert,
 } from "react-native";
 import { WebView } from "react-native-webview";
 // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-member-access
@@ -285,6 +286,45 @@ export default function App(): React.ReactElement {
 
         // 2. Bootstrap identity (silent — creature is already present)
         await a.bootstrap();
+
+        // 2a. Divergence-recovery prompt — surfaces the same Alert
+        //     shape the web/desktop banner uses. Fires only when
+        //     bootstrap detected `divergedFromMotebitId` (configStore
+        //     claimed an identity but keystore probe came back
+        //     empty). The user can either open Settings → Identity →
+        //     Restore from motebit.md / Restore from seed, or
+        //     dismiss the notice and accept the auto-minted fresh
+        //     identity. Without this branch the silent re-mint that
+        //     motivated the keystore-probe revert returns — see
+        //     `[[feedback_sovereignty_primitives_audit_consumers]]`.
+        const orphan = a.divergedFromMotebitId;
+        if (orphan !== null) {
+          Alert.alert(
+            "Previous identity could not be loaded",
+            `The keystore had no matching private key for motebit·${orphan.slice(
+              0,
+              12,
+            )}…. A new identity was created on this device. If you have a backup, restore it now to recover funds, credentials, and trust.`,
+            [
+              {
+                text: "Dismiss",
+                style: "cancel",
+                onPress: () => {
+                  a.clearDivergenceNotice();
+                },
+              },
+              {
+                text: "Restore Identity",
+                style: "default",
+                onPress: () => {
+                  a.clearDivergenceNotice();
+                  setShowSettings(true);
+                },
+              },
+            ],
+            { cancelable: false },
+          );
+        }
 
         // 3. Init AI with saved settings
         await initializeAI(a, loaded);

@@ -676,6 +676,14 @@ export class MobileApp {
   motebitId = "mobile-local";
   deviceId = "mobile-local";
   publicKey = "";
+  /**
+   * Orphaned motebit_id when bootstrap detected divergent state on
+   * launch, or `null` on the clean-bootstrap path. Surfaces UI reads
+   * this to show the recovery banner with restore CTAs. See
+   * `BootstrapResult.divergedFromMotebitId` in `@motebit/core-identity`
+   * for the contract.
+   */
+  divergedFromMotebitId: string | null = null;
 
   // Proxy session state
   private _proxySession: ProxySession | null = null;
@@ -737,6 +745,7 @@ export class MobileApp {
     this.motebitId = result.motebitId;
     this.deviceId = result.deviceId;
     this.publicKey = result.publicKeyHex;
+    this.divergedFromMotebitId = result.divergedFromMotebitId ?? null;
 
     // Generate motebit.md identity file on first launch (best-effort)
     if (result.isFirstLaunch) {
@@ -2234,6 +2243,15 @@ export class MobileApp {
     const result = await verifyIdentityFile(content, { expectedType: "identity" });
     const error = result.errors?.[0]?.message;
     return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
+  }
+
+  /**
+   * Clear the divergence notice — called when the user dismisses the
+   * recovery banner / Alert. Subsequent reads of
+   * `divergedFromMotebitId` return `null`.
+   */
+  clearDivergenceNotice(): void {
+    this.divergedFromMotebitId = null;
   }
 
   /**

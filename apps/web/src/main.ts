@@ -25,6 +25,7 @@ import {
 import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
 import { initRestoreIdentity } from "./ui/restore-identity";
+import { initDivergenceBanner } from "./ui/divergence-banner";
 import { initPairing, startLinkDevice, startClaimDevice } from "./ui/pairing";
 import { initSubscription } from "./ui/subscription";
 import { initConversations } from "./ui/conversations";
@@ -88,7 +89,8 @@ const chatAPI = initChat(ctx, {
 });
 
 const settings = initSettings(ctx, { colorPicker });
-initRestoreIdentity(ctx);
+const restoreApi = initRestoreIdentity(ctx);
+initDivergenceBanner(ctx, restoreApi);
 initPairing(ctx);
 document
   .getElementById("settings-link-device")

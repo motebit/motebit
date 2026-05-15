@@ -39,6 +39,7 @@ import {
 import { initVoice } from "./ui/voice";
 import { initSettings } from "./ui/settings";
 import { initRestoreIdentity } from "./ui/restore-identity";
+import { initDivergenceBanner } from "./ui/divergence-banner";
 import {
   byokKeyringKey,
   LEGACY_API_KEY_SLOT,
@@ -116,7 +117,8 @@ const settings = initSettings(ctx, {
   pairing,
   scrollToRunId: (id) => chat.scrollToRunId(id),
 });
-initRestoreIdentity(ctx);
+const restoreApi = initRestoreIdentity(ctx);
+initDivergenceBanner(ctx, restoreApi);
 
 // === Theme ===
 
