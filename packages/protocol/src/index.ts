@@ -2438,6 +2438,7 @@ export type {
   SettlementEligibility,
   SolvencyProof,
 } from "./settlement-mode.js";
+export { ALL_SETTLEMENT_MODES, isSettlementMode } from "./settlement-mode.js";
 
 // === Cryptosuite Registry ===
 // Every signed wire-format artifact in motebit declares its verification

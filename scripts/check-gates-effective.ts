@@ -1613,6 +1613,19 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-settlement-mode-canonical",
+    proves:
+      'flags the SettlementMode three-way lock breaking — a value rotated in `ALL_SETTLEMENT_MODES` (or in the gate\'s reference, or in the union) without updating the siblings. Drift class: same shape as the EventType probe, but the union AND array live in the same file (`packages/protocol/src/settlement-mode.ts`), so the probe must target only the array entry (not the union arm) — `"relay",` matches only the array because the union form uses ` | `. Probe rewrites the comma-bearing array entry; gate must surface the sibling-alignment violation (union has `relay` but ALL_SETTLEMENT_MODES contains `realy` instead). byte-identical restoration on cleanup via mutateFile.',
+    perturb: () =>
+      // Corrupt one value in ALL_SETTLEMENT_MODES so it no longer
+      // matches the union. The trailing comma `,` distinguishes the
+      // array entry from the union arm (the union uses ` | ` after
+      // each literal).
+      mutateFile(`packages/protocol/src/settlement-mode.ts`, (src) =>
+        src.replace(/"relay",/g, '"realy",'),
+      ),
+  },
+  {
     script: "check-closed-registry-canonical",
     proves:
       "flags a registered closed registry silently losing one of its canonical eight artifacts — the meta-invariant over the lattice's unit cell. Drift class: a refactor that drops `isSensitivityLevel` (or `ALL_X` or any other artifact) for one registry regresses the structural completeness of the family without any compile-time signal. Probe rewrites every `isSensitivityLevel` occurrence in `packages/protocol/src/sensitivity.ts` to `isSensitivityLevelDisabled`; the meta-gate must surface `missing_guard_export` for SensitivityLevel. byte-identical restoration on cleanup via mutateFile.",

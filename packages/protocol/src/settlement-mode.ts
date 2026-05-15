@@ -10,6 +10,53 @@
 /** How money moves for a task: through the relay's virtual accounts, or directly onchain. */
 export type SettlementMode = "relay" | "p2p";
 
+/**
+ * Canonical iteration order over `SettlementMode`, frozen. The single
+ * source of truth for "every settlement mode" — drift gates, exhaustive
+ * switches, settlement-eligibility evaluators, and the protocol's
+ * registry-coverage gate (`check-settlement-mode-canonical`) all
+ * enumerate through this array.
+ *
+ * Promoted to a registered registry per
+ * [`docs/doctrine/registry-pattern-canonical.md`](../../../docs/doctrine/registry-pattern-canonical.md)
+ * on 2026-05-15 — the seventh instance after `SuiteId`, `TokenAudience`,
+ * `ContentArtifactType`, `TaskShape`, `SensitivityLevel`, and
+ * `EventType`. The four criteria are met: interop law (cross-
+ * implementation agreement required for settlement to clear), multi-
+ * consumer (relay, agents, discovery, settlement-rails, eligibility
+ * evaluator), wire-format presence (`SettlementEligibility.mode`,
+ * `AgentDiscovery.settlement_modes[]`), anticipated drift (the closed
+ * union will grow when a third mode lands — escrow / hybrid / batched —
+ * and silently breaking peers without the structural lock would
+ * fail interoperability).
+ *
+ * Same shape as `ALL_SUITE_IDS`, `ALL_TOKEN_AUDIENCES`,
+ * `ALL_CONTENT_ARTIFACT_TYPES`, `ALL_TASK_SHAPES`,
+ * `ALL_SENSITIVITY_LEVELS`, `ALL_EVENT_TYPES`. Adding a settlement
+ * mode is intentional protocol-level work: new union entry + new
+ * entry here + gate reference update + spec update if wire-format-
+ * relevant.
+ */
+export const ALL_SETTLEMENT_MODES: readonly SettlementMode[] = Object.freeze([
+  "relay",
+  "p2p",
+] as SettlementMode[]);
+
+/**
+ * Type guard — narrows `unknown` to `SettlementMode`. Consumers that
+ * derive settlement-mode values from external sources (peer
+ * negotiation, discovery responses, relay routing decisions) call
+ * this before dispatching so an unchecked cast is a fail-open path
+ * the type system can't catch.
+ *
+ * Same shape as `isSuiteId`, `isTokenAudience`,
+ * `isContentArtifactType`, `isTaskShape`, `isSensitivityLevel`,
+ * `isEventType`.
+ */
+export function isSettlementMode(value: unknown): value is SettlementMode {
+  return typeof value === "string" && (ALL_SETTLEMENT_MODES as readonly string[]).includes(value);
+}
+
 // === P2P Payment Proof ===
 
 /**

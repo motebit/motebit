@@ -205,6 +205,23 @@ const REGISTERED_REGISTRIES: ReadonlyArray<RegisteredRegistry> = [
     gateName: "check-event-type-canonical",
     doctrinePaths: ["docs/doctrine/registry-pattern-canonical.md"],
   },
+  {
+    name: "SettlementMode",
+    // Seventh registered registry — landed 2026-05-15, the second
+    // template-growth proof. Unlike `EventType` (enum + array split
+    // across two files), `SettlementMode` is a single-file union
+    // type: source = tooling = settlement-mode.ts. The two-file vs
+    // one-file shape is per-registry; the meta-gate's separate
+    // `sourceFile` / `toolingFile` fields accommodate both.
+    sourceFile: "packages/protocol/src/settlement-mode.ts",
+    toolingFile: "packages/protocol/src/settlement-mode.ts",
+    typeName: "SettlementMode",
+    arrayName: "ALL_SETTLEMENT_MODES",
+    guardName: "isSettlementMode",
+    gatePath: "scripts/check-settlement-mode-canonical.ts",
+    gateName: "check-settlement-mode-canonical",
+    doctrinePaths: ["docs/doctrine/registry-pattern-canonical.md"],
+  },
 ];
 
 function readFile(path: string): string | null {

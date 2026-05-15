@@ -1,6 +1,6 @@
 # The registry pattern, canonical
 
-A motebit-shaped invariant. Five instances at land; the sixth and later are template growth, not new design.
+A motebit-shaped invariant. Five instances at land; the sixth (`EventType`, 2026-05-14) and seventh (`SettlementMode`, 2026-05-15) shipped as template growth on the same rails, with `REGISTERED_REGISTRIES` 5 → 6 → 7 in successive arcs — each addition mechanical, not new design.
 
 ## The structure motebit has been building
 
@@ -75,7 +75,7 @@ The pattern is for **interop law**, not for every closed type union. The test:
 - **Wire-format presence.** The values appear in JSON, signed artifacts, audit logs, or cross-device sync. Internal-only switch discriminators don't need the canonical-coverage gate.
 - **A real drift incident or anticipated drift.** The pattern is documented response to past pain (`check-audience-canonical` exists because `aud: "task:sumbit"` typos cost real debugging time). Anticipatory registration is acceptable when the criteria above are met, but every entry should be defensible against "why is this canonical-grade?"
 
-The five at land all pass every criterion. Future candidates: `EventType` (today an enum, cross-package, wire-format, ~19 values), `SettlementMode` (`"relay" | "p2p"`, the relay-vs-sovereign axis), maybe `Jurisdiction` (closed three-value union, regulatory-distinct).
+The five at land all pass every criterion. **`EventType` landed sixth (2026-05-14)** and **`SettlementMode` landed seventh (2026-05-15)** — both as template growth on the rails this doctrine codified. Remaining future candidate: `Jurisdiction` (closed three-value union, regulatory-distinct).
 
 Future non-candidates: `DropPayloadKind` (already covered by `check-drop-handlers`, different shape), `ControlState` / `EmbodimentMode` (covered by `check-slab-chrome-coverage`, matrix not single-axis), the `dispute.ts` unions (single-file dispatch).
 
