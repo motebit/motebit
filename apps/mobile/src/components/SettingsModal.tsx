@@ -54,6 +54,7 @@ import {
   DEFAULT_OLLAMA_MODEL,
 } from "@motebit/sdk";
 import { BillingPanel } from "./BillingPanel";
+import { RestoreIdentityModal } from "./RestoreIdentityModal";
 import {
   TABS,
   AppearanceTab,
@@ -97,6 +98,7 @@ export function SettingsModal({
 }: SettingsModalProps): React.ReactElement {
   const styles = useSettingsStyles();
   const [tab, setTab] = useState<Tab>("appearance");
+  const [restoreVisible, setRestoreVisible] = useState(false);
   const [draft, setDraft] = useState<MobileSettings>(settings);
   const [apiKey, setApiKey] = useState("");
   const [googleKey, setGoogleKey] = useState("");
@@ -456,6 +458,7 @@ export function SettingsModal({
                   }
                 })();
               }}
+              onRestoreFromMd={() => setRestoreVisible(true)}
               onLinkDevice={onLinkDevice}
               onClaimDevice={onClaimDevice}
               onRotateKey={() => {
@@ -489,6 +492,18 @@ export function SettingsModal({
           )}
         </ScrollView>
       </View>
+      <RestoreIdentityModal
+        visible={restoreVisible}
+        app={app}
+        onClose={() => setRestoreVisible(false)}
+        onRestored={() => {
+          setRestoreVisible(false);
+          Alert.alert(
+            "Identity restored",
+            "Fully close and reopen the app so it boots under the restored identity.",
+          );
+        }}
+      />
     </Modal>
   );
 }

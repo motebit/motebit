@@ -2096,6 +2096,170 @@
         display: none;
       }
 
+      /* Restore-identity dialog — reuses the pin-dialog visual shape but
+         wider and taller for the multi-field confirm flow.  Sibling of
+         apps/web/index.html (same CSS variables, same layout). */
+      #restore-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 42;
+        background: var(--bg-overlay);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.25s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #restore-backdrop.open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      #restore-dialog {
+        background: var(--bg-glass-strong);
+        backdrop-filter: blur(40px) saturate(1.8);
+        -webkit-backdrop-filter: blur(40px) saturate(1.8);
+        border: 1px solid var(--border-input);
+        border-radius: 16px;
+        padding: 24px;
+        width: 420px;
+        max-width: 92vw;
+        max-height: 88vh;
+        overflow-y: auto;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: var(--text-primary);
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .restore-step {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .restore-title {
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .restore-body {
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+      .restore-preview {
+        background: var(--bg-input);
+        border: 1px solid var(--border-medium);
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 12px;
+        line-height: 1.55;
+        color: var(--text-heading);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .restore-preview .restore-preview-label {
+        color: var(--text-muted);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        margin-right: 6px;
+      }
+      .restore-field-group {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .restore-label {
+        font-size: 11px;
+        color: var(--text-muted);
+        font-weight: 500;
+      }
+      .restore-label strong {
+        color: var(--text-heading);
+        font-weight: 600;
+      }
+      #restore-dialog input[type="text"],
+      #restore-dialog input[type="password"] {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid var(--border-medium);
+        border-radius: 10px;
+        background: var(--bg-input);
+        color: var(--text-heading);
+        font-size: 13px;
+        outline: none;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      #restore-dialog input:focus {
+        border-color: var(--accent-border);
+      }
+      .restore-status {
+        font-size: 11px;
+        min-height: 14px;
+      }
+      .restore-status.ok {
+        color: var(--accent, #6e82f0);
+      }
+      .restore-status.err {
+        color: var(--status-warning, #f0a030);
+      }
+      .restore-checkbox {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--text-secondary);
+        cursor: not-allowed;
+        opacity: 0.7;
+      }
+      .restore-checkbox input {
+        margin-top: 2px;
+      }
+      .restore-soon {
+        color: var(--text-muted);
+        font-size: 11px;
+      }
+      .restore-warning {
+        font-size: 11px;
+        color: var(--status-warning, #f0a030);
+        background: var(--status-warning-bg, rgba(240, 160, 48, 0.08));
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--status-warning-bg, rgba(240, 160, 48, 0.16));
+      }
+      .restore-error {
+        font-size: 12px;
+        color: var(--status-error-fg, #f06030);
+        min-height: 14px;
+      }
+      .restore-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .restore-actions button {
+        flex: 1;
+        padding: 8px 0;
+        border: none;
+        border-radius: 10px;
+        font-size: 13px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .restore-cancel {
+        background: var(--bg-btn);
+        color: var(--text-secondary);
+      }
+      .restore-cancel:hover {
+        background: var(--bg-btn-hover);
+      }
+      .restore-primary {
+        background: var(--accent-soft);
+        color: #fff;
+      }
+      .restore-primary:hover:not(:disabled) {
+        background: var(--accent-hover);
+      }
+      .restore-primary:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
       /* Pairing dialog */
       #pairing-backdrop {
         position: fixed;
@@ -7294,11 +7458,83 @@
               border-radius: 4px;
             "
           ></div>
+          <div class="card-title" style="margin-top: 12px">Restore identity</div>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <button class="settings-outline-btn" id="settings-restore-md" style="text-align: left">
+              Restore from motebit.md…
+            </button>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: -2px">
+              Full identity bundle. You'll also need your recovery seed.
+            </div>
+          </div>
         </div>
       </div>
       <div class="settings-footer">
         <button class="cancel-btn" id="settings-cancel">Cancel</button>
         <button class="save-btn" id="settings-save">Save</button>
+      </div>
+    </div>
+
+    <!-- Restore identity dialog — sibling of apps/web/index.html. Same
+         markup shape; the desktop wiring (apps/desktop/src/ui/restore-identity.ts)
+         additionally threads the Tauri invoke fn to DesktopApp.restoreIdentity. -->
+    <div id="restore-backdrop">
+      <div id="restore-dialog" role="dialog" aria-modal="true" aria-label="Restore identity">
+        <div id="restore-step-file" class="restore-step">
+          <div class="restore-title">Restore from motebit.md</div>
+          <div class="restore-body">
+            Select your motebit.md backup file. You'll provide your recovery seed in
+            the next step to complete the restore.
+          </div>
+          <div class="restore-actions">
+            <button id="restore-cancel-1" class="restore-cancel">Cancel</button>
+            <button id="restore-file-pick" class="restore-primary">Choose file…</button>
+          </div>
+        </div>
+        <div id="restore-step-preview" class="restore-step" style="display: none">
+          <div class="restore-title">Restore identity</div>
+          <div class="restore-body">Restoring will activate:</div>
+          <div id="restore-preview" class="restore-preview"></div>
+          <div class="restore-field-group">
+            <label class="restore-label" for="restore-seed">Recovery seed (64 hex chars)</label>
+            <input
+              id="restore-seed"
+              type="password"
+              autocomplete="off"
+              placeholder="Paste your recovery seed"
+            />
+            <div id="restore-seed-status" class="restore-status"></div>
+          </div>
+          <label class="restore-checkbox">
+            <input type="checkbox" id="restore-preserve" disabled />
+            <span>
+              Preserve memories
+              <span class="restore-soon">(coming soon)</span>
+            </span>
+          </label>
+          <div class="restore-warning">
+            This replaces your current identity. Funds, credentials, and trust
+            currently on this device will be ORPHANED. Cannot be undone.
+          </div>
+          <div class="restore-field-group">
+            <label class="restore-label" for="restore-confirm">
+              Type <strong>REPLACE IDENTITY</strong> to confirm
+            </label>
+            <input
+              id="restore-confirm"
+              type="text"
+              autocomplete="off"
+              placeholder="REPLACE IDENTITY"
+            />
+          </div>
+          <div id="restore-error" class="restore-error"></div>
+          <div class="restore-actions">
+            <button id="restore-cancel-2" class="restore-cancel">Cancel</button>
+            <button id="restore-replace" class="restore-primary" disabled>
+              Replace identity
+            </button>
+          </div>
+        </div>
       </div>
     </div>
     <div id="pin-backdrop">

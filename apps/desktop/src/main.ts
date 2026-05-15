@@ -38,6 +38,7 @@ import {
 } from "./ui/mcp-connections";
 import { initVoice } from "./ui/voice";
 import { initSettings } from "./ui/settings";
+import { initRestoreIdentity } from "./ui/restore-identity";
 import {
   byokKeyringKey,
   LEGACY_API_KEY_SLOT,
@@ -115,6 +116,7 @@ const settings = initSettings(ctx, {
   pairing,
   scrollToRunId: (id) => chat.scrollToRunId(id),
 });
+initRestoreIdentity(ctx);
 
 // === Theme ===
 

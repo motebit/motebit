@@ -26,6 +26,8 @@ export interface IdentityTabProps {
   onExport: () => void;
   onExportIdentity?: () => void;
   onVerifyIdentity?: () => void;
+  /** Open the multi-step Restore-from-motebit.md modal (parent owns the modal). */
+  onRestoreFromMd?: () => void;
   onLinkDevice?: () => void;
   onClaimDevice?: () => void;
   onRotateKey?: () => void;
@@ -43,6 +45,7 @@ export function IdentityTab({
   onExport,
   onExportIdentity,
   onVerifyIdentity,
+  onRestoreFromMd,
   onLinkDevice,
   onClaimDevice,
   onRotateKey,
@@ -352,6 +355,12 @@ export function IdentityTab({
           activeOpacity={0.7}
         >
           <Text style={styles.exportText}>Verify motebit.md…</Text>
+        </TouchableOpacity>
+      )}
+
+      {onRestoreFromMd && (
+        <TouchableOpacity style={styles.exportButton} onPress={onRestoreFromMd} activeOpacity={0.7}>
+          <Text style={styles.exportText}>Restore from motebit.md…</Text>
         </TouchableOpacity>
       )}
 
