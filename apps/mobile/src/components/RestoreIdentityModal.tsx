@@ -11,9 +11,11 @@
  *      Caller signals user to fully close + reopen the app.
  *
  * Per [[identity_restore_arc]] design call #1: hard overwrite + type-
- * to-confirm `REPLACE IDENTITY`. Per call #3: clear-by-default; the
- * preserve checkbox is disabled with a "coming soon" tooltip until
- * the re-key migration ships.
+ * to-confirm `REPLACE IDENTITY`. Per call #3: clear-by-default (via
+ * natural filtering — old rows keyed to the prior motebit_id are
+ * invisible under the new identity); the preserve checkbox opts into
+ * the cross-store re-key migration shipped in `migrateMotebitIdExpo`
+ * (apps/mobile/src/adapters/expo-sqlite.ts).
  */
 
 import React, { useState } from "react";

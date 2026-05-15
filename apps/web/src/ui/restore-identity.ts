@@ -16,9 +16,10 @@
  * Per [[identity_restore_arc]] design call #1 (coexistence guard): hard
  * overwrite + type-to-confirm `REPLACE IDENTITY` is the contract.
  * Per design call #3 (memories on replace): default clears (via
- * orphaning today; explicit wipe + re-key path lands when
- * preserveMemories=true ships). The checkbox is rendered disabled with
- * a "coming soon" label until then.
+ * natural filtering — old data is keyed to the prior motebit_id and
+ * is invisible under the new identity); `preserveMemories=true` opts
+ * into the cross-store re-key migration shipped in
+ * `@motebit/browser-persistence`'s `migrateMotebitId`.
  *
  * Sibling-boundary doctrine: desktop and mobile mirror this flow with
  * the same three-layer split. The package primitives

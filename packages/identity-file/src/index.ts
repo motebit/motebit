@@ -321,11 +321,16 @@ export interface RestoreIdentityRequest {
    * decisions": default is clear (no preserve). Setting `true` is
    * surfaced in the UI as opt-in with the explicit "Severs cryptographic
    * chain to original signing identity" trade-off label. The preserve
-   * path requires re-keying existing conversation/memory rows from the
-   * old motebit_id to the new one; that re-key logic lands in a
-   * follow-up commit. Until then this value being `true` returns
-   * `{ ok: false, reason: "preserve_not_implemented" }` and the UI
-   * disables the checkbox.
+   * path re-keys existing conversation / memory / plan / agent-trust
+   * rows from the old motebit_id to the new one — shipped 2026-05-15
+   * via per-surface migrations (`migrateMotebitId` in
+   * `@motebit/browser-persistence` for web IDB; `migrateMotebitIdSql`
+   * in `apps/desktop/src/tauri-storage.ts` for desktop SQLite;
+   * `migrateMotebitIdExpo` in `apps/mobile/src/adapters/expo-sqlite.ts`
+   * for mobile expo-sqlite). The `preserve_not_implemented` typed
+   * reason stays in the union as defense-in-depth for surfaces (CLI,
+   * future) that haven't shipped a migration; each surface handles
+   * the flag locally rather than gating at this package level.
    */
   preserveMemories: boolean;
 }
