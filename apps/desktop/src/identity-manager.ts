@@ -68,9 +68,12 @@ import {
   generate as generateIdentityFile,
   importIdentityFile as importIdentityFileFromContent,
   parse as parseIdentityFile,
+  validateRestoreRequest,
   verify as verifyIdentity,
   rotate as rotateIdentityFile,
   type ImportIdentityResult,
+  type RestoreIdentityRequest,
+  type RestoreIdentityResult,
 } from "@motebit/identity-file";
 import type { BootstrapResult } from "./index.js";
 import { createTauriStorage } from "./index.js";
@@ -395,6 +398,56 @@ export class IdentityManager {
   // seed paste before any restore can proceed.
   async importIdentityFile(content: string): Promise<ImportIdentityResult> {
     return importIdentityFileFromContent(content);
+  }
+
+  // Side-effecting restore: materialize an imported identity onto this
+  // device. Writes the new private key to the OS keyring, motebit_id +
+  // device_id + device_public_key to the Tauri config file, and the
+  // original signed motebit.md content to the `_identity_file` config
+  // slot so bootstrap reads governance from its cryptographic anchor on
+  // next launch.
+  //
+  // No SQLite wipe in v1 — data keyed to the old motebit_id is orphaned
+  // (not visible under the new identity by natural filtering, not
+  // deleted). The explicit-wipe + re-key path lands when
+  // preserveMemories=true ships. See [[identity_restore_arc]] design
+  // call #3 + the package-level commit doc.
+  async restoreIdentity(
+    invoke: InvokeFn,
+    request: RestoreIdentityRequest,
+  ): Promise<RestoreIdentityResult> {
+    const failureReason = await validateRestoreRequest(request);
+    if (failureReason !== null) {
+      return { ok: false, reason: failureReason };
+    }
+
+    const newDeviceId = crypto.randomUUID();
+    try {
+      await invoke<void>("keyring_set", {
+        key: "device_private_key",
+        value: request.privateKeyHex,
+      });
+    } catch {
+      return { ok: false, reason: "keystore_write_failed" };
+    }
+    try {
+      const raw = await invoke<string>("read_config");
+      const configData = JSON.parse(raw) as Record<string, unknown>;
+      configData.motebit_id = request.metadata.motebitId;
+      configData.device_id = newDeviceId;
+      configData.device_public_key = request.metadata.publicKey;
+      if (request.originalContent !== undefined) {
+        configData._identity_file = request.originalContent;
+      } else {
+        // Seed-only restore: clear stale identity-file content. Bootstrap
+        // regenerates a fresh one from the new keypair on next launch.
+        delete configData._identity_file;
+      }
+      await invoke<void>("write_config", { json: JSON.stringify(configData) });
+    } catch {
+      return { ok: false, reason: "config_write_failed" };
+    }
+    return { ok: true, motebitId: request.metadata.motebitId, needsReload: true };
   }
 
   /**

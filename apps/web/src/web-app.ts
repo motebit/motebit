@@ -1609,6 +1609,44 @@ export class WebApp {
     return importIdentityFile(content);
   }
 
+  // Side-effecting restore: materialize an imported identity onto this
+  // device. Writes the new private key to the keystore, motebit_id +
+  // device_id + public_key to localStorage (web's configStore). The
+  // caller (Restore UI) reloads the page on `needsReload: true`; the
+  // next bootstrap reads the new keystore + config and brings up the
+  // runtime under the restored identity.
+  //
+  // No wipe of prior IDB data in v1 — the data is keyed by the old
+  // motebit_id, so the new identity reads empty stores via natural
+  // filtering. The old data is orphaned but doesn't interfere. The
+  // explicit-wipe path lands when preserveMemories=true ships (a
+  // re-key migration, distinct from a delete; see
+  // [[identity_restore_arc]] design call #3).
+  async restoreIdentity(
+    request: import("@motebit/identity-file").RestoreIdentityRequest,
+  ): Promise<import("@motebit/identity-file").RestoreIdentityResult> {
+    const { validateRestoreRequest } = await import("@motebit/identity-file");
+    const failureReason = await validateRestoreRequest(request);
+    if (failureReason !== null) {
+      return { ok: false, reason: failureReason };
+    }
+
+    const newDeviceId = crypto.randomUUID();
+    try {
+      await this.keyStore.storePrivateKey(request.privateKeyHex);
+    } catch {
+      return { ok: false, reason: "keystore_write_failed" };
+    }
+    try {
+      localStorage.setItem("motebit:motebit_id", request.metadata.motebitId);
+      localStorage.setItem("motebit:device_id", newDeviceId);
+      localStorage.setItem("motebit:device_public_key", request.metadata.publicKey);
+    } catch {
+      return { ok: false, reason: "config_write_failed" };
+    }
+    return { ok: true, motebitId: request.metadata.motebitId, needsReload: true };
+  }
+
   // === Operator Mode ===
   //
   // PIN-protected escalation that allows high-risk tools (write, execute,

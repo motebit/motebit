@@ -10,12 +10,14 @@ import {
   generate,
   importIdentityFile,
   parse,
-  update,
   rotate,
   toHex,
+  update,
+  validateRestoreRequest,
   verify as verifyFromIdentityFile,
   publicKeyToDidKey,
   hexPublicKeyToDidKey,
+  type ImportedIdentityMetadata,
 } from "../index";
 
 // Reshape the canonical `verify()` output to the flat backward-compat
@@ -608,6 +610,87 @@ describe("importIdentityFile", () => {
 
     const result = await importIdentityFile(sigStripped);
     expect(result.valid).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateRestoreRequest — guard rail for the per-surface restoreIdentity
+// ---------------------------------------------------------------------------
+//
+// The per-surface `restoreIdentity` methods (WebApp/DesktopApp/MobileApp)
+// each call this helper before any side-effecting keystore or config
+// write. Tests live at the package level because the validation logic is
+// pure (no I/O); the side-effect coverage is per-surface.
+
+describe("validateRestoreRequest", () => {
+  async function metadataForKey(publicKeyHex: string): Promise<ImportedIdentityMetadata> {
+    return {
+      motebitId: DEFAULTS.motebitId,
+      publicKey: publicKeyHex,
+      ownerId: DEFAULTS.ownerId,
+      bornAt: DEFAULTS.createdAt,
+      devices: [],
+      governance: {
+        trust_mode: "guarded",
+        max_risk_auto: "R1_DRAFT",
+        require_approval_above: "R1_DRAFT",
+        deny_above: "R4_MONEY",
+        operator_mode: false,
+      },
+      memory: { half_life_days: 7, confidence_threshold: 0.3, per_turn_limit: 5 },
+    };
+  }
+
+  it("returns null when the derived public key matches the metadata", async () => {
+    const kp = await makeKeypairHex();
+    const result = await validateRestoreRequest({
+      privateKeyHex: toHex(kp.privateKey),
+      metadata: await metadataForKey(kp.publicKeyHex),
+      preserveMemories: false,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns 'invalid_private_key_length' when seed is the wrong length", async () => {
+    const kp = await makeKeypairHex();
+    const result = await validateRestoreRequest({
+      privateKeyHex: "abcd",
+      metadata: await metadataForKey(kp.publicKeyHex),
+      preserveMemories: false,
+    });
+    expect(result).toBe("invalid_private_key_length");
+  });
+
+  it("returns 'invalid_private_key_hex' when seed has non-hex characters", async () => {
+    const kp = await makeKeypairHex();
+    const seedWithNonHex = "Z".repeat(64);
+    const result = await validateRestoreRequest({
+      privateKeyHex: seedWithNonHex,
+      metadata: await metadataForKey(kp.publicKeyHex),
+      preserveMemories: false,
+    });
+    expect(result).toBe("invalid_private_key_hex");
+  });
+
+  it("returns 'key_mismatch' when seed derives a different public key", async () => {
+    const kp1 = await makeKeypairHex();
+    const kp2 = await makeKeypairHex();
+    const result = await validateRestoreRequest({
+      privateKeyHex: toHex(kp1.privateKey),
+      metadata: await metadataForKey(kp2.publicKeyHex),
+      preserveMemories: false,
+    });
+    expect(result).toBe("key_mismatch");
+  });
+
+  it("returns 'preserve_not_implemented' when preserveMemories=true (deferred)", async () => {
+    const kp = await makeKeypairHex();
+    const result = await validateRestoreRequest({
+      privateKeyHex: toHex(kp.privateKey),
+      metadata: await metadataForKey(kp.publicKeyHex),
+      preserveMemories: true,
+    });
+    expect(result).toBe("preserve_not_implemented");
   });
 });
 

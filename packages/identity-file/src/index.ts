@@ -270,6 +270,112 @@ export type ImportIdentityResult =
   | { valid: true; metadata: ImportedIdentityMetadata }
   | { valid: false; reason: string };
 
+// --- Restore (the side-effecting flow that materializes an imported
+//     identity onto a device) ---
+//
+// `restoreIdentity` is the per-surface side-effecting counterpart to
+// `importIdentityFile` (pure read). The two compose:
+//
+//   1. UI gathers the file content + recovery seed paste.
+//   2. `importIdentityFile(content)` validates the .md and returns
+//      `metadata`.
+//   3. UI derives the keypair from the seed, checks the derived public
+//      key matches `metadata.publicKey` (the guard rail).
+//   4. UI calls `WebApp.restoreIdentity` / `DesktopApp.restoreIdentity` /
+//      `MobileApp.restoreIdentity` with `{ privateKeyHex, metadata,
+//      preserveMemories }`.
+//   5. On `{ ok: true, needsReload }` the UI reloads the surface so
+//      bootstrap picks up the restored identity from the new keystore +
+//      config state.
+//
+// The type lives in this package alongside `ImportIdentityResult` so
+// every surface consumes one contract. The implementation is per-surface
+// because each surface owns its own keystore (web IDB, desktop OS keyring
+// via Tauri IPC, mobile Expo SecureStore) and its own identity-config
+// store (web localStorage, desktop Tauri config file, mobile SecureStore).
+
+export interface RestoreIdentityRequest {
+  /** The 64-hex-char Ed25519 private key the recovery seed pasted into. */
+  privateKeyHex: string;
+  /**
+   * Identity metadata to restore. For motebit.md restore, this is the
+   * `metadata` field from a successful `importIdentityFile(content)`
+   * call. For seed-only restore (commit 4), the caller synthesizes a
+   * minimal metadata with the derived public key + a generated
+   * motebit_id (the seed alone cannot recover the original motebit_id;
+   * the relay-side mapping does, but that's a relay-mediated path).
+   */
+  metadata: ImportedIdentityMetadata;
+  /**
+   * Original signed motebit.md content, verbatim. When provided
+   * (motebit.md-restore path), the surface writes this to its
+   * `_identity_file`-equivalent slot so the next bootstrap reads the
+   * original governance fields with their cryptographic anchor intact.
+   * Omit for seed-only restore (commit 4) — the caller has no original
+   * .md and bootstrap regenerates one from the in-memory metadata on
+   * next launch.
+   */
+  originalContent?: string;
+  /**
+   * Per the design call captured in [[identity_restore_arc]] §"Design
+   * decisions": default is clear (no preserve). Setting `true` is
+   * surfaced in the UI as opt-in with the explicit "Severs cryptographic
+   * chain to original signing identity" trade-off label. The preserve
+   * path requires re-keying existing conversation/memory rows from the
+   * old motebit_id to the new one; that re-key logic lands in a
+   * follow-up commit. Until then this value being `true` returns
+   * `{ ok: false, reason: "preserve_not_implemented" }` and the UI
+   * disables the checkbox.
+   */
+  preserveMemories: boolean;
+}
+
+export type RestoreIdentityResult =
+  | { ok: true; motebitId: string; needsReload: true }
+  | { ok: false; reason: RestoreIdentityFailureReason };
+
+export type RestoreIdentityFailureReason =
+  | "invalid_private_key_length"
+  | "invalid_private_key_hex"
+  | "key_mismatch"
+  | "preserve_not_implemented"
+  | "keystore_write_failed"
+  | "config_write_failed";
+
+/**
+ * Validate the request shape and the cryptographic guard (does the
+ * caller's private key derive the public key the metadata declares?).
+ * Surface-level `restoreIdentity` methods call this before any
+ * side-effecting write, so the failure modes are uniform across web /
+ * desktop / mobile.
+ *
+ * Returns `null` on success or a typed reason on failure. Callers that
+ * fail still need to ensure no partial state was written (this helper
+ * does not mutate anything).
+ */
+export async function validateRestoreRequest(
+  request: RestoreIdentityRequest,
+): Promise<RestoreIdentityFailureReason | null> {
+  if (request.privateKeyHex.length !== 64) return "invalid_private_key_length";
+  if (!/^[0-9a-fA-F]+$/.test(request.privateKeyHex)) return "invalid_private_key_hex";
+
+  // Derive the public key from the private key under the identity-file
+  // cryptosuite (Ed25519). Suite-dispatch is the only call site
+  // permitted to reach @noble/ed25519 directly (@motebit/crypto rule 1).
+  const { hexToBytes, bytesToHex, getPublicKeyBySuite } = await import("@motebit/encryption");
+  const privBytes = hexToBytes(request.privateKeyHex);
+  const pubBytes = await getPublicKeyBySuite(privBytes, IDENTITY_FILE_SUITE);
+  const derivedPubHex = bytesToHex(pubBytes);
+
+  if (derivedPubHex.toLowerCase() !== request.metadata.publicKey.toLowerCase()) {
+    return "key_mismatch";
+  }
+  if (request.preserveMemories) {
+    return "preserve_not_implemented";
+  }
+  return null;
+}
+
 export async function importIdentityFile(content: string): Promise<ImportIdentityResult> {
   try {
     parse(content);

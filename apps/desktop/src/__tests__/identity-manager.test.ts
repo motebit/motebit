@@ -36,6 +36,7 @@ const mockCtrl = vi.hoisted(() => ({
   },
   decryptShouldThrow: false,
   walletHasValue: false,
+  restoreValidateReason: null as string | null,
 }));
 
 // ---------------------------------------------------------------------------
@@ -78,7 +79,9 @@ vi.mock("@motebit/identity-file", () => ({
     if (mockCtrl.generateIdentityFileShouldThrow) throw new Error("generate failed");
     return mockCtrl.identityFileContent;
   }),
+  importIdentityFile: vi.fn(async () => ({ valid: false, reason: "not-mocked" })),
   parse: vi.fn(() => mockCtrl.parseResult),
+  validateRestoreRequest: vi.fn(async () => mockCtrl.restoreValidateReason),
   verify: vi.fn(async () => mockCtrl.verifyIdentityResult),
   rotate: vi.fn(async () => mockCtrl.rotateFileContent),
 }));
@@ -152,6 +155,7 @@ beforeEach(() => {
   };
   mockCtrl.decryptShouldThrow = false;
   mockCtrl.walletHasValue = false;
+  mockCtrl.restoreValidateReason = null;
   mockCtrl.bootstrapResult = {
     motebitId: "test-motebit",
     deviceId: "test-device",
@@ -441,6 +445,128 @@ describe("IdentityManager.verifyIdentityFile", () => {
     const r2 = await mgr.verifyIdentityFile("invalid");
     expect(r2.valid).toBe(false);
     expect(r2.error).toBe("bad sig");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// restoreIdentity — side-effecting restore from imported metadata
+// ---------------------------------------------------------------------------
+
+describe("IdentityManager.restoreIdentity", () => {
+  const sampleMetadata = {
+    motebitId: "restored-motebit",
+    publicKey: "a".repeat(64),
+    ownerId: "restored-owner",
+    bornAt: "2025-11-12T00:00:00.000Z",
+    devices: [],
+    governance: {
+      trust_mode: "guarded" as const,
+      max_risk_auto: "R1_DRAFT",
+      require_approval_above: "R1_DRAFT",
+      deny_above: "R4_MONEY",
+      operator_mode: false,
+    },
+    memory: { half_life_days: 7, confidence_threshold: 0.3, per_turn_limit: 5 },
+  };
+
+  it("returns the typed reason when validation fails (key_mismatch)", async () => {
+    const mgr = new IdentityManager();
+    mockCtrl.restoreValidateReason = "key_mismatch";
+    const invoke = makeInvoke({});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await mgr.restoreIdentity(invoke as any, {
+      privateKeyHex: "b".repeat(64),
+      metadata: sampleMetadata,
+      preserveMemories: false,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("key_mismatch");
+  });
+
+  it("writes keystore + config, returns ok with needsReload on success", async () => {
+    const mgr = new IdentityManager();
+    const invoke = makeInvoke({});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await mgr.restoreIdentity(invoke as any, {
+      privateKeyHex: "b".repeat(64),
+      metadata: sampleMetadata,
+      preserveMemories: false,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.motebitId).toBe("restored-motebit");
+    expect(result.needsReload).toBe(true);
+
+    expect(invoke).toHaveBeenCalledWith("keyring_set", {
+      key: "device_private_key",
+      value: "b".repeat(64),
+    });
+    // The last write_config call captures the post-restore state.
+    const writeCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([cmd]) => cmd === "write_config",
+    );
+    expect(writeCalls.length).toBeGreaterThan(0);
+    const lastWritten = JSON.parse(
+      (writeCalls[writeCalls.length - 1]![1] as { json: string }).json,
+    ) as Record<string, unknown>;
+    expect(lastWritten.motebit_id).toBe("restored-motebit");
+    expect(lastWritten.device_public_key).toBe("a".repeat(64));
+    expect(lastWritten.device_id).toMatch(/[a-f0-9-]{36}/);
+  });
+
+  it("preserves originalContent in `_identity_file` when supplied (motebit.md path)", async () => {
+    const mgr = new IdentityManager();
+    const invoke = makeInvoke({});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await mgr.restoreIdentity(invoke as any, {
+      privateKeyHex: "b".repeat(64),
+      metadata: sampleMetadata,
+      originalContent: "---SIGNED-MD-CONTENT---",
+      preserveMemories: false,
+    });
+    const writeCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([cmd]) => cmd === "write_config",
+    );
+    const lastWritten = JSON.parse(
+      (writeCalls[writeCalls.length - 1]![1] as { json: string }).json,
+    ) as Record<string, unknown>;
+    expect(lastWritten._identity_file).toBe("---SIGNED-MD-CONTENT---");
+  });
+
+  it("clears stale `_identity_file` from config when originalContent is omitted (seed-only path)", async () => {
+    const mgr = new IdentityManager();
+    const invoke = makeInvoke({ _identity_file: "OLD-SIGNED-MD" });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await mgr.restoreIdentity(invoke as any, {
+      privateKeyHex: "b".repeat(64),
+      metadata: sampleMetadata,
+      preserveMemories: false,
+    });
+    const writeCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([cmd]) => cmd === "write_config",
+    );
+    const lastWritten = JSON.parse(
+      (writeCalls[writeCalls.length - 1]![1] as { json: string }).json,
+    ) as Record<string, unknown>;
+    expect(lastWritten._identity_file).toBeUndefined();
+  });
+
+  it("returns 'keystore_write_failed' when keyring_set throws", async () => {
+    const mgr = new IdentityManager();
+    const invoke = vi.fn(async (cmd: string) => {
+      if (cmd === "keyring_set") throw new Error("keyring locked");
+      throw new Error(`unexpected: ${cmd}`);
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await mgr.restoreIdentity(invoke as any, {
+      privateKeyHex: "b".repeat(64),
+      metadata: sampleMetadata,
+      preserveMemories: false,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("keystore_write_failed");
   });
 });
 

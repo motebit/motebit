@@ -1761,6 +1761,18 @@ export class DesktopApp {
   }
 
   /**
+   * Side-effecting restore: materialize an imported identity onto this
+   * device. See `IdentityManager.restoreIdentity` for semantics. Caller
+   * reloads the surface on `needsReload: true`.
+   */
+  restoreIdentity(
+    invoke: InvokeFn,
+    request: import("@motebit/identity-file").RestoreIdentityRequest,
+  ): Promise<import("@motebit/identity-file").RestoreIdentityResult> {
+    return this.identity.restoreIdentity(invoke, request);
+  }
+
+  /**
    * Rotate the Ed25519 keypair with signed succession record. See
    * `IdentityManager.rotateKey` for full semantics.
    */

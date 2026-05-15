@@ -86,8 +86,11 @@ import {
   parse as parseIdentityFile,
   governanceToPolicyConfig,
   rotate as rotateIdentityFile,
+  validateRestoreRequest,
   verify as verifyIdentityFile,
   type ImportIdentityResult,
+  type RestoreIdentityRequest,
+  type RestoreIdentityResult,
 } from "@motebit/identity-file";
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
 import type { ExpoSqliteSkillAuditSink, ExpoStorageResult } from "./adapters/expo-sqlite";
@@ -2242,6 +2245,46 @@ export class MobileApp {
    */
   async importMotebitMd(content: string): Promise<ImportIdentityResult> {
     return importIdentityFileFromContent(content);
+  }
+
+  /**
+   * Side-effecting restore: materialize an imported identity onto this
+   * device. Writes the new private key + motebit_id + device_id +
+   * device_public_key through the SecureStore-backed keyring (the same
+   * adapter `bootstrap()` uses to read/write identity material). Caller
+   * reloads the surface on `needsReload: true`.
+   *
+   * No SQLite wipe in v1 — data keyed to the old motebit_id is orphaned
+   * (not visible under the new identity by natural filtering, not
+   * deleted). The explicit-wipe + re-key path lands when
+   * preserveMemories=true ships.
+   *
+   * Note: mobile does not have desktop's `_identity_file` config slot —
+   * governance lives on the runtime config that's regenerated from the
+   * in-memory metadata on next bootstrap, so `originalContent` is
+   * unused on this surface (still accepted for cross-surface contract
+   * uniformity).
+   */
+  async restoreIdentity(request: RestoreIdentityRequest): Promise<RestoreIdentityResult> {
+    const failureReason = await validateRestoreRequest(request);
+    if (failureReason !== null) {
+      return { ok: false, reason: failureReason };
+    }
+
+    const newDeviceId = crypto.randomUUID();
+    try {
+      await this.keyring.set("device_private_key", request.privateKeyHex);
+    } catch {
+      return { ok: false, reason: "keystore_write_failed" };
+    }
+    try {
+      await this.keyring.set(KEYRING_KEYS.motebitId, request.metadata.motebitId);
+      await this.keyring.set("device_id", newDeviceId);
+      await this.keyring.set("device_public_key", request.metadata.publicKey);
+    } catch {
+      return { ok: false, reason: "config_write_failed" };
+    }
+    return { ok: true, motebitId: request.metadata.motebitId, needsReload: true };
   }
 }
 
