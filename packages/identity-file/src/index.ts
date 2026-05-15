@@ -230,6 +230,77 @@ export async function generate(opts: GenerateOptions, privateKey: Uint8Array): P
 
 export type ParseResult = ReturnType<typeof parse>;
 
+// --- Import (parse + verify + flat metadata reshape) ---
+//
+// `importIdentityFile` is the canonical primitive for the restore-from-
+// motebit.md flow on every surface. Three things in one call:
+//
+//   1. Parse the YAML frontmatter via `parse()`. Surfaces a structural-
+//      malformation reason on failure.
+//   2. Verify the Ed25519 signature chain via `verify()`. Surfaces a
+//      cryptographic-failure reason on invalid signature, missing
+//      cryptosuite, succession-chain break, etc.
+//   3. Reshape the validated `MotebitIdentityFile` into a flat
+//      `ImportedIdentityMetadata` that maps cleanly onto what a Restore
+//      flow actually consumes: `bornAt` (the original creation date
+//      `created_at` for the IdentityCreated event re-issuance),
+//      `publicKey` (the guard rail — the user's pasted recovery seed
+//      must derive the same public key), `devices` (so device-list
+//      state survives the restore), `governance` + `memory` (so policy
+//      bounds restore from the file's declared values, not surface
+//      defaults).
+//
+// Note: motebit.md is structurally a *public* artifact — it contains
+// only the public key, never the private key. The Restore UI requires
+// a separate recovery-seed paste to materialize the keypair; this
+// importer does NOT and CAN NOT recover a private key from the file
+// alone.
+
+export interface ImportedIdentityMetadata {
+  motebitId: string;
+  publicKey: string;
+  ownerId: string;
+  bornAt: string;
+  devices: MotebitIdentityFile["devices"];
+  governance: MotebitIdentityFile["governance"];
+  memory: MotebitIdentityFile["memory"];
+}
+
+export type ImportIdentityResult =
+  | { valid: true; metadata: ImportedIdentityMetadata }
+  | { valid: false; reason: string };
+
+export async function importIdentityFile(content: string): Promise<ImportIdentityResult> {
+  try {
+    parse(content);
+  } catch (err: unknown) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return { valid: false, reason: `parse failed: ${reason}` };
+  }
+  const result = await verify(content, { expectedType: "identity" });
+  if (result.type !== "identity" || !result.valid || result.identity === null) {
+    const reason =
+      result.errors?.[0]?.message ??
+      ("error" in result && typeof result.error === "string"
+        ? result.error
+        : "signature verification failed");
+    return { valid: false, reason };
+  }
+  const fm = result.identity;
+  return {
+    valid: true,
+    metadata: {
+      motebitId: fm.motebit_id,
+      publicKey: fm.identity.public_key,
+      ownerId: fm.owner_id,
+      bornAt: fm.created_at,
+      devices: fm.devices,
+      governance: fm.governance,
+      memory: fm.memory,
+    },
+  };
+}
+
 export async function update(
   existingContent: string,
   updates: Partial<Omit<MotebitIdentityFile, "spec" | "identity">>,

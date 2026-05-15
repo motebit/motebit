@@ -1597,6 +1597,18 @@ export class WebApp {
     return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
   }
 
+  // Parse + verify a motebit.md and return the flat metadata the Restore
+  // UI consumes (motebit_id, bornAt, public key, devices, governance,
+  // memory). Pure read — no state mutation. The .md is structurally
+  // public; the private key still has to come from a separate recovery
+  // seed paste before any restore can proceed.
+  async importMotebitMd(
+    content: string,
+  ): Promise<import("@motebit/identity-file").ImportIdentityResult> {
+    const { importIdentityFile } = await import("@motebit/identity-file");
+    return importIdentityFile(content);
+  }
+
   // === Operator Mode ===
   //
   // PIN-protected escalation that allows high-risk tools (write, execute,

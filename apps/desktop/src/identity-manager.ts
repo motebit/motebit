@@ -66,9 +66,11 @@ import {
 import type { KeyTransferPayload } from "@motebit/sdk";
 import {
   generate as generateIdentityFile,
+  importIdentityFile as importIdentityFileFromContent,
   parse as parseIdentityFile,
   verify as verifyIdentity,
   rotate as rotateIdentityFile,
+  type ImportIdentityResult,
 } from "@motebit/identity-file";
 import type { BootstrapResult } from "./index.js";
 import { createTauriStorage } from "./index.js";
@@ -384,6 +386,15 @@ export class IdentityManager {
     const result = await verifyIdentity(content, { expectedType: "identity" });
     const error = result.errors?.[0]?.message;
     return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
+  }
+
+  // Parse + verify a motebit.md and return the flat metadata the Restore
+  // UI consumes (motebit_id, bornAt, public key, devices, governance,
+  // memory). Pure read — no state mutation. The .md is structurally
+  // public; the private key still has to come from a separate recovery
+  // seed paste before any restore can proceed.
+  async importIdentityFile(content: string): Promise<ImportIdentityResult> {
+    return importIdentityFileFromContent(content);
   }
 
   /**

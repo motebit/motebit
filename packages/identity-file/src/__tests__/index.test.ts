@@ -8,6 +8,7 @@ import {
 import { verify as canonicalVerify } from "@motebit/crypto";
 import {
   generate,
+  importIdentityFile,
   parse,
   update,
   rotate,
@@ -519,6 +520,94 @@ describe("cross-compatibility with @motebit/crypto", () => {
     const result = await standaloneVerify(tampered);
     expect(result.valid).toBe(false);
     expect(result.identity).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// importIdentityFile — the canonical Restore-flow primitive
+// ---------------------------------------------------------------------------
+//
+// `importIdentityFile` composes parse + verify + flat-metadata reshape. The
+// Restore UI on every surface (web/desktop/mobile) consumes this single
+// call; surface-level wrappers (`WebApp.importMotebitMd`,
+// `IdentityManager.importIdentityFile`, `MobileApp.importMotebitMd`) thin-
+// delegate here so the reason-string semantics stay uniform across
+// surfaces.
+
+describe("importIdentityFile", () => {
+  it("returns flat metadata for a valid signed file", async () => {
+    const kp = await makeKeypairHex();
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        createdAt: DEFAULTS.createdAt,
+        publicKeyHex: kp.publicKeyHex,
+        devices: [
+          {
+            device_id: "dev-001",
+            name: "CLI",
+            public_key: kp.publicKeyHex,
+            registered_at: DEFAULTS.createdAt,
+          },
+        ],
+      },
+      kp.privateKey,
+    );
+
+    const result = await importIdentityFile(content);
+    expect(result.valid).toBe(true);
+    if (!result.valid) throw new Error("unreachable");
+    expect(result.metadata.motebitId).toBe(DEFAULTS.motebitId);
+    expect(result.metadata.publicKey).toBe(kp.publicKeyHex);
+    expect(result.metadata.ownerId).toBe(DEFAULTS.ownerId);
+    expect(result.metadata.bornAt).toBe(DEFAULTS.createdAt);
+    expect(result.metadata.devices).toHaveLength(1);
+    expect(result.metadata.devices[0]!.device_id).toBe("dev-001");
+    expect(result.metadata.governance.trust_mode).toBe("guarded");
+    expect(result.metadata.memory.half_life_days).toBe(7);
+  });
+
+  it("returns {valid: false} with a reason when the frontmatter has been tampered with", async () => {
+    const kp = await makeKeypairHex();
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        publicKeyHex: kp.publicKeyHex,
+      },
+      kp.privateKey,
+    );
+    const tampered = content.replace(DEFAULTS.ownerId, "evil-owner");
+
+    const result = await importIdentityFile(tampered);
+    expect(result.valid).toBe(false);
+    if (result.valid) throw new Error("unreachable");
+    expect(result.reason).toBeTruthy();
+  });
+
+  it("returns {valid: false, reason: 'parse failed: ...'} for non-motebit.md content", async () => {
+    const result = await importIdentityFile("definitely not a signed yaml frontmatter file");
+
+    expect(result.valid).toBe(false);
+    if (result.valid) throw new Error("unreachable");
+    expect(result.reason).toMatch(/parse failed/);
+  });
+
+  it("returns {valid: false} when the signature comment is missing", async () => {
+    const kp = await makeKeypairHex();
+    const content = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        publicKeyHex: kp.publicKeyHex,
+      },
+      kp.privateKey,
+    );
+    const sigStripped = content.replace(/<!-- motebit:sig:[^>]+-->/, "");
+
+    const result = await importIdentityFile(sigStripped);
+    expect(result.valid).toBe(false);
   });
 });
 

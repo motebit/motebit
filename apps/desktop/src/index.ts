@@ -1751,6 +1751,16 @@ export class DesktopApp {
   }
 
   /**
+   * Parse + verify a motebit.md and return the flat metadata the Restore
+   * UI consumes. See `IdentityManager.importIdentityFile` for semantics.
+   */
+  importIdentityFile(
+    content: string,
+  ): Promise<import("@motebit/identity-file").ImportIdentityResult> {
+    return this.identity.importIdentityFile(content);
+  }
+
+  /**
    * Rotate the Ed25519 keypair with signed succession record. See
    * `IdentityManager.rotateKey` for full semantics.
    */

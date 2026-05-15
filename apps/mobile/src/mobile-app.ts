@@ -82,10 +82,12 @@ import {
 import type { EventFilter, EventStoreAdapter } from "@motebit/event-log";
 import {
   generate as generateIdentityFile,
+  importIdentityFile as importIdentityFileFromContent,
   parse as parseIdentityFile,
   governanceToPolicyConfig,
   rotate as rotateIdentityFile,
   verify as verifyIdentityFile,
+  type ImportIdentityResult,
 } from "@motebit/identity-file";
 import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
 import type { ExpoSqliteSkillAuditSink, ExpoStorageResult } from "./adapters/expo-sqlite";
@@ -2229,6 +2231,17 @@ export class MobileApp {
     const result = await verifyIdentityFile(content, { expectedType: "identity" });
     const error = result.errors?.[0]?.message;
     return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
+  }
+
+  /**
+   * Parse + verify a motebit.md and return the flat metadata the Restore
+   * UI consumes (motebit_id, bornAt, public key, devices, governance,
+   * memory). Pure read — no state mutation. The .md is structurally
+   * public; the private key still has to come from a separate recovery
+   * seed paste before any restore can proceed.
+   */
+  async importMotebitMd(content: string): Promise<ImportIdentityResult> {
+    return importIdentityFileFromContent(content);
   }
 }
 
