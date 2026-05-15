@@ -266,6 +266,35 @@ describe("bootstrapIdentity", () => {
     expect(loaded).not.toBeNull();
     const orphan = await identityStorage.load("orphaned-divergent-id");
     expect(orphan).toBeNull();
+
+    // The orphaned motebit_id is reported back to the caller so the
+    // surface UI can offer recovery (restore-from-motebit.md or
+    // restore-from-seed). Without this signal, the silent re-mint
+    // becomes unrecoverable from the user's perspective — the prior
+    // identity, funds, credentials, and trust are gone without notice.
+    expect(result.divergedFromMotebitId).toBe("orphaned-divergent-id");
+  });
+
+  it("non-divergent paths leave divergedFromMotebitId undefined", async () => {
+    // First launch with no prior config
+    const first = await bootstrapIdentity({
+      surfaceName: "test",
+      identityStorage,
+      eventStoreAdapter,
+      configStore,
+      keyStore,
+    });
+    expect(first.divergedFromMotebitId).toBeUndefined();
+
+    // Second launch with intact keystore
+    const second = await bootstrapIdentity({
+      surfaceName: "test",
+      identityStorage,
+      eventStoreAdapter,
+      configStore,
+      keyStore,
+    });
+    expect(second.divergedFromMotebitId).toBeUndefined();
   });
 
   it("legacy keystore without hasPrivateKey: pre-2026-04-23 behavior preserved (trusts config)", async () => {

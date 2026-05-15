@@ -372,6 +372,27 @@ export interface BootstrapResult {
   deviceId: string;
   publicKeyHex: string;
   isFirstLaunch: boolean;
+  /**
+   * Set when the prior `configStore` claimed an identity but the
+   * `keyStore.hasPrivateKey()` probe returned `false` — divergent state.
+   * Bootstrap still auto-recovers (mints a fresh keypair, overwrites the
+   * config, returns `isFirstLaunch: true`) so a caller that ignores this
+   * field gets the legacy behavior. Callers that DO read this field can
+   * surface a recovery banner with restore-from-motebit.md /
+   * restore-from-seed CTAs (the user is one click from the orphan being
+   * undone).
+   *
+   * Value is the motebit_id that was claimed by the config but had no
+   * matching private key. Will be `undefined` on first launch (no config
+   * existed) and on every clean second-launch (probe returned `true`).
+   *
+   * Co-load-bearing with the keystore-probe primitive per
+   * [[feedback_sovereignty_primitives_audit_consumers]]: the probe is
+   * only safe to expose on a surface when that surface's bootstrap
+   * caller forwards this field to a recovery UI. Probe-without-this-
+   * field = silent re-mint with only a console.warn signal.
+   */
+  divergedFromMotebitId?: string;
 }
 
 function toHex(bytes: Uint8Array): string {
@@ -423,15 +444,21 @@ export async function bootstrapIdentity(opts: {
   // The probe is optional — older keyStore impls that predate hasPrivateKey
   // keep the pre-2026-04-23 behavior (trust the config unconditionally).
   const keyStoreIntact = existing && keyStore.hasPrivateKey ? await keyStore.hasPrivateKey() : true;
+  const divergedFromMotebitId =
+    existing && existing.motebit_id && !keyStoreIntact ? existing.motebit_id : undefined;
 
-  if (existing && existing.motebit_id && !keyStoreIntact) {
+  if (divergedFromMotebitId !== undefined) {
     // Log once, at warning level — the operator needs to see this the
     // first time it happens (divergent state is unusual), and any
     // downstream support bug report should have it in the console.
+    // The same fact is also reported back to the caller in the
+    // BootstrapResult so the surface UI can offer the user a
+    // restore-from-backup or restore-from-seed path (the orphan can be
+    // undone with one click if the user kept their backup).
     // eslint-disable-next-line no-console
     console.warn(
       `[${surfaceName}] bootstrapIdentity: config claims identity ` +
-        `${existing.motebit_id} but the keystore has no matching private ` +
+        `${divergedFromMotebitId} but the keystore has no matching private ` +
         `key — treating as first launch. The prior identity is orphaned.`,
     );
   }
@@ -508,6 +535,7 @@ export async function bootstrapIdentity(opts: {
     deviceId: device.device_id,
     publicKeyHex: pubKeyHex,
     isFirstLaunch: true,
+    ...(divergedFromMotebitId !== undefined ? { divergedFromMotebitId } : {}),
   };
 }
 
