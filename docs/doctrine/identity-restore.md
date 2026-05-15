@@ -38,11 +38,19 @@ This is a real semantic split, not a UI cosmetic: the motebit.md path is _full i
 
 ## The keystore-probe relationship
 
-`hasPrivateKey()` divergence-detection on the keystore was reverted earlier this arc (per [[feedback_sovereignty_primitives_audit_consumers]]) because `bootstrapIdentity` would silently orphan the user's funds, credentials, and trust if config and keystore diverged. The probe is **safe to re-introduce once restore ships** — because the user can now follow a non-destructive recovery path:
+`hasPrivateKey()` divergence-detection on the keystore was reverted earlier this arc (per [[feedback_sovereignty_primitives_audit_consumers]]) because `bootstrapIdentity` would silently orphan the user's funds, credentials, and trust if config and keystore diverged. With the restore arc shipped, the probe is now safe — the user follows a non-destructive recovery path:
 
 > "Your local identity material has diverged. Restore from your motebit.md or recovery seed to recover."
 
 The probe + restore are co-load-bearing. Either alone is hostile (probe-without-restore = forced data loss; restore-without-probe = no entry point for the user to discover they need to restore). The pair is intelligible.
+
+**Implementation (shipped 2026-05-15 in the same session as the restore arc):**
+
+1. **Typed divergence signal** — `BootstrapResult.divergedFromMotebitId?: string` in `@motebit/core-identity`. Bootstrap still auto-recovers (preserving backward compat for non-UI consumers like the CLI and file-stores), but reports the orphaned motebit_id back to the caller. Old callers that ignore the field keep the legacy silent-re-mint behavior; new surfaces that read it can render recovery UI.
+2. **Per-surface divergence banner / Alert** — `WebApp.divergedFromMotebitId` + `DesktopApp.divergedFromMotebitId` + `MobileApp.divergedFromMotebitId` all surface the signal to a UI affordance: web/desktop render a fixed-top banner with three CTAs (Restore from motebit.md / Restore from seed / Dismiss); mobile fires `Alert.alert` with two CTAs (Restore Identity / Dismiss) that route into the SettingsModal Identity tab. The "Dismiss" path calls `clearDivergenceNotice()` to accept the auto-minted fresh identity — making the silent re-mint explicit, not default.
+3. **Web `EncryptedKeyStore.hasPrivateKey()` finally exposed** — the IDB-WebCrypto path probes the keystore IDB for the canonical record; the localStorage fallback probes the cipher key. Never throws; storage-backend errors surface as `false` so bootstrap routes to recovery instead of wedging.
+
+The cross-surface invariant is structural: every surface has BOTH a divergence-detection primitive AND a divergence-recovery surface. The contract is documented in `BootstrapResult` type comments and enforced by TypeScript at every surface's bootstrap call site.
 
 ## Deferred items (v1.x targets)
 
@@ -50,7 +58,7 @@ These are honest gaps in the v1 ship, each documented inline at its blocker site
 
 - **`preserveMemories=true` re-key migration.** Today the typed-error path returns `preserve_not_implemented`; the UI checkbox is disabled. The migration re-keys existing conversation / memory rows from the old motebit_id to the new, severing the cryptographic chain to the original signing identity but preserving the user's accumulated context. It is a per-surface storage migration (web IDB, desktop SQLite, mobile expo-sqlite) — non-trivial, deferred until a real consumer asks.
 - **Born-date fidelity.** Bootstrap's "config has identity, DB doesn't" path re-creates the `IdentityCreated` event with `timestamp: Date.now()`. The motebit.md's bornAt is currently informational only (rendered in the restore preview but lost post-reload). Pre-writing the event with the historical bornAt is per-surface storage surgery; deferred.
-- **`hasPrivateKey()` re-exposure.** Now unblocked architecturally (restore exists). Pending: the UX that surfaces the divergence-detection error to the user with a "Restore identity" CTA. Should land as a focused follow-up commit on top of this arc.
+- ~~**`hasPrivateKey()` re-exposure.**~~ **Shipped 2026-05-15** in the same session as the restore arc. See § "The keystore-probe relationship" above for the implementation.
 - **Solana balance in the preview.** The .md path could fetch live USDC balance for the derived Solana address as a sanity check. v1 shows the address only; users can paste it into Solscan or Phantom externally. Deferred — adds network dependency to the restore UX for marginal value.
 
 ## Citation graph
