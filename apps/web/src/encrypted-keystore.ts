@@ -203,4 +203,48 @@ export class EncryptedKeyStore implements BootstrapKeyStore {
     }
     return loadWithFallback();
   }
+
+  /**
+   * Probe whether a private key is currently stored.
+   *
+   * Required by the `bootstrapIdentity` divergent-state guard: when
+   * `configStore` claims an identity but this probe returns `false`,
+   * bootstrap reports the orphaned `motebit_id` back to the caller via
+   * `BootstrapResult.divergedFromMotebitId`. The surface UI (the
+   * divergence banner) then offers the user a one-click recovery path —
+   * restore from motebit.md, restore from recovery seed, or accept the
+   * auto-minted fresh identity.
+   *
+   * **Doctrine: this method is only safe to expose because the
+   * recovery UI shipped first.** Per
+   * [[feedback_sovereignty_primitives_audit_consumers]], the
+   * keystore-probe primitive was reverted earlier in this arc
+   * (2026-05-15 AM) because the bootstrap consumer silently re-minted
+   * on divergence — wiping funds, credentials, and accumulated trust
+   * without the user ever discovering the orphan. The audit checklist
+   * required shipping (1) backup/export, (2) restore-from-file +
+   * recovery-seed, (3) typed divergence signal + recovery UI BEFORE
+   * the probe could safely fire. With all three landed today
+   * (commits ec49ecd0..435ca02c), the probe firing produces a
+   * user-actionable banner instead of a silent identity wipe.
+   *
+   * Returns `false` for both paths (no record in IDB, no cipher in
+   * localStorage). Never throws — backend errors surface as `false` so
+   * bootstrap treats the configuration as stale and takes the
+   * recovery path rather than wedging the app.
+   */
+  async hasPrivateKey(): Promise<boolean> {
+    if (this.useIndexedDB) {
+      try {
+        const db = await openKeystoreDB();
+        const record = await idbGet(db, IDB_KEY);
+        db.close();
+        return record !== undefined && record !== null;
+      } catch {
+        return false;
+      }
+    }
+    const cipher = localStorage.getItem(LS_CIPHER_KEY);
+    return cipher !== null && cipher !== "";
+  }
 }

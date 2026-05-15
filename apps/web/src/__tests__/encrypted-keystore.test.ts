@@ -50,3 +50,42 @@ describe("EncryptedKeyStore", () => {
     expect(loaded).toBe(testKey);
   });
 });
+
+describe("EncryptedKeyStore.hasPrivateKey", () => {
+  // The probe is the consumer-facing primitive that
+  // `bootstrapIdentity`'s divergent-state guard reads. False with
+  // config-present is what fires the divergence recovery banner. Tests
+  // here lock the contract: `false` for absent, `true` for present,
+  // never throws. See [[feedback_sovereignty_primitives_audit_consumers]]
+  // for the audit checklist that gated the re-exposure of this method.
+
+  it("returns false on a fresh store (no key written)", async () => {
+    const store = new EncryptedKeyStore();
+    expect(await store.hasPrivateKey()).toBe(false);
+  });
+
+  it("returns true after a key has been stored", async () => {
+    const store = new EncryptedKeyStore();
+    const testKey = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+    await store.storePrivateKey(testKey);
+    expect(await store.hasPrivateKey()).toBe(true);
+  });
+
+  it("agrees with loadPrivateKey across a fresh-store round trip", async () => {
+    const store = new EncryptedKeyStore();
+    expect(await store.hasPrivateKey()).toBe(false);
+    expect(await store.loadPrivateKey()).toBeNull();
+
+    await store.storePrivateKey("cd".repeat(32));
+    expect(await store.hasPrivateKey()).toBe(true);
+    expect(await store.loadPrivateKey()).toBe("cd".repeat(32));
+  });
+
+  it("survives a second store instance — probe sees the persisted key", async () => {
+    const store1 = new EncryptedKeyStore();
+    await store1.storePrivateKey("ee".repeat(32));
+
+    const store2 = new EncryptedKeyStore();
+    expect(await store2.hasPrivateKey()).toBe(true);
+  });
+});
