@@ -53,6 +53,7 @@ import { createSignedToken, secureErase, bytesToHex } from "@motebit/encryption"
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
   rotateIdentityKeys,
+  writeRestoredIdentity,
   type BootstrapConfigStore,
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
@@ -2299,6 +2300,27 @@ export class MobileApp {
         }
       } catch {
         return { ok: false, reason: "memory_migration_failed" };
+      }
+    }
+
+    // Pre-write the IdentityCreated event with the historical bornAt
+    // so the next bootstrap's "loaded" path returns the original
+    // creation timestamp instead of fabricating Date.now(). See the
+    // helper's JSDoc in @motebit/core-identity for the doctrine.
+    // Best-effort: failure falls through to the Date.now() event on
+    // next bootstrap's auto-recover path.
+    const bornAtMs = Date.parse(request.metadata.bornAt);
+    if (Number.isFinite(bornAtMs) && this.storage !== null) {
+      try {
+        await writeRestoredIdentity({
+          identityStorage: this.storage.identityStorage,
+          eventStoreAdapter: this.storage.eventStore,
+          motebitId: request.metadata.motebitId,
+          ownerId: "Mobile",
+          bornAtMs,
+        });
+      } catch {
+        // Best-effort. The user's identity restore still proceeds.
       }
     }
 

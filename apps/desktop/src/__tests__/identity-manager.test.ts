@@ -37,6 +37,7 @@ const mockCtrl = vi.hoisted(() => ({
   decryptShouldThrow: false,
   walletHasValue: false,
   restoreValidateReason: null as string | null,
+  writeRestoredIdentityCalls: [] as Array<{ bornAtMs: number; motebitId: string }>,
 }));
 
 // ---------------------------------------------------------------------------
@@ -46,6 +47,9 @@ const mockCtrl = vi.hoisted(() => ({
 vi.mock("@motebit/core-identity", () => ({
   bootstrapIdentity: vi.fn(async () => mockCtrl.bootstrapResult),
   rotateIdentityKeys: vi.fn(async () => mockCtrl.rotateResult),
+  writeRestoredIdentity: vi.fn(async (opts: { bornAtMs: number; motebitId: string }) => {
+    mockCtrl.writeRestoredIdentityCalls.push(opts);
+  }),
 }));
 
 vi.mock("@motebit/encryption", () => ({
@@ -162,6 +166,7 @@ beforeEach(() => {
   mockCtrl.decryptShouldThrow = false;
   mockCtrl.walletHasValue = false;
   mockCtrl.restoreValidateReason = null;
+  mockCtrl.writeRestoredIdentityCalls = [];
   mockCtrl.bootstrapResult = {
     motebitId: "test-motebit",
     deviceId: "test-device",
@@ -601,6 +606,35 @@ describe("IdentityManager.restoreIdentity", () => {
       .filter(([cmd]) => cmd === "db_execute")
       .map(([, args]) => (args as { params: unknown[] }).params);
     expect(migrationParams[0]).toEqual(["restored-motebit", "old-motebit-id"]);
+  });
+
+  it("pre-writes the IdentityCreated event with the historical bornAt (born-date fidelity)", async () => {
+    const mgr = new IdentityManager();
+    const invoke = makeInvoke({});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await mgr.restoreIdentity(invoke as any, {
+      privateKeyHex: "b".repeat(64),
+      metadata: { ...sampleMetadata, bornAt: "2024-11-12T08:30:00.000Z" },
+      preserveMemories: false,
+    });
+    expect(mockCtrl.writeRestoredIdentityCalls).toHaveLength(1);
+    expect(mockCtrl.writeRestoredIdentityCalls[0]!.motebitId).toBe("restored-motebit");
+    expect(mockCtrl.writeRestoredIdentityCalls[0]!.bornAtMs).toBe(
+      Date.parse("2024-11-12T08:30:00.000Z"),
+    );
+  });
+
+  it("skips the bornAt pre-write when bornAt is unparseable (best-effort path)", async () => {
+    const mgr = new IdentityManager();
+    const invoke = makeInvoke({});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await mgr.restoreIdentity(invoke as any, {
+      privateKeyHex: "b".repeat(64),
+      metadata: { ...sampleMetadata, bornAt: "not-a-date" },
+      preserveMemories: false,
+    });
+    expect(result.ok).toBe(true);
+    expect(mockCtrl.writeRestoredIdentityCalls).toHaveLength(0);
   });
 
   it("returns 'memory_migration_failed' when the db UPDATE throws", async () => {

@@ -410,6 +410,60 @@ function toHex(bytes: Uint8Array): string {
  * 4. On first launch: create identity, generate Ed25519 keypair, register device
  * 5. Persist private key via keyStore, write config via configStore
  */
+/**
+ * Pre-write the MotebitIdentity record + `IdentityCreated` event for a
+ * restored identity so the next `bootstrapIdentity` call takes the
+ * "loaded" path (line 469-475 in this file) instead of the
+ * "config has ID, DB doesn't" path that fires a fresh event with
+ * `timestamp: Date.now()`. The point is born-date fidelity — the
+ * restored identity's `IdentityCreated` event timestamp must match
+ * the `bornAt` carried in the motebit.md, not the moment of restore.
+ *
+ * Surfaces (`WebApp.restoreIdentity`, `IdentityManager.restoreIdentity`
+ * on desktop, `MobileApp.restoreIdentity`) call this BEFORE writing
+ * keystore + config so the storage state is internally consistent by
+ * the time the surface reloads. The event payload carries
+ * `restored: true` (same shape bootstrap's auto-recover path emits)
+ * so audit consumers can distinguish a restore-time event from a
+ * first-launch event.
+ *
+ * No-op-safe when the event store already has an `IdentityCreated`
+ * event for this motebit_id (e.g. the user restored the same identity
+ * twice in a row) — the caller is responsible for not double-writing;
+ * this helper just performs the two writes unconditionally and trusts
+ * `appendWithClock` to advance the clock atomically.
+ */
+export async function writeRestoredIdentity(opts: {
+  identityStorage: IdentityStorage;
+  eventStoreAdapter: EventStoreAdapter;
+  motebitId: string;
+  ownerId: string;
+  /** Historical creation timestamp from motebit.md's `created_at`. Use
+   *  `Date.parse(metadata.bornAt)` at the call site; the caller is
+   *  responsible for handling NaN (typically by falling back to
+   *  `Date.now()` — but if that's the chosen behavior, the consumer
+   *  should think about whether they want to lose the born-date
+   *  fidelity that this helper exists to preserve). */
+  bornAtMs: number;
+}): Promise<void> {
+  const eventStore = new EventStore(opts.eventStoreAdapter);
+  const restoredIdentity: MotebitIdentity = {
+    motebit_id: opts.motebitId,
+    created_at: opts.bornAtMs,
+    owner_id: opts.ownerId,
+    version_clock: 0,
+  };
+  await opts.identityStorage.save(restoredIdentity);
+  await eventStore.appendWithClock({
+    event_id: generateUUIDv7(),
+    motebit_id: opts.motebitId,
+    timestamp: opts.bornAtMs,
+    event_type: EventType.IdentityCreated,
+    payload: { owner_id: opts.ownerId, restored: true },
+    tombstoned: false,
+  });
+}
+
 export async function bootstrapIdentity(opts: {
   surfaceName: string;
   identityStorage: IdentityStorage;

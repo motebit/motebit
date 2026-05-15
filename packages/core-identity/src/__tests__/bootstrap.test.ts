@@ -2,11 +2,13 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   InMemoryIdentityStorage,
   bootstrapIdentity,
+  writeRestoredIdentity,
   type BootstrapConfigStore,
   type BootstrapKeyStore,
   type BootstrapResult,
 } from "../index";
 import { InMemoryEventStore } from "@motebit/event-log";
+import { EventType } from "@motebit/protocol";
 
 // --- In-memory config store for testing ---
 
@@ -359,5 +361,118 @@ describe("bootstrapIdentity", () => {
     const dbIdentity = await identityStorage.load("orphaned-id-2");
     expect(dbIdentity).not.toBeNull();
     expect(dbIdentity!.motebit_id).toBe("orphaned-id-2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// writeRestoredIdentity — born-date fidelity for the restore flow
+// ---------------------------------------------------------------------------
+//
+// Pre-write the identity record + IdentityCreated event so the
+// subsequent bootstrap finds them and takes the "loaded" path instead
+// of fabricating a fresh event with `timestamp: Date.now()`. The test
+// shape locks the post-bootstrap state: the event's timestamp must
+// equal the bornAt we passed, not the Date.now() at bootstrap time.
+
+describe("writeRestoredIdentity + bootstrapIdentity (born-date fidelity)", () => {
+  let identityStorage: InMemoryIdentityStorage;
+  let eventStoreAdapter: InMemoryEventStore;
+  let configStore: TestConfigStore;
+  let keyStore: TestKeyStore;
+
+  beforeEach(() => {
+    identityStorage = new InMemoryIdentityStorage();
+    eventStoreAdapter = new InMemoryEventStore();
+    configStore = new TestConfigStore();
+    keyStore = new TestKeyStore();
+  });
+
+  it("preserves the historical bornAt in the IdentityCreated event after bootstrap reloads", async () => {
+    // Simulate the restore flow: caller writes the restored identity
+    // FIRST (with the historical bornAt), THEN populates config +
+    // keystore. Bootstrap on next launch sees both halves and takes
+    // the "loaded" early-return.
+    const bornAtMs = Date.parse("2024-11-12T08:30:00.000Z");
+    await writeRestoredIdentity({
+      identityStorage,
+      eventStoreAdapter,
+      motebitId: "restored-motebit",
+      ownerId: "Web",
+      bornAtMs,
+    });
+    configStore.data = {
+      motebit_id: "restored-motebit",
+      device_id: "restored-device",
+      device_public_key: "aa".repeat(32),
+    };
+    keyStore.storedKey = "bb".repeat(32);
+
+    const result = await bootstrapIdentity({
+      surfaceName: "Web",
+      identityStorage,
+      eventStoreAdapter,
+      configStore,
+      keyStore,
+    });
+
+    expect(result.isFirstLaunch).toBe(false);
+    expect(result.motebitId).toBe("restored-motebit");
+
+    // The event the Sovereign Identity tab queries to render "Born"
+    // carries the original 2024 timestamp, not Date.now() from
+    // bootstrap.
+    const events = await eventStoreAdapter.query({
+      motebit_id: "restored-motebit",
+      event_types: [EventType.IdentityCreated],
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.timestamp).toBe(bornAtMs);
+    expect((events[0]!.payload as { restored?: boolean }).restored).toBe(true);
+  });
+
+  it("writes the identity record with the historical bornAt", async () => {
+    const bornAtMs = Date.parse("2023-06-01T00:00:00.000Z");
+    await writeRestoredIdentity({
+      identityStorage,
+      eventStoreAdapter,
+      motebitId: "old-motebit",
+      ownerId: "Desktop",
+      bornAtMs,
+    });
+    const loaded = await identityStorage.load("old-motebit");
+    expect(loaded).not.toBeNull();
+    expect(loaded!.created_at).toBe(bornAtMs);
+    expect(loaded!.owner_id).toBe("Desktop");
+    expect(loaded!.version_clock).toBe(0);
+  });
+
+  it("when used WITHOUT writeRestoredIdentity, bootstrap fabricates a Date.now() timestamp (the legacy lossy path)", async () => {
+    // This test locks the existing-asymmetry: the auto-recover path
+    // in bootstrap STILL writes Date.now() if the caller didn't
+    // pre-write the identity. born-date fidelity is opt-in via
+    // `writeRestoredIdentity`; surfaces that don't call it get the
+    // legacy "Born just now" behavior.
+    const beforeMs = Date.now();
+    configStore.data = {
+      motebit_id: "no-prewrite-id",
+      device_id: "x",
+      device_public_key: "aa".repeat(32),
+    };
+    keyStore.storedKey = "bb".repeat(32);
+
+    await bootstrapIdentity({
+      surfaceName: "test",
+      identityStorage,
+      eventStoreAdapter,
+      configStore,
+      keyStore,
+    });
+
+    const events = await eventStoreAdapter.query({
+      motebit_id: "no-prewrite-id",
+      event_types: [EventType.IdentityCreated],
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.timestamp).toBeGreaterThanOrEqual(beforeMs);
   });
 });

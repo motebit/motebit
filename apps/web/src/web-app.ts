@@ -71,7 +71,9 @@ import {
   bootstrapIdentity,
   rotateIdentityKeys,
   registerDeviceWithRelay,
+  writeRestoredIdentity,
   type BootstrapConfigStore,
+  type IdentityStorage,
 } from "@motebit/core-identity";
 import {
   createSignedToken,
@@ -397,6 +399,15 @@ export class WebApp {
   private _servingSyncUrl: string | null = null;
   private _activeTaskCount = 0;
   private _localEventStore: StorageAdapters["eventStore"] | null = null;
+  /**
+   * Held so `restoreIdentity` can pre-write the restored
+   * `MotebitIdentity` record + `IdentityCreated` event with the
+   * historical bornAt timestamp, before the reload. Without this
+   * pre-write, bootstrap's "config has ID, DB doesn't" path fires
+   * a fresh event with `timestamp: Date.now()` and the Identity
+   * tab's "Born" display lies about the identity's age post-restore.
+   */
+  private _identityStorage: IdentityStorage | null = null;
   private _planStore: IdbPlanStore | null = null;
   private _planSyncEngine: PlanSyncEngine | null = null;
   private keyStore = new EncryptedKeyStore();
@@ -524,6 +535,7 @@ export class WebApp {
     this._publicKeyHex = result.publicKeyHex;
     this._divergedFromMotebitId = result.divergedFromMotebitId ?? null;
     this._localEventStore = storage.eventStore;
+    this._identityStorage = storage.identityStorage;
 
     // Skills registry + audit sink — both share the same IDB handle.
     // The audit sink wires into the registry's `audit` option AND will
@@ -1655,6 +1667,34 @@ export class WebApp {
           await migrateMotebitId(oldMotebitId, request.metadata.motebitId);
         } catch {
           return { ok: false, reason: "memory_migration_failed" };
+        }
+      }
+    }
+
+    // Pre-write the IdentityCreated event with the historical bornAt
+    // so the next bootstrap's "loaded" path returns the original
+    // creation timestamp instead of fabricating Date.now(). The
+    // Identity tab's "Born" display reads from this event. Failure
+    // here is non-fatal (the rest of the restore still proceeds);
+    // bootstrap will fall back to its auto-recover path with a
+    // Date.now() event — born-date fidelity is lost in that case but
+    // the identity is still recoverable.
+    if (this._localEventStore !== null && this._identityStorage !== null) {
+      const bornAtMs = Date.parse(request.metadata.bornAt);
+      if (Number.isFinite(bornAtMs)) {
+        try {
+          await writeRestoredIdentity({
+            identityStorage: this._identityStorage,
+            eventStoreAdapter: this._localEventStore,
+            motebitId: request.metadata.motebitId,
+            ownerId: "Web",
+            bornAtMs,
+          });
+        } catch {
+          // Best-effort. The user's identity restore still proceeds;
+          // bootstrap's auto-recover path fires Date.now() event on
+          // next launch — Born displays as "today" until the user
+          // exports + reimports a fresh motebit.md.
         }
       }
     }
