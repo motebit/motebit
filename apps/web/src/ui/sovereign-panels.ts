@@ -101,16 +101,23 @@ function createWebAdapter(ctx: WebContext): SovereignFetchAdapter {
 
 function renderCredentials(
   state: SovereignState,
-  hasRelay: boolean,
+  _hasRelay: boolean,
   credList: HTMLDivElement,
   credEmpty: HTMLDivElement,
 ): void {
   credList.innerHTML = "";
+  // Local-first per protocol-primacy: the controller's fetchCredentials()
+  // already merges adapter.getLocalCredentials() (motebit's self-issued
+  // VCs) with relay-augmented credentials. The renderer reads from state,
+  // never from relay-connection status. If state.credentials is empty,
+  // it's because the local credential store is empty AND no relay
+  // augmentation arrived — flat ghost text per the non-voided carve-out
+  // (this tab always has Bundle Presentation + Verify Credential CTAs
+  // below as sibling content).
   if (state.credentials.length === 0) {
+    credEmpty.className = "panel-empty-row";
+    credEmpty.textContent = "Issued credentials appear here";
     credEmpty.style.display = "block";
-    credEmpty.textContent = hasRelay
-      ? "Issued credentials appear here"
-      : "Connect to a relay to see issued credentials";
     return;
   }
 
@@ -162,23 +169,22 @@ function renderCredentials(
 
 function renderLedger(
   state: SovereignState,
-  hasRelay: boolean,
+  _hasRelay: boolean,
   ctrl: SovereignController,
   ledgerList: HTMLDivElement,
   ledgerEmpty: HTMLDivElement,
 ): void {
   ledgerList.innerHTML = "";
 
-  // Universal panel-empty-pulse register. Captions differentiate
-  // context (connect a relay first / wait for goals to complete);
-  // the visual register stays uniform across the panel family.
-  if (!hasRelay) {
-    setEmptyPulse(ledgerEmpty, "Execution history appears here", "connect a relay to see records");
-    return;
-  }
-
+  // Local-first per protocol-primacy: the renderer reads from state,
+  // not from relay-availability. state.goals is currently populated
+  // via relay-only fetch (the controller's fetchGoals path). A proper
+  // local-first fix needs a getLocalLedger() adapter accessor that
+  // queries the local event store for execution receipts — deferred
+  // to the local-event-store-integration arc. For now the empty
+  // caption describes what fills the panel without invoking the relay.
   if (state.goals.length === 0) {
-    setEmptyPulse(ledgerEmpty, "Execution history appears here", "when goals complete");
+    setEmptyPulse(ledgerEmpty, "Execution history appears here", "as goals complete");
     return;
   }
 
@@ -291,7 +297,7 @@ function renderLedgerDetail(container: HTMLElement, ledger: LedgerManifest): voi
 
 function renderBudget(
   state: SovereignState,
-  hasRelay: boolean,
+  _hasRelay: boolean,
   ctx: WebContext,
   ctrl: SovereignController,
   budgetSummary: HTMLDivElement,
@@ -301,15 +307,15 @@ function renderBudget(
   budgetSummary.innerHTML = "";
   budgetList.innerHTML = "";
 
-  if (!hasRelay) {
-    // Universal panel-empty-pulse register.
-    setEmptyPulse(
-      budgetEmpty,
-      "Budget allocations appear here",
-      "connect a relay to see your envelope",
-    );
-    return;
-  }
+  // Local-first per protocol-primacy: the Sovereign reserve row reads
+  // its USDC balance via direct Solana RPC (no relay needed); the
+  // operating balance + budget allocations below are relay-augmented
+  // and individually guarded on state.balance / state.budget being
+  // null. The pre-existing early-return on !hasRelay was a doctrine
+  // violation — it hid the Sovereign reserve (and the Fund button)
+  // from users without a relay, even though their on-chain balance is
+  // viewable + depositable without one. The relay is a sync layer,
+  // not a gate on viewing your own wallet.
 
   // Always render the Sovereign reserve row (below) — it carries the onchain
   // USDC balance + "Fund sovereign" button, which is the user's only deposit
@@ -714,21 +720,34 @@ function renderSuccession(
   successionContent.innerHTML = "";
   successionEmpty.style.display = "none";
 
-  if (!hasRelay) {
-    // Universal panel-empty-pulse register.
+  // Local-first per protocol-primacy: state.succession is currently
+  // populated via relay-only fetchSuccession. A proper local-first
+  // fix shows the bootstrap IdentityCreated event from the local
+  // event store as the always-present "Born: motebit_id at
+  // timestamp" entry — deferred to the local-identity-event arc
+  // that adds a getLocalIdentity() adapter accessor.
+  //
+  // Two cases produce `!data`: (a) no relay configured so fetch was
+  // never attempted, (b) relay configured but fetch failed. They
+  // surface differently — (a) is calm empty register, (b) is
+  // recoverable error with Retry affordance. The hasRelay gate here
+  // is NOT denying local data (there is none yet); it's choosing
+  // between two non-data states.
+  const data = state.succession;
+
+  if (!data && !hasRelay) {
     setEmptyPulse(
       successionEmpty,
       "Key rotations appear here",
-      "connect a relay to see your identity history",
+      "as your identity transitions across devices",
     );
     return;
   }
 
-  const data = state.succession;
-
-  // Error register — fetch failed. Distinct from empty (no rotations
-  // exist) by presenting a Retry affordance. Empty registers are calm
-  // "this slot is ready" states; errors are recoverable problems.
+  // Error register — fetch failed (relay configured but no data).
+  // Distinct from empty by presenting a Retry affordance. Empty
+  // registers are calm "this slot is ready" states; errors are
+  // recoverable problems.
   if (!data) {
     const errorRow = document.createElement("div");
     errorRow.className = "sov-error-row";
