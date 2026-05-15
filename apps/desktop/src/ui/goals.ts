@@ -441,8 +441,18 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
     if (state.goals.length === 0) {
       const empty = document.createElement("div");
-      empty.className = "goal-empty";
-      empty.textContent = "No goals yet";
+      empty.className = "goal-empty-commit";
+      const pulse = document.createElement("div");
+      pulse.className = "goal-empty-pulse";
+      const title = document.createElement("div");
+      title.className = "goal-empty-commit-title";
+      title.textContent = "Commit motebit to a goal";
+      const sub = document.createElement("div");
+      sub.className = "goal-empty-commit-sub";
+      sub.textContent = "a recurring task · or a one-shot plan";
+      empty.appendChild(pulse);
+      empty.appendChild(title);
+      empty.appendChild(sub);
       goalList.appendChild(empty);
       return;
     }

@@ -126,6 +126,21 @@ Same trigger applies to any future surface that could go either way (inference-h
 
 3. **Folding Settings into the doctrine.** Symptom: someone counts seven panels including Settings and tries to fit it into "identity register because it's about you." Diagnostic: Settings is config (what you ARE configuration-wise), not state (what you HAVE). Different category.
 
+## The structural-void test: which empty registers breathe
+
+Sibling clause to **substrate-vs-accumulation**, applied to empty registers. Identity panels (Sovereign / Memories / Conversations) and most runtime panels (Agents / Capabilities) carry default content even when empty: Sovereign's DID and credentials are always visible, Memory's search affordance + retention controls are present, Agents shows discovery rows, Capabilities has sub-tabs. Their cards-area is never structurally empty.
+
+Goals is the exception. When the user has no goals committed, the cards-area genuinely has nothing in it — no marketplace, no defaults, no sibling sub-content. The vertical space between the panel header and the form is a real void. A flat single-line caption in that void reads as "absent." A sympathetic-breathing pulse + commitment-bearing title + subtitle reads as **READY**, per [`always-already-slab.md`](always-already-slab.md) ("the slab precedes content; empty states are READY, not absent" — the property propagates from slab to runtime-register panels via the substrate, since both inherit the body's 0.3 Hz rhythm through Liquescentia).
+
+The breathing test:
+
+- **Does the panel's empty cards-area have any default content?** If yes (sibling rows, discovery, sub-tabs, controls), the empty register is structurally filled — use a flat `.panel-empty-row` ghost caption for cross-panel uniformity.
+- **If no — is the empty space large enough to read as void?** If yes, the empty register is structurally voided — use the breathing-pulse + commit-bearing block (`.goal-empty-commit` shape on web / desktop, `Animated.View` pulse on mobile). The pulse fills the void as a READY signal, medium-coherent with the body's breathing.
+
+Goals is the only panel that passes both tests today. The first runtime register that ships with a structurally-voided empty state (e.g. a future "Plans" panel with no defaults) should adopt the same breathing-pulse shape; the second one whose empty register turns out to be voided after all should too. The test is structural, not panel-typed — register-type alone is too coarse.
+
+Worked example: Goals' empty register was introduced as a breathing-pulse block in commit `426cfcf9` (2026-05-14 Goals runtime-register migration), then flattened to `.panel-empty-row` for cross-panel uniformity later the same day in `a3873a73`, then restored once it became visible in production that the uniformity argument didn't account for Goals' unique structural shape. The restoration ships across web / desktop / mobile in one pass per the one-pass-delivery doctrine.
+
 ## How to apply
 
 Before adding any new side-rail panel surface, answer three questions:

@@ -3936,6 +3936,46 @@
           opacity: 1;
         }
       }
+
+      /* ── Empty register — commitment-bearing READY signal ───────────
+         Goals is uniquely structurally voided when empty: cards-area
+         has no marketplace/default content (unlike Memory/Agents/
+         Capabilities), so an empty Goals panel reads as a large
+         vertical void. The breathing pulse fills that void as a
+         ready-state signal per docs/doctrine/always-already-slab.md
+         ("empty IS READY, not absent"). 0.3 Hz rhythm is
+         medium-coherent with the slab and creature breathing — the
+         panel inherits the body's pulse into the void where future
+         commitments will sit. The block is bottom-anchored within
+         cards-area (`margin-top: auto` on `#goal-empty` below) so the
+         caption reads as "introducing the form" not "centered in
+         absence."
+         Doctrine: panel-temporal-registers.md §"Structural-void test"
+         (Goals breathes; Memory/Agents/Capabilities don't, because
+         their empty registers carry sibling content while Goals' does
+         not). */
+      .goal-empty-commit {
+        padding: 0 16px 18px;
+        text-align: center;
+      }
+      .goal-empty-commit .goal-empty-pulse {
+        margin: 0 auto 14px;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--text-faint);
+        opacity: 0.45;
+        animation: goalPulseBreathe 3.33s ease-in-out infinite;
+      }
+      .goal-empty-commit-title {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-bottom: 4px;
+      }
+      .goal-empty-commit-sub {
+        font-size: 11px;
+        color: var(--text-ghost);
+      }
       .goal-card {
         margin: 8px 8px 0;
         padding: 10px 12px 12px;
@@ -7353,8 +7393,17 @@
            populated; empty caption anchored to its bottom when not. -->
       <div id="goal-cards-area">
         <div id="goal-list"></div>
-        <div id="goal-empty" class="panel-empty-row">
-          Commit motebit to a goal · a recurring task or a one-shot plan
+        <!-- Empty register: breathing-pulse + commitment-bearing
+             caption. Structurally-voided panel (Goals is the only
+             runtime register whose cards-area has no default content
+             when empty), so the pulse fills the void as a READY
+             signal per docs/doctrine/always-already-slab.md. Bottom-
+             anchored within cards-area (margin-top: auto applied
+             below) so the caption reads as introducing the form. -->
+        <div id="goal-empty" class="goal-empty-commit">
+          <div class="goal-empty-pulse"></div>
+          <div class="goal-empty-commit-title">Commit motebit to a goal</div>
+          <div class="goal-empty-commit-sub">a recurring task · or a one-shot plan</div>
         </div>
       </div>
 

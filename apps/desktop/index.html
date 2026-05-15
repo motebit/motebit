@@ -3118,6 +3118,55 @@
         text-align: center;
       }
 
+      /* ── Empty register — commitment-bearing READY signal ───────────
+         Goals is uniquely structurally voided when empty: cards-area
+         has no default content (unlike Memory/Agents/Capabilities),
+         so the breathing pulse fills that void as a READY signal per
+         docs/doctrine/always-already-slab.md ("empty IS READY, not
+         absent"). 0.3 Hz rhythm is medium-coherent with the slab and
+         creature. Bottom-anchored within #goal-list via flex column +
+         `margin-top: auto` so the caption reads as introducing the
+         form. Mirrors apps/web/index.html.
+         Doctrine: panel-temporal-registers.md §"Structural-void test". */
+      #goal-list {
+        display: flex;
+        flex-direction: column;
+      }
+      .goal-empty-commit {
+        margin-top: auto;
+        padding: 0 16px 18px;
+        text-align: center;
+      }
+      .goal-empty-commit .goal-empty-pulse {
+        margin: 0 auto 14px;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--text-faint);
+        opacity: 0.45;
+        animation: goalPulseBreathe 3.33s ease-in-out infinite;
+      }
+      .goal-empty-commit-title {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-bottom: 4px;
+      }
+      .goal-empty-commit-sub {
+        font-size: 11px;
+        color: var(--text-ghost);
+      }
+      @keyframes goalPulseBreathe {
+        0%,
+        100% {
+          opacity: 0.55;
+          transform: scale(0.92);
+        }
+        50% {
+          opacity: 1;
+          transform: scale(1.08);
+        }
+      }
+
       /* Goal status indicator */
       #goal-status {
         position: fixed;

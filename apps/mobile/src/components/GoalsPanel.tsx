@@ -10,6 +10,8 @@ import {
   StyleSheet,
   Platform,
   Alert,
+  Animated,
+  Easing,
 } from "react-native";
 import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
@@ -175,6 +177,36 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
     if (!visible) return;
     void ctrlRef.current?.refresh();
   }, [visible]);
+
+  // Empty-register breathing pulse — 0.3 Hz (3.33s period) sympathetic
+  // breathing on the dot's opacity + scale, medium-coherent with the
+  // slab and creature. The empty Goals panel is the only runtime
+  // register with a structurally-voided cards-area (no default content
+  // like Memory/Agents/Capabilities), so the pulse fills that void as
+  // a READY signal per docs/doctrine/always-already-slab.md.
+  // Doctrine: panel-temporal-registers.md §"Structural-void test."
+  const emptyPulseAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!visible || state.goals.length > 0) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(emptyPulseAnim, {
+          toValue: 1,
+          duration: 1665,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(emptyPulseAnim, {
+          toValue: 0,
+          duration: 1665,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [visible, state.goals.length, emptyPulseAnim]);
 
   const goalStore = app.getGoalStore();
 
@@ -355,11 +387,33 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
           </View>
 
           {state.goals.length === 0 ? (
-            <Text style={styles.emptyText}>
-              {goalStore
-                ? "Commit motebit to a goal · describe one below"
-                : "Goal store not available."}
-            </Text>
+            goalStore ? (
+              <View style={styles.emptyCommit}>
+                <Animated.View
+                  style={[
+                    styles.emptyPulse,
+                    {
+                      opacity: emptyPulseAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.55, 1],
+                      }),
+                      transform: [
+                        {
+                          scale: emptyPulseAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0.92, 1.08],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                />
+                <Text style={styles.emptyCommitTitle}>Commit motebit to a goal</Text>
+                <Text style={styles.emptyCommitSub}>a recurring task · or a one-shot plan</Text>
+              </View>
+            ) : (
+              <Text style={styles.emptyText}>Goal store not available.</Text>
+            )
           ) : (
             <FlatList
               data={state.goals}
@@ -475,6 +529,33 @@ function createStyles(c: ThemeColors) {
       fontStyle: "italic",
       textAlign: "center",
       marginVertical: 24,
+    },
+    // Empty register — commitment-bearing READY signal. Mirrors web's
+    // `.goal-empty-commit` block. See useEffect comment above for
+    // doctrine.
+    emptyCommit: {
+      alignItems: "center",
+      paddingHorizontal: 16,
+      paddingTop: 32,
+      paddingBottom: 24,
+    },
+    emptyPulse: {
+      width: 9,
+      height: 9,
+      borderRadius: 4.5,
+      backgroundColor: c.textMuted,
+      marginBottom: 14,
+    },
+    emptyCommitTitle: {
+      color: c.textSecondary,
+      fontSize: 13,
+      marginBottom: 4,
+      textAlign: "center",
+    },
+    emptyCommitSub: {
+      color: c.textMuted,
+      fontSize: 11,
+      textAlign: "center",
     },
     list: { flexGrow: 0 },
     listContent: { paddingHorizontal: 16, paddingVertical: 8 },
