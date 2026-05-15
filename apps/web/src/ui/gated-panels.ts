@@ -338,7 +338,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     const runner = ctx.app.getGoalsRunner?.();
     if (!runner) {
       goalList.innerHTML = "";
-      goalEmpty.style.display = "block";
+      goalEmpty.style.display = "";
       return;
     }
     const state = runner.getState();
@@ -348,7 +348,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
     goalList.innerHTML = "";
     if (panelGoals.length === 0) {
-      goalEmpty.style.display = "block";
+      goalEmpty.style.display = "";
       return;
     }
     goalEmpty.style.display = "none";

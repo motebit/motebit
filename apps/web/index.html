@@ -165,6 +165,17 @@
         --toggle-knob: #fff;
         --canvas-bg: #c8b8a4;
 
+        /* Cohesive radius — outer-corner radius for body-adjacent
+           display surfaces (side-rail panels, bottom sheets, cards).
+           The 2D analog of Liquescentia's cohesive-permeability
+           property — surfaces echo the body's meniscus with a small
+           radius instead of a hard 90° edge. Canonical value lives
+           in packages/render-engine/src/design-ratios.ts as
+           `COHESIVE_RADIUS`. If you change this, change the TS
+           export to match. Theme-independent (no dark-theme
+           override). */
+        --cohesive-radius: 10px;
+
         /* Status tokens — semantic colors that adapt to theme.
            Backgrounds are alpha-blended pills (work on both substrates);
            foregrounds are deeper hues on light, lighter hues on dark so
@@ -3014,6 +3025,10 @@
         backdrop-filter: blur(40px) saturate(1.8);
         -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-right: 1px solid var(--border);
+        /* Cohesive permeability — outer corners face the body/scene
+           (right side; left is flush against viewport). */
+        border-top-right-radius: var(--cohesive-radius);
+        border-bottom-right-radius: var(--cohesive-radius);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
         transform: translateX(-100%);
@@ -3275,6 +3290,10 @@
         backdrop-filter: blur(40px) saturate(1.8);
         -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-right: 1px solid var(--border);
+        /* Cohesive permeability — outer corners face the body/scene
+           (right side; left is flush against viewport). */
+        border-top-right-radius: var(--cohesive-radius);
+        border-bottom-right-radius: var(--cohesive-radius);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
         transform: translateX(-100%);
@@ -3661,6 +3680,14 @@
         backdrop-filter: blur(40px) saturate(1.8);
         -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-left: 1px solid var(--border);
+        /* Cohesive permeability — outer corners (the edges that face
+           the body / scene) round to var(--cohesive-radius). Right
+           edge stays 0 because it's flush against the viewport edge,
+           which clips any radius there. Doctrine:
+           Liquescentia cohesive-permeability inheritance into the
+           panel's 2D analog. */
+        border-top-left-radius: var(--cohesive-radius);
+        border-bottom-left-radius: var(--cohesive-radius);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
         transform: translateX(100%);
@@ -3955,7 +3982,7 @@
          their empty registers carry sibling content while Goals' does
          not). */
       .goal-empty-commit {
-        padding: 0 16px 18px;
+        padding: 0 16px;
         text-align: center;
       }
       .goal-empty-commit .goal-empty-pulse {
@@ -3963,8 +3990,7 @@
         width: 9px;
         height: 9px;
         border-radius: 50%;
-        background: var(--text-faint);
-        opacity: 0.45;
+        background: var(--accent-soft);
         animation: goalPulseBreathe 3.33s ease-in-out infinite;
       }
       .goal-empty-commit-title {
@@ -4204,12 +4230,22 @@
         display: flex;
         flex-direction: column;
       }
-      /* Empty caption anchors to the bottom of cards-area when it's
-         the only visible child (margin-top: auto in a flex column).
-         When goals exist, goal-list contains cards stacking from the
-         top and #goal-empty is display:none. */
+      /* Empty caption centers vertically in cards-area when it's the
+         only visible child. The breathing pulse is the panel's READY
+         signal — not a caption on the form — so it occupies the
+         middle of the void rather than hugging the form below. Apple
+         pattern (Reminders / Notes / Mail / Photos all center their
+         empty-state mark vertically in the available canvas).
+         Implementation: claim full flex height with `flex: 1`, then
+         center own content via inner flex column. The JS toggles
+         visibility via `display: ""` / `display: "none"` so the
+         stylesheet's `display: flex` applies when shown. */
       #goal-cards-area #goal-empty {
-        margin-top: auto;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
       }
       /* Form pinned at the bottom of the panel. Padding rhythm + a
          subtle top border so the form region is visually distinguished
@@ -4805,6 +4841,10 @@
         backdrop-filter: blur(40px) saturate(1.8);
         -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-left: 1px solid var(--border);
+        /* Cohesive permeability — outer corners face the body/scene
+           (left side; right is flush against viewport). */
+        border-top-left-radius: var(--cohesive-radius);
+        border-bottom-left-radius: var(--cohesive-radius);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
         transform: translateX(100%);
@@ -5043,6 +5083,10 @@
         backdrop-filter: blur(40px) saturate(1.8);
         -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-right: 1px solid var(--border);
+        /* Cohesive permeability — outer corners face the body/scene
+           (right side; left is flush against viewport). */
+        border-top-right-radius: var(--cohesive-radius);
+        border-bottom-right-radius: var(--cohesive-radius);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
         transform: translateX(-100%);
@@ -6508,6 +6552,10 @@
         backdrop-filter: blur(40px) saturate(1.8);
         -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-right: 1px solid var(--border);
+        /* Cohesive permeability — outer corners face the body/scene
+           (right side; left is flush against viewport). */
+        border-top-right-radius: var(--cohesive-radius);
+        border-bottom-right-radius: var(--cohesive-radius);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
         transform: translateX(-100%);
@@ -6953,6 +7001,10 @@
         backdrop-filter: blur(40px) saturate(1.8);
         -webkit-backdrop-filter: blur(40px) saturate(1.8);
         border-left: 1px solid var(--border);
+        /* Cohesive permeability — outer corners face the body/scene
+           (left side; right is flush against viewport). */
+        border-top-left-radius: var(--cohesive-radius);
+        border-bottom-left-radius: var(--cohesive-radius);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: var(--text-primary);
         transform: translateX(100%);

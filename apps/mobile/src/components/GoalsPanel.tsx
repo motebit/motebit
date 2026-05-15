@@ -22,6 +22,7 @@ import {
   type GoalMode,
   type ScheduledGoal,
 } from "@motebit/panels";
+import { COHESIVE_RADIUS } from "@motebit/render-engine";
 
 const INTERVAL_OPTIONS: { label: string; ms: number }[] = [
   { label: "Hourly", ms: 3_600_000 },
@@ -500,8 +501,14 @@ function createStyles(c: ThemeColors) {
     backdrop: { flex: 1, backgroundColor: c.overlayBg, justifyContent: "flex-end" },
     panel: {
       backgroundColor: c.bgPrimary,
-      borderTopLeftRadius: 20,
-      borderTopRightRadius: 20,
+      // Cohesive permeability — outer corners face the body/scene
+      // (top side; bottom is flush against the device edge). Bottom-
+      // sheet panels are the only mobile surface in the
+      // motebit-family that gets COHESIVE_RADIUS; the other panels
+      // use iOS pageSheet and inherit system chrome per doctrine
+      // exclusion. See packages/render-engine/src/design-ratios.ts.
+      borderTopLeftRadius: COHESIVE_RADIUS,
+      borderTopRightRadius: COHESIVE_RADIUS,
       maxHeight: "80%",
       paddingBottom: Platform.OS === "ios" ? 34 : 16,
     },
@@ -531,19 +538,23 @@ function createStyles(c: ThemeColors) {
       marginVertical: 24,
     },
     // Empty register — commitment-bearing READY signal. Mirrors web's
-    // `.goal-empty-commit` block. See useEffect comment above for
-    // doctrine.
+    // `.goal-empty-commit` block. `flex: 1` claims the available
+    // vertical space between header and form; `justifyContent:
+    // 'center'` centers the dot+caption block within that space
+    // (Apple Reminders / Notes / Mail / Photos empty-state pattern).
+    // See useEffect comment above for doctrine.
     emptyCommit: {
+      flex: 1,
       alignItems: "center",
+      justifyContent: "center",
       paddingHorizontal: 16,
-      paddingTop: 32,
-      paddingBottom: 24,
+      minHeight: 160,
     },
     emptyPulse: {
       width: 9,
       height: 9,
       borderRadius: 4.5,
-      backgroundColor: c.textMuted,
+      backgroundColor: c.accent,
       marginBottom: 14,
     },
     emptyCommitTitle: {

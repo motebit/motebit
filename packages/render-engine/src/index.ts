@@ -8,7 +8,7 @@ export { buildReceiptArtifact } from "./receipt-artifact.js";
 export { buildComputerSessionReceiptArtifact } from "./computer-session-receipt-artifact.js";
 export { buildLiveBrowserElement, type LiveBrowserElementHandle } from "./live-browser.js";
 export { ArtifactManager } from "./artifacts.js";
-export { GOLDEN_RATIO } from "./design-ratios.js";
+export { GOLDEN_RATIO, COHESIVE_RADIUS } from "./design-ratios.js";
 export {
   createPlaneGestureDetector,
   attachPlaneGestureToTarget,
