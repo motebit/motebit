@@ -241,6 +241,9 @@ export interface AgentTrustStoreAdapter {
 export const ALL_CONTENT_ARTIFACT_TYPES: readonly ContentArtifactType[];
 
 // @public
+export const ALL_EVENT_TYPES: readonly EventType[];
+
+// @public
 export const ALL_SENSITIVITY_LEVELS: readonly SensitivityLevel[];
 
 // @public
@@ -1850,6 +1853,9 @@ export function isContentArtifactType(value: unknown): value is ContentArtifactT
 
 // @public
 export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail;
+
+// @public
+export function isEventType(value: unknown): value is EventType;
 
 // @public
 export function isSensitivityLevel(value: unknown): value is SensitivityLevel;

@@ -1601,6 +1601,18 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-event-type-canonical",
+    proves:
+      'flags the EventType three-way lock breaking — a value added to the enum without updating ALL_EVENT_TYPES, or vice versa. Drift class: the registry rotation that passes `tsc` but breaks the iteration-array contract; the most common failure mode for closed registries with split enum + array homes. Probe rewrites every `"memory_formed"` literal in `packages/protocol/src/event-type.ts` to `"memory_formd"` (typo); gate must surface the sibling-alignment violation (enum has `memory_formed` but ALL_EVENT_TYPES no longer contains it). byte-identical restoration on cleanup via mutateFile.',
+    perturb: () =>
+      // Corrupt one value in ALL_EVENT_TYPES so it no longer matches
+      // the enum. The gate's three-way sibling-alignment block flags
+      // the mismatch.
+      mutateFile(`packages/protocol/src/event-type.ts`, (src) =>
+        src.replace(/"memory_formed"/g, '"memory_formd"'),
+      ),
+  },
+  {
     script: "check-closed-registry-canonical",
     proves:
       "flags a registered closed registry silently losing one of its canonical eight artifacts — the meta-invariant over the lattice's unit cell. Drift class: a refactor that drops `isSensitivityLevel` (or `ALL_X` or any other artifact) for one registry regresses the structural completeness of the family without any compile-time signal. Probe rewrites every `isSensitivityLevel` occurrence in `packages/protocol/src/sensitivity.ts` to `isSensitivityLevelDisabled`; the meta-gate must surface `missing_guard_export` for SensitivityLevel. byte-identical restoration on cleanup via mutateFile.",

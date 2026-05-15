@@ -69,7 +69,7 @@
  * lattice growing one unit cell.
  */
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -190,6 +190,21 @@ const REGISTERED_REGISTRIES: ReadonlyArray<RegisteredRegistry> = [
     gateName: "check-sensitivity-canonical",
     doctrinePaths: ["docs/doctrine/retention-policy.md"],
   },
+  {
+    name: "EventType",
+    // Sixth registered registry — landed 2026-05-14, the first
+    // template-growth proof of the meta-gate's claim that adding a
+    // registry is mechanical. Same two-file split as
+    // `SensitivityLevel` (enum in index.ts, tooling in event-type.ts).
+    sourceFile: "packages/protocol/src/index.ts",
+    toolingFile: "packages/protocol/src/event-type.ts",
+    typeName: "EventType",
+    arrayName: "ALL_EVENT_TYPES",
+    guardName: "isEventType",
+    gatePath: "scripts/check-event-type-canonical.ts",
+    gateName: "check-event-type-canonical",
+    doctrinePaths: ["docs/doctrine/registry-pattern-canonical.md"],
+  },
 ];
 
 function readFile(path: string): string | null {
@@ -297,17 +312,21 @@ function main(): void {
       });
     }
 
-    // (4) Test file. Scan the protocol's __tests__ dir for a file
-    // that exercises ALL_X + isX (textual scan — the test name is
-    // not enforced, only that some test exercises both identifiers).
+    // (4) Test file. Scan the protocol's __tests__ dir for any
+    // *.test.ts file that exercises ALL_X + isX (textual scan — the
+    // test filename is not enforced, only that some test exercises
+    // both identifiers). Globbing the directory rather than
+    // hardcoding paths so a new registry's test file is picked up
+    // automatically as long as it lives in __tests__/.
     const testsDir = "packages/protocol/src/__tests__";
-    const testFiles = [
-      `${testsDir}/sensitivity-level.test.ts`,
-      `${testsDir}/audience.test.ts`,
-      `${testsDir}/artifact-type.test.ts`,
-      `${testsDir}/routing.test.ts`,
-      `${testsDir}/crypto-suite.test.ts`,
-    ];
+    let testFiles: string[] = [];
+    try {
+      testFiles = readdirSync(resolve(ROOT, testsDir))
+        .filter((name) => name.endsWith(".test.ts"))
+        .map((name) => `${testsDir}/${name}`);
+    } catch {
+      testFiles = [];
+    }
     const testFound = testFiles.some((tf) => {
       const tsrc = readFile(tf);
       if (tsrc === null) return false;
