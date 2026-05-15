@@ -3564,6 +3564,8 @@
       #memory-list {
         flex: 1;
         overflow-y: auto;
+        display: flex;
+        flex-direction: column;
       }
       .mem-panel-header {
         display: flex;
@@ -7694,15 +7696,14 @@
         <span class="mem-panel-title">Memories</span>
         <button class="mem-panel-close" id="memory-close-btn">&times;</button>
       </div>
-      <!-- Empty register — universal panel-empty-pulse. JS swaps to
-           .panel-empty-row + "No matches" for filtered states.
+      <!-- Empty register lives INSIDE #memory-list — JS appends a
+           .panel-empty-pulse (or .panel-empty-row for filtered "No
+           matches") child when the list is structurally empty. Mirrors
+           the conversations panel; sibling-empty siblings split flex
+           height 50/50 and push the pulse below center (the agents/
+           memory bug fixed 2026-05-16).
            Doctrine: panel-temporal-registers.md §"Structural-void". -->
       <div id="memory-list"></div>
-      <div id="memory-empty" class="panel-empty-pulse">
-        <div class="panel-empty-pulse-dot"></div>
-        <div class="panel-empty-pulse-title">Memories appear here</div>
-        <div class="panel-empty-pulse-sub">as conversations build</div>
-      </div>
     </div>
 
     <!-- Goals HUD button + locked panel -->
@@ -7855,25 +7856,21 @@
         <button class="agents-tab active" data-tab="known">Known</button>
         <button class="agents-tab" data-tab="discover">Discover</button>
       </div>
+      <!-- Empty register lives INSIDE the list container (same pattern
+           as conversations + memory). Sibling-empty siblings split flex
+           height 50/50 and push the pulse below center; nested keeps
+           it centered in the full pane. -->
       <div id="agents-known-pane" class="agents-pane active">
-        <div id="agents-list" style="flex: 1; overflow-y: auto; padding: 0"></div>
-        <div id="agents-empty" class="panel-empty-pulse">
-          <div class="panel-empty-pulse-dot"></div>
-          <div class="panel-empty-pulse-title">Known agents appear here</div>
-          <div class="panel-empty-pulse-sub">
-            as your motebit discovers them through delegation
-          </div>
-        </div>
+        <div
+          id="agents-list"
+          style="flex: 1; overflow-y: auto; padding: 0; display: flex; flex-direction: column"
+        ></div>
       </div>
       <div id="agents-discover-pane" class="agents-pane" style="display: none">
-        <div id="agents-discover-list" style="flex: 1; overflow-y: auto; padding: 0"></div>
-        <div id="agents-discover-empty" class="panel-empty-pulse">
-          <div class="panel-empty-pulse-dot"></div>
-          <div class="panel-empty-pulse-title">Discover new agents</div>
-          <div class="panel-empty-pulse-sub">
-            connect to a relay to see what's available
-          </div>
-        </div>
+        <div
+          id="agents-discover-list"
+          style="flex: 1; overflow-y: auto; padding: 0; display: flex; flex-direction: column"
+        ></div>
       </div>
     </div>
 

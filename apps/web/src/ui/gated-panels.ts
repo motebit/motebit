@@ -75,7 +75,6 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   const memoryPanel = document.getElementById("memory-panel") as HTMLDivElement;
   const memoryBackdrop = document.getElementById("memory-backdrop") as HTMLDivElement;
   const memoryList = document.getElementById("memory-list") as HTMLDivElement;
-  const memoryEmpty = document.getElementById("memory-empty") as HTMLDivElement;
 
   const memoryAdapter: MemoryFetchAdapter = {
     listMemories: async () => {
@@ -106,29 +105,31 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
   function renderMemories(state: MemoryState): void {
     const runtime = ctx.app.getRuntime();
+    memoryList.innerHTML = "";
+
     if (!runtime) {
-      memoryList.innerHTML = "";
-      setEmptyRow(memoryEmpty, "Runtime not initialized");
-      memoryList.style.display = "none";
+      const row = document.createElement("div");
+      setEmptyRow(row, "Runtime not initialized");
+      memoryList.appendChild(row);
       return;
     }
 
     const view = memoryCtrl.filteredView();
-    memoryList.innerHTML = "";
 
     if (view.length === 0) {
-      // Structurally empty → breathing pulse; filtered → flat "No matches"
+      // Structurally empty → breathing pulse; filtered → flat "No matches".
+      // Empty nested inside #memory-list (conversations pattern) so it
+      // claims the full pane height instead of splitting flex with the
+      // list container as a sibling.
+      const empty = document.createElement("div");
       if (state.memories.length === 0) {
-        setEmptyPulse(memoryEmpty, "Memories appear here", "as conversations build");
+        setEmptyPulse(empty, "Memories appear here", "as conversations build");
       } else {
-        setEmptyRow(memoryEmpty, "No matches");
+        setEmptyRow(empty, "No matches");
       }
-      memoryList.style.display = "none";
+      memoryList.appendChild(empty);
       return;
     }
-
-    memoryEmpty.style.display = "none";
-    memoryList.style.display = "";
 
     for (const node of view) {
       const item = document.createElement("div");
@@ -853,7 +854,6 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   const agentsPanel = document.getElementById("agents-panel") as HTMLDivElement;
   const agentsBackdrop = document.getElementById("agents-backdrop") as HTMLDivElement;
   const agentsList = document.getElementById("agents-list") as HTMLDivElement;
-  const agentsEmpty = document.getElementById("agents-empty") as HTMLDivElement;
 
   const TRUST_BADGE_CLASS: Record<string, string> = {
     unknown: "unknown",
@@ -929,13 +929,18 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   function renderKnown(state: AgentsState): void {
     agentsList.innerHTML = "";
     if (state.known.length === 0) {
-      // Reset to stylesheet default (display: flex from
-      // .panel-empty-pulse) — the static HTML already has the 3-element
-      // breathing-pulse block.
-      agentsEmpty.style.display = "";
+      // Empty nested inside the list (conversations pattern) so the
+      // pulse claims the full pane height; sibling-empty siblings split
+      // flex 50/50 and push the pulse below center.
+      const empty = document.createElement("div");
+      setEmptyPulse(
+        empty,
+        "Known agents appear here",
+        "as your motebit discovers them through delegation",
+      );
+      agentsList.appendChild(empty);
       return;
     }
-    agentsEmpty.style.display = "none";
 
     for (const agent of state.known) {
       const item = document.createElement("div");
@@ -981,7 +986,6 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
   // --- Discover tab ---
   const discoverList = document.getElementById("agents-discover-list") as HTMLDivElement;
-  const discoverEmpty = document.getElementById("agents-discover-empty") as HTMLDivElement;
   const knownPane = document.getElementById("agents-known-pane") as HTMLDivElement;
   const discoverPane = document.getElementById("agents-discover-pane") as HTMLDivElement;
   const tabBtns = Array.from(agentsPanel.querySelectorAll<HTMLButtonElement>(".agents-tab"));
@@ -1005,28 +1009,30 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
   function renderDiscover(state: AgentsState): void {
     const syncUrl = loadSyncUrl();
+    discoverList.innerHTML = "";
+
     if (!syncUrl) {
       // Universal panel-empty-pulse register. The caption signals
       // setup-needed; the visual register stays uniform with the rest
-      // of the panel family.
-      discoverList.innerHTML = "";
-      setEmptyPulse(discoverEmpty, "Discover new agents", "connect a relay in Settings first");
+      // of the panel family. Empty nested inside the list
+      // (conversations pattern) so the pulse claims full pane height.
+      const empty = document.createElement("div");
+      setEmptyPulse(empty, "Discover new agents", "connect a relay in Settings first");
+      discoverList.appendChild(empty);
       return;
     }
 
     if (state.discovered.length === 0) {
-      discoverList.innerHTML = "";
+      const empty = document.createElement("div");
       if (state.error != null) {
         // Error state — flat row (transient, recoverable).
-        setEmptyRow(discoverEmpty, "Couldn't reach the relay");
+        setEmptyRow(empty, "Couldn't reach the relay");
       } else {
-        setEmptyPulse(discoverEmpty, "Discover new agents", "as the network grows");
+        setEmptyPulse(empty, "Discover new agents", "as the network grows");
       }
+      discoverList.appendChild(empty);
       return;
     }
-
-    discoverEmpty.style.display = "none";
-    discoverList.innerHTML = "";
 
     for (const agent of state.discovered) {
       const item = document.createElement("div");
