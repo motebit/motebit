@@ -95,6 +95,18 @@ function createMobileAdapter(
       return micro != null ? Number(micro) : null;
     },
     getLocalCredentials: () => app.getLocalCredentials() as CredentialEntry[],
+    // Local-first Identity tab (Sovereign Arc 2 — desktop + mobile mirror).
+    // Reads the bootstrap IdentityCreated event from the Expo SQLite event
+    // store; the Sovereign Identity tab renders "Current identity" hero
+    // card without a relay round-trip. Doctrine: docs/doctrine/protocol-primacy.md.
+    getLocalIdentity: () => app.getLocalIdentity(),
+    // Local-first Ledger tab (Sovereign Arc 2 — desktop + mobile mirror).
+    // Reads executed goals from the SQLite goal store. Controller merges
+    // local + relay (local wins on goal_id collision). Future
+    // contract-preserving arc swaps the source to per-fire signed
+    // ExecutionReceipt aggregation via replayGoal() — same wire shape;
+    // see [[sovereign_local_first_arc]] for the design call.
+    getLocalLedger: () => Promise.resolve(app.getLocalLedger()),
   };
 }
 

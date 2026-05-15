@@ -101,6 +101,22 @@ function createDesktopAdapter(ctx: DesktopContext): SovereignFetchAdapter {
       return micro != null ? Number(micro) : null;
     },
     getLocalCredentials: () => ctx.app.getLocalCredentials() as CredentialEntry[],
+    // Local-first Identity tab (Sovereign Arc 2 — desktop + mobile mirror).
+    // Reads the bootstrap IdentityCreated event from the Tauri-side SQLite
+    // event store. Doctrine: docs/doctrine/protocol-primacy.md.
+    getLocalIdentity: () => ctx.app.getLocalIdentity(),
+    // Local-first Ledger tab (Sovereign Arc 2 — desktop + mobile mirror).
+    // Reads executed goals via the Tauri-side `goals_list` invoke (SQLite-
+    // backed canonical goal store). Empty when not running under Tauri or
+    // when invoke isn't available. Controller merges local + relay; local
+    // wins on goal_id collision. Future contract-preserving arc: swap to
+    // per-fire signed ExecutionReceipt aggregation via replayGoal(). See
+    // [[sovereign_local_first_arc]].
+    getLocalLedger: async () => {
+      const config = ctx.getConfig();
+      if (config?.isTauri !== true || config.invoke == null) return [];
+      return ctx.app.getLocalLedger(config.invoke);
+    },
   };
 }
 

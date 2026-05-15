@@ -49,6 +49,7 @@ import {
   APPROVAL_PRESET_CONFIGS,
   DEFAULT_GOVERNANCE_CONFIG,
   DEFAULT_MOTEBIT_CLOUD_URL,
+  EventType,
   type GovernanceConfig,
   type AppearanceConfig,
 } from "@motebit/sdk";
@@ -1572,6 +1573,81 @@ export class DesktopApp {
         credential: vc as unknown as Record<string, unknown>,
         issued_at: vc.validFrom != null ? new Date(vc.validFrom).getTime() : Date.now(),
       }));
+  }
+
+  // === Local-first Sovereign accessors (Arc 2 of the sovereign-local-first
+  //     sweep — desktop + mobile mirror of the web accessors). Doctrine:
+  //     docs/doctrine/protocol-primacy.md — every Sovereign tab must render
+  //     for a user who never subscribes. ===
+
+  /**
+   * Query the local event store for this motebit's bootstrap
+   * IdentityCreated event. Mirrors WebApp.getLocalIdentity() and
+   * MobileApp.getLocalIdentity(). The Sovereign Identity tab renders
+   * "Current identity" hero card without a relay round-trip.
+   */
+  async getLocalIdentity(): Promise<{
+    motebitId: string;
+    createdAt: number;
+    publicKeyHex: string;
+    ownerId: string | null;
+  } | null> {
+    const store = this._localEventStore;
+    if (!store || this.motebitId === "" || this.publicKey === "") return null;
+    try {
+      const events = await store.query({
+        motebit_id: this.motebitId,
+        event_types: [EventType.IdentityCreated],
+      });
+      const first = events.length > 0 ? events[0] : null;
+      if (!first) return null;
+      const payload = first.payload as { owner_id?: string } | null | undefined;
+      return {
+        motebitId: this.motebitId,
+        createdAt: first.timestamp,
+        publicKeyHex: this.publicKey,
+        ownerId: payload?.owner_id ?? null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Locally-known goal execution rows for the Sovereign Ledger tab.
+   * Reads from the Tauri-side `goals_list` invoke (SQLite-backed
+   * canonical goal store on desktop). Filters to goals with execution
+   * history (last_run_at set OR terminal status) and maps to the
+   * canonical GoalRow wire shape. Mirrors WebApp.getLocalLedger() and
+   * MobileApp.getLocalLedger().
+   */
+  async getLocalLedger(
+    invokeFn: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>,
+  ): Promise<Array<{ goal_id: string; prompt: string; status: string; created_at: number }>> {
+    if (this.motebitId === "" || this.motebitId === "desktop-local") return [];
+    try {
+      const rows = await invokeFn<Array<Record<string, unknown>>>("goals_list", {
+        motebitId: this.motebitId,
+      });
+      return rows
+        .filter((g) => {
+          const status = typeof g.status === "string" ? g.status : "";
+          return g.last_run_at != null || status === "completed" || status === "failed";
+        })
+        .map((g) => ({
+          goal_id: typeof g.goal_id === "string" ? g.goal_id : "",
+          prompt: typeof g.prompt === "string" ? g.prompt : "",
+          status: typeof g.status === "string" ? g.status : "",
+          created_at:
+            typeof g.created_at === "number"
+              ? g.created_at
+              : typeof g.last_run_at === "number"
+                ? g.last_run_at
+                : Date.now(),
+        }));
+    } catch {
+      return [];
+    }
   }
 
   // === Curiosity, Gradient, Reflection, Agents, Approvals ===

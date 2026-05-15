@@ -60,7 +60,12 @@ import type { McpServerConfig } from "@motebit/mcp-client";
 export type { McpServerConfig } from "@motebit/mcp-client";
 export type { MemoryNode } from "@motebit/sdk";
 import { PlanEngine } from "@motebit/planner";
-import { DeviceCapability, DEFAULT_OLLAMA_MODEL, DEFAULT_MOTEBIT_CLOUD_URL } from "@motebit/sdk";
+import {
+  DeviceCapability,
+  DEFAULT_OLLAMA_MODEL,
+  DEFAULT_MOTEBIT_CLOUD_URL,
+  EventType,
+} from "@motebit/sdk";
 import type { ByokVendor } from "@motebit/sdk";
 import { dispatchByokRouting } from "@motebit/policy";
 import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
@@ -75,7 +80,6 @@ import {
   reportProgressDefinition,
 } from "@motebit/tools/web-safe";
 import type { EventFilter, EventStoreAdapter } from "@motebit/event-log";
-import type { EventType } from "@motebit/sdk";
 import {
   generate as generateIdentityFile,
   parse as parseIdentityFile,
@@ -1934,6 +1938,75 @@ export class MobileApp {
         credential: vc as unknown as Record<string, unknown>,
         issued_at: vc.validFrom != null ? new Date(vc.validFrom).getTime() : Date.now(),
       }));
+  }
+
+  // === Local-first Sovereign accessors (Arc 2 of the sovereign-local-first
+  //     sweep — desktop + mobile mirror of the web accessors). Doctrine:
+  //     docs/doctrine/protocol-primacy.md — every Sovereign tab must render
+  //     for a user who never subscribes. ===
+
+  /**
+   * Query the local event store for this motebit's bootstrap
+   * IdentityCreated event. Mirrors WebApp.getLocalIdentity() — same
+   * return shape, same semantics (Sovereign Identity tab renders
+   * "Current identity" hero card without relay).
+   */
+  async getLocalIdentity(): Promise<{
+    motebitId: string;
+    createdAt: number;
+    publicKeyHex: string;
+    ownerId: string | null;
+  } | null> {
+    const store = this._localEventStore;
+    if (!store || this.motebitId === "" || this.publicKey === "") return null;
+    try {
+      const events = await store.query({
+        motebit_id: this.motebitId,
+        event_types: [EventType.IdentityCreated],
+      });
+      const first = events.length > 0 ? events[0] : null;
+      if (!first) return null;
+      const payload = first.payload as { owner_id?: string } | null | undefined;
+      return {
+        motebitId: this.motebitId,
+        createdAt: first.timestamp,
+        publicKeyHex: this.publicKey,
+        ownerId: payload?.owner_id ?? null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Locally-known goal execution rows for the Sovereign Ledger tab.
+   * Reads from the SQLite goal store (the local source of truth on
+   * mobile, persisted via expo-sqlite). Filters to goals with
+   * execution history (last_run_at set OR terminal status) and maps
+   * to the canonical GoalRow wire shape consumed by the controller.
+   * Mirrors WebApp.getLocalLedger().
+   */
+  getLocalLedger(): Array<{
+    goal_id: string;
+    prompt: string;
+    status: string;
+    created_at: number;
+  }> {
+    const goalStore = this.storage?.goalStore;
+    if (!goalStore || this.motebitId === "" || this.motebitId === "mobile-local") return [];
+    try {
+      const goals = goalStore.listGoals(this.motebitId);
+      return goals
+        .filter((g) => g.last_run_at != null || g.status === "completed" || g.status === "failed")
+        .map((g) => ({
+          goal_id: g.goal_id,
+          prompt: g.prompt,
+          status: String(g.status),
+          created_at: g.created_at ?? g.last_run_at ?? Date.now(),
+        }));
+    } catch {
+      return [];
+    }
   }
 
   // === Sync (delegates to MobileSyncController in ./sync-controller.ts) ===
