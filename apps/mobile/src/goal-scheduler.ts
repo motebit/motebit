@@ -87,6 +87,34 @@ export class MobileGoalScheduler {
     return this.deps.getStorage()?.goalStore ?? null;
   }
 
+  /**
+   * Sign a goal-fire's artifact bytes as a `ContentArtifactManifest`
+   * (JCS-canonical + suite-dispatched via `@motebit/crypto`) and return
+   * the JSON for persistence into `goal_outcomes.signed_manifest`.
+   * Returns `null` on every degradation path (empty content, no
+   * runtime, signer threw, manifest came back null) — calm-software
+   * default per `docs/doctrine/goal-results.md` §"Phase-3 deferral
+   * close": never silently signed with a placeholder. The receipt-
+   * summary row on the goal card reads
+   * `last_manifest_signed = (signed_manifest != null)` to render the
+   * "signed" indicator, identical wire shape to web + desktop.
+   */
+  private async signArtifactManifestJson(
+    content: string,
+    goalId: string,
+    runId: string,
+  ): Promise<string | null> {
+    if (content.length === 0) return null;
+    const runtime = this.deps.getRuntime();
+    if (!runtime) return null;
+    try {
+      const manifest = await runtime.signGoalArtifact(content, { goalId, runId });
+      return manifest != null ? JSON.stringify(manifest) : null;
+    } catch {
+      return null;
+    }
+  }
+
   get isGoalExecuting(): boolean {
     return this._goalExecuting;
   }
@@ -178,7 +206,7 @@ export class MobileGoalScheduler {
       // text). Per `docs/doctrine/goal-results.md` §"The three
       // categories" Phase 2.
       const now = Date.now();
-      this.finishGoalSuccess(
+      await this.finishGoalSuccess(
         { goal_id: goalId, prompt, mode },
         accumulated.slice(0, 500),
         now,
@@ -250,7 +278,7 @@ export class MobileGoalScheduler {
           if (planEngine && loopDeps) {
             const result = await this.executePlanGoal(goal, outcomes);
             if (result.suspended) return; // Waiting for approval
-            this.finishGoalSuccess(
+            await this.finishGoalSuccess(
               goal,
               result.summary,
               now,
@@ -261,7 +289,7 @@ export class MobileGoalScheduler {
             // Fallback: single-turn streaming
             const result = await this.executeSingleTurnGoal(goal, outcomes, now);
             if (result.suspended) return;
-            this.finishGoalSuccess(
+            await this.finishGoalSuccess(
               goal,
               result.summary,
               now,
@@ -470,13 +498,13 @@ export class MobileGoalScheduler {
     };
   }
 
-  private finishGoalSuccess(
+  private async finishGoalSuccess(
     goal: { goal_id: string; prompt: string; mode: string; budget_tokens?: number | null },
     summary: string,
     now: number,
     tokensUsed: number | null = null,
     responseFull: string | null = null,
-  ): void {
+  ): Promise<void> {
     const goalStore = this.deps.getStorage()?.goalStore;
     if (!goalStore) return;
     const motebitId = this.deps.getMotebitId();
@@ -484,8 +512,20 @@ export class MobileGoalScheduler {
     goalStore.updateLastRun(goal.goal_id, now);
     goalStore.resetFailures(goal.goal_id);
 
+    // Sign the artifact bytes per docs/doctrine/goal-results.md
+    // §"Phase-3 deferral close" — the manifest JSON lands on the
+    // outcome row alongside the artifact bytes. Calm-software default
+    // (null on every degradation path) means the card's
+    // receipt-summary row simply omits the "signed" indicator when
+    // signing isn't possible; no placeholder signatures.
+    const outcomeId = crypto.randomUUID();
+    const signedManifestJson =
+      responseFull != null
+        ? await this.signArtifactManifestJson(responseFull, goal.goal_id, outcomeId)
+        : null;
+
     goalStore.insertOutcome({
-      outcome_id: crypto.randomUUID(),
+      outcome_id: outcomeId,
       goal_id: goal.goal_id,
       motebit_id: motebitId,
       ran_at: now,
@@ -499,9 +539,11 @@ export class MobileGoalScheduler {
       // `docs/doctrine/goal-results.md` §"The three categories". The
       // `summary` field stays a 500-char executions-panel preview;
       // `response_full` is the artifact the slab already rendered via
-      // `motebit-runtime.ts` `restItem` and the verifier will sign in
-      // the Phase-3 sibling commit.
+      // `motebit-runtime.ts` `restItem`; `signed_manifest` is the
+      // cryptographic attestation on the same row (Phase-3 deferral
+      // close).
       response_full: responseFull,
+      signed_manifest: signedManifestJson,
     });
 
     if (goal.mode === "once") {
@@ -555,6 +597,12 @@ export class MobileGoalScheduler {
         // signal. Matches `packages/panels/src/goals/runner.ts`'s
         // symmetric clear of `last_response_full` + `last_response_preview`.
         response_full: null,
+        // Symmetric clear for the signed-manifest indicator — the
+        // receipt's "signed" chip must not outlive the artifact it
+        // attested. `signed_manifest IS NULL` here makes the SQL
+        // projection's `last_manifest_signed` resolve to NULL on the
+        // card, hiding the indicator cleanly.
+        signed_manifest: null,
       });
     } catch {
       /* non-fatal */

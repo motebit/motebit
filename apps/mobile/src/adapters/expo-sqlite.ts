@@ -1043,6 +1043,15 @@ export interface GoalOutcome {
    *  null). Phase-3 sibling: wrapped as `ContentArtifactManifest` at
    *  fire-time when motebit identity is loaded. */
   response_full: string | null;
+  /** Signed `ContentArtifactManifest` JSON for `response_full`, minted
+   *  at fire-time via `@motebit/runtime::signGoalArtifact`. `null` on
+   *  failed fires, on empty content, when identity wasn't loaded, or
+   *  when the signer threw — and on pre-v24 rows. The mobile card's
+   *  receipt-summary row reads
+   *  `last_manifest_signed = (signed_manifest !== null)` to render
+   *  the "signed" indicator (same wire shape as web + desktop per
+   *  `docs/doctrine/goal-results.md` §"Phase-3 deferral close"). */
+  signed_manifest: string | null;
 }
 
 interface GoalRow {
@@ -1073,6 +1082,7 @@ interface GoalOutcomeRow {
   error_message: string | null;
   tokens_used: number | null;
   response_full: string | null;
+  signed_manifest: string | null;
 }
 
 function rowToGoal(row: GoalRow): Goal {
@@ -1106,6 +1116,7 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
     memories_formed: row.memories_formed,
     error_message: row.error_message,
     response_full: row.response_full,
+    signed_manifest: row.signed_manifest,
   };
 }
 
@@ -1145,8 +1156,8 @@ export class ExpoGoalStore {
   insertOutcome(outcome: GoalOutcome): void {
     this.db.runSync(
       `INSERT OR REPLACE INTO goal_outcomes
-       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         outcome.outcome_id,
         outcome.goal_id,
@@ -1159,6 +1170,7 @@ export class ExpoGoalStore {
         outcome.error_message,
         outcome.tokens_used,
         outcome.response_full,
+        outcome.signed_manifest,
       ],
     );
   }

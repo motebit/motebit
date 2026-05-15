@@ -433,4 +433,29 @@ export const MOBILE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE goal_outcomes ADD COLUMN response_full TEXT",
     ],
   },
+  {
+    version: 24,
+    description: "goal_outcomes.signed_manifest — persisted ContentArtifactManifest per goal fire",
+    statements: [
+      // Closes the Phase-3 deferral named in
+      // docs/doctrine/goal-results.md §"Deferred from Phase 3" for
+      // the mobile surface: mobile's scheduler now wraps every
+      // successful fire's `response_full` as a signed
+      // `ContentArtifactManifest` (suite-dispatched via
+      // `@motebit/crypto`, currently `motebit-jcs-ed25519-hex-v1`).
+      // The manifest JSON lands here alongside the artifact bytes so
+      // the goal card's receipt-summary row can render the "signed"
+      // indicator on the same wire shape as web + desktop. NULL when
+      // identity wasn't loaded at fire-time / content was empty /
+      // signer threw (calm-software degradation; no placeholder
+      // signatures). The expo-sqlite SELECT in `loadLatestOutcomes`
+      // / `loadLatestOutcome` reads `signed_manifest` alongside the
+      // other latest-outcome columns and projects
+      // `last_manifest_signed = (signed_manifest != null)` so the
+      // panels runner's `ScheduledGoal.last_manifest_signed` field
+      // mirrors web + desktop. Sibling entry: desktop's
+      // tauri-migrations v4 lands the same column.
+      "ALTER TABLE goal_outcomes ADD COLUMN signed_manifest TEXT",
+    ],
+  },
 ];

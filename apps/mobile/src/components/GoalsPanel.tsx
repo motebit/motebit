@@ -90,12 +90,25 @@ function createMobileGoalsAdapter(app: MobileApp): GoalsFetchAdapter {
       const goals = store.listGoals(identity.motebitId).map((g): ScheduledGoal => {
         const spent = store.getSpentTokens(g.goal_id);
         const latest = store.getLatestOutcome(g.goal_id);
+        // Phase-3 deferral close (docs/doctrine/goal-results.md
+        // §"Phase-3 deferral close"): mobile's signGoalArtifact
+        // wiring lands a `ContentArtifactManifest` JSON on the
+        // latest outcome's `signed_manifest` column when identity
+        // is loaded. Project as `last_manifest_signed = true` when
+        // the latest COMPLETED outcome carries a manifest; null
+        // for failed outcomes (latest-outcome clear-on-error). The
+        // panel runner's `ScheduledGoal.last_manifest_signed`
+        // surfaces the same wire shape as web + desktop so the
+        // receipt-summary row reads identically.
+        const lastManifestSigned =
+          latest != null && latest.status === "completed" ? latest.signed_manifest != null : null;
         return {
           ...(g as unknown as ScheduledGoal),
           budget_tokens: g.budget_tokens,
           spent_tokens: spent,
           last_response_preview: latest?.summary ?? null,
           last_response_full: latest?.response_full ?? null,
+          last_manifest_signed: lastManifestSigned,
         };
       });
       return Promise.resolve(goals);
@@ -227,15 +240,37 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
             >
               {goal.status}
             </Text>
-            {goal.last_run_at != null ? (
-              <Text style={styles.goalMetaText}>ran {formatTimeAgo(goal.last_run_at)}</Text>
-            ) : null}
             {goal.consecutive_failures != null && goal.consecutive_failures > 0 ? (
               <Text style={styles.goalMetaWarning}>
                 {goal.consecutive_failures}/{goal.max_retries ?? "?"} failures
               </Text>
             ) : null}
           </View>
+          {/* Receipt-summary row — collapsed-view per-fire audit trail
+              per docs/doctrine/goal-results.md §"Phase-3 deferral close".
+              Same wire shape as web's `.goal-card-receipt` and desktop's
+              `.goal-item-receipt`:
+                "ran 5m ago · signed"  ← signed manifest minted
+                "ran 5m ago"           ← signing skipped
+                "failed 5m ago"        ← last fire errored (amber)
+              Renders only when the goal has fired at least once. */}
+          {goal.last_run_at != null ? (
+            <View style={styles.goalReceipt}>
+              <Text
+                style={[
+                  styles.goalReceiptText,
+                  (goal.status === "failed" || goal.last_error != null) &&
+                    styles.goalReceiptErrored,
+                ]}
+              >
+                {goal.status === "failed" || goal.last_error != null ? "failed" : "ran"}{" "}
+                {formatTimeAgo(goal.last_run_at)}
+              </Text>
+              {goal.last_manifest_signed === true ? (
+                <Text style={styles.goalReceiptSigned}>· signed</Text>
+              ) : null}
+            </View>
+          ) : null}
           {/* Budget envelope — runtime-register commitment cap.
               Axis-native unit is the headline ("12k / 50k tokens"),
               never cost. Doctrine: panel-temporal-registers.md
@@ -442,6 +477,13 @@ function createStyles(c: ThemeColors) {
     goalMeta: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
     goalMetaText: { color: c.textMuted, fontSize: 11 },
     goalMetaWarning: { color: c.statusWarning, fontSize: 11, fontWeight: "600" },
+    // Receipt-summary row — sibling of `goalMeta`, sits below it.
+    // 10px ghost color to match web + desktop's `.goal-card-receipt`
+    // / `.goal-item-receipt` calm-software register.
+    goalReceipt: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
+    goalReceiptText: { color: c.textMuted, fontSize: 10 },
+    goalReceiptErrored: { color: c.statusWarning },
+    goalReceiptSigned: { color: c.accentSoft, fontSize: 10 },
     goalActions: { flexDirection: "row", alignItems: "center", gap: 8 },
     goalDeleteBtn: {
       width: 28,
