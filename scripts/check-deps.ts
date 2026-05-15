@@ -210,6 +210,11 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // per docs/doctrine/registry-pattern-canonical.md. Same shape as
     // `isSuiteId` / `isTokenAudience`.
     "isEventType",
+    // Settlement-mode vocabulary — pure type guard over the frozen
+    // `ALL_SETTLEMENT_MODES` array. The seventh registered closed
+    // registry per docs/doctrine/registry-pattern-canonical.md.
+    // Same shape as `isEventType`.
+    "isSettlementMode",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)

@@ -247,6 +247,9 @@ export const ALL_EVENT_TYPES: readonly EventType[];
 export const ALL_SENSITIVITY_LEVELS: readonly SensitivityLevel[];
 
 // @public
+export const ALL_SETTLEMENT_MODES: readonly SettlementMode[];
+
+// @public
 export const ALL_SUITE_IDS: readonly SuiteId[];
 
 // @public
@@ -1859,6 +1862,9 @@ export function isEventType(value: unknown): value is EventType;
 
 // @public
 export function isSensitivityLevel(value: unknown): value is SensitivityLevel;
+
+// @public
+export function isSettlementMode(value: unknown): value is SettlementMode;
 
 // @public
 export function isSignedTransparencyDeclaration(value: unknown): value is SignedTransparencyDeclaration;
