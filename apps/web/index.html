@@ -6609,12 +6609,6 @@
         opacity: 0;
         pointer-events: none;
       }
-      .connect-prompt-icon {
-        width: 40px;
-        height: 40px;
-        margin: 0 auto 12px;
-        color: var(--text-ghost);
-      }
       .connect-prompt-heading {
         font-size: 18px;
         font-weight: 600;
@@ -7609,20 +7603,13 @@
       </div>
     </div>
 
-    <!-- Connect prompt overlay (shown when no provider) -->
+    <!-- Connect prompt overlay (shown when no provider).
+         No icon: the creature IS the loading state — adding a target
+         glyph on the body competes with the creature's expression and
+         violates "minimum display" per THE_METABOLIC_PRINCIPLE +
+         always-already-slab.md (the body's existence is sufficient
+         unto itself, not contingent on extra signal). -->
     <div id="connect-prompt" class="connect-prompt hidden">
-      <svg
-        class="connect-prompt-icon"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.5"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      >
-        <circle cx="12" cy="12" r="6" />
-        <circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none" />
-      </svg>
       <div class="connect-prompt-heading" id="connect-prompt-heading">Connect a model</div>
       <div class="connect-prompt-text" id="connect-prompt-text">
         Open Settings to choose a provider — on-device, your own key, or motebit cloud.
