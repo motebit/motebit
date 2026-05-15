@@ -440,11 +440,18 @@ export function initActivityPanel(ctx: WebContext): ActivityPanelAPI {
       return;
     }
     if (view.length === 0) {
-      list!.innerHTML = `<div class="activity-empty">${
-        state.events.length === 0
-          ? "Activity appears here as events occur"
-          : "No matches for this filter"
-      }</div>`;
+      // Structurally-empty → breathing pulse; filtered → flat row.
+      // Doctrine: panel-temporal-registers.md §"Structural-void test."
+      if (state.events.length === 0) {
+        list!.innerHTML =
+          '<div class="panel-empty-pulse">' +
+          '<div class="panel-empty-pulse-dot"></div>' +
+          '<div class="panel-empty-pulse-title">Activity appears here</div>' +
+          '<div class="panel-empty-pulse-sub">as your motebit acts and observes</div>' +
+          "</div>";
+      } else {
+        list!.innerHTML = '<div class="panel-empty-row">No matches for this filter</div>';
+      }
       return;
     }
     list!.innerHTML = view.map(renderRow).join("");

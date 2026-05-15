@@ -97,10 +97,21 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
     convList.innerHTML = "";
     void ctx.app.listConversationsAsync(30).then((conversations) => {
       if (conversations.length === 0) {
+        // Universal panel-empty-pulse — substrate-alive register.
+        // Doctrine: panel-temporal-registers.md §"The structural-void test."
         const empty = document.createElement("div");
-        empty.style.cssText =
-          "font-size:12px;color:rgba(0,0,0,0.3);padding:16px;text-align:center;";
-        empty.textContent = "No conversations yet";
+        empty.className = "panel-empty-pulse";
+        const dot = document.createElement("div");
+        dot.className = "panel-empty-pulse-dot";
+        const title = document.createElement("div");
+        title.className = "panel-empty-pulse-title";
+        title.textContent = "Conversations appear here";
+        const sub = document.createElement("div");
+        sub.className = "panel-empty-pulse-sub";
+        sub.textContent = "as you talk with motebit";
+        empty.appendChild(dot);
+        empty.appendChild(title);
+        empty.appendChild(sub);
         convList.appendChild(empty);
         return;
       }

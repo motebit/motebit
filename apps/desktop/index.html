@@ -2270,6 +2270,8 @@
         flex: 1;
         overflow-y: auto;
         padding: 8px;
+        display: flex;
+        flex-direction: column;
       }
       .conv-item {
         padding: 10px 12px;
@@ -2519,6 +2521,8 @@
         flex: 1;
         overflow-y: auto;
         padding: 4px 8px;
+        display: flex;
+        flex-direction: column;
       }
       .mem-item {
         padding: 10px 12px;
@@ -3152,7 +3156,11 @@
         display: flex;
         flex-direction: column;
       }
-      .goal-empty-commit {
+      /* Panel-empty-pulse — universal substrate-alive register for
+         every panel in the droplet/material family. Mirrors web's
+         .panel-empty-pulse. Doctrine: panel-temporal-registers.md
+         §"The structural-void test." */
+      .panel-empty-pulse {
         flex: 1;
         display: flex;
         flex-direction: column;
@@ -3161,7 +3169,7 @@
         padding: 0 16px;
         text-align: center;
       }
-      .goal-empty-commit .goal-empty-pulse {
+      .panel-empty-pulse .panel-empty-pulse-dot {
         margin: 0 auto 14px;
         width: 9px;
         height: 9px;
@@ -3169,12 +3177,12 @@
         background: var(--accent-soft);
         animation: goalPulseBreathe 3.33s ease-in-out infinite;
       }
-      .goal-empty-commit-title {
+      .panel-empty-pulse-title {
         font-size: 13px;
         color: var(--text-secondary);
         margin-bottom: 4px;
       }
-      .goal-empty-commit-sub {
+      .panel-empty-pulse-sub {
         font-size: 11px;
         color: var(--text-ghost);
       }
@@ -3728,6 +3736,8 @@
       .agents-pane {
         flex: 1;
         overflow-y: auto;
+        display: flex;
+        flex-direction: column;
       }
       .agent-cap-tag {
         font-size: 10px;
@@ -6439,12 +6449,12 @@
       </div>
       <div id="agents-known-pane" class="agents-pane active">
         <div id="agents-list" style="flex: 1; overflow-y: auto; padding: 0"></div>
-        <div
-          id="agents-empty"
-          style="font-size: 12px; color: var(--text-ghost); padding: 24px 16px; text-align: center"
-        >
-          No agents known yet. Your motebit will discover others through delegation and the agent
-          network.
+        <div id="agents-empty" class="panel-empty-pulse">
+          <div class="panel-empty-pulse-dot"></div>
+          <div class="panel-empty-pulse-title">Known agents appear here</div>
+          <div class="panel-empty-pulse-sub">
+            as your motebit discovers them through delegation
+          </div>
         </div>
       </div>
       <div id="agents-discover-pane" class="agents-pane" style="display: none">
@@ -6461,11 +6471,10 @@
           </select>
         </div>
         <div id="agents-discover-list" style="flex: 1; overflow-y: auto; padding: 0"></div>
-        <div
-          id="agents-discover-empty"
-          style="font-size: 12px; color: var(--text-ghost); padding: 24px 16px; text-align: center"
-        >
-          Connect to a relay to discover agents on the network.
+        <div id="agents-discover-empty" class="panel-empty-pulse">
+          <div class="panel-empty-pulse-dot"></div>
+          <div class="panel-empty-pulse-title">Discover new agents</div>
+          <div class="panel-empty-pulse-sub">connect to a relay to see what's available</div>
         </div>
       </div>
     </div>

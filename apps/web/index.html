@@ -3070,6 +3070,8 @@
         flex: 1;
         overflow-y: auto;
         padding: 8px;
+        display: flex;
+        flex-direction: column;
       }
       .conv-item {
         padding: 10px 12px;
@@ -3964,28 +3966,26 @@
         }
       }
 
-      /* ── Empty register — commitment-bearing READY signal ───────────
-         Goals is uniquely structurally voided when empty: cards-area
-         has no marketplace/default content (unlike Memory/Agents/
-         Capabilities), so an empty Goals panel reads as a large
-         vertical void. The breathing pulse fills that void as a
-         ready-state signal per docs/doctrine/always-already-slab.md
-         ("empty IS READY, not absent"). 0.3 Hz rhythm is
-         medium-coherent with the slab and creature breathing — the
-         panel inherits the body's pulse into the void where future
-         commitments will sit. The block is bottom-anchored within
-         cards-area (`margin-top: auto` on `#goal-empty` below) so the
-         caption reads as "introducing the form" not "centered in
-         absence."
-         Doctrine: panel-temporal-registers.md §"Structural-void test"
-         (Goals breathes; Memory/Agents/Capabilities don't, because
-         their empty registers carry sibling content while Goals' does
-         not). */
-      .goal-empty-commit {
+      /* ── Empty register — universal substrate-alive signal ─────────
+         The breathing-pulse block is the empty-state language for
+         every panel in the droplet/material family. Liquescentia's
+         substrate-alive property inherits into all panels equally —
+         the panel surface breathes even when there's no content yet.
+         Captions vary per panel (each panel names what fills it);
+         the visual register is uniform. 0.3 Hz rhythm is
+         medium-coherent with the slab and creature breathing.
+         Centered vertically in the cards-area; pulse + title + sub
+         block. JS toggles via display: "" / "none" so the stylesheet's
+         display: flex applies when shown.
+         Doctrine: panel-temporal-registers.md §"The structural-void
+         test" (filter: panels with sibling content in the empty
+         cards-area — like Sovereign Credentials' Verify form — stay
+         flat using .panel-empty-row; everything else breathes). */
+      .panel-empty-pulse {
         padding: 0 16px;
         text-align: center;
       }
-      .goal-empty-commit .goal-empty-pulse {
+      .panel-empty-pulse .panel-empty-pulse-dot {
         margin: 0 auto 14px;
         width: 9px;
         height: 9px;
@@ -3993,12 +3993,12 @@
         background: var(--accent-soft);
         animation: goalPulseBreathe 3.33s ease-in-out infinite;
       }
-      .goal-empty-commit-title {
+      .panel-empty-pulse-title {
         font-size: 13px;
         color: var(--text-secondary);
         margin-bottom: 4px;
       }
-      .goal-empty-commit-sub {
+      .panel-empty-pulse-sub {
         font-size: 11px;
         color: var(--text-ghost);
       }
@@ -4240,7 +4240,11 @@
          center own content via inner flex column. The JS toggles
          visibility via `display: ""` / `display: "none"` so the
          stylesheet's `display: flex` applies when shown. */
-      #goal-cards-area #goal-empty {
+      /* Panel-generic empty-pulse centering — applies wherever a
+         .panel-empty-pulse block sits inside a flex-column cards-area
+         that grows with `flex: 1`. The pulse claims full available
+         height and centers its own content vertically. */
+      .panel-empty-pulse {
         flex: 1;
         display: flex;
         flex-direction: column;
@@ -4893,6 +4897,8 @@
       .agents-pane {
         flex: 1;
         overflow-y: auto;
+        display: flex;
+        flex-direction: column;
       }
       .agent-cap-tag {
         font-size: 10px;
@@ -7094,6 +7100,8 @@
         flex: 1;
         overflow-y: auto;
         padding: 4px 8px;
+        display: flex;
+        flex-direction: column;
       }
       .activity-empty {
         font-size: 12px;
@@ -7399,10 +7407,15 @@
         <span class="mem-panel-title">Memories</span>
         <button class="mem-panel-close" id="memory-close-btn">&times;</button>
       </div>
-      <div id="memory-empty" class="panel-empty-row">
-        Memories appear here as conversations build
-      </div>
+      <!-- Empty register — universal panel-empty-pulse. JS swaps to
+           .panel-empty-row + "No matches" for filtered states.
+           Doctrine: panel-temporal-registers.md §"Structural-void". -->
       <div id="memory-list"></div>
+      <div id="memory-empty" class="panel-empty-pulse">
+        <div class="panel-empty-pulse-dot"></div>
+        <div class="panel-empty-pulse-title">Memories appear here</div>
+        <div class="panel-empty-pulse-sub">as conversations build</div>
+      </div>
     </div>
 
     <!-- Goals HUD button + locked panel -->
@@ -7445,17 +7458,15 @@
            populated; empty caption anchored to its bottom when not. -->
       <div id="goal-cards-area">
         <div id="goal-list"></div>
-        <!-- Empty register: breathing-pulse + commitment-bearing
-             caption. Structurally-voided panel (Goals is the only
-             runtime register whose cards-area has no default content
-             when empty), so the pulse fills the void as a READY
-             signal per docs/doctrine/always-already-slab.md. Bottom-
-             anchored within cards-area (margin-top: auto applied
-             below) so the caption reads as introducing the form. -->
-        <div id="goal-empty" class="goal-empty-commit">
-          <div class="goal-empty-pulse"></div>
-          <div class="goal-empty-commit-title">Commit motebit to a goal</div>
-          <div class="goal-empty-commit-sub">a recurring task · or a one-shot plan</div>
+        <!-- Empty register: universal panel-empty-pulse block. The
+             breathing dot signals substrate-alive; the caption names
+             what fills the panel. Doctrine:
+             panel-temporal-registers.md §"The structural-void test"
+             + always-already-slab.md ("empty IS READY, not absent"). -->
+        <div id="goal-empty" class="panel-empty-pulse">
+          <div class="panel-empty-pulse-dot"></div>
+          <div class="panel-empty-pulse-title">Commit motebit to a goal</div>
+          <div class="panel-empty-pulse-sub">a recurring task · or a one-shot plan</div>
         </div>
       </div>
 
@@ -7559,14 +7570,22 @@
       </div>
       <div id="agents-known-pane" class="agents-pane active">
         <div id="agents-list" style="flex: 1; overflow-y: auto; padding: 0"></div>
-        <div id="agents-empty" class="panel-empty-row">
-          Known agents appear here as your motebit discovers them through delegation
+        <div id="agents-empty" class="panel-empty-pulse">
+          <div class="panel-empty-pulse-dot"></div>
+          <div class="panel-empty-pulse-title">Known agents appear here</div>
+          <div class="panel-empty-pulse-sub">
+            as your motebit discovers them through delegation
+          </div>
         </div>
       </div>
       <div id="agents-discover-pane" class="agents-pane" style="display: none">
         <div id="agents-discover-list" style="flex: 1; overflow-y: auto; padding: 0"></div>
-        <div id="agents-discover-empty" class="panel-empty-row">
-          Connect to a relay to discover agents on the network
+        <div id="agents-discover-empty" class="panel-empty-pulse">
+          <div class="panel-empty-pulse-dot"></div>
+          <div class="panel-empty-pulse-title">Discover new agents</div>
+          <div class="panel-empty-pulse-sub">
+            connect to a relay to see what's available
+          </div>
         </div>
       </div>
     </div>

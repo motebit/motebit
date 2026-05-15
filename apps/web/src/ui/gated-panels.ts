@@ -16,6 +16,7 @@ import {
 } from "../storage";
 import type { PlanChunk } from "@motebit/runtime";
 import { renderMarkdown } from "./chat";
+import { setEmptyPulse, setEmptyRow } from "./empty-states";
 import {
   createAgentsController,
   createMemoryController,
@@ -107,8 +108,8 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     const runtime = ctx.app.getRuntime();
     if (!runtime) {
       memoryList.innerHTML = "";
-      memoryEmpty.style.display = "block";
-      memoryEmpty.textContent = "Runtime not initialized";
+      setEmptyRow(memoryEmpty, "Runtime not initialized");
+      memoryList.style.display = "none";
       return;
     }
 
@@ -116,13 +117,18 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     memoryList.innerHTML = "";
 
     if (view.length === 0) {
-      memoryEmpty.style.display = "block";
-      memoryEmpty.textContent =
-        state.memories.length === 0 ? "Memories appear here as conversations build" : "No matches";
+      // Structurally empty → breathing pulse; filtered → flat "No matches"
+      if (state.memories.length === 0) {
+        setEmptyPulse(memoryEmpty, "Memories appear here", "as conversations build");
+      } else {
+        setEmptyRow(memoryEmpty, "No matches");
+      }
+      memoryList.style.display = "none";
       return;
     }
 
     memoryEmpty.style.display = "none";
+    memoryList.style.display = "";
 
     for (const node of view) {
       const item = document.createElement("div");
@@ -923,7 +929,10 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   function renderKnown(state: AgentsState): void {
     agentsList.innerHTML = "";
     if (state.known.length === 0) {
-      agentsEmpty.style.display = "block";
+      // Reset to stylesheet default (display: flex from
+      // .panel-empty-pulse) — the static HTML already has the 3-element
+      // breathing-pulse block.
+      agentsEmpty.style.display = "";
       return;
     }
     agentsEmpty.style.display = "none";
@@ -997,19 +1006,22 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   function renderDiscover(state: AgentsState): void {
     const syncUrl = loadSyncUrl();
     if (!syncUrl) {
+      // Universal panel-empty-pulse register. The caption signals
+      // setup-needed; the visual register stays uniform with the rest
+      // of the panel family.
       discoverList.innerHTML = "";
-      discoverEmpty.textContent = "Connect to a relay in Settings to discover agents";
-      discoverEmpty.style.display = "block";
+      setEmptyPulse(discoverEmpty, "Discover new agents", "connect a relay in Settings first");
       return;
     }
 
     if (state.discovered.length === 0) {
       discoverList.innerHTML = "";
-      discoverEmpty.textContent =
-        state.error != null
-          ? "Couldn't reach the relay"
-          : "Agents appear here as the network grows";
-      discoverEmpty.style.display = "block";
+      if (state.error != null) {
+        // Error state — flat row (transient, recoverable).
+        setEmptyRow(discoverEmpty, "Couldn't reach the relay");
+      } else {
+        setEmptyPulse(discoverEmpty, "Discover new agents", "as the network grows");
+      }
       return;
     }
 

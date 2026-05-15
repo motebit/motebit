@@ -389,10 +389,10 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
 
           {state.goals.length === 0 ? (
             goalStore ? (
-              <View style={styles.emptyCommit}>
+              <View style={styles.emptyPulse}>
                 <Animated.View
                   style={[
-                    styles.emptyPulse,
+                    styles.emptyPulseDot,
                     {
                       opacity: emptyPulseAnim.interpolate({
                         inputRange: [0, 1],
@@ -409,8 +409,8 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
                     },
                   ]}
                 />
-                <Text style={styles.emptyCommitTitle}>Commit motebit to a goal</Text>
-                <Text style={styles.emptyCommitSub}>a recurring task · or a one-shot plan</Text>
+                <Text style={styles.emptyPulseTitle}>Commit motebit to a goal</Text>
+                <Text style={styles.emptyPulseSub}>a recurring task · or a one-shot plan</Text>
               </View>
             ) : (
               <Text style={styles.emptyText}>Goal store not available.</Text>
@@ -537,33 +537,33 @@ function createStyles(c: ThemeColors) {
       textAlign: "center",
       marginVertical: 24,
     },
-    // Empty register — commitment-bearing READY signal. Mirrors web's
-    // `.goal-empty-commit` block. `flex: 1` claims the available
-    // vertical space between header and form; `justifyContent:
-    // 'center'` centers the dot+caption block within that space
-    // (Apple Reminders / Notes / Mail / Photos empty-state pattern).
+    // Universal panel-empty-pulse — substrate-alive register for
+    // every panel in the droplet/material family. Mobile mirrors
+    // web's `.panel-empty-pulse`. `flex: 1` + `justifyContent:
+    // 'center'` claims the available vertical space and centers
+    // the dot + title + sub block.
     // See useEffect comment above for doctrine.
-    emptyCommit: {
+    emptyPulse: {
       flex: 1,
       alignItems: "center",
       justifyContent: "center",
       paddingHorizontal: 16,
       minHeight: 160,
     },
-    emptyPulse: {
+    emptyPulseDot: {
       width: 9,
       height: 9,
       borderRadius: 4.5,
       backgroundColor: c.accent,
       marginBottom: 14,
     },
-    emptyCommitTitle: {
+    emptyPulseTitle: {
       color: c.textSecondary,
       fontSize: 13,
       marginBottom: 4,
       textAlign: "center",
     },
-    emptyCommitSub: {
+    emptyPulseSub: {
       color: c.textMuted,
       fontSize: 11,
       textAlign: "center",

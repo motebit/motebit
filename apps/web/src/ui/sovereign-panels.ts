@@ -9,6 +9,7 @@ import type { WebContext } from "../types";
 import { toMicro } from "@motebit/sdk";
 import { loadSyncUrl } from "../storage";
 import { fetchSolanaBalanceUsdc, openSovereignFundingFlow } from "./wallet-balance";
+import { setEmptyPulse } from "./empty-states";
 import {
   createSovereignController,
   type CredentialEntry,
@@ -168,15 +169,16 @@ function renderLedger(
 ): void {
   ledgerList.innerHTML = "";
 
+  // Universal panel-empty-pulse register. Captions differentiate
+  // context (connect a relay first / wait for goals to complete);
+  // the visual register stays uniform across the panel family.
   if (!hasRelay) {
-    ledgerEmpty.style.display = "block";
-    ledgerEmpty.textContent = "Connect to a relay to see execution history";
+    setEmptyPulse(ledgerEmpty, "Execution history appears here", "connect a relay to see records");
     return;
   }
 
   if (state.goals.length === 0) {
-    ledgerEmpty.style.display = "block";
-    ledgerEmpty.textContent = "Execution ledgers appear here when goals complete";
+    setEmptyPulse(ledgerEmpty, "Execution history appears here", "when goals complete");
     return;
   }
 
@@ -300,8 +302,12 @@ function renderBudget(
   budgetList.innerHTML = "";
 
   if (!hasRelay) {
-    budgetEmpty.style.display = "block";
-    budgetEmpty.textContent = "Connect to a relay to view budget.";
+    // Universal panel-empty-pulse register.
+    setEmptyPulse(
+      budgetEmpty,
+      "Budget allocations appear here",
+      "connect a relay to see your envelope",
+    );
     return;
   }
 
@@ -709,8 +715,12 @@ function renderSuccession(
   successionEmpty.style.display = "none";
 
   if (!hasRelay) {
-    successionEmpty.style.display = "block";
-    successionEmpty.textContent = "Connect to a relay to see identity succession";
+    // Universal panel-empty-pulse register.
+    setEmptyPulse(
+      successionEmpty,
+      "Key rotations appear here",
+      "connect a relay to see your identity history",
+    );
     return;
   }
 

@@ -126,20 +126,41 @@ Same trigger applies to any future surface that could go either way (inference-h
 
 3. **Folding Settings into the doctrine.** Symptom: someone counts seven panels including Settings and tries to fit it into "identity register because it's about you." Diagnostic: Settings is config (what you ARE configuration-wise), not state (what you HAVE). Different category.
 
-## The structural-void test: which empty registers breathe
+## The universal empty register: every panel breathes
 
-Sibling clause to **substrate-vs-accumulation**, applied to empty registers. Identity panels (Sovereign / Memories / Conversations) and most runtime panels (Agents / Capabilities) carry default content even when empty: Sovereign's DID and credentials are always visible, Memory's search affordance + retention controls are present, Agents shows discovery rows, Capabilities has sub-tabs. Their cards-area is never structurally empty.
+**Every panel in the droplet/material family inherits Liquescentia's substrate-alive property in its empty state.** The breathing-pulse register (`.panel-empty-pulse` block — animated dot + title + subtitle, centered in the cards-area, 0.3 Hz indigo at `var(--accent-soft)`) is the **universal empty-state language**.
 
-Goals is the exception. When the user has no goals committed, the cards-area genuinely has nothing in it — no marketplace, no defaults, no sibling sub-content. The vertical space between the panel header and the form is a real void. A flat single-line caption in that void reads as "absent." A sympathetic-breathing pulse + commitment-bearing title + subtitle reads as **READY**, per [`always-already-slab.md`](always-already-slab.md) ("the slab precedes content; empty states are READY, not absent" — the property propagates from slab to runtime-register panels via the substrate, since both inherit the body's 0.3 Hz rhythm through Liquescentia).
+Captions vary per panel (each names what fills it and how — passively as content arrives, or actively when setup is needed); the visual register stays uniform.
 
-The breathing test:
+- Passive: _"Memories appear here / as conversations build"_
+- Active: _"Execution history appears here / connect a relay to see records"_
+- Goals-specific verb form: _"Commit motebit to a goal / a recurring task · or a one-shot plan"_
 
-- **Does the panel's empty cards-area have any default content?** If yes (sibling rows, discovery, sub-tabs, controls), the empty register is structurally filled — use a flat `.panel-empty-row` ghost caption for cross-panel uniformity.
-- **If no — is the empty space large enough to read as void?** If yes, the empty register is structurally voided — use the breathing-pulse + commit-bearing block (`.goal-empty-commit` shape on web / desktop, `Animated.View` pulse on mobile). The pulse fills the void as a READY signal, medium-coherent with the body's breathing.
+The pulse signals **"this surface is alive, waiting."** The text tells you what fills it and whether you wait or act. The register is the surface's property; the caption is the substance's content. They compose without one displacing the other.
 
-Goals is the only panel that passes both tests today. The first runtime register that ships with a structurally-voided empty state (e.g. a future "Plans" panel with no defaults) should adopt the same breathing-pulse shape; the second one whose empty register turns out to be voided after all should too. The test is structural, not panel-typed — register-type alone is too coarse.
+**The single carve-out** — structurally non-voided cards-area:
 
-Worked example: Goals' empty register was introduced as a breathing-pulse block in commit `426cfcf9` (2026-05-14 Goals runtime-register migration), then flattened to `.panel-empty-row` for cross-panel uniformity later the same day in `a3873a73`, then restored once it became visible in production that the uniformity argument didn't account for Goals' unique structural shape. The restoration ships across web / desktop / mobile in one pass per the one-pass-delivery doctrine.
+If the cards-area has **inherent sibling content** that always renders regardless of record count (e.g. Sovereign Credentials' Bundle Presentation button + Verify Credential form coexisting with the issued-credentials section), the cards-area is not structurally empty — content is displacing the substrate-alive signal. Use flat `.panel-empty-row` ghost text for the within-section empty caption; the substrate-alive signal is already carried by the sibling CTAs.
+
+This is the _only_ legitimate flat-text case for an empty register. Filtered no-matches and error states use flat too, but those aren't empty registers — they're transient states inside otherwise-populated views.
+
+**What does NOT carve out:**
+
+- "Setup needed" (no relay connected, no sync URL configured) is **not** a separate register. The substrate is still alive, waiting for the user to wire something up. Pulse stays; caption tells the user the action.
+- "Different temporal register" (identity vs runtime) is **not** a separate register. Both inherit the substrate-alive property. Pulse stays; caption adapts to the register's content.
+- "Different protocol primitive" (identity / memory / capability / execution / delegation) is **not** a separate register. Same answer.
+
+**Origin-story history (not the canonical artifact, kept for trail of decisions):**
+
+1. Goals' empty register was introduced as a breathing-pulse block in commit `426cfcf9` (2026-05-14 Goals runtime-register migration).
+2. Flattened to `.panel-empty-row` for cross-panel uniformity later the same day in `a3873a73`.
+3. Restored only on Goals after production-use surfaced the void as a real visual problem.
+4. Initially documented here with a "Goals-only because commit-bearing CTA below" qualifier — over-tight scoping protecting a special case.
+5. Generalized in the first panel-empty-pulse sweep across Conversations / Memories / Agents / Goals / Activity. CSS class family renamed `goal-empty-commit*` → `panel-empty-pulse*`.
+6. The doctrine then carved out a _second_ special case ("setup-needed → flat") that protected Sovereign and Agents Discover from cohesion. Caught again by side-by-side panel review and reverted.
+7. Current state: **one register everywhere**, except the legitimate non-voided carve-out (Sovereign Credentials only). Cohesion-via-doctrine, not cohesion-via-subtraction.
+
+The lesson encoded in this section's history: every time a "doctrine carve-out" is introduced to keep a panel "special" or to honor a category boundary, it breaks family cohesion at the eye level. The doctrine should describe the **universal** property and name the **single** legitimate exception. More than one exception means the doctrine is wrong.
 
 ## How to apply
 

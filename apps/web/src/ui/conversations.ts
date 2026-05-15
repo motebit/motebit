@@ -50,9 +50,21 @@ export function initConversations(
     const conversations = ctx.app.listConversations();
 
     if (conversations.length === 0) {
+      // Universal empty register — substrate-alive breathing pulse.
+      // Doctrine: panel-temporal-registers.md §"Structural-void test."
       const empty = document.createElement("div");
-      empty.className = "panel-empty-row";
-      empty.textContent = "Conversations appear here";
+      empty.className = "panel-empty-pulse";
+      const dot = document.createElement("div");
+      dot.className = "panel-empty-pulse-dot";
+      const title = document.createElement("div");
+      title.className = "panel-empty-pulse-title";
+      title.textContent = "Conversations appear here";
+      const sub = document.createElement("div");
+      sub.className = "panel-empty-pulse-sub";
+      sub.textContent = "as you talk with motebit";
+      empty.appendChild(dot);
+      empty.appendChild(title);
+      empty.appendChild(sub);
       convList.appendChild(empty);
       return;
     }

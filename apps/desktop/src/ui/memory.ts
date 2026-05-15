@@ -425,9 +425,26 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     const filtered = memoryCtrl.filteredView() as MemoryNode[];
 
     if (filtered.length === 0) {
+      // Structurally empty → breathing pulse; filtered → flat row.
+      // Doctrine: panel-temporal-registers.md §"The structural-void test."
       const empty = document.createElement("div");
-      empty.className = "mem-empty";
-      empty.textContent = state.search.trim() ? "No matches" : "No memories yet";
+      if (state.search.trim()) {
+        empty.className = "panel-empty-row";
+        empty.textContent = "No matches";
+      } else {
+        empty.className = "panel-empty-pulse";
+        const dot = document.createElement("div");
+        dot.className = "panel-empty-pulse-dot";
+        const title = document.createElement("div");
+        title.className = "panel-empty-pulse-title";
+        title.textContent = "Memories appear here";
+        const sub = document.createElement("div");
+        sub.className = "panel-empty-pulse-sub";
+        sub.textContent = "as conversations build";
+        empty.appendChild(dot);
+        empty.appendChild(title);
+        empty.appendChild(sub);
+      }
       memoryList.appendChild(empty);
       return;
     }
