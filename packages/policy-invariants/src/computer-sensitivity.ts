@@ -442,7 +442,11 @@ function classifyIrreversibleClick(
 export function classifyComputerAction(action: ComputerAction): ActionClassification {
   if (action.kind === "type") {
     const report = scanText(action.text);
-    if (report.level === "secret" || report.level === "financial" || report.level === "personal") {
+    if (
+      report.level === SensitivityLevel.Secret ||
+      report.level === SensitivityLevel.Financial ||
+      report.level === SensitivityLevel.Personal
+    ) {
       return {
         decision: "require_approval",
         rule: report.matches[0]?.rule ?? `sensitivity.${report.level}`,
@@ -522,18 +526,21 @@ export function classifyScreenshotWithOcr(input: {
 
   for (const token of input.ocrTokens) {
     const report = scanText(token.text);
-    if (report.level === "none") continue;
+    if (report.level === SensitivityLevel.None) continue;
     dominant = maxSensitivity(dominant, report.level);
     for (const match of report.matches) {
       regions.push({ match, x: token.x, y: token.y, w: token.w, h: token.h });
     }
   }
 
-  const blocking = dominant === "secret" || dominant === "financial" || dominant === "medical";
+  const blocking =
+    dominant === SensitivityLevel.Secret ||
+    dominant === SensitivityLevel.Financial ||
+    dominant === SensitivityLevel.Medical;
 
   const projectionKind: string = blocking
     ? "blocked"
-    : dominant === "personal"
+    : dominant === SensitivityLevel.Personal
       ? "personal_flagged"
       : "raw";
 
@@ -541,7 +548,7 @@ export function classifyScreenshotWithOcr(input: {
     level: dominant,
     regions,
     redaction: {
-      applied: dominant !== "none",
+      applied: dominant !== SensitivityLevel.None,
       projection_kind: projectionKind,
       policy_version: COMPUTER_SENSITIVITY_POLICY_VERSION,
       classified_regions_count: regions.length,
