@@ -42,6 +42,15 @@
  */
 
 import type { ComputerAction } from "@motebit/sdk";
+import { maxSensitivity, SensitivityLevel } from "@motebit/protocol";
+
+// Re-export the canonical `SensitivityLevel` from the protocol so
+// existing consumers of this package's type alias (e.g.
+// `packages/runtime/src/perception.ts`'s `type SensitivityLevel as
+// ScanLevel` aliased import) keep their import path. The local
+// re-export is type-only; the enum's runtime presence lives in
+// `@motebit/protocol`, not here.
+export type { SensitivityLevel };
 
 /**
  * Policy version stamped onto every `ComputerRedaction` the classifier
@@ -51,13 +60,12 @@ import type { ComputerAction } from "@motebit/sdk";
  */
 export const COMPUTER_SENSITIVITY_POLICY_VERSION = "v1.0.0";
 
-/**
- * Sensitivity level assigned to matched text. Aligns with the CLAUDE.md
- * foundation-law taxonomy (none/personal/medical/financial/secret).
- * `medical` is reserved for when medical-pattern detection lands — v1
- * never emits it.
- */
-export type SensitivityLevel = "none" | "personal" | "medical" | "financial" | "secret";
+// `SensitivityLevel` is imported + re-exported above (from
+// `@motebit/protocol`). Graduated 2026-05-14 from a local string-
+// union declaration after `check-sensitivity-canonical` (#97) surfaced
+// the duplication. Aligns with the CLAUDE.md foundation-law taxonomy
+// (none/personal/medical/financial/secret). `medical` is reserved
+// for when medical-pattern detection lands — v1 never emits it.
 
 export interface SensitivityMatch {
   /** The rule id that fired — stable identifier for audit logs. */
@@ -237,18 +245,11 @@ export function isValidLuhn(candidate: string): boolean {
   return sum % 10 === 0;
 }
 
-/** Severity ordering for picking the dominant level from matches. */
-const LEVEL_RANK: Record<SensitivityLevel, number> = {
-  none: 0,
-  personal: 1,
-  medical: 2,
-  financial: 3,
-  secret: 4,
-};
-
-function higherLevel(a: SensitivityLevel, b: SensitivityLevel): SensitivityLevel {
-  return LEVEL_RANK[a] >= LEVEL_RANK[b] ? a : b;
-}
+// Severity ordering moved to `@motebit/protocol::rankSensitivity` —
+// the canonical algebra primitive. `maxSensitivity` (imported above)
+// replaces the local `higherLevel`. Graduated 2026-05-14 alongside
+// `check-sensitivity-canonical` (#97); see `sensitivity.ts` §
+// "Graduation history" for the prior local-rank instances.
 
 // ── Text scanner ─────────────────────────────────────────────────────
 
@@ -262,7 +263,7 @@ function higherLevel(a: SensitivityLevel, b: SensitivityLevel): SensitivityLevel
  */
 export function scanText(text: string): TextSensitivityReport {
   if (!text || typeof text !== "string") {
-    return { level: "none", matches: [] };
+    return { level: SensitivityLevel.None, matches: [] };
   }
 
   const matches: SensitivityMatch[] = [];
@@ -284,7 +285,7 @@ export function scanText(text: string): TextSensitivityReport {
       const start = hit.index;
       const end = start + hit[0].length;
       if (overlaps(start, end)) continue;
-      record({ rule, level: "secret", start, end, description });
+      record({ rule, level: SensitivityLevel.Secret, start, end, description });
     }
   }
 
@@ -299,7 +300,7 @@ export function scanText(text: string): TextSensitivityReport {
     if (!isValidLuhn(raw)) continue;
     record({
       rule: "financial.card_number",
-      level: "financial",
+      level: SensitivityLevel.Financial,
       start,
       end,
       description: "Credit/debit card number (Luhn-verified)",
@@ -315,15 +316,15 @@ export function scanText(text: string): TextSensitivityReport {
     if (overlaps(start, end)) continue;
     record({
       rule: "personal.us_ssn",
-      level: "personal",
+      level: SensitivityLevel.Personal,
       start,
       end,
       description: "US Social Security Number",
     });
   }
 
-  let level: SensitivityLevel = "none";
-  for (const m of matches) level = higherLevel(level, m.level);
+  let level: SensitivityLevel = SensitivityLevel.None;
+  for (const m of matches) level = maxSensitivity(level, m.level);
 
   return { level, matches };
 }
@@ -517,12 +518,12 @@ export function classifyScreenshotWithOcr(input: {
   readonly height?: number;
 }): ObservationClassificationResult {
   const regions: ClassifiedRegion[] = [];
-  let dominant: SensitivityLevel = "none";
+  let dominant: SensitivityLevel = SensitivityLevel.None;
 
   for (const token of input.ocrTokens) {
     const report = scanText(token.text);
     if (report.level === "none") continue;
-    dominant = higherLevel(dominant, report.level);
+    dominant = maxSensitivity(dominant, report.level);
     for (const match of report.matches) {
       regions.push({ match, x: token.x, y: token.y, w: token.w, h: token.h });
     }

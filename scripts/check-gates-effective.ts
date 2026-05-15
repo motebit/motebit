@@ -1601,6 +1601,22 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-sensitivity-canonical",
+    proves:
+      'flags the privacy ladder silently regressing — either a sibling-alignment break between the enum + ALL_SENSITIVITY_LEVELS + SENSITIVITY_RANK trio, or a registered consumer dropping a tier reference. Drift class: the most load-bearing closed registry in motebit is the privacy ladder; pre-2026-05-14 it had no `ALL_X` + `isX` + coverage-gate triple (the asymmetry the registry-gate-family audit surfaced). Probe rewrites every `"financial"` literal in `packages/protocol/src/sensitivity.ts` to `"financialish"`; gate must surface the sibling-alignment violation (`level "financial" not found in sensitivity.ts`). byte-identical restoration on cleanup via mutateFile.',
+    perturb: () =>
+      // Strip the `financial` literal from the protocol's sensitivity
+      // file. The gate's sibling-alignment block scans for each
+      // LEVELS_REFERENCE entry as a string literal in sensitivity.ts
+      // (which holds both ALL_SENSITIVITY_LEVELS and SENSITIVITY_RANK);
+      // rewriting `"financial"` to a non-matching token trips the
+      // sibling-alignment violation. TypeScript compilation isn't
+      // affected (the literal is a string, not a type member).
+      mutateFile(`packages/protocol/src/sensitivity.ts`, (src) =>
+        src.replace(/"financial"/g, '"financialish"'),
+      ),
+  },
+  {
     script: "check-panel-registry-coverage",
     proves:
       'flags a panel silently dropped from a surface — the registry-binds-renderer invariant. Drift class: a refactor that removes a panel\'s mount-site from one surface (say, mobile drops `AgentsPanel` from `App.tsx`) while the registry keeps `agents` in `SIDE_RAIL_PANELS` regresses the one-pass-delivery commitment without any compile-time signal. The gate catches the missing fingerprint structurally. Probe rewrites every `AgentsPanel` occurrence in `apps/mobile/src/App.tsx` to `AgentsPanelDisabled`; the gate must surface `does not contain fingerprint "AgentsPanel"` for the mobile mount-site. byte-identical restoration on cleanup via mutateFile.',

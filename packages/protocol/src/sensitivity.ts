@@ -105,3 +105,63 @@ export function maxSensitivity(a: SensitivityLevel, b: SensitivityLevel): Sensit
 export function sensitivityPermits(upper: SensitivityLevel, candidate: SensitivityLevel): boolean {
   return rankSensitivity(candidate) <= rankSensitivity(upper);
 }
+
+// ── Canonical registry tooling ─────────────────────────────────────
+//
+// Closed-registry / structural-lock shape. Same five artifacts as
+// `SuiteId` (`crypto-suite.ts`), `TokenAudience` (`audience.ts`),
+// `ContentArtifactType` (`artifact-type.ts`), `TaskShape`
+// (`routing.ts`):
+//
+//   1. closed type (the `SensitivityLevel` enum in `index.ts`)
+//   2. canonical ordering (`SENSITIVITY_RANK` above)
+//   3. frozen iteration array (`ALL_SENSITIVITY_LEVELS` below)
+//   4. type guard (`isSensitivityLevel` below)
+//   5. drift gate (`check-sensitivity-canonical` per `scripts/`)
+//
+// Pre-this-block, `SensitivityLevel` was the only top-tier closed
+// registry without the iteration + guard pair — the gap surfaced in
+// the registry-gate-family audit on 2026-05-14 (post panels-registry
+// arc). The enum is preserved for back-compat with the ~900
+// pre-existing literal sites; this block adds the missing canonical
+// tooling next to it without converting the enum.
+
+/**
+ * Canonical iteration order over `SensitivityLevel`, frozen. The
+ * single source of truth for "every level" — drift gates,
+ * consumer-coverage scans, exhaustive switches, and the protocol's
+ * registry-coverage gate (`check-sensitivity-canonical`) all
+ * enumerate through this array.
+ *
+ * Ordered low → high to mirror `SENSITIVITY_RANK`: a consumer
+ * iterating in declaration order sees the ladder in the same order
+ * the algebra ranks it. Same shape as `ALL_SUITE_IDS`,
+ * `ALL_TOKEN_AUDIENCES`, `ALL_CONTENT_ARTIFACT_TYPES`,
+ * `ALL_TASK_SHAPES`. Adding a level is intentional protocol-level
+ * work: new enum member + new entry here + new entry in
+ * `SENSITIVITY_RANK` + drift-gate update.
+ *
+ * Values are the enum's string literals (not enum members) to avoid
+ * the init-order cycle the file's `import type` already documents.
+ */
+export const ALL_SENSITIVITY_LEVELS: readonly SensitivityLevel[] = Object.freeze([
+  "none",
+  "personal",
+  "medical",
+  "financial",
+  "secret",
+] as SensitivityLevel[]);
+
+/**
+ * Type guard — narrows `unknown` to `SensitivityLevel`. Drift-gate-
+ * driven literal scanners use this to validate values pulled from
+ * wire-format payloads; consumers that derive sensitivity from
+ * user input call this before dispatching so an unchecked cast is
+ * a fail-open path the type system can't catch.
+ *
+ * Same shape as `isSuiteId`, `isTokenAudience`,
+ * `isContentArtifactType`, `isTaskShape`.
+ */
+export function isSensitivityLevel(value: unknown): value is SensitivityLevel {
+  return typeof value === "string" && (ALL_SENSITIVITY_LEVELS as readonly string[]).includes(value);
+}

@@ -1612,6 +1612,9 @@ importers:
 
   packages/policy-invariants:
     dependencies:
+      '@motebit/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk

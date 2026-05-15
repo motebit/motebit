@@ -94,6 +94,7 @@
     "check-slab-chrome-coverage": "npx tsx scripts/check-slab-chrome-coverage.ts",
     "check-routing-decision-coverage": "npx tsx scripts/check-routing-decision-coverage.ts",
     "check-panel-registry-coverage": "npx tsx scripts/check-panel-registry-coverage.ts",
+    "check-sensitivity-canonical": "npx tsx scripts/check-sensitivity-canonical.ts",
     "check-execution-ledger-receipts-archived": "npx tsx scripts/check-execution-ledger-receipts-archived.ts",
     "check-execution-ledger-inner-receipt-verified": "npx tsx scripts/check-execution-ledger-inner-receipt-verified.ts",
     "check-readme-public-exports": "npx tsx scripts/check-readme-public-exports.ts",

@@ -26,29 +26,15 @@
  */
 
 import { type DropPayload, type DropPayloadKind, SensitivityLevel } from "@motebit/sdk";
-import { scanText, type SensitivityLevel as ScanLevel } from "@motebit/policy-invariants";
+import { scanText } from "@motebit/policy-invariants";
 import type { SlabController } from "./slab-controller.js";
 
-/**
- * Convert the string-union sensitivity level emitted by `scanText`
- * into the protocol's `SensitivityLevel` enum. The string values are
- * identical (`"none" | "personal" | ...`), but TS treats the enum as
- * nominal so the conversion is explicit.
- */
-function toSensitivityEnum(level: ScanLevel): SensitivityLevel {
-  switch (level) {
-    case "none":
-      return SensitivityLevel.None;
-    case "personal":
-      return SensitivityLevel.Personal;
-    case "medical":
-      return SensitivityLevel.Medical;
-    case "financial":
-      return SensitivityLevel.Financial;
-    case "secret":
-      return SensitivityLevel.Secret;
-  }
-}
+// `scanText` returns the protocol's `SensitivityLevel` enum directly
+// since `policy-invariants/computer-sensitivity.ts` graduated to the
+// canonical algebra on 2026-05-14 (drift-defense #97). The prior
+// `toSensitivityEnum` switch existed because the local string union
+// was nominally distinct from the protocol enum; with both unified,
+// the conversion is the identity function and is no longer needed.
 
 /**
  * Bounded preview length when classifying tool results. Tools can
@@ -155,7 +141,7 @@ export function extractClassifiableText(result: unknown): string {
 export function classifyToolResult(result: unknown): SensitivityLevel | undefined {
   const text = extractClassifiableText(result);
   if (text === "") return undefined; // unscanned (binary/empty/unserializable)
-  const level = toSensitivityEnum(scanText(text).level);
+  const level = scanText(text).level;
   return level === SensitivityLevel.None ? undefined : level; // clean → no tag
 }
 
@@ -233,7 +219,7 @@ function defaultUrlHandler(deps: DropDispatcherDeps): DropHandler<"url"> {
     // runtime classifies later if/when it fetches via read_url.
     // Classifying the URL string still catches the rare case (e.g. a
     // signed pre-auth URL containing an embedded secret token).
-    const sensitivity = toSensitivityEnum(scanText(payload.url).level);
+    const sensitivity = scanText(payload.url).level;
     const itemPayload = {
       url: payload.url,
       source: "user-drop" as const,
@@ -267,7 +253,7 @@ function defaultTextHandler(deps: DropDispatcherDeps): DropHandler<"text"> {
     // Items in `shared_gaze` mode contribute their tier to the
     // runtime's effective-sensitivity gate; a user dropping a secret
     // snippet onto motebit while in BYOK mode triggers the gate.
-    const sensitivity = toSensitivityEnum(scanText(payload.text).level);
+    const sensitivity = scanText(payload.text).level;
     const itemPayload = {
       text: payload.text,
       mimeType: payload.mimeType ?? "text/plain",

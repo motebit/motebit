@@ -2606,7 +2606,13 @@ export { resolveDropTarget } from "./perception.js";
 // composition: every consumer derives comparison decisions through
 // `rankSensitivity` so a future tier insertion remains a one-file
 // change at the protocol layer. Doctrine: see ./sensitivity.ts header.
-export { rankSensitivity, maxSensitivity, sensitivityPermits } from "./sensitivity.js";
+export {
+  rankSensitivity,
+  maxSensitivity,
+  sensitivityPermits,
+  ALL_SENSITIVITY_LEVELS,
+  isSensitivityLevel,
+} from "./sensitivity.js";
 
 // Money primitives — interop law for integer-unit accounting. Pure
 // algebra over numbers; the two reference precisions (micro-units for
