@@ -107,7 +107,7 @@ function makeDeps(appOverrides?: Record<string, unknown>): SlashCommandDeps & {
     showToast: (msg: string) => toasts.push(msg),
     setMessages: vi.fn(),
     setCurrentModel: vi.fn(),
-    setShowConversationPanel: vi.fn(),
+    setShowConversationsPanel: vi.fn(),
     setShowMemoryPanel: vi.fn(),
     setShowGoalsPanel: vi.fn(),
     setShowSettings: vi.fn(),
@@ -127,7 +127,7 @@ describe("runSlashCommand navigation commands", () => {
   it("/conversations opens conversation panel", () => {
     const deps = makeDeps();
     runSlashCommand("conversations", "", deps);
-    expect(deps.setShowConversationPanel).toHaveBeenCalledWith(true);
+    expect(deps.setShowConversationsPanel).toHaveBeenCalledWith(true);
   });
 
   it("/memories opens memory panel", () => {

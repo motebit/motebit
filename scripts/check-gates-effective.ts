@@ -1601,6 +1601,21 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-panel-registry-coverage",
+    proves:
+      'flags a panel silently dropped from a surface — the registry-binds-renderer invariant. Drift class: a refactor that removes a panel\'s mount-site from one surface (say, mobile drops `AgentsPanel` from `App.tsx`) while the registry keeps `agents` in `SIDE_RAIL_PANELS` regresses the one-pass-delivery commitment without any compile-time signal. The gate catches the missing fingerprint structurally. Probe rewrites every `AgentsPanel` occurrence in `apps/mobile/src/App.tsx` to `AgentsPanelDisabled`; the gate must surface `does not contain fingerprint "AgentsPanel"` for the mobile mount-site. byte-identical restoration on cleanup via mutateFile.',
+    perturb: () =>
+      // Rename the AgentsPanel component import + JSX in App.tsx. The
+      // gate scans for the literal "AgentsPanel" in the mount-site
+      // file; rewriting it to a non-matching identifier strips the
+      // mount-site fingerprint, triggering the missing-fingerprint
+      // violation. TypeScript compilation isn't affected (the gate
+      // runs against source text, not the type system).
+      mutateFile(`apps/mobile/src/App.tsx`, (src) =>
+        src.replace(/AgentsPanel/g, "AgentsPanelDisabled"),
+      ),
+  },
+  {
     script: "check-execution-ledger-receipts-archived",
     proves:
       "flags the execution-ledger reconstruction silently regressing back to v1.0 summary-only semantics. Drift class: the operator-trust gap — without `signed_receipts` sourced from the byte-identical archive, verifiers cannot check inner motebit signatures and the relay's word becomes the trust floor.",

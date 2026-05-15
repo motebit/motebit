@@ -19,7 +19,7 @@ function formatTimeAgo(ts: number): string {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
-interface ConversationPanelProps {
+interface ConversationsPanelProps {
   visible: boolean;
   app: MobileApp;
   currentConversationId: string | null;
@@ -28,14 +28,14 @@ interface ConversationPanelProps {
   onClose: () => void;
 }
 
-export function ConversationPanel({
+export function ConversationsPanel({
   visible,
   app,
   currentConversationId,
   onLoad,
   onNew,
   onClose,
-}: ConversationPanelProps): React.ReactElement {
+}: ConversationsPanelProps): React.ReactElement {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);

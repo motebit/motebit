@@ -55,7 +55,7 @@ import { SovereignPanel } from "./components/SovereignPanel";
 import { AgentsPanel } from "./components/AgentsPanel";
 import { CapabilitiesPanel } from "./components/CapabilitiesPanel";
 import { ActivityPanel } from "./components/ActivityPanel";
-import { ConversationPanel } from "./components/ConversationPanel";
+import { ConversationsPanel } from "./components/ConversationsPanel";
 import { VoiceIndicator } from "./components/VoiceIndicator";
 import { GoalsPanel } from "./components/GoalsPanel";
 import { Toast } from "./components/Toast";
@@ -123,7 +123,7 @@ export default function App(): React.ReactElement {
 
   // Memory, conversation & goals panel state
   const [showMemoryPanel, setShowMemoryPanel] = useState(false);
-  const [showConversationPanel, setShowConversationPanel] = useState(false);
+  const [showConversationsPanel, setShowConversationsPanel] = useState(false);
   const [showGoalsPanel, setShowGoalsPanel] = useState(false);
 
   // Slab chrome — task-step narration register for the
@@ -482,13 +482,13 @@ export default function App(): React.ReactElement {
       timestamp: Date.now(),
     }));
     setMessages(restored);
-    setShowConversationPanel(false);
+    setShowConversationsPanel(false);
   }, []);
 
   const handleNewConversation = useCallback(() => {
     app.current.startNewConversation();
     setMessages([]);
-    setShowConversationPanel(false);
+    setShowConversationsPanel(false);
   }, []);
 
   // === System message helper (used by voice + goals) ===
@@ -611,7 +611,7 @@ export default function App(): React.ReactElement {
         showToast,
         setMessages,
         setCurrentModel,
-        setShowConversationPanel,
+        setShowConversationsPanel,
         setShowMemoryPanel,
         setShowGoalsPanel,
         setShowSettings,
@@ -911,7 +911,7 @@ export default function App(): React.ReactElement {
           <View style={ds.topLeftButtons}>
             <TouchableOpacity
               style={ds.overlayButton}
-              onPress={() => setShowConversationPanel(true)}
+              onPress={() => setShowConversationsPanel(true)}
               activeOpacity={0.7}
             >
               <Feather name="message-square" size={18} color={themeColors.textMuted} />
@@ -1188,13 +1188,13 @@ export default function App(): React.ReactElement {
           onClose={() => setShowActivityPanel(false)}
         />
 
-        <ConversationPanel
-          visible={showConversationPanel}
+        <ConversationsPanel
+          visible={showConversationsPanel}
           app={app.current}
           currentConversationId={app.current.currentConversationId}
           onLoad={handleLoadConversation}
           onNew={handleNewConversation}
-          onClose={() => setShowConversationPanel(false)}
+          onClose={() => setShowConversationsPanel(false)}
         />
 
         <GoalsPanel

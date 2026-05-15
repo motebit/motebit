@@ -50,7 +50,7 @@ export interface SlashCommandDeps {
   showToast: (msg: string) => void;
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   setCurrentModel: (model: string) => void;
-  setShowConversationPanel: (show: boolean) => void;
+  setShowConversationsPanel: (show: boolean) => void;
   setShowMemoryPanel: (show: boolean) => void;
   setShowGoalsPanel: (show: boolean) => void;
   setShowSettings: (show: boolean) => void;
@@ -65,7 +65,7 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
     showToast,
     setMessages,
     setCurrentModel,
-    setShowConversationPanel,
+    setShowConversationsPanel,
     setShowMemoryPanel,
     setShowGoalsPanel,
     setShowSettings,
@@ -88,7 +88,7 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
       }
       break;
     case "conversations":
-      setShowConversationPanel(true);
+      setShowConversationsPanel(true);
       break;
     case "new":
       a.startNewConversation();
