@@ -111,6 +111,16 @@ function createWebAdapter(ctx: WebContext): SovereignFetchAdapter {
         ownerId: local.ownerId,
       };
     },
+    // Local-first Ledger tab support — reads executed goals from the
+    // GoalsRunner state (the local source of truth). Controller merges
+    // with relay-fetched goals; local wins on goal_id collision (signed
+    // locally is canonical, relay is mirror). Sync underneath; wrapped
+    // in Promise.resolve to match the adapter's Promise return type
+    // (the future ExecutionReceipt-aggregation arc will become genuinely
+    // async — verifying signatures takes IO).
+    // Doctrine: docs/doctrine/receipts-unified.md (the motebit's own
+    // signed receipts are the source of execution proof-of-work).
+    getLocalLedger: () => Promise.resolve(ctx.app.getLocalLedger()),
   };
 }
 

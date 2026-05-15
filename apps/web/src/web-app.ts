@@ -1945,6 +1945,41 @@ export class WebApp {
   }
 
   /**
+   * Locally-known goal execution rows — the Sovereign Ledger's
+   * substrate-alive source of truth. Reads from the GoalsRunner state
+   * (the local source of scheduled goals + their fire timestamps),
+   * filters to goals with execution history (terminal status OR
+   * `last_run_at` set), and maps to the canonical `GoalRow` wire
+   * shape. The controller merges this with relay-fetched goals; local
+   * wins on goal_id collision because local is the signed-locally
+   * truth, relay is a mirror.
+   *
+   * Future arc swaps this for per-fire signed ExecutionReceipt
+   * aggregation via `replayGoal()` from packages/runtime/src/
+   * execution-ledger.ts — each fire becomes a signature-verified row.
+   * Contract-preserving swap (same `GoalRow` shape); only deepens the
+   * source of truth. Doctrine: docs/doctrine/receipts-unified.md.
+   */
+  getLocalLedger(): Array<{
+    goal_id: string;
+    prompt: string;
+    status: string;
+    created_at: number;
+  }> {
+    const runner = this._goalsRunner;
+    if (!runner) return [];
+    const { goals } = runner.getState();
+    return goals
+      .filter((g) => g.last_run_at != null || g.status === "completed" || g.status === "failed")
+      .map((g) => ({
+        goal_id: g.goal_id,
+        prompt: g.prompt,
+        status: String(g.status),
+        created_at: g.created_at ?? g.last_run_at ?? Date.now(),
+      }));
+  }
+
+  /**
    * Query the local event store for this motebit's bootstrap
    * IdentityCreated event. Returns the locally-known identity snapshot
    * (motebit_id, created_at, current public key, owner_id) for the

@@ -148,6 +148,23 @@ export interface SovereignFetchAdapter {
    * delivery is acceptable because the contract is opt-in.
    */
   getLocalIdentity?(): Promise<LocalIdentitySnapshot | null>;
+  /**
+   * Optional local-ledger accessor. Returns the locally-known goal
+   * execution rows — goals the motebit has executed at least once, plus
+   * goals in terminal states (completed / failed). Surfaces that
+   * implement this expose execution proof-of-work without requiring a
+   * relay round-trip; the controller merges local + relay (dedup by
+   * goal_id, local wins) into the unified state.goals shape.
+   *
+   * Tonight's implementation reads from GoalsRunner state (the local
+   * source of truth for scheduled goals across mode/status/last-run).
+   * Future arc swaps in per-fire signed ExecutionReceipt aggregation
+   * via `replayGoal()` from packages/runtime/src/execution-ledger.ts —
+   * each fire becomes a row, signature-verified locally before display.
+   * That swap is contract-preserving: the GoalRow shape stays; only
+   * the source of truth deepens. Doctrine: receipts-unified.md.
+   */
+  getLocalLedger?(): Promise<GoalRow[]>;
 }
 
 // ── State ─────────────────────────────────────────────────────────────
@@ -318,15 +335,45 @@ export function createSovereignController(adapter: SovereignFetchAdapter): Sover
   // ── Ledger ─────────────────────────────────────────────────────────
 
   async function fetchGoals(): Promise<GoalRow[]> {
-    if (!adapter.syncUrl || !adapter.motebitId) return [];
-    try {
-      const res = await adapter.fetch(`/api/v1/goals/${adapter.motebitId}`);
-      if (!res.ok) return [];
-      const data = (await res.json()) as { goals?: GoalRow[] };
-      return (data.goals ?? []).filter((g) => g.status === "completed" || g.status === "failed");
-    } catch {
-      return [];
+    // Local-first per protocol-primacy: query the local ledger source
+    // first (always available, no relay dependency), then merge with
+    // relay-fetched goals (dedup by goal_id, local wins as the
+    // signed-locally truth). Surfaces that haven't implemented
+    // `getLocalLedger` yet contribute an empty local list — no
+    // regression on relay-only behavior. Doctrine:
+    // docs/doctrine/receipts-unified.md (the canonical source of
+    // proof-of-work is the motebit's locally-signed receipts).
+    const local = adapter.getLocalLedger
+      ? await (async () => {
+          try {
+            return await adapter.getLocalLedger!();
+          } catch {
+            return [];
+          }
+        })()
+      : [];
+
+    let relay: GoalRow[] = [];
+    if (adapter.syncUrl && adapter.motebitId) {
+      try {
+        const res = await adapter.fetch(`/api/v1/goals/${adapter.motebitId}`);
+        if (res.ok) {
+          const data = (await res.json()) as { goals?: GoalRow[] };
+          relay = (data.goals ?? []).filter(
+            (g) => g.status === "completed" || g.status === "failed",
+          );
+        }
+      } catch {
+        // Relay failure is non-fatal — local goals still render.
+      }
     }
+
+    // Merge with goal_id dedup; local wins (it's the signed-locally
+    // truth source; relay is a mirror).
+    const merged = new Map<string, GoalRow>();
+    for (const g of relay) merged.set(g.goal_id, g);
+    for (const g of local) merged.set(g.goal_id, g);
+    return Array.from(merged.values()).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
   }
 
   async function loadLedgerDetail(goalId: string): Promise<LedgerManifest | null> {

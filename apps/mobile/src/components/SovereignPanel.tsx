@@ -121,6 +121,7 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
     goals: [],
     ledgerDetails: new Map(),
     succession: null,
+    localIdentity: null,
     presentation: null,
     verifyResult: null,
     loading: false,
