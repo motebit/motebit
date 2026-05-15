@@ -39,6 +39,7 @@ function makeGoalStore() {
     incrementFailures: vi.fn((id: string) => failures.set(id, (failures.get(id) ?? 0) + 1)),
     setStatus: vi.fn((id: string, status: string) => statuses.set(id, status)),
     insertOutcome: vi.fn((o: unknown) => outcomes.push(o)),
+    getSpentTokens: vi.fn((_id: string) => 0),
   };
 }
 
@@ -309,5 +310,191 @@ describe("MobileGoalScheduler.resumeGoalAfterApproval", () => {
     const sched = new MobileGoalScheduler(makeDeps());
     const gen = sched.resumeGoalAfterApproval(true);
     await expect(gen.next()).rejects.toThrow(/No pending/);
+  });
+});
+
+describe("MobileGoalScheduler budget envelope", () => {
+  it("skips fire and flips status to budget_exhausted when spent >= cap (pre-fire gate)", async () => {
+    const deps = makeDeps();
+    deps._goalStore.setActive([
+      {
+        goal_id: "g-cap",
+        prompt: "x",
+        mode: "recurring",
+        interval_ms: 1000,
+        last_run_at: null,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        budget_tokens: 1000,
+      } as any,
+    ]);
+    deps._goalStore.getSpentTokens = vi.fn(() => 1500);
+    const sched = new MobileGoalScheduler(deps);
+    sched.start();
+    await vi.advanceTimersByTimeAsync(6000);
+    sched.stop();
+    await vi.runAllTimersAsync().catch(() => {});
+    expect(deps._goalStore.setStatus).toHaveBeenCalledWith("g-cap", "budget_exhausted");
+    expect(deps._goalStore.insertOutcome).not.toHaveBeenCalled();
+  });
+
+  it("flips status to budget_exhausted post-fire when this run crosses the cap", async () => {
+    const deps = makeDeps();
+    deps._goalStore.setActive([
+      {
+        goal_id: "g-cross",
+        prompt: "x",
+        mode: "recurring",
+        interval_ms: 1000,
+        last_run_at: null,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        budget_tokens: 1000,
+      } as any,
+    ]);
+    deps._goalStore.getSpentTokens = vi
+      .fn()
+      .mockReturnValueOnce(500) // pre-fire: under cap → proceed
+      .mockReturnValueOnce(1200); // post-fire: crossed → flip
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (deps._runtime as any).sendMessageStreaming = vi.fn(async function* () {
+      yield { type: "text", text: "done" };
+      yield { type: "result", result: { totalTokens: 700 } };
+    });
+    const sched = new MobileGoalScheduler(deps);
+    sched.start();
+    await vi.advanceTimersByTimeAsync(6000);
+    sched.stop();
+    await vi.runAllTimersAsync().catch(() => {});
+    expect(deps._goalStore.insertOutcome).toHaveBeenCalled();
+    expect(deps._goalStore.setStatus).toHaveBeenCalledWith("g-cross", "budget_exhausted");
+    // Outcome row carries the per-fire token count from the runtime result chunk
+    const inserted = deps._goalStore.outcomes[0] as { tokens_used: number | null };
+    expect(inserted.tokens_used).toBe(700);
+  });
+});
+
+describe("MobileGoalScheduler executeSingleTurnGoal context", () => {
+  it("renders all three outcome-history branches (failure-with-error / summary-present / summary-absent)", async () => {
+    const deps = makeDeps();
+    const now = Date.now();
+    deps._goalStore.getRecentOutcomes = vi.fn(() => [
+      {
+        ran_at: now - 60_000,
+        status: "completed",
+        summary: "found 3 results",
+        error_message: null,
+      },
+      { ran_at: now - 3_600_000, status: "failed", summary: null, error_message: "timeout" },
+      { ran_at: now - 86_400_000, status: "completed", summary: "", error_message: null },
+    ]);
+    deps._goalStore.setActive([
+      {
+        goal_id: "g-ctx",
+        prompt: "research X",
+        mode: "recurring",
+        interval_ms: 1000,
+        last_run_at: null,
+      },
+    ]);
+    let capturedContext = "";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (deps._runtime as any).sendMessageStreaming = vi.fn(async function* (ctx: string) {
+      capturedContext = ctx;
+      yield { type: "text", text: "ok" };
+    });
+    const sched = new MobileGoalScheduler(deps);
+    sched.start();
+    await vi.advanceTimersByTimeAsync(6000);
+    sched.stop();
+    await vi.runAllTimersAsync().catch(() => {});
+    expect(capturedContext).toContain("Previous executions");
+    // Branch 1: failed + error_message non-empty
+    expect(capturedContext).toMatch(/failed — \[error: timeout\]/);
+    // Branch 2: summary non-empty
+    expect(capturedContext).toContain('completed — "found 3 results"');
+    // Branch 3: else (summary empty/null, not failed) — no quoted summary, no error tag
+    expect(capturedContext).toMatch(/d ago: completed(?!\s+—)/);
+  });
+});
+
+describe("MobileGoalScheduler signed artifact manifest", () => {
+  it("records signer-returned manifest as JSON in signed_manifest", async () => {
+    const deps = makeDeps();
+    const manifest = { producer: "did:key:motebit:test", type: "goal-result" };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (deps._runtime as any).signGoalArtifact = vi.fn(async () => manifest);
+    deps._goalStore.setActive([
+      {
+        goal_id: "g-sign",
+        prompt: "x",
+        mode: "recurring",
+        interval_ms: 1000,
+        last_run_at: null,
+      },
+    ]);
+    const sched = new MobileGoalScheduler(deps);
+    sched.start();
+    await vi.advanceTimersByTimeAsync(6000);
+    sched.stop();
+    await vi.runAllTimersAsync().catch(() => {});
+    const inserted = deps._goalStore.outcomes[0] as { signed_manifest: string | null };
+    expect(inserted.signed_manifest).toBe(JSON.stringify(manifest));
+  });
+
+  it("records null signed_manifest when signer returns null (calm-software degradation)", async () => {
+    const deps = makeDeps();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (deps._runtime as any).signGoalArtifact = vi.fn(async () => null);
+    deps._goalStore.setActive([
+      {
+        goal_id: "g-nosign",
+        prompt: "x",
+        mode: "recurring",
+        interval_ms: 1000,
+        last_run_at: null,
+      },
+    ]);
+    const sched = new MobileGoalScheduler(deps);
+    sched.start();
+    await vi.advanceTimersByTimeAsync(6000);
+    sched.stop();
+    await vi.runAllTimersAsync().catch(() => {});
+    const inserted = deps._goalStore.outcomes[0] as { signed_manifest: string | null };
+    expect(inserted.signed_manifest).toBeNull();
+  });
+});
+
+describe("MobileGoalScheduler finishGoalFailure error swallowing", () => {
+  it("swallows insertOutcome + incrementFailures throws (non-fatal) and still fires completion event", async () => {
+    const deps = makeDeps();
+    deps._goalStore.insertOutcome = vi.fn(() => {
+      throw new Error("db locked");
+    });
+    deps._goalStore.incrementFailures = vi.fn(() => {
+      throw new Error("db locked");
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (deps._runtime as any).sendMessageStreaming = vi.fn(async function* () {
+      throw new Error("upstream provider down");
+      // eslint-disable-next-line no-unreachable
+      yield { type: "text", text: "never" };
+    });
+    deps._goalStore.setActive([
+      {
+        goal_id: "g-fail",
+        prompt: "x",
+        mode: "recurring",
+        interval_ms: 1000,
+        last_run_at: null,
+      },
+    ]);
+    const completeEvents: Array<{ status: string }> = [];
+    const sched = new MobileGoalScheduler(deps);
+    sched.onGoalComplete((e) => completeEvents.push(e));
+    sched.start();
+    await vi.advanceTimersByTimeAsync(6000);
+    sched.stop();
+    await vi.runAllTimersAsync().catch(() => {});
+    expect(completeEvents.length).toBe(1);
+    expect(completeEvents[0]?.status).toBe("failed");
   });
 });
