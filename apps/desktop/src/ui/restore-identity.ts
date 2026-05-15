@@ -195,15 +195,15 @@ export function initRestoreIdentity(ctx: DesktopContext): RestoreIdentityAPI {
       void file.text().then(async (content) => {
         const result = await ctx.app.importIdentityFile(content);
         if (!result.valid) {
-          errorEl!.textContent = `Could not import — ${result.reason}`;
+          errorEl.textContent = `Could not import — ${result.reason}`;
           return;
         }
         state.metadata = result.metadata;
         state.originalContent = content;
         renderPreview(result.metadata);
-        stepFile!.style.display = "none";
-        stepPreview!.style.display = "";
-        seedInput!.focus();
+        stepFile.style.display = "none";
+        stepPreview.style.display = "";
+        seedInput.focus();
       });
     });
     input.click();
@@ -270,11 +270,11 @@ export function initRestoreIdentity(ctx: DesktopContext): RestoreIdentityAPI {
     const config = ctx.getConfig();
     const invoke = config?.invoke;
     if (invoke == null) {
-      errorEl!.textContent = "Restore unavailable — Tauri runtime not ready";
+      errorEl.textContent = "Restore unavailable — Tauri runtime not ready";
       return;
     }
-    replaceBtn!.disabled = true;
-    errorEl!.textContent = "";
+    replaceBtn.disabled = true;
+    errorEl.textContent = "";
     void ctx.app
       .restoreIdentity(invoke, {
         privateKeyHex: state.derivedPrivateKeyHex,
@@ -286,13 +286,13 @@ export function initRestoreIdentity(ctx: DesktopContext): RestoreIdentityAPI {
         if (result.ok) {
           window.location.reload();
         } else {
-          errorEl!.textContent = `Restore failed — ${result.reason}`;
+          errorEl.textContent = `Restore failed — ${result.reason}`;
           evaluateConfirm();
         }
       })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        errorEl!.textContent = `Restore failed — ${msg}`;
+        errorEl.textContent = `Restore failed — ${msg}`;
         evaluateConfirm();
       });
   });
@@ -301,7 +301,7 @@ export function initRestoreIdentity(ctx: DesktopContext): RestoreIdentityAPI {
   // → advance to preview. No metadata-side guard (the seed IS the
   // authority); the preview banner warns the user that a new motebit_id
   // is being assigned.
-  async function evaluateSeedOnly(): Promise<void> {
+  function evaluateSeedOnly(): void {
     const seedRaw = seedOnlyInput!.value.trim();
     seedOnlyNext!.disabled = true;
     if (seedRaw === "") {
@@ -327,11 +327,11 @@ export function initRestoreIdentity(ctx: DesktopContext): RestoreIdentityAPI {
   seedOnlyInput.addEventListener("input", () => {
     if (seedOnlyDebounce) clearTimeout(seedOnlyDebounce);
     seedOnlyDebounce = setTimeout(() => {
-      void evaluateSeedOnly();
+      evaluateSeedOnly();
     }, 150);
   });
   seedOnlyNext.addEventListener("click", () => {
-    const seedRaw = seedOnlyInput!.value.trim();
+    const seedRaw = seedOnlyInput.value.trim();
     if (seedRaw.length !== 64 || !/^[0-9a-fA-F]+$/.test(seedRaw)) return;
     void (async () => {
       try {
@@ -344,15 +344,15 @@ export function initRestoreIdentity(ctx: DesktopContext): RestoreIdentityAPI {
         state.originalContent = null;
         state.derivedPrivateKeyHex = seedRaw;
         renderPreview(synthesized);
-        stepSeedOnly!.style.display = "none";
-        stepPreview!.style.display = "";
-        seedFieldGroup!.style.display = "none";
-        confirmInput!.focus();
+        stepSeedOnly.style.display = "none";
+        stepPreview.style.display = "";
+        seedFieldGroup.style.display = "none";
+        confirmInput.focus();
         evaluateConfirm();
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        seedOnlyStatus!.textContent = `Could not derive key — ${msg}`;
-        seedOnlyStatus!.className = "restore-status err";
+        seedOnlyStatus.textContent = `Could not derive key — ${msg}`;
+        seedOnlyStatus.className = "restore-status err";
       }
     })();
   });

@@ -214,15 +214,15 @@ export function initRestoreIdentity(ctx: WebContext): RestoreIdentityAPI {
       void file.text().then(async (content) => {
         const result = await ctx.app.importMotebitMd(content);
         if (!result.valid) {
-          errorEl!.textContent = `Could not import — ${result.reason}`;
+          errorEl.textContent = `Could not import — ${result.reason}`;
           return;
         }
         state.metadata = result.metadata;
         state.originalContent = content;
         renderPreview(result.metadata);
-        stepFile!.style.display = "none";
-        stepPreview!.style.display = "";
-        seedInput!.focus();
+        stepFile.style.display = "none";
+        stepPreview.style.display = "";
+        seedInput.focus();
       });
     });
     input.click();
@@ -286,8 +286,8 @@ export function initRestoreIdentity(ctx: WebContext): RestoreIdentityAPI {
 
   replaceBtn.addEventListener("click", () => {
     if (state.metadata === null || state.derivedPrivateKeyHex === null) return;
-    replaceBtn!.disabled = true;
-    errorEl!.textContent = "";
+    replaceBtn.disabled = true;
+    errorEl.textContent = "";
     void ctx.app
       .restoreIdentity({
         privateKeyHex: state.derivedPrivateKeyHex,
@@ -299,13 +299,13 @@ export function initRestoreIdentity(ctx: WebContext): RestoreIdentityAPI {
         if (result.ok) {
           window.location.reload();
         } else {
-          errorEl!.textContent = `Restore failed — ${result.reason}`;
+          errorEl.textContent = `Restore failed — ${result.reason}`;
           evaluateConfirm();
         }
       })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        errorEl!.textContent = `Restore failed — ${msg}`;
+        errorEl.textContent = `Restore failed — ${msg}`;
         evaluateConfirm();
       });
   });
@@ -314,7 +314,7 @@ export function initRestoreIdentity(ctx: WebContext): RestoreIdentityAPI {
   // → advance to preview. No metadata-side guard (the seed IS the
   // authority); the preview banner warns the user that a new motebit_id
   // is being assigned.
-  async function evaluateSeedOnly(): Promise<void> {
+  function evaluateSeedOnly(): void {
     const seedRaw = seedOnlyInput!.value.trim();
     seedOnlyNext!.disabled = true;
     if (seedRaw === "") {
@@ -340,11 +340,11 @@ export function initRestoreIdentity(ctx: WebContext): RestoreIdentityAPI {
   seedOnlyInput.addEventListener("input", () => {
     if (seedOnlyDebounce) clearTimeout(seedOnlyDebounce);
     seedOnlyDebounce = setTimeout(() => {
-      void evaluateSeedOnly();
+      evaluateSeedOnly();
     }, 150);
   });
   seedOnlyNext.addEventListener("click", () => {
-    const seedRaw = seedOnlyInput!.value.trim();
+    const seedRaw = seedOnlyInput.value.trim();
     if (seedRaw.length !== 64 || !/^[0-9a-fA-F]+$/.test(seedRaw)) return;
     void (async () => {
       try {
@@ -357,17 +357,17 @@ export function initRestoreIdentity(ctx: WebContext): RestoreIdentityAPI {
         state.originalContent = null;
         state.derivedPrivateKeyHex = seedRaw;
         renderPreview(synthesized);
-        stepSeedOnly!.style.display = "none";
-        stepPreview!.style.display = "";
+        stepSeedOnly.style.display = "none";
+        stepPreview.style.display = "";
         // In seed-only mode the seed has already been collected upstream;
         // hide the preview-step's seed input so we don't re-ask for it.
-        seedFieldGroup!.style.display = "none";
-        confirmInput!.focus();
+        seedFieldGroup.style.display = "none";
+        confirmInput.focus();
         evaluateConfirm();
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        seedOnlyStatus!.textContent = `Could not derive key — ${msg}`;
-        seedOnlyStatus!.className = "restore-status err";
+        seedOnlyStatus.textContent = `Could not derive key — ${msg}`;
+        seedOnlyStatus.className = "restore-status err";
       }
     })();
   });
