@@ -36,7 +36,9 @@ export default defineMotebitTest({
     // are tested directly; everything else is platform surface.
     "src/ui/activity.ts",
     "src/ui/agents.ts",
+    "src/ui/capabilities.ts",
     "src/ui/chat.ts",
+    "src/ui/mcp-connections.ts",
     // slab-items.ts is a ~1700-line DOM rendering module: iframes,
     // canvas, gesture handlers, CSS2DObject mounts. Exercised
     // end-to-end via render-engine's slab.test.ts (the SlabManager
@@ -47,6 +49,7 @@ export default defineMotebitTest({
     "src/ui/color-picker.ts",
     "src/ui/config.ts",
     "src/ui/conversations.ts",
+    "src/ui/drop.ts",
     "src/ui/focus.ts",
     "src/ui/goals.ts",
     "src/ui/keyboard.ts",
