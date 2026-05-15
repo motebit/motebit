@@ -15,6 +15,7 @@ export {
   type LedgerTimelineEvent,
   type SuccessionResponse,
   type KeySuccessionEntry,
+  type LocalIdentitySnapshot,
 } from "./sovereign/controller";
 
 export {

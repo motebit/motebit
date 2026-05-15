@@ -94,6 +94,23 @@ function createWebAdapter(ctx: WebContext): SovereignFetchAdapter {
         issued_at: vc.validFrom != null ? new Date(vc.validFrom).getTime() : Date.now(),
       })) as CredentialEntry[];
     },
+    // Local-first Identity tab support — reads the bootstrap
+    // IdentityCreated event from the local event store. Closes the
+    // protocol-primacy audit gap for the Identity tab: a user without
+    // a relay can now see "who they are, when they were born, what key
+    // they currently sign with" without any relay call. Relay-fetched
+    // succession history (cross-device key rotations) appends on top
+    // when present. Doctrine: docs/doctrine/protocol-primacy.md.
+    getLocalIdentity: async () => {
+      const local = await ctx.app.getLocalIdentity();
+      if (!local) return null;
+      return {
+        motebitId: local.motebitId,
+        createdAt: local.createdAt,
+        publicKeyHex: local.publicKeyHex,
+        ownerId: local.ownerId,
+      };
+    },
   };
 }
 
@@ -720,22 +737,70 @@ function renderSuccession(
   successionContent.innerHTML = "";
   successionEmpty.style.display = "none";
 
-  // Local-first per protocol-primacy: state.succession is currently
-  // populated via relay-only fetchSuccession. A proper local-first
-  // fix shows the bootstrap IdentityCreated event from the local
-  // event store as the always-present "Born: motebit_id at
-  // timestamp" entry — deferred to the local-identity-event arc
-  // that adds a getLocalIdentity() adapter accessor.
-  //
-  // Two cases produce `!data`: (a) no relay configured so fetch was
-  // never attempted, (b) relay configured but fetch failed. They
-  // surface differently — (a) is calm empty register, (b) is
-  // recoverable error with Retry affordance. The hasRelay gate here
-  // is NOT denying local data (there is none yet); it's choosing
-  // between two non-data states.
+  // Local-first per protocol-primacy: render the bootstrap-event
+  // identity hero card FIRST, regardless of relay state. Relay-fetched
+  // succession history (cross-device key rotations) appends on top
+  // when present. A user without a relay still sees their own identity
+  // (who they are, when they were born, what key they sign with) from
+  // second zero. Doctrine: docs/doctrine/protocol-primacy.md.
+  if (state.localIdentity) {
+    const localHero = document.createElement("div");
+    localHero.className = "sov-hero-card";
+
+    const lhBody = document.createElement("div");
+    lhBody.className = "sov-hero-body";
+
+    const lhLabel = document.createElement("div");
+    lhLabel.className = "sov-hero-label";
+    lhLabel.textContent = "Current identity";
+    lhBody.appendChild(lhLabel);
+
+    const lhId = document.createElement("div");
+    lhId.className = "sov-hero-value";
+    lhId.style.cssText = "font-family:Menlo,monospace;font-size:11px;word-break:break-all;";
+    lhId.textContent = state.localIdentity.motebitId;
+    lhBody.appendChild(lhId);
+
+    const lhSub = document.createElement("div");
+    lhSub.className = "sov-hero-sub";
+    lhSub.style.cssText = "font-size:11px;color:var(--text-muted);margin-top:4px;";
+    const born = new Date(state.localIdentity.createdAt);
+    lhSub.textContent = `Born ${born.toLocaleDateString()} · ${born.toLocaleTimeString()}`;
+    lhBody.appendChild(lhSub);
+
+    const lhKey = document.createElement("div");
+    lhKey.style.cssText =
+      "font-size:10px;color:var(--text-ghost);font-family:Menlo,monospace;margin-top:2px;word-break:break-all;";
+    lhKey.textContent = `pubkey: ${state.localIdentity.publicKeyHex.slice(0, 32)}…`;
+    lhBody.appendChild(lhKey);
+
+    localHero.appendChild(lhBody);
+    successionContent.appendChild(localHero);
+  }
+
+  // If we have the local identity AND no relay-fetched succession data,
+  // we're done — the hero card is the meaningful render. Skip the
+  // error/empty branches that follow (they're for the relay-succession
+  // history path, which is augmentation, not gate).
   const data = state.succession;
 
+  if (!data && state.localIdentity) {
+    // Local identity rendered above; relay succession history just isn't
+    // available (no relay or fetch hasn't completed). Add a calm hint at
+    // the bottom that explains what relay-fetched data would augment.
+    const hint = document.createElement("div");
+    hint.className = "panel-empty-row";
+    hint.style.cssText = "font-size:11px;color:var(--text-ghost);margin-top:12px;";
+    hint.textContent = hasRelay
+      ? "Key rotations appear here as your identity transitions across devices"
+      : "Connect a relay to see cross-device succession history";
+    successionContent.appendChild(hint);
+    return;
+  }
+
   if (!data && !hasRelay) {
+    // No local identity (older surfaces / event store unavailable) and
+    // no relay — the universal empty-pulse register.
     setEmptyPulse(
       successionEmpty,
       "Key rotations appear here",
@@ -744,10 +809,9 @@ function renderSuccession(
     return;
   }
 
-  // Error register — fetch failed (relay configured but no data).
-  // Distinct from empty by presenting a Retry affordance. Empty
-  // registers are calm "this slot is ready" states; errors are
-  // recoverable problems.
+  // Error register — fetch failed (relay configured but no data, and
+  // no local identity to fall back on). Distinct from empty by
+  // presenting a Retry affordance.
   if (!data) {
     const errorRow = document.createElement("div");
     errorRow.className = "sov-error-row";

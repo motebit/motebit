@@ -110,6 +110,22 @@ export type SovereignFetchInit = {
   headers?: Record<string, string>;
 };
 
+/**
+ * Local identity snapshot — the bootstrap `IdentityCreated` event's
+ * essentials, queryable without a relay. Per protocol-primacy doctrine,
+ * a user without a connected relay must still see their own identity:
+ * who they are, when they were born, what key they currently sign with.
+ * The Sovereign Identity tab renders this as the always-present
+ * "Current identity" hero card; relay-fetched succession history (key
+ * rotations across devices) appends below.
+ */
+export interface LocalIdentitySnapshot {
+  readonly motebitId: string;
+  readonly createdAt: number; // ms epoch
+  readonly publicKeyHex: string;
+  readonly ownerId: string | null; // null if event payload lacks owner_id
+}
+
 export interface SovereignFetchAdapter {
   readonly syncUrl: string | null;
   readonly motebitId: string | null;
@@ -121,6 +137,17 @@ export interface SovereignFetchAdapter {
   getSolanaAddress(): string | null;
   getSolanaBalanceMicro(): Promise<number | null>;
   getLocalCredentials(): CredentialEntry[];
+  /**
+   * Optional local-identity accessor. Surfaces that implement it expose
+   * the bootstrap `IdentityCreated` event to the renderer; surfaces that
+   * leave it undefined silently fall back to relay-only succession data
+   * (no regression — controller stores `localIdentity: null` in state).
+   * Adding this expanded the protocol-primacy audit pass surface for the
+   * Identity tab without forcing a one-pass mirror across web/desktop/
+   * mobile. The right end state has all three implementing it; staged
+   * delivery is acceptable because the contract is opt-in.
+   */
+  getLocalIdentity?(): Promise<LocalIdentitySnapshot | null>;
 }
 
 // ── State ─────────────────────────────────────────────────────────────
@@ -138,6 +165,15 @@ export interface SovereignState {
   goals: GoalRow[];
   ledgerDetails: ReadonlyMap<string, LedgerManifest>;
   succession: SuccessionResponse | null;
+  // Always-locally-available identity snapshot from the bootstrap
+  // IdentityCreated event. Populated whenever the adapter implements
+  // `getLocalIdentity`; null on surfaces that don't yet implement it
+  // (no regression — renderer reads succession-only in that case).
+  // Doctrine: docs/doctrine/protocol-primacy.md — Identity tab passes
+  // the audit ("does this work identically for a user who never
+  // subscribes?") when localIdentity is present, since it renders
+  // without any relay call.
+  localIdentity: LocalIdentitySnapshot | null;
   presentation: unknown;
   verifyResult: { valid: boolean; reason?: string } | null;
   loading: boolean;
@@ -156,6 +192,7 @@ function initialState(): SovereignState {
     goals: [],
     ledgerDetails: new Map(),
     succession: null,
+    localIdentity: null,
     presentation: null,
     verifyResult: null,
     loading: false,
@@ -360,19 +397,32 @@ export function createSovereignController(adapter: SovereignFetchAdapter): Sover
 
   // ── Public API ─────────────────────────────────────────────────────
 
+  async function fetchLocalIdentity(): Promise<LocalIdentitySnapshot | null> {
+    // Optional adapter method — surfaces opt in. Failure is non-fatal
+    // (returns null, renderer falls back to relay-only succession data).
+    if (!adapter.getLocalIdentity) return null;
+    try {
+      return await adapter.getLocalIdentity();
+    } catch {
+      return null;
+    }
+  }
+
   async function refresh(): Promise<void> {
     if (disposed) return;
     patch({ loading: true, error: null });
 
     try {
-      const [credResult, goals, balance, budget, succession, sovereign] = await Promise.all([
-        fetchCredentials(),
-        fetchGoals(),
-        fetchBalance(),
-        fetchBudget(),
-        fetchSuccession(),
-        fetchSovereignBalance(),
-      ]);
+      const [credResult, goals, balance, budget, succession, sovereign, localIdentity] =
+        await Promise.all([
+          fetchCredentials(),
+          fetchGoals(),
+          fetchBalance(),
+          fetchBudget(),
+          fetchSuccession(),
+          fetchSovereignBalance(),
+          fetchLocalIdentity(),
+        ]);
 
       if (disposed) return;
 
@@ -385,6 +435,7 @@ export function createSovereignController(adapter: SovereignFetchAdapter): Sover
         succession,
         sovereignAddress: sovereign.address,
         sovereignBalanceUsdc: sovereign.usdc,
+        localIdentity,
         loading: false,
       });
     } catch (err) {

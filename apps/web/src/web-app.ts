@@ -1944,6 +1944,44 @@ export class WebApp {
     return this._motebitId;
   }
 
+  /**
+   * Query the local event store for this motebit's bootstrap
+   * IdentityCreated event. Returns the locally-known identity snapshot
+   * (motebit_id, created_at, current public key, owner_id) for the
+   * Sovereign Identity tab to render without a relay round-trip. Returns
+   * null when the event store is unavailable or no matching event exists.
+   * Per protocol-primacy doctrine — Identity is local data; the relay is
+   * a sync layer for cross-device succession, not the source of truth
+   * for "who you are right now."
+   */
+  async getLocalIdentity(): Promise<{
+    motebitId: string;
+    createdAt: number;
+    publicKeyHex: string;
+    ownerId: string | null;
+  } | null> {
+    const store = this._localEventStore;
+    if (!store || this._motebitId === "" || this._publicKeyHex === "") return null;
+    try {
+      const events = await store.query({
+        motebit_id: this._motebitId,
+        event_types: [EventType.IdentityCreated],
+      });
+      // First matching event is the bootstrap event (sorted by clock).
+      const first = events.length > 0 ? events[0] : null;
+      if (!first) return null;
+      const payload = first.payload as { owner_id?: string } | null | undefined;
+      return {
+        motebitId: this._motebitId,
+        createdAt: first.timestamp,
+        publicKeyHex: this._publicKeyHex,
+        ownerId: payload?.owner_id ?? null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   get deviceId(): string {
     return this._deviceId;
   }
