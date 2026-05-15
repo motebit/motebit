@@ -1601,6 +1601,21 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-closed-registry-canonical",
+    proves:
+      "flags a registered closed registry silently losing one of its canonical eight artifacts — the meta-invariant over the lattice's unit cell. Drift class: a refactor that drops `isSensitivityLevel` (or `ALL_X` or any other artifact) for one registry regresses the structural completeness of the family without any compile-time signal. Probe rewrites every `isSensitivityLevel` occurrence in `packages/protocol/src/sensitivity.ts` to `isSensitivityLevelDisabled`; the meta-gate must surface `missing_guard_export` for SensitivityLevel. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      // Rename the isSensitivityLevel guard's export in
+      // packages/protocol/src/sensitivity.ts. The meta-gate's
+      // guard-presence check scans for `export function isX(` in the
+      // tooling file; rewriting the identifier strips the export and
+      // trips `missing_guard_export`. TypeScript compilation isn't
+      // affected at this layer (the gate runs against source text).
+      mutateFile(`packages/protocol/src/sensitivity.ts`, (src) =>
+        src.replace(/isSensitivityLevel/g, "isSensitivityLevelDisabled"),
+      ),
+  },
+  {
     script: "check-sensitivity-canonical",
     proves:
       'flags the privacy ladder silently regressing — either a sibling-alignment break between the enum + ALL_SENSITIVITY_LEVELS + SENSITIVITY_RANK trio, or a registered consumer dropping a tier reference. Drift class: the most load-bearing closed registry in motebit is the privacy ladder; pre-2026-05-14 it had no `ALL_X` + `isX` + coverage-gate triple (the asymmetry the registry-gate-family audit surfaced). Probe rewrites every `"financial"` literal in `packages/protocol/src/sensitivity.ts` to `"financialish"`; gate must surface the sibling-alignment violation (`level "financial" not found in sensitivity.ts`). byte-identical restoration on cleanup via mutateFile.',
