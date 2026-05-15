@@ -141,6 +141,12 @@ function makeInvoke(config: Record<string, unknown> = {}) {
       delete cfg[`__keyring_${(args as { key: string }).key}`];
       return undefined;
     }
+    if (cmd === "db_execute") {
+      // No-op stub: tests that assert UPDATE SQL inspect the call
+      // arguments via the mock's recorded calls; tests that don't
+      // exercise the migration path simply get 0 rows affected.
+      return 0;
+    }
     throw new Error(`unexpected invoke: ${cmd}`);
   });
 }
@@ -567,6 +573,52 @@ describe("IdentityManager.restoreIdentity", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
     expect(result.reason).toBe("keystore_write_failed");
+  });
+
+  it("issues UPDATE SQL for the four memory-shaped tables when preserveMemories=true", async () => {
+    const mgr = new IdentityManager();
+    const invoke = makeInvoke({ motebit_id: "old-motebit-id" });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await mgr.restoreIdentity(invoke as any, {
+      privateKeyHex: "b".repeat(64),
+      metadata: sampleMetadata,
+      preserveMemories: true,
+    });
+    expect(result.ok).toBe(true);
+
+    const updateSqls = (invoke as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([cmd]) => cmd === "db_execute")
+      .map(([, args]) => (args as { sql: string }).sql);
+    // The migration touches exactly the four memory-shaped tables.
+    expect(updateSqls).toEqual([
+      "UPDATE conversations SET motebit_id = ? WHERE motebit_id = ?",
+      "UPDATE memory_nodes SET motebit_id = ? WHERE motebit_id = ?",
+      "UPDATE plans SET motebit_id = ? WHERE motebit_id = ?",
+      "UPDATE agent_trust SET motebit_id = ? WHERE motebit_id = ?",
+    ]);
+    // The migration uses the OLD motebit_id from config, not the new one.
+    const migrationParams = (invoke as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([cmd]) => cmd === "db_execute")
+      .map(([, args]) => (args as { params: unknown[] }).params);
+    expect(migrationParams[0]).toEqual(["restored-motebit", "old-motebit-id"]);
+  });
+
+  it("returns 'memory_migration_failed' when the db UPDATE throws", async () => {
+    const mgr = new IdentityManager();
+    const invoke = vi.fn(async (cmd: string) => {
+      if (cmd === "read_config") return JSON.stringify({ motebit_id: "old-motebit-id" });
+      if (cmd === "db_execute") throw new Error("sqlite error");
+      throw new Error(`unexpected: ${cmd}`);
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await mgr.restoreIdentity(invoke as any, {
+      privateKeyHex: "b".repeat(64),
+      metadata: sampleMetadata,
+      preserveMemories: true,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("memory_migration_failed");
   });
 });
 

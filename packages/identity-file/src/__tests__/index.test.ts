@@ -683,14 +683,21 @@ describe("validateRestoreRequest", () => {
     expect(result).toBe("key_mismatch");
   });
 
-  it("returns 'preserve_not_implemented' when preserveMemories=true (deferred)", async () => {
+  it("no longer gates preserveMemories=true at the package level (per-surface handling)", async () => {
+    // Earlier in the restore-arc this returned
+    // `"preserve_not_implemented"` because no surface had the re-key
+    // migration. Once web / desktop / mobile shipped their own
+    // migrations, the gate moved per-surface and validate stopped
+    // refusing the flag globally. Surfaces that haven't implemented
+    // the migration still need to return the typed reason from
+    // their own `restoreIdentity` body.
     const kp = await makeKeypairHex();
     const result = await validateRestoreRequest({
       privateKeyHex: toHex(kp.privateKey),
       metadata: await metadataForKey(kp.publicKeyHex),
       preserveMemories: true,
     });
-    expect(result).toBe("preserve_not_implemented");
+    expect(result).toBeNull();
   });
 });
 

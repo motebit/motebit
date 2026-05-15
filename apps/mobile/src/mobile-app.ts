@@ -92,7 +92,7 @@ import {
   type RestoreIdentityRequest,
   type RestoreIdentityResult,
 } from "@motebit/identity-file";
-import { createExpoStorage, ExpoGoalStore } from "./adapters/expo-sqlite";
+import { createExpoStorage, ExpoGoalStore, migrateMotebitIdExpo } from "./adapters/expo-sqlite";
 import type { ExpoSqliteSkillAuditSink, ExpoStorageResult } from "./adapters/expo-sqlite";
 import { SkillRegistry } from "@motebit/skills";
 import { WebViewGLAdapter } from "./adapters/webview-gl";
@@ -2272,10 +2272,12 @@ export class MobileApp {
    * adapter `bootstrap()` uses to read/write identity material). Caller
    * reloads the surface on `needsReload: true`.
    *
-   * No SQLite wipe in v1 — data keyed to the old motebit_id is orphaned
-   * (not visible under the new identity by natural filtering, not
-   * deleted). The explicit-wipe + re-key path lands when
-   * preserveMemories=true ships.
+   * When `preserveMemories=true`, the four memory-shaped SQLite tables
+   * (conversations / memory_nodes / plans / agent_trust) are re-keyed
+   * from the old motebit_id to the new BEFORE the keyring writes. The
+   * signed-trail tables (events / audit_log / issued_credentials) are
+   * intentionally orphaned so the cryptographic chain to the old
+   * identity stays honest about authorship.
    *
    * Note: mobile does not have desktop's `_identity_file` config slot —
    * governance lives on the runtime config that's regenerated from the
@@ -2287,6 +2289,17 @@ export class MobileApp {
     const failureReason = await validateRestoreRequest(request);
     if (failureReason !== null) {
       return { ok: false, reason: failureReason };
+    }
+
+    if (request.preserveMemories) {
+      try {
+        const oldMotebitId = await this.keyring.get(KEYRING_KEYS.motebitId);
+        if (oldMotebitId !== null && oldMotebitId !== "" && this.storage !== null) {
+          migrateMotebitIdExpo(this.storage.db, oldMotebitId, request.metadata.motebitId);
+        }
+      } catch {
+        return { ok: false, reason: "memory_migration_failed" };
+      }
     }
 
     const newDeviceId = crypto.randomUUID();

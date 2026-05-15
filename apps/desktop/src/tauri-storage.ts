@@ -58,6 +58,42 @@ async function dbExecute(invoke: InvokeFn, sql: string, params: unknown[] = []):
   return invoke<number>("db_execute", { sql, params });
 }
 
+/**
+ * Re-key the four memory-shaped SQLite tables from `oldMotebitId`
+ * to `newMotebitId`. Sibling of `migrateMotebitId` in
+ * `@motebit/browser-persistence` — same four tables, same doctrinal
+ * split (signed-trail tables `events` / `audit_log` /
+ * `issued_credentials` are intentionally NOT re-keyed). See the
+ * file doc on `packages/browser-persistence/src/migrate-motebit-id.ts`
+ * for the doctrinal split + the agent_trust composite-PK note.
+ *
+ * SQLite handles composite-key UPDATEs in place — no DELETE +
+ * INSERT needed (the IDB sibling needs the cursor delete+put dance
+ * because IDB primary keys aren't mutable in-place). Returns the
+ * per-table re-keyed-row counts so the caller can log.
+ *
+ * Exported because `IdentityManager.restoreIdentity` calls it from
+ * a different module and the helper has no instance state.
+ */
+export async function migrateMotebitIdSql(
+  invoke: InvokeFn,
+  oldMotebitId: string,
+  newMotebitId: string,
+): Promise<{ table: string; rekeyed: number }[]> {
+  if (oldMotebitId === newMotebitId) return [];
+  const tables = ["conversations", "memory_nodes", "plans", "agent_trust"] as const;
+  const results: { table: string; rekeyed: number }[] = [];
+  for (const table of tables) {
+    const rekeyed = await dbExecute(
+      invoke,
+      `UPDATE ${table} SET motebit_id = ? WHERE motebit_id = ?`,
+      [newMotebitId, oldMotebitId],
+    );
+    results.push({ table, rekeyed });
+  }
+  return results;
+}
+
 // === TauriEventStore ===
 
 interface EventRow {

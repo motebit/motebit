@@ -339,6 +339,7 @@ export type RestoreIdentityFailureReason =
   | "invalid_private_key_hex"
   | "key_mismatch"
   | "preserve_not_implemented"
+  | "memory_migration_failed"
   | "keystore_write_failed"
   | "config_write_failed";
 
@@ -370,9 +371,17 @@ export async function validateRestoreRequest(
   if (derivedPubHex.toLowerCase() !== request.metadata.publicKey.toLowerCase()) {
     return "key_mismatch";
   }
-  if (request.preserveMemories) {
-    return "preserve_not_implemented";
-  }
+  // `preserve_not_implemented` was previously returned here as a
+  // package-level gate so all three surfaces refused
+  // `preserveMemories=true` until the migration shipped. The gate
+  // is no longer global: each surface that has implemented the
+  // re-key migration (web: `migrateMotebitId` in
+  // `@motebit/browser-persistence`; desktop: SQLite UPDATEs via
+  // Tauri; mobile: expo-sqlite UPDATEs) handles the flag locally.
+  // Surfaces that have NOT implemented it still need to return
+  // `preserve_not_implemented` from their own `restoreIdentity`
+  // body as defense in depth; the typed-reason stays in the union
+  // because some future consumer (e.g. CLI) might still need it.
   return null;
 }
 

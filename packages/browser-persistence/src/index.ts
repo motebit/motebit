@@ -18,6 +18,7 @@ import { IdbApprovalStore } from "./approval-store.js";
 import { IdbToolAuditSink } from "./tool-audit-store.js";
 
 export { openMotebitDB, idbRequest, idbTransaction } from "./idb.js";
+export { migrateMotebitId } from "./migrate-motebit-id.js";
 export { IdbEventStore } from "./event-store.js";
 export { IdbMemoryStorage } from "./memory-storage.js";
 export { IdbIdentityStorage } from "./identity-storage.js";

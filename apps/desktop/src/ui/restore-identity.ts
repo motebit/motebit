@@ -145,6 +145,8 @@ export function initRestoreIdentity(ctx: DesktopContext): RestoreIdentityAPI {
     stepSeedOnly!.style.display = "none";
     stepPreview!.style.display = "none";
     seedFieldGroup!.style.display = "";
+    const preserveCheckbox = document.getElementById("restore-preserve") as HTMLInputElement | null;
+    if (preserveCheckbox !== null) preserveCheckbox.checked = false;
   }
 
   function close(): void {
@@ -275,12 +277,14 @@ export function initRestoreIdentity(ctx: DesktopContext): RestoreIdentityAPI {
     }
     replaceBtn.disabled = true;
     errorEl.textContent = "";
+    const preserveCheckbox = document.getElementById("restore-preserve") as HTMLInputElement | null;
+    const preserveMemories = preserveCheckbox !== null && preserveCheckbox.checked;
     void ctx.app
       .restoreIdentity(invoke, {
         privateKeyHex: state.derivedPrivateKeyHex,
         metadata: state.metadata,
         originalContent: state.originalContent ?? undefined,
-        preserveMemories: false,
+        preserveMemories,
       })
       .then((result) => {
         if (result.ok) {

@@ -53,6 +53,7 @@ import {
   IdbSkillStorageAdapter,
   IdbSkillAuditSink,
   openMotebitDB,
+  migrateMotebitId,
 } from "@motebit/browser-persistence";
 import { SkillRegistry } from "@motebit/skills";
 import type { EventStoreAdapter } from "@motebit/event-log";
@@ -1629,12 +1630,15 @@ export class WebApp {
   // next bootstrap reads the new keystore + config and brings up the
   // runtime under the restored identity.
   //
-  // No wipe of prior IDB data in v1 — the data is keyed by the old
-  // motebit_id, so the new identity reads empty stores via natural
-  // filtering. The old data is orphaned but doesn't interfere. The
-  // explicit-wipe path lands when preserveMemories=true ships (a
-  // re-key migration, distinct from a delete; see
-  // [[identity_restore_arc]] design call #3).
+  // When `preserveMemories=true`, the four memory-shaped IDB stores
+  // (conversations / memory_nodes / plans / agent_trust) are re-keyed
+  // from the old motebit_id to the new BEFORE the config write. The
+  // signed-trail stores (events / audit_log / issued_credentials) are
+  // intentionally orphaned so the cryptographic chain to the old
+  // identity stays honest about authorship. See
+  // `docs/doctrine/identity-restore.md` § "The keystore-probe
+  // relationship" + `migrate-motebit-id.ts` in
+  // `@motebit/browser-persistence` for the doctrinal split.
   async restoreIdentity(
     request: import("@motebit/identity-file").RestoreIdentityRequest,
   ): Promise<import("@motebit/identity-file").RestoreIdentityResult> {
@@ -1642,6 +1646,17 @@ export class WebApp {
     const failureReason = await validateRestoreRequest(request);
     if (failureReason !== null) {
       return { ok: false, reason: failureReason };
+    }
+
+    if (request.preserveMemories) {
+      const oldMotebitId = localStorage.getItem("motebit:motebit_id");
+      if (oldMotebitId !== null && oldMotebitId !== "") {
+        try {
+          await migrateMotebitId(oldMotebitId, request.metadata.motebitId);
+        } catch {
+          return { ok: false, reason: "memory_migration_failed" };
+        }
+      }
     }
 
     const newDeviceId = crypto.randomUUID();

@@ -95,6 +95,7 @@ export function RestoreIdentityModal({
     text: "",
   });
   const [derivedPrivateKey, setDerivedPrivateKey] = useState<string | null>(null);
+  const [preserveMemories, setPreserveMemories] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -105,6 +106,7 @@ export function RestoreIdentityModal({
     setConfirm("");
     setSeedStatus({ kind: "none", text: "" });
     setDerivedPrivateKey(null);
+    setPreserveMemories(false);
     setErrorMsg(null);
     setBusy(false);
   }
@@ -221,7 +223,7 @@ export function RestoreIdentityModal({
         privateKeyHex: derivedPrivateKey,
         metadata,
         originalContent: originalContent ?? undefined,
-        preserveMemories: false,
+        preserveMemories,
       });
       if (result.ok) {
         onRestored();
@@ -449,12 +451,13 @@ export function RestoreIdentityModal({
               </>
             )}
 
-            <View
+            <TouchableOpacity
+              onPress={() => setPreserveMemories(!preserveMemories)}
+              activeOpacity={0.7}
               style={{
                 flexDirection: "row",
                 alignItems: "flex-start",
                 marginBottom: 16,
-                opacity: 0.7,
               }}
             >
               <View
@@ -463,16 +466,25 @@ export function RestoreIdentityModal({
                   height: 16,
                   borderRadius: 3,
                   borderWidth: 1,
-                  borderColor: "#3a3a3c",
+                  borderColor: preserveMemories ? "#6e82f0" : "#3a3a3c",
+                  backgroundColor: preserveMemories ? "#6e82f0" : "transparent",
                   marginRight: 8,
                   marginTop: 2,
+                  alignItems: "center",
+                  justifyContent: "center",
                 }}
-              />
+              >
+                {preserveMemories ? (
+                  <Text style={{ color: "#fff", fontSize: 11, lineHeight: 14 }}>✓</Text>
+                ) : null}
+              </View>
               <Text style={{ flex: 1, color: "#aaa", fontSize: 12, lineHeight: 17 }}>
                 Preserve memories
-                <Text style={{ color: "#666" }}> (coming soon)</Text>
+                <Text style={{ color: "#666" }}>
+                  {"\n"}Severs cryptographic chain to original signing identity
+                </Text>
               </Text>
-            </View>
+            </TouchableOpacity>
 
             <Text
               style={{

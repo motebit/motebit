@@ -2293,8 +2293,9 @@
         gap: 8px;
         font-size: 12px;
         color: var(--text-secondary);
-        cursor: not-allowed;
-        opacity: 0.7;
+      }
+      .restore-checkbox-active {
+        cursor: pointer;
       }
       .restore-checkbox input {
         margin-top: 2px;
@@ -2302,6 +2303,8 @@
       .restore-soon {
         color: var(--text-muted);
         font-size: 11px;
+        display: block;
+        margin-top: 2px;
       }
       .restore-warning {
         font-size: 11px;
@@ -7652,11 +7655,13 @@
             />
             <div id="restore-seed-status" class="restore-status"></div>
           </div>
-          <label class="restore-checkbox">
-            <input type="checkbox" id="restore-preserve" disabled />
+          <label class="restore-checkbox restore-checkbox-active">
+            <input type="checkbox" id="restore-preserve" />
             <span>
               Preserve memories
-              <span class="restore-soon">(coming soon)</span>
+              <span class="restore-soon">
+                Severs cryptographic chain to original signing identity
+              </span>
             </span>
           </label>
           <div class="restore-warning">

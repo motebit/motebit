@@ -44,6 +44,7 @@
  */
 
 import type { InvokeFn } from "./tauri-storage.js";
+import { migrateMotebitIdSql } from "./tauri-storage.js";
 import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
 import { PairingClient } from "@motebit/sync-engine";
 import {
@@ -415,11 +416,12 @@ export class IdentityManager {
   // slot so bootstrap reads governance from its cryptographic anchor on
   // next launch.
   //
-  // No SQLite wipe in v1 — data keyed to the old motebit_id is orphaned
-  // (not visible under the new identity by natural filtering, not
-  // deleted). The explicit-wipe + re-key path lands when
-  // preserveMemories=true ships. See [[identity_restore_arc]] design
-  // call #3 + the package-level commit doc.
+  // When `preserveMemories=true`, the four memory-shaped SQLite tables
+  // (conversations / memory_nodes / plans / agent_trust) are re-keyed
+  // from the old motebit_id to the new BEFORE the config write. The
+  // signed-trail tables (events / audit_log / issued_credentials) are
+  // intentionally orphaned so the cryptographic chain to the old
+  // identity stays honest about authorship.
   async restoreIdentity(
     invoke: InvokeFn,
     request: RestoreIdentityRequest,
@@ -427,6 +429,19 @@ export class IdentityManager {
     const failureReason = await validateRestoreRequest(request);
     if (failureReason !== null) {
       return { ok: false, reason: failureReason };
+    }
+
+    if (request.preserveMemories) {
+      try {
+        const raw = await invoke<string>("read_config");
+        const config = JSON.parse(raw) as Record<string, unknown>;
+        const oldMotebitId = typeof config.motebit_id === "string" ? config.motebit_id : null;
+        if (oldMotebitId !== null && oldMotebitId !== "") {
+          await migrateMotebitIdSql(invoke, oldMotebitId, request.metadata.motebitId);
+        }
+      } catch {
+        return { ok: false, reason: "memory_migration_failed" };
+      }
     }
 
     const newDeviceId = crypto.randomUUID();

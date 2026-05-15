@@ -2518,6 +2518,15 @@ function rowToSkillAuditEvent(row: SkillAuditRow): SkillAuditEvent {
 // === Factory ===
 
 export interface ExpoStorageResult extends StorageAdapters {
+  /**
+   * Direct handle on the SQLite database, exposed so the
+   * preserveMemories=true restore path can re-key the four
+   * memory-shaped tables (conversations / memory_nodes / plans /
+   * agent_trust) without going through every store's specific
+   * adapter. The migration is a single sweep of UPDATE statements;
+   * the adapter API doesn't model cross-store identity migration.
+   */
+  db: SQLite.SQLiteDatabase;
   goalStore: ExpoGoalStore;
   planStore: ExpoPlanStore;
   gradientStore: ExpoGradientStore;
@@ -2582,6 +2591,37 @@ function expoSqliteDriver(db: SQLite.SQLiteDatabase): SyncSqliteDriver {
   };
 }
 
+/**
+ * Re-key the four memory-shaped SQLite tables from `oldMotebitId`
+ * to `newMotebitId`. Mobile sibling of `migrateMotebitId` (web,
+ * IDB) and `migrateMotebitIdSql` (desktop, Tauri SQLite). Same four
+ * tables, same doctrinal split — signed-trail tables (events /
+ * audit_log / issued_credentials) are intentionally NOT re-keyed.
+ * See `packages/browser-persistence/src/migrate-motebit-id.ts` for
+ * the doctrinal split.
+ *
+ * Returns per-table re-keyed-row counts so the caller can log.
+ */
+export function migrateMotebitIdExpo(
+  db: SQLite.SQLiteDatabase,
+  oldMotebitId: string,
+  newMotebitId: string,
+): { table: string; rekeyed: number }[] {
+  if (oldMotebitId === newMotebitId) return [];
+  const tables = ["conversations", "memory_nodes", "plans", "agent_trust"] as const;
+  const results: { table: string; rekeyed: number }[] = [];
+  for (const table of tables) {
+    const stmt = db.prepareSync(`UPDATE ${table} SET motebit_id = ? WHERE motebit_id = ?`);
+    try {
+      const result = stmt.executeSync([newMotebitId, oldMotebitId]);
+      results.push({ table, rekeyed: result.changes });
+    } finally {
+      stmt.finalizeSync();
+    }
+  }
+  return results;
+}
+
 export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   const db = SQLite.openDatabaseSync(dbName);
   db.execSync("PRAGMA journal_mode = WAL");
@@ -2591,6 +2631,7 @@ export function createExpoStorage(dbName = "motebit.db"): ExpoStorageResult {
   runMigrations(expoSqliteDriver(db), MOBILE_MIGRATIONS);
 
   return {
+    db,
     eventStore: new ExpoSqliteEventStore(db),
     memoryStorage: new ExpoSqliteMemoryStorage(db),
     identityStorage: new ExpoSqliteIdentityStorage(db),
