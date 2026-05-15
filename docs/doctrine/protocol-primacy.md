@@ -121,6 +121,49 @@ When someone proposes a motebit-cloud feature, the question is never "what does 
 - [`agility-as-role.md`](agility-as-role.md) — vendor optionality at the protocol layer means motebit-cloud has no exclusives. Every BYOK vendor is also available outside motebit-cloud.
 - [`retention-policy.md`](retention-policy.md) — sensitivity ceilings are interop law (protocol-level); operational retention windows are reference defaults (per-deployment, including motebit-cloud's specific tier choices).
 
+## The audit at the panel level — local-first as a per-surface test
+
+The protocol-first audit applies recursively at the **panel** level, not just the feature/tier level. Every panel surface in the droplet/material family is a separate audit target:
+
+> **"Does this panel render meaningful content for a user with no relay configured?"**
+
+Three structural categories:
+
+1. **Pure local** — panel has no relay dependency at all (chat history, memories, locally-installed skills, MCP server config, on-device activity log, scheduled goals). Audit passes by construction.
+2. **Local-first, relay-augmented** — panel has a local source of truth AND optionally augments with relay-fetched cross-device/federation data. The local source always renders; the relay adds on top. This is the doctrinally-correct shape for panels surfacing accumulated state that spans devices (Sovereign Credentials / Ledger / Budget / Identity).
+3. **Network-required by nature** — panel content IS the network discovery surface (Agents Discover, Capabilities Browse). Relay-required is correct here because the relay IS the substrate of the content. Audit passes by virtue of "this feature exists only because federation exists."
+
+**Doctrinally-incorrect:** relay-gated on local data that _could_ be rendered without one. This is the drift class the Sovereign panel had pre-2026-05-15.
+
+### Renderer vs controller — where the drift hides
+
+The Sovereign worked example surfaced a structural lesson: **a panel's controller can be local-first-correct while its renderer is relay-gating-wrong.** The `@motebit/panels/sovereign` controller already merged local + relay sources correctly (`fetchCredentials()` reads `adapter.getLocalCredentials()` then merges relay data; `fetchSovereignBalance()` reads via direct Solana RPC). But each renderer in `apps/web/src/ui/sovereign-panels.ts` short-circuited with `if (!hasRelay) → empty` before reading what the controller had already fetched. The architectural intent was preserved at the data layer and discarded at the presentation layer.
+
+**The audit needs to check both:**
+
+- **Adapter layer**: does the adapter expose a local accessor for each typed data shape the panel surfaces? (e.g., `getLocalCredentials`, `getLocalIdentity`, `getLocalLedger`)
+- **Renderer layer**: does the renderer read from state directly, never branching on relay-availability for _whether_ to render local data? (Branching on relay-availability for _what error register to show_ — e.g., "fetch never attempted" vs "fetch failed" — is acceptable; branching to hide local content is not.)
+
+A panel passes the audit only when both layers are correct.
+
+### Worked example — Sovereign panel local-first arc, 2026-05-15
+
+The Sovereign panel had four tabs each with `if (!hasRelay) → empty` renderer gates, even though three of the four had local data sources already wired through the controller. Fix arc (commits `dd305854` → `b22d5bf3` → `70076837`):
+
+1. **Renderer cleanup** (`dd305854`) — removed relay-gates from `renderCredentials` + `renderBudget`; reframed `renderSuccession`'s `!hasRelay` check to distinguish "never attempted" (calm empty) from "fetch failed" (Retry affordance); `renderLedger`'s caption no longer mentions relay.
+2. **`getLocalIdentity` adapter accessor** (`ffcd6c89`) — optional method on `SovereignFetchAdapter`. Web implementation queries the local event store for the bootstrap `EventType.IdentityCreated` event. State exposed via `state.localIdentity`. Renderer shows "Current identity" hero card from local data, regardless of relay state.
+3. **`getLocalLedger` adapter accessor** (`b22d5bf3`) — same optional pattern. Web reads from `GoalsRunner` state filtered to executed goals. Controller merges local + relay with goal_id dedup; local wins (signed locally is canonical, relay is mirror). Future contract-preserving arc swaps source to per-fire signed `ExecutionReceipt` aggregation via `replayGoal()` — same `GoalRow` wire shape.
+4. **Cross-surface mirror** (`70076837`) — desktop + mobile implementations of both accessors. Optional `?` on the contract allowed staged delivery without breaking surfaces that don't yet implement.
+
+After the arc: all four Sovereign tabs pass the audit on all three surfaces. A user with zero relay configuration sees their own identity, on-chain balance, locally-signed credentials, and executed goals from second zero.
+
+### Lessons encoded
+
+- **The audit fires per panel** — pass/fail is binary per panel, not per app. Even one panel that fails the audit invalidates the "you own your identity" claim for users hitting that panel without a relay.
+- **Optional adapter methods enable staged cross-surface delivery** — adding `getX?(): Promise<...>` to the contract lets one surface ship the local-first answer before others. Controller treats absence as null. No regression on surfaces that defer.
+- **Wire-shape preservation enables contract-preserving deepening** — the Ledger arc shipped `GoalsRunner`-derived rows mapped to the existing `GoalRow` shape. A future arc can swap the source to signed `ExecutionReceipt` aggregation without changing what the consumer reads. Pick the eventually-correct wire shape _first_ so source-of-truth deepening is non-breaking.
+- **Renderer audits matter** — a doctrine that only checks the data layer misses the drift class where renderers hide local data behind relay-gates. Check both.
+
 ## Drift signals — when this doctrine has been violated
 
 Catch these patterns as adversarial test cases when reviewing motebit-cloud pitch language or feature proposals:
