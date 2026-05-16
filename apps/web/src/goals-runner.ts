@@ -24,7 +24,7 @@ import {
 } from "@motebit/panels";
 import { slabTurnIdForRun } from "@motebit/runtime";
 
-import type { WebApp } from "./web-app";
+import type { UnbootedWebApp } from "./web-app";
 
 const GOALS_KEY = "motebit.goals";
 const RUNS_KEY = "motebit.goals_runs";
@@ -65,7 +65,7 @@ function writeJson(key: string, value: unknown): void {
  * Build the GoalsRunner for a WebApp. Takes `app` by reference — closures
  * read `app.isProcessing` lazily — so bootstrap ordering matters less.
  */
-export function createWebGoalsRunner(app: WebApp): GoalsRunner {
+export function createWebGoalsRunner(app: UnbootedWebApp): GoalsRunner {
   const adapter: GoalsRunnerAdapter = {
     loadGoals: () => readJson<ScheduledGoal[]>(GOALS_KEY, []),
     saveGoals: (goals) => writeJson(GOALS_KEY, goals),

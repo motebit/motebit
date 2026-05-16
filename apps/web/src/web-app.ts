@@ -148,10 +148,10 @@ export type WebSyncStatus =
   | "error"
   | "disconnected";
 
-export class WebApp {
+export class UnbootedWebApp {
   private renderer = new ThreeJSAdapter();
   private cursorPresence = new CursorPresence();
-  private runtime: MotebitRuntime | null = null;
+  protected runtime: MotebitRuntime | null = null;
   /**
    * BYOK auto-router state — second-consumer half of the auto-routing
    * primitive per `docs/doctrine/auto-routing-as-protocol-primitive.md`
@@ -183,7 +183,7 @@ export class WebApp {
    * `stop()` tears down the cloud Chromium context server-side and
    * emits the closing audit event.
    */
-  private computerRegistration: ComputerToolRegistration | null = null;
+  protected computerRegistration: ComputerToolRegistration | null = null;
   /**
    * Co-browse Slice 2b — disposers wired against the active
    * `coBrowseControl` machine. Two registrations bundled here:
@@ -213,7 +213,7 @@ export class WebApp {
    * slab itself precedes acts. `null` only before mount, after
    * dispose, or when the cloud-browser tool isn't configured.
    */
-  private liveBrowserItemId: string | null = null;
+  protected liveBrowserItemId: string | null = null;
   /** Stable id used for the shell — not session-suffixed. */
   private static readonly LIVE_BROWSER_SHELL_ID = "live-browser-shell";
   /**
@@ -223,7 +223,7 @@ export class WebApp {
    * control band and the address bar based on coBrowseControl
    * state. Cleared on WebApp dispose.
    */
-  private liveBrowserHandle: LiveBrowserElementHandle | null = null;
+  protected liveBrowserHandle: LiveBrowserElementHandle | null = null;
   /**
    * Stable session-aware forward closure mounted on the shell at
    * boot. Reads `_activeBrowserSessionId` lazily so a single closure
@@ -241,7 +241,7 @@ export class WebApp {
    * forward closure reads this each call so dispatch routes to
    * whatever session is active.
    */
-  private _activeBrowserSessionId: string | null = null;
+  protected _activeBrowserSessionId: string | null = null;
   /**
    * Phase 1+2 of the persistent user_data_dir arc — cookies-only, now
    * with disk-backed encryption at rest. In-memory cache mirrors what
@@ -1122,107 +1122,10 @@ export class WebApp {
     // the slab is always rendered. Doctrine: `intent-gated-slab.md`
     // §"Affirmative shape" — empty register is the slab's READY
     // state ONCE invoked, not the surface's default.
-  }
-
-  /**
-   * Intent-gated entry point that mounts the live_browser shell and
-   * warms a cloud-browser session. Idempotent — safe to call from
-   * every invocation path: `/computer` slash command, AI computer
-   * tool call, drop-URL affordance, future surfaces. The shell mount
-   * is the load-bearing precondition (the AI's `attachSessionToLive
-   * Browser` hook expects a handle to attach to); session warming is
-   * best-effort.
-   *
-   * Doctrine: a body-first surface only mounts the slab on intent.
-   * Calling this from bootstrap is a doctrine violation.
-   * External callers via `WebContext.app` are structurally blocked
-   * (`BootedApp` omits this method — Layer 1). The bootstrap-internal
-   * boundary (`this.invokeComputer()` from inside `bootstrap()`) remains
-   * comment-enforced — `this` is still `WebApp` inside the method body.
-   */
-  invokeComputer(): void {
-    if (!this.computerRegistration) return;
-    this.mountLiveBrowserShell();
-    void this.computerRegistration.ensureDefaultSession().catch(() => {
-      // Honest absence — no session, shell stays in READY register.
-      // The chat path still works; a subsequent `computer` tool call
-      // (motebit-driven) re-tries `ensureDefaultSession`.
-    });
-  }
-
-  /**
-   * Counterpart to `invokeComputer`. Ends the live_browser slab item
-   * (triggers the bridge's `onItemGone` → `releaseLiveBrowserItem`
-   * cascade for WebSocket/input-capture cleanup), closes the cloud
-   * Chromium session (releases the fly.io concurrency slot
-   * immediately rather than waiting for idle-timeout), and resets
-   * local mount state so a subsequent `invokeComputer()` rebuilds
-   * clean.
-   *
-   * Idempotent: safe to call when nothing is mounted. The /computer
-   * slash command's toggle-off path is the canonical caller; the AI
-   * computer-tool path keeps using `closeSession` directly because
-   * it owns its own session lifecycle.
-   *
-   * Closes the lifecycle-binding gap that produced (a) the rate-
-   * limit pain Daniel hit in dev (orphan sessions consuming the
-   * 4-concurrent fly.io pool), (b) the bandwidth/decode-CPU leak
-   * (screencast bus subscription kept flowing into a hidden slab),
-   * and (c) the never-fired `releaseLiveBrowserItem` disposer.
-   */
-  dismissComputer(): void {
-    // Path A — active session present. Close the session and let
-    // `onSessionReceiptSigned → emergeSessionReceipt` drive the slab
-    // end via the pinch-detach path. The signed receipt IS the
-    // membrane-out crossing — the user sees content leave the slab
-    // carrying its provenance, not just vanish. Closing also
-    // releases the fly.io concurrency slot immediately rather than
-    // waiting for idle-timeout.
     //
-    // Path B — no session (slab opened but never warmed, or session
-    // already closed). Dissolve the slab item directly — nothing
-    // happened that needs provenance, just clear the surface.
-    //
-    // Both paths trigger the bridge's `onItemGone → releaseLiveBrowserItem`
-    // cascade for kind-specific cleanup (WebSocket subscription
-    // unbind, input-capture detach) — that fires on phase=gone
-    // regardless of whether the item ended via dissolve or detach.
-    const sessionId = this._activeBrowserSessionId;
-    const itemId = this.liveBrowserItemId;
-
-    if (sessionId != null && this.computerRegistration != null) {
-      // Receipt-emergence drives the slab end; local mount-state
-      // clears inside emergeSessionReceipt when it lands.
-      void this.computerRegistration.sessionManager
-        .closeSession(sessionId, "user_dismissed_slab")
-        .catch(() => {
-          // closeSession faulted (server unreachable etc) — receipt
-          // won't fire to drive slab end. Fall back to dismissItem
-          // so the slab still clears for the user.
-          if (this.liveBrowserItemId === itemId && itemId !== null && this.runtime != null) {
-            try {
-              this.runtime.slab.dismissItem(itemId);
-            } catch {
-              // best-effort
-            }
-            this.liveBrowserItemId = null;
-            this.liveBrowserHandle = null;
-          }
-        });
-      this._activeBrowserSessionId = null;
-      return;
-    }
-
-    // Path B — no session. Dissolve directly.
-    if (itemId !== null && this.runtime != null) {
-      try {
-        this.runtime.slab.dismissItem(itemId);
-      } catch {
-        // Race with concurrent endItem; best-effort.
-      }
-      this.liveBrowserItemId = null;
-      this.liveBrowserHandle = null;
-    }
+    // Layer 1 enforcement: `invokeComputer` and `dismissComputer` live
+    // only on `WebApp` (the subclass), not here. `this: UnbootedWebApp`
+    // structurally cannot call them — any attempt is a compile error.
   }
 
   /**
@@ -2442,7 +2345,7 @@ export class WebApp {
    * principle's deepest expression: empty IS READY because the
    * shell precedes content.
    */
-  private mountLiveBrowserShell(): void {
+  protected mountLiveBrowserShell(): void {
     if (this.liveBrowserItemId !== null) return;
     if (!this.runtime) return;
     // Headless guard — the shell is a DOM-rooted element. Sibling
@@ -3994,21 +3897,91 @@ export class WebApp {
 }
 
 /**
+ * Fully-booted WebApp — extends UnbootedWebApp with the two slab-mount
+ * methods. These methods exist only on this subclass, so `this` inside
+ * `UnbootedWebApp.bootstrap()` structurally cannot call them: any attempt
+ * is a compile error (Layer 1, bootstrap-internal boundary closed).
+ *
+ * `main.ts` instantiates as `new WebApp()` and calls `bootstrap()`. The
+ * object is always a `WebApp` at runtime; the split enforces phase
+ * discipline at the type level, not through a runtime assertion.
+ *
+ * Doctrine: `intent-gated-slab.md` — slab mounted only on user/AI intent.
+ */
+export class WebApp extends UnbootedWebApp {
+  /**
+   * Intent-gated entry point that mounts the live_browser shell and
+   * opens the default cloud-browser session. The single idempotent
+   * entry point for `/computer` slash command, Option+C, and the AI
+   * `computer({...})` tool call.
+   *
+   * Layer 1 enforcement on TWO boundaries:
+   *   - WebContext-callsite: `WebContext.app: BootedApp` (Omit removes
+   *     this method) — `initXxx(ctx)` modules cannot call it.
+   *   - Bootstrap-internal: this method lives only on `WebApp`, not on
+   *     `UnbootedWebApp`, so `this.invokeComputer()` inside `bootstrap()`
+   *     (typed `UnbootedWebApp`) is a compile error.
+   *
+   * Doctrine: `intent-gated-slab.md`.
+   */
+  invokeComputer(): void {
+    if (!this.computerRegistration) return;
+    this.mountLiveBrowserShell();
+    void this.computerRegistration.ensureDefaultSession().catch(() => {
+      // Honest absence — no session, shell stays in READY register.
+    });
+  }
+
+  /**
+   * Counterpart to `invokeComputer`. Closes the active cloud-browser
+   * session (which tears down the screencast) then dismisses the slab
+   * item. No-op if no session or item is live.
+   */
+  dismissComputer(): void {
+    const sessionId = this._activeBrowserSessionId;
+    const itemId = this.liveBrowserItemId;
+    if (sessionId != null && this.computerRegistration != null) {
+      void this.computerRegistration.sessionManager
+        .closeSession(sessionId, "user_dismissed_slab")
+        .catch(() => {
+          if (this.liveBrowserItemId === itemId && itemId !== null && this.runtime != null) {
+            try {
+              this.runtime.slab.dismissItem(itemId);
+            } catch {
+              /* already gone */
+            }
+            this.liveBrowserItemId = null;
+            this.liveBrowserHandle = null;
+          }
+        });
+      this._activeBrowserSessionId = null;
+      return;
+    }
+    if (itemId !== null && this.runtime != null) {
+      try {
+        this.runtime.slab.dismissItem(itemId);
+      } catch {
+        /* already gone */
+      }
+      this.liveBrowserItemId = null;
+      this.liveBrowserHandle = null;
+    }
+  }
+}
+
+/**
  * Post-bootstrap view of `WebApp` — structurally lacks `invokeComputer`,
  * `dismissComputer`, and `bootstrap` so any code holding only this type
  * cannot mount the slab or re-bootstrap.
  *
- * Enforces the WebContext-callsite boundary: `WebContext.app` is typed
- * as `BootedApp`, so every `initXxx(ctx)` UI module receives a reference
- * that structurally cannot call slab-mount methods (Layer 1 — compile
- * error, not a comment).
- *
- * Does NOT close the bootstrap-internal boundary: inside `bootstrap()`
- * itself, `this` is still typed as the full `WebApp`, so `this.invokeComputer()`
- * would typecheck. That boundary is guarded by the comment at
- * `invokeComputer()`. Closing it requires a state-machine split
- * (`UnbootedWebApp.bootstrap()` → `WebApp`) — see the deferred arc
- * in the engineering notes (2026-05-16 four-pass survey, Risk deferred #2).
+ * Closes BOTH enforcement layers:
+ *   - WebContext-callsite (Layer 1): `WebContext.app: BootedApp` means
+ *     every `initXxx(ctx)` UI module structurally cannot call slab-mount
+ *     methods — compile error, not a comment.
+ *   - Bootstrap-internal (Layer 1): `invokeComputer` and `dismissComputer`
+ *     exist only on `WebApp`, not on `UnbootedWebApp`. Inside `bootstrap()`
+ *     `this: UnbootedWebApp` has no `invokeComputer` — any call is a
+ *     compile error.
  *
  * Doctrine: `intent-gated-slab.md`.
  */
