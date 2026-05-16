@@ -11,7 +11,7 @@ export { OpenAIProvider } from "./openai-provider.js";
 export type { OpenAIProviderConfig, OpenAIStreamChunk } from "./openai-provider.js";
 
 // Loop: agentic turn execution (requires memory-graph → onnxruntime-node)
-export { runTurn, runTurnStreaming } from "./loop.js";
+export { runTurn, runTurnStreaming, projectProviderClearance } from "./loop.js";
 export type {
   MotebitLoopDependencies,
   TurnResult,

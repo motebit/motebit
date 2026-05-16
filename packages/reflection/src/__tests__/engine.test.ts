@@ -44,6 +44,7 @@ import type {
   MemoryCandidate,
   ConversationMessage,
   MemoryNode,
+  SensitivityCleared,
 } from "@motebit/sdk";
 import type { StreamingProvider } from "@motebit/ai-core";
 
@@ -53,15 +54,20 @@ const MOTEBIT_ID = "test-reflector";
  * Minimal StreamingProvider double.
  * `generate` returns a canned reflection text; everything else is a no-op.
  * Tests that need a specific response pass it via the factory arg.
+ *
+ * Returns `SensitivityCleared<StreamingProvider>` — production code
+ * reaches this form through the runtime's gate + `projectProviderClearance`;
+ * tests cast at the helper boundary since the brand is a phantom
+ * type-level proof with no runtime cost.
  */
-function makeProvider(responseText: string): StreamingProvider {
+function makeProvider(responseText: string): SensitivityCleared<StreamingProvider> {
   const response: AIResponse = {
     text: responseText,
     memory_candidates: [],
     state_updates: {},
     confidence: 0.9,
   };
-  return {
+  const provider = {
     model: "mock-model",
     setModel() {},
     generate: vi.fn<(ctx: ContextPack) => Promise<AIResponse>>().mockResolvedValue(response),
@@ -74,6 +80,7 @@ function makeProvider(responseText: string): StreamingProvider {
       yield { type: "done", response };
     },
   } satisfies StreamingProvider;
+  return provider as StreamingProvider as SensitivityCleared<StreamingProvider>;
 }
 
 function makeDeps(opts: {
@@ -82,6 +89,12 @@ function makeDeps(opts: {
   summary?: string | null;
 }): {
   deps: ReflectionDeps;
+  /**
+   * Cleared provider — production wiring obtains this via the runtime's
+   * `assertSensitivityPermitsAiCall("runReflection")` + `projectProviderClearance`.
+   * Tests pass it explicitly to `performReflection(deps, provider)`.
+   */
+  provider: SensitivityCleared<StreamingProvider>;
   eventStore: EventStore;
   memory: MemoryGraph;
   state: StateVectorEngine;
@@ -97,12 +110,11 @@ function makeDeps(opts: {
     events: eventStore,
     state,
     memoryGovernor,
-    getProvider: () => provider,
     getTaskRouter: () => null,
     getConversationSummary: () => opts.summary ?? null,
     getConversationHistory: () => opts.history ?? [],
   };
-  return { deps, eventStore, memory, state };
+  return { deps, provider, eventStore, memory, state };
 }
 
 const CANONICAL_REFLECTION = `INSIGHTS:
@@ -121,24 +133,28 @@ describe("performReflection", () => {
   });
 
   it("returns the parsed reflection result", async () => {
-    const { deps } = makeDeps({ responseText: CANONICAL_REFLECTION });
-    const result = await performReflection(deps);
+    const { deps, provider } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const result = await performReflection(deps, provider);
     expect(result.insights).toHaveLength(2);
     expect(result.planAdjustments).toHaveLength(1);
     expect(result.selfAssessment).toContain("technical questions");
   });
 
-  it("throws when no provider is configured", async () => {
-    const { deps } = makeDeps({ responseText: CANONICAL_REFLECTION });
-    const dead: ReflectionDeps = { ...deps, getProvider: () => null };
-    await expect(performReflection(dead)).rejects.toThrow(/No AI provider/);
-  });
+  // "throws when no provider is configured" was structurally retired
+  // when `provider` became a required `performReflection` parameter
+  // and `getProvider` was removed from `ReflectionDeps` — the
+  // null-check moved to the caller (MotebitRuntime.reflect /
+  // reflectAndStore), which can't even reach `performReflection`
+  // without firing the gate that throws on the no-provider path
+  // (`assertSensitivityPermitsAiCall` throws "AI not initialized"
+  // when `this.loopDeps` is null). The runtime's own test suite
+  // covers that throw shape.
 
   it("nudges state — confidence + affect_valence bumped after reflection", async () => {
-    const { deps, state } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider, state } = makeDeps({ responseText: CANONICAL_REFLECTION });
     const pushSpy = vi.spyOn(state, "pushUpdate");
     const before = { ...state.getState() };
-    await performReflection(deps);
+    await performReflection(deps, provider);
     // State engine uses EMA smoothing via ticks, so we verify the signal
     // was pushed with the expected deltas rather than polling currentState.
     expect(pushSpy).toHaveBeenCalledTimes(1);
@@ -150,8 +166,8 @@ describe("performReflection", () => {
   });
 
   it("logs a ReflectionCompleted event containing full payload", async () => {
-    const { deps, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
-    await performReflection(deps);
+    const { deps, provider, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    await performReflection(deps, provider);
 
     // Allow best-effort async logger to flush
     await new Promise((r) => setTimeout(r, 10));
@@ -169,9 +185,8 @@ describe("performReflection", () => {
   });
 
   it("passes goals through to the provider prompt", async () => {
-    const { deps } = makeDeps({ responseText: CANONICAL_REFLECTION });
-    const provider = deps.getProvider()!;
-    await performReflection(deps, [
+    const { deps, provider } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    await performReflection(deps, provider, [
       { description: "Ship relay v2", status: "in_progress" },
       { description: "Write shakedown tests", status: "completed" },
     ]);
@@ -196,8 +211,8 @@ describe("performReflection", () => {
       summary: "User asked about X, Y, Z",
       history: longHistory,
     });
-    await performReflection(withSummary.deps);
-    const summaryCall = (withSummary.deps.getProvider()!.generate as ReturnType<typeof vi.fn>).mock
+    await performReflection(withSummary.deps, withSummary.provider);
+    const summaryCall = (withSummary.provider.generate as ReturnType<typeof vi.fn>).mock
       .calls[0]![0] as ContextPack;
     expect(summaryCall.user_message).toContain("msg-29");
     expect(summaryCall.user_message).toContain("msg-26");
@@ -210,8 +225,8 @@ describe("performReflection", () => {
       summary: null,
       history: longHistory,
     });
-    await performReflection(noSummary.deps);
-    const noSummaryCall = (noSummary.deps.getProvider()!.generate as ReturnType<typeof vi.fn>).mock
+    await performReflection(noSummary.deps, noSummary.provider);
+    const noSummaryCall = (noSummary.provider.generate as ReturnType<typeof vi.fn>).mock
       .calls[0]![0] as ContextPack;
     expect(noSummaryCall.user_message).toContain("msg-29");
     expect(noSummaryCall.user_message).toContain("msg-10"); // within last 20
@@ -219,8 +234,8 @@ describe("performReflection", () => {
   });
 
   it("persists concrete novel insights as semantic memories", async () => {
-    const { deps, memory } = makeDeps({ responseText: CANONICAL_REFLECTION });
-    await performReflection(deps);
+    const { deps, provider, memory } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    await performReflection(deps, provider);
 
     // Wait a tick for the `void persistHighSignalInsights(...)` promise to settle
     await new Promise((r) => setTimeout(r, 50));
@@ -247,8 +262,8 @@ ADJUSTMENTS:
 
 ASSESSMENT:
 Fine.`;
-    const { deps, memory } = makeDeps({ responseText: generic });
-    await performReflection(deps);
+    const { deps, provider, memory } = makeDeps({ responseText: generic });
+    await performReflection(deps, provider);
     await new Promise((r) => setTimeout(r, 50));
 
     const exported = await memory.exportAll();
@@ -256,15 +271,15 @@ Fine.`;
   });
 
   it("returns empty insights when LLM returns no structure", async () => {
-    const { deps } = makeDeps({ responseText: "just free-form text" });
-    const result = await performReflection(deps);
+    const { deps, provider } = makeDeps({ responseText: "just free-form text" });
+    const result = await performReflection(deps, provider);
     expect(result.insights).toHaveLength(0);
     expect(result.planAdjustments).toHaveLength(0);
     expect(result.selfAssessment).toBe("just free-form text");
   });
 
   it("buildAuditSummary surfaces phantom certainties in the prompt", async () => {
-    const { deps, memory } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider, memory } = makeDeps({ responseText: CANONICAL_REFLECTION });
 
     // Seed an isolated high-confidence node — this triggers a phantom certainty
     // in the memory audit (confidence >= 0.7, decayedConfidence >= 0.5, zero edges).
@@ -278,17 +293,16 @@ Fine.`;
       [1, 0, 0, 0],
     );
 
-    await performReflection(deps);
+    await performReflection(deps, provider);
 
-    const call = (deps.getProvider()!.generate as ReturnType<typeof vi.fn>).mock
-      .calls[0]![0] as ContextPack;
+    const call = (provider.generate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as ContextPack;
     expect(call.user_message).toContain("Notable memories this period");
     expect(call.user_message).toMatch(/\[phantom /);
     expect(call.user_message).toContain("Ansible");
   });
 
   it("includes past reflections section when prior ReflectionCompleted events exist", async () => {
-    const { deps, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
 
     // Seed a prior reflection event
     await eventStore.appendWithClock({
@@ -304,10 +318,9 @@ Fine.`;
       tombstoned: false,
     });
 
-    await performReflection(deps);
+    await performReflection(deps, provider);
 
-    const call = (deps.getProvider()!.generate as ReturnType<typeof vi.fn>).mock
-      .calls[0]![0] as ContextPack;
+    const call = (provider.generate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as ContextPack;
     expect(call.user_message).toContain("Past Reflections");
     expect(call.user_message).toContain("Prior insight");
   });
@@ -323,8 +336,8 @@ ADJUSTMENTS:
 
 ASSESSMENT:
 Test.`;
-    const { deps, memory } = makeDeps({ responseText: poisoned });
-    await performReflection(deps);
+    const { deps, provider, memory } = makeDeps({ responseText: poisoned });
+    await performReflection(deps, provider);
     await new Promise((r) => setTimeout(r, 50));
 
     // Insight was concrete (has snake_case) but embedText threw → not persisted
@@ -333,16 +346,15 @@ Test.`;
   });
 
   it("still runs when the memory audit throws (catch swallows)", async () => {
-    const { deps } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider } = makeDeps({ responseText: CANONICAL_REFLECTION });
 
     testFlags.auditThrows = true;
     try {
-      const result = await performReflection(deps);
+      const result = await performReflection(deps, provider);
       expect(result.insights).toHaveLength(2);
 
       // Verify the reflection still fires the LLM call (audit failure must not block)
-      const call = (deps.getProvider()!.generate as ReturnType<typeof vi.fn>).mock
-        .calls[0]![0] as ContextPack;
+      const call = (provider.generate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as ContextPack;
       // Audit section should NOT be in the prompt since the audit failed
       expect(call.user_message).not.toContain("Notable memories this period");
     } finally {
@@ -351,21 +363,20 @@ Test.`;
   });
 
   it("survives eventStore.query failure in loadPastReflections", async () => {
-    const { deps, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
     vi.spyOn(eventStore, "query").mockRejectedValue(new Error("query exploded"));
 
-    const result = await performReflection(deps);
+    const result = await performReflection(deps, provider);
     // Result still returned — past-reflections query failure is silent
     expect(result.insights).toHaveLength(2);
 
     // No "Past Reflections" section in the prompt since the query failed
-    const call = (deps.getProvider()!.generate as ReturnType<typeof vi.fn>).mock
-      .calls[0]![0] as ContextPack;
+    const call = (provider.generate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as ContextPack;
     expect(call.user_message).not.toContain("Past Reflections");
   });
 
   it("survives eventStore.appendWithClock failure in logReflectionCompleted", async () => {
-    const { deps, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
 
     // Only block the ReflectionCompleted append — earlier event activity is fine
     const originalAppend = eventStore.appendWithClock.bind(eventStore);
@@ -376,26 +387,26 @@ Test.`;
       return originalAppend(entry);
     });
 
-    const result = await performReflection(deps);
+    const result = await performReflection(deps, provider);
     expect(result.insights).toHaveLength(2);
     // Allow the best-effort append to resolve/reject
     await new Promise((r) => setTimeout(r, 10));
   });
 
   it("swallows persistence errors without affecting the return value", async () => {
-    const { deps, memory } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider, memory } = makeDeps({ responseText: CANONICAL_REFLECTION });
 
     // Force formMemory to throw on every call — persistence fails completely
     const formSpy = vi.spyOn(memory, "formMemory").mockRejectedValue(new Error("DB unreachable"));
 
-    const result = await performReflection(deps);
+    const result = await performReflection(deps, provider);
     expect(result.insights).toHaveLength(2);
     expect(result.selfAssessment).toContain("technical questions");
     formSpy.mockRestore();
   });
 
   it("skips insight that matches a prior reflection pattern (repeated)", async () => {
-    const { deps, memory, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider, memory, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
 
     // Seed enough prior reflections with the same insight that
     // detectReflectionPatterns surfaces it, making the current insight
@@ -416,7 +427,7 @@ Test.`;
       });
     }
 
-    await performReflection(deps);
+    await performReflection(deps, provider);
     await new Promise((r) => setTimeout(r, 50));
 
     // The repeated insight should NOT have been persisted as a memory
@@ -426,7 +437,7 @@ Test.`;
   });
 
   it("skips insight that is too similar to an existing memory (not novel)", async () => {
-    const { deps, memory } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider, memory } = makeDeps({ responseText: CANONICAL_REFLECTION });
 
     // Pre-seed memories with the exact same content — the novelty check
     // should detect the match (cosine ~1.0) and skip persistence.
@@ -448,7 +459,7 @@ Test.`;
     }
 
     const before = (await memory.exportAll()).nodes.length;
-    await performReflection(deps);
+    await performReflection(deps, provider);
     await new Promise((r) => setTimeout(r, 50));
 
     // No duplicates added
@@ -457,7 +468,7 @@ Test.`;
   });
 
   it("loadPastReflections handles events with only insights (no plan_adjustments)", async () => {
-    const { deps, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
 
     // Event with insights only — exercises the plan_adjustments ?? [] fallback
     await eventStore.appendWithClock({
@@ -472,20 +483,19 @@ Test.`;
       tombstoned: false,
     });
 
-    await performReflection(deps);
-    const call = (deps.getProvider()!.generate as ReturnType<typeof vi.fn>).mock
-      .calls[0]![0] as ContextPack;
+    await performReflection(deps, provider);
+    const call = (provider.generate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as ContextPack;
     expect(call.user_message).toContain("one insight");
   });
 
   it("skips insight when the memory governor rejects it", async () => {
-    const { deps, memory } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider, memory } = makeDeps({ responseText: CANONICAL_REFLECTION });
 
     // Force the governor to reject every candidate
     vi.spyOn(deps.memoryGovernor, "evaluate").mockReturnValue([]);
 
     const before = (await memory.exportAll()).nodes.length;
-    await performReflection(deps);
+    await performReflection(deps, provider);
     await new Promise((r) => setTimeout(r, 50));
 
     // Nothing persisted — governor returned no decisions
@@ -494,7 +504,7 @@ Test.`;
   });
 
   it("loadPastReflections handles events with only plan_adjustments", async () => {
-    const { deps, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
 
     // Event with plan_adjustments but no insights — exercises the filter's
     // second arm (`Array.isArray(e.payload.plan_adjustments)`).
@@ -510,19 +520,18 @@ Test.`;
       tombstoned: false,
     });
 
-    await performReflection(deps);
-    const call = (deps.getProvider()!.generate as ReturnType<typeof vi.fn>).mock
-      .calls[0]![0] as ContextPack;
+    await performReflection(deps, provider);
+    const call = (provider.generate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as ContextPack;
     expect(call.user_message).toContain("Past Reflections");
     expect(call.user_message).toContain("adjust something");
   });
 
   it("swallows top-level persistence setup failure (patterns throw)", async () => {
-    const { deps } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider } = makeDeps({ responseText: CANONICAL_REFLECTION });
 
     testFlags.patternsThrows = true;
     try {
-      const result = await performReflection(deps);
+      const result = await performReflection(deps, provider);
       // Main reflection return is unaffected even though the pattern-check
       // setup in persistHighSignalInsights exploded
       expect(result.insights).toHaveLength(2);
@@ -533,27 +542,24 @@ Test.`;
 });
 
 describe("runReflectionSafe", () => {
-  it("swallows errors from missing provider", async () => {
-    const { deps } = makeDeps({ responseText: CANONICAL_REFLECTION });
-    const dead: ReflectionDeps = { ...deps, getProvider: () => null };
-    // Should not throw
-    await expect(runReflectionSafe(dead)).resolves.toBeUndefined();
-  });
+  // "swallows errors from missing provider" was structurally retired
+  // along with the matching `performReflection` test — the no-provider
+  // path is now compile-time impossible at the caller (the runtime
+  // throws "AI not initialized" before reaching `runReflectionSafe`
+  // when no provider is wired).
 
   it("swallows errors from provider rejection", async () => {
-    const { deps } = makeDeps({ responseText: CANONICAL_REFLECTION });
-    const broken: StreamingProvider = {
-      ...deps.getProvider()!,
-      generate: () => Promise.reject(new Error("rate limit")),
-    };
-    const failing: ReflectionDeps = { ...deps, getProvider: () => broken };
-    await expect(runReflectionSafe(failing)).resolves.toBeUndefined();
+    const { deps, provider } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    // Stub the provider's generate to reject — runReflectionSafe must
+    // swallow the rejection rather than propagate.
+    (provider.generate as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("rate limit"));
+    await expect(runReflectionSafe(deps, provider)).resolves.toBeUndefined();
   });
 
   it("runs to completion on the happy path", async () => {
-    const { deps, state } = makeDeps({ responseText: CANONICAL_REFLECTION });
+    const { deps, provider, state } = makeDeps({ responseText: CANONICAL_REFLECTION });
     const pushSpy = vi.spyOn(state, "pushUpdate");
-    await runReflectionSafe(deps);
+    await runReflectionSafe(deps, provider);
     expect(pushSpy).toHaveBeenCalledTimes(1);
   });
 });

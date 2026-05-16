@@ -665,6 +665,40 @@ export type AgenticChunk =
     }
   | { type: "result"; result: TurnResult };
 
+// === Clearance projection ===
+
+/**
+ * Project the sensitivity-clearance witness from cleared deps onto
+ * the deps' `provider` field. **No new gate fires here** — the brand
+ * was produced by the runtime's `assertSensitivityPermitsAiCall`
+ * that yielded `cleared`; this helper carries the type-level witness
+ * from the container to its provider sub-field. Pure type-level
+ * no-op at runtime.
+ *
+ * Use this at every cross-package direct-provider-call site that
+ * already has cleared deps (planner per-step decomposition and
+ * reflection, runtime housekeeping that fires the gate explicitly).
+ * The receiving function declares `provider:
+ * SensitivityCleared<StreamingProvider>` (or
+ * `SensitivityCleared<IntelligenceProvider>`, since
+ * `StreamingProvider extends IntelligenceProvider`), and the brand
+ * makes the unbranded `.generate(...)` call site structurally
+ * unreachable from any path that didn't fire the gate.
+ *
+ * Doctrine: `docs/doctrine/security-boundaries.md` (privacy gate),
+ * CLAUDE.md ("Medical/financial/secret never reach external AI").
+ * Layer 1 promotion arc: closes the cross-package direct-provider-
+ * call family that `runTurn` / `runTurnStreaming`'s deps-bundle
+ * brand cannot reach (those functions take cleared deps, but
+ * housekeeping functions like `summarizeConversation` / `reflect` /
+ * `decomposePlan` / `reflectOnPlan` take a bare provider parameter).
+ */
+export function projectProviderClearance(
+  cleared: SensitivityCleared<MotebitLoopDependencies>,
+): SensitivityCleared<StreamingProvider> {
+  return (cleared as MotebitLoopDependencies).provider as SensitivityCleared<StreamingProvider>;
+}
+
 // === Orchestrator ===
 
 export async function runTurn(

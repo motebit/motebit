@@ -8,7 +8,7 @@ import type {
 } from "@motebit/sdk";
 import type { MotebitLoopDependencies, AgenticChunk, ResolvedTaskConfig } from "@motebit/ai-core";
 import type { SensitivityCleared } from "@motebit/sdk";
-import { runTurnStreaming } from "@motebit/ai-core";
+import { runTurnStreaming, projectProviderClearance } from "@motebit/ai-core";
 import type { PlanStoreAdapter } from "./types.js";
 import type { CollaborativeDelegationAdapter } from "./delegation-adapter.js";
 import { decomposePlan } from "./decompose.js";
@@ -106,7 +106,7 @@ export class PlanEngine {
     deps: SensitivityCleared<MotebitLoopDependencies>,
     planningConfig?: ResolvedTaskConfig,
   ): Promise<{ plan: Plan; truncatedFrom?: number }> {
-    const rawPlan = await decomposePlan(ctx, deps.provider, planningConfig);
+    const rawPlan = await decomposePlan(ctx, projectProviderClearance(deps), planningConfig);
     const maxSteps = this.config.maxStepsPerPlan ?? 10;
     let truncatedFrom: number | undefined;
     if (rawPlan.steps.length > maxSteps) {
@@ -575,7 +575,7 @@ export class PlanEngine {
           const result = await reflectOnPlan(
             completedPlan,
             allSteps,
-            deps.provider,
+            projectProviderClearance(deps),
             reflectionConfig,
           );
           yield { type: "reflection", result };

@@ -1,12 +1,19 @@
 import { describe, it, expect, vi } from "vitest";
 import { PlanStatus, StepStatus } from "@motebit/sdk";
-import type { Plan, PlanStep, AIResponse } from "@motebit/sdk";
+import type { Plan, PlanStep, AIResponse, SensitivityCleared } from "@motebit/sdk";
 import type { StreamingProvider } from "@motebit/ai-core";
 import { reflectOnPlan, parseReflectionResponse } from "../reflect.js";
 
 // === Mock Provider ===
 
-function createMockProvider(responseText: string): StreamingProvider {
+/**
+ * Tests construct the provider directly; production code reaches the
+ * cleared form by going through the runtime's
+ * `assertSensitivityPermitsAiCall` + `projectProviderClearance`. The
+ * helper casts to the brand because `reflectOnPlan` now requires it
+ * on the signature — phantom type-level proof, no runtime cost.
+ */
+function createMockProvider(responseText: string): SensitivityCleared<StreamingProvider> {
   return {
     model: "test-model",
     setModel: vi.fn(),
@@ -19,7 +26,7 @@ function createMockProvider(responseText: string): StreamingProvider {
     generateStream: vi.fn(),
     estimateConfidence: vi.fn().mockResolvedValue(0.8),
     extractMemoryCandidates: vi.fn().mockResolvedValue([]),
-  };
+  } as StreamingProvider as SensitivityCleared<StreamingProvider>;
 }
 
 function makePlan(overrides?: Partial<Plan>): Plan {

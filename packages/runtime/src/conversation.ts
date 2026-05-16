@@ -6,10 +6,25 @@
  * wiring rather than conversation bookkeeping.
  */
 
-import type { ConversationMessage, ConversationStoreAdapter } from "@motebit/sdk";
+import type {
+  ConversationMessage,
+  ConversationStoreAdapter,
+  SensitivityCleared,
+  SensitivityGateEntry,
+} from "@motebit/sdk";
 import { SensitivityLevel, maxSensitivity, sensitivityPermits } from "@motebit/sdk";
-import type { StreamingProvider, ContextBudget, TaskType } from "@motebit/ai-core";
-import { trimConversation, summarizeConversation, shouldSummarize } from "@motebit/ai-core";
+import type {
+  StreamingProvider,
+  ContextBudget,
+  TaskType,
+  MotebitLoopDependencies,
+} from "@motebit/ai-core";
+import {
+  trimConversation,
+  summarizeConversation,
+  shouldSummarize,
+  projectProviderClearance,
+} from "@motebit/ai-core";
 import type { TaskRouter } from "@motebit/ai-core";
 import {
   searchConversationMessages,
@@ -50,12 +65,38 @@ export interface ConversationDeps {
   maxHistory: number;
   summarizeAfterMessages: number;
   store: ConversationStoreAdapter | null;
-  /** Resolve current AI provider (may change over lifetime). */
+  /**
+   * Resolve current AI provider (may change over lifetime).
+   *
+   * Returns the raw (unbranded) provider — used for nullability /
+   * configuration checks ("is a provider wired?"). Bytes-leave call
+   * sites do NOT use this; they call
+   * `assertSensitivityPermitsAiCall("summarizeConversation")` and
+   * project the cleared provider via
+   * `projectProviderClearance(cleared)`. Reading the unbranded
+   * provider for a pre-flight existence check before firing the
+   * gate is fine — the gate's audit event correctly attributes
+   * which call would have egressed.
+   */
   getProvider(): StreamingProvider | null;
   /** Resolve current task router (may change over lifetime). */
   getTaskRouter(): TaskRouter | null;
   /** Generate a plain text completion for titling. */
   generateCompletion(prompt: string, taskType?: TaskType): Promise<string>;
+  /**
+   * Fire the runtime's sensitivity gate and return branded loop deps.
+   * Single authorized path to summarization's AI-call site — the
+   * brand is unforgeable outside the runtime, so every
+   * `summarizeConversation` invocation is rooted in a gate firing.
+   * Closes the cross-package off-gate path the static
+   * `check-sensitivity-routing` cannot scan (this file lives in
+   * `@motebit/runtime`, the static gate scans only
+   * `motebit-runtime.ts`).
+   */
+  assertSensitivityPermitsAiCall(
+    entry: SensitivityGateEntry,
+    toolName?: string,
+  ): SensitivityCleared<MotebitLoopDependencies>;
   /**
    * Default sensitivity tier stamped on every persisted message. Mirrors
    * the operator manifest's `pre_classification_default_sensitivity`
@@ -318,10 +359,18 @@ export class ConversationManager {
     const history = this.getHistory();
     if (history.length < 2) return null;
     const existingSummary = this.getStoredSummary();
+    // Fire the privacy gate before bytes leave for the
+    // summarization completion. The unbranded `provider` above is
+    // only used for the nullability check; the actual AI call
+    // requires `SensitivityCleared<StreamingProvider>` projected
+    // from the gate's cleared deps.
+    const clearedProvider = projectProviderClearance(
+      this.deps.assertSensitivityPermitsAiCall("summarizeConversation"),
+    );
     const summary = await summarizeConversation(
       history,
       existingSummary,
-      provider,
+      clearedProvider,
       this.deps.getTaskRouter() ?? undefined,
     );
     if (summary && this.currentId) {
@@ -543,10 +592,19 @@ export class ConversationManager {
       return;
     try {
       const existingSummary = this.getStoredSummary();
+      // Gate-then-project — see `summarize()` comment. The outer
+      // try/catch covers both the gate's `SovereignTierRequiredError`
+      // (sensitivity blocked the egress) and downstream provider
+      // failures; the audit event still emits before the throw so a
+      // blocked background summarization is observable in the
+      // SensitivityGateFired log.
+      const clearedProvider = projectProviderClearance(
+        this.deps.assertSensitivityPermitsAiCall("summarizeConversation"),
+      );
       const summary = await summarizeConversation(
         this.history,
         existingSummary,
-        provider,
+        clearedProvider,
         this.deps.getTaskRouter() ?? undefined,
       );
       if (summary && this.currentId) {

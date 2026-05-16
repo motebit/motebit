@@ -1,6 +1,7 @@
 import { TrustMode, BatteryMode, StepStatus } from "@motebit/sdk";
 import type { Plan, PlanStep } from "@motebit/sdk";
 import type { StreamingProvider, ResolvedTaskConfig } from "@motebit/ai-core";
+import type { SensitivityCleared } from "@motebit/sdk";
 import { withTaskConfig } from "@motebit/ai-core";
 
 // === Plan Reflection Result ===
@@ -129,7 +130,16 @@ export function parseReflectionResponse(text: string): ReflectionResult {
 export async function reflectOnPlan(
   plan: Plan,
   steps: PlanStep[],
-  provider: StreamingProvider,
+  /**
+   * `SensitivityCleared<StreamingProvider>` — type-level proof that
+   * `assertSensitivityPermitsAiCall("executePlanStep")` fired before
+   * `PlanExecutionManager.executePlan` reached `PlanEngine.executePlan`
+   * (which projects the cleared provider from cleared deps via
+   * `projectProviderClearance` and passes it here on post-execution
+   * reflection). Plan reflection shares the plan-step audit category
+   * with decomposition and per-step execution — one egress cluster.
+   */
+  provider: SensitivityCleared<StreamingProvider>,
   reflectionConfig?: ResolvedTaskConfig,
 ): Promise<ReflectionResult> {
   const userMessage = buildReflectionPrompt(plan, steps);

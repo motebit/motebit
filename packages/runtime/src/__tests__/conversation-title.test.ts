@@ -130,6 +130,11 @@ function makeDeps(
     getProvider: () => (overrides.getProvider ? overrides.getProvider() : provider),
     getTaskRouter: () => null,
     generateCompletion: vi.fn(async () => "AI Title"),
+    // Fixtured gate — these auto-title tests don't drive
+    // `summarize()`/`runSummarization()` (the only call sites that
+    // fire the brand-producing gate), so an identity stub is safe.
+    assertSensitivityPermitsAiCall: () =>
+      ({}) as ReturnType<ConversationDeps["assertSensitivityPermitsAiCall"]>,
     ...overrides,
   };
 }

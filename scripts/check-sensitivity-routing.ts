@@ -50,7 +50,36 @@
  * have already passed through `CONTEXT_SAFE_SENSITIVITY` at retrieval
  * time, so high-sensitivity bytes never enter the consolidation
  * path. Locking that invariant is the memory-retrieval filter's job,
- * not this gate's.
+ * not this gate's. The carve-out also covers
+ * `runtime/consolidation-cycle.ts:consolidatePhase` (same content-
+ * filter justification, cross-file from this scan).
+ *
+ * ── Relationship to the `SensitivityCleared<T>` brand ──────────────
+ *
+ * This gate handles **in-file direct provider calls** within
+ * `motebit-runtime.ts` (`generateCompletion`, `wireLoopDeps`'s
+ * consolidation provider). It complements — does not replace — the
+ * `SensitivityCleared<T>` phantom-type brand promoted in
+ * `@motebit/protocol`, which structurally enforces the **cross-
+ * package indirect direct-call family**:
+ *
+ *   - `summarizeConversation` in `@motebit/ai-core` — caller
+ *     `ConversationManager` projects cleared provider from
+ *     `assertSensitivityPermitsAiCall("summarizeConversation")`.
+ *   - `reflect` in `@motebit/ai-core` — caller `performReflection`
+ *     in `@motebit/reflection` receives cleared provider from the
+ *     runtime's `assertSensitivityPermitsAiCall("runReflection")`.
+ *   - `decomposePlan` / `reflectOnPlan` in `@motebit/planner` —
+ *     `PlanEngine` projects cleared provider from cleared deps that
+ *     `PlanExecutionManager` produced via
+ *     `assertSensitivityPermitsAiCall("executePlanStep")`.
+ *
+ * Each branded parameter makes any path that bypasses the gate a
+ * compile error. The static check this file performs is what's
+ * left after the brand absorbs the cross-package family: in-file
+ * regression coverage for direct `provider.generate(...)` calls
+ * inside the runtime's own method bodies, where TS can't enforce
+ * "this method call requires the receiver to be branded."
  *
  * Exit 1 on violation. Runs in CI via `pnpm check`.
  */

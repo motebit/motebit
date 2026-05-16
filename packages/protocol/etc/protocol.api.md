@@ -2903,7 +2903,7 @@ export type SensitivityCleared<T> = T & {
 export type SensitivityElevationSource = "session" | "slab_item";
 
 // @public
-export type SensitivityGateEntry = "sendMessage" | "sendMessageStreaming" | "generateActivation" | "generateCompletion" | "outbound_tool" | "resumeAfterToolApproval" | "executePlanStep";
+export type SensitivityGateEntry = "sendMessage" | "sendMessageStreaming" | "generateActivation" | "generateCompletion" | "outbound_tool" | "resumeAfterToolApproval" | "executePlanStep" | "summarizeConversation" | "runReflection";
 
 // @public
 export interface SensitivityGateFiredPayload {

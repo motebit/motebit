@@ -181,6 +181,7 @@ import {
   withStageTimeout,
   STAGE_TIMEOUTS_MS,
   StageTimeoutError,
+  projectProviderClearance,
 } from "@motebit/ai-core";
 import type {
   StreamingProvider,
@@ -797,6 +798,13 @@ export class MotebitRuntime {
       getProvider: () => this.provider,
       getTaskRouter: () => this.taskRouter,
       generateCompletion: (prompt, taskType) => this.generateCompletion(prompt, taskType),
+      // Single authorized brand producer for the summarization
+      // path. ConversationManager projects the cleared provider
+      // and passes it to ai-core's summarizeConversation; the
+      // brand makes any path that bypasses the gate a compile
+      // error.
+      assertSensitivityPermitsAiCall: (entry, toolName) =>
+        this.assertSensitivityPermitsAiCall(entry, toolName),
       // Default sensitivity baseline for persisted messages. Set to
       // `None` to match the read-side filter's default in
       // `trimmed()` (which falls back to `None` when
@@ -2264,9 +2272,19 @@ export class MotebitRuntime {
    * Trigger a reflection on the current conversation.
    * The agent reviews its performance, learns insights, and stores them as memories.
    * Returns the reflection result for display (e.g. in the CLI).
+   *
+   * Fires the privacy gate for `"runReflection"` and projects the
+   * cleared provider before reaching `performReflection`. Throws
+   * `SovereignTierRequiredError` (the gate's audit event emits
+   * before the throw) when session sensitivity is medical+/
+   * non-sovereign — surface the typed error so the surface can
+   * render a "this reflection requires on-device" affordance.
    */
   async reflect(goals?: Array<{ description: string; status: string }>): Promise<ReflectionResult> {
-    const result = await performReflection(this.reflectionDeps, goals);
+    const clearedProvider = projectProviderClearance(
+      this.assertSensitivityPermitsAiCall("runReflection"),
+    );
+    const result = await performReflection(this.reflectionDeps, clearedProvider, goals);
     this.gradientManager.setLastReflection(result);
     return result;
   }
@@ -2275,10 +2293,18 @@ export class MotebitRuntime {
    * Fire reflection in background and capture the result.
    * The result is stored in gradientManager and available to buildSelfAwareness()
    * on subsequent turns — the creature carries forward its behavioral learning.
+   *
+   * Gate firing is inside the try/catch — a sovereign-tier-required
+   * throw silently skips background reflection (the audit event
+   * still emits before the throw so the blocked egress is
+   * observable).
    */
   private async reflectAndStore(): Promise<void> {
     try {
-      const result = await performReflection(this.reflectionDeps);
+      const clearedProvider = projectProviderClearance(
+        this.assertSensitivityPermitsAiCall("runReflection"),
+      );
+      const result = await performReflection(this.reflectionDeps, clearedProvider);
       this.gradientManager.setLastReflection(result);
     } catch {
       // Reflection is best-effort — don't crash the runtime
@@ -2292,7 +2318,6 @@ export class MotebitRuntime {
       events: this.events,
       state: this.state,
       memoryGovernor: this.memoryGovernor,
-      getProvider: () => this.provider,
       getTaskRouter: () => this.taskRouter,
       getConversationSummary: () => this.conversation.getStoredSummary(),
       getConversationHistory: () => this.conversation.getHistory(),
@@ -2637,7 +2662,24 @@ export class MotebitRuntime {
           memoryGovernor: this.memoryGovernor,
           privacy: this.privacy,
           getProvider: () => this.provider,
-          performReflection: () => runReflectionSafe(this.reflectionDeps),
+          // Consolidation-cycle reflection — fires the gate at
+          // each cycle (sensitivity may elevate between cycles via
+          // a slab item or tier-bounded tool result). Gate failure
+          // resolves silently because the callback returns
+          // Promise<void> and the consolidation cycle treats the
+          // entire reflection step as best-effort; the audit event
+          // still emits before the throw so the blocked egress
+          // shows in the SensitivityGateFired log.
+          performReflection: () => {
+            try {
+              const clearedProvider = projectProviderClearance(
+                this.assertSensitivityPermitsAiCall("runReflection"),
+              );
+              return runReflectionSafe(this.reflectionDeps, clearedProvider);
+            } catch {
+              return Promise.resolve();
+            }
+          },
           setCuriosityTargets: (targets) => this.gradientManager.setCuriosityTargets(targets),
           computeAndStoreGradient: (nodes) =>
             this.gradientManager.computeAndStoreGradient(nodes).then(() => {}),

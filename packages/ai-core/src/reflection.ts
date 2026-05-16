@@ -1,4 +1,4 @@
-import type { ConversationMessage, IntelligenceProvider } from "@motebit/sdk";
+import type { ConversationMessage, IntelligenceProvider, SensitivityCleared } from "@motebit/sdk";
 import { TrustMode, BatteryMode } from "@motebit/sdk";
 import type { TaskRouter } from "./task-router.js";
 import { withTaskConfig } from "./task-router.js";
@@ -155,13 +155,22 @@ function parseBulletList(text: string): string[] {
  * When a `TaskRouter` is provided, the provider's model/temperature/maxTokens
  * are temporarily switched to the "reflection" task config before calling
  * generate, then restored afterward.
+ *
+ * Provider parameter carries `SensitivityCleared<IntelligenceProvider>`:
+ * the type-level proof that `assertSensitivityPermitsAiCall` fired for
+ * `"runReflection"` before this call. The caller (typically
+ * `performReflection` in `@motebit/reflection`) projects the cleared
+ * provider from cleared deps via `projectProviderClearance`. Reflection
+ * composes the conversation summary, recent messages, memories, past
+ * reflections, and audit-summary into the prompt — a richer egress
+ * shape than `generateCompletion`, with its own audit attribution.
  */
 export async function reflect(
   conversationSummary: string | null,
   recentMessages: ConversationMessage[],
   activeGoals: Array<{ description: string; status: string }>,
   memories: Array<{ content: string }>,
-  provider: IntelligenceProvider,
+  provider: SensitivityCleared<IntelligenceProvider>,
   taskRouter?: TaskRouter,
   pastReflections?: PastReflection[],
   auditSummary?: string,

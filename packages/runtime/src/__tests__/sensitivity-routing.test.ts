@@ -15,7 +15,8 @@
  *   - on-device provider permits any sensitivity
  *   - The gate fires at every entry point: sendMessage,
  *     sendMessageStreaming, generateActivation, generateCompletion,
- *     outbound_tool, resumeAfterToolApproval, executePlanStep
+ *     outbound_tool, resumeAfterToolApproval, executePlanStep,
+ *     summarizeConversation, runReflection
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -530,5 +531,44 @@ describe("MotebitRuntime — sensitivity gate audit emission", () => {
     expect(events[0]!.payload.entry).toBe("executePlanStep");
     expect(events[0]!.payload.session_sensitivity).toBe(SensitivityLevel.Financial);
     expect(events[0]!.payload.provider_mode).toBe("motebit-cloud");
+  });
+
+  // ── Sub-axis entries: housekeeping sites ─────────────────────────
+  //
+  // `summarizeConversation` and `runReflection` are the housekeeping
+  // gate-firing sites added when the `SensitivityCleared<T>` brand
+  // promoted from the deps-bundle (covering `runTurn` /
+  // `runTurnStreaming`) onto the direct-provider-call family
+  // (`summarizeConversation` in `@motebit/ai-core`, `performReflection`
+  // in `@motebit/reflection`). Both are bytes-leave moments with
+  // payload shapes distinct from `generateCompletion` — distinct
+  // audit entries attribute blocked egress to the right site.
+
+  it("summarizeConversation entry: gate predicate fires SensitivityGateFired with the dedicated entry", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("byok");
+    r.setSessionSensitivity(SensitivityLevel.Medical);
+    expect(() => r.assertSensitivityPermitsAiCall("summarizeConversation")).toThrow(
+      SovereignTierRequiredError,
+    );
+    const events = await getGateFiredEvents(r);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload.entry).toBe("summarizeConversation");
+    expect(events[0]!.payload.session_sensitivity).toBe(SensitivityLevel.Medical);
+    expect(events[0]!.payload.provider_mode).toBe("byok");
+  });
+
+  it("runReflection entry: gate predicate fires SensitivityGateFired with the dedicated entry", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("byok");
+    r.setSessionSensitivity(SensitivityLevel.Secret);
+    expect(() => r.assertSensitivityPermitsAiCall("runReflection")).toThrow(
+      SovereignTierRequiredError,
+    );
+    const events = await getGateFiredEvents(r);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload.entry).toBe("runReflection");
+    expect(events[0]!.payload.session_sensitivity).toBe(SensitivityLevel.Secret);
+    expect(events[0]!.payload.provider_mode).toBe("byok");
   });
 });

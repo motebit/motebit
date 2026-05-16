@@ -234,7 +234,7 @@ export function resolveDropTarget(payload: DropPayload): DropTarget {
 
 /**
  * Which AI-call entry the runtime blocked. The runtime gates fire at
- * seven distinct sites today; the audit event names the site so log
+ * nine distinct sites today; the audit event names the site so log
  * consumers can group / branch by entry without parsing free text.
  *
  * Sub-axis refinement (not a registered registry — per `registry-
@@ -245,14 +245,14 @@ export function resolveDropTarget(payload: DropPayload): DropTarget {
  * entry is intentional protocol-level work + test additions, but
  * carries no eight-artifact obligation.
  *
- * Entries split into two categories:
+ * Entries split into three categories:
  *
  *  1. **Direct AI-call entries** — the surface-facing method the user
  *     (or surface) invoked: `sendMessage`, `sendMessageStreaming`,
  *     `generateActivation`, `generateCompletion`, `outbound_tool`.
  *
- *  2. **Indirect AI-call entries** — continuations the runtime fires
- *     internally where bytes leave on resume:
+ *  2. **Indirect AI-call entries (continuation sites)** — the runtime
+ *     fires the gate again where bytes leave on resume:
  *     `resumeAfterToolApproval` (StreamingManager continues a paused
  *     turn after the user approves a tool call); `executePlanStep`
  *     (PlanExecutionManager fires the gate per-step on initial
@@ -261,6 +261,20 @@ export function resolveDropTarget(payload: DropPayload): DropTarget {
  *     `sendMessageStreaming` as the audit label; the doctrinally
  *     accurate split names the actual entry so audit consumers can
  *     attribute blocked egress to the right site without guessing.
+ *
+ *  3. **Indirect AI-call entries (housekeeping sites)** — the runtime
+ *     fires the gate on background AI work that doesn't go through
+ *     `runtime.generateCompletion`'s surface-facing path:
+ *     `summarizeConversation` (ConversationManager calls
+ *     `summarizeConversation` from `@motebit/ai-core` directly,
+ *     reading full conversation history); `runReflection`
+ *     (runtime.reflect / reflectAndStore call `performReflection` in
+ *     `@motebit/reflection`, which composes history + memories +
+ *     past reflections + audit summary before calling
+ *     `reflect` in `@motebit/ai-core`). Both are bytes-leave moments
+ *     with payload shapes distinct enough from `generateCompletion`
+ *     that conflating their audit entry hides the actual blocked
+ *     site from a forensic consumer.
  */
 export type SensitivityGateEntry =
   | "sendMessage"
@@ -269,7 +283,9 @@ export type SensitivityGateEntry =
   | "generateCompletion"
   | "outbound_tool"
   | "resumeAfterToolApproval"
-  | "executePlanStep";
+  | "executePlanStep"
+  | "summarizeConversation"
+  | "runReflection";
 
 /**
  * What elevated effective sensitivity above the explicit session

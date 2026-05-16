@@ -7,7 +7,7 @@
  */
 
 import { EventType, SensitivityLevel, MemoryType } from "@motebit/sdk";
-import type { ConversationMessage } from "@motebit/sdk";
+import type { ConversationMessage, SensitivityCleared } from "@motebit/sdk";
 import type {
   StreamingProvider,
   TaskRouter,
@@ -29,15 +29,23 @@ import type { StateVectorEngine } from "@motebit/state-vector";
 import { MemoryClass } from "@motebit/policy";
 import type { MemoryGovernor } from "@motebit/policy";
 
-/** Dependencies injected by the runtime. */
+/**
+ * Dependencies injected by the runtime.
+ *
+ * `getProvider` is intentionally absent — the cleared provider
+ * threads in as an explicit `performReflection` parameter, so the
+ * type system enforces that the caller fired
+ * `assertSensitivityPermitsAiCall("runReflection")` and projected
+ * the clearance via `projectProviderClearance`. The runtime callers
+ * (`MotebitRuntime.reflect`, `MotebitRuntime.reflectAndStore`, and
+ * the consolidation-cycle reflection callback) own the gate firing.
+ */
 export interface ReflectionDeps {
   motebitId: string;
   memory: MemoryGraph;
   events: EventStore;
   state: StateVectorEngine;
   memoryGovernor: MemoryGovernor;
-  /** Resolve current AI provider (may change over lifetime). */
-  getProvider(): StreamingProvider | null;
   /** Resolve current task router (may change over lifetime). */
   getTaskRouter(): TaskRouter | null;
   /** Get conversation summary from the conversation manager. */
@@ -49,14 +57,21 @@ export interface ReflectionDeps {
 /**
  * Trigger a reflection on the current conversation.
  * The agent reviews its performance, learns insights, and stores them as memories.
+ *
+ * `provider` is `SensitivityCleared<StreamingProvider>` — the
+ * type-level proof that the caller fired
+ * `assertSensitivityPermitsAiCall("runReflection")` before reaching
+ * this function. Any path that reaches `performReflection` without
+ * threading the brand from a gate-firing producer is a compile
+ * error. Sensitivity may elevate between consecutive reflection
+ * fires (a slab item dropped, a tier-bounded tool result observed);
+ * the gate must fire at each invocation, never cached.
  */
 export async function performReflection(
   deps: ReflectionDeps,
+  provider: SensitivityCleared<StreamingProvider>,
   goals?: Array<{ description: string; status: string }>,
 ): Promise<ReflectionResult> {
-  const provider = deps.getProvider();
-  if (!provider) throw new Error("No AI provider configured");
-
   const summary = deps.getConversationSummary();
 
   const recentMemories = await deps.memory.exportAll();
@@ -101,10 +116,24 @@ export async function performReflection(
   return result;
 }
 
-/** Best-effort reflection — swallows errors to avoid crashing the runtime. */
-export async function runReflectionSafe(deps: ReflectionDeps): Promise<void> {
+/**
+ * Best-effort reflection — swallows errors to avoid crashing the
+ * runtime.
+ *
+ * `provider` is `SensitivityCleared<StreamingProvider>` — caller
+ * fires `assertSensitivityPermitsAiCall("runReflection")` and
+ * threads the cleared provider in. The caller (typically the
+ * consolidation-cycle reflection callback) wraps the gate firing
+ * itself in a try/catch when reflection is best-effort:
+ * `SovereignTierRequiredError` is silenced + the cycle continues,
+ * but the gate's audit event still emits before the throw.
+ */
+export async function runReflectionSafe(
+  deps: ReflectionDeps,
+  provider: SensitivityCleared<StreamingProvider>,
+): Promise<void> {
   try {
-    await performReflection(deps);
+    await performReflection(deps, provider);
   } catch {
     // Reflection is best-effort — don't crash the runtime
   }

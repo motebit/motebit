@@ -6,11 +6,20 @@ import type {
   AIResponse,
   IntelligenceProvider,
   ContextPack,
+  SensitivityCleared,
 } from "@motebit/sdk";
 
 // === Mock Provider ===
 
-function createMockProvider(responseText: string): IntelligenceProvider {
+/**
+ * Tests construct mock providers directly; production code reaches the
+ * cleared form by going through `MotebitRuntime.assertSensitivityPermitsAiCall`
+ * + `projectProviderClearance`. The helper casts to the brand because
+ * `summarizeConversation` now requires it on the signature — the brand
+ * is a phantom type-level proof, not a runtime field, so the cast
+ * carries no runtime cost.
+ */
+function createMockProvider(responseText: string): SensitivityCleared<IntelligenceProvider> {
   return {
     generate: vi.fn().mockResolvedValue({
       text: responseText,
@@ -20,7 +29,7 @@ function createMockProvider(responseText: string): IntelligenceProvider {
     } satisfies AIResponse),
     estimateConfidence: vi.fn().mockResolvedValue(0.8),
     extractMemoryCandidates: vi.fn().mockResolvedValue([]),
-  };
+  } as IntelligenceProvider as SensitivityCleared<IntelligenceProvider>;
 }
 
 function msg(role: "user" | "assistant", content: string): ConversationMessage {
@@ -155,7 +164,7 @@ describe("summarizeConversation with TaskRouter", () => {
     let currentTemp: number | undefined = 0.7;
     let currentMaxTokens: number | undefined = 1024;
 
-    return {
+    const provider = {
       get model() {
         return currentModel;
       },
@@ -183,6 +192,9 @@ describe("summarizeConversation with TaskRouter", () => {
       estimateConfidence: vi.fn().mockResolvedValue(0.8),
       extractMemoryCandidates: vi.fn().mockResolvedValue([]),
     };
+    // Cast at the helper boundary so callsites stay clean. The brand
+    // is type-level only — no runtime field added.
+    return provider as typeof provider & SensitivityCleared<IntelligenceProvider>;
   }
 
   it("switches model config for summarization task and restores after", async () => {

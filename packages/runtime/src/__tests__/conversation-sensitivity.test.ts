@@ -67,6 +67,13 @@ function makeDeps(
     getProvider: () => provider,
     getTaskRouter: () => null,
     generateCompletion: vi.fn(async () => "AI Title"),
+    // Tests fixture the gate as a no-op identity (returns a typed
+    // empty cleared-deps shell) — these suites assert sensitivity
+    // FLOOR semantics on persisted messages, not the gate's egress
+    // throwing behavior. The runtime's `sensitivity-routing.test.ts`
+    // is the canonical home for gate-firing assertions.
+    assertSensitivityPermitsAiCall: () =>
+      ({}) as ReturnType<ConversationDeps["assertSensitivityPermitsAiCall"]>,
     ...overrides,
   };
 }
@@ -224,6 +231,8 @@ describe("ConversationManager — read-side trimmed() filter by effective tier",
       getProvider: () => provider,
       getTaskRouter: () => null,
       generateCompletion: vi.fn(async () => "AI Title"),
+      assertSensitivityPermitsAiCall: () =>
+        ({}) as ReturnType<ConversationDeps["assertSensitivityPermitsAiCall"]>,
       // Non-permissive session tier — would block tagged messages.
       getEffectiveSensitivity: () => SensitivityLevel.None,
     };

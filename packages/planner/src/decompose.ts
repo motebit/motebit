@@ -1,4 +1,5 @@
 import type { StreamingProvider, ResolvedTaskConfig } from "@motebit/ai-core";
+import type { SensitivityCleared } from "@motebit/sdk";
 import { withTaskConfig } from "@motebit/ai-core";
 
 export interface DecompositionContext {
@@ -131,7 +132,18 @@ export function parseDecompositionResponse(text: string): RawPlan {
 
 export async function decomposePlan(
   ctx: DecompositionContext,
-  provider: StreamingProvider,
+  /**
+   * `SensitivityCleared<StreamingProvider>` — type-level proof that
+   * `assertSensitivityPermitsAiCall("executePlanStep")` fired before
+   * `PlanExecutionManager.executePlan` reached `PlanEngine.createPlan`
+   * (which projects the cleared provider from cleared deps via
+   * `projectProviderClearance` and passes it here). Plan
+   * decomposition is a bytes-leave moment that shares the plan-step
+   * audit category — initial execute, post-pause resume, and the
+   * decomposition prompt that frames the steps are one egress
+   * cluster.
+   */
+  provider: SensitivityCleared<StreamingProvider>,
   planningConfig?: ResolvedTaskConfig,
 ): Promise<RawPlan> {
   const userMessage = buildDecompositionPrompt(ctx);

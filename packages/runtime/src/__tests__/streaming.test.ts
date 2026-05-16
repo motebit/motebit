@@ -1344,7 +1344,13 @@ describe("reflect", () => {
 
   it("throws without provider", async () => {
     const headless = new MotebitRuntime({ motebitId: "no-ai" }, createAdapters());
-    await expect(headless.reflect()).rejects.toThrow("No AI provider configured");
+    // Brand promotion arc (2026-05-16): `reflect()` now fires the
+    // sensitivity gate first via `assertSensitivityPermitsAiCall`,
+    // which throws "AI not initialized" when `this.loopDeps` is
+    // null (no provider wired). Functionally equivalent to the
+    // old "No AI provider configured" — same fail-closed path,
+    // typed at a different layer.
+    await expect(headless.reflect()).rejects.toThrow("AI not initialized");
   });
 
   it("calls aiReflect and returns result", { timeout: 15_000 }, async () => {
