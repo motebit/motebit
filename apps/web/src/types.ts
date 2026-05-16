@@ -1,15 +1,17 @@
-import type { WebApp } from "./web-app";
+import type { WebApp, BootedApp } from "./web-app";
 import type { ProviderConfig } from "./storage";
 
 declare global {
   interface Window {
+    // Debug surface — intentionally full WebApp so test harnesses and
+    // devtools can reach invokeComputer / dismissComputer directly.
     __motebitApp?: WebApp;
     __motebitReady?: boolean;
   }
 }
 
 export interface WebContext {
-  app: WebApp;
+  app: BootedApp;
   getConfig(): ProviderConfig | null;
   setConfig(config: ProviderConfig): void;
   addMessage(role: "user" | "assistant" | "system", text: string): void;

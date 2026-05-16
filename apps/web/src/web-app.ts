@@ -1134,8 +1134,11 @@ export class WebApp {
    * best-effort.
    *
    * Doctrine: a body-first surface only mounts the slab on intent.
-   * Calling this from bootstrap is a doctrine violation — see the
-   * `bootstrapComputer` close-out comment.
+   * Calling this from bootstrap is a doctrine violation.
+   * External callers via `WebContext.app` are structurally blocked
+   * (`BootedApp` omits this method — Layer 1). The bootstrap-internal
+   * boundary (`this.invokeComputer()` from inside `bootstrap()`) remains
+   * comment-enforced — `this` is still `WebApp` inside the method body.
    */
   invokeComputer(): void {
     if (!this.computerRegistration) return;
@@ -3989,3 +3992,24 @@ export class WebApp {
     return walletWarning;
   }
 }
+
+/**
+ * Post-bootstrap view of `WebApp` — structurally lacks `invokeComputer`,
+ * `dismissComputer`, and `bootstrap` so any code holding only this type
+ * cannot mount the slab or re-bootstrap.
+ *
+ * Enforces the WebContext-callsite boundary: `WebContext.app` is typed
+ * as `BootedApp`, so every `initXxx(ctx)` UI module receives a reference
+ * that structurally cannot call slab-mount methods (Layer 1 — compile
+ * error, not a comment).
+ *
+ * Does NOT close the bootstrap-internal boundary: inside `bootstrap()`
+ * itself, `this` is still typed as the full `WebApp`, so `this.invokeComputer()`
+ * would typecheck. That boundary is guarded by the comment at
+ * `invokeComputer()`. Closing it requires a state-machine split
+ * (`UnbootedWebApp.bootstrap()` → `WebApp`) — see the deferred arc
+ * in the engineering notes (2026-05-16 four-pass survey, Risk deferred #2).
+ *
+ * Doctrine: `intent-gated-slab.md`.
+ */
+export type BootedApp = Omit<WebApp, "invokeComputer" | "dismissComputer" | "bootstrap">;
