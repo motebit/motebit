@@ -563,7 +563,7 @@ export class SlabManager {
       // Front-pane refraction override — calm-software readability
       // tuning, 2026-05-12. The screencast mesh sits at depth ½
       // inside the slab volume (harmony, balance — see
-      // motebit-computer.md §"Always-already slab" + the suspended-
+      // intent-gated-slab.md + the suspended-
       // in-glass register from liquescentia-as-substrate.md). Light
       // refracts through the front pane to reach the texture; even
       // gentle IOR 1.22 + thickness 0.02 (the canonical body
@@ -1272,7 +1272,7 @@ export class SlabManager {
     // mesh would keep rendering its texture in 3D space even after
     // `/computer` toggles the slab off — the glass volume + chrome
     // fade out, but the JPEG texture floats on, content outliving
-    // its substrate (always-already-slab.md violation, third instance
+    // its substrate (intent-gated-slab.md violation, third instance
     // of the slab/stitch desync after chrome band and stage opacity —
     // caught 2026-05-11 on /computer toggle). Per-frame derivation
     // here is the single source of truth; `setScreencastImage` no

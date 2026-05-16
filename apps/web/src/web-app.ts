@@ -208,7 +208,7 @@ export class WebApp {
    * at WebApp boot (right after the cloud-browser registration is
    * built) and lives for the WebApp's lifetime — sessions populate
    * the shell's screencast slot, they don't create the shell.
-   * Doctrine: `always-already-slab.md` §"Affirmative shape" — the
+   * Doctrine: `intent-gated-slab.md` §"Affirmative shape" — the
    * slab's primary embodiment shell precedes content, just like the
    * slab itself precedes acts. `null` only before mount, after
    * dispose, or when the cloud-browser tool isn't configured.
@@ -1013,7 +1013,7 @@ export class WebApp {
         // (see `mountLiveBrowserShell` below); `onSessionLive`
         // attaches a session to the existing shell and `onSessionEnding`
         // detaches it. The shell itself never dissolves on session
-        // boundaries — that's the always-already-slab principle:
+        // boundaries — that's the intent-gated-slab principle:
         // the embodiment shell precedes content, sessions populate it.
         screencastBus: this.screencastBus,
         onSessionLive: (sessionId) => this.attachSessionToLiveBrowser(sessionId),
@@ -1119,7 +1119,7 @@ export class WebApp {
     // command, AI computer tool call, or other affordances all
     // route through `invokeComputer()`. "Always-already" means
     // instantiation has no cold-start cost when invoked, NOT that
-    // the slab is always rendered. Doctrine: `always-already-slab.md`
+    // the slab is always rendered. Doctrine: `intent-gated-slab.md`
     // §"Affirmative shape" — empty register is the slab's READY
     // state ONCE invoked, not the surface's default.
   }
@@ -2435,7 +2435,7 @@ export class WebApp {
    *
    * The shell never dissolves on session boundaries; sessions
    * attach via `attachSessionToLiveBrowser` and detach via
-   * `detachSessionFromLiveBrowser`. This is the always-already-slab
+   * `detachSessionFromLiveBrowser`. This is the intent-gated-slab
    * principle's deepest expression: empty IS READY because the
    * shell precedes content.
    */

@@ -197,7 +197,7 @@ This is the test that prevents the pivot from being a 2D UI redesign. The matrix
 
 This pivot composes with five doctrines that today live as separate concerns:
 
-- **[`always-already-slab`](always-already-slab.md)** — the slab is the state-render's substrate, always-already present. The chrome's state-driven render is the substrate's state-driven content.
+- **[`intent-gated-slab`](intent-gated-slab.md)** — the slab is the state-render's substrate, always-already present. The chrome's state-driven render is the substrate's state-driven content.
 - **[`goals-vs-tasks`](goals-vs-tasks.md)** — registers cleanly split: goals → chat (mote conversation), task-steps → slab chrome. The seam is the doctrinal cut you already named.
 - **[`runtime-invariants-over-prompt-rules`](runtime-invariants-over-prompt-rules.md)** — hybrid narration extends the typed-truth exemplar to in-flight motebit-voiced text. Exemplar 3.
 - **[`motebit-computer`](motebit-computer.md)** — chrome finally reflects the slab as motebit's perceptual field, not a cobrowser. The doctrine's "first-person perceptual field made visible" line stops being aspirational.

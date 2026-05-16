@@ -14,7 +14,7 @@
  *   - `records-vs-acts.md` — body shows acts, panels hold records.
  *     Home tiles are ACT-framed launchpads (forward verbs), not
  *     record listings. Past sessions inform; the user FEELS forward.
- *   - `always-already-slab.md` — empty IS READY. The empty-empty
+ *   - `intent-gated-slab.md` — empty IS READY. The empty-empty
  *     state (no affordances yet) is pure slab interior, no body
  *     content; the chrome strip's "type a URL · or ask motebit"
  *     placeholder is the canonical first-time-user affordance.
@@ -263,7 +263,7 @@ function buildAffordanceTile(aff: SlabHomeAffordance, opts: SlabHomeViewOptions)
   // transmission shader so the tile reads as a substrate-bubble
   // RISING THROUGH the slab rather than a card SITTING ON it.
   // Doctrine bind: "content embeds INTO the slab's typed slots,
-  // never adjacent" (always-already-slab.md). The materiality
+  // never adjacent" (intent-gated-slab.md). The materiality
   // delta from "card" → "bubble" is the difference between
   // close-but-not-exact and exactly-the-doctrine.
   const soulTint = opts.soulTint ?? "#a9b8d0";

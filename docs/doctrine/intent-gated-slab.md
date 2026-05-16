@@ -1,4 +1,4 @@
-# Always-already slab
+# Intent-gated slab
 
 The slab is **instantly-instantiable on intent**, not always-rendered. Bootstrap holds the body; intent invokes the slab. Once invoked, the slab materializes intact — chrome present, empty register settled, no two-pass cold-start.
 

@@ -203,7 +203,7 @@ export class SlabCore {
    * Force-hide override. Set when the user dismisses the slab via
    * Option+C / `/computer` — takes precedence over active items and
    * drag-hover so the user can hide the plane even when the live_browser
-   * shell is mounted (the always-already-slab affirmative shape that
+   * shell is mounted (the intent-gated-slab affirmative shape that
    * makes the legacy "force-show empty plane" semantic redundant on
    * shell-equipped surfaces). Doctrine: motebit-computer.md §"Ambient
    * states — User-held visibility (orthogonal)."
@@ -223,7 +223,7 @@ export class SlabCore {
    * Body register — what's in the body region right now. Surfaces
    * write via `setBodyRegister`; renderers read via `getBodyRegister`
    * or the per-frame snapshot. Default `home`: empty-but-ready is the
-   * floor (the always-already-slab principle). The register lifts the
+   * floor (the intent-gated-slab principle). The register lifts the
    * prior implicit coupling between {screenTexture present, suppressed
    * flag} into one named state — three values, one source of truth.
    * Doctrine: `motebit-computer.md` §"Body register — the tri-state."

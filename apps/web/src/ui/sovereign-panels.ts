@@ -361,7 +361,7 @@ function renderBudget(
   // Both balances render as .sov-hero-card sub-surfaces: the number is the
   // hero (display weight + tabular-nums), label sits small above it, subtitle
   // below. Cold-load uses a breathing skeleton — never the literal "Loading…"
-  // string (anti-pattern per CLAUDE.md UI § + always-already-slab doctrine).
+  // string (anti-pattern per CLAUDE.md UI § + intent-gated-slab doctrine).
   const balancesSection = document.createElement("div");
   balancesSection.className = "budget-balance-section";
   balancesSection.style.cssText = "display:flex;flex-direction:column;gap:12px;";
@@ -634,7 +634,7 @@ function renderBudget(
 
   budgetSummary.appendChild(balancesSection);
 
-  // Activity slot \u2014 always-already-slab: the section header + container
+  // Activity slot \u2014 intent-gated-slab: the section header + container
   // render whether or not transactions exist. Empty state is a dashed
   // calm row, not absent. The panel reads "inhabited but empty" instead
   // of "incomplete render."
@@ -670,7 +670,7 @@ function renderBudget(
     budgetSummary.appendChild(txnSection);
   } else {
     // Forward-framed empty register — describes what the slot holds,
-    // not what it lacks (always-already-slab: slot is READY). Same
+    // not what it lacks (intent-gated-slab: slot is READY). Same
     // shape as slab-home.ts's "Anywhere." watermark — the affordance
     // is the antecedent, not the absence.
     const activityEmpty = document.createElement("div");

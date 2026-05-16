@@ -184,7 +184,7 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
   // slab and creature. The empty Goals panel is the only runtime
   // register with a structurally-voided cards-area (no default content
   // like Memory/Agents/Capabilities), so the pulse fills that void as
-  // a READY signal per docs/doctrine/always-already-slab.md.
+  // a READY signal per docs/doctrine/intent-gated-slab.md.
   // Doctrine: panel-temporal-registers.md §"Structural-void test."
   const emptyPulseAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {

@@ -292,7 +292,7 @@ export interface RenderAdapter {
  *
  * Doctrine: `motebit-computer.md` §"Body register — the tri-state."
  * Default register on slab construction is `home`: empty-but-ready is
- * the floor (the always-already-slab principle — the slab precedes
+ * the floor (the intent-gated-slab principle — the slab precedes
  * content; content embeds INTO the register, never adjacent).
  */
 export type SlabBodyRegister = "home" | "live" | "transition";

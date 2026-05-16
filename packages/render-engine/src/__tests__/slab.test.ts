@@ -622,7 +622,7 @@ describe("SlabManager — screencast WebGL texture (v1.3 → texture register)",
   });
 
   it("hiding the slab user-visibility hides the screencast screen mesh even with an active texture — content must not outlive the substrate", () => {
-    // Pins the always-already-slab invariant: the screen mesh's
+    // Pins the intent-gated-slab invariant: the screen mesh's
     // visibility IS derived from the slab's user-visibility, not
     // from screencast presence alone. Without this binding,
     // `/computer`-toggling the slab off leaves the WebGL screen

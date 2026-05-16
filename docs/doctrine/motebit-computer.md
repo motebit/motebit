@@ -431,7 +431,7 @@ The renderer migration and the capture-pipeline migration **must not be conflate
 
 ## References
 
-- [`always-already-slab.md`](always-already-slab.md) — when the slab is rendered and what's load-bearing about its instantiation.
+- [`intent-gated-slab.md`](intent-gated-slab.md) — when the slab is rendered and what's load-bearing about its instantiation.
 - [`records-vs-acts.md`](records-vs-acts.md) — the substrate categorization.
 - [`panels-pattern.md`](panels-pattern.md) — the cross-surface controller shape extended to scene primitives.
 - [`surface-determinism.md`](surface-determinism.md) — affordances triggering slab work must be deterministic.

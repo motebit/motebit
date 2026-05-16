@@ -19,7 +19,7 @@
  *      affordance (forward action, never a record open).
  *
  * Lock #1 + #2 are the doctrine bind to records-vs-acts.md (body
- * shows acts) and always-already-slab.md (empty IS empty in the
+ * shows acts) and intent-gated-slab.md (empty IS empty in the
  * calm-software register).
  */
 

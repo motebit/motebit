@@ -188,7 +188,7 @@ browser-sandbox`) and the dispatcher (`@motebit/runtime`'s
 
   Legacy bearer (no `motebitId` on `c.var`) keeps the fresh-every-call allocation — admin/test tooling intentionally allocates parallel sessions and shouldn't be silently deduplicated. dualAuth applied to allocation: relay-signed → identity-keyed dedup; legacy bearer → fresh-every-call.
 
-  Doctrine: "Persistent sovereign identity — a cryptographic entity across time and devices, not a session token" (`CLAUDE.md`). Identity is the foundational primitive; the session id is an internal handle. Allocation by `randomUUID` first + identity decorative was the inversion this change corrects. Compounds with `always-already-slab.md` — the slab persists across reloads only if the underlying session does too.
+  Doctrine: "Persistent sovereign identity — a cryptographic entity across time and devices, not a session token" (`CLAUDE.md`). Identity is the foundational primitive; the session id is an internal handle. Allocation by `randomUUID` first + identity decorative was the inversion this change corrects. Compounds with `intent-gated-slab.md` — the slab persists across reloads only if the underlying session does too.
 
   Wire shape unchanged: `/sessions/ensure` still returns `{ session_id, display }`, same shape whether the response is a fresh allocation or a reuse. No client-side change required (the `CloudBrowserDispatcher` happily receives the same `session_id` across reloads now).
 
