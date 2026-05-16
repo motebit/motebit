@@ -14,7 +14,8 @@
  *     SovereignTierRequiredError with the expected fields
  *   - on-device provider permits any sensitivity
  *   - The gate fires at every entry point: sendMessage,
- *     sendMessageStreaming, generateActivation
+ *     sendMessageStreaming, generateActivation, generateCompletion,
+ *     outbound_tool, resumeAfterToolApproval, executePlanStep
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -490,5 +491,44 @@ describe("MotebitRuntime — sensitivity gate audit emission", () => {
     expect(outboundExecuted).toBe(0);
     const events = await getGateFiredEvents(r);
     expect(events.some((e) => e.payload.entry === "outbound_tool")).toBe(true);
+  });
+
+  // ── Sub-axis entries: indirect AI-call continuations ─────────────
+  //
+  // `resumeAfterToolApproval` and `executePlanStep` are the indirect-
+  // entry-point sites where bytes leave on a continuation (resume
+  // after the user approves a paused tool call; per-step plan
+  // execution and resume). Pre-2026-05-16 these reused the
+  // `sendMessageStreaming` audit label; the doctrinally accurate
+  // split attributes blocked egress to the actual continuation site.
+  // The gate predicate is the same — these tests verify the audit
+  // entry on the payload, not new behavior.
+
+  it("resumeAfterToolApproval entry: gate predicate fires SensitivityGateFired with the dedicated entry", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("byok");
+    r.setSessionSensitivity(SensitivityLevel.Secret);
+    expect(() => r.assertSensitivityPermitsAiCall("resumeAfterToolApproval")).toThrow(
+      SovereignTierRequiredError,
+    );
+    const events = await getGateFiredEvents(r);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload.entry).toBe("resumeAfterToolApproval");
+    expect(events[0]!.payload.session_sensitivity).toBe(SensitivityLevel.Secret);
+    expect(events[0]!.payload.provider_mode).toBe("byok");
+  });
+
+  it("executePlanStep entry: gate predicate fires SensitivityGateFired with the dedicated entry", async () => {
+    const r = makeRuntime();
+    r.setProviderMode("motebit-cloud");
+    r.setSessionSensitivity(SensitivityLevel.Financial);
+    expect(() => r.assertSensitivityPermitsAiCall("executePlanStep")).toThrow(
+      SovereignTierRequiredError,
+    );
+    const events = await getGateFiredEvents(r);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload.entry).toBe("executePlanStep");
+    expect(events[0]!.payload.session_sensitivity).toBe(SensitivityLevel.Financial);
+    expect(events[0]!.payload.provider_mode).toBe("motebit-cloud");
   });
 });

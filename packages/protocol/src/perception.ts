@@ -234,15 +234,42 @@ export function resolveDropTarget(payload: DropPayload): DropTarget {
 
 /**
  * Which AI-call entry the runtime blocked. The runtime gates fire at
- * five distinct sites today; the audit event names the site so log
+ * seven distinct sites today; the audit event names the site so log
  * consumers can group / branch by entry without parsing free text.
+ *
+ * Sub-axis refinement (not a registered registry — per `registry-
+ * pattern-canonical.md` this is a closed union of indirect-entry-
+ * point identifiers, not an interop-law typed vocabulary with
+ * multi-consumer wire-format presence). The doctrine for the
+ * structural-lock pattern with bespoke coverage applies: adding an
+ * entry is intentional protocol-level work + test additions, but
+ * carries no eight-artifact obligation.
+ *
+ * Entries split into two categories:
+ *
+ *  1. **Direct AI-call entries** — the surface-facing method the user
+ *     (or surface) invoked: `sendMessage`, `sendMessageStreaming`,
+ *     `generateActivation`, `generateCompletion`, `outbound_tool`.
+ *
+ *  2. **Indirect AI-call entries** — continuations the runtime fires
+ *     internally where bytes leave on resume:
+ *     `resumeAfterToolApproval` (StreamingManager continues a paused
+ *     turn after the user approves a tool call); `executePlanStep`
+ *     (PlanExecutionManager fires the gate per-step on initial
+ *     execution and on plan resume — sensitivity may have changed
+ *     during the pause). Pre-2026-05-16 these reused
+ *     `sendMessageStreaming` as the audit label; the doctrinally
+ *     accurate split names the actual entry so audit consumers can
+ *     attribute blocked egress to the right site without guessing.
  */
 export type SensitivityGateEntry =
   | "sendMessage"
   | "sendMessageStreaming"
   | "generateActivation"
   | "generateCompletion"
-  | "outbound_tool";
+  | "outbound_tool"
+  | "resumeAfterToolApproval"
+  | "executePlanStep";
 
 /**
  * What elevated effective sensitivity above the explicit session

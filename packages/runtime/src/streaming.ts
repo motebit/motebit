@@ -493,11 +493,12 @@ export class StreamingManager {
       return;
     }
     // Resume after tool approval IS a bytes-leave moment — fire the
-    // gate again. Reuses `sendMessageStreaming` as the audit entry
-    // since this is structurally a continuation of that turn; a
-    // dedicated `resumeAfterToolApproval` entry is a future
-    // SensitivityGateEntry sub-axis refinement.
-    const loopDeps = this.deps.assertSensitivityPermitsAiCall("sendMessageStreaming");
+    // gate again. Sensitivity may have elevated during the pause for
+    // approval (a slab item dropped, a tier-bounded tool result
+    // observed); a dedicated entry attributes the blocked egress to
+    // the actual continuation site rather than borrowing the
+    // surface-facing `sendMessageStreaming` label.
+    const loopDeps = this.deps.assertSensitivityPermitsAiCall("resumeAfterToolApproval");
 
     const pending = this._pendingApproval;
     this._pendingApproval = null;

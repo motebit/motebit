@@ -83,10 +83,12 @@ export class PlanExecutionManager {
     privateKey?: Uint8Array,
   ): AsyncGenerator<PlanChunk> {
     // Plan execution IS a bytes-leave moment — each step ultimately
-    // calls `runTurnStreaming`. Reuses `sendMessageStreaming` as the
-    // audit entry; dedicated `executePlanStep` entry deferred to
-    // future SensitivityGateEntry sub-axis refinement.
-    const loopDeps = this.deps.assertSensitivityPermitsAiCall("sendMessageStreaming");
+    // calls `runTurnStreaming`. Dedicated entry attributes blocked
+    // egress to the plan-step site rather than borrowing the
+    // surface-facing `sendMessageStreaming` label; covers both
+    // initial execute and `resumePlan` (single audit category for
+    // "the gate firing for a plan-step's bytes-leave moment").
+    const loopDeps = this.deps.assertSensitivityPermitsAiCall("executePlanStep");
 
     const availableTools =
       this.deps.toolRegistry.size > 0
@@ -297,8 +299,10 @@ export class PlanExecutionManager {
    */
   async *resumePlan(planId: string, runId?: string): AsyncGenerator<PlanChunk> {
     // Resume IS a bytes-leave moment; gate again — sensitivity may
-    // have changed during the pause.
-    const loopDeps = this.deps.assertSensitivityPermitsAiCall("sendMessageStreaming");
+    // have changed during the pause. Same audit entry as initial
+    // execution: both are per-step gate firings for the same
+    // plan-execution category.
+    const loopDeps = this.deps.assertSensitivityPermitsAiCall("executePlanStep");
     const plan = this.deps.planStore.getPlan(planId);
     const goalId = plan?.goal_id;
     for await (const chunk of this.deps.planEngine.resumePlan(planId, loopDeps, undefined, runId)) {
