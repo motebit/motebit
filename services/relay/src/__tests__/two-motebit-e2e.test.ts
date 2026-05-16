@@ -20,6 +20,7 @@ import type { PlanChunk } from "@motebit/planner";
 import { DeviceCapability, StepStatus, PlanStatus } from "@motebit/sdk";
 import type { ExecutionReceipt, MotebitId, DeviceId, AgentTask } from "@motebit/sdk";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
+import type { SensitivityCleared } from "@motebit/sdk";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import {
   generateKeypair,
@@ -146,14 +147,16 @@ function createWsBridge() {
   return { ws, onCustomMessage };
 }
 
-function makeMockDeps(steps: Array<Record<string, unknown>>): MotebitLoopDependencies {
+function makeMockDeps(
+  steps: Array<Record<string, unknown>>,
+): SensitivityCleared<MotebitLoopDependencies> {
   return {
     provider: {
       generate: vi.fn().mockResolvedValue({
         text: JSON.stringify({ title: "Test Plan", steps }),
       }),
     },
-  } as unknown as MotebitLoopDependencies;
+  } as unknown as SensitivityCleared<MotebitLoopDependencies>;
 }
 
 // === Tests ===

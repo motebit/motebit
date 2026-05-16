@@ -2895,6 +2895,11 @@ export interface Semiring<T> {
 }
 
 // @public
+export type SensitivityCleared<T> = T & {
+    readonly [__sensitivityCleared]: true;
+};
+
+// @public
 export type SensitivityElevationSource = "session" | "slab_item";
 
 // @public

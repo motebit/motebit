@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PlanStatus, StepStatus } from "@motebit/sdk";
 import type { Plan, PlanStep } from "@motebit/sdk";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
+import type { SensitivityCleared } from "@motebit/sdk";
 
 // Mock runTurnStreaming at the module level
 vi.mock("@motebit/ai-core", async (importOriginal) => {
@@ -59,7 +60,7 @@ function setupStreamMock(responses: string[]): void {
   });
 }
 
-function makeMockDeps(): MotebitLoopDependencies {
+function makeMockDeps(): SensitivityCleared<MotebitLoopDependencies> {
   return {
     motebitId: "test-motebit",
     eventStore: {} as never,
@@ -85,7 +86,7 @@ function makeMockDeps(): MotebitLoopDependencies {
       estimateConfidence: vi.fn().mockResolvedValue(0.9),
       extractMemoryCandidates: vi.fn().mockResolvedValue([]),
     } as never,
-  };
+  } as unknown as SensitivityCleared<MotebitLoopDependencies>;
 }
 
 async function collectChunks(gen: AsyncGenerator<PlanChunk>): Promise<PlanChunk[]> {

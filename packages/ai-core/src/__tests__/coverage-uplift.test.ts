@@ -35,6 +35,7 @@ import { isModelTier, resolveModelTier, withTaskConfig } from "../task-router";
 import { parseReflectionResponse, reflect } from "../reflection";
 import { runTurnStreaming } from "../loop";
 import type { MotebitLoopDependencies, AgenticChunk, LoopPolicyGate } from "../loop";
+import type { SensitivityCleared } from "@motebit/sdk";
 import type { StreamingProvider } from "../index";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { MemoryGraph, InMemoryMemoryStorage } from "@motebit/memory-graph";
@@ -130,7 +131,7 @@ function makeDepsWithProvider(
     memoryGovernor?: MotebitLoopDependencies["memoryGovernor"];
     consolidationProvider?: MotebitLoopDependencies["consolidationProvider"];
   },
-): MotebitLoopDependencies {
+): SensitivityCleared<MotebitLoopDependencies> {
   const eventStore = new EventStore(new InMemoryEventStore());
   const storage = new InMemoryMemoryStorage();
   const memoryGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
@@ -147,7 +148,7 @@ function makeDepsWithProvider(
     policyGate: opts?.policyGate,
     memoryGovernor: opts?.memoryGovernor,
     consolidationProvider: opts?.consolidationProvider,
-  };
+  } as SensitivityCleared<MotebitLoopDependencies>;
 }
 
 // ---------------------------------------------------------------------------

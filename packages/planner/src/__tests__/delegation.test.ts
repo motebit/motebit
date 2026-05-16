@@ -11,15 +11,18 @@ import type {
   DeviceId,
 } from "@motebit/sdk";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
+import type { SensitivityCleared } from "@motebit/sdk";
 
-function makeMockDeps(steps: Array<Record<string, unknown>>): MotebitLoopDependencies {
+function makeMockDeps(
+  steps: Array<Record<string, unknown>>,
+): SensitivityCleared<MotebitLoopDependencies> {
   return {
     provider: {
       generate: vi.fn().mockResolvedValue({
         text: JSON.stringify({ title: "Test plan", steps }),
       }),
     },
-  } as unknown as MotebitLoopDependencies;
+  } as unknown as SensitivityCleared<MotebitLoopDependencies>;
 }
 
 function makeReceipt(

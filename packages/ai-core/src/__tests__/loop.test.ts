@@ -8,6 +8,7 @@ vi.mock("@motebit/memory-graph", async () => {
 
 import { runTurn, runTurnStreaming } from "../loop";
 import type { MotebitLoopDependencies, AgenticChunk, LoopMemoryGovernor } from "../loop";
+import type { SensitivityCleared } from "@motebit/sdk";
 import { AnthropicProvider } from "../index";
 import type { AnthropicProviderConfig, StreamingProvider } from "../index";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
@@ -56,7 +57,7 @@ function mockFetchError(status: number, body: string): void {
   mockFn.mockResolvedValueOnce(new Response(body, { status }));
 }
 
-function makeDeps(): MotebitLoopDependencies {
+function makeDeps(): SensitivityCleared<MotebitLoopDependencies> {
   const cloudConfig: AnthropicProviderConfig = {
     api_key: "test-key",
     model: "claude-sonnet-4-5-20250929",
@@ -69,6 +70,10 @@ function makeDeps(): MotebitLoopDependencies {
   const behaviorEngine = new BehaviorEngine();
   const cloudProvider = new AnthropicProvider(cloudConfig);
 
+  // Test fixture casts to `SensitivityCleared<...>` via `unknown`
+  // because the optional fields on `MotebitLoopDependencies` aren't
+  // populated in this lite fixture. The gate's behavior is tested
+  // separately in `runtime/__tests__/sensitivity-routing.test.ts`.
   return {
     motebitId: MOTEBIT_ID,
     eventStore,
@@ -76,7 +81,7 @@ function makeDeps(): MotebitLoopDependencies {
     stateEngine,
     behaviorEngine,
     provider: cloudProvider,
-  };
+  } as unknown as SensitivityCleared<MotebitLoopDependencies>;
 }
 
 // ---------------------------------------------------------------------------
@@ -461,7 +466,7 @@ function makeMockToolRegistry(
 function makeDepsWithProvider(
   provider: StreamingProvider,
   tools?: ToolRegistry,
-): MotebitLoopDependencies {
+): SensitivityCleared<MotebitLoopDependencies> {
   const eventStore = new EventStore(new InMemoryEventStore());
   const storage = new InMemoryMemoryStorage();
   const memoryGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
@@ -476,7 +481,7 @@ function makeDepsWithProvider(
     behaviorEngine,
     provider,
     tools,
-  };
+  } as SensitivityCleared<MotebitLoopDependencies>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1394,11 +1399,11 @@ describe("runTurnStreaming — pixel gate composition", () => {
   it("sovereign provider (`on-device`): bytes pass to AI regardless of consent — bytes never leave the device", async () => {
     const captured: ContextPack[] = [];
     const provider = makeShotProvider(captured);
-    const deps: MotebitLoopDependencies = {
+    const deps = {
       ...makeDepsWithProvider(provider, makeScreenshotRegistry()),
       getProviderMode: () => "on-device",
       getPixelConsent: () => "denied", // even with denied consent
-    };
+    } as SensitivityCleared<MotebitLoopDependencies>;
 
     for await (const _ of runTurnStreaming(deps, "shot")) void _;
     const second = JSON.stringify(captured[captured.length - 1]);
@@ -1409,12 +1414,12 @@ describe("runTurnStreaming — pixel gate composition", () => {
   it("external + sensitivity > none: bytes stripped with reason `sensitivity_blocked` regardless of consent", async () => {
     const captured: ContextPack[] = [];
     const provider = makeShotProvider(captured);
-    const deps: MotebitLoopDependencies = {
+    const deps = {
       ...makeDepsWithProvider(provider, makeScreenshotRegistry()),
       getProviderMode: () => "byok",
       getEffectiveSensitivity: () => SensitivityLevel.Medical,
       getPixelConsent: () => "session", // even with session consent
-    };
+    } as SensitivityCleared<MotebitLoopDependencies>;
 
     for await (const _ of runTurnStreaming(deps, "shot")) void _;
     const second = JSON.stringify(captured[captured.length - 1]);
@@ -1426,12 +1431,12 @@ describe("runTurnStreaming — pixel gate composition", () => {
   it("external + sensitivity none + consent denied: bytes stripped with reason `consent_required`", async () => {
     const captured: ContextPack[] = [];
     const provider = makeShotProvider(captured);
-    const deps: MotebitLoopDependencies = {
+    const deps = {
       ...makeDepsWithProvider(provider, makeScreenshotRegistry()),
       getProviderMode: () => "motebit-cloud",
       getEffectiveSensitivity: () => SensitivityLevel.None,
       getPixelConsent: () => "denied",
-    };
+    } as SensitivityCleared<MotebitLoopDependencies>;
 
     for await (const _ of runTurnStreaming(deps, "shot")) void _;
     const second = JSON.stringify(captured[captured.length - 1]);
@@ -1443,12 +1448,12 @@ describe("runTurnStreaming — pixel gate composition", () => {
   it("external + sensitivity none + consent granted: bytes pass to AI", async () => {
     const captured: ContextPack[] = [];
     const provider = makeShotProvider(captured);
-    const deps: MotebitLoopDependencies = {
+    const deps = {
       ...makeDepsWithProvider(provider, makeScreenshotRegistry()),
       getProviderMode: () => "byok",
       getEffectiveSensitivity: () => SensitivityLevel.None,
       getPixelConsent: () => "session",
-    };
+    } as SensitivityCleared<MotebitLoopDependencies>;
 
     for await (const _ of runTurnStreaming(deps, "shot")) void _;
     const second = JSON.stringify(captured[captured.length - 1]);
@@ -1535,7 +1540,10 @@ describe("runTurnStreaming pipeline stage timeouts", () => {
 });
 
 /** Run one step of a streaming turn and capture the thrown error (if any). */
-async function iter(deps: MotebitLoopDependencies, text: string): Promise<unknown> {
+async function iter(
+  deps: SensitivityCleared<MotebitLoopDependencies>,
+  text: string,
+): Promise<unknown> {
   try {
     const gen = runTurnStreaming(deps, text);
     await gen.next();
@@ -1559,7 +1567,7 @@ async function iter(deps: MotebitLoopDependencies, text: string): Promise<unknow
 
 describe("runTurnStreaming — memory candidate sensitivity floor", () => {
   async function collectMemoriesFormed(
-    deps: MotebitLoopDependencies,
+    deps: SensitivityCleared<MotebitLoopDependencies>,
     text: string,
   ): Promise<Array<{ content: string; sensitivity: SensitivityLevel }>> {
     const chunks: AgenticChunk[] = [];

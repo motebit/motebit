@@ -39,6 +39,7 @@ import type {
   ComputerSessionActionRecord,
 } from "@motebit/sdk";
 import { EventType, AgentTrustLevel, SensitivityLevel, rankSensitivity } from "@motebit/sdk";
+import type { SensitivityCleared } from "@motebit/sdk";
 import type {
   ProviderMode,
   DropPayload,
@@ -948,7 +949,8 @@ export class MotebitRuntime {
       events: this.events,
       toolAuditSink: this.toolAuditSink,
       logger: this._logger,
-      getLoopDeps: () => this.loopDeps,
+      assertSensitivityPermitsAiCall: (entry, toolName) =>
+        this.assertSensitivityPermitsAiCall(entry, toolName),
       getLocalCapabilities: () => this._localCapabilities,
       getTaskRouter: () => this.taskRouter,
     });
@@ -993,7 +995,8 @@ export class MotebitRuntime {
         }
         return { result };
       },
-      getLoopDeps: () => this.loopDeps,
+      assertSensitivityPermitsAiCall: (entry, toolName) =>
+        this.assertSensitivityPermitsAiCall(entry, toolName),
       getLatestCues: () => this.latestCues,
       getApprovalStore: () => this.approvalStore,
       redactText: (text) => {
@@ -1273,9 +1276,21 @@ export class MotebitRuntime {
     return result;
   }
 
-  /** Access the loop dependencies for direct use by PlanEngine. */
-  getLoopDeps(): MotebitLoopDependencies | null {
-    return this.loopDeps;
+  /**
+   * Access the loop dependencies for direct use by `PlanEngine`. The
+   * deps are returned **already branded** as `SensitivityCleared<...>` —
+   * this method fires `assertSensitivityPermitsAiCall` internally so
+   * the runTurn family receives compile-time proof the gate ran.
+   *
+   * Returns `null` when AI is not yet wired (no provider). Throws
+   * `SovereignTierRequiredError` when effective sensitivity blocks
+   * the configured provider — schedulers should let that propagate
+   * (sensitivity violations are NOT a fall-back-to-single-turn
+   * condition; they're a fail-closed signal to the user).
+   */
+  getLoopDeps(): SensitivityCleared<MotebitLoopDependencies> | null {
+    if (!this.loopDeps) return null;
+    return this.assertSensitivityPermitsAiCall("sendMessageStreaming");
   }
 
   setLocalCapabilities(caps: DeviceCapability[]): void {
@@ -1387,7 +1402,10 @@ export class MotebitRuntime {
   /** Recover delegated steps that were orphaned (e.g. tab closed during delegation). */
   async *recoverDelegatedSteps(): AsyncGenerator<PlanChunk> {
     if (!this.loopDeps) return;
-    yield* this.planExecution.recoverDelegatedSteps(this.loopDeps);
+    // Recovery IS a bytes-leave moment — gate fires before passing
+    // branded deps into the plan-execution manager.
+    const clearedLoopDeps = this.assertSensitivityPermitsAiCall("sendMessageStreaming");
+    yield* this.planExecution.recoverDelegatedSteps(clearedLoopDeps);
   }
 
   /** Reconstruct a complete execution manifest for a goal from the event log. */
@@ -1582,9 +1600,8 @@ export class MotebitRuntime {
     // fail-closes regardless of init state. Default session_sensitivity
     // is `none` — this is a no-op for the common path.
     // See `check-sensitivity-routing` drift gate.
-    this.assertSensitivityPermitsAiCall("sendMessage");
+    const clearedLoopDeps = this.assertSensitivityPermitsAiCall("sendMessage");
 
-    if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
 
     this._isProcessing = true;
@@ -1600,7 +1617,7 @@ export class MotebitRuntime {
       const selfAwareness = this.buildSelfAwareness();
       const selectedSkills = await this.resolveSkillsForTurn(text);
       await this.emitSkillLoadEvents(selectedSkills, runId);
-      const result = await runTurn(this.loopDeps, text, {
+      const result = await runTurn(clearedLoopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
@@ -2009,9 +2026,8 @@ export class MotebitRuntime {
     // Privacy doctrine gate. See `assertSensitivityPermitsAiCall` /
     // `SovereignTierRequiredError` for the contract. Fires before the
     // loopDeps check so the gate is independent of init state.
-    this.assertSensitivityPermitsAiCall("sendMessageStreaming");
+    const clearedLoopDeps = this.assertSensitivityPermitsAiCall("sendMessageStreaming");
 
-    if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
 
     this._isProcessing = true;
@@ -2059,7 +2075,7 @@ export class MotebitRuntime {
       const selectedSkills = await this.resolveSkillsForTurn(text);
       await this.emitSkillLoadEvents(selectedSkills, runId);
 
-      const stream = runTurnStreaming(this.loopDeps, text, {
+      const stream = runTurnStreaming(clearedLoopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
@@ -2157,9 +2173,8 @@ export class MotebitRuntime {
     // are system-generated, but they're injected into the same provider
     // call path as user messages — same gate applies. Fires before
     // loopDeps check so the gate is independent of init state.
-    this.assertSensitivityPermitsAiCall("generateActivation");
+    const clearedLoopDeps = this.assertSensitivityPermitsAiCall("generateActivation");
 
-    if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     if (this._isProcessing) throw new Error("Already processing a message");
 
     this._isProcessing = true;
@@ -2168,7 +2183,7 @@ export class MotebitRuntime {
     this.behavior.setSpeaking(true);
 
     try {
-      const stream = runTurnStreaming(this.loopDeps, "", {
+      const stream = runTurnStreaming(clearedLoopDeps, "", {
         conversationHistory: [],
         previousCues: this.latestCues,
         runId,
@@ -3672,6 +3687,17 @@ export class MotebitRuntime {
    * method — the public promotion adds no new code path, it just
    * names what was already the architectural seam.
    *
+   * Returns `SensitivityCleared<MotebitLoopDependencies>` — the
+   * branded form of `this.loopDeps` that `runTurn`/`runTurnStreaming`
+   * (and the planner) structurally require. This is the only
+   * authorized production site for the brand; all other paths to
+   * `runTurn` are compile errors. Closes the indirect-call gap that
+   * the static `check-sensitivity-routing` gate cannot scan
+   * (cross-file: `runtime/streaming.ts`; cross-package:
+   * `planner/plan-engine.ts`). The static gate stays for the
+   * `provider.generate(...)` direct path; brand promotion for that
+   * family is a separate arc.
+   *
    * @param entry — which AI-call entry is being checked. Carried into
    *   the `SensitivityGateFired` event payload so audit consumers can
    *   group by entry without parsing free text.
@@ -3681,8 +3707,13 @@ export class MotebitRuntime {
    * @throws SovereignTierRequiredError when effective sensitivity is
    *   medical/financial/secret AND the configured provider is not
    *   sovereign. Emits a `SensitivityGateFired` event before throwing.
+   * @throws Error when `this.loopDeps` is null (runtime not yet wired
+   *   to a provider via `setProvider()`).
    */
-  assertSensitivityPermitsAiCall(entry: SensitivityGateEntry, toolName?: string): void {
+  assertSensitivityPermitsAiCall(
+    entry: SensitivityGateEntry,
+    toolName?: string,
+  ): SensitivityCleared<MotebitLoopDependencies> {
     const { effective, elevatedByItem } = this.computeEffectiveSensitivityContext();
     // The doctrine threshold: medical/financial/secret never reach
     // external AI. Expressed via the protocol's rank ordering rather
@@ -3722,6 +3753,14 @@ export class MotebitRuntime {
       });
       throw new SovereignTierRequiredError(this._sessionSensitivity, providerMode, effective);
     }
+    // Single authorized production site for `SensitivityCleared`. The
+    // brand is type-level only — no runtime field added. Throws if the
+    // runtime isn't yet wired to a provider; AI-call entries depend on
+    // `setProvider()` having been called.
+    if (!this.loopDeps) {
+      throw new Error("AI not initialized — call setProvider() before AI-call entries");
+    }
+    return this.loopDeps as SensitivityCleared<MotebitLoopDependencies>;
   }
 
   private get trustDeps(): AgentTrustDeps {

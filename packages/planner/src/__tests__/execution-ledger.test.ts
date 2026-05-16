@@ -9,6 +9,7 @@ import type {
   DeviceId,
 } from "@motebit/sdk";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
+import type { SensitivityCleared } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "../plan-engine.js";
 
 // Mock runTurnStreaming at the module level
@@ -121,7 +122,7 @@ function setupStreamMockWithTools(steps: Array<{ response: string; tools?: strin
   });
 }
 
-function makeMockDeps(stepCount = 2): MotebitLoopDependencies {
+function makeMockDeps(stepCount = 2): SensitivityCleared<MotebitLoopDependencies> {
   const steps = Array.from({ length: stepCount }, (_, i) => ({
     description: `Step ${i + 1}`,
     prompt: `Do step ${i + 1}`,
@@ -145,7 +146,7 @@ function makeMockDeps(stepCount = 2): MotebitLoopDependencies {
       estimateConfidence: vi.fn().mockResolvedValue(0.9),
       extractMemoryCandidates: vi.fn().mockResolvedValue([]),
     } as never,
-  };
+  } as unknown as SensitivityCleared<MotebitLoopDependencies>;
 }
 
 async function collectChunks(gen: AsyncGenerator<PlanChunk>): Promise<PlanChunk[]> {

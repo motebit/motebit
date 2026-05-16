@@ -770,7 +770,11 @@ describe("generateCompletion", () => {
   it("throws without AI provider configured", async () => {
     const rt = new MotebitRuntime({ motebitId: "no-provider" }, createAdapters());
 
-    await expect(rt.generateCompletion("prompt")).rejects.toThrow("No AI provider");
+    // Error message comes from `assertSensitivityPermitsAiCall` (the
+    // gate fires first, before the explicit `this.provider` null-check
+    // in `generateCompletion`). Both paths converge on the same
+    // "AI not configured" condition; the gate just gets there first.
+    await expect(rt.generateCompletion("prompt")).rejects.toThrow("AI not initialized");
   });
 
   it("does not change state during generateCompletion", async () => {

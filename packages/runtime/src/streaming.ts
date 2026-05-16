@@ -13,7 +13,7 @@ import type {
   ConversationMessage,
   ApprovalStoreAdapter,
 } from "@motebit/sdk";
-import type { BehaviorCues } from "@motebit/sdk";
+import type { BehaviorCues, SensitivityCleared, SensitivityGateEntry } from "@motebit/sdk";
 import type { AgenticChunk, TurnResult } from "@motebit/ai-core";
 import { extractStateTags, runTurnStreaming } from "@motebit/ai-core";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
@@ -86,8 +86,20 @@ export interface StreamingDeps {
     result: ToolResult,
     toolName: string,
   ): { result: ToolResult; injectionDetected?: boolean; injectionPatterns?: string[] };
-  /** Current loop deps (for continuation turns). */
-  getLoopDeps(): MotebitLoopDependencies | null;
+  /**
+   * Fire the runtime's sensitivity gate and return the resulting
+   * branded loop deps. Single authorized path to `runTurnStreaming` —
+   * the brand is unforgeable outside the runtime, so any continuation
+   * turn (e.g. after tool approval) cannot bypass the gate. Resume
+   * paths fire the gate AGAIN because the user may have elevated
+   * sensitivity during the pause for approval; fail-closed semantics
+   * require re-checking every bytes-leave moment, not just the
+   * initial turn.
+   */
+  assertSensitivityPermitsAiCall(
+    entry: SensitivityGateEntry,
+    toolName?: string,
+  ): SensitivityCleared<MotebitLoopDependencies>;
   /** Current latest cues (for continuation turns). */
   getLatestCues(): BehaviorCues;
   /** Approval store for quorum persistence. */
@@ -480,8 +492,12 @@ export class StreamingManager {
       // already injected a denial into conversation history, so this is a no-op.
       return;
     }
-    const loopDeps = this.deps.getLoopDeps();
-    if (!loopDeps) throw new Error("AI not initialized");
+    // Resume after tool approval IS a bytes-leave moment — fire the
+    // gate again. Reuses `sendMessageStreaming` as the audit entry
+    // since this is structurally a continuation of that turn; a
+    // dedicated `resumeAfterToolApproval` entry is a future
+    // SensitivityGateEntry sub-axis refinement.
+    const loopDeps = this.deps.assertSensitivityPermitsAiCall("sendMessageStreaming");
 
     const pending = this._pendingApproval;
     this._pendingApproval = null;

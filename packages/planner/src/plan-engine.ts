@@ -7,6 +7,7 @@ import type {
   ExecutionTimelineEntry,
 } from "@motebit/sdk";
 import type { MotebitLoopDependencies, AgenticChunk, ResolvedTaskConfig } from "@motebit/ai-core";
+import type { SensitivityCleared } from "@motebit/sdk";
 import { runTurnStreaming } from "@motebit/ai-core";
 import type { PlanStoreAdapter } from "./types.js";
 import type { CollaborativeDelegationAdapter } from "./delegation-adapter.js";
@@ -102,7 +103,7 @@ export class PlanEngine {
     goalId: string,
     motebitId: string,
     ctx: DecompositionContext,
-    deps: MotebitLoopDependencies,
+    deps: SensitivityCleared<MotebitLoopDependencies>,
     planningConfig?: ResolvedTaskConfig,
   ): Promise<{ plan: Plan; truncatedFrom?: number }> {
     const rawPlan = await decomposePlan(ctx, deps.provider, planningConfig);
@@ -157,7 +158,7 @@ export class PlanEngine {
 
   async *executePlan(
     planId: string,
-    deps: MotebitLoopDependencies,
+    deps: SensitivityCleared<MotebitLoopDependencies>,
     ctx?: DecompositionContext,
     runId?: string,
     reflectionConfig?: ResolvedTaskConfig,
@@ -183,7 +184,7 @@ export class PlanEngine {
 
   async *resumePlan(
     planId: string,
-    deps: MotebitLoopDependencies,
+    deps: SensitivityCleared<MotebitLoopDependencies>,
     ctx?: DecompositionContext,
     runId?: string,
     reflectionConfig?: ResolvedTaskConfig,
@@ -201,7 +202,7 @@ export class PlanEngine {
   private async *runSteps(
     plan: Plan,
     steps: PlanStep[],
-    deps: MotebitLoopDependencies,
+    deps: SensitivityCleared<MotebitLoopDependencies>,
     ctx?: DecompositionContext,
     planRetryCount: number = 0,
     runId?: string,
@@ -620,7 +621,7 @@ export class PlanEngine {
   private async *executeStep(
     step: PlanStep,
     priorResults: string[],
-    deps: MotebitLoopDependencies,
+    deps: SensitivityCleared<MotebitLoopDependencies>,
     runId?: string,
   ): AsyncGenerator<
     PlanChunk,
@@ -716,7 +717,7 @@ export class PlanEngine {
    */
   async *recoverDelegatedSteps(
     motebitId: string,
-    deps: MotebitLoopDependencies,
+    deps: SensitivityCleared<MotebitLoopDependencies>,
   ): AsyncGenerator<PlanChunk> {
     const adapter = this.config.delegationAdapter;
     if (!adapter?.pollTaskResult) return;
@@ -804,7 +805,7 @@ export class PlanEngine {
     plan: Plan,
     steps: PlanStep[],
     localMotebitId: string,
-    deps: MotebitLoopDependencies,
+    deps: SensitivityCleared<MotebitLoopDependencies>,
     runId?: string,
   ): AsyncGenerator<PlanChunk> {
     const adapter = this.config.collaborativeAdapter;

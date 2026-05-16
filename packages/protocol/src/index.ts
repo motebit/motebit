@@ -2614,6 +2614,7 @@ export {
   ALL_SENSITIVITY_LEVELS,
   isSensitivityLevel,
 } from "./sensitivity.js";
+export type { SensitivityCleared } from "./sensitivity.js";
 export { ALL_EVENT_TYPES, isEventType } from "./event-type.js";
 
 // Money primitives — interop law for integer-unit accounting. Pure

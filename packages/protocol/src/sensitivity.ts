@@ -165,3 +165,48 @@ export const ALL_SENSITIVITY_LEVELS: readonly SensitivityLevel[] = Object.freeze
 export function isSensitivityLevel(value: unknown): value is SensitivityLevel {
   return typeof value === "string" && (ALL_SENSITIVITY_LEVELS as readonly string[]).includes(value);
 }
+
+// ── Sensitivity-cleared brand (precondition encoding) ─────────────
+//
+// Phantom-type brand: `SensitivityCleared<T>` is `T` plus an opaque
+// type-level tag that exists only at the type layer. The runtime
+// representation is `T` — there is no extra field, no allocation, no
+// runtime cost. The brand carries a single proof: "the sensitivity
+// gate (`assertSensitivityPermitsAiCall`) fired before this value
+// was produced."
+//
+// Consumer contract: any function that crosses the AI egress
+// boundary (`runTurn`, `runTurnStreaming`) requires
+// `SensitivityCleared<MotebitLoopDependencies>` rather than the bare
+// deps. Callers cannot construct the brand themselves — the symbol
+// is `declare const`-only, so the only valid production is an
+// explicit `as SensitivityCleared<T>` cast inside the gate's
+// implementation.
+//
+// Layer 1 enforcement: any future call site that reaches `runTurn`
+// without threading the brand from a gate-firing producer is a
+// compile error. Closes the off-gate paths that the static scanner
+// `check-sensitivity-routing` misses (cross-file, cross-package
+// indirect calls — `runtime/streaming.ts`, `planner/plan-engine.ts`).
+// The static gate is now redundant for the runTurn family; it stays
+// for `provider.generate(...)` direct calls (housekeeping
+// completions) which are a separate brand-promotion arc.
+
+declare const __sensitivityCleared: unique symbol;
+
+/**
+ * Precondition brand: `T` carrying the type-level proof that
+ * `assertSensitivityPermitsAiCall()` fired before the value left
+ * the gate.
+ *
+ * Produced only inside the runtime's gate method (the single
+ * authorized `as SensitivityCleared<T>` cast). Required as the
+ * deps parameter on `runTurn` / `runTurnStreaming`. Propagates
+ * through every indirect AI-egress path (`StreamingManager` resume,
+ * `PlanEngine` per-step) so the brand is the type-level proof a
+ * sensitivity check happened at the right moment.
+ *
+ * Doctrine: `docs/doctrine/security-boundaries.md` (privacy gate),
+ * CLAUDE.md ("Medical/financial/secret never reach external AI").
+ */
+export type SensitivityCleared<T> = T & { readonly [__sensitivityCleared]: true };

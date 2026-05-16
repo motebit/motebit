@@ -6,6 +6,7 @@
  */
 
 import { EventType } from "@motebit/sdk";
+import type { SensitivityCleared, SensitivityGateEntry } from "@motebit/sdk";
 import type {
   GoalExecutionManifest,
   ExecutionTimelineEntry,
@@ -29,8 +30,18 @@ export interface PlanExecutionDeps {
   events: EventStore;
   toolAuditSink?: AuditLogSink;
   logger: { warn(message: string, context?: Record<string, unknown>): void };
-  /** Resolve current loop deps (may be null if provider not set). */
-  getLoopDeps(): MotebitLoopDependencies | null;
+  /**
+   * Fire the runtime's sensitivity gate and return branded loop deps.
+   * Single authorized path to the planner's AI-call paths — the brand
+   * is unforgeable outside the runtime, so every per-step
+   * `runTurnStreaming` call is rooted in a gate firing. Replaces the
+   * unbranded `getLoopDeps()` so the static check-sensitivity-routing
+   * gate's blind spot (cross-package call) is closed structurally.
+   */
+  assertSensitivityPermitsAiCall(
+    entry: SensitivityGateEntry,
+    toolName?: string,
+  ): SensitivityCleared<MotebitLoopDependencies>;
   /** Resolve current local capabilities. */
   getLocalCapabilities(): DeviceCapability[];
   /** Resolve task router for model selection (may be null). */
@@ -71,8 +82,11 @@ export class PlanExecutionManager {
     runId?: string,
     privateKey?: Uint8Array,
   ): AsyncGenerator<PlanChunk> {
-    const loopDeps = this.deps.getLoopDeps();
-    if (!loopDeps) throw new Error("AI not initialized — call setProvider() first");
+    // Plan execution IS a bytes-leave moment — each step ultimately
+    // calls `runTurnStreaming`. Reuses `sendMessageStreaming` as the
+    // audit entry; dedicated `executePlanStep` entry deferred to
+    // future SensitivityGateEntry sub-axis refinement.
+    const loopDeps = this.deps.assertSensitivityPermitsAiCall("sendMessageStreaming");
 
     const availableTools =
       this.deps.toolRegistry.size > 0
@@ -282,8 +296,9 @@ export class PlanExecutionManager {
    * Streams PlanChunk events starting from where the plan left off.
    */
   async *resumePlan(planId: string, runId?: string): AsyncGenerator<PlanChunk> {
-    const loopDeps = this.deps.getLoopDeps();
-    if (!loopDeps) throw new Error("AI not initialized — call setProvider() first");
+    // Resume IS a bytes-leave moment; gate again — sensitivity may
+    // have changed during the pause.
+    const loopDeps = this.deps.assertSensitivityPermitsAiCall("sendMessageStreaming");
     const plan = this.deps.planStore.getPlan(planId);
     const goalId = plan?.goal_id;
     for await (const chunk of this.deps.planEngine.resumePlan(planId, loopDeps, undefined, runId)) {
@@ -296,7 +311,9 @@ export class PlanExecutionManager {
    * Recover delegated steps that were orphaned (e.g. tab closed during delegation).
    * Polls relay for results and resumes plans where possible.
    */
-  async *recoverDelegatedSteps(loopDeps: MotebitLoopDependencies): AsyncGenerator<PlanChunk> {
+  async *recoverDelegatedSteps(
+    loopDeps: SensitivityCleared<MotebitLoopDependencies>,
+  ): AsyncGenerator<PlanChunk> {
     for await (const chunk of this.deps.planEngine.recoverDelegatedSteps(
       this.deps.motebitId,
       loopDeps,

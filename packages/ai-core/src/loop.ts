@@ -12,6 +12,7 @@ import type {
   ConversationMessage,
 } from "@motebit/sdk";
 import { EventType, SensitivityLevel, rankSensitivity } from "@motebit/sdk";
+import type { SensitivityCleared } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, ConsolidationProvider } from "@motebit/memory-graph";
 import { embedText, formMemoriesFromCandidates } from "@motebit/memory-graph";
@@ -667,7 +668,7 @@ export type AgenticChunk =
 // === Orchestrator ===
 
 export async function runTurn(
-  deps: MotebitLoopDependencies,
+  deps: SensitivityCleared<MotebitLoopDependencies>,
   userMessage: string,
   options?: TurnOptions,
 ): Promise<TurnResult> {
@@ -722,7 +723,7 @@ function toolContext(name: string, args: Record<string, unknown>): string | unde
 }
 
 export async function* runTurnStreaming(
-  deps: MotebitLoopDependencies,
+  deps: SensitivityCleared<MotebitLoopDependencies>,
   userMessage: string,
   options?: TurnOptions,
 ): AsyncGenerator<AgenticChunk> {

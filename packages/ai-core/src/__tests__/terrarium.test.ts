@@ -25,6 +25,7 @@ vi.mock("@motebit/memory-graph", async () => {
 
 import { runTurn } from "../loop.js";
 import type { MotebitLoopDependencies } from "../loop.js";
+import type { SensitivityCleared } from "@motebit/sdk";
 import type { StreamingProvider } from "../index.js";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { MemoryGraph, InMemoryMemoryStorage } from "@motebit/memory-graph";
@@ -87,13 +88,17 @@ function mem(
 function makeDeps(
   provider: StreamingProvider,
   consolidationProvider?: ConsolidationProvider,
-): MotebitLoopDependencies {
+): SensitivityCleared<MotebitLoopDependencies> {
   const eventStore = new EventStore(new InMemoryEventStore());
   const storage = new InMemoryMemoryStorage();
   const memoryGraph = new MemoryGraph(storage, eventStore, MOTEBIT_ID);
   const stateEngine = new StateVectorEngine();
   const behaviorEngine = new BehaviorEngine();
 
+  // Test fixture casts to `SensitivityCleared<...>` because terrarium
+  // tests exercise `runTurn` directly without a runtime instance to
+  // call the gate. The gate's behavior is tested separately in
+  // `runtime/__tests__/sensitivity-routing.test.ts`.
   return {
     motebitId: MOTEBIT_ID,
     eventStore,
@@ -102,7 +107,7 @@ function makeDeps(
     behaviorEngine,
     provider,
     consolidationProvider,
-  };
+  } as SensitivityCleared<MotebitLoopDependencies>;
 }
 
 /** Get all live (non-tombstoned, non-superseded) memories. */
