@@ -125,6 +125,10 @@ const FORBIDDEN_PATTERNS: ReadonlyArray<{
     name: "glass creature (body description — use 'liquescent creature' or 'the creature')",
   },
   {
+    pattern: /\brendered as glass\b/i,
+    name: "rendered as glass (ontology claim via rendering framing — use 'rendered with glass-like optical character' or 'optics borrow from glass-physics')",
+  },
+  {
     pattern: /\bliquid[- ]glass plane\b/i,
     name: "liquid-glass plane (slab description — slab is liquescent; one body, one material)",
   },

@@ -25,7 +25,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 - [Intelligence](https://docs.motebit.com/docs/concepts/intelligence): Pluggable LLM providers — the intelligence is a commodity, the identity is the asset.
 - [Governance](https://docs.motebit.com/docs/concepts/governance): Surface tension — what crosses the boundary between the agent and the world.
 - [Federation](https://docs.motebit.com/docs/concepts/federation): A network of independent relays that peer bilaterally — discovery, routing, and settlement extend across boundaries without a central authority.
-- [The Droplet](https://docs.motebit.com/docs/concepts/the-droplet): Form thesis — surface tension, glass, breathing, orbital mechanics.
+- [The Droplet](https://docs.motebit.com/docs/concepts/the-droplet): Form thesis — surface tension, liquescent material, breathing, orbital mechanics.
 - [Public surface](https://docs.motebit.com/docs/concepts/public-surface): What motebit promises stability for, what it doesn't, and where the boundary is drawn.
 
 ## Developer Guide
