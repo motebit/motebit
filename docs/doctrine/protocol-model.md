@@ -2,6 +2,14 @@
 
 Motebit is a protocol, not a platform. This has concrete architectural consequences that bend every design decision.
 
+## TL;DR
+
+> **Open verification. Source-available reference implementation. Accumulated state as moat.**
+
+The permissive floor lets anyone implement and verify motebit primitives. The reference implementation is source-available under BSL-1.1 and auto-converts to Apache-2.0 at the Change Date. Accumulated state — trust graph, routing history, federation topology, and settlement relationships — is never licensed because it is the permanent moat.
+
+Two-clause shorthand (`strategy_open_source_moat` memory anchor): _"Open-source protocol; never open-source accumulated state."_ Use when compression is the priority; use the three-clause TL;DR above when the BSL middle layer needs to be legible (investor decks, public positioning, README hero, doctrine-citing replies to external proposers).
+
 ## The three-layer model
 
 Every function the relay performs lives in exactly one of three layers, and each layer has a different shape of ownership:

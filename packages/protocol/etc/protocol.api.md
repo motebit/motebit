@@ -2544,6 +2544,7 @@ export interface ProposalStepCounter {
 
 // @public
 export interface ProviderCapability {
+    readonly contextWindowTokens?: number;
     readonly host: InferenceHost;
     readonly inputCostPerMillion: number;
     readonly jurisdiction: Jurisdiction;
