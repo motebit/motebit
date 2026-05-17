@@ -210,6 +210,24 @@ describe("detectDishonestClosing — three test pins", () => {
       expect(correction).toContain("page navigated underneath");
     });
 
+    it("non-frame_stale failure (policy_denied / session_closed) takes the count-based fallback, not the inspect branch", () => {
+      // Comment in inspectDishonesty: failure reasons other than
+      // `frame_stale` are surfaced via the count-based fallback
+      // branches and don't need re-correction here. The function
+      // returns null for those entries; the closing-text claim then
+      // either matches a separate count-based rule or stays as-is.
+      const log: ToolResultLogEntry[] = [
+        {
+          name: "computer",
+          ok: false,
+          data: null,
+          errorReason: "policy_denied",
+        },
+      ];
+      const correction = detectDishonestClosing({ finalText: "Done.", toolResultsLog: log });
+      expect(correction).toBeNull();
+    });
+
     // Sibling sweep pins (2026-05-12): blank_page_detected and
     // access_denied_detected. Same shape as bot_detection_detected,
     // distinct content-failure semantics. Persistent-state dishonesty

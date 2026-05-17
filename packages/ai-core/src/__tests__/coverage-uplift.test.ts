@@ -33,7 +33,7 @@ import { buildSystemPrompt, buildSystemPromptCacheable } from "../prompt";
 import { OpenAIProvider } from "../openai-provider";
 import { isModelTier, resolveModelTier, withTaskConfig } from "../task-router";
 import { parseReflectionResponse, reflect } from "../reflection";
-import { runTurnStreaming } from "../loop";
+import { runTurnStreaming, projectProviderClearance } from "../loop";
 import type { MotebitLoopDependencies, AgenticChunk, LoopPolicyGate } from "../loop";
 import type { SensitivityCleared } from "@motebit/sdk";
 import type { StreamingProvider } from "../index";
@@ -2152,6 +2152,133 @@ describe("policy gate: sanitizeResult fallback (no sanitizeAndCheck)", () => {
       result: { toolCallsSucceeded: number };
     };
     expect(result.result.toolCallsSucceeded).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runTurnStreaming — dishonest-closing correction + deferMemoryFormation
+// (covers loop.ts:1500-1514 correction path and loop.ts:1578-1583 deferred chunk)
+// ---------------------------------------------------------------------------
+
+describe("projectProviderClearance", () => {
+  it("carries the SensitivityCleared brand from deps onto the provider field — same reference at runtime", () => {
+    // The function is a pure type-level no-op (a cast wrapper). The
+    // runtime guarantee is reference identity — the projected
+    // provider IS the one on the cleared deps, not a copy.
+    const provider = makeMockProvider([
+      { text: "x", confidence: 0.8, memory_candidates: [], state_updates: {} },
+    ]);
+    const deps = makeDepsWithProvider(provider);
+    const projected = projectProviderClearance(deps);
+    expect(projected).toBe(provider);
+  });
+});
+
+describe("runTurnStreaming — dishonest-closing correction path", () => {
+  it("appends a correction text chunk when the closing claim contradicts the last tool's typed truth", async () => {
+    // Tool returns a click where navigation_triggered: false — a
+    // dishonesty-class typed-truth field. The model then closes with
+    // "Done." (generic action-class claim). detectDishonestClosing
+    // returns a correction; the loop yields it as a follow-up text
+    // chunk and reflects it on finalResponse.
+    const registry = makeToolRegistry(
+      new Map([
+        [
+          "computer",
+          {
+            def: {
+              name: "computer",
+              description: "click/type/navigate",
+              inputSchema: { type: "object", properties: { action: { type: "object" } } },
+            },
+            result: {
+              ok: true,
+              data: { kind: "click", ok: true, navigation_triggered: false },
+            } as ToolResult,
+          },
+        ],
+      ]),
+    );
+    const provider = makeMockProvider([
+      {
+        text: "Clicking.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        tool_calls: [
+          { id: "tc_click", name: "computer", args: { action: { kind: "click", x: 10, y: 10 } } },
+        ],
+      },
+      {
+        text: "Done.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+      },
+    ]);
+    const deps = makeDepsWithProvider(provider, { tools: registry });
+    const chunks: AgenticChunk[] = [];
+    for await (const c of runTurnStreaming(deps, "click that thing")) chunks.push(c);
+
+    // The dishonest-closing intercept yields a SECOND text chunk
+    // prefixed by two newlines (`\n\n${correction}`) after the
+    // model's "Done." chunk. Per the navigation_triggered rule, the
+    // correction string contains "page didn't move".
+    const textChunks = chunks.filter((c) => c.type === "text") as Array<{
+      type: "text";
+      text: string;
+    }>;
+    const correctionChunk = textChunks.find((c) => c.text.includes("page didn't move"));
+    expect(correctionChunk).toBeDefined();
+    expect(correctionChunk!.text.startsWith("\n\n")).toBe(true);
+
+    // The corrected text is reflected onto finalResponse so memory
+    // candidates / conversation persistence see the same coherent
+    // message the user saw.
+    const resultChunk = chunks.find((c) => c.type === "result") as {
+      type: "result";
+      result: { response: string };
+    };
+    expect(resultChunk.result.response).toContain("Done.");
+    expect(resultChunk.result.response).toContain("page didn't move");
+  });
+});
+
+describe("runTurnStreaming — deferMemoryFormation", () => {
+  it("yields a memory_formation_deferred chunk and skips the inline formation pass", async () => {
+    const provider = makeMockProvider([
+      {
+        text: "Hi back.",
+        confidence: 0.8,
+        memory_candidates: [
+          { content: "user said hi", confidence: 0.7, sensitivity: SensitivityLevel.None },
+        ],
+        state_updates: {},
+      },
+    ]);
+    const deps = makeDepsWithProvider(provider);
+    const chunks: AgenticChunk[] = [];
+    for await (const c of runTurnStreaming(deps, "hi", { deferMemoryFormation: true })) {
+      chunks.push(c);
+    }
+
+    const deferred = chunks.find((c) => c.type === "memory_formation_deferred") as
+      | { type: "memory_formation_deferred"; candidates: unknown[]; relevantMemories: unknown[] }
+      | undefined;
+    expect(deferred).toBeDefined();
+    expect(Array.isArray(deferred!.candidates)).toBe(true);
+    expect(Array.isArray(deferred!.relevantMemories)).toBe(true);
+    expect(deferred!.candidates.length).toBeGreaterThan(0);
+
+    // Inline formation was skipped — no memories were committed to
+    // the graph, so memoriesFormed on the result is empty. The
+    // runtime is what queues background formation; the loop just
+    // hands off the snapshot.
+    const resultChunk = chunks.find((c) => c.type === "result") as {
+      type: "result";
+      result: { memoriesFormed: unknown[] };
+    };
+    expect(resultChunk.result.memoriesFormed).toEqual([]);
   });
 });
 
