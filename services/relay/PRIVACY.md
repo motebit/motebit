@@ -206,7 +206,6 @@ client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and in
 
 ## Honest gaps
 
-- onchain anchor of this declaration is not yet in place; only cached copies of the JSON survive operator deletion. See `spec/relay-transparency-v1.md` (when shipped) for the mandatory-anchor wire format.
 - Fly.io and Vercel log retention windows are governed by their respective DPAs and are not separately enforced by motebit code.
 - receipts verified before the relay_receipts archive landed (migration v10) retained only `receipt_hash` in `relay_settlements`; their full canonical JSON was not preserved and cannot be reconstructed. Receipts verified on and after v10 are archived byte-identically.
 
@@ -214,5 +213,5 @@ client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and in
 
 The JSON form at `/.well-known/motebit-transparency.json` is signed by the relay's Ed25519 identity key under suite `motebit-jcs-ed25519-hex-v1`. Verifiers compute `sha256(canonicalJson({spec, declared_at, relay_id, relay_public_key, content}))` and check the signature against `relay_public_key`. No relay contact is required to verify a cached copy.
 
-Onchain anchoring of the declaration hash will land with `spec/relay-transparency-v1.md`. Until then the disappearance test is partially passed: a cached JSON proves what Motebit claimed at a point in time, but a coordinated deletion of the published copy and absence of a third-party cache would erase the public claim. This gap is documented in `honest_gaps` above.
+The declaration hash is committed onchain via the Solana Memo program at boot when the relay is configured with `SOLANA_RPC_URL` and its Ed25519-derived Solana wallet is funded (per `spec/relay-transparency-v1.md` §5 — Stage 2 trust-anchor primitive). A third party can find the anchor transaction by searching Solana memos signed by `relay_public_key` and matching the declaration's `hash` field, proving Motebit's claim even if the published copy disappears. Without a configured anchor, the declaration remains valid via trust-on-first-use over HTTPS — the anchor is additive evidence.
 

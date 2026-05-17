@@ -15,13 +15,15 @@
  * must change in the same PR. Otherwise the relay's signed declaration
  * lies, and the doctrine the declaration cites becomes worthless.
  *
- * Stage 1.5 deliberately omits onchain anchoring; that lands when
- * `spec/relay-transparency-v1.md` ships and makes the anchor mandatory.
- * Until then the declaration is signed by the relay's identity key and
- * served at /.well-known/motebit-transparency.json — partial disappearance
- * test: any holder of the cached JSON can verify it was Motebit's claim,
- * but the operator could silently delete the published copy. The future
- * onchain anchor closes that gap.
+ * Stage 2 onchain anchoring is lifted forward (per `index.ts` startup
+ * wiring + `spec/relay-transparency-v1.md` §5): when the relay is
+ * configured with `SOLANA_RPC_URL` and its identity-derived Solana
+ * wallet is funded, the declaration hash is committed via the Solana
+ * Memo program at boot. A third party can find the anchor by searching
+ * memos signed by `relay_public_key` and matching the declaration's
+ * `hash` field — proves Motebit's claim even if the published copy
+ * disappears. Without a configured anchor, declarations remain valid
+ * via trust-on-first-use over HTTPS; the anchor is additive evidence.
  */
 
 import type { Hono } from "hono";
@@ -300,7 +302,6 @@ export const DECLARATION_CONTENT = {
       "none committed yet — Plausible (self-hosted) is the planned choice per docs/doctrine/operator-transparency.md anti-patterns",
   },
   honest_gaps: [
-    "onchain anchor of this declaration is not yet in place; only cached copies of the JSON survive operator deletion. See `spec/relay-transparency-v1.md` (when shipped) for the mandatory-anchor wire format.",
     "Fly.io and Vercel log retention windows are governed by their respective DPAs and are not separately enforced by motebit code.",
     "receipts verified before the relay_receipts archive landed (migration v10) retained only `receipt_hash` in `relay_settlements`; their full canonical JSON was not preserved and cannot be reconstructed. Receipts verified on and after v10 are archived byte-identically.",
   ],
@@ -489,7 +490,7 @@ export function renderMarkdown(): string {
   );
   lines.push("");
   lines.push(
-    "Onchain anchoring of the declaration hash will land with `spec/relay-transparency-v1.md`. Until then the disappearance test is partially passed: a cached JSON proves what Motebit claimed at a point in time, but a coordinated deletion of the published copy and absence of a third-party cache would erase the public claim. This gap is documented in `honest_gaps` above.",
+    "The declaration hash is committed onchain via the Solana Memo program at boot when the relay is configured with `SOLANA_RPC_URL` and its Ed25519-derived Solana wallet is funded (per `spec/relay-transparency-v1.md` §5 — Stage 2 trust-anchor primitive). A third party can find the anchor transaction by searching Solana memos signed by `relay_public_key` and matching the declaration's `hash` field, proving Motebit's claim even if the published copy disappears. Without a configured anchor, the declaration remains valid via trust-on-first-use over HTTPS — the anchor is additive evidence.",
   );
   lines.push("");
 
