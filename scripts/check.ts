@@ -683,6 +683,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-prompt-density",
   },
   {
+    name: "check-prompt-budget",
+    defends:
+      "the assembled system prompt (`packages/ai-core/src/prompt.ts` template-literal content) does not silently grow past `SYSTEM_PROMPT_BUDGET_BYTES`, declared in the same file. Paired with `check-prompt-density` (#81): density catches conformance-shape accumulation (rule-clauses), budget catches absolute-size growth (bytes). A prompt that adds three new bullets within the existing token budget trips density only; a prompt that adds 1,200 tokens of non-bullet prose trips budget only. Both gates needed because both drift modes exist. The constitutional motivation: motebit's `protocol-primacy` doctrine lists on-device inference as a protocol-level property; pluggability is structurally true only if the prompt fits the selected model's context window. Witnessed 2026-05-17: a 40KB system prompt overflowed a 4k-context WebLLM model with `prompt tokens: 8484; context window size: 4096`. Doctrine: `docs/doctrine/intelligence-pluggability-contract.md` — runtime invariants stay constant; prompt + tools + rendered state adapt; honest deny when admission cannot be met. Bumping `SYSTEM_PROMPT_BUDGET_BYTES` is the doctrine moment.",
+    script: "check-prompt-budget",
+  },
+  {
     name: "check-universal-slash-coverage",
     defends:
       "every chat-surface that ships a slash-command registry — web (`apps/web/src/ui/slash-commands.ts`), desktop (`apps/desktop/src/ui/slash-commands.ts`), mobile (`apps/mobile/src/components/SlashAutocomplete.tsx`), CLI (`apps/cli/src/args.ts`) — registers every UNIVERSAL_COMMAND in the gate's registry. Today: `/trust` (canonical 5-dimension trust-accumulation summary computed by cmdTrust) + `/welcome` (onboarding tour naming the three thesis pillars). Closed-registry shape (same as `check-skills-cross-surface` #73 + `check-typed-truth-perception` #80): UNIVERSAL_COMMANDS × SURFACES matrix; adding a universal command MUST update the registry + every surface's slash list. Generalized from a per-command gate to one rule covering N commands — future universal commands cost one registry line, not a new script. Doctrine: `docs/doctrine/runtime-invariants-over-prompt-rules.md` § trust-accumulation visibility arc + onboarding arc. Spatial is intentionally out of scope — AR-glasses prototype has no chat surface and no slash menu.",

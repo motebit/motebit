@@ -81,6 +81,7 @@
     "check-computer-dispatcher-modes": "npx tsx scripts/check-computer-dispatcher-modes.ts",
     "check-typed-truth-perception": "npx tsx scripts/check-typed-truth-perception.ts",
     "check-prompt-density": "npx tsx scripts/check-prompt-density.ts",
+    "check-prompt-budget": "npx tsx scripts/check-prompt-budget.ts",
     "check-universal-slash-coverage": "npx tsx scripts/check-universal-slash-coverage.ts",
     "check-money-boundary": "npx tsx scripts/check-money-boundary.ts",
     "check-ha-not-a-gate": "npx tsx scripts/check-ha-not-a-gate.ts",

@@ -221,6 +221,18 @@ export interface ProviderCapability {
   readonly inputCostPerMillion: number;
   /** Output price (USD per million tokens). */
   readonly outputCostPerMillion: number;
+  /**
+   * Maximum prompt+completion tokens the model will accept in a single
+   * call. Optional + additive per
+   * [`docs/doctrine/intelligence-pluggability-contract.md`](../../../docs/doctrine/intelligence-pluggability-contract.md) —
+   * consumers performing pre-flight admission (system-prompt + tools +
+   * rendered state + user message + output reserve ≤ window) read this
+   * to decide whether to deny honestly before invoking the model.
+   * Auto-routing dispatch does not consume this field today; admission
+   * is a sibling deny semantic to auto-router deny ("I can't pick"
+   * vs "the picked model can't carry").
+   */
+  readonly contextWindowTokens?: number;
 }
 
 // === Routing constraint =====================================================

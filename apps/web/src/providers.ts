@@ -53,17 +53,46 @@ interface WebLLMEngine {
   };
 }
 
+interface WebLLMChatOpts {
+  readonly context_window_size?: number;
+  readonly sliding_window_size?: number;
+}
+
 interface WebLLMModule {
   CreateMLCEngine(
     model: string,
     opts?: { initProgressCallback?: (report: { text: string; progress: number }) => void },
+    chatOpts?: WebLLMChatOpts,
   ): Promise<WebLLMEngine>;
   CreateWebWorkerMLCEngine(
     worker: Worker,
     model: string,
     opts?: { initProgressCallback?: (report: { text: string; progress: number }) => void },
+    chatOpts?: WebLLMChatOpts,
   ): Promise<WebLLMEngine>;
 }
+
+/**
+ * WebLLM's default `context_window_size` is 4096 across all MLC packages —
+ * a memory-budget choice baked into the SDK, NOT a hard model ceiling
+ * (Llama-3.2-3B's published context window is 128K). Motebit's assembled
+ * system prompt is ~8.5k tokens today, so the SDK default overflows on
+ * the first message.
+ *
+ * Per [`docs/doctrine/intelligence-pluggability-contract.md`](../../../docs/doctrine/intelligence-pluggability-contract.md):
+ * the runtime invariants stay constant; the budget rendered to the model
+ * adapts. Configuring the engine with 16,384 tokens admits the current
+ * prompt with comfortable headroom for user input + output reserve on a
+ * 3B model in browser memory (q4f16 quantization at this window fits in
+ * the ~4 GB WebGPU budget typical consumer hardware exposes).
+ *
+ * Raising this is a memory-tradeoff decision; lowering it past the
+ * `SYSTEM_PROMPT_BUDGET_TOKENS` floor declared in `@motebit/ai-core`
+ * would re-introduce the admission failure this constant exists to
+ * close. Pair with `check-prompt-budget` (the drift gate that watches
+ * `prompt.ts` static size against the same budget).
+ */
+const WEBLLM_CONTEXT_WINDOW_TOKENS = 16384;
 
 export class WebLLMProvider implements StreamingProvider {
   private engine: WebLLMEngine | null = null;
@@ -144,9 +173,12 @@ export class WebLLMProvider implements StreamingProvider {
         this.worker = new Worker(new URL("./webllm-worker.ts", import.meta.url), {
           type: "module",
         });
-        const workerEngine = webllm.CreateWebWorkerMLCEngine(this.worker, this._model, {
-          initProgressCallback: progressCb,
-        });
+        const workerEngine = webllm.CreateWebWorkerMLCEngine(
+          this.worker,
+          this._model,
+          { initProgressCallback: progressCb },
+          { context_window_size: WEBLLM_CONTEXT_WINDOW_TOKENS },
+        );
         const timeout = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("Worker init timeout")), 15_000),
         );
@@ -160,7 +192,11 @@ export class WebLLMProvider implements StreamingProvider {
     }
 
     // Fallback: main thread engine (blocks rendering but still works)
-    return webllm.CreateMLCEngine(this._model, { initProgressCallback: progressCb });
+    return webllm.CreateMLCEngine(
+      this._model,
+      { initProgressCallback: progressCb },
+      { context_window_size: WEBLLM_CONTEXT_WINDOW_TOKENS },
+    );
   }
 
   private async getEngine(): Promise<WebLLMEngine> {

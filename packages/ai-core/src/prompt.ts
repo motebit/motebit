@@ -4,6 +4,32 @@ import type { MotebitPersonalityConfig } from "./config.js";
 import { DEFAULT_CONFIG } from "./config.js";
 import { packContext } from "./core.js";
 
+/**
+ * Declared maximum static-prefix byte budget for the assembled system
+ * prompt. Per
+ * [`docs/doctrine/intelligence-pluggability-contract.md`](../../../docs/doctrine/intelligence-pluggability-contract.md):
+ * intelligence is pluggable only when the runtime's prompt budget fits
+ * the selected model. The static prefix (IDENTITY + KNOWLEDGE_DOCTRINE +
+ * PERCEPTION_DOCTRINE + CONVERSATION_BEHAVIOR + TAG_INSTRUCTIONS +
+ * INJECTION_DEFENSE) is the runtime-invariant cost paid on every call;
+ * dynamic suffix (tools + packed context + state) is per-turn variable.
+ *
+ * 45,000 bytes ≈ 11,250 tokens (4 bytes/token approximation). Measured
+ * baseline 2026-05-17: `prompt.ts` is 40,543 bytes (~10,135 tokens). The
+ * cushion is small intentionally — the doctrine's standing commitment
+ * is that this number trends DOWN over time as PERCEPTION_DOCTRINE
+ * subtracts prose into typed-truth wire fields. Bumping this constant
+ * is the doctrine moment: the bump commit names what crossed the
+ * threshold and why.
+ *
+ * Paired gates:
+ *   - `check-prompt-density` (#81): rule-clause accumulation lens
+ *   - `check-prompt-budget` (new): byte-weight lens
+ *
+ * Different drift modes; both gates needed.
+ */
+export const SYSTEM_PROMPT_BUDGET_BYTES = 45_000;
+
 // === Identity ===
 // Distilled from THE_SOVEREIGN_INTERIOR.md — the model needs to know what it IS.
 
