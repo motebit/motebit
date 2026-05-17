@@ -74,6 +74,7 @@
  */
 
 import type { ExecutionReceipt } from "@motebit/sdk";
+import type { SettlementAsset } from "@motebit/protocol";
 
 // ── Message types ─────────────────────────────────────────────────────
 
@@ -100,8 +101,14 @@ export interface SovereignReceiptRequest {
   tx_hash: string;
   /** Payment amount in micro-units (6 decimals for USDC). */
   amount_micro: bigint;
-  /** Asset symbol (e.g., "USDC"). */
-  asset: string;
+  /**
+   * Settlement asset this payment cleared in. Closed union — see
+   * `SettlementAsset` in `@motebit/protocol`. The HTTP transport
+   * (`http-receipt-exchange.ts`) narrows incoming wire payloads
+   * through `isSettlementAsset` at intake; in-process callers are
+   * TypeScript-checked.
+   */
+  asset: SettlementAsset;
   /**
    * The payee's expected receiving address. Used by the payee to verify
    * that the onchain payment (if cross-checked) landed at its own wallet.

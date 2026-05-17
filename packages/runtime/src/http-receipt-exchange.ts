@@ -71,6 +71,7 @@
  * layered on top of the transport, not the transport itself.
  */
 
+import { isSettlementAsset } from "@motebit/protocol";
 import type {
   SovereignReceiptExchangeAdapter,
   SovereignReceiptRequest,
@@ -267,6 +268,26 @@ export async function createHttpReceiptExchange(
           try {
             const bodyText = Buffer.concat(chunks).toString("utf8");
             const parsedRequest = decodeJson<SovereignReceiptRequest>(bodyText);
+
+            // Wire-format intake narrows the asset field via the
+            // protocol's closed-registry type guard before handing to
+            // the handler. A peer sending `{"asset": "USDT"}` (or any
+            // value outside `ALL_SETTLEMENT_ASSETS`) fails-closed here
+            // with a 400 — the structural complement to the TypeScript
+            // tightening on `SovereignReceiptRequest.asset` per the
+            // off-ramp arc's asset-pluggability commitment
+            // (docs/doctrine/off-ramp-as-user-action.md
+            // § "The settlement-asset registry — sub-phase A SHIPPED").
+            if (!isSettlementAsset(parsedRequest.asset)) {
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json");
+              res.end(
+                JSON.stringify({
+                  error: `unsupported settlement asset: ${JSON.stringify(parsedRequest.asset)}`,
+                }),
+              );
+              return;
+            }
 
             if (!handler) {
               const response: SovereignReceiptResponse = {

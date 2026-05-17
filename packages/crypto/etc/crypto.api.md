@@ -19,6 +19,7 @@ import type { HardwareAttestationClaim } from '@motebit/protocol';
 import type { HorizonWitness } from '@motebit/protocol';
 import type { HorizonWitnessRequestBody } from '@motebit/protocol';
 import type { RetentionManifest } from '@motebit/protocol';
+import type { SettlementAsset } from '@motebit/protocol';
 import type { SettlementRecord } from '@motebit/protocol';
 import type { SignableComputerSessionReceipt } from '@motebit/protocol';
 import type { SkillEnvelope } from '@motebit/protocol';
@@ -1135,7 +1136,7 @@ export interface SkillVerifyResult extends BaseResult {
 // @public
 export interface SovereignPaymentReceiptInput {
     amount_micro: bigint;
-    asset: string;
+    asset: SettlementAsset;
     completed_at: number;
     payee_device_id: string;
     payee_motebit_id: string;

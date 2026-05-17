@@ -390,6 +390,7 @@ export async function verifyToolInvocationReceipt(
 import type {
   SignableComputerSessionReceipt,
   ComputerSessionActionRecord,
+  SettlementAsset,
 } from "@motebit/protocol";
 
 /** The one suite ComputerSessionReceipts sign under today. */
@@ -522,8 +523,15 @@ export interface SovereignPaymentReceiptInput {
   tx_hash: string;
   /** Payment amount in micro-units (6 decimals for USDC). */
   amount_micro: bigint;
-  /** Asset symbol (e.g., "USDC"). */
-  asset: string;
+  /**
+   * Settlement asset this payment cleared in. Closed union — see
+   * `SettlementAsset` in `@motebit/protocol`. The value is embedded in
+   * the signed receipt's `result` string and is therefore part of the
+   * canonical-JSON-signed payload; tightening the input type forces
+   * every signer to provide a registered asset before the receipt can
+   * be produced.
+   */
+  asset: SettlementAsset;
   /** Brief human-readable description of the service rendered. */
   service_description: string;
   /** SHA-256 hash of the request payload. */

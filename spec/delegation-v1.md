@@ -300,7 +300,7 @@ SovereignReceiptRequest {
   rail:               string      // e.g. "solana"
   tx_hash:            string      // Onchain transaction hash
   amount_micro:       number      // Payment amount in micro-units
-  asset:              string      // e.g. "USDC"
+  asset:              SettlementAsset  // Closed registry — packages/protocol/src/settlement-asset.ts ("USDC" at sub-phase A)
   payee_address:      string      // Expected receiving wallet address
   service_description: string
   prompt_hash:        string      // SHA-256 of original request

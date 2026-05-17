@@ -286,6 +286,62 @@ describe("HTTP direct receipt exchange — cross-process sovereign loop", () => 
     expect(receipt.motebit_id).toBe("bob");
   });
 
+  it("rejects HTTP intake with an unknown settlement asset (fail-closed at boundary)", async () => {
+    // The TypeScript tightening on `SovereignReceiptRequest.asset`
+    // makes constructing an unknown-asset request impossible through
+    // the typed API. The HTTP boundary is the only path where an
+    // unknown asset can arrive (external peer, malformed client, etc).
+    // This test posts a raw JSON body with `asset: "USDT"` and asserts
+    // the server fails-closed with 400 — the structural complement to
+    // the type-level enforcement.
+    const bobKp = await generateKeypair();
+    bobTransport = await createHttpReceiptExchange({
+      server: { port: EPHEMERAL_PORT },
+    });
+
+    // The runtime is constructed so the handler is registered — that
+    // way a 400 here proves the boundary rejected the asset BEFORE
+    // ever reaching the handler.
+    const bob = new MotebitRuntime(
+      {
+        motebitId: "bob",
+        tickRateHz: 0,
+        signingKeys: { privateKey: bobKp.privateKey, publicKey: bobKp.publicKey },
+        sovereignReceiptExchange: bobTransport,
+      },
+      createAdaptersWithTrust().adapters,
+    );
+    expect(await bob.getSolanaBalance()).toBeNull();
+
+    const payload = {
+      payer_motebit_id: "alice",
+      payer_device_id: "device-1",
+      payee_motebit_id: "bob",
+      rail: "solana",
+      tx_hash: "boundary-rejection-tx",
+      amount_micro: { __bigint__: "1000" },
+      asset: "USDT", // ← unknown settlement asset
+      payee_address: deriveSolanaAddress(bobKp.publicKey),
+      service_description: "boundary rejection test payload",
+      prompt_hash: "p",
+      result_hash: "r",
+      tools_used: [],
+      submitted_at: Date.now() - 1000,
+      completed_at: Date.now(),
+    };
+
+    const response = await fetch(`${bobTransport.baseUrl}/receipts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toMatch(/unsupported settlement asset/i);
+    expect(body.error).toContain("USDT");
+  });
+
   it("close() is idempotent and releases the port", async () => {
     bobTransport = await createHttpReceiptExchange({
       server: { port: EPHEMERAL_PORT },

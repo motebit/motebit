@@ -1778,6 +1778,9 @@ importers:
       '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../privacy-layer
+      '@motebit/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@motebit/reflection':
         specifier: workspace:*
         version: link:../reflection
