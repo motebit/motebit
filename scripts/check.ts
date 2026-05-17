@@ -365,6 +365,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-license-doc-sync",
   },
   {
+    name: "check-liquescent-ontology",
+    defends:
+      "every doctrine/code/prose surface across the repo (`.md`/`.mdx`/`.ts`/`.tsx`, minus generated `corpus-data.ts`, historical `CHANGELOG.md`, and `readme-as-glass.md` which has its own ontology) is free of Layer 1 ontological glass claims about the motebit body or slab — `glass droplet`, `the motebit is glass`, `made of glass`, `glass body`, `glass sphere`, `glass creature`, `liquid-glass plane`, `Apple-Liquid-Glass`, `glass-droplet trade dress`, `Glass Droplet Creature`. Layer 2 physics-borrowing (LIQUESCENTIA §II.2.3 `a glass droplet in a spectrally uniform medium` as a general physics statement about glass-character optical bodies) is allowlisted by file:line. Protects the 2026-05-17 correction: body is liquescent (held in the becoming-liquid state where surface tension governs form), glass-physics is borrowed for optical traits only, slab follows by `one body, one material` per motebit-computer.md §291. Initial run after the gate landed surfaced 14 missed `.mdx` and strategy-doc drifts that the prior manual sweep didn't reach — the proof that prose-scope gates earn their cost. Doctrine: DROPLET.md §V, LIQUESCENTIA.md, motebit-computer.md §291; memory [[liquescent-not-glass]] (invariant #102, full history in docs/drift-defenses.md).",
+    script: "check-liquescent-ontology",
+  },
+  {
     name: "check-tsup-define-conventions",
     defends:
       "every `__<NAME>_VERSION__` constant in any `tsup.config.ts` reads from the workspace package name implied by `<NAME>`; catches the misnamed-constant class that produced the create-motebit@1.1.0 scaffold-pin bug where `__VERIFY_VERSION__` actually read from `@motebit/crypto` and was reused to pin `@motebit/sdk` and `motebit` (invariant #53, full history in docs/drift-defenses.md)",
