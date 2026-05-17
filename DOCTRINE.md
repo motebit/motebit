@@ -2,6 +2,8 @@
 
 The architecture is not designed; it is derived. Each document below derives the next, and motebit's shipped capabilities — Identity, Memory, Trust, Governance, Proof, Delegation, Embodiment, Federation — emerge as products of the chain.
 
+The body has three primary positions: identity forms the boundary, intelligence fills the interior, governance maintains the surface that prevents diffusion. Memory and trust accumulate inside the interior — internal energy and temperature respectively. Embodiment is the body's physical form; proof, delegation, and federation are how the body interacts with peers.
+
 This file is the canonical index. The README, [CLAUDE.md](CLAUDE.md), and the docs site all point here rather than re-listing the chain — one canonical source per synchronization invariant ([drift-defenses doctrine](docs/drift-defenses.md)).
 
 ## The chain
