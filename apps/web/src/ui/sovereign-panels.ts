@@ -360,13 +360,60 @@ function renderBudget(
   // CTA that routes through openSovereignFundingFlow (Stripe onramp session).
   // Both balances render as .sov-hero-card sub-surfaces: the number is the
   // hero (display weight + tabular-nums), label sits small above it, subtitle
-  // below. Cold-load uses a breathing skeleton — never the literal "Loading…"
-  // string (anti-pattern per CLAUDE.md UI § + intent-gated-slab doctrine).
+  // below. Two registers, paired:
+  //   - Substrate-honest default — when state has no value AND no error, render
+  //     `0.00 USDC` (the protocol-default; an unfunded motebit IS at zero). Not
+  //     a skeleton — the skeleton was the same anti-pattern as a literal
+  //     "Loading…" string in another shape, hedging "we don't know" over a
+  //     truth we know.
+  //   - Failure-explicit register — when refresh failed AND we have no prior
+  //     value to fall back on, show one `.sov-error-row` with a Retry above the
+  //     cards, and render "—" in each card's value slot. Reading them together
+  //     resolves to "we tried, we couldn't" instead of the lie "$0" would tell
+  //     when the actual balance is unknown.
+  // The pair is the full application of "fail-explicit, not fail-hedged" — the
+  // substrate is honest, the exception is loud.
   const balancesSection = document.createElement("div");
   balancesSection.className = "budget-balance-section";
   balancesSection.style.cssText = "display:flex;flex-direction:column;gap:12px;";
 
   const sovereignAddress = state.sovereignAddress;
+
+  // Failure-explicit register — the controller's refresh runs all
+  // fetches under a single Promise.all so any failure trips the shared
+  // `state.error` and leaves prior-good state intact (per
+  // packages/panels/CLAUDE.md rule 5). The first-load case is the one
+  // where both balance slots are also still null — that's a true
+  // unknown, not a refresh-after-success drop. Surface it once at the
+  // top of the section with a retry, then the cards below render "—"
+  // in their value slots so the user reads "we tried, we couldn't"
+  // instead of "you have $0" (the lie in the wrong direction). The
+  // mirror of the succession-tab error row, narrowed to the cold-load
+  // path where the substrate-honest default would mislead.
+  const balancesFailedToLoad =
+    state.error != null && state.balance == null && state.sovereignBalanceUsdc == null;
+  if (balancesFailedToLoad) {
+    const errorRow = document.createElement("div");
+    errorRow.className = "sov-error-row";
+    errorRow.style.margin = "0";
+    const errorText = document.createElement("span");
+    errorText.className = "sov-error-row-text";
+    errorText.textContent = "Couldn't refresh balances";
+    const retryBtn = document.createElement("button");
+    retryBtn.className = "sov-error-row-retry";
+    retryBtn.textContent = "Retry";
+    retryBtn.addEventListener("click", () => {
+      retryBtn.disabled = true;
+      retryBtn.textContent = "Retrying…";
+      void ctrl.refresh().finally(() => {
+        retryBtn.disabled = false;
+        retryBtn.textContent = "Retry";
+      });
+    });
+    errorRow.appendChild(errorText);
+    errorRow.appendChild(retryBtn);
+    balancesSection.appendChild(errorRow);
+  }
 
   const sovereignCard = document.createElement("div");
   sovereignCard.className = "sov-hero-card";
@@ -385,19 +432,25 @@ function renderBudget(
     sovValue.innerHTML = `${escapeHtml(state.sovereignBalanceUsdc.toFixed(2))}<span class="sov-hero-unit">USDC</span>`;
     sovBody.appendChild(sovValue);
   } else if (sovereignAddress) {
-    // Breathing skeleton at the size the number will occupy — the
-    // slot is always-already there, the substance is in flight. 0.3 Hz
-    // Rayleigh rhythm matches the slab/body breath (see slab-home.ts).
-    const sovSkeleton = document.createElement("div");
-    sovSkeleton.className = "sov-hero-skeleton";
-    sovBody.appendChild(sovSkeleton);
-    if (typeof sovSkeleton.animate === "function") {
-      sovSkeleton.animate([{ opacity: 0.5 }, { opacity: 0.85 }, { opacity: 0.5 }], {
-        duration: 1000 / 0.3,
-        iterations: Infinity,
-        easing: "ease-in-out",
-      });
+    const sovValue = document.createElement("div");
+    sovValue.className = "sov-hero-value";
+    if (balancesFailedToLoad) {
+      // Failure-explicit: refresh tried, refresh couldn't. "—" here
+      // is paired with the error row above; reading them together
+      // resolves cleanly to "we don't know" instead of the lie
+      // "$0.00" would tell when the actual balance is unknown.
+      sovValue.textContent = "—";
+    } else {
+      // Substrate-honest default: an unfunded motebit IS at $0
+      // onchain. The slot is always-already there, the value is
+      // always-already zero until a deposit lands. When the Solana
+      // RPC fetch resolves, a non-zero balance overwrites this; the
+      // typical case (new motebit) sees $0 → $0 (no visible change).
+      // No skeleton, no shimmer — those would hedge "loading" over
+      // a truth we know.
+      sovValue.innerHTML = `0.00<span class="sov-hero-unit">USDC</span>`;
     }
+    sovBody.appendChild(sovValue);
   } else {
     const sovValue = document.createElement("div");
     sovValue.className = "sov-hero-value";
@@ -438,8 +491,9 @@ function renderBudget(
 
   // Operating balance card — always rendered (symmetric with sovereign
   // reserve above), so the slab carries both balance slots regardless
-  // of whether relay data has landed yet. Skeleton + ghost subtitle
-  // when state.balance is null; real number + sweep config + Top-up
+  // of whether relay data has landed yet. Substrate-honest $0.00 USDC
+  // default when state.balance is null (a brand-new motebit has nothing
+  // in the relay ledger yet); real number + sweep config + Top-up
   // affordance when loaded.
   const operatingCard = document.createElement("div");
   operatingCard.className = "sov-hero-card";
@@ -472,18 +526,20 @@ function renderBudget(
     opSubtitle.textContent = opSubParts.join(" · ");
     opBody.appendChild(opSubtitle);
   } else {
-    // Same breathing-skeleton pattern as sovereign — the slot is
-    // always-already there, the substance is in flight or absent.
-    const opSkeleton = document.createElement("div");
-    opSkeleton.className = "sov-hero-skeleton";
-    opBody.appendChild(opSkeleton);
-    if (typeof opSkeleton.animate === "function") {
-      opSkeleton.animate([{ opacity: 0.5 }, { opacity: 0.85 }, { opacity: 0.5 }], {
-        duration: 1000 / 0.3,
-        iterations: Infinity,
-        easing: "ease-in-out",
-      });
+    const opValue = document.createElement("div");
+    opValue.className = "sov-hero-value";
+    if (balancesFailedToLoad) {
+      // Failure-explicit, paired with the error row above. Same
+      // logic as the sovereign reserve card.
+      opValue.textContent = "—";
+    } else {
+      // Substrate-honest default — symmetric with sovereign reserve
+      // above. A new motebit's relay ledger starts at zero; render
+      // the truth, not a shimmer. When the fetch resolves, a
+      // non-zero balance overwrites; the typical case sees $0 → $0.
+      opValue.innerHTML = `0.00<span class="sov-hero-unit">USDC</span>`;
     }
+    opBody.appendChild(opValue);
     const opSubtitle = document.createElement("div");
     opSubtitle.className = "sov-hero-subtitle";
     opSubtitle.textContent = "relay ledger, instant settlement";
