@@ -84,9 +84,11 @@ A motebit running with the proactive interior enabled:
 
 ## What's deferred
 
-Desktop UI landed (settings toggle + creature presence modulation + memory-panel consolidation log). Web + mobile + spatial follow one-pass after desktop's UI dogfoods.
+Spatial UI follow-on. Desktop + web + mobile parity shipped (single-source `resolveProactiveAnchor`); spatial waits until the spatial surface itself has settings + memory-panel analogues to host the toggle and the consolidation log.
 
 ## What was deferred and is now done
+
+Web + mobile parity for the proactive-interior surface (settings toggle + creature presence modulation + memory-panel consolidation log) shipped 2026-04-20 — desktop's UI dogfooded and the cross-surface one-pass followed cleanly. The single-source `resolveProactiveAnchor` primitive lifted the per-surface tick wiring into one shared call, so the three flat surfaces now share both behavior and chrome.
 
 The `runHousekeeping` unification landed 2026-04-28. The deferred-design question — does curiosity belong in the cycle's `gather` phase or stay a separate signal the gradient manager subscribes to? — was settled by the data: `housekeeping()` had been called only at runtime shutdown since the 2026-04-20 unification, firing at a soon-to-be-disposed gradient manager. Curiosity-target computation was effectively dead in production for eight days, and the gradient was being kept fresh only by interactive-turn paths (cold-start, every-fifth-turn reflection) — never during long idle windows.
 
