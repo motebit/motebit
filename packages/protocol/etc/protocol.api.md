@@ -2956,11 +2956,14 @@ export interface ServiceListingStoreAdapter {
 }
 
 // @public
-export interface SettlementEligibility {
-    allowed: boolean;
-    mode: SettlementMode;
+export type SettlementEligibility = {
+    allowed: true;
+    mode: WritableSettlementMode;
     reason: string;
-}
+} | {
+    allowed: false;
+    reason: string;
+};
 
 // @public (undocumented)
 export type SettlementId = Brand<string, "SettlementId">;
@@ -4037,6 +4040,9 @@ export interface WitnessSolicitationResponse {
     readonly motebit_id: MotebitId;
     readonly signature: string;
 }
+
+// @public
+export type WritableSettlementMode = Extract<SettlementMode, "p2p">;
 
 // (No @packageDocumentation comment for this package)
 

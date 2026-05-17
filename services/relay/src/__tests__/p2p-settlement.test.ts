@@ -68,15 +68,39 @@ describe("evaluateSettlementEligibility", () => {
     await relay.close();
   });
 
-  it("allows p2p when both parties opt in and trust is sufficient", () => {
+  // Arc 3 of the off-ramp arc made eligibility disjunctive: established
+  // pair OR new pair with delegator acknowledgment. P2P is the only path;
+  // the gate is delegation-eligibility, not settlement-routing. The
+  // result type is the disjunctive `SettlementEligibility` (allowed
+  // implies mode: "p2p"; disallowed has no mode field).
+
+  it("allows established pair via trust + interactions branch (no acknowledgment needed)", () => {
     setTrust(relay.moteDb.db, "del-elig", "wrk-elig", "verified", 10);
 
     const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
     expect(result.allowed).toBe(true);
-    expect(result.mode).toBe("p2p");
+    if (result.allowed) {
+      expect(result.mode).toBe("p2p");
+      expect(result.reason).toContain("Established pair");
+    }
   });
 
-  it("rejects when worker has no settlement address", async () => {
+  it("allows new pair via delegator-acknowledgment branch (Arc 3 bootstrap)", () => {
+    // No trust history. The acknowledgment unlocks the new-pair branch.
+    const result = evaluateSettlementEligibility(
+      relay.moteDb.db,
+      "del-elig",
+      "wrk-elig",
+      true /* delegatorAcknowledgesNoHistoryRisk */,
+    );
+    expect(result.allowed).toBe(true);
+    if (result.allowed) {
+      expect(result.mode).toBe("p2p");
+      expect(result.reason).toContain("New pair");
+    }
+  });
+
+  it("rejects when worker has no settlement address (both branches)", async () => {
     const kp = await generateKeypair();
     await registerAgent(relay, "wrk-noaddr", bytesToHex(kp.publicKey), {
       settlementModes: "relay,p2p",
@@ -86,41 +110,54 @@ describe("evaluateSettlementEligibility", () => {
     const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-noaddr");
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain("settlement address");
+
+    // Even acknowledgment can't unlock — no destination exists.
+    const withAck = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-noaddr", true);
+    expect(withAck.allowed).toBe(false);
+    expect(withAck.reason).toContain("settlement address");
   });
 
-  it("rejects when worker does not support p2p", async () => {
-    const kp = await generateKeypair();
-    await registerAgent(relay, "wrk-relay-only", bytesToHex(kp.publicKey), {
-      settlementAddress: "3xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsm",
-      settlementModes: "relay",
-    });
-    setTrust(relay.moteDb.db, "del-elig", "wrk-relay-only", "trusted", 20);
-
-    const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-relay-only");
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toContain("does not support p2p");
-  });
-
-  it("rejects when trust is too low", () => {
+  it("rejects when trust + interactions below threshold AND no acknowledgment", () => {
     setTrust(relay.moteDb.db, "del-elig", "wrk-elig", "first_contact", 2);
 
     const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
     expect(result.allowed).toBe(false);
-    expect(result.reason).toContain("Trust score");
+    expect(result.reason).toContain("did not acknowledge");
   });
 
-  it("rejects when interaction count is too low", () => {
+  it("rejects when interaction count below threshold AND no acknowledgment", () => {
     setTrust(relay.moteDb.db, "del-elig", "wrk-elig", "verified", 3);
 
     const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
     expect(result.allowed).toBe(false);
-    expect(result.reason).toContain("Interaction count");
+    expect(result.reason).toContain("did not acknowledge");
   });
 
-  it("rejects when active dispute exists between pair", () => {
+  it("unlocks below-threshold pair when delegator acknowledges (Arc 3 bootstrap)", () => {
+    setTrust(relay.moteDb.db, "del-elig", "wrk-elig", "first_contact", 2);
+
+    const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig", true);
+    expect(result.allowed).toBe(true);
+    if (result.allowed) {
+      expect(result.mode).toBe("p2p");
+    }
+  });
+
+  it("rejects when worker is blocked (acknowledgment cannot unlock)", () => {
+    setTrust(relay.moteDb.db, "del-elig", "wrk-elig", "blocked", 10);
+
+    const noAck = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
+    expect(noAck.allowed).toBe(false);
+    expect(noAck.reason).toContain("blocked");
+
+    const withAck = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig", true);
+    expect(withAck.allowed).toBe(false);
+    expect(withAck.reason).toContain("blocked");
+  });
+
+  it("rejects when active dispute exists between pair (both branches)", () => {
     setTrust(relay.moteDb.db, "del-elig", "wrk-elig", "trusted", 20);
 
-    // Create an active dispute between them
     relay.moteDb.db
       .prepare(
         `INSERT INTO relay_disputes
@@ -137,12 +174,17 @@ describe("evaluateSettlementEligibility", () => {
         Date.now() + 86400000,
       );
 
-    const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toContain("Active dispute");
+    const noAck = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
+    expect(noAck.allowed).toBe(false);
+    expect(noAck.reason).toContain("Active dispute");
+
+    // Active dispute blocks even the acknowledgment branch.
+    const withAck = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig", true);
+    expect(withAck.allowed).toBe(false);
+    expect(withAck.reason).toContain("Active dispute");
   });
 
-  it("rejects when no trust history exists", () => {
+  it("rejects when no trust history AND no acknowledgment", () => {
     const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain("No trust history");

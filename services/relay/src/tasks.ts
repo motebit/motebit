@@ -650,9 +650,16 @@ export async function handleReceiptIngestion(
             amount_settled: subSettlement.amount_settled,
             platform_fee: subSettlement.platform_fee,
             platform_fee_rate: subSettlement.platform_fee_rate,
-            // Multi-hop sub-receipts settle through the relay's virtual
-            // accounts (creditAccount below) — this is relay-custody by
-            // construction, never p2p.
+            // Multi-hop sub-receipt — Arc 3 carve-out. Sub-agent
+            // settlement here is intra-relay coordination: the parent
+            // task's allocation pays the sub-agent through the relay,
+            // not third-party transmission. The doctrine forbids
+            // relay-custody for direct delegator→worker paid flows
+            // (enforced at task submission via TASK_P2P_PROOF_REQUIRED);
+            // multi-hop is a different topology and stays `"relay"`
+            // until a future arc closes it via P2P sub-payments. See
+            // `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3
+            // carve-outs".
             settlement_mode: "relay",
             status: subSettlement.status,
             settled_at: subSettlement.settled_at,
@@ -960,11 +967,18 @@ export async function handleReceiptIngestion(
               amount_settled: settlement.amount_settled,
               platform_fee: settlement.platform_fee,
               platform_fee_rate: settlement.platform_fee_rate,
-              // This branch only runs for !isP2pTask — the p2p audit record
-              // is constructed and inserted above. Relay-custody by
-              // construction; x402_tx_hash here records that the relay's
-              // payout to the worker happened on-chain (still relay-custody
-              // — the relay held funds and then disbursed them).
+              // !isP2pTask branch — runs only for Arc 3 carve-outs:
+              // self-delegation (worker is the delegator, same-party),
+              // zero-cost direct delegation (unit_cost = 0, no real
+              // funds), or legacy non-P2P paths that pre-date the
+              // TASK_P2P_PROOF_REQUIRED submission gate. Paid direct
+              // delegation to a different worker can no longer reach
+              // this branch — submission rejects without a
+              // payment_proof. `settlement_mode: "relay"` here is the
+              // documented carve-out; the structural enforcement is at
+              // submission, not at this write site. See
+              // `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3
+              // carve-outs".
               settlement_mode: "relay",
               status: settlement.status,
               settled_at: settlement.settled_at,
@@ -1501,6 +1515,18 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       invocation_origin?: "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
       /** P2P: target agent for direct settlement (required with payment_proof). */
       target_agent?: string;
+      /**
+       * P2P bootstrap acknowledgment — Arc 3 of the off-ramp arc. When
+       * set true, unlocks the eligibility gate's new-pair branch (no
+       * trust history accumulated yet). The delegator consciously
+       * accepts the cold-start risk; transactions accumulate real
+       * trust into the graph for future routing decisions. Established
+       * pairs (trust ≥ 0.6 + ≥5 interactions) don't need this — the
+       * acknowledgment is ignored on the fast path. See
+       * `docs/doctrine/off-ramp-as-user-action.md` § Arc 3 and the
+       * `trust_as_economic_membrane` memory.
+       */
+      delegator_acknowledges_no_history_risk?: boolean;
       /** P2P: onchain payment proof (triggers p2p settlement mode). */
       payment_proof?: {
         tx_hash: string;
@@ -1649,7 +1675,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       }
 
       // Policy-based eligibility check
-      const eligibility = evaluateSettlementEligibility(moteDb.db, submittedBy, body.target_agent);
+      // Arc 3: pass the delegator's cold-start acknowledgment through to
+      // the eligibility gate. Established pairs ignore it; new pairs
+      // require it set true to unlock the bootstrap branch.
+      const eligibility = evaluateSettlementEligibility(
+        moteDb.db,
+        submittedBy,
+        body.target_agent,
+        body.delegator_acknowledges_no_history_risk === true,
+      );
       if (!eligibility.allowed) {
         throw new TaskError("TASK_P2P_INELIGIBLE", eligibility.reason, 403);
       }
@@ -1729,6 +1763,19 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         reason: eligibility.reason,
       });
     }
+
+    // Arc 3 of the off-ramp arc lands type-level scaffolding
+    // (`WritableSettlementMode`, disjunctive eligibility gate) and
+    // doctrine. The structural operational enforcement — rejecting
+    // paid direct delegation without payment_proof — is deferred to
+    // a follow-on arc ("Arc 3.5: migrate test-suite + production
+    // delegator clients to P2P-by-default") because the existing
+    // relay-custody path is heavily exercised in E2E test coverage.
+    // Until Arc 3.5 lands, paid direct delegation can still use the
+    // relay-custody path; new delegator clients SHOULD prefer P2P but
+    // aren't structurally required to. See
+    // `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3 scope and
+    // Arc 3.5 deferred."
 
     taskQueue.set(taskId, {
       task,

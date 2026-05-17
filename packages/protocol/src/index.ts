@@ -2518,6 +2518,7 @@ export type {
 
 export type {
   SettlementMode,
+  WritableSettlementMode,
   P2pPaymentProof,
   PaymentVerificationStatus,
   SettlementEligibility,

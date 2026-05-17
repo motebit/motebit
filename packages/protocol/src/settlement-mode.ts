@@ -11,6 +11,32 @@
 export type SettlementMode = "relay" | "p2p";
 
 /**
+ * The narrow subset of `SettlementMode` that the relay is permitted to
+ * write for **new** worker-settlement rows after Arc 3 of the off-ramp
+ * arc. Reads accept the full `SettlementMode` union (legacy `"relay"`
+ * rows must remain readable for audit, verifier, and federation
+ * compat); writes are structurally restricted to `"p2p"`.
+ *
+ * This is the asymmetric-typing enforcement shape from
+ * [`architecture_disjointness_by_construction`](../../../../.claude/projects/-Users-daniel-src-motebit/memory/architecture_disjointness_by_construction.md)
+ * — the surface stays open for reads but closed for writes; legacy
+ * data remains verifiable but no new code can re-introduce the
+ * relay-custody worker-settlement path. The doctrine: *the relay does
+ * not accept delegator-paid funds on behalf of a worker*. The type:
+ * `WritableSettlementMode = Extract<SettlementMode, "p2p">`. The
+ * structural enforcement: a compile error at every site that tries to
+ * write `"relay"` for a worker settlement.
+ *
+ * Composes with the prior arcs' Layer 1 enforcement shapes:
+ *   - Surface deletion (`BridgeSettlementRail.withdraw`) — Arc 1
+ *   - Marker interface (`WithdrawableGuestRail`) — Arc 1
+ *   - Asymmetric typing (this) — Arc 3
+ *
+ * Doctrine: [`docs/doctrine/off-ramp-as-user-action.md`](../../../docs/doctrine/off-ramp-as-user-action.md) § "Arc 3 close".
+ */
+export type WritableSettlementMode = Extract<SettlementMode, "p2p">;
+
+/**
  * Canonical iteration order over `SettlementMode`, frozen. The single
  * source of truth for "every settlement mode" — drift gates, exhaustive
  * switches, settlement-eligibility evaluators, and the protocol's
@@ -162,16 +188,29 @@ export interface SolvencyProof {
 // === Settlement Eligibility ===
 
 /**
- * Result of policy-based settlement mode evaluation.
+ * Result of policy-based settlement-eligibility evaluation. After Arc 3
+ * of the off-ramp arc, the eligibility check no longer routes between
+ * relay-custody and P2P — P2P is the only worker-settlement path. The
+ * gate now answers a binary question: "can this delegator-worker pair
+ * transact at all?"
  *
- * The eligibility check considers: mutual opt-in, trust level,
- * interaction history, active disputes, and declared settlement capabilities.
+ * Disjunctive eligibility per [`docs/doctrine/off-ramp-as-user-action.md`](../../../docs/doctrine/off-ramp-as-user-action.md):
+ *   - **Established-pair branch**: trust ≥ 0.6 AND interactions ≥ 5
+ *     AND no_active_disputes AND worker_has_settlement_address.
+ *   - **New-pair branch**: `delegator_acknowledges_no_history_risk`
+ *     AND no_active_disputes AND worker_not_blocked AND
+ *     worker_has_settlement_address.
+ *
+ * The disjunctive type encodes "allowed implies p2p" structurally —
+ * the `mode` field uses `WritableSettlementMode` so consumers that
+ * destructure `{ mode }` on an allowed result get the narrow type;
+ * the disallowed case has no `mode` field because there's no
+ * fallback rail to route to.
+ *
+ * Composes with [[trust_as_economic_membrane]] — the established-pair
+ * branch is the trust-as-fast-path; the new-pair branch is the
+ * cold-start unlock with explicit consent.
  */
-export interface SettlementEligibility {
-  /** Whether p2p settlement is allowed for this pair + task. */
-  allowed: boolean;
-  /** Selected settlement mode. */
-  mode: SettlementMode;
-  /** Human-readable reason for the decision. */
-  reason: string;
-}
+export type SettlementEligibility =
+  | { allowed: true; mode: WritableSettlementMode; reason: string }
+  | { allowed: false; reason: string };

@@ -9,7 +9,7 @@
 import type { CandidateProfile, TaskRequirements } from "@motebit/market";
 import { aggregateCredentialReputation, aggregateHardwareAttestation } from "@motebit/market";
 import type { ReputationVC, TrustVC } from "@motebit/market";
-import type { CapabilityPrice, AgentTrustRecord } from "@motebit/sdk";
+import type { CapabilityPrice, AgentTrustRecord, SettlementEligibility } from "@motebit/sdk";
 import { asMotebitId, asListingId, AgentTrustLevel } from "@motebit/sdk";
 import { trustLevelToScore } from "@motebit/market";
 import type { ListingId } from "@motebit/sdk";
@@ -1004,87 +1004,67 @@ function extractReceipt(text: string): ReceiptCandidate | null {
 
 // === P2P Settlement Eligibility (policy-based) ===
 
-/** Minimum trust score for p2p settlement (verified = 0.6). */
+/** Minimum trust score for established-pair eligibility (verified = 0.6). */
 const P2P_MIN_TRUST_SCORE = 0.6;
-/** Minimum completed interactions between the pair. */
+/** Minimum completed interactions for established-pair eligibility. */
 const P2P_MIN_INTERACTIONS = 5;
 
 /**
- * Evaluate whether a delegator→worker pair qualifies for p2p settlement.
+ * Evaluate whether a delegator→worker pair qualifies to transact at all.
  *
- * Policy checks:
- * 1. Both parties advertise "p2p" in settlement_modes
- * 2. Worker has a declared settlement_address
- * 3. Trust score ≥ threshold (default: 0.6 / "verified")
- * 4. Interaction count ≥ minimum (default: 5)
- * 5. No active disputes between this pair
+ * After Arc 3 of the off-ramp arc, P2P is the only worker-settlement
+ * path — there is no relay-custody fallback. This gate is the
+ * delegation-eligibility check, not a settlement-routing check.
+ *
+ * **Disjunctive eligibility** per [`docs/doctrine/off-ramp-as-user-action.md`](../../../docs/doctrine/off-ramp-as-user-action.md):
+ *
+ *   eligible = established_pair OR new_pair_with_acknowledgment
+ *
+ * Where:
+ *
+ *   established_pair = trust ≥ 0.6 AND interactions ≥ 5
+ *   new_pair_with_acknowledgment = delegator_acknowledges_no_history_risk
+ *
+ * Both branches additionally require:
+ *   - worker has a declared settlement_address (else no destination)
+ *   - no active disputes between this pair (structural safety)
+ *
+ * The `mutual opt-in via settlement_modes` check from the pre-Arc-3
+ * gate collapses post-Arc-3: a worker with `settlement_address`
+ * declared implicitly accepts P2P (it's the only path). The
+ * `agent_registry.settlement_modes` field becomes vestigial; a future
+ * cleanup arc can deprecate it.
+ *
+ * **Trust as economic membrane** per [[trust_as_economic_membrane]]:
+ * the established-pair branch is the trust-as-fast-path; the new-pair
+ * branch unlocks cold-start with explicit delegator consent. Workers
+ * who abuse the bootstrap path get trust-downgraded via the existing
+ * verifier loop (failed onchain verification → trust demotion). The
+ * trust graph closes the residual economic gap the structural type
+ * system can't reach.
+ *
+ * Returns the disjunctive `SettlementEligibility` shape — `allowed:
+ * true` carries `mode: "p2p"` (the only `WritableSettlementMode`);
+ * `allowed: false` has no `mode` field because there's no fallback
+ * rail. The shape forces callers to handle the false case explicitly.
  */
 export function evaluateSettlementEligibility(
   db: DatabaseDriver,
   delegatorId: string,
   workerId: string,
-): { allowed: boolean; mode: "relay" | "p2p"; reason: string } {
-  // Check worker has declared settlement address
+  delegatorAcknowledgesNoHistoryRisk: boolean = false,
+): SettlementEligibility {
+  // Worker must have a settlement address (both branches require it —
+  // there's no destination without it).
   const worker = db
-    .prepare("SELECT settlement_address, settlement_modes FROM agent_registry WHERE motebit_id = ?")
-    .get(workerId) as
-    | { settlement_address: string | null; settlement_modes: string | null }
-    | undefined;
+    .prepare("SELECT settlement_address FROM agent_registry WHERE motebit_id = ?")
+    .get(workerId) as { settlement_address: string | null } | undefined;
 
   if (!worker?.settlement_address) {
-    return { allowed: false, mode: "relay", reason: "Worker has no declared settlement address" };
+    return { allowed: false, reason: "Worker has no declared settlement address" };
   }
 
-  // Check worker supports p2p (trim each mode for whitespace safety)
-  const workerModes = (worker.settlement_modes ?? "relay").split(",").map((m) => m.trim());
-  if (!workerModes.includes("p2p")) {
-    return { allowed: false, mode: "relay", reason: "Worker does not support p2p settlement" };
-  }
-
-  // Check delegator supports p2p
-  const delegator = db
-    .prepare("SELECT settlement_modes FROM agent_registry WHERE motebit_id = ?")
-    .get(delegatorId) as { settlement_modes: string | null } | undefined;
-
-  const delegatorModes = (delegator?.settlement_modes ?? "relay").split(",").map((m) => m.trim());
-  if (!delegatorModes.includes("p2p")) {
-    return {
-      allowed: false,
-      mode: "relay",
-      reason: "Delegator does not support p2p settlement",
-    };
-  }
-
-  // Check trust level
-  const trustRow = db
-    .prepare(
-      "SELECT trust_level, interaction_count FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?",
-    )
-    .get(delegatorId, workerId) as { trust_level: string; interaction_count: number } | undefined;
-
-  if (!trustRow) {
-    return { allowed: false, mode: "relay", reason: "No trust history between agents" };
-  }
-
-  const score = trustLevelToScore(trustRow.trust_level as AgentTrustLevel);
-  if (score < P2P_MIN_TRUST_SCORE) {
-    return {
-      allowed: false,
-      mode: "relay",
-      reason: `Trust score ${score} below minimum ${P2P_MIN_TRUST_SCORE}`,
-    };
-  }
-
-  // Check interaction count
-  if (trustRow.interaction_count < P2P_MIN_INTERACTIONS) {
-    return {
-      allowed: false,
-      mode: "relay",
-      reason: `Interaction count ${trustRow.interaction_count} below minimum ${P2P_MIN_INTERACTIONS}`,
-    };
-  }
-
-  // Check no active disputes between this pair
+  // No active disputes between this pair (both branches require it).
   try {
     const activeDispute = db
       .prepare(
@@ -1098,17 +1078,58 @@ export function evaluateSettlementEligibility(
     if (activeDispute) {
       return {
         allowed: false,
-        mode: "relay",
         reason: `Active dispute ${activeDispute.dispute_id} between agents`,
       };
     }
   } catch {
-    // relay_disputes table may not exist — no disputes, allow
+    // relay_disputes table may not exist — treat as no disputes
   }
 
+  // Worker not blocked (defensive — though this is a trust-level concept,
+  // a blocked worker should never receive routing regardless of branch).
+  const trustRow = db
+    .prepare(
+      "SELECT trust_level, interaction_count FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?",
+    )
+    .get(delegatorId, workerId) as { trust_level: string; interaction_count: number } | undefined;
+
+  if (trustRow?.trust_level === "blocked") {
+    return { allowed: false, reason: "Worker is blocked by this delegator" };
+  }
+
+  // Established-pair branch — trust + interactions accumulated.
+  if (trustRow) {
+    const score = trustLevelToScore(trustRow.trust_level as AgentTrustLevel);
+    if (score >= P2P_MIN_TRUST_SCORE && trustRow.interaction_count >= P2P_MIN_INTERACTIONS) {
+      return {
+        allowed: true,
+        mode: "p2p",
+        reason: `Established pair — trust ${score}, ${trustRow.interaction_count} interactions`,
+      };
+    }
+  }
+
+  // New-pair branch — delegator explicitly acknowledges cold-start risk.
+  // This is the Arc 3 bootstrap mechanism: workers with no trust history
+  // can transact when the delegator consciously accepts the risk. Trust
+  // accumulates from real transactions; failures downgrade trust via
+  // the existing verifier loop. See `trust_as_economic_membrane` memory.
+  if (delegatorAcknowledgesNoHistoryRisk) {
+    return {
+      allowed: true,
+      mode: "p2p",
+      reason: "New pair — delegator acknowledged no-history risk",
+    };
+  }
+
+  // Neither branch satisfied — reject. The disallowed return has no
+  // `mode` field because there's no relay-custody fallback to route to.
+  const score = trustRow ? trustLevelToScore(trustRow.trust_level as AgentTrustLevel) : 0;
+  const interactions = trustRow?.interaction_count ?? 0;
   return {
-    allowed: true,
-    mode: "p2p",
-    reason: `Trust ${score}, ${trustRow.interaction_count} interactions, both parties opted in`,
+    allowed: false,
+    reason: trustRow
+      ? `Trust ${score} / ${interactions} interactions below established-pair threshold (${P2P_MIN_TRUST_SCORE} / ${P2P_MIN_INTERACTIONS}); delegator did not acknowledge cold-start risk`
+      : "No trust history between agents; delegator did not acknowledge cold-start risk",
   };
 }
