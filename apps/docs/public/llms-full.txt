@@ -570,7 +570,7 @@ Source: https://docs.motebit.com/docs/concepts/identity
 
 > Cryptographic identity that persists across time, devices, and providers.
 
-Identity is the foundation. Without it, an agent is a stateless function — no memory persists, no trust accumulates, no governance applies. Motebit gives every agent a cryptographic identity that exists independently of any intelligence provider.
+Identity forms the boundary — the cohesive force that makes an agent a distinct entity rather than part of the general flow. Without it, an agent is a stateless function: no memory persists, no trust accumulates, no governance applies. Motebit gives every agent a cryptographic identity that exists independently of any intelligence provider.
 
 ## The identity model
 
@@ -645,7 +645,7 @@ Source: https://docs.motebit.com/docs/concepts/memory
 
 > Semantic memory that accumulates, decays, and respects sensitivity.
 
-Memory is what separates a sovereign agent from a stateless chatbot. Every conversation, every interaction, every decision leaves a trace. Motebit's memory system stores these traces as a semantic graph — searchable by meaning, governed by sensitivity, and subject to natural decay over time.
+Memory is the interior's accumulated energy — what makes a sovereign agent more capable the longer it runs, where a stateless chatbot starts empty every session. Every conversation, every interaction, every decision leaves a trace. Motebit's memory system stores these traces as a semantic graph — searchable by meaning, governed by sensitivity, and subject to natural decay over time.
 
 ## How memories form
 
@@ -744,7 +744,7 @@ Source: https://docs.motebit.com/docs/concepts/trust
 
 > The aggregate of signed receipts — what a motebit has earned by working, expressed as numbers any other agent can compose along a path.
 
-Trust in motebit is not a setting. It is the accumulated record of past work. Every successful [receipt](/docs/concepts/receipts) raises a motebit's trust score with the parties who verified it; every failure or dispute lowers it. There is no central reputation authority — trust is a property of the receipts each party already holds, computed locally and combined algebraically when a routing decision needs to span multiple parties.
+Trust is the temperature of the interior — a scalar that rises slowly through consistent exchange and drops quickly through violation. It is not a setting. It is the accumulated record of past work. Every successful [receipt](/docs/concepts/receipts) raises a motebit's trust score with the parties who verified it; every failure or dispute lowers it. There is no central reputation authority — trust is a property of the receipts each party already holds, computed locally and combined algebraically when a routing decision needs to span multiple parties.
 
 ## How it accumulates
 
@@ -771,7 +771,7 @@ Source: https://docs.motebit.com/docs/concepts/intelligence
 
 > Pluggable LLM providers — the intelligence is a commodity, the identity is the asset.
 
-Intelligence is a commodity. Motebit treats language models as interchangeable providers — you can switch between Anthropic, Ollama, OpenAI, or any future provider without losing your agent's identity, memory, or governance.
+Intelligence fills the interior — the active substance within the body's accumulated state. The model is pluggable; the interior is not. Motebit treats language models as interchangeable providers — you can switch between Anthropic, Ollama, OpenAI, or any future provider without losing your agent's identity, memory, or governance.
 
 ## Pluggable providers
 
