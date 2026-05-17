@@ -177,8 +177,6 @@ const WAIVED_EXPORTS: ReadonlyArray<PackageWaiver> = [
       "asProposalId",
       "EXECUTION_LEDGER_SPEC_V1_0",
       "EXECUTION_LEDGER_SPEC_V1_1",
-      "isDepositableRail",
-      "isBatchableRail",
       "VC_TYPE_GRADIENT",
       "VC_TYPE_REPUTATION",
       "VC_TYPE_TRUST",

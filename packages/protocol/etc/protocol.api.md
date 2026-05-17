@@ -413,7 +413,7 @@ export interface BalanceWaiver {
 }
 
 // @public
-export interface BatchableGuestRail extends GuestRail {
+export interface BatchableGuestRail extends WithdrawableGuestRail {
     // (undocumented)
     readonly supportsBatch: true;
     // (undocumented)
@@ -1759,8 +1759,7 @@ export interface GuestRail extends SettlementRail {
     readonly railType: "fiat" | "protocol" | "orchestration";
     readonly supportsBatch: boolean;
     readonly supportsDeposit: boolean;
-    withdraw(motebitId: string, amount: number, currency: string, destination: string, idempotencyKey: string): Promise<WithdrawalResult>;
-    withdrawBatch?(items: readonly BatchWithdrawalItem[]): Promise<BatchWithdrawalResult>;
+    readonly supportsWithdraw: boolean;
 }
 
 // @public
@@ -1877,6 +1876,9 @@ export function isTaskShape(value: unknown): value is TaskShape;
 
 // @public
 export function isTokenAudience(value: unknown): value is TokenAudience;
+
+// @public
+export function isWithdrawableRail(rail: GuestRail): rail is WithdrawableGuestRail;
 
 // @public
 export function joinParallelRoutes(scores: number[]): number;
@@ -3971,6 +3973,14 @@ export class WeightedDigraph<T> {
     removeNode(id: string): void;
     setEdge(from: string, to: string, weight: T): void;
     get sr(): Semiring<T>;
+}
+
+// @public
+export interface WithdrawableGuestRail extends GuestRail {
+    // (undocumented)
+    readonly supportsWithdraw: true;
+    withdraw(motebitId: string, amount: number, currency: string, destination: string, idempotencyKey: string): Promise<WithdrawalResult>;
+    withdrawBatch?(items: readonly BatchWithdrawalItem[]): Promise<BatchWithdrawalResult>;
 }
 
 // @public

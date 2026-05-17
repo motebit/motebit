@@ -1,37 +1,37 @@
 /**
- * BridgeSettlementRail — Bridge.xyz orchestration as a GuestRail.
+ * BridgeSettlementRail — Bridge.xyz orchestration as a treasury-only GuestRail.
  *
- * Wraps Bridge's transfer API behind the GuestRail interface.
- * Bridge is fiat↔crypto bridging — the first orchestration rail type.
+ * Wraps Bridge's transfer API behind the `GuestRail` interface, but
+ * deliberately does NOT implement `WithdrawableGuestRail`. The
+ * `supportsWithdraw: false` discriminant + the structural absence of
+ * `withdraw()` from this class is the doctrinal embodiment of the
+ * off-ramp principle: Motebit is not a transmitter of user funds. Bridge
+ * stays registered for own-account treasury conversion (via the
+ * sibling `BridgeOfframpAdapter` consumed at the relay's offramp routes)
+ * — never as a user-facing withdrawal target.
  *
- * Transfer lifecycle (13 states, 4 on happy path):
- *   awaiting_funds → funds_received → payment_submitted → payment_processed
+ * The `withdraw()` method was removed in Arc 1 Commit 2 of the off-ramp
+ * arc (see `docs/doctrine/settlement-rails.md` § "Lanes for external
+ * readers" and the future `off-ramp-as-user-action.md`). Anyone who
+ * attempts to call `bridgeRail.withdraw(...)` hits a compile error;
+ * narrowing `railRegistry.get("bridge")` through `isWithdrawableRail()`
+ * (the only sanctioned path to a withdraw call) returns false. The
+ * negative-proof is the absence itself.
  *
- * Two withdrawal paths:
- * - Instant (crypto→crypto with prefunded Bridge wallet): withdraw() polls
- *   briefly for payment_processed, returns confirmed WithdrawalResult.
- * - Async (crypto→fiat): withdraw() creates transfer, returns pending
- *   WithdrawalResult with Bridge transfer ID as reference and confirmedAt: 0.
- *   Completion happens via webhook (same pattern as Stripe pending withdrawals).
+ * The `BridgeClient.createTransfer` capability still exists on the
+ * client interface — future treasury-conversion methods will compose
+ * with it (e.g., `convertOwnAccount(amount)` that calls createTransfer
+ * with `on_behalf_of: MotebitCustomerId`, `from: motebit_treasury`,
+ * `to: motebit_mercury_account` — same-party in/out). Today this rail
+ * exposes only `isAvailable()` + `attachProof()` from the `GuestRail`
+ * surface; the only consumer is the registry slot itself.
  *
  * Metabolic principle: absorbs Bridge's REST API through a thin BridgeClient
  * interface. Does not reimplement the transfer state machine.
  */
 
-import type { GuestRail, PaymentProof, WithdrawalResult } from "@motebit/sdk";
+import type { GuestRail, PaymentProof } from "@motebit/sdk";
 import { type RailLogger, NOOP_LOGGER } from "./logger.js";
-
-/** Terminal states where no further progress is possible. */
-const TERMINAL_STATES = new Set([
-  "payment_processed",
-  "canceled",
-  "refunded",
-  "refund_failed",
-  "error",
-]);
-
-/** Success state. */
-const COMPLETED_STATE = "payment_processed";
 
 /**
  * Minimal Bridge client interface.
@@ -87,16 +87,12 @@ export interface BridgeTransfer {
 export interface BridgeRailConfig {
   /** Bridge API client instance. */
   bridgeClient: BridgeClient;
-  /** Bridge customer ID for the relay operator. */
+  /** Bridge customer ID for the relay operator. Used by future treasury-conversion methods. */
   customerId: string;
-  /** Source payment rail for withdrawals (e.g., "base", "solana", "bridge_wallet"). */
+  /** Source payment rail for treasury operations (e.g., "base"). */
   sourcePaymentRail: string;
-  /** Source currency for withdrawals (e.g., "usdc"). */
+  /** Source currency for treasury operations (e.g., "usdc"). */
   sourceCurrency: string;
-  /** Max poll attempts for instant settlement path. Default: 10. */
-  maxPollAttempts?: number;
-  /** Poll interval in ms. Default: 2000. */
-  pollIntervalMs?: number;
   /** Callback to persist proof. Injected by relay — the rail does not own storage. */
   onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
   /** Structured logger. Default is silent — relay injects one carrying correlation id. */
@@ -108,14 +104,29 @@ export class BridgeSettlementRail implements GuestRail {
   readonly railType = "orchestration" as const;
   readonly name = "bridge";
   readonly supportsDeposit = false as const;
+  // Doctrinal absence — see file header. Bridge is treasury-only; user-
+  // facing withdrawal is structurally impossible because `withdraw()`
+  // does not exist on this class. `isWithdrawableRail(bridgeRail)`
+  // returns false on the discriminant alone, before reaching the
+  // method-presence check.
+  readonly supportsWithdraw = false as const;
   readonly supportsBatch = false as const;
 
+  // Client retained for `isAvailable()` (the only GuestRail-surface method
+  // that still reads from it). Customer ID + source rail/currency are
+  // retained for future treasury-conversion methods (e.g.,
+  // `convertOwnAccount(amount)` mapping to
+  // `Bridge.createTransfer({on_behalf_of: MotebitCustomerId, ...})`
+  // — same-party in/out, no third-party transmission). The treasury arc
+  // lands those; today the class participates in the rail registry for
+  // health checks + proof callback wiring only.
   private readonly client: BridgeClient;
+  // @ts-expect-error TS6133 — held for the treasury arc, see file header
   private readonly customerId: string;
+  // @ts-expect-error TS6133 — held for the treasury arc, see file header
   private readonly sourcePaymentRail: string;
+  // @ts-expect-error TS6133 — held for the treasury arc, see file header
   private readonly sourceCurrency: string;
-  private readonly maxPollAttempts: number;
-  private readonly pollIntervalMs: number;
   private readonly onProofAttached?: (settlementId: string, proof: PaymentProof) => void;
   private readonly logger: RailLogger;
 
@@ -124,8 +135,6 @@ export class BridgeSettlementRail implements GuestRail {
     this.customerId = config.customerId;
     this.sourcePaymentRail = config.sourcePaymentRail;
     this.sourceCurrency = config.sourceCurrency;
-    this.maxPollAttempts = config.maxPollAttempts ?? 10;
-    this.pollIntervalMs = config.pollIntervalMs ?? 2000;
     this.onProofAttached = config.onProofAttached;
     this.logger = config.logger ?? NOOP_LOGGER;
   }
@@ -136,115 +145,6 @@ export class BridgeSettlementRail implements GuestRail {
     } catch {
       return false;
     }
-  }
-
-  /**
-   * Create a Bridge transfer for withdrawal.
-   *
-   * For crypto→crypto with prefunded wallet: polls briefly for completion.
-   * For crypto→fiat or slow paths: returns pending result immediately.
-   * Completion via webhook — same pattern as Stripe pending withdrawals.
-   */
-  async withdraw(
-    motebitId: string,
-    amount: number,
-    currency: string,
-    destination: string,
-    idempotencyKey: string,
-  ): Promise<WithdrawalResult> {
-    if (amount <= 0) {
-      throw new Error("Withdrawal amount must be positive");
-    }
-    if (!destination) {
-      throw new Error("Destination is required for Bridge withdrawal");
-    }
-
-    // Determine destination rail from the destination format.
-    // Wallet addresses (0x...) → crypto rail matching source.
-    // Everything else → external account (fiat).
-    const isCryptoDestination = /^0x[0-9a-fA-F]{40}$/.test(destination);
-
-    const transfer = await this.client.createTransfer({
-      onBehalfOf: this.customerId,
-      amount: amount.toFixed(6),
-      sourceCurrency: this.sourceCurrency,
-      sourcePaymentRail: this.sourcePaymentRail,
-      destinationCurrency: isCryptoDestination ? this.sourceCurrency : currency.toLowerCase(),
-      destinationPaymentRail: isCryptoDestination ? this.sourcePaymentRail : "wire",
-      destinationAddress: isCryptoDestination ? destination : undefined,
-      externalAccountId: isCryptoDestination ? undefined : destination,
-      idempotencyKey,
-    });
-
-    this.logger.info("bridge.transfer.created", {
-      motebitId,
-      transferId: transfer.id,
-      state: transfer.state,
-      amount,
-      destination,
-    });
-
-    // For crypto→crypto: try polling for fast completion
-    if (isCryptoDestination) {
-      const completed = await this.pollForCompletion(transfer.id);
-      if (completed) {
-        const txHash = completed.receipt?.destinationTxHash ?? completed.id;
-        const network = completed.destination?.paymentRail ?? this.sourcePaymentRail;
-
-        this.logger.info("bridge.transfer.completed", {
-          motebitId,
-          transferId: completed.id,
-          txHash,
-          network,
-        });
-
-        return {
-          amount,
-          currency,
-          proof: {
-            reference: txHash,
-            railType: "orchestration",
-            network,
-            confirmedAt: Date.now(),
-          },
-        };
-      }
-    }
-
-    // Async path: return pending result. Completion via webhook.
-    return {
-      amount,
-      currency,
-      proof: {
-        reference: `bridge:${transfer.id}`,
-        railType: "orchestration",
-        network: transfer.destination?.paymentRail,
-        confirmedAt: 0, // Not confirmed yet — webhook completes
-      },
-    };
-  }
-
-  /**
-   * Poll for transfer completion. Returns the completed transfer,
-   * or null if it hasn't completed within the poll window.
-   */
-  private async pollForCompletion(transferId: string): Promise<BridgeTransfer | null> {
-    for (let i = 0; i < this.maxPollAttempts; i++) {
-      const transfer = await this.client.getTransfer(transferId);
-
-      if (transfer.state === COMPLETED_STATE) {
-        return transfer;
-      }
-      if (TERMINAL_STATES.has(transfer.state) && transfer.state !== COMPLETED_STATE) {
-        throw new Error(`Bridge transfer ${transferId} failed: ${transfer.state}`);
-      }
-
-      // Wait before next poll
-      await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
-    }
-
-    // Not completed within poll window — falls back to async/webhook path
-    return null;
   }
 
   attachProof(settlementId: string, proof: PaymentProof): Promise<void> {

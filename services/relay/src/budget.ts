@@ -5,9 +5,8 @@
 import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
-import { toCents } from "@motebit/protocol";
+import { toCents, isWithdrawableRail } from "@motebit/protocol";
 import { bytesToHex, hash as sha256Hash } from "@motebit/encryption";
-import { createVerify } from "node:crypto";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
 import { persistFreeze } from "./freeze.js";
@@ -19,7 +18,6 @@ import {
   hasTransactionWithReference,
   requestWithdrawal,
   completeWithdrawal,
-  linkWithdrawalTransfer,
   signWithdrawalReceipt,
   failWithdrawal,
   getWithdrawals,
@@ -128,8 +126,6 @@ export interface BudgetDeps {
   stripeConfig: { secretKey: string; webhookSecret: string; currency?: string } | null;
   /** Settlement rail registry — holds configured rails by name. */
   railRegistry?: SettlementRailRegistry;
-  /** Bridge webhook public key (PEM) for signature verification. */
-  bridgeWebhookPublicKey?: string;
   /**
    * Operator-side Solana transfer primitive — drives Path 0 withdrawals
    * (relay treasury → user sovereign wallet, native onchain return of
@@ -151,7 +147,6 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     stripeClient,
     stripeConfig,
     railRegistry,
-    bridgeWebhookPublicKey,
     operatorSolanaTransfer,
   } = deps;
   const stripeRail = railRegistry?.get("stripe") as StripeSettlementRail | undefined;
@@ -490,10 +485,18 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       }
     }
 
-    // Path 1: x402 instant settlement for wallet destinations
+    // Path 1: x402 instant settlement for EVM-shaped wallet destinations.
+    //
+    // The rail must be narrowed through `isWithdrawableRail()` before
+    // calling `.withdraw(...)` — `withdraw` does not exist on the base
+    // `GuestRail` type (it lives on `WithdrawableGuestRail`). This is
+    // the structural fence the off-ramp arc landed: the only rails
+    // that can drive user-facing transmission are those that opt-in
+    // via the `WithdrawableGuestRail` marker. `BridgeSettlementRail`
+    // does NOT opt-in — Bridge is treasury-only.
     if (!autoSettled && railRegistry && isWalletDest) {
       const x402Rail = railRegistry.get("x402");
-      if (x402Rail) {
+      if (x402Rail && isWithdrawableRail(x402Rail)) {
         try {
           const available = await x402Rail.isAvailable();
           if (available) {
@@ -550,75 +553,24 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       }
     }
 
-    // Path 2: Bridge transfer (crypto→crypto instant or crypto→fiat async)
-    if (!autoSettled && railRegistry && result.destination !== "pending") {
-      const bridgeRail = railRegistry.get("bridge");
-      if (bridgeRail) {
-        try {
-          const available = await bridgeRail.isAvailable();
-          if (available) {
-            const withdrawResult = await bridgeRail.withdraw(
-              motebitId,
-              body.amount,
-              result.currency ?? "USDC",
-              result.destination,
-              result.withdrawal_id,
-            );
-
-            if (withdrawResult.proof.confirmedAt > 0) {
-              // Instant completion (crypto→crypto)
-              const completedAt = Date.now();
-              const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
-              const signature = await signWithdrawalReceipt(
-                {
-                  withdrawal_id: result.withdrawal_id,
-                  motebit_id: motebitId,
-                  amount: body.amount,
-                  currency: result.currency,
-                  destination: result.destination,
-                  payout_reference: withdrawResult.proof.reference,
-                  completed_at: completedAt,
-                  relay_id: relayIdentity.relayMotebitId,
-                },
-                relayIdentity.privateKey,
-              );
-              completeWithdrawal(
-                moteDb.db,
-                result.withdrawal_id,
-                withdrawResult.proof.reference,
-                signature,
-                relayPublicKeyHex,
-                completedAt,
-              );
-              await bridgeRail.attachProof(result.withdrawal_id, withdrawResult.proof);
-              autoSettled = true;
-            } else {
-              // Async path: link Bridge transfer ID to withdrawal for webhook completion
-              linkWithdrawalTransfer(
-                moteDb.db,
-                result.withdrawal_id,
-                withdrawResult.proof.reference,
-              );
-            }
-
-            logger.info("withdrawal.bridge.initiated", {
-              correlationId,
-              motebitId,
-              withdrawalId: result.withdrawal_id,
-              bridgeRef: withdrawResult.proof.reference,
-              confirmed: withdrawResult.proof.confirmedAt > 0,
-            });
-          }
-        } catch (err) {
-          logger.warn("withdrawal.bridge.auto_settle_failed", {
-            correlationId,
-            motebitId,
-            withdrawalId: result.withdrawal_id,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-    }
+    // Path 2 deleted in Arc 1 Commit 2 of the off-ramp arc.
+    //
+    // Bridge no longer routes user-facing withdrawals — the doctrine is
+    // enforced structurally: `BridgeSettlementRail.withdraw()` was
+    // removed at the package level (see `packages/settlement-rails/src/
+    // bridge-rail.ts` header). `isWithdrawableRail(bridgeRail)` returns
+    // false; any attempt to call `bridgeRail.withdraw(...)` is a compile
+    // error. Bridge stays registered for treasury operations only.
+    //
+    // If neither Path 0 (Solana sovereign) nor Path 1 (x402 EVM) matched,
+    // the withdrawal stays pending for admin resolution. Funds remain
+    // held by `requestWithdrawal` — no double-spend risk. This is the
+    // intended behavior under the doctrine "Motebit is not a transmitter
+    // of user funds": withdrawals route through user-held wallets or
+    // they don't auto-complete at all.
+    //
+    // Doctrine: docs/doctrine/settlement-rails.md § "Lanes for external
+    // readers" + the future `off-ramp-as-user-action.md`.
 
     const responseBody = {
       motebit_id: motebitId,
@@ -1012,150 +964,24 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     return c.json({ received: true });
   });
 
-  // --- Bridge webhook ---
-  /** @internal */
-  app.post("/api/v1/bridge/webhook", async (c) => {
-    const correlationId = c.get("correlationId" as never) as string;
-
-    // Signature verification: RSA-SHA256 over "{timestamp}.{rawBody}"
-    // Header format: X-Webhook-Signature: t=<timestamp>,v0=<base64 signature>
-    const rawBody = await c.req.text();
-    if (bridgeWebhookPublicKey) {
-      const sigHeader = c.req.header("X-Webhook-Signature");
-      if (!sigHeader) {
-        logger.warn("bridge.webhook.missing_signature", { correlationId });
-        throw new HTTPException(400, { message: "Missing X-Webhook-Signature header" });
-      }
-
-      const parts = sigHeader.split(",");
-      const timestamp = parts.find((p) => p.startsWith("t="))?.slice(2);
-      const sig = parts.find((p) => p.startsWith("v0="))?.slice(3);
-
-      if (!timestamp || !sig) {
-        logger.warn("bridge.webhook.malformed_signature", { correlationId, sigHeader });
-        throw new HTTPException(400, { message: "Malformed X-Webhook-Signature header" });
-      }
-
-      // Replay protection: reject events older than 10 minutes
-      const age = Date.now() - Number(timestamp);
-      if (age > 600_000 || Number.isNaN(age)) {
-        logger.warn("bridge.webhook.stale_timestamp", { correlationId, timestamp, age });
-        throw new HTTPException(400, { message: "Webhook timestamp too old" });
-      }
-
-      // RSA-SHA256 verification
-      const signedPayload = `${timestamp}.${rawBody}`;
-      let valid = false;
-      try {
-        const verifier = createVerify("RSA-SHA256");
-        verifier.update(signedPayload);
-        valid = verifier.verify(bridgeWebhookPublicKey, sig, "base64");
-      } catch {
-        // Malformed signature bytes — treat as invalid
-      }
-      if (!valid) {
-        logger.warn("bridge.webhook.invalid_signature", { correlationId });
-        throw new HTTPException(400, { message: "Invalid webhook signature" });
-      }
-    }
-
-    const body = JSON.parse(rawBody) as {
-      event_type?: string;
-      event_object_id?: string;
-      event_object_status?: string;
-      event_object?: {
-        id?: string;
-        state?: string;
-        receipt?: {
-          source_tx_hash?: string;
-          destination_tx_hash?: string;
-        };
-        destination?: {
-          payment_rail?: string;
-        };
-      };
-    };
-
-    // Only process transfer state changes that reach terminal success
-    const transferState = body.event_object?.state ?? body.event_object_status;
-    const transferId = body.event_object?.id ?? body.event_object_id;
-    if (transferState !== "payment_processed" || !transferId) {
-      return c.json({ received: true, processed: false });
-    }
-
-    const bridgeRef = `bridge:${transferId}`;
-
-    // Look up pending withdrawal by Bridge transfer reference
-    const withdrawal = moteDb.db
-      .prepare(
-        "SELECT * FROM relay_withdrawals WHERE payout_reference = ? AND status IN ('pending', 'processing')",
-      )
-      .get(bridgeRef) as
-      | {
-          withdrawal_id: string;
-          motebit_id: string;
-          amount: number;
-          currency: string;
-          destination: string;
-        }
-      | undefined;
-
-    if (!withdrawal) {
-      logger.info("bridge.webhook.no_matching_withdrawal", {
-        correlationId,
-        transferId,
-      });
-      return c.json({ received: true, processed: false });
-    }
-
-    // Auto-complete the withdrawal with signed receipt
-    const completedAt = Date.now();
-    const txHash = body.event_object?.receipt?.destination_tx_hash ?? transferId;
-    const network = body.event_object?.destination?.payment_rail;
-    const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
-    const signature = await signWithdrawalReceipt(
-      {
-        withdrawal_id: withdrawal.withdrawal_id,
-        motebit_id: withdrawal.motebit_id,
-        amount: fromMicro(withdrawal.amount),
-        currency: withdrawal.currency,
-        destination: withdrawal.destination,
-        payout_reference: txHash,
-        completed_at: completedAt,
-        relay_id: relayIdentity.relayMotebitId,
-      },
-      relayIdentity.privateKey,
-    );
-    const success = completeWithdrawal(
-      moteDb.db,
-      withdrawal.withdrawal_id,
-      txHash,
-      signature,
-      relayPublicKeyHex,
-      completedAt,
-    );
-
-    if (success) {
-      // Attach proof through the Bridge rail
-      const bridgeRail = railRegistry?.get("bridge");
-      if (bridgeRail) {
-        await bridgeRail.attachProof(withdrawal.withdrawal_id, {
-          reference: txHash,
-          railType: "orchestration",
-          network,
-          confirmedAt: completedAt,
-        });
-      }
-
-      logger.info("bridge.webhook.withdrawal_completed", {
-        correlationId,
-        withdrawalId: withdrawal.withdrawal_id,
-        transferId,
-        txHash,
-        network,
-      });
-    }
-
-    return c.json({ received: true, processed: success });
-  });
+  // Bridge webhook deleted in Arc 1 Commit 2 of the off-ramp arc.
+  //
+  // The webhook existed to complete async user-facing Bridge withdrawals
+  // (state: payment_processed → mark relay_withdrawals row completed +
+  // sign receipt + attach proof). With Path 2 deletion and
+  // BridgeSettlementRail.withdraw() removed at the package level, no
+  // user-facing Bridge transfer can be initiated, so no Bridge webhook
+  // can carry a user-withdrawal completion. The handler is gone.
+  //
+  // Pre-deletion verification: BRIDGE_CUSTOMER_ID has never been set in
+  // production Fly secrets (verified 2026-05-17). Without both
+  // BRIDGE_API_KEY and BRIDGE_CUSTOMER_ID, the rail never registered —
+  // and without the rail, no withdraw() was ever called from the deleted
+  // Path 2. Therefore zero in-flight user-facing Bridge withdrawals
+  // existed at the moment of deletion; no orphaned `bridge:*`-referenced
+  // rows in relay_withdrawals require migration.
+  //
+  // The future treasury arc may add a separate webhook for treasury-
+  // conversion completions (different shape, different handler, distinct
+  // from the deleted user-facing path). Today's deletion is total.
 }

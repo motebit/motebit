@@ -41,6 +41,11 @@ class FakeGuestRail implements GuestRail {
   readonly custody = "relay" as const;
   readonly railType = "protocol" as const;
   readonly supportsDeposit = false as const;
+  // WithdrawableGuestRail discriminant — Arc 1 Commit 2 of the off-ramp
+  // arc added this required field. The fake represents a withdrawable
+  // rail (x402-style); Bridge-style non-withdrawable rails never enter
+  // the batch worker.
+  readonly supportsWithdraw = true as const;
   readonly name: string;
   readonly supportsBatch: boolean;
   private readonly withdrawResult?: () => Promise<WithdrawalResult>;

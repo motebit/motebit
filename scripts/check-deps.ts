@@ -161,6 +161,7 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "asListingId",
     "asProposalId",
     "isDepositableRail",
+    "isWithdrawableRail",
     "isBatchableRail",
     // Semiring algebra — protocol-level primitives (open standard)
     "productSemiring",

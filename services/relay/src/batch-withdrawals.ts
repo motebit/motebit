@@ -26,11 +26,12 @@
 import type { DatabaseDriver } from "@motebit/persistence";
 import type {
   BatchableGuestRail,
+  WithdrawableGuestRail,
   BatchWithdrawalItem,
   GuestRail,
   WithdrawalResult,
 } from "@motebit/sdk";
-import { isBatchableRail } from "@motebit/sdk";
+import { isBatchableRail, isWithdrawableRail } from "@motebit/sdk";
 import { shouldBatchSettle, DEFAULT_BATCH_POLICY, type BatchPolicy } from "@motebit/market";
 import { computeDisputeWindowHold, getOrCreateAccount, fromMicro } from "./accounts.js";
 import { sqliteAccountStoreFor } from "./account-store-sqlite.js";
@@ -277,10 +278,16 @@ function toBatchItem(row: PendingRow): BatchWithdrawalItem {
 /**
  * Evaluate one rail's pending queue and fire if the policy clears.
  * Exported for tests; the production caller is `startBatchWithdrawalLoop`.
+ *
+ * Rails MUST be `WithdrawableGuestRail` to enter the batch worker —
+ * `withdraw()` lives only on that marker interface (off-ramp arc, Arc 1
+ * Commit 2). The `startBatchWithdrawalLoop` caller filters the rail
+ * list through `isWithdrawableRail` before passing rails in; this type
+ * tightens the contract so any future caller is forced to do the same.
  */
 export async function evaluateAndFireRail(
   db: DatabaseDriver,
-  rail: GuestRail,
+  rail: WithdrawableGuestRail,
   config: BatchWithdrawalConfig,
 ): Promise<void> {
   const rows = db
@@ -380,7 +387,11 @@ async function fireBatch(
   });
 }
 
-async function fireSerial(db: DatabaseDriver, rail: GuestRail, rows: PendingRow[]): Promise<void> {
+async function fireSerial(
+  db: DatabaseDriver,
+  rail: WithdrawableGuestRail,
+  rows: PendingRow[],
+): Promise<void> {
   let fired = 0;
   let failed = 0;
   for (const row of rows) {
@@ -460,14 +471,25 @@ export function startBatchWithdrawalLoop(
   isFrozen?: () => boolean,
 ): ReturnType<typeof setInterval> {
   const intervalMs = config.intervalMs ?? DEFAULT_LOOP_INTERVAL_MS;
-  logger.info("batch_withdrawals.started", { intervalMs, rails: rails.map((r) => r.name) });
+  // Filter the incoming rail list to only those that opt-in to
+  // user-facing withdrawal via `WithdrawableGuestRail`. Bridge
+  // (treasury-only) is structurally excluded — `isWithdrawableRail`
+  // returns false for it. Any non-withdrawable rail registered for
+  // other purposes (treasury, deposit-only) is silently skipped here
+  // rather than crashing the batch loop.
+  const withdrawableRails = rails.filter(isWithdrawableRail);
+  logger.info("batch_withdrawals.started", {
+    intervalMs,
+    rails: withdrawableRails.map((r) => r.name),
+    skipped: rails.length - withdrawableRails.length,
+  });
 
   return setInterval(() => {
     if (isFrozen?.()) return;
     void (async () => {
       try {
         logStaleFiring(db);
-        for (const rail of rails) {
+        for (const rail of withdrawableRails) {
           await evaluateAndFireRail(db, rail, config);
         }
       } catch (err) {

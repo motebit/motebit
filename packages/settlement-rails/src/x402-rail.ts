@@ -11,7 +11,7 @@
  */
 
 import { toMicro } from "@motebit/protocol";
-import type { GuestRail, PaymentProof, WithdrawalResult } from "@motebit/sdk";
+import type { WithdrawableGuestRail, PaymentProof, WithdrawalResult } from "@motebit/sdk";
 import { type RailLogger, NOOP_LOGGER } from "./logger.js";
 
 /**
@@ -47,11 +47,12 @@ export interface X402RailConfig {
   logger?: RailLogger;
 }
 
-export class X402SettlementRail implements GuestRail {
+export class X402SettlementRail implements WithdrawableGuestRail {
   readonly custody = "relay" as const;
   readonly railType = "protocol" as const;
   readonly name = "x402";
   readonly supportsDeposit = false as const;
+  readonly supportsWithdraw = true as const;
   readonly supportsBatch = false as const;
 
   private readonly facilitator: X402FacilitatorClient;

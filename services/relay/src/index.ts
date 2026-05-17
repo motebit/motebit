@@ -1172,7 +1172,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     stripeClient,
     stripeConfig: stripeConfig ?? null,
     railRegistry,
-    bridgeWebhookPublicKey: bridgeConfig?.webhookPublicKey,
     ...(operatorSolanaTransfer ? { operatorSolanaTransfer } : {}),
   });
 

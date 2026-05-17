@@ -1702,6 +1702,27 @@ export interface GuestRail extends SettlementRail {
   readonly supportsDeposit: boolean;
 
   /**
+   * Whether this rail supports user-facing withdrawal — i.e., the relay
+   * may invoke `rail.withdraw(...)` to transmit user funds to an
+   * external destination on the user's behalf. When `false`, the rail
+   * is registered for other purposes (treasury orchestration, deposit
+   * intake, anchor submission) but NEVER appears in the user-withdrawal
+   * dispatch path.
+   *
+   * `BridgeSettlementRail.supportsWithdraw = false` is the structural
+   * embodiment of the off-ramp doctrine: Motebit is not a transmitter
+   * of user funds. Bridge stays registered for own-account treasury
+   * conversion via `BridgeOfframpAdapter`, but the rail itself cannot
+   * be a withdrawal target — `withdraw()` is structurally absent from
+   * the type (it lives on `WithdrawableGuestRail`, not on the base).
+   *
+   * Mirrors `supportsDeposit` + `DepositableGuestRail` and `supportsBatch`
+   * + `BatchableGuestRail` as a discriminant narrowing to
+   * `WithdrawableGuestRail`.
+   */
+  readonly supportsWithdraw: boolean;
+
+  /**
    * Whether the rail exposes a single-call batch withdrawal primitive.
    * When true, `withdrawBatch` MUST be implemented. When false (the
    * default for every rail that ships in the reference relay today),
@@ -1709,29 +1730,11 @@ export interface GuestRail extends SettlementRail {
    * defers sub-threshold items and fires serially once the policy
    * clears — but the rail itself settles one item per call.
    * Mirrors `supportsDeposit` + `DepositableGuestRail` as a
-   * discriminant narrowing to `BatchableGuestRail`.
+   * discriminant narrowing to `BatchableGuestRail`. Implies
+   * `supportsWithdraw: true` — batch is a specialization of single
+   * withdraw.
    */
   readonly supportsBatch: boolean;
-
-  /**
-   * Execute a withdrawal to an external destination.
-   * Fail-closed: throws on any error.
-   */
-  withdraw(
-    motebitId: string,
-    amount: number,
-    currency: string,
-    destination: string,
-    idempotencyKey: string,
-  ): Promise<WithdrawalResult>;
-
-  /**
-   * Submit multiple withdrawals in one rail call when the rail
-   * supports a native batch primitive (e.g., a future x402 multi-
-   * authorization, a Bridge bulk-transfer). Present only when
-   * `supportsBatch` is true — narrow with `isBatchableRail`.
-   */
-  withdrawBatch?(items: readonly BatchWithdrawalItem[]): Promise<BatchWithdrawalResult>;
 
   /**
    * Record a payment proof with a settlement (e.g., x402 tx hash, Stripe charge ID).
@@ -1765,10 +1768,54 @@ export interface BatchWithdrawalResult {
 }
 
 /**
+ * A guest rail that supports user-facing withdrawal — the relay may
+ * invoke `withdraw()` to transmit user funds to an external destination.
+ *
+ * Use the `supportsWithdraw` discriminant for runtime narrowing from
+ * `GuestRail`. The marker exists so `BridgeSettlementRail` (orchestration,
+ * treasury-only) is structurally distinct from `StripeSettlementRail`
+ * (fiat, user-facing) and `X402SettlementRail` (protocol, user-facing).
+ *
+ * The doctrinal frame: Motebit is not a transmitter of user funds. User-
+ * facing withdrawal is permitted only to user-held wallets (the sovereign
+ * Solana path via `OperatorSolanaTransfer` on the operator side, or to
+ * a user-held EVM wallet via x402 on a `WithdrawableGuestRail`). Bridge
+ * is excluded structurally — the method does not exist on its type, so
+ * the relay cannot orchestrate user-facing transfers through Bridge no
+ * matter what env vars are set. The doctrine is enforced by absence.
+ */
+export interface WithdrawableGuestRail extends GuestRail {
+  readonly supportsWithdraw: true;
+
+  /**
+   * Execute a withdrawal to an external destination.
+   * Fail-closed: throws on any error.
+   */
+  withdraw(
+    motebitId: string,
+    amount: number,
+    currency: string,
+    destination: string,
+    idempotencyKey: string,
+  ): Promise<WithdrawalResult>;
+
+  /**
+   * Submit multiple withdrawals in one rail call when the rail
+   * supports a native batch primitive (e.g., a future x402 multi-
+   * authorization). Present only when `supportsBatch` is true — narrow
+   * with `isBatchableRail`. A rail can be withdrawable without being
+   * batchable, but the reverse is forbidden by the type hierarchy:
+   * `BatchableGuestRail extends WithdrawableGuestRail`.
+   */
+  withdrawBatch?(items: readonly BatchWithdrawalItem[]): Promise<BatchWithdrawalResult>;
+}
+
+/**
  * A guest rail that supports batch withdrawal submission.
  * Use the `supportsBatch` discriminant for runtime narrowing from `GuestRail`.
+ * Batchable implies withdrawable — batch is a specialization of single withdraw.
  */
-export interface BatchableGuestRail extends GuestRail {
+export interface BatchableGuestRail extends WithdrawableGuestRail {
   readonly supportsBatch: true;
   withdrawBatch(items: readonly BatchWithdrawalItem[]): Promise<BatchWithdrawalResult>;
 }
@@ -1797,9 +1844,31 @@ export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail
   return rail.supportsDeposit;
 }
 
+/**
+ * Type guard: narrows GuestRail to WithdrawableGuestRail.
+ *
+ * The relay's user-withdrawal dispatch (services/relay/src/budget.ts)
+ * MUST narrow through this guard before calling `rail.withdraw(...)`.
+ * Compile-time enforcement: `withdraw` does not exist on bare `GuestRail`,
+ * so an un-narrowed call site fails to typecheck. Runtime defense-in-
+ * depth: a rail with `supportsWithdraw: true` AND a non-function
+ * `withdraw` property would shape-match the interface but fail this
+ * guard, surfacing as "this rail does not support withdrawal" rather
+ * than a `TypeError: rail.withdraw is not a function` at the dispatch.
+ */
+export function isWithdrawableRail(rail: GuestRail): rail is WithdrawableGuestRail {
+  return (
+    rail.supportsWithdraw === true &&
+    typeof (rail as Partial<WithdrawableGuestRail>).withdraw === "function"
+  );
+}
+
 /** Type guard: narrows GuestRail to BatchableGuestRail. */
 export function isBatchableRail(rail: GuestRail): rail is BatchableGuestRail {
-  return rail.supportsBatch === true && typeof rail.withdrawBatch === "function";
+  return (
+    rail.supportsBatch === true &&
+    typeof (rail as Partial<BatchableGuestRail>).withdrawBatch === "function"
+  );
 }
 
 /**

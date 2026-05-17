@@ -10,6 +10,7 @@ import type Stripe from "stripe";
 import { toCents } from "@motebit/protocol";
 import type {
   DepositableGuestRail,
+  WithdrawableGuestRail,
   PaymentProof,
   DepositResult,
   WithdrawalResult,
@@ -29,11 +30,12 @@ export interface StripeRailConfig {
   logger?: RailLogger;
 }
 
-export class StripeSettlementRail implements DepositableGuestRail {
+export class StripeSettlementRail implements DepositableGuestRail, WithdrawableGuestRail {
   readonly custody = "relay" as const;
   readonly railType = "fiat" as const;
   readonly name = "stripe";
   readonly supportsDeposit = true as const;
+  readonly supportsWithdraw = true as const;
   readonly supportsBatch = false as const;
 
   private readonly stripe: Stripe;
