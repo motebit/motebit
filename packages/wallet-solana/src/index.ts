@@ -53,3 +53,9 @@ export {
   SOLANA_MAINNET_CAIP2,
   SOLANA_DEVNET_CAIP2,
 } from "./memo-submitter.js";
+
+export {
+  OperatorSolanaTransfer,
+  type OperatorSolanaTransferConfig,
+  createOperatorSolanaTransfer,
+} from "./operator-transfer.js";

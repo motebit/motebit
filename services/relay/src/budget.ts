@@ -130,6 +130,16 @@ export interface BudgetDeps {
   railRegistry?: SettlementRailRegistry;
   /** Bridge webhook public key (PEM) for signature verification. */
   bridgeWebhookPublicKey?: string;
+  /**
+   * Operator-side Solana transfer primitive — drives Path 0 withdrawals
+   * (relay treasury → user sovereign wallet, native onchain return of
+   * custody). Constructed from the relay identity seed + SOLANA_RPC_URL
+   * at boot; the treasury address is the relay's identity-derived Solana
+   * wallet by curve coincidence (same key used by SolanaMemoSubmitter).
+   * Absent when SOLANA_RPC_URL is unset — Path 0 dispatch falls through
+   * to Path 1 (x402 EVM) or Path 2 (Bridge) in that case.
+   */
+  operatorSolanaTransfer?: import("@motebit/wallet-solana").OperatorSolanaTransfer;
 }
 
 export function registerBudgetRoutes(deps: BudgetDeps): void {
@@ -142,6 +152,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     stripeConfig,
     railRegistry,
     bridgeWebhookPublicKey,
+    operatorSolanaTransfer,
   } = deps;
   const stripeRail = railRegistry?.get("stripe") as StripeSettlementRail | undefined;
 
@@ -390,12 +401,94 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       idempotencyKey: idempotencyKey ?? null,
     });
 
-    // Automated settlement: try x402 (instant) or Bridge (instant or async).
-    // Fail-safe: if settlement fails, withdrawal stays pending for admin resolution.
-    // Funds are already held by requestWithdrawal — no double-spend risk.
+    // Automated settlement: try Solana sovereign return (Path 0), x402 EVM
+    // (Path 1), or Bridge (Path 2). Each path is gated by the destination
+    // address shape — Solana base58, EVM 0x-hex, or other. Paths are
+    // mutually exclusive on address shape, so ordering doesn't affect
+    // correctness; Path 0 is listed first as the doctrinal-default
+    // sovereign-rail return-of-custody path (relay treasury → user wallet,
+    // no third-party orchestrator, no transmission category).
+    //
+    // Fail-safe: if settlement fails, withdrawal stays pending for admin
+    // resolution. Funds are already held by requestWithdrawal — no
+    // double-spend risk.
     let autoSettled = false;
+    const isSolanaDest =
+      result.destination !== "pending" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(result.destination);
     const isWalletDest =
       result.destination !== "pending" && /^0x[0-9a-fA-F]{40}$/.test(result.destination);
+
+    // Path 0: native Solana sovereign return of custody.
+    //
+    // The user's withdrawal destination is their own sovereign Solana
+    // wallet (typically the identity-key-derived address — same Ed25519,
+    // by curve coincidence). The relay signs from its own treasury wallet
+    // (also identity-key-derived for the relay) and sends USDC directly
+    // via the operator-side Solana adapter. No Bridge, no third-party
+    // orchestrator, no `on_behalf_of` header — the relay is the native
+    // principal of its own onchain transfer; the destination is the
+    // user's own wallet; the round-trip is structurally same-party return
+    // of custody from a self-deposit cache (user→Motebit→same-user).
+    //
+    // Doctrine: docs/doctrine/off-ramp-as-user-action.md (landing this arc).
+    // Operator primitive: packages/wallet-solana/src/operator-transfer.ts.
+    if (!autoSettled && isSolanaDest && operatorSolanaTransfer) {
+      try {
+        const available = await operatorSolanaTransfer.isAvailable();
+        if (available) {
+          const sendResult = await operatorSolanaTransfer.sendUsdc(
+            result.destination,
+            // result.amount is stored in micro-units; the operator-side
+            // adapter takes micro-units as bigint (same unit convention
+            // as everywhere in the ledger).
+            BigInt(result.amount),
+          );
+
+          const completedAt = Date.now();
+          const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
+          const signature = await signWithdrawalReceipt(
+            {
+              withdrawal_id: result.withdrawal_id,
+              motebit_id: motebitId,
+              amount: body.amount,
+              currency: result.currency,
+              destination: result.destination,
+              payout_reference: sendResult.signature,
+              completed_at: completedAt,
+              relay_id: relayIdentity.relayMotebitId,
+            },
+            relayIdentity.privateKey,
+          );
+          completeWithdrawal(
+            moteDb.db,
+            result.withdrawal_id,
+            sendResult.signature,
+            signature,
+            relayPublicKeyHex,
+            completedAt,
+          );
+
+          autoSettled = true;
+          logger.info("withdrawal.solana.auto_settled", {
+            correlationId,
+            motebitId,
+            withdrawalId: result.withdrawal_id,
+            txSignature: sendResult.signature,
+            slot: sendResult.slot,
+            confirmed: sendResult.confirmed,
+            destination: result.destination,
+          });
+        }
+      } catch (err) {
+        logger.warn("withdrawal.solana.auto_settle_failed", {
+          correlationId,
+          motebitId,
+          withdrawalId: result.withdrawal_id,
+          destination: result.destination,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
 
     // Path 1: x402 instant settlement for wallet destinations
     if (!autoSettled && railRegistry && isWalletDest) {

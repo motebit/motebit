@@ -288,6 +288,14 @@ export interface SyncRelayConfig {
     webhookPublicKey?: string;
   };
   /**
+   * Test override: pre-built operator-side Solana transfer primitive
+   * for Path 0 withdrawal dispatch. When provided, the relay uses this
+   * instead of constructing one from `SOLANA_RPC_URL` + the relay
+   * identity seed. Tests inject a fake-adapter-backed instance; production
+   * leaves this undefined so the auto-construction path runs.
+   */
+  operatorSolanaTransfer?: import("@motebit/wallet-solana").OperatorSolanaTransfer;
+  /**
    * STAGING/development-only: deterministic vote policy for the §6.2
    * federation orchestrator's peer-side vote-request endpoint. When set,
    * every incoming /federation/v1/disputes/:disputeId/vote-request
@@ -345,6 +353,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     bridge: bridgeConfig,
     onramp: onrampOverride,
     offramp: offrampOverride,
+    operatorSolanaTransfer: operatorSolanaTransferOverride,
     platformFeeRate = parseFloatEnv("MOTEBIT_PLATFORM_FEE_RATE", 0.05),
   } = config;
 
@@ -1132,6 +1141,28 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     (bridgeConfig ? new BridgeOfframpAdapter({ apiKey: bridgeConfig.apiKey }) : null);
   registerOfframpRoutes(app, offrampAdapter);
 
+  // --- Operator-side Solana transfer primitive (Path 0 withdrawals) ---
+  // Treasury wallet is the relay's identity-derived Solana address — same
+  // key the memo submitter uses for anchoring, by Ed25519 curve coincidence
+  // (`packages/wallet-solana/CLAUDE.md` Rule 2 + Rule 6). Constructed once
+  // and passed into budget routes; used by Path 0 to return self-deposited
+  // custody to a user's sovereign wallet without any third-party
+  // orchestrator. Falls through to Path 1 (x402 EVM) or Path 2 (Bridge)
+  // when SOLANA_RPC_URL is unset.
+  let operatorSolanaTransfer: import("@motebit/wallet-solana").OperatorSolanaTransfer | undefined =
+    operatorSolanaTransferOverride;
+  if (!operatorSolanaTransfer && process.env.SOLANA_RPC_URL) {
+    const { createOperatorSolanaTransfer } = await import("@motebit/wallet-solana");
+    operatorSolanaTransfer = createOperatorSolanaTransfer({
+      rpcUrl: process.env.SOLANA_RPC_URL,
+      identitySeed: relayIdentity.privateKey,
+      ...(process.env.SOLANA_USDC_MINT ? { usdcMint: process.env.SOLANA_USDC_MINT } : {}),
+    });
+    logger.info("operator_solana_transfer.configured", {
+      address: operatorSolanaTransfer.address,
+    });
+  }
+
   // --- Budget, accounts & admin routes (after auth middleware) ---
   registerBudgetRoutes({
     app,
@@ -1142,6 +1173,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     stripeConfig: stripeConfig ?? null,
     railRegistry,
     bridgeWebhookPublicKey: bridgeConfig?.webhookPublicKey,
+    ...(operatorSolanaTransfer ? { operatorSolanaTransfer } : {}),
   });
 
   // --- Agent routes (registration, discovery, capabilities, settlements, ledger) ---
