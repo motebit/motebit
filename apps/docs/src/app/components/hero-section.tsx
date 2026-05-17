@@ -29,7 +29,10 @@ export function HeroSection() {
             <h1 className="text-[clamp(2rem,4.5vw,3.5rem)] font-bold tracking-[-0.04em] leading-[1.05] text-zinc-900 dark:text-zinc-100">
               A droplet of intelligence under surface tension.
             </h1>
-            <p className="mt-5 text-[clamp(0.9rem,1.6vw,1.1rem)] text-zinc-500 dark:text-zinc-200 leading-relaxed">
+            <p className="mt-5 text-[clamp(0.9rem,1.6vw,1.1rem)] text-zinc-600 dark:text-zinc-100 leading-relaxed">
+              Identity at the boundary. Intelligence in the interior. Governance at the surface.
+            </p>
+            <p className="mt-2 text-[clamp(0.85rem,1.4vw,1rem)] text-zinc-500 dark:text-zinc-300 leading-relaxed">
               You own the identity. The intelligence is pluggable. The body is yours.
             </p>
             <div className="mt-8 flex gap-3 hero-enter-buttons">
