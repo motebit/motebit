@@ -495,6 +495,11 @@ interface AgentSettlementRow {
   amount_settled: number;
   platform_fee: number;
   platform_fee_rate: number;
+  // Lane discriminant — part of the signed body since SettlementRecord
+  // gained the field, so it MUST be included in the canonical
+  // reconstruction below or the leaf hash won't match the relay's
+  // signature and anchor verification breaks.
+  settlement_mode: string;
   status: string;
   settled_at: number;
   issuer_relay_id: string;
@@ -520,6 +525,7 @@ async function computeAgentSettlementLeaf(row: AgentSettlementRow): Promise<stri
     amount_settled: row.amount_settled,
     platform_fee: row.platform_fee,
     platform_fee_rate: row.platform_fee_rate,
+    settlement_mode: row.settlement_mode,
     status: row.status,
     settled_at: row.settled_at,
     issuer_relay_id: row.issuer_relay_id,
@@ -547,7 +553,8 @@ export async function cutAgentSettlementBatch(
   const rows = db
     .prepare(
       `SELECT settlement_id, motebit_id, receipt_hash, ledger_hash,
-              amount_settled, platform_fee, platform_fee_rate, status,
+              amount_settled, platform_fee, platform_fee_rate,
+              COALESCE(settlement_mode, 'relay') AS settlement_mode, status,
               settled_at, issuer_relay_id, suite, signature
        FROM relay_settlements
        WHERE anchor_batch_id IS NULL AND signature IS NOT NULL
@@ -871,7 +878,8 @@ export async function getAgentSettlementProof(
   const settlement = db
     .prepare(
       `SELECT settlement_id, motebit_id, receipt_hash, ledger_hash,
-              amount_settled, platform_fee, platform_fee_rate, status,
+              amount_settled, platform_fee, platform_fee_rate,
+              COALESCE(settlement_mode, 'relay') AS settlement_mode, status,
               settled_at, issuer_relay_id, suite, signature, anchor_batch_id
        FROM relay_settlements
        WHERE settlement_id = ?`,
@@ -906,7 +914,8 @@ export async function getAgentSettlementProof(
   const batchSettlements = db
     .prepare(
       `SELECT settlement_id, motebit_id, receipt_hash, ledger_hash,
-              amount_settled, platform_fee, platform_fee_rate, status,
+              amount_settled, platform_fee, platform_fee_rate,
+              COALESCE(settlement_mode, 'relay') AS settlement_mode, status,
               settled_at, issuer_relay_id, suite, signature
        FROM relay_settlements
        WHERE anchor_batch_id = ?

@@ -2987,6 +2987,7 @@ export interface SettlementRecord {
     settled_at: number;
     // (undocumented)
     settlement_id: SettlementId;
+    settlement_mode: SettlementMode;
     signature: string;
     // (undocumented)
     status: "completed" | "partial" | "refunded";

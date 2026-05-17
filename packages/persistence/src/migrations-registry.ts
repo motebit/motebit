@@ -323,4 +323,18 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE goals ADD COLUMN budget_tokens INTEGER",
     ],
   },
+  {
+    version: 37,
+    description:
+      "settlements.settlement_mode — lane discriminant (relay-custody vs p2p) on signed receipts",
+    statements: [
+      // SettlementRecord gained a required `settlement_mode` wire field.
+      // Existing rows are reconstructed via rowToSettlement; COALESCE to
+      // 'relay' there preserves backward-compat reads, but the column
+      // exists so new writes can persist the lane explicitly. Doctrine:
+      // docs/doctrine/settlement-rails.md § "Lanes for external readers".
+      // Treasury reconciliation is NOT a settlement and has no row here.
+      "ALTER TABLE settlements ADD COLUMN settlement_mode TEXT DEFAULT 'relay'",
+    ],
+  },
 ];

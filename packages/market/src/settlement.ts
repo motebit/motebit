@@ -104,9 +104,14 @@ export function validateAllocation(allocation: BudgetAllocation): void {
  * produce a fully-signed record. The signing-triple split keeps the
  * money math here and the cryptographic attestation at the consumer.
  */
+// `settlement_mode` is excluded from the market-layer body for the same
+// reason as `issuer_relay_id`: market math is custody-agnostic, and the
+// caller (relay, agent, peer-settlement loop) is the only party that
+// knows whether this settlement is relay-custodied or sovereign-P2P.
+// The caller adds both at the `signSettlement` boundary.
 export type SettlementRecordBody = Omit<
   SettlementRecord,
-  "issuer_relay_id" | "suite" | "signature"
+  "issuer_relay_id" | "suite" | "signature" | "settlement_mode"
 >;
 
 /**

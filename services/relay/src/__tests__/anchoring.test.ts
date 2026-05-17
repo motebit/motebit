@@ -369,6 +369,7 @@ async function insertSignedAgentSettlement(opts: {
       amount_settled: opts.amount ?? 950_000,
       platform_fee: opts.fee ?? 50_000,
       platform_fee_rate: 0.05,
+      settlement_mode: "relay",
       status: "completed",
       settled_at: settledAt,
       issuer_relay_id: agentRelayIdentity.relayMotebitId,
@@ -381,8 +382,8 @@ async function insertSignedAgentSettlement(opts: {
       `INSERT INTO relay_settlements
        (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash,
         amount_settled, platform_fee, platform_fee_rate, status, settled_at,
-        issuer_relay_id, suite, signature)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        settlement_mode, issuer_relay_id, suite, signature)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -396,6 +397,7 @@ async function insertSignedAgentSettlement(opts: {
       signed.platform_fee_rate,
       signed.status,
       signed.settled_at,
+      signed.settlement_mode,
       signed.issuer_relay_id,
       signed.suite,
       signed.signature,

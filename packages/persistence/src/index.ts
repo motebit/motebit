@@ -2521,6 +2521,13 @@ interface SettlementRow {
   platform_fee_rate: number;
   status: string;
   settled_at: number;
+  // Lane discriminant added by migration v37. Nullable in the DB for
+  // backward-compat with rows persisted before SettlementRecord gained
+  // the field; `rowToSettlement` COALESCEs to "relay" on read because
+  // the only settlements that could have been signed pre-v37 were
+  // relay-custody (the p2p audit path always inserted the row with
+  // settlement_mode='p2p' explicitly via raw SQL).
+  settlement_mode: string | null;
   // Self-attestation columns added by the audit-#1 schema migration.
   // Nullable in the DB for backward-compat with rows persisted before
   // SettlementRecord became signed; required in the wire format. Legacy
@@ -2542,6 +2549,10 @@ function rowToSettlement(row: SettlementRow): SettlementRecord {
     amount_settled: row.amount_settled,
     platform_fee: row.platform_fee,
     platform_fee_rate: row.platform_fee_rate,
+    // Pre-v37 rows default to "relay" — the only lane that could have
+    // been written under the prior schema where p2p audit rows always
+    // set the column explicitly.
+    settlement_mode: (row.settlement_mode as SettlementRecord["settlement_mode"] | null) ?? "relay",
     status: row.status as SettlementRecord["status"],
     settled_at: row.settled_at,
     // Pre-audit-#1 rows persisted before SettlementRecord became signed
@@ -2564,8 +2575,8 @@ export class SqliteSettlementStore {
     this.stmtGet = db.prepare(`SELECT * FROM settlements WHERE settlement_id = ?`);
     this.stmtCreate = db.prepare(
       `INSERT INTO settlements
-       (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, issuer_relay_id, suite, signature)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, issuer_relay_id, suite, signature)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtListByAllocation = db.prepare(
       `SELECT * FROM settlements WHERE allocation_id = ? ORDER BY settled_at DESC`,
@@ -2588,6 +2599,7 @@ export class SqliteSettlementStore {
       settlement.platform_fee_rate,
       settlement.status,
       settlement.settled_at,
+      settlement.settlement_mode,
       settlement.issuer_relay_id,
       settlement.suite,
       settlement.signature,

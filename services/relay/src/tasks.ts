@@ -643,6 +643,10 @@ export async function handleReceiptIngestion(
             amount_settled: subSettlement.amount_settled,
             platform_fee: subSettlement.platform_fee,
             platform_fee_rate: subSettlement.platform_fee_rate,
+            // Multi-hop sub-receipts settle through the relay's virtual
+            // accounts (creditAccount below) — this is relay-custody by
+            // construction, never p2p.
+            settlement_mode: "relay",
             status: subSettlement.status,
             settled_at: subSettlement.settled_at,
             issuer_relay_id: relayIdentity.relayMotebitId,
@@ -655,8 +659,8 @@ export async function handleReceiptIngestion(
           moteDb.db
             .prepare(
               `INSERT OR IGNORE INTO relay_settlements
-             (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, issuer_relay_id, suite, signature)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, issuer_relay_id, suite, signature)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               signedSubSettlement.settlement_id,
@@ -670,6 +674,7 @@ export async function handleReceiptIngestion(
               signedSubSettlement.platform_fee_rate,
               signedSubSettlement.status,
               signedSubSettlement.settled_at,
+              signedSubSettlement.settlement_mode,
               signedSubSettlement.issuer_relay_id,
               signedSubSettlement.suite,
               signedSubSettlement.signature,
@@ -775,6 +780,11 @@ export async function handleReceiptIngestion(
             amount_settled: 0,
             platform_fee: 0,
             platform_fee_rate: 0,
+            // P2P audit record: relay never held the funds. Money moved
+            // onchain delegator → worker; this is the audit attestation,
+            // not a credit/debit. Lane is part of the signed body so the
+            // relay's custody posture is committed-to, not derivable.
+            settlement_mode: "p2p",
             status: "completed",
             settled_at: p2pSettledAt,
             issuer_relay_id: relayIdentity.relayMotebitId,
@@ -925,6 +935,12 @@ export async function handleReceiptIngestion(
               amount_settled: settlement.amount_settled,
               platform_fee: settlement.platform_fee,
               platform_fee_rate: settlement.platform_fee_rate,
+              // This branch only runs for !isP2pTask — the p2p audit record
+              // is constructed and inserted above. Relay-custody by
+              // construction; x402_tx_hash here records that the relay's
+              // payout to the worker happened on-chain (still relay-custody
+              // — the relay held funds and then disbursed them).
+              settlement_mode: "relay",
               status: settlement.status,
               settled_at: settlement.settled_at,
               ...(entry.x402_tx_hash != null ? { x402_tx_hash: entry.x402_tx_hash } : {}),
@@ -943,8 +959,8 @@ export async function handleReceiptIngestion(
           moteDb.db
             .prepare(
               `INSERT OR IGNORE INTO relay_settlements
-               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, x402_tx_hash, x402_network, issuer_relay_id, suite, signature)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, x402_tx_hash, x402_network, issuer_relay_id, suite, signature)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               signedSettlement.settlement_id,
@@ -958,6 +974,7 @@ export async function handleReceiptIngestion(
               signedSettlement.platform_fee_rate,
               signedSettlement.status,
               signedSettlement.settled_at,
+              signedSettlement.settlement_mode,
               entry.x402_tx_hash ?? null,
               entry.x402_network ?? null,
               signedSettlement.issuer_relay_id,

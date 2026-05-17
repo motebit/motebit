@@ -16,6 +16,7 @@ describe("IdbSettlementStore", () => {
       amount_settled: 450000,
       platform_fee: 50000,
       platform_fee_rate: 0.05,
+      settlement_mode: "relay",
       status: "completed",
       settled_at: Date.now(),
       issuer_relay_id: "relay-test",

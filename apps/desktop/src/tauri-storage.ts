@@ -1822,6 +1822,12 @@ interface SettlementRow {
   amount_settled: number;
   platform_fee: number;
   platform_fee_rate: number;
+  // Lane discriminant added by desktop migration v5. COALESCEd to "relay"
+  // on read for backward-compat with rows persisted before the field
+  // existed — only relay-custody settlements could have been written
+  // pre-v5 since p2p settlements at the agent layer first appeared
+  // alongside this same change.
+  settlement_mode: string | null;
   x402_tx_hash: string | null;
   x402_network: string | null;
   status: string;
@@ -1845,6 +1851,7 @@ function rowToSettlement(row: SettlementRow): SettlementRecord {
     amount_settled: row.amount_settled,
     platform_fee: row.platform_fee,
     platform_fee_rate: row.platform_fee_rate,
+    settlement_mode: (row.settlement_mode as SettlementRecord["settlement_mode"] | null) ?? "relay",
     status: row.status as SettlementRecord["status"],
     settled_at: row.settled_at,
     issuer_relay_id: row.issuer_relay_id ?? "",
@@ -1872,8 +1879,8 @@ export class TauriSettlementStore implements SettlementStoreAdapter {
   async create(settlement: SettlementRecord): Promise<void> {
     await dbExecute(
       this.invoke,
-      `INSERT OR REPLACE INTO settlements (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, x402_tx_hash, x402_network, status, settled_at, issuer_relay_id, suite, signature)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO settlements (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, settlement_mode, x402_tx_hash, x402_network, status, settled_at, issuer_relay_id, suite, signature)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         settlement.settlement_id,
         settlement.allocation_id,
@@ -1882,6 +1889,7 @@ export class TauriSettlementStore implements SettlementStoreAdapter {
         settlement.amount_settled,
         settlement.platform_fee,
         settlement.platform_fee_rate,
+        settlement.settlement_mode,
         settlement.x402_tx_hash ?? null,
         settlement.x402_network ?? null,
         settlement.status,

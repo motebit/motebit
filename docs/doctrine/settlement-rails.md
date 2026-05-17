@@ -14,6 +14,26 @@ External money movement uses three interfaces in `@motebit/protocol` (Layer 0), 
 
 **SovereignRail surface:** `chain`, `asset`, `address`, `getBalance`. Reference implementation: `SolanaWalletRail` in `@motebit/wallet-solana`. Future Ed25519-native chains (Aptos, Sui) satisfy the same interface.
 
+## Lanes for external readers
+
+Motebit-native code names the lane `settlement_mode`; auditors, counsel, and external compliance reviewers often want this expressed in their own vocabulary. The translation table below preserves motebit-native names in code and locates the doctrine-shaped framing in a single place. New code uses `settlement_mode`; this section is the only place where the external vocabulary is reconciled.
+
+| Code surface                       | Value      | External meaning                                                                                                                                                                        |
+| ---------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SettlementRecord.settlement_mode` | `"relay"`  | Managed relay lane — relay-custody, virtual-account credit/debit on the relay's books                                                                                                   |
+| `SettlementRecord.settlement_mode` | `"p2p"`    | Sovereign P2P lane — agent-custody, onchain transfer delegator→worker, relay records the audit but never custodies funds                                                                |
+| `relay_treasury_reconciliations.*` | (no field) | **Treasury lane** — own-account operator fee accrual vs onchain balance. NOT a settlement; structurally absent from `SettlementMode`. See [`treasury-custody.md`](treasury-custody.md). |
+
+The trichotomy auditors look for ("treasury / managed relay / sovereign P2P") maps to motebit-native concepts as follows:
+
+- **Treasury** = `treasury-reconciliation.ts` + the operator's `X402_PAY_TO_ADDRESS`. Own-account by construction; never appears in `relay_settlements` and never carries a `settlement_mode` field. The structural separation is doctrine-enforced in [`treasury-custody.md`](treasury-custody.md) — unifying the two would create the privilege-escalation surface that drove `packages/treasury-reconciliation` to ship as a sibling primitive to `deposit-detector` rather than a shared abstraction.
+- **Managed relay** = `SettlementRecord.settlement_mode === "relay"`. Funds flow through `virtual-accounts`; the relay is the custodian; the relay signs the receipt.
+- **Sovereign P2P** = `SettlementRecord.settlement_mode === "p2p"`. Funds move agent-to-agent onchain via `SovereignRail` (today: `SolanaWalletRail`); the relay observes via `p2p-verifier.ts` and emits an audit-only record (`amount_settled: 0`, `platform_fee: 0`, no virtual-account movement). Eligibility gated by `evaluateSettlementEligibility` in `services/relay/src/task-routing.ts` — trust ≥ 0.6, ≥5 interactions, both parties opting in, worker has `settlement_address`.
+
+**Graduation removes custody, not coordination.** An agent moving from `"relay"` to `"p2p"` does not stop using the relay — it stops requiring the relay to hold the money. Trust routing, policy evaluation, receipt verification, the 5% fee at the settlement boundary, audit trails, counterparty discovery, and federation co-witness machinery all continue to apply to `"p2p"` settlements. The relay's moat is accumulated state (settlement history, trust graph, receipt corpus, reputation), not custody — [`protocol-primacy.md`](protocol-primacy.md) applied to settlement.
+
+**Why the lane lives on the signed body.** Putting `settlement_mode` inside the signature commits the relay to a specific custody posture for each settlement. A relay cannot silently relabel a custodied settlement as p2p after the fact to dodge regulatory or counterparty scrutiny — the bytes signed at settlement time include the lane, and any tamper invalidates the signature. The closed registry (`SettlementMode = "relay" | "p2p"`) lives in `@motebit/protocol/src/settlement-mode.ts` per [`registry-pattern-canonical.md`](registry-pattern-canonical.md). Treasury was deliberately not added to the union — see the structural negative-proof in `packages/wire-schemas/src/__tests__/settlement-record.test.ts` (rejects `settlement_mode: "treasury"`).
+
 ## Doctrine enforced at the type level
 
 `SettlementRailRegistry.register()` accepts only `GuestRail`. The compiler rejects attempts to register a `SovereignRail` at the relay — "relay is a convenience layer, not a trust root" stops being prose and becomes a type error. The negative proof lives in `packages/settlement-rails/src/__tests__/custody-boundary.test.ts` with a `@ts-expect-error` assertion; if someone widens the registry, that file stops compiling. The `/health/ready` rail manifest advertises only guest rails — sovereign settlement has no mediator to advertise.

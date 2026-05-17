@@ -484,6 +484,7 @@ describe("signSettlement / verifySettlement", () => {
       amount_settled: 950_000,
       platform_fee: 50_000,
       platform_fee_rate: 0.05,
+      settlement_mode: "relay" as const,
       status: "completed" as const,
       settled_at: 1_700_000_000_000,
       issuer_relay_id: "relay-001",

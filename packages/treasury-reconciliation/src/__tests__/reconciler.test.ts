@@ -216,3 +216,56 @@ describe("reconcileTreasury", () => {
     expect(store.getPersistedRecords()).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Structural negative-proof: treasury reconciliation is NOT a settlement.
+//
+// Doctrine: `docs/doctrine/settlement-rails.md` § "Lanes for external readers"
+// and `packages/treasury-reconciliation/CLAUDE.md` rule 1. Treasury accrual
+// is its own audit shape (own-account operator fees), structurally distinct
+// from the `relay`/`p2p` settlement lanes that ride on `SettlementRecord`.
+// The negative-proof below catches a future drift where someone adds a
+// `settlement_mode` field to `ReconciliationResult` and accidentally
+// re-conflates the two audit categories.
+// ---------------------------------------------------------------------------
+
+describe("ReconciliationResult structural shape (negative-proof)", () => {
+  it("does not carry a settlement_mode field — treasury is not a settlement lane", () => {
+    type _ReconciliationResultLacksSettlementMode =
+      import("../types.js").ReconciliationResult extends { settlement_mode: unknown }
+        ? "DRIFT: treasury reconciliation gained a settlement_mode field — see settlement-rails.md § 'Lanes for external readers'"
+        : true;
+
+    // Compile-time assertion — narrows to `true` only when the field is absent.
+    const _proof: _ReconciliationResultLacksSettlementMode = true;
+    expect(_proof).toBe(true);
+  });
+
+  it("does not carry settlement-shaped fields (no amount_settled / platform_fee / settlement_id)", () => {
+    // Treasury reconciliation tracks fee accrual deltas, not per-task
+    // settlement amounts. The complement test of the doctrine: if any
+    // of these fields appear here, the structural separation has been
+    // violated and the relay-treasury vs agent-settlement audit shapes
+    // have been re-merged against rule 1.
+    type _NoAmountSettled = import("../types.js").ReconciliationResult extends {
+      amount_settled: unknown;
+    }
+      ? false
+      : true;
+    type _NoPlatformFee = import("../types.js").ReconciliationResult extends {
+      platform_fee: unknown;
+    }
+      ? false
+      : true;
+    type _NoSettlementId = import("../types.js").ReconciliationResult extends {
+      settlement_id: unknown;
+    }
+      ? false
+      : true;
+
+    const _a: _NoAmountSettled = true;
+    const _b: _NoPlatformFee = true;
+    const _c: _NoSettlementId = true;
+    expect([_a, _b, _c]).toEqual([true, true, true]);
+  });
+});

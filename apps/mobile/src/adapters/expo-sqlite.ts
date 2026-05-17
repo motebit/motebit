@@ -1963,6 +1963,10 @@ interface SettlementRow {
   amount_settled: number;
   platform_fee: number;
   platform_fee_rate: number;
+  // Lane discriminant added by expo-sqlite migration v25. COALESCEd to
+  // "relay" on read for backward-compat with rows persisted before the
+  // field existed.
+  settlement_mode: string | null;
   status: string;
   settled_at: number;
   // Self-attestation columns added by audit-#1 schema migration. Nullable
@@ -1983,6 +1987,7 @@ function rowToSettlement(row: SettlementRow): SettlementRecord {
     amount_settled: row.amount_settled,
     platform_fee: row.platform_fee,
     platform_fee_rate: row.platform_fee_rate,
+    settlement_mode: (row.settlement_mode as SettlementRecord["settlement_mode"] | null) ?? "relay",
     status: row.status as SettlementRecord["status"],
     settled_at: row.settled_at,
     issuer_relay_id: row.issuer_relay_id ?? "",
@@ -2005,8 +2010,8 @@ export class ExpoSettlementStore {
   async create(settlement: SettlementRecord): Promise<void> {
     this.db.runSync(
       `INSERT INTO settlements
-       (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, issuer_relay_id, suite, signature)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, issuer_relay_id, suite, signature)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         settlement.settlement_id,
         settlement.allocation_id,
@@ -2017,6 +2022,7 @@ export class ExpoSettlementStore {
         settlement.platform_fee_rate,
         settlement.status,
         settlement.settled_at,
+        settlement.settlement_mode,
         settlement.issuer_relay_id,
         settlement.suite,
         settlement.signature,

@@ -14,6 +14,7 @@ const SAMPLE: Record<string, unknown> = {
   amount_settled: 950_000, // $0.95 in micro-units
   platform_fee: 50_000, // $0.05 in micro-units
   platform_fee_rate: 0.05,
+  settlement_mode: "relay",
   status: "completed",
   settled_at: 1_713_456_000_000,
   issuer_relay_id: "019cd9d4-3275-7b24-8265-relay0000001",
@@ -95,5 +96,36 @@ describe("SettlementRecordSchema", () => {
       status: "refunded",
     });
     expect(s.amount_settled).toBe(0);
+  });
+
+  describe("settlement_mode (lane discriminant — relay vs p2p)", () => {
+    it("accepts settlement_mode='relay'", () => {
+      const s = SettlementRecordSchema.parse({ ...SAMPLE, settlement_mode: "relay" });
+      expect(s.settlement_mode).toBe("relay");
+    });
+
+    it("accepts settlement_mode='p2p'", () => {
+      const s = SettlementRecordSchema.parse({ ...SAMPLE, settlement_mode: "p2p" });
+      expect(s.settlement_mode).toBe("p2p");
+    });
+
+    it("rejects missing settlement_mode (required — lane is part of the signed attestation)", () => {
+      const bad: Record<string, unknown> = { ...SAMPLE };
+      delete bad.settlement_mode;
+      expect(() => SettlementRecordSchema.parse(bad)).toThrow();
+    });
+
+    it("rejects unknown settlement_mode (closed registry; 'treasury' is NOT a settlement lane)", () => {
+      // Treasury reconciliation is a separate audit shape per
+      // docs/doctrine/settlement-rails.md § "Lanes for external readers" —
+      // structural negative-proof that operator fee accrual cannot be
+      // mislabeled as a settlement.
+      expect(() =>
+        SettlementRecordSchema.parse({ ...SAMPLE, settlement_mode: "treasury" }),
+      ).toThrow();
+      expect(() =>
+        SettlementRecordSchema.parse({ ...SAMPLE, settlement_mode: "managed_relay" }),
+      ).toThrow();
+    });
   });
 });

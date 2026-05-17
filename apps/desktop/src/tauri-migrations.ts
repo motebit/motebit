@@ -101,6 +101,22 @@ export const DESKTOP_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE goal_outcomes ADD COLUMN signed_manifest TEXT",
     ],
   },
+  {
+    version: 5,
+    description:
+      "settlements.settlement_mode — lane discriminant (relay-custody vs p2p) on signed receipts",
+    statements: [
+      // Sibling of persistence migration v37 — closes the wire-format
+      // change in `@motebit/protocol::SettlementRecord` across the
+      // desktop's local SQLite. Pre-v5 rows default to "relay" via the
+      // rowToSettlement COALESCE; new writes set the lane explicitly.
+      // Doctrine: docs/doctrine/settlement-rails.md § "Lanes for
+      // external readers". Treasury reconciliation is NOT a settlement
+      // and has no row in this table — structural separation per
+      // packages/treasury-reconciliation/CLAUDE.md rule 1.
+      "ALTER TABLE settlements ADD COLUMN settlement_mode TEXT DEFAULT 'relay'",
+    ],
+  },
 ];
 
 interface UserVersionRow {

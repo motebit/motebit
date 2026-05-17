@@ -53,6 +53,14 @@ describe("tauri-migrations — DESKTOP_MIGRATIONS registry", () => {
     expect(v4).toBeDefined();
     expect(v4!.statements).toContain("ALTER TABLE goal_outcomes ADD COLUMN signed_manifest TEXT");
   });
+
+  it("declares the v5 settlement-lane migration (settlement_mode)", () => {
+    const v5 = DESKTOP_MIGRATIONS.find((m) => m.version === 5);
+    expect(v5).toBeDefined();
+    expect(v5!.statements).toContain(
+      "ALTER TABLE settlements ADD COLUMN settlement_mode TEXT DEFAULT 'relay'",
+    );
+  });
 });
 
 describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => {
@@ -87,6 +95,12 @@ describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => 
         goal_id TEXT NOT NULL,
         ran_at INTEGER NOT NULL,
         status TEXT NOT NULL
+      );
+      CREATE TABLE settlements (
+        settlement_id TEXT PRIMARY KEY,
+        allocation_id TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        amount_settled INTEGER NOT NULL
       );
     `);
   });
@@ -125,6 +139,12 @@ describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => 
     // v3 + v4 columns — artifact preservation + Phase-3 deferral close
     expect(outcomeCols.some((c) => c.name === "response_full")).toBe(true);
     expect(outcomeCols.some((c) => c.name === "signed_manifest")).toBe(true);
+
+    // v5 column — settlement lane discriminant
+    const settlementCols = db.prepare("PRAGMA table_info(settlements)").all() as Array<{
+      name: string;
+    }>;
+    expect(settlementCols.some((c) => c.name === "settlement_mode")).toBe(true);
 
     const version = db.prepare("PRAGMA user_version").get() as { user_version: number };
     expect(version.user_version).toBe(latest);

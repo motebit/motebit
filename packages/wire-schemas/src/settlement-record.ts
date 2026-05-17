@@ -28,7 +28,7 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
-import type { SettlementRecord } from "@motebit/protocol";
+import { ALL_SETTLEMENT_MODES, type SettlementRecord } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
 
@@ -82,6 +82,11 @@ export const SettlementRecordSchema = z
       .number()
       .describe(
         "Fee rate applied to this settlement (e.g. `0.05` = 5%). Recorded per-settlement for auditability — a relay that changes its default fee mid-flight cannot retroactively rewrite past settlements without breaking this field's signed/hashed binding.",
+      ),
+    settlement_mode: z
+      .enum(ALL_SETTLEMENT_MODES as readonly [string, ...string[]])
+      .describe(
+        "How the money moved for this settlement: `relay` (relay-custody — virtual-account credit/debit on the relay's books) or `p2p` (peer-to-peer onchain transfer — relay records the audit but never held the funds). Closed registry: the `SettlementMode` union in `@motebit/protocol/src/settlement-mode.ts`. Carried in the signed body so the lane is part of the relay's attestation; the relay cannot silently re-label a custodied settlement as p2p after the fact. Treasury reconciliation (operator fee accrual) is structurally NOT a settlement and never appears here — see `docs/doctrine/settlement-rails.md` § \"Lanes for external readers\".",
       ),
     x402_tx_hash: z
       .string()

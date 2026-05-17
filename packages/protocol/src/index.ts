@@ -1568,6 +1568,22 @@ export interface SettlementRecord {
   platform_fee: number;
   /** Fee rate applied (e.g. 0.05 = 5%). Recorded per-settlement for auditability. */
   platform_fee_rate: number;
+  /**
+   * How the money moved for this settlement: `relay` (relay holds custody;
+   * virtual-account credit/debit on the relay's books) or `p2p` (peer-to-
+   * peer onchain transfer; relay records the audit but never held the
+   * funds). Closed registry — see `SettlementMode` in `./settlement-mode.ts`.
+   *
+   * Carried in the signed body so the lane is part of the relay's
+   * attestation, not a derivable side-fact. Auditors and counsel reading
+   * the receipt see the custody posture directly; the relay cannot
+   * silently re-label a custodied settlement as p2p after the fact.
+   *
+   * Treasury reconciliation (operator fee accrual vs. onchain balance)
+   * is structurally NOT a settlement and never appears here — see
+   * `docs/doctrine/settlement-rails.md` § "Lanes for external readers".
+   */
+  settlement_mode: SettlementMode;
   /** x402 payment transaction hash (when paid on-chain). */
   x402_tx_hash?: string;
   /** x402 network used for payment (CAIP-2 identifier). */
@@ -2732,6 +2748,7 @@ export {
 } from "./transparency.js";
 
 import type { ToolMode } from "./tool-mode.js";
+import type { SettlementMode } from "./settlement-mode.js";
 
 // ── Skill manifest + envelope (spec/skills-v1.md) ────────────────
 export type {
