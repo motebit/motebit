@@ -247,6 +247,9 @@ export const ALL_EVENT_TYPES: readonly EventType[];
 export const ALL_SENSITIVITY_LEVELS: readonly SensitivityLevel[];
 
 // @public
+export const ALL_SETTLEMENT_ASSETS: readonly SettlementAsset[];
+
+// @public
 export const ALL_SETTLEMENT_MODES: readonly SettlementMode[];
 
 // @public
@@ -1863,6 +1866,9 @@ export function isEventType(value: unknown): value is EventType;
 export function isSensitivityLevel(value: unknown): value is SensitivityLevel;
 
 // @public
+export function isSettlementAsset(value: unknown): value is SettlementAsset;
+
+// @public
 export function isSettlementMode(value: unknown): value is SettlementMode;
 
 // @public
@@ -2956,6 +2962,9 @@ export interface ServiceListingStoreAdapter {
 }
 
 // @public
+export type SettlementAsset = "USDC";
+
+// @public
 export type SettlementEligibility = {
     allowed: true;
     mode: WritableSettlementMode;
@@ -3242,7 +3251,7 @@ export interface SolvencyProof {
 // @public
 export interface SovereignRail extends SettlementRail {
     readonly address: string;
-    readonly asset: string;
+    readonly asset: SettlementAsset;
     readonly chain: string;
     // (undocumented)
     readonly custody: "agent";

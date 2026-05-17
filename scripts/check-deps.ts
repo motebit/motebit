@@ -216,6 +216,13 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // registry per docs/doctrine/registry-pattern-canonical.md.
     // Same shape as `isEventType`.
     "isSettlementMode",
+    // Settlement-asset vocabulary — pure type guard over the frozen
+    // `ALL_SETTLEMENT_ASSETS` array. Sub-phase A of the asset-
+    // pluggability commitment per docs/doctrine/off-ramp-as-user-action.md;
+    // promotes to the 8th registered registry per
+    // docs/doctrine/registry-pattern-canonical.md on second-asset
+    // consumer. Same shape as `isSettlementMode`.
+    "isSettlementAsset",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)

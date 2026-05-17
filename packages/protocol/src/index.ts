@@ -1893,8 +1893,13 @@ export interface SovereignRail extends SettlementRail {
   readonly custody: "agent";
   /** Chain identifier (e.g., "solana"). Future: "aptos", "sui". */
   readonly chain: string;
-  /** Asset symbol (e.g., "USDC"). */
-  readonly asset: string;
+  /**
+   * Settlement asset this rail clears in. Closed union — see
+   * `SettlementAsset` in `./settlement-asset.ts`. Sub-phase A: USDC
+   * only at land; second-asset promotion lifts the registry to the
+   * 8th registered registry per `registry-pattern-canonical.md`.
+   */
+  readonly asset: SettlementAsset;
   /** Agent's own address on this chain. Equals the motebit identity public key for Ed25519-native chains. */
   readonly address: string;
   /** Current balance in micro-units (1e6 = 1 unit of asset). */
@@ -2526,6 +2531,16 @@ export type {
 } from "./settlement-mode.js";
 export { ALL_SETTLEMENT_MODES, isSettlementMode } from "./settlement-mode.js";
 
+// ── Settlement Asset (protocol-level) ───────────────────────────
+// The closed vocabulary of stablecoin assets the protocol clears
+// settlement in. Sub-phase A: closed union with bespoke coverage;
+// promotes to the 8th registered registry per
+// `docs/doctrine/registry-pattern-canonical.md` when a second asset
+// (PYUSD, USDP, etc.) arrives as a real consumer (sub-phase B).
+
+export type { SettlementAsset } from "./settlement-asset.js";
+export { ALL_SETTLEMENT_ASSETS, isSettlementAsset } from "./settlement-asset.js";
+
 // === Cryptosuite Registry ===
 // Every signed wire-format artifact in motebit declares its verification
 // recipe via a `suite: SuiteId` field. Missing or unknown values are
@@ -2819,6 +2834,7 @@ export {
 
 import type { ToolMode } from "./tool-mode.js";
 import type { SettlementMode } from "./settlement-mode.js";
+import type { SettlementAsset } from "./settlement-asset.js";
 
 // ── Skill manifest + envelope (spec/skills-v1.md) ────────────────
 export type {
