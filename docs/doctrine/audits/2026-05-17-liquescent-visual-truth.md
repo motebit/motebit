@@ -180,3 +180,7 @@ Pass 3 confirms + expands the preserve list:
 4. Capture current docs-hero post-bridge to close that pending view.
 
 Pass 3's framing — face is doctrine, smirk is feature, state is the only legitimate tuning surface — is the right starting point for any future visual-craft work.
+
+## Doctrine crystallized — [`attention-is-directional.md`](../attention-is-directional.md)
+
+The rule pass 3 surfaced has been crystallized as canonical doctrine at [`docs/doctrine/attention-is-directional.md`](../attention-is-directional.md): **the body is omnidirectional; attention is directional**. The face lives in the front hemisphere by geometry; the body's omnidirectional material refracts it from any angle it's visible at; angular falloff happens naturally. Anti-patterns explicitly forbidden (camera-facing eyes, 360° face texture, back-view eye glow, shell-only optimization). Cross-referenced from DROPLET §IV Law 4 and CLAUDE.md doctrine index. Future visual-craft work cites this memo as the rule it must respect.
