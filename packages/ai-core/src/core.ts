@@ -159,6 +159,23 @@ export interface AnthropicProviderConfig {
   personalityConfig?: import("./config.js").MotebitPersonalityConfig;
   /** Additional headers injected into every request (e.g. proxy auth tokens). */
   extra_headers?: Record<string, string>;
+  /**
+   * Fired when a response carries `X-Motebit-Routing-Reason`. The
+   * motebit-cloud proxy emits this header alongside the proxied
+   * Anthropic response to surface the auto-routing decision the
+   * proxy made (model + reason) — sibling-shape of
+   * `X-Motebit-Content-Manifest` on the state-export surface.
+   * Anthropic's own API and BYOK passthroughs don't emit this
+   * header, so the callback fires only for cloud-mode users.
+   *
+   * Doctrine: `docs/doctrine/auto-routing-as-protocol-primitive.md`
+   * § "PR 4 — chrome narration of routing decisions". The consumer
+   * mirror of the producer-side header (PR 4a). Surfaces that wire
+   * the callback get the same routing-chip narration BYOK + on-device
+   * already render via `formatRoutingChip(decision)`, closing the
+   * three-tier (BYOK / on-device / cloud) chip-availability asymmetry.
+   */
+  onRoutingReason?: (reason: string) => void;
 }
 
 // === Context Packing ===
@@ -878,8 +895,31 @@ export class AnthropicProvider implements StreamingProvider {
       throw new Error(`Anthropic API error ${res.status}: ${errorText}`);
     }
 
+    this.emitRoutingReason(res);
+
     const data = (await res.json()) as AnthropicResponse;
     return this.parseAnthropicResponse(data);
+  }
+
+  /**
+   * Surface `X-Motebit-Routing-Reason` if the response carries it.
+   * Non-cloud responses (direct Anthropic / BYOK passthrough) lack
+   * the header — the callback simply doesn't fire. Best-effort —
+   * a throwing callback must not break the AI call, so wrap in
+   * try/catch and log via the runtime's logger when the callback
+   * surfaces an error.
+   */
+  private emitRoutingReason(res: Response): void {
+    if (!this.config.onRoutingReason) return;
+    const reason = res.headers.get("X-Motebit-Routing-Reason");
+    if (reason === null || reason === "") return;
+    try {
+      this.config.onRoutingReason(reason);
+    } catch {
+      // Routing narration is observability surface, never load-bearing
+      // for the call itself. Swallow callback errors so a misbehaving
+      // consumer can't crash the turn.
+    }
   }
 
   async *generateStream(
@@ -938,6 +978,8 @@ export class AnthropicProvider implements StreamingProvider {
       }
       throw new Error(`Anthropic API error ${res.status}: ${errorText}`);
     }
+
+    this.emitRoutingReason(res);
 
     let accumulated = "";
     const currentToolCalls: ToolCall[] = [];

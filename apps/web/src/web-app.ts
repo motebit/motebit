@@ -327,24 +327,33 @@ export class UnbootedWebApp {
   private _taskStepNarration: string | null = null;
   /**
    * Routing-decision chip text — second narration source the chrome
-   * absorbs alongside `_taskStepNarration`. Populated per turn by
-   * the BYOK auto-router intercept in `sendMessageStreaming` (the
-   * surface that runs the dispatcher locally); cleared when no
-   * routing decision applies (motebit-cloud / BYOK-without-autoRoute
-   * paths). The chrome's `routingNarration` opt reads this on every
-   * `applyChromeToCurrentState`.
+   * absorbs alongside `_taskStepNarration`. Two producer sites
+   * populate this slot, depending on tier:
+   *
+   *   - **BYOK / on-device** — the surface runs the dispatcher
+   *     locally in `sendMessageStreaming` before the AI call;
+   *     `formatRoutingChip(decision)` formats the chip; assigned
+   *     pre-call and applyChromeToCurrentState fires synchronously.
+   *
+   *   - **motebit-cloud** — the proxy decides at request time and
+   *     emits `X-Motebit-Routing-Reason` on the response;
+   *     `AnthropicProvider` reads the header via its
+   *     `onRoutingReason` callback (wired in `connectProvider`),
+   *     assigns the reason to this field, and fires
+   *     applyChromeToCurrentState mid-turn as soon as the header
+   *     lands. Plain string vs `formatRoutingChip`'s structured
+   *     decision; the chrome renders both shapes identically as
+   *     opaque chip text.
+   *
+   * Cleared at turn entry in `sendMessageStreaming` so a stale
+   * chip from a prior turn doesn't outlive its decision. Also
+   * cleared in `connectProvider` so a config swap (BYOK→cloud /
+   * autoRoute on/off) doesn't leak the prior tier's chip.
    *
    * Doctrine: `docs/doctrine/auto-routing-as-protocol-primitive.md`
-   * § "PR 4 — chrome narration of routing decisions". The doctrine
-   * names every `RoutingDecision.reason` as observability surface;
-   * this field is the WebApp's render-time slot for the chip
-   * `formatRoutingChip(decision)` produces.
-   *
-   * Proxy/motebit-cloud routing reasons live in the
-   * `X-Motebit-Routing-Reason` response header (PR 4a, already
-   * shipped at the proxy); consuming the header from the runtime's
-   * HTTP layer + threading into this field is a follow-up arc
-   * (the consumer-side mirror of the producer-side header).
+   * § "PR 4 — chrome narration of routing decisions". Closes the
+   * three-tier chip-availability asymmetry (BYOK + on-device had
+   * the chip; motebit-cloud didn't until this consumer mirror).
    */
   private _routingNarration: string | null = null;
   /**
@@ -1374,7 +1383,19 @@ export class UnbootedWebApp {
   }
 
   connectProvider(config: ProviderConfig): void {
-    const provider = createProvider(config) as StreamingProvider;
+    const provider = createProvider(config, {
+      // PR 4b — consumer-side mirror of the proxy's
+      // X-Motebit-Routing-Reason header. The proxy emits it on every
+      // motebit-cloud response with a routing decision; the provider's
+      // AnthropicProvider reads the header and fires this callback.
+      // Web threads the reason into the slab chrome via the same
+      // `_routingNarration` slot BYOK + on-device already write to —
+      // chip parity across all three tiers.
+      onRoutingReason: (reason) => {
+        this._routingNarration = reason;
+        this.applyChromeToCurrentState();
+      },
+    }) as StreamingProvider;
     this._currentProvider = provider;
     // BYOK auto-router opt-in (per-turn `dispatchByokRouting` consumer
     // site). Captured on every connectProvider so a config swap from
@@ -1387,9 +1408,9 @@ export class UnbootedWebApp {
     // PR 4 — clear any stale routing chip when the provider config
     // changes. A BYOK→cloud swap, for example, would otherwise leave
     // the chip showing the last BYOK fire's chosen model even though
-    // the next turn routes through the proxy (where the surface
-    // doesn't know the chosen model until the header-parsing arc
-    // lands).
+    // the next turn routes through the proxy. PR 4b (this commit)
+    // closes the cloud-side gap: subsequent cloud turns surface the
+    // chosen model via `onRoutingReason` above.
     this._routingNarration = null;
     if (this.runtime) {
       this.runtime.setProvider(provider);

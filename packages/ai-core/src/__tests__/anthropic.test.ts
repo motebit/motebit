@@ -311,6 +311,89 @@ describe("AnthropicProvider Anthropic integration", () => {
     expect(response.text).not.toContain("<state");
   });
 
+  // ── PR 4b: cloud routing-reason consumer mirror ─────────────────
+  //
+  // The motebit-cloud proxy emits `X-Motebit-Routing-Reason` on
+  // every Anthropic-protocol response with a routing decision (PR
+  // 4a). AnthropicProvider reads the header and fires the
+  // `onRoutingReason` callback so surfaces can render the chip via
+  // their existing routing-narration slot. Closes the three-tier
+  // chip-availability asymmetry (BYOK + on-device had the chip; the
+  // cloud path didn't until this mirror).
+
+  it("fires onRoutingReason when response carries X-Motebit-Routing-Reason (generate)", async () => {
+    const reasons: string[] = [];
+    const provider = new AnthropicProvider({
+      ...config,
+      onRoutingReason: (r) => reasons.push(r),
+    });
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(
+      new Response(JSON.stringify(mockAnthropicResponse("Hi")), {
+        status: 200,
+        headers: { "X-Motebit-Routing-Reason": "picked claude-opus-4-7 for reasoning shape" },
+      }),
+    );
+
+    await provider.generate(makeContextPack());
+
+    expect(reasons).toEqual(["picked claude-opus-4-7 for reasoning shape"]);
+  });
+
+  it("does not fire onRoutingReason when header is absent (BYOK / direct Anthropic)", async () => {
+    const reasons: string[] = [];
+    const provider = new AnthropicProvider({
+      ...config,
+      onRoutingReason: (r) => reasons.push(r),
+    });
+    mockFetchSuccess("Hi");
+
+    await provider.generate(makeContextPack());
+
+    expect(reasons).toEqual([]);
+  });
+
+  it("does not throw if the callback throws (observability is best-effort)", async () => {
+    const provider = new AnthropicProvider({
+      ...config,
+      onRoutingReason: () => {
+        throw new Error("consumer wedged");
+      },
+    });
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(
+      new Response(JSON.stringify(mockAnthropicResponse("Hi")), {
+        status: 200,
+        headers: { "X-Motebit-Routing-Reason": "fallback to claude-sonnet-4-6" },
+      }),
+    );
+
+    // The AI call must complete — the routing chip is observability
+    // surface, never load-bearing for the call itself. A misbehaving
+    // consumer can't crash the turn.
+    const response = await provider.generate(makeContextPack());
+    expect(response.text).toBe("Hi");
+  });
+
+  it("ignores empty header value (treats as absent)", async () => {
+    const reasons: string[] = [];
+    const provider = new AnthropicProvider({
+      ...config,
+      onRoutingReason: (r) => reasons.push(r),
+    });
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(
+      new Response(JSON.stringify(mockAnthropicResponse("Hi")), {
+        status: 200,
+        headers: { "X-Motebit-Routing-Reason": "" },
+      }),
+    );
+
+    await provider.generate(makeContextPack());
+
+    expect(reasons).toEqual([]);
+  });
+
   it("handles non-ok response", async () => {
     mockFetchError(429, JSON.stringify({ error: { message: "Rate limit" } }));
 

@@ -324,7 +324,10 @@ const WEB_RESOLVER_ENV: ResolverEnv = {
  * resolver gates them via `supportedBackends` and they should never reach
  * this function on web.
  */
-function specToProvider(spec: ProviderSpec): StreamingProvider | IntelligenceProvider {
+function specToProvider(
+  spec: ProviderSpec,
+  options: ProviderOptions,
+): StreamingProvider | IntelligenceProvider {
   switch (spec.kind) {
     case "cloud": {
       if (spec.wireProtocol === "openai") {
@@ -345,6 +348,12 @@ function specToProvider(spec: ProviderSpec): StreamingProvider | IntelligencePro
         max_tokens: spec.maxTokens,
         temperature: spec.temperature,
         extra_headers: spec.extraHeaders,
+        // PR 4b — consumer-side mirror of the proxy's
+        // X-Motebit-Routing-Reason header. Wires only on the
+        // Anthropic-protocol cloud path (which is what the proxy
+        // emits the header on); BYOK Anthropic responses lack
+        // the header and the callback won't fire.
+        onRoutingReason: options.onRoutingReason,
       };
       return new AnthropicProvider(cloudConfig);
     }
@@ -362,10 +371,33 @@ function specToProvider(spec: ProviderSpec): StreamingProvider | IntelligencePro
 }
 
 /**
+ * Optional opts threaded into the underlying provider constructor —
+ * surface-level observability hooks that the resolver doesn't know
+ * about. Pass-through; absence yields the default (no-op) behavior.
+ */
+export interface ProviderOptions {
+  /**
+   * Fired when a cloud-routed response carries
+   * `X-Motebit-Routing-Reason`. Wired into `AnthropicProviderConfig`
+   * on the cloud path (proxy responses). WebApp uses this to set
+   * `_routingNarration` and re-render the slab chrome — same chip
+   * BYOK + on-device already render via `formatRoutingChip`,
+   * closing the three-tier chip-availability asymmetry.
+   *
+   * Doctrine: `docs/doctrine/auto-routing-as-protocol-primitive.md`
+   * § "PR 4 — chrome narration of routing decisions".
+   */
+  onRoutingReason?: (reason: string) => void;
+}
+
+/**
  * Public entry point. Resolves the user's `UnifiedProviderConfig` against
  * the web env, then instantiates the matching provider class.
  */
-export function createProvider(config: ProviderConfig): StreamingProvider | IntelligenceProvider {
+export function createProvider(
+  config: ProviderConfig,
+  options: ProviderOptions = {},
+): StreamingProvider | IntelligenceProvider {
   const spec = resolveProviderSpec(config, WEB_RESOLVER_ENV);
-  return specToProvider(spec);
+  return specToProvider(spec, options);
 }
