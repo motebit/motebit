@@ -104,7 +104,7 @@ function CreatureCanvas({ config }: { config: CreatureConfig }) {
 }
 
 // ── Color Variants ──
-// Glass stays glass. Color lives inside — tint (what light looks like
+// The droplet holds. Color lives inside — tint (what light looks like
 // passing through the body) and glow (the interior luminance).
 
 const GLOW = 0.04; // subtle resting glow — interior is active
@@ -171,9 +171,9 @@ export function CreatureCompare() {
   return (
     <div className="min-h-screen bg-[#09090b] text-white p-8 pb-24">
       <h1 className="text-3xl font-bold text-center mb-2">Interior Color Variants</h1>
-      <p className="text-zinc-500 text-center mb-4">Glass stays glass. Color lives inside.</p>
+      <p className="text-zinc-500 text-center mb-4">The droplet holds. Color lives inside.</p>
       <p className="text-zinc-600 text-center text-sm mb-12">
-        Same glass body, same physics — only the interior tint and glow change.
+        Same liquescent body, same physics — only the interior tint and glow change.
         <br />
         Dark environment on all variants so you see how they look on obsidian.
       </p>

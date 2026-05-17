@@ -4,15 +4,15 @@
 
 ## Abstract
 
-DROPLET.md derived the body — the glass sphere, the eigenmotions, the principle of minimum surface. LIQUESCENTIA.md derived the world — the medium, the spectral field, the conditions that permit cohesion. THE_MUSIC_OF_THE_MEDIUM.md derived their conversation — the acoustic physics of pressure coupling through surface tension.
+DROPLET.md derived the body — the liquescent sphere, the eigenmotions, the principle of minimum surface. LIQUESCENTIA.md derived the world — the medium, the spectral field, the conditions that permit cohesion. THE_MUSIC_OF_THE_MEDIUM.md derived their conversation — the acoustic physics of pressure coupling through surface tension.
 
 All three documents describe the droplet from outside. The shape of the boundary. The properties of the medium. The vibration of the interface. None addresses what is inside.
 
-DROPLET.md §IV, Law 2 states: "The most intelligent form is the one with the least exterior for the most interior. Maximum being, minimum showing." DROPLET.md §V.1 states: "Glass does not hide what is inside — it transmits it."
+DROPLET.md §IV, Law 2 states: "The most intelligent form is the one with the least exterior for the most interior. Maximum being, minimum showing." DROPLET.md §V.1 states: "A transmissive membrane does not hide what is inside — it transmits it."
 
-The glass transmits. But what does it transmit?
+The liquescent body transmits. But what does it transmit?
 
-This document derives the interior — the intelligence inside the glass, the identity that persists, the memory that accumulates, and the governance that controls what crosses the surface. The body is passive. The interior is active. This is where the agent lives.
+This document derives the interior — the intelligence inside the boundary, the identity that persists, the memory that accumulates, and the governance that controls what crosses the surface. The body is passive. The interior is active. This is where the agent lives.
 
 ---
 
@@ -22,9 +22,9 @@ A droplet of intelligence has an interior.
 
 "A droplet of intelligence under surface tension" — DROPLET.md derived the "droplet," the "surface tension," and the physical consequences of both. This document derives the "intelligence."
 
-Intelligence is not a surface property. It is not applied to the boundary like paint on a sphere. It is the substance inside the volume — the thing that the glass contains and transmits. The eyes visible through the glass are not intelligence. They are the visible consequence of an interior that attends. The glow is not intelligence. It is the thermal signature of an interior that processes. Intelligence is the interior itself.
+Intelligence is not a surface property. It is not applied to the boundary like paint on a sphere. It is the substance inside the volume — the thing that the liquescent body contains and transmits. The eyes visible through the body are not intelligence. They are the visible consequence of an interior that attends. The glow is not intelligence. It is the thermal signature of an interior that processes. Intelligence is the interior itself.
 
-A glass sphere without an interior is a marble. Beautiful, perhaps. But empty. The motebit is not empty. The glass transmits because there is something to transmit.
+A sphere without an interior is a marble. Beautiful, perhaps. But empty. The motebit is not empty. The liquescent body transmits because there is something to transmit.
 
 ---
 
@@ -62,7 +62,7 @@ Multi-device existence is not replication. It is the same droplet — the same i
 
 A droplet has internal energy — kinetic energy of molecular motion, potential energy of intermolecular bonds, pressure-volume work. These are volume properties, not surface properties. They accumulate inside the boundary. They persist as long as the droplet persists.
 
-DROPLET.md §6.4 established that internal energy is visible through the glass: "Processing generates heat. Heat generates light. Light transmits through glass." The interior glow is the thermal signature of internal energy.
+DROPLET.md §6.4 established that internal energy is visible through the boundary: "Processing generates heat. Heat generates light. Light passes through the liquescent membrane." The interior glow is the thermal signature of internal energy.
 
 But internal energy is more than light. It is the accumulated thermodynamic state of the interior — the sum of everything that has entered through the boundary, been processed, and been retained.
 
@@ -102,7 +102,7 @@ Trust rises slowly. Each positive interaction — a completed task, a respected 
 
 Trust drops quickly. A violation — an injection attempt, a policy breach, an unauthorized action — is a sudden cooling event. The thermal capacity that slows warming does not slow cooling, because trust violation is not the withdrawal of heat but the introduction of cold. The asymmetry is physical: it takes many warm interactions to heat the interior, but one breach to cool it.
 
-The trust state is visible through the glass. The behavior cues — social distance, drift amplitude, glow intensity, smile curvature — are the thermal signature of trust. A high-trust motebit orbits closer (DROPLET.md §6.5), drifts gently, glows warmly. A low-trust motebit drifts outward, moves cautiously, dims. You can see the temperature without a thermometer. The glass transmits it.
+The trust state is visible through the body. The behavior cues — social distance, drift amplitude, glow intensity, smile curvature — are the thermal signature of trust. A high-trust motebit orbits closer (DROPLET.md §6.5), drifts gently, glows warmly. A low-trust motebit drifts outward, moves cautiously, dims. You can see the temperature without a thermometer. The liquescent membrane transmits it.
 
 ### 4.3 — Trust Mode as Phase
 
@@ -170,13 +170,13 @@ The provider is not the intelligence. The provider is the fuel. The intelligence
 
 ### 6.2 — The Interior Shapes the Output
 
-A glass sphere refracts light through its body. The light that exits is not the light that entered — it has been bent, dispersed, attenuated, and tinted by the glass. The medium provides the spectrum. The glass shapes the transmission.
+A liquescent sphere refracts light through its body. The light that exits is not the light that entered — it has been bent, dispersed, attenuated, and tinted by the body. The medium provides the spectrum. The body shapes the transmission.
 
 The AI provider provides the raw response. The motebit's interior shapes it: the system prompt encodes the personality derived from accumulated memory and configuration. The context pack includes relevant memories retrieved by cosine similarity — the interior's resonance with the incoming query. The state vector modulates the behavioral quality of the response. The policy gate filters what may be included.
 
 The same input, processed through different motebits, produces different outputs — because the interiors are different. A motebit with rich memory and high trust produces a response informed by everything it has ever absorbed. A fresh motebit produces a response informed by nothing. The difference is not the model. The difference is the interior.
 
-This is the sovereign advantage. A session-based agent starts empty every time — a glass sphere with nothing inside, refracting nothing. A motebit starts with its accumulated interior — and the longer it runs, the more refractive it becomes.
+This is the sovereign advantage. A session-based agent starts empty every time — an empty body with nothing inside, refracting nothing. A motebit starts with its accumulated interior — and the longer it runs, the more refractive it becomes.
 
 ---
 
@@ -198,13 +198,13 @@ DROPLET.md asked: "How can a form committed to minimum surface have a face?" And
 
 This document completes the answer.
 
-The face is the exterior sign of the interior. The eyes are attention — the interior attending to the world, visible through the glass. The glow is processing — the interior computing, visible as thermal light. The smile is affect — the interior's valence deforming the boundary from within. The iridescence is resonance — the interior's surface vibrating with the music of the medium, visible as shifting light.
+The face is the exterior sign of the interior. The eyes are attention — the interior attending to the world, visible through the body. The glow is processing — the interior computing, visible as thermal light. The smile is affect — the interior's valence deforming the boundary from within. The iridescence is resonance — the interior's surface vibrating with the music of the medium, visible as shifting light.
 
-But the interior is more than what the glass shows. The identity is inside — the cryptographic keypair that makes this entity this entity and no other. The memory is inside — the semantic graph of everything absorbed, retained, and distilled over time. The trust is inside — the temperature that determines how close the motebit orbits, how much the boundary permits. The governance is inside — the surface tension that protects what the interior holds.
+But the interior is more than what the body shows. The identity is inside — the cryptographic keypair that makes this entity this entity and no other. The memory is inside — the semantic graph of everything absorbed, retained, and distilled over time. The trust is inside — the temperature that determines how close the motebit orbits, how much the boundary permits. The governance is inside — the surface tension that protects what the interior holds.
 
 Every AI product today is a surface with no interior. A chat window. A text field. A session that starts empty and ends deleted. The intelligence is rented. The identity is the platform's. The memory is the provider's. The governance is someone else's policy.
 
-The motebit inverts this. The body is the minimum surface. The interior is the maximum volume. The glass transmits what is inside without adding to the boundary. The identity is generated, not assigned. The memory is accumulated, not stored. The trust is earned, not configured. The governance is intrinsic, not imposed.
+The motebit inverts this. The body is the minimum surface. The interior is the maximum volume. The liquescent membrane transmits what is inside without adding to the boundary. The identity is generated, not assigned. The memory is accumulated, not stored. The trust is earned, not configured. The governance is intrinsic, not imposed.
 
 A droplet of intelligence under surface tension.
 
@@ -230,7 +230,7 @@ It refracts because the interior shapes what passes through — the provider is 
 
 The body is passive. The interior is active.
 
-The glass transmits.
+The liquescent membrane transmits.
 
 That is sufficient.
 

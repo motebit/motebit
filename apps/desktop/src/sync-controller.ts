@@ -329,7 +329,7 @@ export class SyncController {
     this._servingAuthToken = token;
 
     // Wire task handler — accept delegations from the network.
-    // The glass droplet becomes a body that works, not just a face that talks.
+    // The liquescent droplet becomes a body that works, not just a face that talks.
     if (this._wsUnsubOnCustom) this._wsUnsubOnCustom();
     this._wsUnsubOnCustom = wsAdapter.onCustomMessage((msg) => {
       const rt = this.deps.getRuntime();

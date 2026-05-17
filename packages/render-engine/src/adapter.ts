@@ -70,8 +70,8 @@ export class NullRenderAdapter implements RenderAdapter {
 }
 
 // === Desktop / Web Adapter ===
-// The glass creature on screen. Spectral environment provides
-// the chromatic gradient the glass needs to refract.
+// The liquescent creature on screen. Spectral environment provides
+// the chromatic gradient the body needs to refract.
 
 export class ThreeJSAdapter implements RenderAdapter {
   private spec: RenderSpec = CANONICAL_SPEC;
@@ -439,10 +439,10 @@ export class SpatialAdapter implements RenderAdapter {
 }
 
 // === WebXR Three.js Adapter ===
-// The glass creature in physical space. AR passthrough — no simulated sky.
+// The liquescent creature in physical space. AR passthrough — no simulated sky.
 //
 // Doctrinal endgame: the real world IS Liquescentia. The camera feed
-// provides the chromatic spectrum that the glass refracts; reality
+// provides the chromatic spectrum the liquescent body refracts; reality
 // becomes the medium. See docs/doctrine/liquescentia-as-substrate.md
 // §"The AR glasses coherence — the medium becomes literal."
 //

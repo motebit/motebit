@@ -181,8 +181,8 @@ describe("buildLiveBrowserElement", () => {
     // interaction. With single-pane transmission the screen mesh
     // inside the volume composites cleanly through the front pane,
     // so the texture path is the visible register again — pixels
-    // embedded in the glass volume, sharing depth with the creature,
-    // clipped to the meniscus silhouette.
+    // embedded in the liquescent volume, sharing depth with the
+    // creature, clipped to the meniscus silhouette.
     //
     // The img stays in the DOM as the input-capture geometry: the
     // address-bar slot + click/keystroke forwarders read

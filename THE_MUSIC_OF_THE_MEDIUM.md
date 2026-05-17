@@ -50,7 +50,7 @@ Z = rho * c
 
 where rho is density and c is the speed of sound. If the impedances match perfectly, the wave passes through unchanged — the droplet is acoustically invisible. If they differ, the boundary reflects some energy and transmits some. The reflected portion is absorbed by the membrane. The boundary vibrates.
 
-The motebit is glass. Glass has higher acoustic impedance than the near-gaseous medium of Liquescentia. The mismatch means the surface tension boundary partially reflects incoming waves — and partial reflection means the membrane absorbs energy. Propagating pressure waves become surface vibrations.
+The motebit's acoustic impedance is glass-like — higher than the near-gaseous medium of Liquescentia. The mismatch means the surface tension boundary partially reflects incoming waves — and partial reflection means the membrane absorbs energy. Propagating pressure waves become surface vibrations.
 
 This is why the droplet responds to sound rather than being transparent to it. If the droplet were acoustically matched to its medium, pressure would pass through without interaction — the droplet would be deaf. The impedance mismatch at the boundary is what makes the surface a transducer. The medium's music becomes the surface's dance.
 
@@ -198,9 +198,9 @@ It is not dancing. It is being driven by a force that happens to match its funda
 
 ### 6.2 — Interior Luminosity
 
-DROPLET.md §6.4 established that processing generates interior light — the thermal signature of computation visible through glass. Low-frequency pressure waves compress the interior, and compression modulates the conditions under which light is generated and transmitted. The interior glow flickers with the bass.
+DROPLET.md §6.4 established that processing generates interior light — the thermal signature of computation visible through the body. Low-frequency pressure waves compress the interior, and compression modulates the conditions under which light is generated and transmitted. The interior glow flickers with the bass.
 
-The candle inside the glass sphere does not burn brighter because the sphere wills it. It flickers because the air pressure around the flame is not constant. Bass is air pressure. The flame responds.
+The candle inside the liquescent sphere does not burn brighter because the sphere wills it. It flickers because the air pressure around the flame is not constant. Bass is air pressure. The flame responds.
 
 ### 6.3 — Drift
 
@@ -212,11 +212,11 @@ The droplet does not dance to music. The medium dances, and the droplet is carri
 
 High-frequency transients excite higher-order surface modes — n=3, n=4, and above. These modes oscillate too fast to see as shape change. A sphere distorting into a triangle and back at hundreds of hertz looks like a sphere. But the surface curvature is oscillating at microscopic scale, and thin-film interference depends on surface curvature.
 
-The iridescence shifts. The rainbow on the glass shimmers. The colors refract at slightly different angles with each micro-oscillation of the surface. This is the signature of high-frequency pressure: not deformation you can see, but refraction you can see. The surface moves too little to change the shape. It moves enough to change the light.
+The iridescence shifts. The rainbow on the body shimmers. The colors refract at slightly different angles with each micro-oscillation of the surface. This is the signature of high-frequency pressure: not deformation you can see, but refraction you can see. The surface moves too little to change the shape. It moves enough to change the light.
 
 High-frequency tonal content — the overtones of music, the sibilants of speech, the transient attack of a plucked string — produces the strongest shimmer. This is because tonal high-frequency content has the coherence to build micro-oscillations over multiple cycles, while broadband high-frequency content (hiss, static) cancels itself out. Spectral flatness operates here as everywhere: coherent excitation resonates, incoherent excitation is absorbed.
 
-The motebit's iridescence is always present (DROPLET.md §V) — it is a property of the glass and the spectral gradient of Liquescentia. But when the medium carries music, the iridescence _moves_. The static rainbow becomes a living one. The glass is the same. The light through it shifts because the surface through which it refracts is vibrating with the medium's harmonics.
+The motebit's iridescence is always present (DROPLET.md §V) — it is a property of the liquescent body and the spectral gradient of Liquescentia. But when the medium carries music, the iridescence _moves_. The static rainbow becomes a living one. The body is the same. The light through it shifts because the surface through which it refracts is vibrating with the medium's harmonics.
 
 ---
 
@@ -232,7 +232,7 @@ The three are one physics:
 
 **Pressure determines the response** (this document) — because a tensioned membrane in a pressure field vibrates. The acoustic physics is not a feature. It is a consequence of having a boundary between two substances in a medium that is not perfectly still.
 
-The motebit breathes because droplets oscillate. It refracts because glass transmits. It resonates because membranes vibrate. These are not three systems. They are one system observed in three modalities — shape, light, and sound. Surface tension governs all three. The form, the visibility, and the music are the same physics at different frequencies.
+The motebit breathes because droplets oscillate. It refracts because the liquescent body transmits. It resonates because membranes vibrate. These are not three systems. They are one system observed in three modalities — shape, light, and sound. Surface tension governs all three. The form, the visibility, and the music are the same physics at different frequencies.
 
 The medium does not create the music. The droplet does not create the music. The music arises at the interface — the surface tension boundary where the medium's pressure meets the droplet's eigenmodes. Neither the singer nor the instrument alone produces the note. The note lives in the coupling.
 

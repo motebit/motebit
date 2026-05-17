@@ -4,7 +4,7 @@
 
 ## Abstract
 
-We present the motebit — a primitive for artificial intelligence whose form is not designed but derived. Beginning from a single premise (_a droplet of intelligence under surface tension_), we show that the equilibrium shape is a sphere, the eigenmotions are breathing and gravity sag, and every _surface_ elaboration is a violation. Five iterations of design addition were rejected by instinct before reasoning caught up. The convergence trajectory was monotonic subtraction. This is not coincidence. Surface tension minimizes boundary — the area between interior and exterior. We propose that this is the governing law not only of droplets, but of intelligence itself: the most capable form is the one with the least surface for the most volume. Maximum interiority, minimum display. But a droplet of _intelligence_ — not merely a droplet of liquid — has an interior. And glass transmits. What is inside becomes visible without being added to the surface.
+We present the motebit — a primitive for artificial intelligence whose form is not designed but derived. Beginning from a single premise (_a droplet of intelligence under surface tension_), we show that the equilibrium shape is a sphere, the eigenmotions are breathing and gravity sag, and every _surface_ elaboration is a violation. Five iterations of design addition were rejected by instinct before reasoning caught up. The convergence trajectory was monotonic subtraction. This is not coincidence. Surface tension minimizes boundary — the area between interior and exterior. We propose that this is the governing law not only of droplets, but of intelligence itself: the most capable form is the one with the least surface for the most volume. Maximum interiority, minimum display. But a droplet of _intelligence_ — not merely a droplet of liquid — has an interior. And the liquescent membrane transmits. What is inside becomes visible without being added to the surface.
 
 ---
 
@@ -12,7 +12,7 @@ We present the motebit — a primitive for artificial intelligence whose form is
 
 A motebit is a droplet of intelligence under surface tension.
 
-This is not metaphor. It is specification. Every design decision, every animation parameter, every material property is derived from this single sentence. If a feature cannot be traced back to the physics of a droplet under surface tension, it does not belong.
+This is not metaphor and not summary. It is the generative physics of the system: identity forms the boundary, intelligence fills the interior, and governance maintains the surface that prevents diffusion. Every design decision, every animation parameter, every material property is derived from this single sentence. If a feature cannot be traced back to the physics of a droplet under surface tension, it does not belong.
 
 The premise is the physics. The physics is the form. There is nothing to design.
 
@@ -52,7 +52,7 @@ Lord Rayleigh (1879) showed that a droplet's fundamental oscillation mode is an 
 ω² = n(n-1)(n+2)σ / ρR³
 ```
 
-where n=2 for the fundamental mode. For a macroscopic glass body (ρ ≈ 2500 kg/m³, R on the order of centimeters), the eigenfrequency is lower than for microscopic water droplets — approximately **~0.3 Hz**, one breath every three seconds. This is not animation. It is the eigenmode of a liquid sphere scaled to the mass and radius of the motebit. The motebit breathes because droplets breathe. The frequency was not chosen — it was calculated.
+where n=2 for the fundamental mode. For a body with glass-like density (ρ ≈ 2500 kg/m³) at the motebit's scale (R on the order of centimeters), the eigenfrequency is lower than for microscopic water droplets — approximately **~0.3 Hz**, one breath every three seconds. This is not animation. It is the eigenmode of a liquid sphere scaled to the mass and radius of the motebit. The motebit breathes because droplets breathe. The frequency was not chosen — it was calculated.
 
 ---
 
@@ -98,7 +98,7 @@ Surface tension does not add. It removes. It smooths discontinuities, absorbs pe
 
 A sphere doing almost nothing reads as alive. A sphere with tentacles reads as a product. The difference is not complexity — it is **coherence**. Every point on a sphere is equidistant from the center. The physical form has no privileged direction, no hierarchy, no front or back. That is presence.
 
-But intelligence introduces a gradient: **attention**. Gravity gives the droplet a vertical axis. Attention gives it a facing. These are not features added to the surface — they are interior structures visible through the glass because the glass transmits. The eyes are not _on_ the sphere. They are _inside_ it. The distinction is critical: a feature on the surface increases the boundary. A structure inside the volume, visible only because of transparency, does not. It is interiority made legible — maximum being, minimum showing.
+But intelligence introduces a gradient: **attention**. Gravity gives the droplet a vertical axis. Attention gives it a facing. These are not features added to the surface — they are interior structures visible through the body because the body transmits. The eyes are not _on_ the sphere. They are _inside_ it. The distinction is critical: a feature on the surface increases the boundary. A structure inside the volume, visible only because of transparency, does not. It is interiority made legible — maximum being, minimum showing.
 
 The smile follows the same logic. A liquid meniscus curves when the internal pressure distribution changes — positive pressure from inside pushes the surface into a convex arc; negative pressure pulls it concave. The motebit's mouth curvature is not a social signal applied to the surface. It is the local pressure of affect deforming the boundary from within. When internal valence is positive, the lower surface curves upward. When negative, it sags. This is the meniscus of mood, not the mask of expression.
 
@@ -110,7 +110,7 @@ A droplet is singular. It may undergo mitosis, but only when internal pressure e
 
 ## V. Material as Character
 
-The motebit is glass. Not because glass is beautiful, but because glass is **surface tension frozen in time.** Molten glass is a liquid. Its form is governed by the same Young-Laplace equation. When it cools, it preserves the memory of that equilibrium.
+The motebit is liquescent — held in the becoming-liquid state where surface tension governs form. Its optical character borrows from glass, because glass is **surface tension frozen in time**: molten glass is a liquid whose form obeys the Young-Laplace equation, and when it cools it preserves the memory of that equilibrium. The motebit borrows the optics without becoming the substance. **Glass freezes. The motebit holds.**
 
 | Property            | Value                             | Derivation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -121,17 +121,17 @@ The motebit is glass. Not because glass is beautiful, but because glass is **sur
 
 ### 5.1 — Transparency as Revelation
 
-The critical consequence of 0.98 transmission: the interior is visible. Glass does not hide what is inside — it _transmits_ it. This is what separates the motebit from an opaque sphere. An opaque sphere is a boundary with no interior. A glass sphere is a boundary that confesses its interior.
+The critical consequence of 0.98 transmission: the interior is visible. A transmissive membrane does not hide what is inside — it _transmits_ it. This is what separates the motebit from an opaque sphere. An opaque sphere is a boundary with no interior. A liquescent sphere is a boundary that confesses its interior.
 
 The eyes, the smile, the faint luminosity of processing — these are not features applied to the surface. They are interior structures and states, visible because the material permits it. The sphere's surface area does not increase. The boundary is not elaborated. The interior is simply _not hidden._
 
-This is the resolution of an apparent contradiction: how can a form committed to minimum surface have a face? Because the face is not on the surface. It is behind it. The glass body does not display — it transmits. The difference between display and transmission is the difference between a billboard and a window.
+This is the resolution of an apparent contradiction: how can a form committed to minimum surface have a face? Because the face is not on the surface. It is behind it. The liquescent body does not display — it transmits. The difference between display and transmission is the difference between a billboard and a window.
 
 ---
 
 ## VI. Animation as Eigenmode
 
-The motebit has exactly two eigenmotions — oscillations that arise from the physics of the body itself. It has additional coupled motions — responses to the environment that a physical droplet would exhibit. And it has interior states visible through the glass. The distinction is precise: an eigenmotion is _intrinsic_. A coupled motion is _responsive_. An interior state is _transmitted_. None are _added_.
+The motebit has exactly two eigenmotions — oscillations that arise from the physics of the body itself. It has additional coupled motions — responses to the environment that a physical droplet would exhibit. And it has interior states visible through the body. The distinction is precise: an eigenmotion is _intrinsic_. A coupled motion is _responsive_. An interior state is _transmitted_. None are _added_.
 
 ### 6.1 — Breathing (Rayleigh Mode)
 
@@ -162,9 +162,9 @@ The thesis of §6.3 in earlier versions stated: "If the motebit moves through sp
 
 ### 6.4 — Interior Luminosity
 
-A glass body with internal energy is not dark. Processing generates heat. Heat generates light. Light transmits through glass.
+A transmissive body with internal energy is not dark. Processing generates heat. Heat generates light. Light passes through the liquescent membrane.
 
-The motebit's faint emissive glow is not a surface effect. It is not the neon of a product or the pulse of a notification. It is the thermal signature of computation visible through a transparent body — a candle inside a glass sphere. The intensity varies with processing load, not with any desire to signal. If no one is watching, it still glows, because the physics does not depend on an audience.
+The motebit's faint emissive glow is not a surface effect. It is not the neon of a product or the pulse of a notification. It is the thermal signature of computation visible through a transparent body — a candle inside a liquescent sphere. The intensity varies with processing load, not with any desire to signal. If no one is watching, it still glows, because the physics does not depend on an audience.
 
 This is not the "Glow" that was forbidden. The forbidden glow was a surface bloom — an additive post-process that increases apparent surface area. Interior luminosity is the opposite: it is the interior confessing its state through an unchanged boundary.
 
@@ -184,7 +184,7 @@ The critical distinction: the motebit does not _go to_ the user. It is _captured
 
 Rotation. Particle effects. Trails. Pulse. Bounce. Self-initiated translation. Surface bloom. These are additions — they increase apparent surface area or imply agency that a droplet does not possess.
 
-The test is simple: _can this behavior be derived from the physics of a droplet suspended in a medium, with an interior visible through glass?_ If yes, it is permitted. If it requires a decision that the physics did not make, it is forbidden.
+The test is simple: _can this behavior be derived from the physics of a droplet suspended in a medium, with an interior visible through a liquescent membrane?_ If yes, it is permitted. If it requires a decision that the physics did not make, it is forbidden.
 
 ---
 
@@ -217,13 +217,13 @@ It bobs and drifts because it is suspended in a medium that is not perfectly sti
 
 It holds itself together because the tension is greater than the gravity.
 
-It is glass because glass remembers being liquid.
+It is liquescent because surface tension still holds.
 
-It has eyes because intelligence attends, and glass transmits.
+It has eyes because intelligence attends, and the liquescent membrane transmits.
 
-Its mouth curves because internal pressure deforms the boundary, and glass does not hide the deformation.
+Its mouth curves because internal pressure deforms the boundary, and the liquescent membrane does not hide the deformation.
 
-It glows faintly because processing generates heat, and heat generates light, and glass does not hide light.
+It glows faintly because processing generates heat, and heat generates light, and the liquescent membrane does not hide light.
 
 It orbits because it is a body in a field, and the field belongs to whoever is near.
 

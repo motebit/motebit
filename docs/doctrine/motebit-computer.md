@@ -1,6 +1,6 @@
 # Motebit Computer — the slab
 
-The slab is the motebit's **workstation, rendered as a liquid-glass plane** beside the creature. It holds pages the motebit has read, terminals it is using, responses it has streamed, delegations in flight, peer replies returning with signed receipts. Work stays available until the user dismisses it or the session ends.
+The slab is the motebit's **workstation, rendered as a liquescent plane** beside the creature. It holds pages the motebit has read, terminals it is using, responses it has streamed, delegations in flight, peer replies returning with signed receipts. Work stays available until the user dismisses it or the session ends.
 
 - **Chat is second-person** — you ↔ motebit, words exchanged.
 - **Slab is first-person** — the agent's frame, where the work it has been doing lives in the modality it belongs to.
@@ -9,7 +9,7 @@ First-person here doesn't mean watching live (AI is faster than human perception
 
 ## What it is
 
-A liquid-glass plane floating to the right of the motebit. Sibling to **constellation** (clusters of related records), **artifact** (detached, persistent outputs), **chat bubble** (ephemeral conversational messages). It is not a panel, not a window, not a HUD. It has a meniscus, not a frame; no titlebar, no close button, no scrollbar chrome.
+A liquescent plane floating to the right of the motebit. Sibling to **constellation** (clusters of related records), **artifact** (detached, persistent outputs), **chat bubble** (ephemeral conversational messages). It is not a panel, not a window, not a HUD. It has a meniscus, not a frame; no titlebar, no close button, no scrollbar chrome.
 
 What appears on the slab is what the motebit is — or has been — **seeing, doing, and attending to**, in its own first-person frame. Pages appear as the motebit reads them; terminals scroll as commands run; memory surfaces as it becomes relevant. Most items rest after their active phase ends; ephemeral plumbing dissolves; durable outputs detach into the scene.
 
@@ -162,7 +162,7 @@ Drift gate `check-drop-handlers` (#77) enforces: every `DropPayloadKind` has a r
 
 ## Embodiment modes
 
-A motebit perceives through many embodiments. The Motebit Computer is **the single liquid-glass surface where whatever embodiment is currently occupied is rendered live**, governed by what the user has granted. This is the load-bearing distinction from the market — Operator picks `virtual_browser`, Cowork picks `desktop_drive`, nobody unifies. The slab does.
+A motebit perceives through many embodiments. The Motebit Computer is **the single liquescent surface where whatever embodiment is currently occupied is rendered live**, governed by what the user has granted. This is the load-bearing distinction from the market — Operator picks `virtual_browser`, Cowork picks `desktop_drive`, nobody unifies. The slab does.
 
 ### The spectrum
 
@@ -267,7 +267,7 @@ The motebit going idle does NOT empty the slab. A workstation with open tabs doe
 
 Four transitions, each rooted in droplet physics (not CSS easing):
 
-- **Emergence (~400ms)** — small glass droplet forms at the slab's anchor and expands into a plane. Inverse of a droplet collapsing: sphere relaxes into oblate disk. Size + opacity co-animate.
+- **Emergence (~400ms)** — small liquescent droplet forms at the slab's anchor and expands into a plane. Inverse of a droplet collapsing: sphere relaxes into oblate disk. Size + opacity co-animate.
 - **Settling into rest (~200ms)** — card's edges soften, internal warmth eases, shadow deepens. Held, not in motion. Position and content retained.
 - **Dissolution (~300ms)** — outline softens, content fades inward, slab surface briefly ripples at the dissolution site. No artifact spawned.
 - **Detachment / pinch (~600–800ms)** — surface dimples upward at the item's center as internal pressure rises. Dimple grows into a bead under surface tension. Bead separates with a brief tendril that snaps (Rayleigh–Plateau instability — same physics as the creature's breathing). Detached bead takes its artifact-appropriate shape mid-flight and continues outward. Slab ripples back to flat with small residual oscillation. Eased on tension-release curves, not generic `ease-out`.
@@ -286,20 +286,20 @@ Absent is not a bug. Do not fill it with ghost planes, skeleton loaders, typing 
 
 ## Visual properties (binding)
 
-| Property              | Value                                                                                                                                                                                         | Reason                                                                                            |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Material              | Apple-Liquid-Glass (same crystalline family as the creature; same IOR derivation)                                                                                                             | One body, one material.                                                                           |
-| Aspect ratio          | golden-ratio (φ ≈ 1.618:1) — `GOLDEN_RATIO` from `@motebit/render-engine`                                                                                                                     | Held-tablet feel, not wall-monitor. Local default for body-adjacent display surfaces.             |
-| Tilt                  | ~10–15° forward (toward camera), ~5° yaw toward the motebit                                                                                                                                   | Gaze axis. Makes the creature's attention legible.                                                |
-| Edges                 | meniscus (rounded surface-tension curve) — no frame, no border, no corner radius                                                                                                              | Droplet family. The moment it has corners, it stops being a droplet.                              |
-| Breathing             | ~0.3 Hz sympathetic with the creature, amplitude ~30% of creature amplitude                                                                                                                   | One body, one respiratory rhythm. The slab inherits, not imitates.                                |
-| Tint (always)         | derived from current soul color, on `attenuationColor`; carried at idle and during work                                                                                                       | Body coherence: the slab is an organ of the motebit.                                              |
-| Glow (variable)       | soul color on `emissive`; faint baseline at idle, brightening with `activeWarmth`                                                                                                             | Activity is visible as light. Peak intentionally gentle so the slab never outshines the creature. |
-| Items on slab surface | ~1mm forward depth; subtle Fresnel on edges                                                                                                                                                   | Cards feel lifted, not painted.                                                                   |
-| Chrome material       | Inherits the slab's substrate — same glass, same tint, same breathing. Chrome is NOT a separate object floating above the slab; it is the slab's edge region with affordances embedded.       | One material throughout. URL input + nav glyphs are slab-resident, not pill-shaped overlays.      |
-| Chrome affordances    | Tinted glyphs, borderless (back / forward / reload as SF-Symbol-shape icons). Framed cells with their own corner radius and border are forbidden — they read as web-form UI, not slab-native. | Apple HIG pattern for ornament-style chrome.                                                      |
-| Content inset         | Webview / content surface inset ~16pt from the slab's edge so the meniscus breathes                                                                                                           | Content abutting the rounded edge gets clipped and visually fights the slab silhouette.           |
-| Empty register        | The URL input itself is the empty state — centered placeholder `"type a URL · or ask motebit"`, breathing at the slab's 30% amplitude. No second empty indicator.                             | The chrome IS the affordance. Two ready signals competing is a violation.                         |
+| Property              | Value                                                                                                                                                                                         | Reason                                                                                                             |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Material              | Liquescent (same family as the creature; optics borrow from Apple's Liquid Glass design language + glass-physics IOR derivation)                                                              | One body, one material. Both creature and slab are liquescent; "glass" is the optical reference, not the ontology. |
+| Aspect ratio          | golden-ratio (φ ≈ 1.618:1) — `GOLDEN_RATIO` from `@motebit/render-engine`                                                                                                                     | Held-tablet feel, not wall-monitor. Local default for body-adjacent display surfaces.                              |
+| Tilt                  | ~10–15° forward (toward camera), ~5° yaw toward the motebit                                                                                                                                   | Gaze axis. Makes the creature's attention legible.                                                                 |
+| Edges                 | meniscus (rounded surface-tension curve) — no frame, no border, no corner radius                                                                                                              | Droplet family. The moment it has corners, it stops being a droplet.                                               |
+| Breathing             | ~0.3 Hz sympathetic with the creature, amplitude ~30% of creature amplitude                                                                                                                   | One body, one respiratory rhythm. The slab inherits, not imitates.                                                 |
+| Tint (always)         | derived from current soul color, on `attenuationColor`; carried at idle and during work                                                                                                       | Body coherence: the slab is an organ of the motebit.                                                               |
+| Glow (variable)       | soul color on `emissive`; faint baseline at idle, brightening with `activeWarmth`                                                                                                             | Activity is visible as light. Peak intentionally gentle so the slab never outshines the creature.                  |
+| Items on slab surface | ~1mm forward depth; subtle Fresnel on edges                                                                                                                                                   | Cards feel lifted, not painted.                                                                                    |
+| Chrome material       | Inherits the slab's substrate — same material, same tint, same breathing. Chrome is NOT a separate object floating above the slab; it is the slab's edge region with affordances embedded.    | One material throughout. URL input + nav glyphs are slab-resident, not pill-shaped overlays.                       |
+| Chrome affordances    | Tinted glyphs, borderless (back / forward / reload as SF-Symbol-shape icons). Framed cells with their own corner radius and border are forbidden — they read as web-form UI, not slab-native. | Apple HIG pattern for ornament-style chrome.                                                                       |
+| Content inset         | Webview / content surface inset ~16pt from the slab's edge so the meniscus breathes                                                                                                           | Content abutting the rounded edge gets clipped and visually fights the slab silhouette.                            |
+| Empty register        | The URL input itself is the empty state — centered placeholder `"type a URL · or ask motebit"`, breathing at the slab's 30% amplitude. No second empty indicator.                             | The chrome IS the affordance. Two ready signals competing is a violation.                                          |
 
 ## Failure modes to avoid
 

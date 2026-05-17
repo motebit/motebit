@@ -21,7 +21,7 @@ MCP says what an agent can do. A2A says how agents talk. x402 and AP2 say how th
 
 The intelligence is pluggable. The identity is the asset.
 
-A motebit is a droplet of intelligence under surface tension — body passive, interior active. A glass droplet that breathes: the runtime gives it a body, the protocol defines its physics. [Read the thesis.](https://docs.motebit.com/docs/introduction)
+A motebit is a droplet of intelligence under surface tension — body passive, interior active. Identity forms the boundary, intelligence fills the interior, governance maintains the surface that prevents diffusion. A liquescent droplet that breathes: the runtime gives it a body, the protocol defines its physics. [Read the thesis.](https://docs.motebit.com/docs/introduction)
 
 |                | Agents today   | Motebit                                                           |
 | -------------- | -------------- | ----------------------------------------------------------------- |
@@ -107,7 +107,7 @@ The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the
 
 **Delegation** — Agents delegate to other agents via MCP. Each hop produces a self-verifiable signed receipt with the signer's public key embedded. Budget allocation and settlement on verified receipts. Nested receipts for chain-of-custody.
 
-**Embodiment** — Glass droplet in Three.js. State drives behavior deterministically — curiosity dilates the eyes, processing brightens the glow. No stage directions, just physics.
+**Embodiment** — Liquescent droplet in Three.js. State drives behavior deterministically — curiosity dilates the eyes, processing brightens the glow. No stage directions, just physics.
 
 **Federation** — Relays peer via mutual authentication. Cross-relay routing through the trust semiring. Settlement chains handle cross-relay budget settlement.
 

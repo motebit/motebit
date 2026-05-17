@@ -55,7 +55,7 @@ This is a key provision. It allows Motebit to offer commercial licenses to enter
 
 - [LICENSE](LICENSE) — the legal license text covering the BSL-licensed runtime, including the Additional Use Grant and Change Date / Change License terms
 - [LICENSING.md](LICENSING.md) — full license boundary (Apache-2.0 floor + BSL-1.1 runtime), the convergence story, and the BSL/BUSL prose-vs-token register convention
-- [TRADEMARK.md](TRADEMARK.md) — Motebit name, wordmark, and glass-droplet trade dress; this CLA does **not** grant trademark or trade-dress rights
+- [TRADEMARK.md](TRADEMARK.md) — Motebit name, wordmark, and liquescent-droplet trade dress; this CLA does **not** grant trademark or trade-dress rights
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to submit a contribution, including how to sign this CLA on your first PR
 
 ---

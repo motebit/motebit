@@ -1227,7 +1227,7 @@ export class DesktopApp {
     // Slab ("Motebit Computer") bridge — wire the runtime's slab
     // controller to the render adapter so tool-call / stream /
     // plan-step items emitted from the runtime project onto the
-    // liquid-glass plane. The per-kind renderers (`renderSlabItem`,
+    // liquescent plane. The per-kind renderers (`renderSlabItem`,
     // `updateSlabItem`, `renderDetachArtifact`) live in
     // ./ui/slab-items.ts — sibling-aligned with apps/web's copy.
     // Doctrine: docs/doctrine/motebit-computer.md.

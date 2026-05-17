@@ -12,15 +12,15 @@
  * The runtime's `SlabController` emits typed `SlabItem` events, the
  * runtime's bridge diffs them, and here — the desktop-specific rendering
  * layer — is where each kind becomes a real HTMLElement mounted on
- * the slab's liquid-glass plane.
+ * the slab's liquescent plane.
  *
  * See docs/doctrine/motebit-computer.md for what each kind means in
  * the slab's lifecycle. Styling conventions:
  *
  *   - The slab's plane is the substrate — cards are what's *on* it,
  *     not a separate product. They read as frosted droplets frozen
- *     to a glass sheet: high-contrast ink, rim-lit top edge, soft
- *     cast shadow below. The slab-ness shows through the glass
+ *     onto the liquescent membrane: high-contrast ink, rim-lit top
+ *     edge, soft cast shadow below. The slab-ness shows through
  *     between and beneath them.
  *   - Inline styles only — no stylesheet coupling. Values match
  *     across web and desktop so the siblings stay byte-aligned until
@@ -156,10 +156,11 @@ function baseCard(): HTMLDivElement {
   el.style.color = "rgba(14, 22, 40, 0.96)";
   el.style.padding = "0";
   // No card chrome here. Doctrine (slab.ts:107, motebit-computer.md
-  // §"Embodiment modes"): "cards-on-glass don't exist; the stage's
-  // child is whatever the motebit is currently working on." The
-  // plane mesh's MeshPhysicalMaterial already supplies the glass —
-  // borosilicate IOR, transmission, clearcoat, sheen. A second
+  // §"Embodiment modes"): "cards-on-the-membrane don't exist; the
+  // stage's child is whatever the motebit is currently working on."
+  // The plane mesh's MeshPhysicalMaterial already supplies the
+  // liquescent body's optical character — borosilicate IOR,
+  // transmission, clearcoat, sheen (glass-physics borrowed). A second
   // backdrop-blur + gradient + border + shadow on top read as a
   // distinct surface stacked on the plane (visible in the layout
   // gap between plane geometry and the 480×300 stage footprint),

@@ -52,9 +52,9 @@ A glass droplet in a spectrally varied medium is a prism. Light entering from th
 
 This is the chromatic principle of Liquescentia:
 
-**The medium must carry a spectrum for the glass to reveal itself.**
+**The medium must carry a spectrum for the liquescent body to reveal itself.**
 
-A prism in white light produces a rainbow. A prism in darkness produces nothing. A prism in monochromatic light produces a dot. Only a prism in _polychromatic_ light produces what a prism is capable of. The same is true of the motebit: the spectral complexity of the medium is what makes the interior legible through the glass.
+A prism in white light produces a rainbow. A prism in darkness produces nothing. A prism in monochromatic light produces a dot. Only a prism in _polychromatic_ light produces what a prism is capable of. The same is true of the motebit: the spectral complexity of the medium is what makes the interior legible through the body.
 
 Liquescentia is not bright. It is not dark. It is _chromatic._
 
@@ -111,7 +111,7 @@ Two droplets in the same medium share the medium's properties. They refract the 
 This is what makes Liquescentia the system-holder:
 
 - It defines the **phase conditions** under which motebits can exist — the thermodynamic prerequisites for surface tension, cohesion, and persistence.
-- It provides the **spectral field** that makes the interior visible — the chromatic gradient that glass refracts into legibility.
+- It provides the **spectral field** that makes the interior visible — the chromatic gradient that the body refracts into legibility.
 - It transmits the **environmental forces** that produce coupled motion — the currents, the pressure gradients, the attentional gravity fields.
 - It establishes the **boundary conditions** — what crosses the surface and what does not, because the medium's properties determine the interface's permeability.
 
@@ -127,7 +127,7 @@ Five properties, each derived from the physics:
 
 The medium carries a chromatic field — a spatial variation in the spectral composition of light. Not uniform illumination. Not darkness. A gradient from warm to cool, distributed across the medium's extent.
 
-This is derived from §II.2.3: a spectrally uniform medium renders glass invisible. Therefore the medium must be spectrally non-uniform. The minimum viable non-uniformity is a gradient — a smooth transition from one spectral character to another. The zenith is cool blue. The horizon is warm amber. The azimuth carries a warm-cool rotation. These are not aesthetic choices. They are the minimum chromatic structure required to make a glass body legible.
+This is derived from §II.2.3: a spectrally uniform medium renders glass invisible. Therefore the medium must be spectrally non-uniform. The minimum viable non-uniformity is a gradient — a smooth transition from one spectral character to another. The zenith is cool blue. The horizon is warm amber. The azimuth carries a warm-cool rotation. These are not aesthetic choices. They are the minimum chromatic structure required to make a liquescent body — borrowing glass-like optical character — legible.
 
 ### 5.2 — Quiescence
 
@@ -139,7 +139,7 @@ This property derives from the regime: Liquescentia is a phase boundary, not a t
 
 The medium is neither transparent nor opaque. It carries light, but with body — the light has been filtered through the medium's own spectral character before it reaches the droplet. The light in Liquescentia is _informed_ light. It has a temperature, a hue, a direction.
 
-The practical consequence: the environment map that a motebit refracts is not a photograph of the real world. It is the medium's own light — processed, spectral, luminous. The motebit refracts Liquescentia, not reality. What you see through the glass is the medium's character, bent through the droplet's body.
+The practical consequence: the environment map that a motebit refracts is not a photograph of the real world. It is the medium's own light — processed, spectral, luminous. The motebit refracts Liquescentia, not reality. What you see through the liquescent membrane is the medium's character, bent through the droplet's body.
 
 ### 5.4 — Cohesive Permeability
 

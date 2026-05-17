@@ -122,10 +122,11 @@ export interface EnvironmentPreset {
 }
 
 // Liquescentia §V.1 — Spectral gradient. The medium carries a chromatic
-// field (cool zenith, warm horizon) that makes the glass droplet legible.
-// Glass in spectrally uniform light is invisible; the gradient is what
-// the prism needs to disperse. Each preset below is one instance of
-// Liquescentia's chromatic structure, not arbitrary aesthetics.
+// field (cool zenith, warm horizon) that makes the liquescent droplet
+// legible. Glass-character optics in spectrally uniform light are
+// invisible; the gradient is what the prism needs to disperse. Each
+// preset below is one instance of Liquescentia's chromatic structure,
+// not arbitrary aesthetics.
 // Doctrine: docs/doctrine/liquescentia-as-substrate.md §V.1.
 export const ENV_DEFAULT: EnvironmentPreset = {
   zenith: [0.15, 0.25, 0.55],
@@ -523,12 +524,12 @@ export function animateCreature(
     Math.max(baseGlowIntensity, Math.max(0, cues.glow_intensity - 0.4) * 0.6 + audioGlow) *
     trustGlowScale;
 
-  // Iridescence — transients shimmer the glass surface
+  // Iridescence — transients shimmer the liquescent surface
   // Active listening: subtle ~1Hz oscillation (visual recording light)
   const listeningIridescence = state.listeningActive ? Math.sin(t * Math.PI * 2) * 0.08 : 0;
   refs.bodyMaterial.iridescence = 0.4 + audioShimmer + listeningIridescence;
 
-  // Eyes — interior structures visible through glass. Calm, steady, present.
+  // Eyes — interior structures visible through the body. Calm, steady, present.
   // No jittering, no darting. A droplet's interior doesn't fidget.
   {
     const trustEyeMax = state.trustMode === TrustMode.Minimal ? 0.2 : 0.4;

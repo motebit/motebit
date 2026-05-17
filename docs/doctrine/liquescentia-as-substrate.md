@@ -26,7 +26,7 @@ Fast pulses, sharp transitions, jittery animations break the equilibrium regime.
 
 Neither transparent nor opaque. Light passes through with body — informed by the medium's spectral character before it reaches the droplet.
 
-`CANONICAL_MATERIAL` (`spec.ts`): IOR `1.22`, transmission `0.94`, roughness `0`, attenuation distance `BODY_R * 0.7`, attenuation color set from the soul tint. The environment map (`envMap`) is the medium's filtered light, processed before the glass refracts it.
+`CANONICAL_MATERIAL` (`spec.ts`): IOR `1.22`, transmission `0.94`, roughness `0`, attenuation distance `BODY_R * 0.7`, attenuation color set from the soul tint. The environment map (`envMap`) is the medium's filtered light, processed before the liquescent body refracts it.
 
 Opaque body, no transmission, missing envMap → marble. The optics ARE Liquescentia.
 
@@ -52,9 +52,9 @@ The consolidation cycle (see [`proactive-interior.md`](proactive-interior.md)) i
 
 ## AR glasses — the medium becomes literal
 
-On VR and web/desktop, Liquescentia is fully synthetic (`ENV_LIGHT` renders the gradient). On AR glasses, **the user's real world becomes Liquescentia** — natural lighting, environment colors, physical spectral character become the medium the glass refracts.
+On VR and web/desktop, Liquescentia is fully synthetic (`ENV_LIGHT` renders the gradient). On AR glasses, **the user's real world becomes Liquescentia** — natural lighting, environment colors, physical spectral character become the medium the liquescent body refracts.
 
-The architecture names this endgame in `packages/render-engine/src/adapter.ts`'s `WebXRThreeJSAdapter` header comment: _"the real world IS Liquescentia. The camera feed provides the chromatic spectrum that the glass refracts."_
+The architecture names this endgame in `packages/render-engine/src/adapter.ts`'s `WebXRThreeJSAdapter` header comment: _"the real world IS Liquescentia. The camera feed provides the chromatic spectrum the liquescent body refracts."_
 
 **Current state:** the adapter uses `ENV_LIGHT` unconditionally as both today's behavior and the eventual fallback. Promotion to real-world spectrum (via `XRSession.requestLightProbe()` / `WebXRManager.getEstimatedLight()`) is endgame work blocked on a real-device test surface (Vision Pro AR mode / Quest passthrough rig). The code's comment names the gap; this doctrine pins what closing it requires.
 

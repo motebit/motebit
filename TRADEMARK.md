@@ -11,7 +11,7 @@
 
 ### Design Marks
 
-- The Motebit glass droplet creature (described below under Trade Dress)
+- The Motebit liquescent droplet creature (described below under Trade Dress)
 
 ### Logos
 
@@ -38,26 +38,26 @@ The typeset rendering of "Motebit" is the project's wordmark. Use it **as-is, un
 
 **Common-law trademark** — established through use in commerce since 2026-03-11 (npm packages published under `@motebit/` scope, `create-motebit`, and `motebit` CLI). Common-law rights apply in any jurisdiction where Motebit is in active use, independently of registration status.
 
-## Trade Dress — The Glass Droplet Creature
+## Trade Dress — The Liquescent Droplet Creature
 
-Trade dress protects the overall visual impression of a product's design when it serves as a source identifier. The Motebit glass droplet creature is the primary visual identity of the product and functions as trade dress.
+Trade dress protects the overall visual impression of a product's design when it serves as a source identifier. The Motebit liquescent droplet creature is the primary visual identity of the product and functions as trade dress.
 
 ### Protected Visual Elements
 
 The following combination of elements constitutes the Motebit trade dress:
 
-1. **Form**: A translucent glass sphere functioning as an autonomous agent's visual representation
-2. **Glass material**: High-transmission glass with visible refraction/IOR magnification effect — the interior is magnified when viewed through the front surface
-3. **Interior face**: Two dark eyes positioned inside the sphere, magnified by the glass from the front viewing angle, with a subtle curved smile
+1. **Form**: A translucent liquescent sphere functioning as an autonomous agent's visual representation
+2. **Liquescent material**: A transmissive refractive body with visible IOR magnification of interior elements when viewed through the front surface — optical character borrows from glass-physics (high transmission, IOR, attenuation), but the body is liquescent, not glass
+3. **Interior face**: Two dark eyes positioned inside the sphere, magnified by the body's refraction from the front viewing angle, with a subtle curved smile
 4. **Animation**: Organic breathing (asymmetric oblate/prolate oscillation), natural blinking, gravity sag
-5. **Spectral environment**: Chromatic ambient lighting that creates rainbow refraction through the glass surface
-6. **Overall impression**: A living glass droplet with an interior face — maximum interiority, minimum display
+5. **Spectral environment**: Chromatic ambient lighting that creates rainbow refraction through the liquescent surface
+6. **Overall impression**: A living liquescent droplet with an interior face — maximum interiority, minimum display
 
 ### Distinctiveness
 
-- **Distinctive**: No other AI agent or software product uses a glass sphere with interior IOR-magnified eyes as its visual identity
-- **Non-functional**: The glass sphere aesthetic is not required for the software to function — it is purely a source identifier
-- **Source-identifying**: Users and developers associate the glass droplet with Motebit
+- **Distinctive**: No other AI agent or software product uses a liquescent droplet with interior IOR-magnified eyes as its visual identity
+- **Non-functional**: The liquescent droplet aesthetic is not required for the software to function — it is purely a source identifier
+- **Source-identifying**: Users and developers associate the liquescent droplet with Motebit
 
 ## Permitted Uses
 
@@ -67,8 +67,8 @@ The following combination of elements constitutes the Motebit trade dress:
 
 ## Prohibited Uses
 
-- Using "Motebit" or the glass droplet creature in a way that suggests your product IS Motebit or is endorsed by Motebit
-- Using the glass droplet creature or a substantially similar design as the visual identity of another product
+- Using "Motebit" or the liquescent droplet creature in a way that suggests your product IS Motebit or is endorsed by Motebit
+- Using the liquescent droplet creature or a substantially similar design as the visual identity of another product
 - Registering domain names containing "motebit" for competing products or services
 - Using Motebit trademarks in product names (e.g., "MotebitPlus", "OpenMotebit") without written permission
 
@@ -80,7 +80,7 @@ If you publish a fork or modified build of the BSL-licensed runtime:
 
 - **Rename it.** A distributed fork must use a name distinguishable from "Motebit" — not "MotebitPlus," "OpenMotebit," "MotebitFork," "Motebit Community Edition," or any name that incorporates the Motebit mark.
 - **Factual provenance descriptions are permitted.** "Fork of Motebit," "Based on Motebit," "Originally derived from Motebit" are accurate and allowed.
-- **Do not use the glass droplet creature** or any visually similar design as the fork's visual identity.
+- **Do not use the liquescent droplet creature** or any visually similar design as the fork's visual identity.
 - **Commercial use of the fork still requires a commercial license** under BSL-1.1, independently of the trademark question.
 
 This is standard practice for source-available projects (HashiCorp / OpenTofu, MariaDB / MaxScale derivatives). The protocol is open so anyone can interoperate; the implementation is source-available so anyone can run or fork it; the brand stays with Motebit, Inc.

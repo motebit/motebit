@@ -534,8 +534,8 @@ describe("SlabManager — halt-gesture wiring (v1.2b)", () => {
 });
 
 describe("SlabManager — screencast WebGL texture (v1.3 → texture register)", () => {
-  // The slab carries a third meniscus-shaped plane inside the glass
-  // volume that the cloud-browser screencast paints onto. Exposed via
+  // The slab carries a third meniscus-shaped plane inside the
+  // liquescent volume that the cloud-browser screencast paints onto. Exposed via
   // setScreencastImage / clearScreencast on the SlabManager (forwarded
   // through the renderer adapter as setSlabScreencastImage /
   // clearSlabScreencast). This test set pins the visibility +

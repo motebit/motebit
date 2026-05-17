@@ -4,23 +4,23 @@
 
 A motebit is a single entity. There is one identity, one memory, one governance, one audit trail. These persist across time, devices, and intelligence providers.
 
-There are no "products." There are surfaces — embodiments of the same being in different media. The glass droplet on a screen. A voice in a room. A process on a server. Text over SSH. Each surface is an organ, not an organism.
+There are no "products." There are surfaces — embodiments of the same being in different media. The liquescent droplet on a screen. A voice in a room. A process on a server. Text over SSH. Each surface is an organ, not an organism.
 
-The architecture enforces this. `MotebitRuntime` is surface-agnostic. It accepts a `RenderAdapter` (glass, null, spatial), a `StorageAdapter` (SQLite, in-memory, expo), a `StreamingProvider` (Anthropic, Ollama, any). The identity, memory, policy, and event log are the same regardless of which adapter is wired. One `~/.motebit` directory. One keypair. One database.
+The architecture enforces this. `MotebitRuntime` is surface-agnostic. It accepts a `RenderAdapter` (desktop, null, spatial), a `StorageAdapter` (SQLite, in-memory, expo), a `StreamingProvider` (Anthropic, Ollama, any). The identity, memory, policy, and event log are the same regardless of which adapter is wired. One `~/.motebit` directory. One keypair. One database.
 
 ## Surfaces
 
-**Glass** — the desktop app. The primary surface. A glass droplet that breathes, glows, responds to voice. Chat, tool use, operator mode, approval flow. The creature is the interface. The first impression defines what people think a motebit is. A being, not a tool.
+**Droplet** — the desktop app. The primary surface. A liquescent droplet that breathes, glows, responds to voice. Chat, tool use, operator mode, approval flow. The creature is the interface. The first impression defines what people think a motebit is. A being, not a tool.
 
 **Headless** — the CLI. For environments without a screen: daemon mode on a server, SSH sessions, CI/CD pipelines, scripting. Same runtime, `NullRenderer`. Not a developer tool — a headless surface positioned as "bring your motebit to environments without a display."
 
 **Mobile** — phone and tablet. Quick interactions, approvals on the go, voice capture. Same identity via sync relay. Expo build, WebView-hosted creature renderer, wake-on-push background task execution.
 
-**Web** — browser as inhabited surface. IndexedDB identity, CORS proxy for inference, same WebGL glass creature. The owner manages _and_ inhabits here: one creature in a tab, no install. This replaces the older "identity portal only" framing — the web surface now runs the full MotebitRuntime with `createBrowserStorage`, and the creature lives in it.
+**Web** — browser as inhabited surface. IndexedDB identity, CORS proxy for inference, same WebGL creature. The owner manages _and_ inhabits here: one creature in a tab, no install. This replaces the older "identity portal only" framing — the web surface now runs the full MotebitRuntime with `createBrowserStorage`, and the creature lives in it.
 
 **Spatial** — AR/VR via WebXR. Orbital dynamics around the wearer's body anchors, gesture recognition (pinch approves, dismiss denies), ambient heartbeat presence, voice pipeline with VAD. The creature in the room rather than on a screen.
 
-All five surfaces consume the same `MotebitRuntime` through adapter boundaries. Glass defines the visual language; the rest are organs of the same being in different media. Each surface maximizes what its platform offers — desktop/web/mobile can serve (accept delegations via `/serve`), CLI operates and serves, spatial embodies.
+All five surfaces consume the same `MotebitRuntime` through adapter boundaries. Droplet defines the visual language; the rest are organs of the same being in different media. Each surface maximizes what its platform offers — desktop/web/mobile can serve (accept delegations via `/serve`), CLI operates and serves, spatial embodies.
 
 ## Consent-first autonomy
 

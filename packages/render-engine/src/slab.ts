@@ -3,7 +3,7 @@
  *
  * State machine lives in `slab-core.ts` (Ring 1 — same on every surface
  * that renders a slab). This module owns the desktop / web rendering
- * primitive: a liquid-glass plane floating to the right of the
+ * primitive: a liquescent plane floating to the right of the
  * creature, items mounted via `CSS3DObject`, sympathetic breathing,
  * Rayleigh-Plateau pinch displacement on the plane mesh.
  *
@@ -17,10 +17,11 @@
  *
  * What this module is:
  *
- *   - A `THREE.Group` containing the liquid-glass plane mesh + a
+ *   - A `THREE.Group` containing the liquescent plane mesh + a
  *     CSS3DObject anchor for HTML items mounted on its surface. Same
- *     material family as the creature (borosilicate IOR, transmission,
- *     low roughness) — body-adjacent, not a UI element. CSS3D is
+ *     material family as the creature — both liquescent, optical
+ *     character borrowed from glass-physics (borosilicate IOR,
+ *     transmission, low roughness) — body-adjacent, not a UI element. CSS3D is
  *     load-bearing here: the plane sits at SLAB_TILT_X (~12° forward)
  *     and SLAB_TILT_Y (~5° yaw toward creature), and CSS3DObject
  *     respects that 3D transform — items tilt with the plane the way
@@ -130,7 +131,7 @@ const SLAB_CORNER_RADIUS = Math.min(SLAB_WIDTH, SLAB_HEIGHT) * 0.28;
  * 0.04m matches the `MeshPhysicalMaterial.thickness` shader hint
  * already declared on `planeMaterial` — keeping geometry and
  * refraction-thickness aligned avoids the discrepancy where the
- * shader believed the glass was 4cm thick while the geometry
+ * shader believed the front pane was 4cm thick while the geometry
  * presented as 0mm.
  *
  * The slab is built as a front pane + back pane separated by this
@@ -138,7 +139,7 @@ const SLAB_CORNER_RADIUS = Math.min(SLAB_WIDTH, SLAB_HEIGHT) * 0.28;
  * content lives — both the WebGL `screenMesh` (screencast pixels)
  * and the CSS3D `stageAnchor` (chrome, address-bar slot,
  * input-capture geometry) co-locate at the volume's center plane
- * (z=0), composing as one window plane suspended in the glass.
+ * (z=0), composing as one window plane suspended in the liquescent volume.
  * Step 3 of the volume arc renders content as a back-pane texture
  * so it refracts through the front; step 2 (this) gets the
  * geometry depth in place first so the perceptual register
@@ -171,13 +172,13 @@ const STAGE_PIXEL_TO_WORLD = SLAB_WIDTH / STAGE_PIXEL_WIDTH;
 // one plane. Earlier designs split them across z-depths (chrome at
 // front face, content at volume center) which produced a visible
 // depth split at angles — chrome read as floating in front of the
-// glass while content read as recessed into the volume, fragmenting
-// a unified concept into two registers. CSS3DRenderer composites
+// liquescent body while content read as recessed into the volume,
+// fragmenting a unified concept into two registers. CSS3DRenderer composites
 // above the WebGL canvas regardless of 3D position, so chrome still
 // visually layers above content via DOM stacking; the only thing
 // that changed is the geometry, which now agrees with the concept:
 // one window plane, suspended in the volume per liquescentia-as-
-// substrate's "pixels embed in glass volume" principle. From any
+// substrate's "pixels embed in liquescent volume" principle. From any
 // angle, chrome and content read as the same surface.
 
 /**
@@ -582,14 +583,15 @@ export class SlabManager {
       // intact at the creature (which has no internal content, where
       // dramatic refraction is the visual feature). This override is
       // the content-bearing exception — readability wins over
-      // optical-glass purity at the slab's content rect. Geometry
+      // optical-purity at the slab's content rect. Geometry
       // unchanged: mesh still at depth ½, side-view "airy room front,
       // content middle, airy room back" register preserved.
       //
-      // Side view stays glass: IOR 1.10 still bends environment light
-      // around the meniscus, just at a softer angle. Apple-grade
-      // calm: the glass shell reads as glass; the content inside
-      // reads as content; neither overrides the other.
+      // Side view stays liquescent: IOR 1.10 still bends environment
+      // light around the meniscus, just at a softer angle. Apple-grade
+      // calm: the liquescent shell reads as liquescent (glass-like
+      // optics); the content inside reads as content; neither overrides
+      // the other.
       ior: 1.1,
       thickness: 0.01,
     });
@@ -675,20 +677,20 @@ export class SlabManager {
     // strip (CSS3D, in `stageEl`) occupies the top of the slab. The
     // mesh's top edge is FLAT (where chrome ends); its bottom
     // corners are rounded to match the slab's silhouette curvature.
-    // Chrome region above the mesh shows empty glass (front + back
-    // panes only), giving the chrome a clean translucent backdrop
-    // and ensuring page pixels never render behind chrome.
+    // Chrome region above the mesh shows the empty liquescent body
+    // (front + back panes only), giving the chrome a clean translucent
+    // backdrop and ensuring page pixels never render behind chrome.
     //
     // **Suspended in fluid (z=0).** The earlier "press against the
     // back pane" placement read as "poster behind glass" — a Model
     // A display register fighting the slab's Model B liquescentia
     // substrate. liquescentia-as-substrate.md says pixels embed in
-    // the glass volume, and the creature's analog (eyes suspended
+    // the liquescent volume, and the creature's analog (eyes suspended
     // in the droplet body, not pressed against the back of the
     // skull) argues for centered. Symmetric optical register too:
-    // 2cm of glass from front + 2cm from back means similar
+    // 2cm of liquescent body from front + 2cm from back means similar
     // Beer-Lambert absorption from any orbit angle, the slab
-    // reading as one uniform glass-volume-with-content rather than
+    // reading as one uniform liquescent-volume-with-content rather than
     // a wall-mounted display.
     //
     // **Body region (y-offset).** Shifted down from slab center by
@@ -728,10 +730,10 @@ export class SlabManager {
       // lands in the opaque pre-pass, gets rendered into the
       // transmission target cleanly, and the front pane's
       // `transmission` samples it via the standard refraction shader.
-      // Result: screen pixels show through the glass at face value.
+      // Result: screen pixels show through the front pane at face value.
       //
       // (Confirmed again 2026-05-11: tried `transparent: true` +
-      // opacity 0.96 + depthWrite:false to add "glass volume"
+      // opacity 0.96 + depthWrite:false to add "liquescent volume"
       // character — Three.js excluded the screen mesh from the
       // transmission backbuffer and content disappeared behind the
       // front pane. The constraint is structural, not a tuning
@@ -1254,7 +1256,7 @@ export class SlabManager {
     // are visibly more translucent so the window reads as "glass
     // volume" rather than "panel with edges." Material tuning, not
     // overlay geometry — the simplest move that lands the brand
-    // signature (slab as a glass volume) at off-axis views.
+    // signature (slab as a liquescent volume) at off-axis views.
     this.silhouetteMaterial.opacity = frame.planeVisibility * 0.55;
     const visible = frame.planeVisibility > 0.01;
     this.planeMesh.visible = visible;
@@ -1270,7 +1272,7 @@ export class SlabManager {
     // so the home overlay reads as the primary body content (Apple
     // Safari URL-bar focus pattern). Without this, the WebGL screen
     // mesh would keep rendering its texture in 3D space even after
-    // `/computer` toggles the slab off — the glass volume + chrome
+    // `/computer` toggles the slab off — the liquescent volume + chrome
     // fade out, but the JPEG texture floats on, content outliving
     // its substrate (intent-gated-slab.md violation, third instance
     // of the slab/stitch desync after chrome band and stage opacity —
@@ -1298,13 +1300,13 @@ export class SlabManager {
     // directly is silently reverted to `""` on the next render. We
     // must flip `stageAnchor.visible` instead so the renderer's
     // built-in display toggle does the work. Without this, /computer
-    // toggle hides the WebGL glass volume but leaves the chrome
+    // toggle hides the WebGL liquescent volume but leaves the chrome
     // strip + breathing dot floating in 3D space without their
     // substrate (the bug Daniel hit 2026-05-09 on /computer toggle).
     this.stageAnchor.visible = visible;
     // Sympathetic chrome fade — bind CSS3D stage opacity to plane
     // visibility so chrome (URL bar, breathing dot, live-browser
-    // shell) fades alongside the WebGL glass volume rather than
+    // shell) fades alongside the WebGL liquescent volume rather than
     // hanging at full opacity through the plane's ease-out and then
     // snapping off at the visibility threshold. The snap-off was
     // visible as ~750ms of orphaned chrome after the plane had
@@ -1313,8 +1315,8 @@ export class SlabManager {
     // `transform` and `display` per frame but not `opacity`, so the
     // assignment sticks. Mapping: chrome at full opacity once the
     // plane reaches MEMBRANE_OPACITY (the empty-register floor) — at
-    // or above that, the chrome reads as content on glass; below it,
-    // chrome fades proportionally with the glass leaving.
+    // or above that, the chrome reads as content on the membrane; below
+    // it, chrome fades proportionally with the membrane leaving.
     this.stageEl.style.opacity = String(Math.min(1, frame.planeVisibility / MEMBRANE_OPACITY));
   }
 

@@ -39,7 +39,7 @@ Consequences:
 - Depth: WebGL shared depth buffer with the creature. The
   creature occludes the screen at every angle; no through-punch.
 - Refraction: the front pane's `transmission` samples the screen
-  mesh through the glass — pixels embed in the slab volume,
+  mesh through the liquescent membrane — pixels embed in the slab volume,
   they don't sit in a parallel layer in front of it.
 
 **API**

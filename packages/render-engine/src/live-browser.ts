@@ -440,9 +440,9 @@ export function buildLiveBrowserElement(
   // earlier multi-transmissive stack was three.js's design boundary,
   // not a fixable shader interaction. With single-pane transmission,
   // the screen mesh inside the volume composites cleanly through the
-  // front pane — pixels embedded in the glass volume, sharing depth
-  // with the creature, clipped to the meniscus silhouette
-  // (`liquescentia-as-substrate.md`).
+  // front pane — pixels embedded in the slab's liquescent volume,
+  // sharing depth with the creature, clipped to the meniscus
+  // silhouette (`liquescentia-as-substrate.md`).
   img.style.display = "none";
   img.style.opacity = "0";
   // Click-capture geometry MUST match the WebGL screen-mesh's

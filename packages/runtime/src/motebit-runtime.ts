@@ -1665,7 +1665,7 @@ export class MotebitRuntime {
    *
    * Wraps an async chunk stream and yields every chunk unchanged,
    * while side-effecting `this.slab` calls so surfaces see the
-   * motebit's work materialize on the liquid-glass plane. See
+   * motebit's work materialize on the liquescent plane. See
    * `docs/doctrine/motebit-computer.md` for the item kinds and end
    * states.
    *

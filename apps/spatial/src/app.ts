@@ -1,5 +1,5 @@
 /**
- * Spatial app entry point — the glass creature in physical space.
+ * Spatial app entry point — the liquescent creature in physical space.
  *
  * Initializes the SpatialApp platform shell, wires settings UI, voice pipeline,
  * gesture recognition, gaze attention, and WebXR session. The creature has

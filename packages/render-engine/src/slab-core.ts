@@ -323,7 +323,7 @@ export class SlabCore {
     // through a transition when that transition is instant. Any
     // easing in `tick()` creates the "URL bar persists past slab
     // body" desync because the chrome's white-panel mass starts at
-    // ~97% perceived opacity while the glass plane starts at 20%.
+    // ~97% perceived opacity while the liquescent plane starts at 20%.
     // Same proportional decay, very different perceived presence.
     // Snap on both edges: pre-warm up to the empty-held target on
     // reveal, pre-warm down to 0 on hide. Both registers cross the

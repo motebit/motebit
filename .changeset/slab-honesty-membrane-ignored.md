@@ -12,7 +12,7 @@ opacity 0.85 — visually indistinguishable from the active register,
 which conflated "the slab is present" with "the slab is working." The
 membrane work fixes that asymmetry:
 
-- `MEMBRANE_OPACITY = 0.20` — empty + held slab. Glass-at-rest. Soul
+- `MEMBRANE_OPACITY = 0.20` — empty + held slab. Membrane-at-rest. Soul
   tint still attenuates (body coherence with the creature). 0.3Hz
   breathing stays. You can see the creature _through_ the slab. No
   outline, no chrome, no "drop here" text — the surface acknowledges

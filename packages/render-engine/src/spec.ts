@@ -12,10 +12,12 @@ import type {
 // These constants are the body's substance and the medium's optics in
 // code form. Doctrine: docs/doctrine/liquescentia-as-substrate.md §V.3
 // "Luminous density" — IOR + transmission + attenuation make the
-// medium's filtered light visible through the glass. CANONICAL_MATERIAL
-// is the canonical home for those constants; departing from them needs
-// physical justification (a coupling argument from the same physics
-// that produced them), not aesthetic preference.
+// medium's filtered light visible through the liquescent membrane
+// (optical character borrows from glass-physics; the body IS liquescent,
+// not glass — see DROPLET.md §V). CANONICAL_MATERIAL is the canonical
+// home for those constants; departing from them needs physical
+// justification (a coupling argument from the same physics that
+// produced them), not aesthetic preference.
 
 export const CANONICAL_GEOMETRY: GeometrySpec = {
   form: "droplet",
@@ -129,7 +131,7 @@ export interface RenderAdapter {
 
   // ── Slab ("Motebit Computer") — see docs/doctrine/motebit-computer.md ──
   //
-  // A liquid-glass plane floating to the right of the creature where
+  // A liquescent plane floating to the right of the creature where
   // computation materializes. Sibling to constellation / artifact / chat
   // bubble. The slab itself is implicit (renderer-managed); callers add
   // slab ITEMS and the renderer handles the plane's emergence, idle
@@ -205,7 +207,7 @@ export interface RenderAdapter {
   /**
    * Upload a decoded screencast frame as the slab's screen-mesh
    * texture. The slab maintains a third meniscus-shaped plane inside
-   * the glass volume; this method lights it up with the cloud
+   * the liquescent volume; this method lights it up with the cloud
    * browser's JPEG bitstream (one frame at a time, replace-in-place).
    *
    * Accepts the two texture-uploadable surfaces the `live-browser.ts`
