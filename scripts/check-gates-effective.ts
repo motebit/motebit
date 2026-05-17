@@ -1749,6 +1749,17 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-prompt-budget",
+    proves:
+      "flags absolute byte growth of template-literal content in `packages/ai-core/src/prompt.ts` past the declared `SYSTEM_PROMPT_BUDGET_BYTES`. Sibling to `check-prompt-density` — density counts rule-clauses (conformance-shape drift), budget counts bytes (absolute-size drift), neither subsumes the other. The constitutional motivation: motebit's intelligence is pluggable only when the prompt fits the selected model's context window (witnessed 2026-05-17 — 40KB prompt overflowed a 4096-token WebLLM + Llama-3.2-3B context). Probe appends a 20k-byte template literal at module scope; the gate must catch the overflow against the 45,000-byte budget. byte-identical restoration on cleanup. Doctrine: `docs/doctrine/intelligence-pluggability-contract.md`.",
+    perturb: () =>
+      mutateFile(
+        `packages/ai-core/src/prompt.ts`,
+        (src) =>
+          `${src}\n// ${PROBE_PREFIX}prompt_budget_probe\nexport const ${PROBE_PREFIX}OVERFLOW_PROBE = \`${"x".repeat(20_000)}\`;\n`,
+      ),
+  },
+  {
     script: "check-universal-slash-coverage",
     proves:
       'flags a UNIVERSAL_COMMAND missing from any chat surface\'s slash registry. Today: `/trust` + `/welcome` × web/desktop/mobile/CLI matrix; every cell MUST register. Probe replaces `name: "trust"` with `name: "trust_probe_renamed"` on the web surface so the gate\'s pattern (`\\bname:\\s*"trust"`) no longer matches; the gate must flag web as missing /trust. byte-identical restoration on cleanup.',
