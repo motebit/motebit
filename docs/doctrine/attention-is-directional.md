@@ -51,6 +51,10 @@ The being has a front because attention has a direction.
 
 A sphere with face-texture-wrapped-360° is a sphere with face data projected everywhere — not a being. A being can FACE you. Removing that direction flattens it into a gimmick.
 
+> **Motebit's face is not a bug. It is the interior made visible through a liquescent boundary.**
+
+This one-liner is the canonical anti-restatement of any "soften the face" / "less eyes" / "calmer back" proposal. The face is doctrine, not drift.
+
 This is doctrine-load-bearing. Future proposals that touch the face's rendering should be evaluated against three questions:
 
 1. Does this require attention to be omnidirectional? (anti-pattern — reject)

@@ -172,6 +172,8 @@ Pass 3 confirms + expands the preserve list:
 5. **Open question remains state-busyness** — whether specific compound cue combinations over-amplify. State-diff investigation identifies `eye_dilation` (primary) + `glow_intensity` (secondary) + audio cues + `listeningActive` as the busy-driving levers.
 6. **If future tuning happens, it targets the STATE layer** (cue caps, compound smoothing) — NOT the material layer.
 
+**Operating rule going forward**: protect the identity, then only tune state-specific excess if evidence shows it. The doctrine (identity layer) is canonical; state tuning (modulation layer) is permitted only on evidence, never on heuristic preference.
+
 ## Follow-on work
 
 1. A/B capture with known cue values: low/med/high `eye_dilation` × low/med/high `glow_intensity` × audio on/off × listening on/off. Identify whether specific compound states produce over-busy reading.
