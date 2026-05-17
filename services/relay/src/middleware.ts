@@ -299,7 +299,6 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/agents/:motebitId/withdrawals", rl(readLimiter));
   app.use("/api/v1/agents/:motebitId/checkout", rl(writeLimiter));
   app.use("/api/v1/stripe/webhook", rl(publicLimiter));
-  app.use("/api/v1/bridge/webhook", rl(publicLimiter));
   app.use("/api/v1/admin/withdrawals/*", rl(writeLimiter));
   app.use("/api/v1/admin/reconciliation", rl(expensiveLimiter));
   app.use("/api/v1/admin/freeze", rl(writeLimiter));

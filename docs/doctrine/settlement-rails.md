@@ -18,6 +18,8 @@ External money movement uses three interfaces in `@motebit/protocol` (Layer 0), 
 
 Motebit-native code names the lane `settlement_mode`; auditors, counsel, and external compliance reviewers often want this expressed in their own vocabulary. The translation table below preserves motebit-native names in code and locates the doctrine-shaped framing in a single place. New code uses `settlement_mode`; this section is the only place where the external vocabulary is reconciled.
 
+The out-flow direction of user funds (user withdrawal → user wallet → user-chosen off-ramp) is structurally closed by [`off-ramp-as-user-action.md`](off-ramp-as-user-action.md) — `BridgeSettlementRail.withdraw` does not exist at the package level; only `WithdrawableGuestRail` instances dispatch via the user-withdrawal endpoint. The in-flow direction (delegator-paid worker earnings) remains open under `settlement_mode='relay'` until Arcs 2+3 of that arc shift worker earnings to direct sovereign-rail P2P.
+
 | Code surface                       | Value      | External meaning                                                                                                                                                                        |
 | ---------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SettlementRecord.settlement_mode` | `"relay"`  | Managed relay lane — relay-custody, virtual-account credit/debit on the relay's books                                                                                                   |

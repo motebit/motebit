@@ -5,12 +5,29 @@
  * off-ramp uses Bridge (crypto→fiat). Both are pluggable adapters
  * with the relay as a session broker that never touches the funds.
  *
+ * **Doctrinal frame** (off-ramp arc, Arc 1 close):
+ * this is the Path-3 user-initiated off-ramp shape (the user is
+ * Bridge's KYC'd customer; the user signs from their own sovereign
+ * wallet to Bridge's deposit address; Bridge converts and ACHes to
+ * the user's bank account). Motebit is the session broker — passes
+ * instructions, never custodies funds, never appears as the
+ * `on_behalf_of` party in the Bridge API call (the user's
+ * `bridgeCustomerId` is passed through from the request). The Path-2
+ * deletion in Arc 1 Commit 2 (relay-initiated Bridge withdrawals
+ * with Motebit as the customer) does NOT affect this flow — the two
+ * paths were always architecturally separate, even when they
+ * coincidentally shared the BridgeClient surface area. See
+ * `docs/doctrine/off-ramp-as-user-action.md`.
+ *
  * ## Flow
  *
  * 1. User clicks "Withdraw to Bank" in the wallet UX.
  * 2. Surface POSTs to relay `POST /api/v1/offramp/session` with the
- *    motebit's Solana address, amount, and destination bank details.
+ *    motebit's Solana address, amount, the user's `bridgeCustomerId`
+ *    (the user's own KYC at Bridge), and the user's external bank
+ *    account id (also bound to the user's KYC).
  * 3. Relay calls Bridge `POST /transfers` with:
+ *      on_behalf_of: req.bridgeCustomerId  (the USER's KYC ID)
  *      source: { payment_rail: "solana", currency: "usdc",
  *                from_address: motebit's Solana address }
  *      destination: { payment_rail: "ach_push", currency: "usd",
@@ -18,12 +35,17 @@
  * 4. Bridge returns transfer instructions including a `deposit_address`
  *    (Bridge's Solana address to send USDC to).
  * 5. Relay returns the deposit instructions to the surface.
- * 6. The motebit sends USDC from its wallet to Bridge's deposit address
- *    via wallet-solana (runtime.sendUsdc).
- * 7. Bridge detects the deposit, converts to fiat, ACH's to the user's
+ * 6. The motebit sends USDC from its own sovereign wallet to Bridge's
+ *    deposit address via wallet-solana (`SolanaWalletRail.send`) —
+ *    the user signs this transaction from their own keys.
+ * 7. Bridge detects the deposit, converts to fiat, ACHes to the user's
  *    bank account.
- * 8. Bridge webhook (already wired at POST /api/v1/bridge/webhook)
- *    confirms completion.
+ * 8. Completion happens on Bridge's side; Bridge confirms to the user
+ *    directly. The relay's role ended at step 5 — no relay-side
+ *    completion handler is required for the Path-3 user-initiated
+ *    flow. (The Path-2 webhook at `/api/v1/bridge/webhook` was deleted
+ *    in Arc 1 Commit 2; it handled the deleted Motebit-initiated
+ *    Bridge transfer flow, not this one.)
  *
  * ## KYC requirement
  *
