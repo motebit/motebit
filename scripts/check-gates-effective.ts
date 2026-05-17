@@ -566,6 +566,21 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-liquescent-ontology",
+    proves:
+      "flags an ontological `glass droplet` claim in any in-scope doc/code — the Layer 1 ontology drift the 2026-05-17 correction protects against (body is liquescent, not glass; optics borrowed only). Same drift class as pass 2's audit findings before pass 3's inversion.",
+    perturb: () =>
+      // Write a probe README containing the exact Layer 1 ontology
+      // phrase the gate forbids — `glass droplet` referring to the
+      // motebit. The gate should fire with the canonical violation
+      // message naming the body as liquescent, not glass. writeFixture
+      // cleans up after the probe.
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}README.md`,
+        `# Probe README\n\nThe motebit is a glass droplet that breathes.\n`,
+      ),
+  },
+  {
     script: "check-tsup-define-conventions",
     proves:
       "flags a `__<NAME>_VERSION__` constant in any tsup.config.ts whose value reads from a package name that doesn't match the constant name — the exact misnamed-constant pattern that produced the create-motebit@1.1.0 scaffold-pin bug",
