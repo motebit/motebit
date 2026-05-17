@@ -193,6 +193,12 @@ describe("P2P task submission", () => {
           network: "solana:mainnet",
           to_address: "9xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgBBB",
           amount_micro: 500000,
+          // Arc 2 of off-ramp arc: fee fields required for validation
+          // to proceed past completeness check. Placeholder address +
+          // amount; this test targets the eligibility-failure path so
+          // exact values don't matter — they just need to be present.
+          fee_to_address: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgFFF",
+          fee_amount_micro: 26316,
         },
       }),
     });
@@ -217,6 +223,8 @@ describe("P2P task submission", () => {
           network: "solana:mainnet",
           to_address: "2xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgCCC",
           amount_micro: 500000,
+          fee_to_address: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgFFF",
+          fee_amount_micro: 26316,
         },
       }),
     });

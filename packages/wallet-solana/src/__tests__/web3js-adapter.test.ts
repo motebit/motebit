@@ -221,8 +221,7 @@ describe("Web3JsRpcAdapter.getTransaction", () => {
     expect(result).toEqual({
       status: "confirmed",
       from: payer,
-      to: recipient,
-      amountMicro: 500_000n,
+      transfers: [{ to: recipient, amountMicro: 500_000n }],
       slot: 321,
       asset: "USDC",
     });
@@ -293,22 +292,32 @@ describe("Web3JsRpcAdapter.getTransaction", () => {
     expect(result).toEqual({ status: "not_found" });
   });
 
-  it("returns not_found when multiple recipients are present (ambiguous transfer)", async () => {
+  it("surfaces multiple recipients as transfers[] entries (Arc 2 fee-leg composition)", async () => {
+    // After Arc 2 of the off-ramp arc, multi-recipient transactions
+    // are first-class: the delegator's single atomic Solana tx pays
+    // the worker AND the relay treasury as two SPL Transfer
+    // instructions. The verifier walks transfers[] to find both legs.
     const adapter = makeAdapterForTx();
     const conn = adapter.getConnection();
     vi.spyOn(conn, "getTransaction").mockResolvedValue(
       txResponse({
         slot: 78,
         entries: [
-          { accountIndex: 0, owner: "payer", pre: "1000000", post: "0" },
-          { accountIndex: 1, owner: "recipient-1", pre: "0", post: "500000" },
-          { accountIndex: 2, owner: "recipient-2", pre: "0", post: "500000" },
+          { accountIndex: 0, owner: "delegator", pre: "1000000", post: "0" },
+          { accountIndex: 1, owner: "worker", pre: "0", post: "950000" },
+          { accountIndex: 2, owner: "relay-treasury", pre: "0", post: "50000" },
         ],
       }) as never,
     );
 
-    const result = await adapter.getTransaction("sigAmbiguousTo");
-    expect(result).toEqual({ status: "not_found" });
+    const result = await adapter.getTransaction("sigMultiRecipient");
+    expect(result.status).toBe("confirmed");
+    if (result.status === "confirmed") {
+      expect(result.from).toBe("delegator");
+      expect(result.transfers).toHaveLength(2);
+      expect(result.transfers).toContainEqual({ to: "worker", amountMicro: 950_000n });
+      expect(result.transfers).toContainEqual({ to: "relay-treasury", amountMicro: 50_000n });
+    }
   });
 
   it("skips token-balance entries with no owner (defensive against partial wire data)", async () => {

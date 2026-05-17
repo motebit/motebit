@@ -1442,10 +1442,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   let p2pVerifierInterval: ReturnType<typeof setInterval> | undefined;
   if (solanaRpcUrl) {
     const { startP2pVerifierLoop } = await import("./p2p-verifier.js");
-    p2pVerifierInterval = startP2pVerifierLoop(moteDb.db, { rpcUrl: solanaRpcUrl }, () =>
-      getEmergencyFreeze(),
+    const { deriveSolanaAddress } = await import("@motebit/wallet-solana");
+    // Relay treasury Solana address — same identity-derived wallet that
+    // OperatorSolanaTransfer uses for Path 0 withdrawals and that
+    // SolanaMemoSubmitter uses for anchoring. Arc 2 of the off-ramp arc
+    // requires this so the verifier can validate the delegator's fee leg
+    // (delegator→treasury transfer in the atomic multi-output P2P tx).
+    const relayTreasuryAddress = deriveSolanaAddress(relayIdentity.publicKey);
+    p2pVerifierInterval = startP2pVerifierLoop(
+      moteDb.db,
+      { rpcUrl: solanaRpcUrl, relayTreasuryAddress },
+      () => getEmergencyFreeze(),
     );
-    logger.info("p2p_verifier.started", { intervalMs: 60000 });
+    logger.info("p2p_verifier.started", { intervalMs: 60000, relayTreasuryAddress });
   }
 
   // --- Auto-sweep loop (relay balance → sovereign wallet) ---

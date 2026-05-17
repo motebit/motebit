@@ -8,7 +8,9 @@
  * trust-layer complaint.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { Buffer } from "node:buffer";
 import type { SyncRelay } from "../index.js";
+import { deriveSolanaAddress } from "@motebit/wallet-solana";
 import {
   generateKeypair,
   bytesToHex,
@@ -120,6 +122,12 @@ describe("P2P Settlement Cycle E2E", () => {
           network: "solana:mainnet",
           to_address: WORKER_SOLANA_ADDR,
           amount_micro: 500000,
+          // Arc 2 of off-ramp arc: fee leg required. 500_000 net /
+          // (1 - 0.05) = 526_316 gross; fee = 526_316 - 500_000 = 26_316.
+          fee_to_address: deriveSolanaAddress(
+            Uint8Array.from(Buffer.from(relay.relayIdentity.publicKeyHex, "hex")),
+          ),
+          fee_amount_micro: 26316,
         },
       }),
     });
@@ -171,11 +179,15 @@ describe("P2P Settlement Cycle E2E", () => {
       .prepare("SELECT * FROM relay_settlements WHERE task_id = ?")
       .all(taskId) as Array<Record<string, unknown>>;
 
-    // Should have exactly one settlement record (the p2p audit)
+    // Should have exactly one settlement record (the p2p audit).
+    // After Arc 2 of the off-ramp arc, the audit records the actual
+    // amounts: amount_settled = worker leg (500_000), platform_fee =
+    // fee leg (26_316). Pre-Arc-2 the audit wrote 0/0; that policy
+    // was the sibling-doc contradiction Arc 2 resolved.
     const settlement = allSettlements.find((s) => s.settlement_mode === "p2p");
     expect(settlement).toBeDefined();
-    expect(settlement!.amount_settled).toBe(0);
-    expect(settlement!.platform_fee).toBe(0);
+    expect(settlement!.amount_settled).toBe(500000);
+    expect(settlement!.platform_fee).toBe(26316);
     expect(settlement!.p2p_tx_hash).toBe(FAKE_TX_HASH);
     expect(settlement!.payment_verification_status).toBe("pending");
     expect(settlement!.delegator_id).toBe(delegator.motebitId);
@@ -204,6 +216,12 @@ describe("P2P Settlement Cycle E2E", () => {
           network: "solana:mainnet",
           to_address: WORKER_SOLANA_ADDR,
           amount_micro: 500000,
+          // Arc 2 of off-ramp arc: fee leg required. 500_000 net /
+          // (1 - 0.05) = 526_316 gross; fee = 526_316 - 500_000 = 26_316.
+          fee_to_address: deriveSolanaAddress(
+            Uint8Array.from(Buffer.from(relay.relayIdentity.publicKeyHex, "hex")),
+          ),
+          fee_amount_micro: 26316,
         },
       }),
     });
@@ -318,6 +336,12 @@ describe("P2P Settlement Cycle E2E", () => {
           network: "solana:mainnet",
           to_address: WORKER_SOLANA_ADDR,
           amount_micro: 500000,
+          // Arc 2 of off-ramp arc: fee leg required. 500_000 net /
+          // (1 - 0.05) = 526_316 gross; fee = 526_316 - 500_000 = 26_316.
+          fee_to_address: deriveSolanaAddress(
+            Uint8Array.from(Buffer.from(relay.relayIdentity.publicKeyHex, "hex")),
+          ),
+          fee_amount_micro: 26316,
         },
       }),
     });

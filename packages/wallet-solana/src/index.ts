@@ -30,6 +30,7 @@ export {
   type SendUsdcArgs,
   type SendUsdcBatchItemResult,
   type TxVerificationResult,
+  type ConfirmedTransferLeg,
 } from "./adapter.js";
 
 export { Web3JsRpcAdapter, deriveSolanaAddress } from "./web3js-adapter.js";

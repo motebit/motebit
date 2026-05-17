@@ -2228,6 +2228,8 @@ export function optimalPathTrace<T>(graph: WeightedDigraph<T>, source: string, t
 export interface P2pPaymentProof {
     amount_micro: number;
     chain: string;
+    fee_amount_micro: number;
+    fee_to_address: string;
     network: string;
     to_address: string;
     tx_hash: string;

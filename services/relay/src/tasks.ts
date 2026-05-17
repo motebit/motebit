@@ -101,13 +101,20 @@ export type TaskQueueEntry = {
   settled?: boolean;
   /** Settlement mode: "relay" (default) or "p2p" (direct onchain). */
   settlement_mode?: "relay" | "p2p";
-  /** P2P payment proof (when settlement_mode === "p2p"). */
+  /**
+   * P2P payment proof (when settlement_mode === "p2p"). After Arc 2 of
+   * the off-ramp arc, carries the fee-leg fields so the relay can
+   * record and verify both delegator→worker and delegator→treasury
+   * transfers from the same atomic multi-output Solana tx.
+   */
   p2p_payment_proof?: {
     tx_hash: string;
     chain: string;
     network: string;
     to_address: string;
     amount_micro: number;
+    fee_to_address: string;
+    fee_amount_micro: number;
   };
   /** Target agent for p2p tasks (pinned routing). */
   target_agent?: string;
@@ -765,24 +772,42 @@ export async function handleReceiptIngestion(
         const p2pSettlementId = crypto.randomUUID();
         const p2pSettledAt = Date.now();
 
-        // P2P audit settlement still gets self-attested. Even though
-        // money moves onchain (relay isn't custodian), the relay is
-        // committing to "I observed this task settle peer-to-peer at
-        // amount 0 / fee 0 with status completed." A worker (or auditor)
-        // re-presenting this record needs to verify the relay actually
-        // claimed it.
+        // P2P settlement after Arc 2 of the off-ramp arc: money moves
+        // delegator→worker AND delegator→relay_treasury in a single
+        // atomic Solana multi-output tx. The relay never held the
+        // worker's earnings OR the fee; both legs settle on-chain as
+        // the delegator's principal action.
+        //
+        // The signed audit record commits the relay to "I observed
+        // this task settle peer-to-peer at worker_amount + fee with
+        // status completed" — the p2p-verifier walks transfers[] on
+        // `p2p_tx_hash` to validate both legs against the recorded
+        // `amount_settled` and `platform_fee`.
+        //
+        // Resolves the sibling-doc contradiction the settlement_mode
+        // arc surfaced: `platform_fee` is now non-zero on P2P,
+        // matching the top-level "5% applies through both lanes"
+        // claim. `services/relay/CLAUDE.md` rule 8 amends in the
+        // same arc commit.
+        const p2pProof = entry.p2p_payment_proof;
+        const p2pWorkerAmount = p2pProof?.amount_micro ?? 0;
+        const p2pFeeAmount = p2pProof?.fee_amount_micro ?? 0;
+        const p2pGrossAmount = p2pWorkerAmount + p2pFeeAmount;
+        const p2pFeeRate =
+          p2pGrossAmount > 0 ? Math.round((p2pFeeAmount / p2pGrossAmount) * 10000) / 10000 : 0;
+
         const signedP2pAudit = await signSettlement(
           {
             settlement_id: p2pSettlementId as never,
             allocation_id: `p2p-${taskId}` as never,
             receipt_hash: receipt.result_hash ?? "",
             ledger_hash: null,
-            amount_settled: 0,
-            platform_fee: 0,
-            platform_fee_rate: 0,
+            amount_settled: p2pWorkerAmount,
+            platform_fee: p2pFeeAmount,
+            platform_fee_rate: p2pFeeRate,
             // P2P audit record: relay never held the funds. Money moved
-            // onchain delegator → worker; this is the audit attestation,
-            // not a credit/debit. Lane is part of the signed body so the
+            // onchain delegator → worker AND delegator → treasury in a
+            // single atomic tx. Lane is part of the signed body so the
             // relay's custody posture is committed-to, not derivable.
             settlement_mode: "p2p",
             status: "completed",
@@ -807,13 +832,13 @@ export async function handleReceiptIngestion(
             taskId,
             motebitId,
             receipt.result_hash ?? "",
-            0,
-            0,
-            0,
+            p2pWorkerAmount,
+            p2pFeeAmount,
+            p2pFeeRate,
             "completed",
             p2pSettledAt,
             "p2p",
-            entry.p2p_payment_proof?.tx_hash ?? null,
+            p2pProof?.tx_hash ?? null,
             "pending",
             entry.submitted_by ?? null,
             signedP2pAudit.issuer_relay_id,
@@ -1483,6 +1508,19 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         network: string;
         to_address: string;
         amount_micro: number;
+        /**
+         * Relay treasury Solana address (base58). Required after Arc 2
+         * of the off-ramp arc — the delegator's atomic Solana tx
+         * composes a fee leg sending `fee_amount_micro` to this
+         * address. Discoverable via the relay's published public key
+         * (`deriveSolanaAddress(relayPublicKey)`).
+         */
+        fee_to_address: string;
+        /**
+         * Fee leg amount in micro-units. Computed as
+         * `gross - amount_micro` where `gross = amount_micro / (1 - feeRate)`.
+         */
+        fee_amount_micro: number;
       };
     }>();
 
@@ -1586,15 +1624,23 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     if (body.payment_proof && body.target_agent && submittedBy) {
       const proof = body.payment_proof;
 
-      // Validate proof completeness
+      // Validate proof completeness — after Arc 2 of the off-ramp arc,
+      // the fee leg fields are required (delegator's atomic tx carries
+      // both worker and treasury legs).
       if (
         !proof.tx_hash ||
         !proof.chain ||
         !proof.network ||
         !proof.to_address ||
-        !proof.amount_micro
+        !proof.amount_micro ||
+        !proof.fee_to_address ||
+        proof.fee_amount_micro == null
       ) {
-        throw new TaskError("TASK_INVALID_INPUT", "Incomplete payment_proof fields", 400);
+        throw new TaskError(
+          "TASK_INVALID_INPUT",
+          "Incomplete payment_proof fields (after Arc 2: tx_hash, chain, network, to_address, amount_micro, fee_to_address, fee_amount_micro are all required)",
+          400,
+        );
       }
 
       // Tx hash format (Solana signatures are 87-88 char base58)
@@ -1628,8 +1674,25 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         );
       }
 
-      // Exact amount match against the worker's unit cost (not the gross
-      // amount which includes platform fee — p2p has zero fee).
+      // Verify fee leg's treasury address matches the relay's
+      // identity-derived Solana address. The relay treasury IS the
+      // relay's identity key — same address that funds
+      // OperatorSolanaTransfer and SolanaMemoSubmitter. Mismatch means
+      // the delegator sent the fee leg to a non-relay address — reject.
+      const { deriveSolanaAddress } = await import("@motebit/wallet-solana");
+      const relayTreasuryAddress = deriveSolanaAddress(relayIdentity.publicKey);
+      if (proof.fee_to_address !== relayTreasuryAddress) {
+        throw new TaskError(
+          "TASK_P2P_FEE_ADDRESS_MISMATCH",
+          `Payment proof fee_to_address does not match relay treasury address`,
+          400,
+        );
+      }
+
+      // Exact amount match against the worker's unit cost. The worker
+      // earns net = unit_cost; the fee = gross - unit_cost where
+      // gross = unit_cost / (1 - platformFeeRate). The delegator's
+      // atomic tx pays both.
       const unitCostMicro = unitCostAtSubmission > 0 ? toMicro(unitCostAtSubmission) : undefined;
       if (unitCostMicro != null && proof.amount_micro !== unitCostMicro) {
         throw new TaskError(
@@ -1637,6 +1700,21 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           `Payment amount ${proof.amount_micro} does not match expected ${priceSnapshot}`,
           400,
         );
+      }
+
+      // Fee amount must match the expected platform_fee given the
+      // worker's unit_cost and the current platform_fee_rate. Computed
+      // as `gross - net` where `gross = round(net / (1 - feeRate))`.
+      if (unitCostMicro != null && platformFeeRate > 0) {
+        const grossMicro = Math.round(unitCostMicro / (1 - platformFeeRate));
+        const expectedFeeMicro = grossMicro - unitCostMicro;
+        if (proof.fee_amount_micro !== expectedFeeMicro) {
+          throw new TaskError(
+            "TASK_P2P_FEE_AMOUNT_MISMATCH",
+            `Payment fee_amount_micro ${proof.fee_amount_micro} does not match expected ${expectedFeeMicro} (gross ${grossMicro} - net ${unitCostMicro})`,
+            400,
+          );
+        }
       }
 
       settlementMode = "p2p";

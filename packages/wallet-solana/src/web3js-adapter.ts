@@ -403,37 +403,36 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       addRow(b.accountIndex, b.owner, b.uiTokenAmount.amount, -1n);
     }
 
+    // After Arc 2 of the off-ramp arc, multi-recipient transactions
+    // are first-class (the delegator's single tx pays worker AND relay
+    // treasury atomically). Single payer is still required — multi-
+    // payer cases remain ambiguous and surface as not_found. The
+    // delegator side composes via a multi-instruction Solana
+    // transaction; the verifier walks `transfers[]` to find the legs
+    // it expects.
     let from: string | null = null;
-    let to: string | null = null;
-    let amountMicro = 0n;
+    const transfers: Array<{ to: string; amountMicro: bigint }> = [];
     for (const { owner, delta } of rows.values()) {
       if (delta < 0n) {
-        // A single tx could touch multiple payer accounts; we only
-        // surface a transfer when exactly one payer and one recipient
-        // are on the mint. The verifier checks for an exact match,
-        // so any ambiguity should be treated as not_found.
         if (from != null) {
+          // Multi-payer — genuinely ambiguous; the delegator must be
+          // the sole payer in Motebit's P2P model. (Arc 2 doctrine.)
           return { status: "not_found" };
         }
         from = owner;
-        amountMicro = -delta;
       } else if (delta > 0n) {
-        if (to != null) {
-          return { status: "not_found" };
-        }
-        to = owner;
+        transfers.push({ to: owner, amountMicro: delta });
       }
     }
 
-    if (from == null || to == null || amountMicro === 0n) {
+    if (from == null || transfers.length === 0) {
       return { status: "not_found" };
     }
 
     return {
       status: "confirmed",
       from,
-      to,
-      amountMicro,
+      transfers,
       slot: resp.slot,
       asset: ASSET_NAME_USDC,
     };

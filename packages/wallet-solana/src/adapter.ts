@@ -43,6 +43,24 @@ export interface SendUsdcBatchItemResult {
 }
 
 /**
+ * One recipient leg of a confirmed SPL transfer. A single signed Solana
+ * transaction can carry multiple SPL Transfer instructions atomically
+ * (one payer, N recipients) — the canonical shape for Motebit's P2P
+ * settlement after Arc 2 of the off-ramp arc, where the delegator's
+ * single tx pays the worker (one leg) AND the relay treasury (another
+ * leg) in the same atomic transaction.
+ *
+ * `to` is the base58 **owner** address (NOT the Associated Token
+ * Account address); the verifier compares directly to declared
+ * settlement / treasury addresses. `amountMicro` is the exact transfer
+ * amount — §11.1 forbids `>=` matching.
+ */
+export interface ConfirmedTransferLeg {
+  to: string;
+  amountMicro: bigint;
+}
+
+/**
  * Closed, motebit-shaped result of looking up a Solana transaction by
  * signature. The discrimination is load-bearing: p2p payment
  * verification MUST distinguish `not_found` (authoritative null,
@@ -57,24 +75,34 @@ export interface SendUsdcBatchItemResult {
  *     commitment level. Also returned when the tx exists but carries
  *     no SPL transfer instruction the verifier can parse — the
  *     verifier should treat both the same (no verifiable payment).
- *   - `confirmed`: the tx landed at the configured commitment and an
- *     SPL transfer was extracted. `from` and `to` are base58 **owner**
- *     addresses (NOT Associated Token Account addresses); the verifier
- *     compares them directly to the declared `settlement_address`.
- *     `amountMicro` is the exact transfer amount — p2p §11.1 forbids
- *     `>=` matching. `asset` is the SPL mint's short name (today:
- *     always `"USDC"`).
+ *     Also returned when MULTIPLE payers are present on the configured
+ *     mint (genuinely ambiguous source — the delegator must be the
+ *     sole payer for Motebit's P2P model). Multiple **recipients** are
+ *     legitimate (Arc 2 fee-leg composition) and surface as multiple
+ *     entries in `transfers[]`.
+ *   - `confirmed`: the tx landed at the configured commitment with
+ *     exactly one payer (`from`) and one-or-more recipients
+ *     (`transfers[]`). The verifier walks `transfers[]` to find the
+ *     legs it expects (e.g., worker payment, treasury fee). `asset` is
+ *     the SPL mint's short name (today: always `"USDC"`).
  *   - `rpc_error`: any failure the RPC boundary couldn't classify as
  *     authoritative null. The caller retries; the settlement state
  *     stays pending.
+ *
+ * Doctrine: Arc 2 of the off-ramp arc replaced the single-recipient
+ * `to` + `amountMicro` fields on the `confirmed` variant with a
+ * `transfers[]` array, enabling atomic multi-output composition for the
+ * P2P fee leg. The shape change is breaking for consumers that read
+ * the prior single-recipient fields; the only authorized consumer (the
+ * relay's `p2p-verifier.ts`) was updated in the same arc. See
+ * `docs/doctrine/off-ramp-as-user-action.md` § "What Arc 1 did NOT close".
  */
 export type TxVerificationResult =
   | { status: "not_found" }
   | {
       status: "confirmed";
       from: string;
-      to: string;
-      amountMicro: bigint;
+      transfers: ConfirmedTransferLeg[];
       slot: number;
       asset: string;
     }

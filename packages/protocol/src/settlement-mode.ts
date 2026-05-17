@@ -60,8 +60,37 @@ export function isSettlementMode(value: unknown): value is SettlementMode {
 // === P2P Payment Proof ===
 
 /**
- * Proof of direct onchain payment from delegator to worker.
- * Submitted by the delegator at task submission time.
+ * Proof of direct onchain payment for a P2P-settled task. After Arc 2
+ * of the off-ramp arc, the delegator's single signed Solana
+ * transaction composes TWO atomic SPL Transfer instructions:
+ *
+ *   1. **Worker leg** — delegator → worker, amount = `amount_micro`
+ *      (the worker's listing unit_cost, what they earn net).
+ *   2. **Fee leg** — delegator → relay treasury, amount =
+ *      `fee_amount_micro` (the platform fee, derived from the gross
+ *      via `platform_fee_rate`).
+ *
+ * Both legs land atomically (either the whole tx succeeds or it
+ * doesn't); the `p2p-verifier` walks the on-chain `transfers[]` to
+ * confirm both legs match the declared addresses + amounts. The relay
+ * treasury address is the relay's identity-derived Solana wallet
+ * (`deriveSolanaAddress(relay.publicKey)`) — same address that funds
+ * `SolanaMemoSubmitter` for anchoring and that `OperatorSolanaTransfer`
+ * uses for Path 0 withdrawals. Delegators discover it via the published
+ * relay public key on `/.well-known/motebit.json` or
+ * `/.well-known/motebit-transparency.json`.
+ *
+ * Doctrine: `docs/doctrine/off-ramp-as-user-action.md` — Arc 2 closes
+ * the sibling-doc contradiction between the top-level `CLAUDE.md`
+ * Economic Loop "5% applies through both lanes" claim and
+ * `services/relay/CLAUDE.md` rule 8's pre-Arc-2 "Fee: zero on P2P"
+ * policy. The fee is now structurally present on every P2P settlement
+ * as a direct delegator→treasury leg.
+ *
+ * **Breaking change from pre-Arc-2 P2pPaymentProof shape**: the new
+ * `fee_to_address` + `fee_amount_micro` fields are required. The
+ * worker-leg fields (`to_address`, `amount_micro`) keep their existing
+ * semantics — they describe only the worker leg, not the gross.
  */
 export interface P2pPaymentProof {
   /** Onchain transaction signature (Solana base58, 87-88 chars). */
@@ -72,8 +101,27 @@ export interface P2pPaymentProof {
   network: string;
   /** Worker's declared settlement address (base58 for Solana). */
   to_address: string;
-  /** Exact payment amount in micro-units (USDC 6 decimals). Must match expected amount. */
+  /**
+   * Worker leg amount in micro-units (USDC 6 decimals). Equals the
+   * worker's listing unit_cost — what the worker earns net.
+   */
   amount_micro: number;
+  /**
+   * Relay treasury Solana address (base58). Derivable from the relay's
+   * published Ed25519 public key via `deriveSolanaAddress(publicKey)`
+   * (see `@motebit/wallet-solana`). Delegators MUST fetch the relay's
+   * public key from a verified source (transparency declaration or
+   * pinned config) — passing a wrong address sends the fee leg to a
+   * non-relay address and verification fails-closed.
+   */
+  fee_to_address: string;
+  /**
+   * Fee leg amount in micro-units. The platform fee, computed as
+   * `gross - amount_micro` where `gross = amount_micro / (1 - platformFeeRate)`.
+   * The verifier validates this matches the relay's recorded
+   * `platform_fee_rate` against the declared `amount_micro`.
+   */
+  fee_amount_micro: number;
 }
 
 // === Payment Verification ===

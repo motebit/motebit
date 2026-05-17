@@ -46,6 +46,19 @@ const READ_ONLY_SEED = new Uint8Array(32);
 export interface P2pVerifierConfig {
   /** Solana RPC URL (e.g., from SOLANA_RPC_URL env). Ignored when `adapter` is provided. */
   rpcUrl: string;
+  /**
+   * Relay treasury Solana address (base58). The relay's identity-derived
+   * Solana wallet — same address that `OperatorSolanaTransfer` uses for
+   * Path 0 withdrawals and that `SolanaMemoSubmitter` uses for anchoring.
+   * The verifier expects the delegator's atomic multi-output P2P tx to
+   * include a fee leg sending to this address.
+   *
+   * Required after Arc 2 of the off-ramp arc. When the relay starts up
+   * without a Solana keypair configured (no `SOLANA_RPC_URL`), the
+   * verifier loop is not started at all — so this address is always
+   * resolvable when the loop runs.
+   */
+  relayTreasuryAddress: string;
   /** Override check interval (default: 60s). */
   intervalMs?: number;
   /** Override max proofs per cycle (default: 20). */
@@ -74,6 +87,7 @@ export function startP2pVerifierLoop(
 ): ReturnType<typeof setInterval> {
   const intervalMs = config.intervalMs ?? VERIFY_INTERVAL_MS;
   const maxPerCycle = config.maxPerCycle ?? MAX_VERIFY_PER_CYCLE;
+  const treasuryAddress = config.relayTreasuryAddress;
 
   // Construct the adapter once per loop. `Web3JsRpcAdapter` requires a
   // 32-byte identity seed for its send path; the verifier only calls
@@ -91,14 +105,21 @@ export function startP2pVerifierLoop(
 
     void (async () => {
       try {
+        // After Arc 2 of the off-ramp arc, P2P settlements carry a
+        // composite tx hash (single atomic Solana tx with worker leg +
+        // fee leg). The verifier needs the expected amounts and the
+        // worker's settlement address to walk transfers[] and validate
+        // both legs.
         const pendingRows = db
           .prepare(
-            `SELECT settlement_id, task_id, motebit_id, p2p_tx_hash
-             FROM relay_settlements
-             WHERE settlement_mode = 'p2p'
-               AND payment_verification_status = 'pending'
-               AND p2p_tx_hash IS NOT NULL
-             ORDER BY settled_at ASC
+            `SELECT s.settlement_id, s.task_id, s.motebit_id, s.p2p_tx_hash,
+                    s.amount_settled, s.platform_fee, a.settlement_address
+             FROM relay_settlements s
+             LEFT JOIN agent_registry a ON a.motebit_id = s.motebit_id
+             WHERE s.settlement_mode = 'p2p'
+               AND s.payment_verification_status = 'pending'
+               AND s.p2p_tx_hash IS NOT NULL
+             ORDER BY s.settled_at ASC
              LIMIT ?`,
           )
           .all(maxPerCycle) as Array<{
@@ -106,6 +127,9 @@ export function startP2pVerifierLoop(
           task_id: string;
           motebit_id: string;
           p2p_tx_hash: string;
+          amount_settled: number;
+          platform_fee: number;
+          settlement_address: string | null;
         }>;
 
         if (pendingRows.length === 0) return;
@@ -113,7 +137,7 @@ export function startP2pVerifierLoop(
         for (const row of pendingRows) {
           try {
             const result = await adapter.getTransaction(row.p2p_tx_hash);
-            handleVerificationResult(db, row, result);
+            handleVerificationResult(db, row, result, treasuryAddress);
           } catch (err) {
             logger.error("p2p_verifier.check_error", {
               settlementId: row.settlement_id,
@@ -136,14 +160,29 @@ export function startP2pVerifierLoop(
 
 /**
  * Map the adapter's three-state `TxVerificationResult` to the
- * verification state machine on `relay_settlements`:
+ * verification state machine on `relay_settlements`. After Arc 2 of
+ * the off-ramp arc, "verified" requires BOTH legs of the atomic
+ * delegator tx to be present and match the expected amounts:
  *
- *   - `confirmed` → `verified` (tx landed; amount/address match is
- *     checked at task submission time — the verifier's job here is to
- *     confirm the tx exists onchain, not to re-validate the proof)
+ *   - **Worker leg**: `transfers[]` contains an entry with
+ *     `to == row.settlement_address` AND
+ *     `amountMicro == row.amount_settled`.
+ *   - **Fee leg**: `transfers[]` contains an entry with
+ *     `to == treasuryAddress` AND `amountMicro == row.platform_fee`.
+ *
+ * State machine:
+ *   - `confirmed` + both legs match → `verified`
+ *   - `confirmed` + either leg missing or wrong amount → `failed` +
+ *     trust downgrade (the delegator submitted a tx that doesn't
+ *     match the declared proof — same severity as a missing tx)
  *   - `not_found` → `failed` + trust downgrade (per spec §11.1)
  *   - `rpc_error` → stay pending, log, retry next cycle (NEVER
  *     downgrade — `spec/settlement-v1.md` §11.1 Foundation Law)
+ *
+ * Special case: `platform_fee === 0` means the settlement predates
+ * Arc 2 (legacy zero-fee P2P) — the fee-leg check is skipped to keep
+ * those rows verifiable. New settlements after Arc 2 will always carry
+ * `platform_fee > 0` so this path narrows to historical rows only.
  */
 function handleVerificationResult(
   db: DatabaseDriver,
@@ -152,23 +191,79 @@ function handleVerificationResult(
     task_id: string;
     motebit_id: string;
     p2p_tx_hash: string;
+    amount_settled: number;
+    platform_fee: number;
+    settlement_address: string | null;
   },
   result: TxVerificationResult,
+  treasuryAddress: string,
 ): void {
   switch (result.status) {
-    case "confirmed":
+    case "confirmed": {
+      // Walk transfers[] for both legs.
+      const workerLeg =
+        row.settlement_address != null
+          ? result.transfers.find(
+              (t) =>
+                t.to === row.settlement_address && t.amountMicro === BigInt(row.amount_settled),
+            )
+          : undefined;
+
+      // Fee leg: skipped for legacy pre-Arc-2 zero-fee P2P rows.
+      const expectFeeLeg = row.platform_fee > 0;
+      const feeLeg = expectFeeLeg
+        ? result.transfers.find(
+            (t) => t.to === treasuryAddress && t.amountMicro === BigInt(row.platform_fee),
+          )
+        : undefined;
+
+      const workerLegOk = workerLeg != null;
+      const feeLegOk = expectFeeLeg ? feeLeg != null : true;
+
+      if (workerLegOk && feeLegOk) {
+        db.prepare(
+          `UPDATE relay_settlements
+           SET payment_verification_status = 'verified', payment_verified_at = ?
+           WHERE settlement_id = ?`,
+        ).run(Date.now(), row.settlement_id);
+        logger.info("p2p_verifier.verified", {
+          settlementId: row.settlement_id,
+          txHash: row.p2p_tx_hash,
+          workerAmountMicro: row.amount_settled,
+          feeAmountMicro: row.platform_fee,
+          slot: result.slot,
+        });
+        return;
+      }
+
+      // Confirmed onchain but the legs don't match — same severity as
+      // not_found (delegator's declared proof doesn't match what's on
+      // chain). Fail + downgrade.
+      const error = !workerLegOk
+        ? "Worker leg not found in tx transfers (address or amount mismatch)"
+        : "Fee leg not found in tx transfers (address or amount mismatch)";
       db.prepare(
         `UPDATE relay_settlements
-         SET payment_verification_status = 'verified', payment_verified_at = ?
+         SET payment_verification_status = 'failed',
+             payment_verified_at = ?,
+             payment_verification_error = ?
          WHERE settlement_id = ?`,
-      ).run(Date.now(), row.settlement_id);
-      logger.info("p2p_verifier.verified", {
+      ).run(Date.now(), error, row.settlement_id);
+      logger.warn("p2p_verifier.legs_mismatch", {
         settlementId: row.settlement_id,
         txHash: row.p2p_tx_hash,
-        amountMicro: result.amountMicro.toString(),
-        slot: result.slot,
+        workerLegOk,
+        feeLegOk,
+        expectFeeLeg,
+        error,
+        observedTransfers: result.transfers.map((t) => ({
+          to: t.to,
+          amount: t.amountMicro.toString(),
+        })),
       });
+      downgradeP2pTrust(db, row.task_id, row.motebit_id);
       return;
+    }
 
     case "not_found": {
       const error = "Transaction not found on Solana";
