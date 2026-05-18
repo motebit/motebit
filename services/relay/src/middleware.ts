@@ -475,6 +475,13 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         c.req.path.startsWith("/api/v1/bridge/") ||
         c.req.path.startsWith("/api/v1/subscriptions/") ||
         c.req.path.startsWith("/api/v1/onramp/") ||
+        // Off-ramp session creation is user-initiated per Path 3 of the
+        // off-ramp arc — the user's surface POSTs with the user's KYC'd
+        // `bridge_customer_id` + `external_account_id`. The user is
+        // Bridge's customer, not motebit's, so a relay-issued master
+        // bearer token doesn't model the trust relationship. Mirrors
+        // `/api/v1/onramp/` above. See `docs/doctrine/off-ramp-as-user-action.md`.
+        c.req.path.startsWith("/api/v1/offramp/") ||
         c.req.path.startsWith("/api/v1/discover/") ||
         c.req.path.startsWith("/api/v1/allocations/") ||
         c.req.path.startsWith("/api/v1/disputes/") ||
