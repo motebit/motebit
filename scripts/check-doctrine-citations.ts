@@ -46,6 +46,23 @@
  *      resolves to either a real `scripts/check-X.ts` source file OR
  *      a registered `check-X` script in root `package.json`.
  *
+ *   3. Every backtick-delimited line-anchored reference
+ *      (`path/to/file.ts:LINE` or `path/to/file.ts:START-END` with
+ *      hyphen OR en-dash OR em-dash) resolves to a real file AND the
+ *      line (or range) is within the file's current line count.
+ *      Line numbers rot on every edit to the cited file — the
+ *      off-ramp doctrine cites `tasks.ts:377` and `tasks.ts:644-688`;
+ *      the dissolution-spectrum doctrine cites `credentials.ts:223–225`
+ *      with an em-dash; the panels-pattern doctrine cites
+ *      `chat.ts:545–642`. The pre-extension regex required the
+ *      captured path to end at the closing backtick, so `:LINE`
+ *      suffixes broke the match entirely and the citation was
+ *      unprotected. This extension catches the moved-past-EOF case
+ *      and the inverted-range case (`:10-5`). Content equivalence
+ *      ("does the cited line still say what the doctrine claims?")
+ *      remains out of scope — that's a different class requiring
+ *      AST/content matching.
+ *
  * Out of scope:
  *
  *   - Function/symbol names. Would require resolving the named
@@ -56,6 +73,10 @@
  *   - Cross-references to other doctrine docs (already validated by
  *     `check-claude-md` for the lazy-load index).
  *   - Section anchors (`docs/foo.md#section-name`).
+ *   - Column anchors (`file.ts:10:20`). Not used in motebit doctrine.
+ *   - Line-anchor content equivalence (the cited code still says
+ *     what the doctrine claims). Content matching is the next layer;
+ *     line-in-range catches the most common drift first.
  *
  * Usage:
  *   tsx scripts/check-doctrine-citations.ts        # exit 1 on violation
@@ -96,6 +117,26 @@ const PATH_PATTERN = new RegExp(
  * mentions of the literal string "check" don't false-positive.
  */
 const GATE_PATTERN = /`(check-[a-z0-9-]+)(?:\.ts)?`/g;
+
+/**
+ * Match a backtick-delimited line-anchored reference:
+ *   `path/to/file.ext:LINE`
+ *   `path/to/file.ext:START-END` (hyphen `-`, en-dash `–`, or em-dash `—`)
+ *
+ * Same path shape as `PATH_PATTERN` (slash + known extension), then a
+ * colon + line(s). En-dash and em-dash appear in real doctrine (e.g.
+ * `credentials.ts:223–225` in `dissolution-spectrum.md`) because
+ * prose-mode editors auto-substitute them; we accept all three so
+ * doctrine prose isn't forced into a single hyphen convention.
+ *
+ * Captures: (1) path, (2) start line, (3) end line (optional).
+ */
+const LINE_ANCHOR_PATTERN = new RegExp(
+  "`([a-zA-Z0-9_.-][a-zA-Z0-9_./-]*/[a-zA-Z0-9_./-]+\\.(?:" +
+    PATH_EXTENSIONS.join("|") +
+    ")):(\\d+)(?:[-–—](\\d+))?`",
+  "g",
+);
 
 /**
  * Allowlist of gate-name strings that the regex matches but
@@ -144,9 +185,26 @@ const PATH_ALLOWLIST: Record<string, string> = {
 interface Finding {
   doc: string;
   line: number;
-  kind: "missing-path" | "unknown-gate";
+  kind: "missing-path" | "unknown-gate" | "line-out-of-range";
   reference: string;
   context: string;
+  /** Populated for `line-out-of-range` — the file's current line count. */
+  fileLineCount?: number;
+}
+
+/**
+ * Per-file line-count cache. The same path may be cited from many
+ * doctrine docs (or many times within one doc); we read each file
+ * at most once per gate run.
+ */
+const lineCountCache = new Map<string, number>();
+
+function getLineCount(abs: string): number {
+  const cached = lineCountCache.get(abs);
+  if (cached !== undefined) return cached;
+  const count = readFileSync(abs, "utf-8").split("\n").length;
+  lineCountCache.set(abs, count);
+  return count;
 }
 
 function walkDoctrineMd(): string[] {
@@ -199,7 +257,7 @@ function scanDoc(abs: string, validGates: Set<string>): Finding[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
 
-    // Path-shaped references.
+    // Path-shaped references (no line anchor — `path.ts` only).
     PATH_PATTERN.lastIndex = 0;
     let pathMatch: RegExpExecArray | null;
     while ((pathMatch = PATH_PATTERN.exec(line)) !== null) {
@@ -214,6 +272,54 @@ function scanDoc(abs: string, validGates: Set<string>): Finding[] {
         reference: cited,
         context: line.trim(),
       });
+    }
+
+    // Line-anchored references (`path.ts:LINE` or `path.ts:START-END`).
+    // File-existence check happens here too — the line-anchor pattern
+    // is mutually exclusive with PATH_PATTERN (the colon breaks the
+    // path-pattern's backtick-boundary requirement), so missing-file
+    // findings from line-anchored citations don't double-count.
+    LINE_ANCHOR_PATTERN.lastIndex = 0;
+    let lineMatch: RegExpExecArray | null;
+    while ((lineMatch = LINE_ANCHOR_PATTERN.exec(line)) !== null) {
+      const cited = lineMatch[1]!;
+      const startLine = parseInt(lineMatch[2]!, 10);
+      const endLine = lineMatch[3] ? parseInt(lineMatch[3], 10) : startLine;
+      const rangeStr = lineMatch[3] ? `${startLine}-${endLine}` : `${startLine}`;
+      const fullRef = `${cited}:${rangeStr}`;
+
+      if (cited in PATH_ALLOWLIST) continue;
+      const abs = resolve(REPO_ROOT, cited);
+      if (!existsSync(abs)) {
+        findings.push({
+          doc: rel,
+          line: i + 1,
+          kind: "missing-path",
+          reference: fullRef,
+          context: line.trim(),
+        });
+        continue;
+      }
+
+      // Validate the line (or range) is within the file. Three failure
+      // shapes: start past EOF, end past EOF, inverted range (end <
+      // start). Line 0 is invalid (1-indexed).
+      const fileLineCount = getLineCount(abs);
+      if (
+        startLine < 1 ||
+        startLine > fileLineCount ||
+        endLine > fileLineCount ||
+        endLine < startLine
+      ) {
+        findings.push({
+          doc: rel,
+          line: i + 1,
+          kind: "line-out-of-range",
+          reference: fullRef,
+          context: line.trim(),
+          fileLineCount,
+        });
+      }
     }
 
     // Gate-name references.
@@ -258,12 +364,13 @@ function main(): void {
 
   if (findings.length === 0) {
     console.log(
-      "✓ Every path-shaped and `check-X` reference in docs/doctrine/ resolves to a real file or registered gate.",
+      "✓ Every path-shaped, line-anchored, and `check-X` reference in docs/doctrine/ resolves to a real file or registered gate.",
     );
     return;
   }
 
   const missingPaths = findings.filter((f) => f.kind === "missing-path");
+  const lineOutOfRange = findings.filter((f) => f.kind === "line-out-of-range");
   const unknownGates = findings.filter((f) => f.kind === "unknown-gate");
 
   if (missingPaths.length > 0) {
@@ -272,6 +379,17 @@ function main(): void {
     );
     for (const f of missingPaths) {
       console.log(`  ${f.doc}:${f.line}  \`${f.reference}\``);
+      console.log(`    ${f.context}`);
+    }
+    console.log();
+  }
+
+  if (lineOutOfRange.length > 0) {
+    console.log(
+      `✗ ${lineOutOfRange.length} line-anchored citation(s) reference a line outside the file's current range:\n`,
+    );
+    for (const f of lineOutOfRange) {
+      console.log(`  ${f.doc}:${f.line}  \`${f.reference}\`  (file has ${f.fileLineCount} lines)`);
       console.log(`    ${f.context}`);
     }
     console.log();
@@ -289,11 +407,13 @@ function main(): void {
   }
 
   console.log(
-    `  Fix: update the citation to point at the current location, OR\n` +
-      `       add an entry to PATH_ALLOWLIST / GATE_ALLOWLIST in\n` +
-      `       scripts/check-doctrine-citations.ts with a reason if the\n` +
-      `       reference is intentionally pointing at something not\n` +
-      `       resolvable here (rare).`,
+    `  Fix: update the citation to point at the current location (file, line,\n` +
+      `       or gate name), OR add an entry to PATH_ALLOWLIST / GATE_ALLOWLIST\n` +
+      `       in scripts/check-doctrine-citations.ts with a reason if the\n` +
+      `       reference is intentionally pointing at something not resolvable\n` +
+      `       here (rare). Line-anchored citations rot on every edit to the\n` +
+      `       cited file — prefer symbol-named or section-named anchors over\n` +
+      `       \`file.ts:LINE\` when the cited concept has a stable name.`,
   );
   process.exit(1);
 }

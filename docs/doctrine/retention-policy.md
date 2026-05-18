@@ -10,12 +10,12 @@ This document is the doctrine. `spec/retention-policy-v1.md` (when it lands — 
 
 Today's enforcement asymmetry is the diagnosis:
 
-| Store         | Sensitivity field                                | Retention enforcement                                                                                 |
-| ------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
-| Memory        | ✓ `MemoryContent.sensitivity`                    | ✓ `consolidation-cycle.ts:444-453` — `prune` phase calls `deleteMemory(..., "retention_enforcement")` |
-| Conversations | ✗ `ConversationStoreAdapter` carries none        | ✗ `conversation-search.ts:38` — `ConversationMessageRecord` has no TTL                                |
-| Events        | ✗ `EventLogEntry` (`protocol/index.ts:346-356`)  | ✗ `packages/event-log/src/index.ts` is append-only by construction                                    |
-| Tool audit    | ✗ `ToolAuditEntry` (`protocol/index.ts:429-440`) | ✗ `packages/browser-persistence/src/tool-audit-store.ts` queries but never prunes                     |
+| Store         | Sensitivity field                                             | Retention enforcement                                                                                 |
+| ------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Memory        | ✓ `MemoryContent.sensitivity`                                 | ✓ `consolidation-cycle.ts:444-453` — `prune` phase calls `deleteMemory(..., "retention_enforcement")` |
+| Conversations | ✗ `ConversationStoreAdapter` carries none                     | ✗ `conversation-search.ts:38` — `ConversationMessageRecord` has no TTL                                |
+| Events        | ✗ `EventLogEntry` (`packages/protocol/src/index.ts:382-392`)  | ✗ `packages/event-log/src/index.ts` is append-only by construction                                    |
+| Tool audit    | ✗ `ToolAuditEntry` (`packages/protocol/src/index.ts:465-486`) | ✗ `packages/browser-persistence/src/tool-audit-store.ts` queries but never prunes                     |
 
 `CLAUDE.md:77` claims "Retention enforced via deletion certificates" as the motebit privacy boundary. Today, only memory honors that claim. The fix is not to retrofit memory's prune phase onto the other three — they have different physics, and the prune phase isn't the right enforcement for any of them. The fix is to name the three shapes, type-system them at the protocol layer, and register each store against the shape its physics dictates.
 
@@ -215,7 +215,7 @@ JCS canonicalization throughout, suite-tagged via the cert's `suite` field; veri
 
 ### Decision 6a — cert migration: required fields, single-PR cutover
 
-**Scenario.** Phase 2 ships the new union. Existing callers in `runtime/src/consolidation-cycle.ts:449` and `privacy-layer/src/index.ts:163` construct `DeletionCertificate` values without `kind`, without signatures.
+**Scenario.** Phase 2 ships the new union. Existing callers in `packages/runtime/src/consolidation-cycle.ts` and `packages/privacy-layer/src/index.ts` construct `DeletionCertificate` values without `kind`, without signatures.
 
 **Test.** Optional `suite` + `signature` admits non-self-attesting certs into the type, breaking the three-test check at every receiver. A `legacy_unsigned` arm in the union poisons every consumer with "is this cert actually signed" filtering. Required fields with a single-PR cutover breaks compile in every caller — but compile failures are the migration tracker.
 

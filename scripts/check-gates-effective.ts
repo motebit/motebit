@@ -1439,7 +1439,7 @@ export function probeAdmit(peer: PeerProfile): boolean {
   {
     script: "check-doctrine-citations",
     proves:
-      "flags a doctrine doc that cites a non-existent gate (`check-X`) or a missing path-shaped reference. The drift class the gate exists to catch — doctrine prose that lies about what code/gates exist after a rename, package extraction, or hypothetical name. Same shape as `check-readme-bin-claims` / `check-docs-cli-claims` / `check-docs-slash-claims`, fourth member of the doc-citation-validation family.",
+      "flags a doctrine doc that cites a non-existent gate (`check-X`), a missing path-shaped reference, OR a line-anchored citation (`file.ts:LINE`) whose line is outside the file's current range. The drift class the gate exists to catch — doctrine prose that lies about what code/gates exist after a rename, package extraction, hypothetical name, or file edit that moved the cited line past EOF. Same shape as `check-readme-bin-claims` / `check-docs-cli-claims` / `check-docs-slash-claims`, fourth member of the doc-citation-validation family.",
     perturb: () =>
       writeFixture(
         `docs/doctrine/${PROBE_PREFIX}stale-citation.md`,
@@ -1447,8 +1447,9 @@ export function probeAdmit(peer: PeerProfile): boolean {
 
 Cites \`packages/nonexistent/__probe.ts\` which does not exist.
 Also cites \`check-imaginary-gate\` which is not a real drift gate.
+Also cites \`packages/protocol/src/index.ts:999999\` which is well past the file's EOF.
 
-If check-doctrine-citations is working, both references fail the gate.
+If check-doctrine-citations is working, all three references fail the gate.
 `,
       ),
   },
