@@ -120,17 +120,23 @@ const relay = await createSyncRelay({
           currency: process.env.STRIPE_CURRENCY,
         }
       : undefined,
-  bridge:
-    process.env.BRIDGE_API_KEY && process.env.BRIDGE_CUSTOMER_ID
-      ? {
-          apiKey: process.env.BRIDGE_API_KEY,
-          customerId: process.env.BRIDGE_CUSTOMER_ID,
-          sourcePaymentRail: process.env.BRIDGE_SOURCE_RAIL,
-          sourceCurrency: process.env.BRIDGE_SOURCE_CURRENCY,
-          baseUrl: process.env.BRIDGE_API_BASE_URL,
-          webhookPublicKey: process.env.BRIDGE_WEBHOOK_PUBLIC_KEY,
-        }
-      : undefined,
+  // BRIDGE_API_KEY alone enables the Path-3 user-initiated off-ramp
+  // (BridgeOfframpAdapter — user is the KYC'd customer, customer ID is
+  // per-request). BRIDGE_CUSTOMER_ID additionally registers the
+  // BridgeSettlementRail for own-account treasury operations (motebit
+  // operator's Bridge customer ID; required only by the future
+  // convertOwnAccount treasury method). The two surfaces have distinct
+  // scopes; they shouldn't share a gating predicate.
+  bridge: process.env.BRIDGE_API_KEY
+    ? {
+        apiKey: process.env.BRIDGE_API_KEY,
+        customerId: process.env.BRIDGE_CUSTOMER_ID,
+        sourcePaymentRail: process.env.BRIDGE_SOURCE_RAIL,
+        sourceCurrency: process.env.BRIDGE_SOURCE_CURRENCY,
+        baseUrl: process.env.BRIDGE_API_BASE_URL,
+        webhookPublicKey: process.env.BRIDGE_WEBHOOK_PUBLIC_KEY,
+      }
+    : undefined,
   testVotePolicy,
 });
 const app: Hono = relay.app;

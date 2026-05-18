@@ -272,12 +272,21 @@ export interface SyncRelayConfig {
    * Auto-constructed from `bridge.apiKey` when Bridge is configured.
    */
   offramp?: OfframpAdapter;
-  /** Bridge.xyz configuration. Omit to disable Bridge orchestration rail. */
+  /**
+   * Bridge.xyz configuration. `apiKey` alone enables the Path-3 user-
+   * initiated off-ramp (`BridgeOfframpAdapter` — user is the KYC'd
+   * customer). `customerId` additionally registers `BridgeSettlementRail`
+   * for own-account treasury operations.
+   */
   bridge?: {
     /** Bridge API key. */
     apiKey: string;
-    /** Bridge customer ID for the relay operator. */
-    customerId: string;
+    /**
+     * Motebit operator's Bridge customer ID. Required only to register
+     * `BridgeSettlementRail` (treasury). Omit to enable only the
+     * user-initiated off-ramp adapter.
+     */
+    customerId?: string;
     /** Source payment rail for withdrawals (e.g., "base"). Default: "base". */
     sourcePaymentRail?: string;
     /** Source currency (e.g., "usdc"). Default: "usdc". */
@@ -439,7 +448,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       );
     }
   }
-  if (bridgeConfig) {
+  // BridgeSettlementRail registration gates on `customerId` — the field is
+  // structurally held by the rail for the future `convertOwnAccount`
+  // treasury method (see `packages/settlement-rails/src/bridge-rail.ts`
+  // header). Without an operator customer ID, no rail-side surface has
+  // anything to dispatch, and the off-ramp adapter below uses `apiKey`
+  // only — so the rail block must not block off-ramp activation.
+  if (bridgeConfig?.customerId) {
+    const operatorCustomerId = bridgeConfig.customerId;
     const baseUrl = bridgeConfig.baseUrl ?? "https://api.bridge.xyz/v0";
     const bridgeApiKey = bridgeConfig.apiKey;
     const bridgeClient: import("@motebit/settlement-rails").BridgeClient = {
@@ -512,7 +528,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     railRegistry.register(
       new BridgeSettlementRail({
         bridgeClient: bridgeClient,
-        customerId: bridgeConfig.customerId,
+        customerId: operatorCustomerId,
         sourcePaymentRail: bridgeConfig.sourcePaymentRail ?? "base",
         sourceCurrency: bridgeConfig.sourceCurrency ?? "usdc",
         onProofAttached: proofCallback("bridge"),
