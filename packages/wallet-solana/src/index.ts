@@ -60,3 +60,15 @@ export {
   type OperatorSolanaTransferConfig,
   createOperatorSolanaTransfer,
 } from "./operator-transfer.js";
+
+export {
+  OperatorSolanaTreasuryReconciler,
+  createOperatorSolanaTreasuryReconciler,
+  SOLANA_DEFAULT_CONFIRMATION_LAG_BUFFER_MS,
+  SOLANA_TREASURY_DEFAULT_CHAIN,
+  type OperatorSolanaTreasuryReconcilerConfig,
+  type ReconcileSolanaTreasuryArgs,
+  type SolanaReconciliationResult,
+  type SolanaTreasuryReconciliationLogger,
+  type SolanaTreasuryReconciliationStore,
+} from "./operator-treasury-reconciler.js";

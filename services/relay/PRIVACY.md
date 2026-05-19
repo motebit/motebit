@@ -44,6 +44,7 @@ Observable:
 - every federation peer relationship
 - every onchain settlement proof attached
 - every treasury-reconciliation cycle on mainnet — the recorded x402 platform-fee sum, the onchain USDC balance at the operator's fee-collection address, the drift between them, and the consistent flag — append-only audit log
+- every Solana treasury-reconciliation cycle — the recorded verified-p2p platform-fee sum, the onchain USDC balance at the relay's identity-derived Solana treasury wallet, the drift between them, and the consistent flag — append-only audit log, written alongside EVM rows in the same table and discriminated by CAIP-2 chain
 
 Retention window: permanent ledger; required for audit, dispute, and settlement reconciliation.
 

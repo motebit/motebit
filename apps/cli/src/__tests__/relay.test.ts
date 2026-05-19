@@ -22,6 +22,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SyncRelayConfig } from "@motebit/relay";
+import { SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
 
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "motebit-relay-test-"));
 const savedHome = process.env["HOME"];
@@ -148,7 +149,7 @@ describe("isTestnetNetwork", () => {
     ["eip155:8453", false], // Base mainnet
     ["eip155:42161", false], // Arbitrum mainnet
     ["eip155:1", false], // Ethereum mainnet
-    ["solana:mainnet", false], // solana — treated as mainnet (unknown = strict)
+    [SOLANA_MAINNET_CAIP2, false], // Solana mainnet (CAIP-30) — out of scope for the EVM-only testnet check; defaults to false (strict)
   ])("%s → %s", (network, expected) => {
     expect(mod.isTestnetNetwork(network)).toBe(expected);
   });

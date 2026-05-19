@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
 import { generateKeypair, bytesToHex, signDisputeRequest } from "@motebit/encryption";
+import { SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
 import { evaluateSettlementEligibility } from "../task-routing.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
@@ -232,7 +233,7 @@ describe("P2P task submission", () => {
         payment_proof: {
           tx_hash: "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk",
           chain: "solana",
-          network: "solana:mainnet",
+          network: SOLANA_MAINNET_CAIP2,
           to_address: "9xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgBBB",
           amount_micro: 500000,
           // Arc 2 of off-ramp arc: fee fields required for validation
@@ -262,7 +263,7 @@ describe("P2P task submission", () => {
         payment_proof: {
           tx_hash: "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk",
           chain: "solana",
-          network: "solana:mainnet",
+          network: SOLANA_MAINNET_CAIP2,
           to_address: "2xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgCCC",
           amount_micro: 500000,
           fee_to_address: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgFFF",

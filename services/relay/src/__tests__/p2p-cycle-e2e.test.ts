@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Buffer } from "node:buffer";
 import type { SyncRelay } from "../index.js";
-import { deriveSolanaAddress } from "@motebit/wallet-solana";
+import { deriveSolanaAddress, SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
 import {
   generateKeypair,
   bytesToHex,
@@ -119,7 +119,7 @@ describe("P2P Settlement Cycle E2E", () => {
         payment_proof: {
           tx_hash: FAKE_TX_HASH,
           chain: "solana",
-          network: "solana:mainnet",
+          network: SOLANA_MAINNET_CAIP2,
           to_address: WORKER_SOLANA_ADDR,
           amount_micro: 500000,
           // Arc 2 of off-ramp arc: fee leg required. 500_000 net /
@@ -213,7 +213,7 @@ describe("P2P Settlement Cycle E2E", () => {
         payment_proof: {
           tx_hash: FAKE_TX_HASH,
           chain: "solana",
-          network: "solana:mainnet",
+          network: SOLANA_MAINNET_CAIP2,
           to_address: WORKER_SOLANA_ADDR,
           amount_micro: 500000,
           // Arc 2 of off-ramp arc: fee leg required. 500_000 net /
@@ -333,7 +333,7 @@ describe("P2P Settlement Cycle E2E", () => {
         payment_proof: {
           tx_hash: FAKE_TX_HASH,
           chain: "solana",
-          network: "solana:mainnet",
+          network: SOLANA_MAINNET_CAIP2,
           to_address: WORKER_SOLANA_ADDR,
           amount_micro: 500000,
           // Arc 2 of off-ramp arc: fee leg required. 500_000 net /

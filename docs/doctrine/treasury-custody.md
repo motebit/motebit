@@ -63,6 +63,37 @@ Operator-specific details (which hardware wallet, which Fly.io secrets, which ex
 
 A note on what's NOT phase 1: the CDP facilitator is itself a relay-shaped guest service (Coinbase's, not motebit's). Using it does not weaken the protocol-vs-platform claim — the x402 _protocol_ is open and chain-agnostic; CDP is one of multiple compatible facilitator implementations (community + self-hosted alternatives exist). Phase 2 doesn't change the facilitator decision; phase 2 is the _outbound_ custody question (sweeping the treasury), independent of which facilitator handles inbound x402 settlements.
 
+## Solana p2p-fee reconciliation
+
+The relay's identity-derived Solana wallet (`deriveSolanaAddress(relayIdentity.publicKey)`) is the treasury on the Solana side. It's the same wallet that funds `SolanaMemoSubmitter` anchoring, signs `OperatorSolanaTransfer` Path-0 withdrawals (per [`off-ramp-as-user-action.md`](off-ramp-as-user-action.md) Path 0), and receives Arc 2 P2P fee legs from delegators. It is not a separate piece of infrastructure — it is the operator's identity, used as a Solana wallet by Ed25519 curve coincidence.
+
+That coincidence is the structural reason the Solana side does not need a hardware-wallet receive split. The relay's identity key already holds the treasury; the same key the operator generates as part of bringing a relay online IS the treasury wallet. Pre-volume, the operator backs up the identity key offline (per the relay-key backup discipline named in `relay_key_backup_pending`) and the security posture is identical to phase 1's EVM cold-receive shape.
+
+### What the reconciler audits
+
+The sibling primitive to the EVM reconciler is `OperatorSolanaTreasuryReconciler` (exported from `@motebit/wallet-solana`, sibling to `OperatorSolanaTransfer` — same package, same construction pattern, same Ed25519 curve coincidence). It compares:
+
+- **Recorded** — `SUM(relay_settlements.platform_fee)` over rows where `settlement_mode = 'p2p' AND payment_verification_status = 'verified' AND settled_at < asOfMs`. The verified-only filter is load-bearing: P2P settlements record `platform_fee` at submission, but the funds only reach the treasury after `p2p-verifier.ts` confirms both legs landed onchain (Arc 2 atomic multi-output tx). Counting pending or failed rows would produce false-positive negative drift.
+- **Observed** — `adapter.getUsdcBalance()` against the treasury wallet's Associated Token Account on the Solana SPL USDC mint (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` on mainnet).
+- **Drift** — `observed - recorded`. Same conservative invariant as EVM: `consistent = drift >= 0n`. Positive drift covers direct deposits, SOL→USDC swap residue, manual operator funding. Negative drift is the load-bearing alert.
+
+### Why this is a structurally different signal than EVM
+
+Both reconcilers share the algebra (drift = onchain − recorded). They diverge on what each side represents:
+
+- **EVM:** the x402 facilitator settles synchronously to `X402_PAY_TO_ADDRESS`. The `platform_fee` row and the onchain transfer happen in the same `onAfterSettle` callback. Drift detects facilitator-side leakage or recording bugs.
+- **Solana:** the delegator submits the atomic multi-output tx; the relay records the proof; the verifier confirms both legs land onchain; only then is the row `verified`. Drift detects three failure modes structurally absent on EVM: (a) verifier false-positives — a row marked verified whose treasury leg didn't actually land; (b) treasury-wallet drains via a path other than `OperatorSolanaTransfer.sendUsdc` (the only authorized debit path on the relay side); (c) an Arc 2 fee-leg-composition bug that records `platform_fee` against the wrong row.
+
+### One table, two writers
+
+The Solana reconciler writes to the same `relay_treasury_reconciliations` table the EVM reconciler uses — the table's `chain` column carries canonical CAIP-2 strings and discriminates rows (`eip155:8453` for EVM-Base; `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` for Solana mainnet, per CAIP-30 — the same identifier the credential-anchor schema in [`spec/credential-anchor-v1.md`](../../spec/credential-anchor-v1.md) and the consolidation-receipt schema in [`spec/consolidation-receipt-v1.md`](../../spec/consolidation-receipt-v1.md) use). One table, two writers, one admin endpoint (`GET /api/v1/admin/treasury-reconciliation` returns `chains[]` with one entry per CAIP-2 chain, and a cross-chain `records[]` audit feed). The canonical-form constant `SOLANA_MAINNET_CAIP2` is exported from `@motebit/wallet-solana` and is the only allowed source for this identifier — drift gate #104 enforces that the treasury-reconciliation files import the constant rather than constructing a non-canonical `"solana:mainnet"` shorthand.
+
+The verified-only filter is the only structural asymmetry between the two stores' SQL. Everything else — the persistence shape, the audit-log discipline, the conservative one-way drift invariant, the confirmation-lag buffer — composes by structural agreement, not code reuse. The two stores are siblings of the same shape, just as the two adapter-layer packages are siblings (`@motebit/evm-rpc` and `@motebit/wallet-solana`'s `SolanaRpcAdapter`).
+
+### Drift gate
+
+`check-solana-treasury-reconciliation` (`docs/drift-defenses.md` #104) enforces presence pairing: when `services/relay/src/index.ts` wires `startP2pVerifierLoop`, it must also wire `startSolanaTreasuryReconciliationLoop`. Verifier produces verified rows; reconciler audits them. Either side missing is a configuration mistake.
+
 ## Why naming the phases separately matters
 
 Without the split, every conversation about "mainnet custody" defaults to the highest-risk axis (phase 2's hot-custody decision) and stalls there. Founders defer mainnet activation indefinitely because they're trying to solve phase 2 before they have phase 2's evidence.

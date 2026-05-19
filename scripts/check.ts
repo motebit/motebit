@@ -263,6 +263,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-deposit-detector-confirmations",
   },
   {
+    name: "check-solana-treasury-reconciliation",
+    defends:
+      '(a) when `services/relay/src/index.ts` wires the P2P payment verifier (the loop that validates the delegator\'s fee-leg transfer to the relay\'s identity-derived Solana treasury wallet — Arc 2 of the off-ramp arc), the same boot path MUST also wire `startSolanaTreasuryReconciliationLoop` so the verified `relay_settlements.platform_fee` accumulation is automatically audited against the treasury wallet\'s onchain USDC balance — and the reverse (an isolated reconciler with no verifier wired is a configuration mistake; the reconciler audits rows the verifier produces); (b) the two treasury-reconciliation source files (`packages/wallet-solana/src/operator-treasury-reconciler.ts`, `services/relay/src/solana-treasury-reconciliation.ts`) MUST NOT contain the non-canonical `"solana:mainnet"`/`"solana:devnet"` string-literal shorthand — the canonical CAIP-2 form per CAIP-30 is `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`/`solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1`, exported as `SOLANA_MAINNET_CAIP2`/`SOLANA_DEVNET_CAIP2` from `@motebit/wallet-solana`; redeclaring the shorthand drifts the `relay_treasury_reconciliations.chain` column off the identifier every other audit table uses for chain joins (credential-anchor + consolidation-receipt schemas). Same paired-presence shape as `check-deposit-detector-confirmations` (#72) on the (a) branch; same canonical-source-of-truth shape as the closed-registry gates on the (b) branch. Both branches probed in `check-gates-effective`; doc-comment mentions of the forbidden form are tolerated so doctrine prose can name what\'s being forbidden. Doctrine: `docs/doctrine/treasury-custody.md` § "Solana p2p-fee reconciliation"; `services/relay/CLAUDE.md` rule 16. Invariant #104, added 2026-05-18 alongside `@motebit/wallet-solana`\'s `OperatorSolanaTreasuryReconciler` primitive landing; the (b) branch caught at review-time before commit and added in the same arc',
+    script: "check-solana-treasury-reconciliation",
+  },
+  {
     name: "check-api-surface",
     defends:
       "@motebit/{protocol,crypto,sdk} public API must match committed baseline unless a `major` changeset is pending",

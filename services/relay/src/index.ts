@@ -110,12 +110,18 @@ import {
 } from "./credential-anchoring.js";
 import { aggregateFees } from "./fees.js";
 import { aggregateHealthSummary } from "./health-summary.js";
-import { startDepositDetector } from "./deposit-detector.js";
+import { startDepositDetector, USDC_CONTRACTS } from "./deposit-detector.js";
 import {
   startTreasuryReconciliationLoop,
   getTreasuryReconciliationStats,
   listTreasuryReconciliations,
 } from "./treasury-reconciliation.js";
+import { startSolanaTreasuryReconciliationLoop } from "./solana-treasury-reconciliation.js";
+import {
+  SOLANA_TREASURY_DEFAULT_CHAIN,
+  USDC_MINT_MAINNET,
+  deriveSolanaAddress,
+} from "@motebit/wallet-solana";
 import { registerCredentialRoutes } from "./credentials.js";
 import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscriptions.js";
 import {
@@ -973,23 +979,49 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     });
   });
 
+  // Forward-declared state for the per-chain treasury reconciliation
+  // endpoint and the two loops below. The endpoint's closure captures
+  // these by binding; both are assigned in the Solana wiring block
+  // further down in this function. The closure only runs at HTTP
+  // request time (after createSyncRelay has finished), so the
+  // forward-declared bindings are initialized by then.
+  let solanaTreasuryAddress: string | undefined;
+  let solanaTreasuryReconciliationInterval: ReturnType<typeof setInterval> | undefined;
+
   // Admin: treasury reconciliation overview (recent records + aggregated stats).
-  // The reconciliation loop runs only on mainnet (X402_TESTNET=false); on
-  // testnet this endpoint returns zero history with `loop_enabled=false`.
+  // Response shape is per-chain: `chains[]` carries one entry per active or
+  // historical CAIP-2 chain (EVM x402 fee accumulation, Solana p2p fee-leg
+  // accumulation). The reconciliation loops run conditionally — EVM on
+  // mainnet (X402_TESTNET=false), Solana whenever SOLANA_RPC_URL is set.
+  // `records[]` is the cross-chain audit feed sorted by run_at desc.
   // Sibling-but-distinct from `/api/v1/admin/credential-anchoring` — the
   // treasury observability primitive is documented in
-  // `packages/treasury-reconciliation/CLAUDE.md` Rule 1; the relay-side
-  // wiring lives in `services/relay/src/treasury-reconciliation.ts`.
+  // `packages/treasury-reconciliation/CLAUDE.md` Rule 1 (EVM) and
+  // `docs/doctrine/treasury-custody.md` § "Solana p2p-fee reconciliation"
+  // (Solana).
   /** @internal */
   app.get("/api/v1/admin/treasury-reconciliation", (c) => {
-    const stats = getTreasuryReconciliationStats(moteDb.db);
     const records = listTreasuryReconciliations(moteDb.db, 50);
-    return c.json({
-      stats,
-      records,
-      treasury_address: x402Config.payToAddress,
+
+    const evmChain = {
       chain: x402Config.network,
+      treasury_address: x402Config.payToAddress ?? null,
+      usdc_contract: USDC_CONTRACTS[x402Config.network] ?? null,
       loop_enabled: treasuryReconciliationInterval !== undefined,
+      stats: getTreasuryReconciliationStats(moteDb.db, x402Config.network),
+    };
+
+    const solanaChain = {
+      chain: SOLANA_TREASURY_DEFAULT_CHAIN,
+      treasury_address: solanaTreasuryAddress ?? null,
+      usdc_contract: USDC_MINT_MAINNET,
+      loop_enabled: solanaTreasuryReconciliationInterval !== undefined,
+      stats: getTreasuryReconciliationStats(moteDb.db, SOLANA_TREASURY_DEFAULT_CHAIN),
+    };
+
+    return c.json({
+      chains: [evmChain, solanaChain],
+      records,
     });
   });
 
@@ -1458,19 +1490,49 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   let p2pVerifierInterval: ReturnType<typeof setInterval> | undefined;
   if (solanaRpcUrl) {
     const { startP2pVerifierLoop } = await import("./p2p-verifier.js");
-    const { deriveSolanaAddress } = await import("@motebit/wallet-solana");
     // Relay treasury Solana address — same identity-derived wallet that
     // OperatorSolanaTransfer uses for Path 0 withdrawals and that
     // SolanaMemoSubmitter uses for anchoring. Arc 2 of the off-ramp arc
     // requires this so the verifier can validate the delegator's fee leg
     // (delegator→treasury transfer in the atomic multi-output P2P tx).
     const relayTreasuryAddress = deriveSolanaAddress(relayIdentity.publicKey);
+    solanaTreasuryAddress = relayTreasuryAddress;
     p2pVerifierInterval = startP2pVerifierLoop(
       moteDb.db,
       { rpcUrl: solanaRpcUrl, relayTreasuryAddress },
       () => getEmergencyFreeze(),
     );
     logger.info("p2p_verifier.started", { intervalMs: 60000, relayTreasuryAddress });
+
+    // --- Solana treasury reconciliation (compares verified-p2p fee sum to onchain balance) ---
+    // Sibling-but-distinct from the EVM treasury reconciler — see
+    // packages/treasury-reconciliation/CLAUDE.md Rule 1 (the
+    // privilege-escalation + circular-fee surfaces close the same way
+    // here, just with a different settlement-mode filter on the
+    // recorded-fee-sum side). The Solana treasury IS the relay's
+    // identity-derived Solana wallet — the same wallet the p2p
+    // verifier resolves the delegator's fee leg against, the same
+    // wallet OperatorSolanaTransfer signs Path-0 withdrawals from, the
+    // same wallet SolanaMemoSubmitter spends SOL gas from. Drift is
+    // structurally a different signal here than EVM's: it reports
+    // whether recorded `platform_fee` accumulation matches the wallet's
+    // onchain USDC balance after the verifier confirmed both legs of
+    // each Arc 2 atomic multi-output tx.
+    const solanaReconciliationIntervalMs = parseIntEnv(
+      "MOTEBIT_SOLANA_TREASURY_RECONCILIATION_INTERVAL_MS",
+      15 * 60_000,
+    );
+    solanaTreasuryReconciliationInterval = startSolanaTreasuryReconciliationLoop({
+      db: moteDb.db,
+      rpcUrl: solanaRpcUrl,
+      identitySeed: relayIdentity.privateKey,
+      intervalMs: solanaReconciliationIntervalMs,
+      isFrozen: () => getEmergencyFreeze(),
+    });
+  } else {
+    logger.info("solana-treasury-reconciliation.disabled", {
+      reason: "SOLANA_RPC_URL not set",
+    });
   }
 
   // --- Auto-sweep loop (relay balance → sovereign wallet) ---
@@ -1586,6 +1648,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(depositDetectorInterval);
     if (treasuryReconciliationInterval) clearInterval(treasuryReconciliationInterval);
     if (p2pVerifierInterval) clearInterval(p2pVerifierInterval);
+    if (solanaTreasuryReconciliationInterval) clearInterval(solanaTreasuryReconciliationInterval);
     clearInterval(sweepInterval);
     clearInterval(batchWithdrawalInterval);
     clearInterval(orchestrationWorkerInterval);

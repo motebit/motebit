@@ -153,35 +153,49 @@ export class SqliteTreasuryReconciliationStore implements TreasuryReconciliation
   }
 }
 
-/** Aggregate view for `/api/v1/admin/treasury-reconciliation`. */
-export function getTreasuryReconciliationStats(db: DatabaseDriver): TreasuryReconciliationStats {
+/** Aggregate view for `/api/v1/admin/treasury-reconciliation`.
+ *
+ *  Pass `chain` to scope counts + drift to a single CAIP-2 chain; the
+ *  admin endpoint calls this once per known chain to build the
+ *  `chains[]` array. Omit `chain` for the cross-chain aggregate
+ *  (preserved for callers that pre-date the multi-chain reshape). */
+export function getTreasuryReconciliationStats(
+  db: DatabaseDriver,
+  chain?: string,
+): TreasuryReconciliationStats {
   const now = Date.now();
   const oneDayAgo = now - 24 * 60 * 60_000;
   const oneWeekAgo = now - 7 * 24 * 60 * 60_000;
+  const chainClause = chain !== undefined ? " AND chain = ?" : "";
+  const chainArgs = chain !== undefined ? [chain] : [];
 
-  const total = db.prepare("SELECT COUNT(*) as cnt FROM relay_treasury_reconciliations").get() as {
-    cnt: number;
-  };
+  const total = db
+    .prepare(
+      `SELECT COUNT(*) as cnt FROM relay_treasury_reconciliations${
+        chain !== undefined ? " WHERE chain = ?" : ""
+      }`,
+    )
+    .get(...chainArgs) as { cnt: number };
 
   const inconsistent24h = db
     .prepare(
-      "SELECT COUNT(*) as cnt FROM relay_treasury_reconciliations WHERE consistent = 0 AND run_at >= ?",
+      `SELECT COUNT(*) as cnt FROM relay_treasury_reconciliations WHERE consistent = 0 AND run_at >= ?${chainClause}`,
     )
-    .get(oneDayAgo) as { cnt: number };
+    .get(oneDayAgo, ...chainArgs) as { cnt: number };
 
   const inconsistent7d = db
     .prepare(
-      "SELECT COUNT(*) as cnt FROM relay_treasury_reconciliations WHERE consistent = 0 AND run_at >= ?",
+      `SELECT COUNT(*) as cnt FROM relay_treasury_reconciliations WHERE consistent = 0 AND run_at >= ?${chainClause}`,
     )
-    .get(oneWeekAgo) as { cnt: number };
+    .get(oneWeekAgo, ...chainArgs) as { cnt: number };
 
   // SQLite TEXT comparison would order lexicographically; pull all 7d-window
   // negative-drift rows and compute the min in JS to avoid the surprise.
   const driftRows = db
     .prepare(
-      "SELECT drift_micro FROM relay_treasury_reconciliations WHERE consistent = 0 AND run_at >= ?",
+      `SELECT drift_micro FROM relay_treasury_reconciliations WHERE consistent = 0 AND run_at >= ?${chainClause}`,
     )
-    .all(oneWeekAgo) as Array<{ drift_micro: string }>;
+    .all(oneWeekAgo, ...chainArgs) as Array<{ drift_micro: string }>;
   let maxNegativeDrift = 0n;
   for (const r of driftRows) {
     const d = BigInt(r.drift_micro);
@@ -190,9 +204,11 @@ export function getTreasuryReconciliationStats(db: DatabaseDriver): TreasuryReco
 
   const latest = db
     .prepare(
-      "SELECT run_at, drift_micro, consistent FROM relay_treasury_reconciliations ORDER BY run_at DESC LIMIT 1",
+      `SELECT run_at, drift_micro, consistent FROM relay_treasury_reconciliations${
+        chain !== undefined ? " WHERE chain = ?" : ""
+      } ORDER BY run_at DESC LIMIT 1`,
     )
-    .get() as { run_at: number; drift_micro: string; consistent: number } | undefined;
+    .get(...chainArgs) as { run_at: number; drift_micro: string; consistent: number } | undefined;
 
   return {
     total_runs: total.cnt,

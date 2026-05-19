@@ -973,6 +973,38 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       ),
   },
   {
+    script: "check-solana-treasury-reconciliation",
+    proves:
+      "flags removal of `startSolanaTreasuryReconciliationLoop` from the relay's boot path while `startP2pVerifierLoop` is still wired — Arc 2 P2P fee legs would accumulate in the treasury wallet with no automated reconciliation",
+    perturb: () =>
+      // Strip the startSolanaTreasuryReconciliationLoop call from the
+      // relay's index.ts while leaving startP2pVerifierLoop in place.
+      // The gate must surface the missing-reconciler asymmetry.
+      // mutateFile restores byte-identical on cleanup.
+      mutateFile("services/relay/src/index.ts", (src) =>
+        src.replace(
+          /\s*solanaTreasuryReconciliationInterval\s*=\s*startSolanaTreasuryReconciliationLoop\(\{[^}]*\}\);/,
+          "",
+        ),
+      ),
+  },
+  {
+    script: "check-solana-treasury-reconciliation",
+    proves:
+      'flags a non-canonical `"solana:mainnet"` CAIP-2 string literal in the treasury-reconciliation source files — drifts the `relay_treasury_reconciliations.chain` column off the CAIP-30 identifier used by every other audit table',
+    perturb: () =>
+      // Replace the canonical SOLANA_MAINNET_CAIP2 reference with the
+      // shorthand string literal. The gate must surface this as a
+      // literal-shorthand violation. mutateFile restores
+      // byte-identical on cleanup.
+      mutateFile("packages/wallet-solana/src/operator-treasury-reconciler.ts", (src) =>
+        src.replace(
+          "SOLANA_TREASURY_DEFAULT_CHAIN = SOLANA_MAINNET_CAIP2;",
+          'SOLANA_TREASURY_DEFAULT_CHAIN = "solana:mainnet";',
+        ),
+      ),
+  },
+  {
     script: "check-preset-imports",
     proves:
       "flags a surface-app declaration that shadows an @motebit/sdk canonical preset identifier (APPROVAL_PRESET_CONFIGS, COLOR_PRESETS, RISK_LABELS, …)",
