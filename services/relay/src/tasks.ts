@@ -655,11 +655,13 @@ export async function handleReceiptIngestion(
             // task's allocation pays the sub-agent through the relay,
             // not third-party transmission. The doctrine forbids
             // relay-custody for direct delegator→worker paid flows
-            // (enforced at task submission via TASK_P2P_PROOF_REQUIRED);
-            // multi-hop is a different topology and stays `"relay"`
-            // until a future arc closes it via P2P sub-payments. See
-            // `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3
-            // carve-outs".
+            // (enforced at task submission via TASK_P2P_PROOF_REQUIRED
+            // once Arc 3.5 lands; today the structural enforcement is
+            // type-level only — see the canonical inline comment at
+            // ~line 1767 below); multi-hop is a different topology and
+            // stays `"relay"` until a future arc closes it via P2P
+            // sub-payments. See `docs/doctrine/off-ramp-as-user-action.md`
+            // § "Arc 3 carve-outs".
             settlement_mode: "relay",
             status: subSettlement.status,
             settled_at: subSettlement.settled_at,
