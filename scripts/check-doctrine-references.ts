@@ -147,16 +147,23 @@ const BACKTICK_IDENT = /`([A-Za-z_][A-Za-z0-9_]*)`/g;
 /**
  * Identifiers that match a shape pattern but legitimately do not resolve
  * to a current source-corpus token. Each entry MUST carry a reason.
- * Three legitimate classes:
+ * Five legitimate classes (initial sweep against the 43-doc corpus
+ * surfaced one or more of each):
  *
  *   - Anticipated future symbol: the doctrine names a planned type or
  *     constant that lands later (sibling shape to `check-doctrine-citations`
  *     `PATH_ALLOWLIST` for forward-looking specs).
  *   - Historical symbol: past-tense narration of a now-removed identifier
  *     that the deletion narrative would be incoherent without naming.
- *   - Placeholder symbol: shape-only mention (`ALL_X`, `OperatorXxx`)
- *     where the doctrine uses the identifier name to describe a class of
- *     symbols, not a specific one.
+ *   - Illustrative teaching prose: pedagogical counterexample names used
+ *     to motivate a design decision (e.g., "with three sibling types, the
+ *     verifier must dispatch on type" — the names are illustrative, not
+ *     actual exports).
+ *   - External library symbol: stdlib / third-party API named in
+ *     comparison or endgame tables (WebGPU, WebCodecs, Three.js, etc.).
+ *   - Naming-convention shorthand: the doctrine cites a suffix or
+ *     prefix string, not a standalone identifier (e.g., `Md` vs
+ *     `IdentityFile` suffix in method names).
  *
  * Adding to this allowlist is intentional: a typo or stale identifier
  * should be fixed in the doctrine, not waived here.
@@ -381,10 +388,11 @@ function main(): void {
   console.log(
     `  Fix: update the citation to the current symbol name, OR add an entry\n` +
       `       to IDENTIFIER_ALLOWLIST in scripts/check-doctrine-references.ts\n` +
-      `       with a reason (anticipated future symbol / historical symbol /\n` +
-      `       placeholder symbol). Adding an allowlist entry is intentional —\n` +
-      `       a typo or stale identifier belongs in the doctrine fix, not\n` +
-      `       waived here.`,
+      `       with a reason — see the five legitimate classes documented at\n` +
+      `       the allowlist's declaration (anticipated future / historical /\n` +
+      `       illustrative teaching prose / external library / naming-\n` +
+      `       convention shorthand). Adding an entry is intentional — a typo\n` +
+      `       or stale identifier belongs in the doctrine fix, not waived.`,
   );
   process.exit(1);
 }
