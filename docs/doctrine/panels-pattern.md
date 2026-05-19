@@ -85,7 +85,7 @@ Known drifts (each is a policy / audit question, not a mechanical cleanup):
 
 3. Mobile's `GovernanceTab.tsx` has no UI for `maxMemoriesPerTurn`; the field is stored in `MobileSettings` but users can't edit it.
 
-4. Model-list seeding is divergent: web's `FALLBACK_MODELS` (`apps/web/src/ui/settings.ts:35–57`) is a local list, desktop reads from `ANTHROPIC_MODELS` / `OPENAI_MODELS` / `GOOGLE_MODELS` in `@motebit/sdk`, mobile relies on parent-supplied defaults. Different users see different model pickers for the same provider.
+4. Model-list seeding needs cross-surface audit: desktop reads from `ANTHROPIC_MODELS` / `OPENAI_MODELS` / `GOOGLE_MODELS` in `@motebit/sdk`, mobile relies on parent-supplied defaults, and web's prior local constant was struck during the BYOK overhaul (model picker flows through the vendor catalog now). Whether different users see different model pickers for the same provider is an open audit on the post-overhaul state.
 
 5. Voice key persistence on desktop needs audit. Web uses `getTTSKey('elevenlabs')` through a shared helper. Desktop's settings.ts grep shows no matching read path for `elevenlabs_api_key` — the key may only be persisted if the TTS provider reads the keyring itself, which would mean Settings shows a stale "connected" indicator when the key changes.
 

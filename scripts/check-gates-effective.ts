@@ -1486,6 +1486,23 @@ If check-doctrine-citations is working, all three references fail the gate.
       ),
   },
   {
+    script: "check-doctrine-references",
+    proves:
+      "flags a doctrine doc that cites an identifier-shaped backticked symbol that doesn't appear anywhere in the source corpus (packages/*, services/*, apps/*, scripts/, spec/*.md, per-package CLAUDE.md). The drift class the gate exists to catch — a stale PascalCase type, SCREAMING_SNAKE constant, or camelCase function name surviving in doctrine prose after the code symbol it names was renamed or removed. Sibling of `check-doctrine-citations` one level deeper (path-shaped vs symbol-shaped). Closes the prose-fossil class the 2026-05-18 CAIP-2 canonicality catch and the FIN-2015-G001 prose-fossil catch were instances of.",
+    perturb: () =>
+      writeFixture(
+        `docs/doctrine/${PROBE_PREFIX}stale-symbol.md`,
+        `# Probe-only doctrine doc
+
+Cites a fake type \`XyzNonExistentProbeReconciler\` and a fake constant
+\`XYZ_NONEXISTENT_PROBE_CONSTANT\` and a fake function \`probeXyzNonExistent\`,
+none of which appear in the source corpus.
+
+If check-doctrine-references is working, all three references fail the gate.
+`,
+      ),
+  },
+  {
     script: "check-audience-canonical",
     proves:
       'flags an audience literal that is not a member of the closed `TokenAudience` registry. Same drift class the registry exists to catch — a typo at a signing site (`aud: "task:sumbit"`) that pre-registry was a runtime 401 at the verifier.',

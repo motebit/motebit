@@ -105,6 +105,7 @@
     "check-execution-ledger-inner-receipt-verified": "npx tsx scripts/check-execution-ledger-inner-receipt-verified.ts",
     "check-readme-public-exports": "npx tsx scripts/check-readme-public-exports.ts",
     "check-doctrine-citations": "npx tsx scripts/check-doctrine-citations.ts",
+    "check-doctrine-references": "npx tsx scripts/check-doctrine-references.ts",
     "check-readme-bin-claims": "npx tsx scripts/check-readme-bin-claims.ts",
     "check-docs-cli-claims": "npx tsx scripts/check-docs-cli-claims.ts",
     "check-docs-slash-claims": "npx tsx scripts/check-docs-slash-claims.ts",
