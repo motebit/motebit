@@ -7,9 +7,9 @@
  * vendors. This test verifies the second half of the same contract:
  * given byte-identical model OUTPUTS (the chunk sequence emitted by the
  * `StreamingProvider`), the runtime produces byte-identical signed
- * artifacts — `ExecutionReceipt` envelopes, sensitivity-gate decisions,
- * tool dispatch sequences — REGARDLESS OF WHICH VENDOR ADAPTER
- * EMITTED THE CHUNKS.
+ * artifacts — `ExecutionReceipt` envelopes (and, on extension,
+ * `ToolInvocationReceipt` envelopes + tool dispatch sequences) —
+ * REGARDLESS OF WHICH VENDOR ADAPTER EMITTED THE CHUNKS.
  *
  * The doctrinal claim being tested:
  *   "Runtime invariants stay constant; only prompts/tools/budgets
@@ -19,9 +19,10 @@
  * `StreamingProvider` instances to the same recorded chunk sequence and
  * assert the runtime's signed output is byte-identical across all N.
  * This rules out the failure mode "vendor adapter leaks into the
- * post-streaming pipeline" — sensitivity-gate hashing, receipt
- * canonicalization, tool dispatch ordering must be pure functions of
- * the chunk stream, not the adapter identity.
+ * post-streaming pipeline" — receipt canonicalization, hashing, signing,
+ * and tool dispatch ordering must be pure functions of the chunk stream,
+ * not the adapter identity. (Sensitivity-gate decisions are deliberately
+ * excluded: they vary across vendors by design — see the TODO block.)
  *
  * What this test is NOT:
  *
