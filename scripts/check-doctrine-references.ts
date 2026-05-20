@@ -190,6 +190,8 @@ const IDENTIFIER_ALLOWLIST: Record<string, string> = {
     "anticipated future semiring — `retention-policy.md` names this as the semiring that lands in `@motebit/semiring` if a third consumer arrives. Until then the `max` reduction in the resolver is sufficient; the doctrine names the shape preemptively.",
   playProtectVerdict:
     "anticipated future non-canonical operator signal — `hardware-attestation.md` names this as a field a future motebit deployment might surface at the relay tier if Play Integrity were re-introduced (outside the permissive-floor crypto-leaf set). Hypothetical, not motebit-canonical.",
+  EvalReceipt:
+    "illustrative counterexample — `evals-as-attestations.md` opens with the rejected name. The whole memo's purpose is to explain why evals are NOT a receipt; naming the rejected category in the opening sentence is what makes the deferral legible. The actual future type is `EvalAttestation` (already in the source corpus via the root CLAUDE.md index entry).",
 
   // ----- Historical symbols (past-tense narrative) -----
   setSlabControlBand:
