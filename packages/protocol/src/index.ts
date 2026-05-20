@@ -1582,19 +1582,8 @@ export interface SettlementRecord {
    * Treasury reconciliation (operator fee accrual vs. onchain balance)
    * is structurally NOT a settlement and never appears here — see
    * `docs/doctrine/settlement-rails.md` § "Lanes for external readers".
-   *
-   * **v1.x additive shape**: optional at the type level so adding this
-   * field does not break v1.x consumers that construct `SettlementRecord`
-   * directly. Functionally required — every `signSettlement` call site
-   * in `services/relay/src/tasks.ts` sets it explicitly to `"relay"` or
-   * `"p2p"`. Verifiers reading a record where this is absent should
-   * treat it as a pre-Arc-3 legacy receipt (implicit lane = `"relay"`,
-   * the original single-lane behavior) or fail-closed per their policy.
-   *
-   * Promotes to required at v2.0.0 when a real ground-shift in the
-   * settlement model justifies the major bump.
    */
-  settlement_mode?: SettlementMode;
+  settlement_mode: SettlementMode;
   /** x402 payment transaction hash (when paid on-chain). */
   x402_tx_hash?: string;
   /** x402 network used for payment (CAIP-2 identifier). */
