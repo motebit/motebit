@@ -87,6 +87,22 @@ function segmentBounds(receipt: string): {
 const BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".split("");
 const HEX_CHARS = "0123456789abcdef".split("");
 
+/**
+ * Pick a mutation position within a base64url segment, EXCLUDING the
+ * last char. base64url has trailing-bit ambiguity at the end of a
+ * segment whose length is not a multiple of 4: the last char's unused
+ * low-order bits don't affect the decoded byte stream, so a single-char
+ * mutation there can decode to identical bytes and be a structural
+ * no-op. Avoid that case by capping mutation positions to
+ * `[start, end-1)`. Sibling helper to the same-named function in
+ * `crypto-appattest` and `crypto-webauthn` properties tests.
+ */
+function pickMutPos(start: number, end: number, seed: number): number {
+  const segLen = end - start;
+  if (segLen <= 1) return start;
+  return start + (seed % (segLen - 1));
+}
+
 // ── Property 1 — Leaf-segment mutation always detected ──────────────
 
 describe("verifyAndroidKeystoreAttestation: mutation in leaf (first) segment is always detected", () => {
@@ -97,7 +113,7 @@ describe("verifyAndroidKeystoreAttestation: mutation in leaf (first) segment is 
         fc.constantFrom(...BASE64URL),
         async (positionSeed, newChar) => {
           const [start, end] = segmentBounds(fixture.receipt).leaf;
-          const pos = start + (positionSeed % (end - start));
+          const pos = pickMutPos(start, end, positionSeed);
           if (fixture.receipt[pos] === newChar) return true; // no-op
           const mutated = fixture.receipt.slice(0, pos) + newChar + fixture.receipt.slice(pos + 1);
           const result = await verifyAndroidKeystoreAttestation(
@@ -121,7 +137,7 @@ describe("verifyAndroidKeystoreAttestation: mutation in intermediates (second) s
         fc.constantFrom(...BASE64URL),
         async (positionSeed, newChar) => {
           const [start, end] = segmentBounds(fixture.receipt).intermediates;
-          const pos = start + (positionSeed % (end - start));
+          const pos = pickMutPos(start, end, positionSeed);
           if (fixture.receipt[pos] === newChar) return true; // no-op
           const mutated = fixture.receipt.slice(0, pos) + newChar + fixture.receipt.slice(pos + 1);
           const result = await verifyAndroidKeystoreAttestation(
