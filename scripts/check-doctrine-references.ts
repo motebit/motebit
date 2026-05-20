@@ -174,6 +174,14 @@ const IDENTIFIER_ALLOWLIST: Record<string, string> = {
     "anticipated future ByokVendor field — `intelligence-pluggability-contract.md` names this as the model's declared context-window size that the pre-flight admission check measures the assembled prompt against. Lands when the typed admission path replaces the current byte-budget pre-flight.",
   renderedMemoryBudget:
     "anticipated future model-aware prompt assembly field — `intelligence-pluggability-contract.md` names this in the substance-vs-representation table for memory packing. Lands with the model-aware prompt assembly arc the doctrine is the standing direction for.",
+  promptVerbosity:
+    "anticipated future model-aware prompt assembly field — sibling of `renderedMemoryBudget` above; named in `intelligence-pluggability-contract.md`'s substance-vs-representation table as the doctrine-teaching-density budget. Lands with the model-aware prompt assembly arc.",
+  toolSchemaBudget:
+    "anticipated future model-aware prompt assembly field — sibling of `renderedMemoryBudget`; named in `intelligence-pluggability-contract.md` as the schemas + descriptions exposed budget. Lands with the model-aware prompt assembly arc.",
+  renderedStateBudget:
+    'anticipated future model-aware prompt assembly field — sibling of `renderedMemoryBudget`; named in `intelligence-pluggability-contract.md` for state representation in context (`never "compressed state" — state is identity-adjacent`). Lands with the model-aware prompt assembly arc.',
+  outputReserve:
+    "anticipated future model-aware prompt assembly field — sibling of `renderedMemoryBudget`; named in `intelligence-pluggability-contract.md` as the max_tokens reserved for completion. Lands with the model-aware prompt assembly arc.",
   REFERENCE_BYOK_ROUTING_POLICY:
     "anticipated future BYOK consumer-side routing policy — `auto-routing-as-protocol-primitive.md` names this as the constant a future PR 2 (BYOK consumer) might ship. Per-consumer policy is consumer-side, not protocol-side; lands when PR 2 materializes.",
   REFERENCE_ON_DEVICE_ROUTING_POLICY:
