@@ -37,6 +37,13 @@ export interface AgentTaskHandlerDeps {
   agentGraph: AgentGraphManager;
   latencyStatsStore: LatencyStatsStoreAdapter | null;
   logger: { warn(message: string, context?: Record<string, unknown>): void };
+  /**
+   * Source of `completed_at` for the signed ExecutionReceipt. Defaults to
+   * `Date.now`. Sourced from `RuntimeConfig.clock`. Tests that assert
+   * byte-identity across runs (e.g. cross-model behavioral equivalence)
+   * pin this to a fixed value; production leaves it undefined.
+   */
+  clock?: () => number;
 
   /** Send a message through the streaming pipeline, returning chunks. */
   sendMessageStreaming(
@@ -245,7 +252,7 @@ export async function* handleAgentTask(
     motebit_id: task.motebit_id,
     device_id: deviceId,
     submitted_at: task.submitted_at,
-    completed_at: Date.now(),
+    completed_at: (deps.clock ?? Date.now)(),
     status,
     result: responseText,
     tools_used: toolsUsed,

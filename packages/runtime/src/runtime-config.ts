@@ -286,6 +286,14 @@ export interface RuntimeConfig {
   sovereignReceiptExchange?: import("./sovereign-receipt-exchange.js").SovereignReceiptExchangeAdapter;
   /** Optional structured logger. Falls back to console.warn for best-effort diagnostics. */
   logger?: { warn(message: string, context?: Record<string, unknown>): void };
+  /**
+   * Clock source for receipt timestamps. Defaults to `Date.now`. Override
+   * in tests that assert byte-identity across runs (cross-model behavioral
+   * equivalence, fixture replay) and in deterministic-replay scenarios.
+   * Threaded into `AgentTaskHandlerDeps.clock`; other receipt paths
+   * continue to call `Date.now` directly until a test demands otherwise.
+   */
+  clock?: () => number;
 }
 
 // === Stream Chunk ===

@@ -477,6 +477,12 @@ export class MotebitRuntime {
    */
   private _deviceId: string;
   /**
+   * Clock source for receipt timestamps; threaded into
+   * `AgentTaskHandlerDeps.clock`. Undefined means default `Date.now`.
+   * Sourced from `RuntimeConfig.clock` at construction.
+   */
+  private _clock?: () => number;
+  /**
    * Optional sink for signed per-tool-call receipts. When set, the
    * streaming manager fires this once per matched calling→done pair
    * after composing + signing the receipt. Wired through from
@@ -530,6 +536,7 @@ export class MotebitRuntime {
 
     this.motebitId = config.motebitId;
     this._deviceId = config.deviceId ?? "runtime-default";
+    this._clock = config.clock;
     // receipts-1 — wrap the surface's onToolInvocation callback so
     // every signed receipt lands in the runtime's buffer BEFORE the
     // surface fans out. This is what makes `getRecentReceipts()`
@@ -3245,6 +3252,7 @@ export class MotebitRuntime {
       agentGraph: this.agentGraph,
       latencyStatsStore: this.latencyStatsStore,
       logger: this._logger,
+      clock: this._clock,
       sendMessageStreaming: (text, runId, options) =>
         this.sendMessageStreaming(text, runId, options),
       saveConversationContext: () => this.conversation.saveContext(),
