@@ -274,6 +274,71 @@ describe("P2P task submission", () => {
     expect(res.status).toBe(400);
   });
 
+  // === Arc 2 fee-leg completeness (runtime contract) ===
+  //
+  // After the v1.x additive-shape change, `P2pPaymentProof.fee_to_address`
+  // and `fee_amount_micro` are optional at the type level. The contract
+  // moves to runtime — `tasks.ts:1658` throws TASK_INVALID_INPUT (HTTP
+  // 400, "Incomplete payment_proof fields …") when either is absent.
+  // These two cases lock that runtime enforcement against drift, since
+  // the type system no longer catches missing fields at the boundary.
+
+  it("rejects when payment_proof omits fee_to_address (Arc 2 runtime check)", async () => {
+    const res = await relay.app.request(`/agent/wrk-p2p/task`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": "idem-p2p-no-fee-addr",
+        ...AUTH_HEADER,
+      },
+      body: JSON.stringify({
+        prompt: "Test p2p task",
+        submitted_by: "del-p2p",
+        target_agent: "wrk-p2p",
+        payment_proof: {
+          tx_hash: "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk",
+          chain: "solana",
+          network: SOLANA_MAINNET_CAIP2,
+          to_address: "9xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgBBB",
+          amount_micro: 500000,
+          // fee_to_address intentionally omitted
+          fee_amount_micro: 26316,
+        },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error ?? "").toMatch(/Incomplete payment_proof fields/);
+  });
+
+  it("rejects when payment_proof omits fee_amount_micro (Arc 2 runtime check)", async () => {
+    const res = await relay.app.request(`/agent/wrk-p2p/task`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": "idem-p2p-no-fee-amount",
+        ...AUTH_HEADER,
+      },
+      body: JSON.stringify({
+        prompt: "Test p2p task",
+        submitted_by: "del-p2p",
+        target_agent: "wrk-p2p",
+        payment_proof: {
+          tx_hash: "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk",
+          chain: "solana",
+          network: SOLANA_MAINNET_CAIP2,
+          to_address: "9xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgBBB",
+          amount_micro: 500000,
+          fee_to_address: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgFFF",
+          // fee_amount_micro intentionally omitted
+        },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error ?? "").toMatch(/Incomplete payment_proof fields/);
+  });
+
   it("submits task without payment_proof — falls back to relay mode", async () => {
     const res = await relay.app.request(`/agent/wrk-p2p/task`, {
       method: "POST",

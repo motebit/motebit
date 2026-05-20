@@ -539,6 +539,57 @@ describe("signSettlement / verifySettlement", () => {
     const b = await signSettlement(r, kp.privateKey);
     expect(a.signature).toBe(b.signature);
   });
+
+  // === settlement_mode lane discriminant (Arc 3 wire field) ===
+  //
+  // settlement_mode is optional on the type (v1.x additive shape per
+  // packages/protocol/src/index.ts) but functionally required at the
+  // relay — every signSettlement call site sets it explicitly. These
+  // three tests lock the wire-level contract:
+  //   1. p2p mode round-trips (matches the relay's p2p signSettlement site)
+  //   2. legacy records without the field still verify (additive shape
+  //      means absent → readable as pre-Arc-3 implicit "relay")
+  //   3. the field is in the signed bytes — tampering invalidates the
+  //      signature, so a relay cannot relabel custody after the fact
+
+  it("round-trips with settlement_mode: 'p2p' — lane is signed wire field", async () => {
+    const kp = await generateKeypair();
+    const p2pRecord = { ...makeSettlement(), settlement_mode: "p2p" as const };
+    const signed = await signSettlement(p2pRecord, kp.privateKey);
+    expect(signed.settlement_mode).toBe("p2p");
+    const valid = await verifySettlement(signed, kp.publicKey);
+    expect(valid).toBe(true);
+  });
+
+  it("verifies a legacy record WITHOUT settlement_mode (v1.x additive shape)", async () => {
+    // Pre-Arc-3 SettlementRecord shape — settlement_mode field absent.
+    // The v1.x type makes the field optional so this construction
+    // typechecks; verification must still succeed because the canonical
+    // JSON bytes for the legacy shape are well-defined (the field is
+    // omitted, not set to undefined or null). Readers default the lane
+    // to "relay" — the original single-lane behavior — per the JSDoc
+    // contract on SettlementRecord.settlement_mode.
+    const kp = await generateKeypair();
+    const legacy = makeSettlement();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { settlement_mode: _omit, ...withoutMode } = legacy;
+    const signed = await signSettlement(withoutMode, kp.privateKey);
+    const valid = await verifySettlement(signed, kp.publicKey);
+    expect(valid).toBe(true);
+    expect(signed.settlement_mode).toBeUndefined();
+  });
+
+  it("detects settlement_mode tampering — relay cannot relabel custody lane after the fact", async () => {
+    const kp = await generateKeypair();
+    const relayRecord = await signSettlement(makeSettlement(), kp.privateKey);
+    expect(relayRecord.settlement_mode).toBe("relay");
+    // Relay-custody record retroactively relabeled as p2p (which would
+    // hide a custody event from auditors). Ed25519 over the canonical
+    // bytes catches the mutation.
+    const tampered = { ...relayRecord, settlement_mode: "p2p" as const };
+    const valid = await verifySettlement(tampered, kp.publicKey);
+    expect(valid).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
