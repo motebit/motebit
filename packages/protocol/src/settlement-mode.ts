@@ -113,10 +113,23 @@ export function isSettlementMode(value: unknown): value is SettlementMode {
  * policy. The fee is now structurally present on every P2P settlement
  * as a direct delegator→treasury leg.
  *
- * **Breaking change from pre-Arc-2 P2pPaymentProof shape**: the new
- * `fee_to_address` + `fee_amount_micro` fields are required. The
- * worker-leg fields (`to_address`, `amount_micro`) keep their existing
- * semantics — they describe only the worker leg, not the gross.
+ * **Arc 2 shape (additive, v1.x-compatible)**: `fee_to_address` and
+ * `fee_amount_micro` are declared **optional** at the type level so
+ * adding them does not break v1.x consumers that construct
+ * `P2pPaymentProof` directly. They are functionally required for any
+ * post-Arc-2 submission — the relay's `/tasks` endpoint (see
+ * `services/relay/src/tasks.ts`) returns HTTP 400 "Incomplete
+ * payment_proof fields" if either is missing. The contract is enforced
+ * at the relay-submission boundary at runtime, not by the type system.
+ *
+ * This is the v1.x position. A future v2.0.0 may promote these to
+ * required at the type level when an actual ground-shift in the
+ * settlement model justifies the major bump; until then the optional
+ * shape lets v1 stay stable while the runtime enforcement keeps the
+ * fee leg structurally present on every submitted P2P settlement.
+ *
+ * The worker-leg fields (`to_address`, `amount_micro`) keep their
+ * existing semantics — they describe only the worker leg, not the gross.
  */
 export interface P2pPaymentProof {
   /** Onchain transaction signature (Solana base58, 87-88 chars). */
@@ -139,15 +152,21 @@ export interface P2pPaymentProof {
    * public key from a verified source (transparency declaration or
    * pinned config) — passing a wrong address sends the fee leg to a
    * non-relay address and verification fails-closed.
+   *
+   * Optional at the type level (v1.x additive shape); the relay
+   * submission boundary rejects requests where this is missing.
    */
-  fee_to_address: string;
+  fee_to_address?: string;
   /**
    * Fee leg amount in micro-units. The platform fee, computed as
    * `gross - amount_micro` where `gross = amount_micro / (1 - platformFeeRate)`.
    * The verifier validates this matches the relay's recorded
    * `platform_fee_rate` against the declared `amount_micro`.
+   *
+   * Optional at the type level (v1.x additive shape); the relay
+   * submission boundary rejects requests where this is missing.
    */
-  fee_amount_micro: number;
+  fee_amount_micro?: number;
 }
 
 // === Payment Verification ===
