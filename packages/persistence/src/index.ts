@@ -2599,7 +2599,7 @@ export class SqliteSettlementStore {
       settlement.platform_fee_rate,
       settlement.status,
       settlement.settled_at,
-      settlement.settlement_mode,
+      settlement.settlement_mode ?? null,
       settlement.issuer_relay_id,
       settlement.suite,
       settlement.signature,

@@ -1889,7 +1889,7 @@ export class TauriSettlementStore implements SettlementStoreAdapter {
         settlement.amount_settled,
         settlement.platform_fee,
         settlement.platform_fee_rate,
-        settlement.settlement_mode,
+        settlement.settlement_mode ?? null,
         settlement.x402_tx_hash ?? null,
         settlement.x402_network ?? null,
         settlement.status,
