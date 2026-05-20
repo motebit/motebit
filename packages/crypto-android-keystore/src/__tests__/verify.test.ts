@@ -18,7 +18,6 @@
 
 import { describe, expect, it } from "vitest";
 import * as x509 from "@peculiar/x509";
-import { Crypto } from "@peculiar/webcrypto";
 
 import { androidKeystoreVerifier } from "../index.js";
 import {
@@ -35,183 +34,26 @@ import {
 } from "../asn1.js";
 import { verifyAndroidKeystoreAttestation } from "../verify.js";
 import { composeKeyDescriptionForTest } from "./compose-key-description-for-test.js";
-
-x509.cryptoProvider.set(new Crypto() as unknown as globalThis.Crypto);
-
-const subtle = new Crypto().subtle;
-
-async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await subtle.digest("SHA-256", bytes as BufferSource));
-}
-
-function toBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-/** Mirror of `buildCanonicalAttestationBody` in `verify.ts`. */
-function canonicalAndroidKeystoreBody(input: {
-  attestedAt: number;
-  deviceId: string;
-  identityPublicKeyHex: string;
-  motebitId: string;
-}): string {
-  const esc = (s: string): string => {
-    let out = '"';
-    for (const ch of s) {
-      const code = ch.codePointAt(0)!;
-      if (ch === '"') out += '\\"';
-      else if (ch === "\\") out += "\\\\";
-      else if (ch === "\n") out += "\\n";
-      else if (ch === "\r") out += "\\r";
-      else if (ch === "\t") out += "\\t";
-      else if (code < 0x20) out += `\\u${code.toString(16).padStart(4, "0")}`;
-      else out += ch;
-    }
-    return out + '"';
-  };
-  return (
-    `{"attested_at":${input.attestedAt}` +
-    `,"device_id":${esc(input.deviceId)}` +
-    `,"identity_public_key":${esc(input.identityPublicKeyHex.toLowerCase())}` +
-    `,"motebit_id":${esc(input.motebitId)}` +
-    `,"platform":"android_keystore"` +
-    `,"version":"1"}`
-  );
-}
-
-interface BuildChainOptions {
-  /**
-   * Override the intermediate's basicConstraints. Default `{ ca: true,
-   * pathLength: 1 }`. Tests that exercise the non-CA-intermediate
-   * branch pass `{ ca: false }`.
-   */
-  readonly intermediateBasicConstraints?: { ca: boolean; pathLength?: number };
-  readonly notBefore?: Date;
-  readonly notAfter?: Date;
-}
-
-interface BuiltChain {
-  readonly rootPem: string;
-  readonly leaf: x509.X509Certificate;
-  readonly intermediate: x509.X509Certificate;
-}
-
-async function buildFakeRoot(opts: BuildChainOptions = {}): Promise<{
-  rootPem: string;
-  rootKeys: CryptoKeyPair;
-}> {
-  const alg: EcKeyGenParams & EcdsaParams = {
-    name: "ECDSA",
-    namedCurve: "P-256",
-    hash: "SHA-256",
-  };
-  const rootKeys = await subtle.generateKey(alg, true, ["sign", "verify"]);
-  const root = await x509.X509CertificateGenerator.createSelfSigned({
-    serialNumber: "01",
-    name: "CN=FakeAndroidAttestationRoot",
-    notBefore: opts.notBefore ?? new Date("2024-01-01"),
-    notAfter: opts.notAfter ?? new Date("2099-01-01"),
-    signingAlgorithm: alg,
-    keys: rootKeys,
-    extensions: [new x509.BasicConstraintsExtension(true, 2, true)],
-  });
-  return { rootPem: root.toString("pem"), rootKeys };
-}
-
-async function buildChainWithKeyDescription(input: {
-  rootPem: string;
-  rootKeys: CryptoKeyPair;
-  keyDescriptionDer: Uint8Array;
-  options?: BuildChainOptions;
-}): Promise<BuiltChain> {
-  const alg: EcKeyGenParams & EcdsaParams = {
-    name: "ECDSA",
-    namedCurve: "P-256",
-    hash: "SHA-256",
-  };
-  const opts = input.options ?? {};
-  const intermediateKeys = await subtle.generateKey(alg, true, ["sign", "verify"]);
-  const leafKeys = await subtle.generateKey(alg, true, ["sign", "verify"]);
-
-  const notBefore = opts.notBefore ?? new Date("2024-01-01");
-  const notAfter = opts.notAfter ?? new Date("2099-01-01");
-  const bc = opts.intermediateBasicConstraints ?? { ca: true, pathLength: 1 as number | undefined };
-
-  const root = new x509.X509Certificate(input.rootPem);
-
-  const intermediate = await x509.X509CertificateGenerator.create({
-    serialNumber: "02",
-    issuer: root.subject,
-    subject: "CN=FakeAndroidAttestationIntermediate",
-    notBefore,
-    notAfter,
-    signingAlgorithm: alg,
-    publicKey: intermediateKeys.publicKey,
-    signingKey: input.rootKeys.privateKey,
-    extensions: [new x509.BasicConstraintsExtension(bc.ca, bc.pathLength, true)],
-  });
-
-  const leaf = await x509.X509CertificateGenerator.create({
-    serialNumber: "1234abcd",
-    issuer: intermediate.subject,
-    subject: "CN=Android Keystore Key",
-    notBefore,
-    notAfter,
-    signingAlgorithm: alg,
-    publicKey: leafKeys.publicKey,
-    signingKey: intermediateKeys.privateKey,
-    extensions: [new x509.Extension(ANDROID_KEY_ATTESTATION_OID, false, input.keyDescriptionDer)],
-  });
-
-  return { rootPem: input.rootPem, leaf, intermediate };
-}
-
-function buildReceipt(chain: BuiltChain): string {
-  const leafB64 = toBase64Url(new Uint8Array(chain.leaf.rawData));
-  const intB64 = toBase64Url(new Uint8Array(chain.intermediate.rawData));
-  return `${leafB64}.${intB64}`;
-}
-
-// ── Test fixtures ────────────────────────────────────────────────────
-
-const RP_PACKAGE = "com.motebit.mobile";
-const RP_SIGNING_HASH = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const APP_ID_BYTES = new TextEncoder().encode(`${RP_PACKAGE}::${RP_SIGNING_HASH}`);
-const VERIFIED_BOOT_KEY = new Uint8Array(32).fill(0xab);
-
-const IDENT = "a".repeat(64);
-const MOTEBIT_ID = "01234567-89ab-cdef-0123-456789abcdef";
-const DEVICE_ID = "dev-1";
-const ATTESTED_AT = 1_745_000_000_000;
-const FIXED_CLOCK = (): number => new Date("2026-04-22").getTime();
-
-async function buildHappyPathFixture(): Promise<{ receipt: string; rootPem: string }> {
-  const body = canonicalAndroidKeystoreBody({
-    attestedAt: ATTESTED_AT,
-    deviceId: DEVICE_ID,
-    identityPublicKeyHex: IDENT,
-    motebitId: MOTEBIT_ID,
-  });
-  const challenge = await sha256(new TextEncoder().encode(body));
-  const keyDescription = composeKeyDescriptionForTest({
-    attestationChallenge: challenge,
-    rootOfTrust: {
-      verifiedBootKey: VERIFIED_BOOT_KEY,
-      deviceLocked: true,
-      verifiedBootState: VERIFIED_BOOT_STATE_VERIFIED,
-    },
-    attestationApplicationId: APP_ID_BYTES,
-  });
-  const { rootPem, rootKeys } = await buildFakeRoot();
-  const chain = await buildChainWithKeyDescription({
-    rootPem,
-    rootKeys,
-    keyDescriptionDer: keyDescription,
-  });
-  return { receipt: buildReceipt(chain), rootPem };
-}
+import {
+  APP_ID_BYTES,
+  ATTESTED_AT,
+  DEVICE_ID,
+  FIXED_CLOCK,
+  IDENT,
+  MOTEBIT_ID,
+  RP_PACKAGE,
+  RP_SIGNING_HASH,
+  VERIFIED_BOOT_KEY,
+  buildChainWithKeyDescription,
+  buildFakeRoot,
+  buildHappyPathFixture,
+  buildReceipt,
+  canonicalAndroidKeystoreBody,
+  sha256,
+  subtle,
+  toBase64Url,
+} from "./test-helpers.js";
+import type { BuildChainOptions, BuiltChain } from "./test-helpers.js";
 
 // ── Tests ────────────────────────────────────────────────────────────
 
