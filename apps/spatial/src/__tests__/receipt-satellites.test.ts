@@ -49,14 +49,18 @@ describe("hueForVerifyState", () => {
   it("assigns distinct hues to each verification state", () => {
     const pending = hueForVerifyState("pending");
     const verified = hueForVerifyState("verified");
+    const integrityOnly = hueForVerifyState("integrity-only");
     const taskFailed = hueForVerifyState("task-failed");
     const failed = hueForVerifyState("failed");
-    const all = [pending, verified, taskFailed, failed];
-    expect(new Set(all).size).toBe(4);
+    const all = [pending, verified, integrityOnly, taskFailed, failed];
+    expect(new Set(all).size).toBe(5);
+    // integrity-only must NOT share the green "bound" hue — the whole point is
+    // that a self-asserted-key receipt reads differently from an anchored one.
+    expect(integrityOnly).not.toBe(verified);
   });
 
   it("keeps every hue inside [0, 360)", () => {
-    for (const s of ["pending", "verified", "task-failed", "failed"] as const) {
+    for (const s of ["pending", "verified", "integrity-only", "task-failed", "failed"] as const) {
       const h = hueForVerifyState(s);
       expect(h).toBeGreaterThanOrEqual(0);
       expect(h).toBeLessThan(360);

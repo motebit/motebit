@@ -6,12 +6,16 @@
  * ring around the creature, colored by the local verification state:
  *
  *   amber  → verifying
- *   green  → chain verified, task succeeded
+ *   green  → chain verified against a trusted anchor — identity bound
+ *   cyan   → signature verified, identity not anchored (checked against the
+ *            receipt's own embedded key — integrity, not binding)
  *   orange → chain verified, task reported failure
  *   red    → chain verification failed
  *
  * The citation IS the orb. No footnote. No URL. Local Ed25519 over JCS
  * canonical JSON runs in-browser via `@motebit/encryption.verifyReceiptChain`.
+ * A valid signature proves the bytes were signed; binding that key to the
+ * `motebit_id` needs a trusted anchor — hence the green/cyan split.
  *
  * Shape choices versus credentials:
  *   - Outer ring (0.26m base vs 0.18m) so receipts and credentials occupy
@@ -37,7 +41,12 @@ export const RECEIPT_SATELLITES_MODULE = registerSpatialDataModule({
   name: "receipts",
 });
 
-export type ReceiptVerifyState = "pending" | "verified" | "task-failed" | "failed";
+export type ReceiptVerifyState =
+  | "pending"
+  | "verified"
+  | "integrity-only"
+  | "task-failed"
+  | "failed";
 
 const BASE_RADIUS_M = 0.26;
 const RADIUS_STEP_M = 0.03;
@@ -56,7 +65,9 @@ export function hueForVerifyState(state: ReceiptVerifyState): number {
     case "pending":
       return 45; // amber
     case "verified":
-      return 140; // green-teal
+      return 140; // green-teal — verified + identity bound
+    case "integrity-only":
+      return 190; // cyan — signature valid, identity not anchored
     case "task-failed":
       return 25; // orange — chain is fine, task reported failed
     case "failed":
@@ -75,9 +86,15 @@ function hexToBytes(hex: string): Uint8Array {
 }
 
 /**
- * Collect every `public_key` embedded in a receipt tree keyed by
- * `motebit_id`. The relay-optional doctrine: a receipt carries its own
- * verification key, so chain verification needs no registry lookup.
+ * Collect every `public_key` embedded in a receipt tree keyed by `motebit_id`.
+ *
+ * WARNING: these are the receipt's OWN self-declared keys — NOT a trust anchor.
+ * Do not pass this map as `verifyReceiptChain`'s `knownKeys`: doing so makes the
+ * result report `keySource: "external"` for a key the receipt asserted about
+ * itself, laundering signature integrity into a false identity binding. Pass an
+ * independently-trusted anchor instead; the embedded fallback still verifies
+ * signatures with `keySource: "embedded"` (integrity only). Retained for
+ * extraction uses that explicitly want the self-declared keys.
  */
 export function collectKnownKeys(receipt: ExecutionReceipt): Map<string, Uint8Array> {
   const keys = new Map<string, Uint8Array>();
@@ -93,6 +110,22 @@ export function collectKnownKeys(receipt: ExecutionReceipt): Map<string, Uint8Ar
   };
   visit(receipt);
   return keys;
+}
+
+interface VerifyNode {
+  verified: boolean;
+  keySource?: "external" | "embedded";
+  delegations?: VerifyNode[];
+}
+
+// A verified chain is "bound" only when every node resolved its key from the
+// trusted anchor (keySource === "external"), not the receipt's own embedded key.
+function allBound(tree: VerifyNode): boolean {
+  if (tree.keySource !== "external") return false;
+  for (const child of tree.delegations ?? []) {
+    if (!allBound(child)) return false;
+  }
+  return true;
 }
 
 /** Per-receipt projection the renderer consumes. Keeps the transform pure. */
@@ -224,6 +257,18 @@ export class ReceiptSatelliteCoordinator {
   private states = new Map<string, ReceiptVerifyState>();
   private renderer: ReceiptSatelliteRenderer | null = null;
   private monotonic = 0;
+  private readonly trustedAnchor: Map<string, Uint8Array>;
+
+  /**
+   * `trustedAnchor` is the independently-trusted key map (pinned transparency
+   * key / known-keys registry) keyed by `motebit_id`. When omitted, receipts
+   * verify against their own embedded key and render cyan (integrity-only) —
+   * the coordinator never launders a self-declared key into a green
+   * identity-bound orb. Pass an anchor to upgrade matching receipts to green.
+   */
+  constructor(trustedAnchor?: Map<string, Uint8Array>) {
+    this.trustedAnchor = trustedAnchor ?? new Map<string, Uint8Array>();
+  }
 
   attach(parent: THREE.Object3D): void {
     if (this.renderer) return;
@@ -282,16 +327,20 @@ export class ReceiptSatelliteCoordinator {
   }
 
   private async verify(receipt: ExecutionReceipt): Promise<void> {
-    const keys = collectKnownKeys(receipt);
     try {
-      const tree = await verifyReceiptChain(receipt, keys);
+      // Verify against the trusted anchor. With none, the embedded fallback
+      // still checks signatures, but the result is integrity-only — NOT proof
+      // the key belongs to the motebit_id.
+      const tree = await verifyReceiptChain(receipt, this.trustedAnchor);
       if (!this.receipts.has(receipt.task_id)) return; // evicted during verify
       if (!tree.verified) {
         this.states.set(receipt.task_id, "failed");
       } else if (receipt.status === "failed") {
         this.states.set(receipt.task_id, "task-failed");
-      } else {
+      } else if (allBound(tree)) {
         this.states.set(receipt.task_id, "verified");
+      } else {
+        this.states.set(receipt.task_id, "integrity-only");
       }
     } catch {
       if (!this.receipts.has(receipt.task_id)) return;
