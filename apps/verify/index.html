@@ -104,6 +104,16 @@
         font-size: 12px;
         color: var(--text-muted);
       }
+      .binding-note {
+        margin-top: 16px;
+        font-size: 12px;
+        line-height: 1.6;
+        color: var(--text-muted);
+      }
+      .binding-note strong {
+        color: var(--text-dim);
+        font-weight: 600;
+      }
       #result-container {
         margin-top: 20px;
       }
@@ -144,6 +154,35 @@
         font-size: 13px;
         color: var(--text-dim);
         margin-top: 8px;
+      }
+      .result-tiers {
+        margin-top: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .tier-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 13px;
+      }
+      .tier-label {
+        color: var(--text-dim);
+      }
+      .tier-status {
+        font-weight: 500;
+        font-family: var(--font-mono);
+        font-size: 12px;
+      }
+      .tier-ok {
+        color: var(--green);
+      }
+      .tier-warn {
+        color: var(--cyan);
+      }
+      .tier-fail {
+        color: var(--red);
       }
       .result-meta {
         margin-top: 14px;
@@ -208,7 +247,7 @@
 
       <textarea
         id="receipt-input"
-        placeholder='{ "task_id": "...", "motebit_id": "...", "signature": "...", "suite": "motebit-jcs-ed25519-b64-v1", ... }'
+        placeholder='{ "task_id": "...", "motebit_id": "...", "public_key": "...", "signature": "...", "suite": "motebit-jcs-ed25519-b64-v1" }'
         spellcheck="false"
       ></textarea>
 
@@ -217,11 +256,17 @@
         <span class="hint">⌘/Ctrl + Enter</span>
       </div>
 
+      <p class="binding-note">
+        A valid signature proves <strong>integrity</strong> — the bytes weren't tampered. Binding
+        that key to an <strong>identity</strong> requires a trusted anchor.
+      </p>
+
       <div id="result-container"></div>
 
       <div class="page-footer">
         Same check at the terminal: <code>motebit verify &lt;receipt&gt;</code> · nothing is sent
-        anywhere · <a href="https://github.com/motebit/motebit">motebit/execution-ledger@1.0</a>
+        anywhere.<br />
+        <a href="https://github.com/motebit/motebit">motebit/execution-ledger@1.0</a>
       </div>
     </div>
 

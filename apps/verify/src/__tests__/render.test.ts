@@ -27,6 +27,10 @@ describe("renderResult", () => {
     expect(el.textContent).toContain("claims to be"); // NOT "motebit"
     expect(el.textContent).toContain("mote-x");
     expect(el.textContent).toContain("did:key:zABC");
+    // Two-tier breakdown: integrity verified (ok), identity binding not anchored (warn).
+    expect(el.querySelector(".result-tiers")).not.toBeNull();
+    expect(el.querySelector(".tier-warn")?.textContent).toContain("not anchored");
+    expect(el.textContent).toContain("signature integrity");
   });
 
   it("bound → green tone, motebit_id labelled as proven identity", () => {
@@ -36,6 +40,9 @@ describe("renderResult", () => {
     const labels = Array.from(el.querySelectorAll(".meta-label")).map((n) => n.textContent);
     expect(labels).toContain("motebit");
     expect(labels).not.toContain("claims to be");
+    // binding tier reads as a positive (ok), not a caveat (warn).
+    expect(el.querySelector(".tier-warn")).toBeNull();
+    expect(el.querySelector(".result-tiers")?.textContent).toContain("anchored");
   });
 
   it("failed → red tone, no identity meta shown", () => {
@@ -47,6 +54,9 @@ describe("renderResult", () => {
     expect(el.classList.contains("tone-failed")).toBe(true);
     expect(el.querySelector(".result-meta")).toBeNull();
     expect(el.textContent).toContain("altered or forged");
+    // integrity tier failed; no identity-binding tier when integrity fails.
+    expect(el.querySelector(".tier-fail")?.textContent).toContain("failed");
+    expect(el.querySelectorAll(".tier-row")).toHaveLength(1);
   });
 
   it("renders a delegation chain recursively", () => {
@@ -56,5 +66,7 @@ describe("renderResult", () => {
     expect(el.querySelector(".result-chain")).not.toBeNull();
     expect(el.textContent).toContain("delegation chain (1)");
     expect(el.textContent).toContain("t-child");
+    // a delegation-chain tier row appears in the breakdown.
+    expect(el.querySelector(".result-tiers")?.textContent).toContain("delegation chain");
   });
 });
