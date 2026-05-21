@@ -1061,15 +1061,17 @@ export async function verifyKeyBindingAtTime(
     }
   }
 
+  // A malformed `created_at` parses to NaN; comparisons against NaN are always
+  // false, so the genesis key simply won't match — fail-closed, no special case
+  // (an identity without a valid creation time is malformed and shouldn't bind).
   const createdAtMs = Date.parse(identity.created_at);
-  const bornMs = Number.isNaN(createdAtMs) ? Number.NEGATIVE_INFINITY : createdAtMs;
   const genesisKey = chain.length > 0 ? chain[0]!.old_public_key : currentKey;
 
   // Contiguous active windows in chain order: genesis first, then each rotation's
   // new key. The chain is already verified temporally ordered, so windows don't
   // overlap and `[from, until)` is well-formed.
   const windows: Array<{ key: string; from: number; until: number }> = [
-    { key: genesisKey, from: bornMs, until: chain[0]?.timestamp ?? Number.POSITIVE_INFINITY },
+    { key: genesisKey, from: createdAtMs, until: chain[0]?.timestamp ?? Number.POSITIVE_INFINITY },
   ];
   for (let i = 0; i < chain.length; i++) {
     windows.push({
@@ -1095,7 +1097,7 @@ export async function verifyKeyBindingAtTime(
   return {
     bound: true,
     genesisPublicKey: genesisKey,
-    ...(match.from !== Number.NEGATIVE_INFINITY ? { activeFrom: match.from } : {}),
+    activeFrom: match.from,
     ...(match.until !== Number.POSITIVE_INFINITY ? { activeUntil: match.until } : {}),
   };
 }
