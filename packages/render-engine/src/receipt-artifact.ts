@@ -21,15 +21,23 @@
 
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { verifyReceiptChain } from "@motebit/encryption";
-import { collectKnownKeys, displayName, priceFor, shortHash } from "./receipt-summary.js";
+import { bindingStatusFor, displayName, priceFor, shortHash } from "./receipt-summary.js";
 
 /**
  * Build the receipt artifact DOM. The caller owns the element lifecycle
  * (add to ArtifactManager, dismiss via the close button).
+ *
+ * `trustedAnchor` is the independently-trusted key map (pinned transparency
+ * key / known-keys registry) keyed by `motebit_id`. When omitted, the card
+ * verifies the signature against the receipt's own embedded key and honestly
+ * reports identity as *not anchored* — it never launders a self-declared key
+ * into an identity claim. Pass an anchor to upgrade verified receipts to
+ * "bound".
  */
 export function buildReceiptArtifact(
   receipt: ExecutionReceipt,
   onDismiss: () => void,
+  trustedAnchor?: Map<string, Uint8Array>,
 ): HTMLElement {
   const root = document.createElement("div");
   root.className = "spatial-artifact artifact-receipt";
@@ -99,11 +107,11 @@ export function buildReceiptArtifact(
   // pulse is the calm-software signal that a check is in flight.
   root.classList.add("is-pending");
 
-  const knownKeys = collectKnownKeys(receipt);
-  void verifyReceiptChain(receipt, knownKeys)
+  void verifyReceiptChain(receipt, trustedAnchor ?? new Map<string, Uint8Array>())
     .then((tree) => {
       root.classList.remove("is-pending");
-      if (!tree.verified) {
+      const binding = bindingStatusFor(tree);
+      if (binding === "unverified") {
         root.classList.add("is-unverified");
         label.textContent = "verification failed";
         return;
@@ -113,8 +121,16 @@ export function buildReceiptArtifact(
         label.textContent = "verified · completed: failed";
         return;
       }
-      root.classList.add("is-verified");
-      label.textContent = "verified locally · chain intact";
+      if (binding === "bound") {
+        root.classList.add("is-verified");
+        label.textContent = "verified locally · chain intact";
+        return;
+      }
+      // integrity-only: the signature is valid, but it was checked against the
+      // receipt's own embedded key — identity is NOT bound without a trust
+      // anchor. Distinct class + honest label so no surface implies "from X".
+      root.classList.add("is-integrity-verified");
+      label.textContent = "signature verified · identity not anchored";
     })
     .catch(() => {
       root.classList.remove("is-pending");

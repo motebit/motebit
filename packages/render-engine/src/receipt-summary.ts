@@ -59,10 +59,18 @@ export function displayName(receipt: ExecutionReceipt): string {
 }
 
 /**
- * Walk a receipt tree and collect every embedded public_key as bytes.
- * Used by `verifyReceiptChain` as the `knownKeys` map — each motebit's
- * key travels with its own receipt, so chain verification needs no
- * external registry lookup.
+ * Walk a receipt tree and collect every embedded `public_key` as bytes,
+ * keyed by `motebit_id`.
+ *
+ * WARNING: these are the receipt's OWN self-declared keys — NOT a trust
+ * anchor. Do not pass this map as `verifyReceiptChain`'s `knownKeys`: doing so
+ * makes the result report `keySource: "external"` for a key the receipt
+ * asserted about itself, laundering signature integrity into a false identity
+ * binding (a forged receipt embeds its own key and "verifies"). Pass an
+ * independently-trusted anchor (pinned transparency key / known-keys registry)
+ * as `knownKeys` instead, and let `verifyReceiptChain`'s embedded fallback
+ * verify the signature with `keySource: "embedded"` (integrity only). Retained
+ * for display/extraction that explicitly wants the self-declared keys.
  */
 export function collectKnownKeys(receipt: ExecutionReceipt): Map<string, Uint8Array> {
   const keys = new Map<string, Uint8Array>();
@@ -91,6 +99,28 @@ export function hexToBytes(hex: string): Uint8Array {
     out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
   }
   return out;
+}
+
+/**
+ * Identity-binding status of a receipt verification, for honest display.
+ *
+ * A verified signature proves the bytes were signed by *some* key; it does NOT
+ * prove that key belongs to the receipt's `motebit_id`. Binding is established
+ * only when the verifying key came from a trusted external source
+ * (`keySource === "external"` — a pinned transparency key or known-keys
+ * registry), never the receipt's own embedded `public_key`. Surfaces MUST
+ * render `"integrity-only"` distinctly from `"bound"` — never show a receipt
+ * verified against its own embedded key as "from <motebit>". A missing
+ * `keySource` is treated as `"integrity-only"` (conservative/honest default).
+ */
+export type BindingStatus = "bound" | "integrity-only" | "unverified";
+
+export function bindingStatusFor(result: {
+  verified: boolean;
+  keySource?: "external" | "embedded";
+}): BindingStatus {
+  if (!result.verified) return "unverified";
+  return result.keySource === "external" ? "bound" : "integrity-only";
 }
 
 /** Short-form display of a hex hash: first `n` chars + ellipsis. */

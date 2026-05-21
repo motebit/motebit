@@ -103,14 +103,38 @@ describe("buildReceiptArtifact — structural render", () => {
 });
 
 describe("buildReceiptArtifact — verify outcomes", () => {
-  it("flips to is-verified + intact label when verify resolves verified + status=completed", async () => {
-    verifyReceiptChainMock.mockResolvedValue({ verified: true });
+  it("bound (keySource=external) → is-verified + intact label", async () => {
+    // External key resolved from a trusted anchor: identity binding established.
+    verifyReceiptChainMock.mockResolvedValue({ verified: true, keySource: "external" });
     const el = buildReceiptArtifact(makeReceipt({ status: "completed" }), () => {});
     await flushMicrotasks();
     expect(el.classList.contains("is-pending")).toBe(false);
     expect(el.classList.contains("is-verified")).toBe(true);
     expect(el.querySelector(".receipt-verify-label")?.textContent).toBe(
       "verified locally · chain intact",
+    );
+  });
+
+  it("integrity-only (embedded / no anchor) → is-integrity-verified + honest label", async () => {
+    // Signature valid but checked against the receipt's own embedded key — the
+    // default (no trustedAnchor). Identity is NOT bound; the card must say so.
+    verifyReceiptChainMock.mockResolvedValue({ verified: true, keySource: "embedded" });
+    const el = buildReceiptArtifact(makeReceipt({ status: "completed" }), () => {});
+    await flushMicrotasks();
+    expect(el.classList.contains("is-verified")).toBe(false);
+    expect(el.classList.contains("is-integrity-verified")).toBe(true);
+    expect(el.querySelector(".receipt-verify-label")?.textContent).toBe(
+      "signature verified · identity not anchored",
+    );
+  });
+
+  it("missing keySource is treated as integrity-only (conservative default)", async () => {
+    verifyReceiptChainMock.mockResolvedValue({ verified: true });
+    const el = buildReceiptArtifact(makeReceipt({ status: "completed" }), () => {});
+    await flushMicrotasks();
+    expect(el.classList.contains("is-integrity-verified")).toBe(true);
+    expect(el.querySelector(".receipt-verify-label")?.textContent).toBe(
+      "signature verified · identity not anchored",
     );
   });
 

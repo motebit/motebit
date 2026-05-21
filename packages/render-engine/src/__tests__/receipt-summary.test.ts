@@ -7,6 +7,7 @@
 import { describe, it, expect } from "vitest";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import {
+  bindingStatusFor,
   CAPABILITY_PRICES_USD,
   collectKnownKeys,
   displayName,
@@ -252,5 +253,26 @@ describe("receiptSummary", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const receipt = makeReceipt({ suite: undefined as any });
     expect(receiptSummary(receipt).suite).toBe("—");
+  });
+});
+
+describe("bindingStatusFor", () => {
+  it("unverified when the signature does not verify", () => {
+    expect(bindingStatusFor({ verified: false })).toBe("unverified");
+    expect(bindingStatusFor({ verified: false, keySource: "external" })).toBe("unverified");
+  });
+
+  it("bound only when verified against an external (trusted) key", () => {
+    expect(bindingStatusFor({ verified: true, keySource: "external" })).toBe("bound");
+  });
+
+  it("integrity-only when verified against the receipt's own embedded key", () => {
+    expect(bindingStatusFor({ verified: true, keySource: "embedded" })).toBe("integrity-only");
+  });
+
+  it("treats a missing keySource as integrity-only (conservative default)", () => {
+    // A legacy/forged receipt verified without a declared key source must NOT
+    // be presented as identity-bound.
+    expect(bindingStatusFor({ verified: true })).toBe("integrity-only");
   });
 });
