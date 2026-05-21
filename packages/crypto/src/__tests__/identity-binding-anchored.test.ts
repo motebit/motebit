@@ -12,13 +12,39 @@ import {
   bytesToHex,
   hexToBytes,
   sha256,
+  signBySuite,
+  canonicalJson,
   identityLogLeaf,
   verifyIdentityBindingAnchored,
   type MotebitIdentityFile,
+  type SuccessionRecord,
+  type KeyPair,
 } from "../index.js";
 
 const CREATED = Date.parse("2026-01-01T00:00:00Z");
 const NOW = CREATED + 24 * 60 * 60 * 1000;
+const ROTATED_AT = CREATED + 7 * 24 * 60 * 60 * 1000;
+const SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+
+async function rotation(
+  oldKp: KeyPair,
+  newKp: KeyPair,
+  timestamp: number,
+): Promise<SuccessionRecord> {
+  const old_public_key = bytesToHex(oldKp.publicKey);
+  const new_public_key = bytesToHex(newKp.publicKey);
+  const msg = new TextEncoder().encode(
+    canonicalJson({ old_public_key, new_public_key, timestamp, suite: SUITE }),
+  );
+  return {
+    old_public_key,
+    new_public_key,
+    timestamp,
+    suite: SUITE,
+    old_key_signature: bytesToHex(await signBySuite(SUITE, msg, oldKp.privateKey)),
+    new_key_signature: bytesToHex(await signBySuite(SUITE, msg, newKp.privateKey)),
+  };
+}
 
 function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
   const o = new Uint8Array(a.length + b.length);
@@ -88,6 +114,25 @@ describe("verifyIdentityBindingAnchored", () => {
     const r = await verifyIdentityBindingAnchored(id, stranger, NOW, proof);
     expect(r.bound).toBe(false);
     expect(r.reason).toContain("not in this identity's succession chain");
+  });
+
+  it("binds an old rotated key when the current key is anchored", async () => {
+    // The realistic case: a receipt was signed by the genesis key, the motebit
+    // later rotated, and the LOG anchors the current key. The old key must still
+    // bind for a receipt dated within its window.
+    const kp1 = await generateKeypair();
+    const kp2 = await generateKeypair();
+    const k1 = bytesToHex(kp1.publicKey);
+    const k2 = bytesToHex(kp2.publicKey);
+    const id: MotebitIdentityFile = {
+      ...identity("mote-x", k2),
+      succession: [await rotation(kp1, kp2, ROTATED_AT)],
+    };
+    // The log commits the CURRENT key (k2); the receipt is signed by the OLD key.
+    const proof = await treeFor(await identityLogLeaf("mote-x", k2));
+    const r = await verifyIdentityBindingAnchored(id, k1, CREATED + 1000, proof);
+    expect(r.bound).toBe(true);
+    expect(r.genesisPublicKey).toBe(k1);
   });
 
   it("identityLogLeaf is deterministic and key-specific", async () => {

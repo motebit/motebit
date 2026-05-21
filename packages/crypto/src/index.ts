@@ -1148,7 +1148,9 @@ export interface IdentityLogInclusionProof {
  * `KeyBindingResult` when both hold; `bound: false` if either fails.
  *
  * NOTE: this proves inclusion under a *given* root; verifying that root is the
- * one the operator anchored on-chain is the caller's cross-check.
+ * one the operator anchored on-chain is the caller's cross-check. The caller must
+ * also confirm `identity.motebit_id` is the receipt's claimed motebit — this
+ * primitive binds a key to the supplied identity file, not to a receipt.
  */
 export async function verifyIdentityBindingAnchored(
   identity: MotebitIdentityFile,
