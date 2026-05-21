@@ -1,5 +1,56 @@
 # @motebit/sdk Changelog
 
+## 1.3.0
+
+### Minor Changes
+
+- 4a7e281: Add `autoRoute?: boolean` to `ByokProviderConfig` — opts the user into auto-routing across the vendor's available models per turn. When `true`, surface runtimes (web today; desktop/mobile mirror following) consume the second-consumer half of the auto-routing primitive (`@motebit/policy::dispatchByokRouting`) to pick the best model for each turn's `TaskShape` from the vendor's catalog. When `false` or omitted, the surface uses the single configured `model` (backward-compat default).
+
+  Closes the auto-routing PR 2 doctrine arc (`docs/doctrine/auto-routing-as-protocol-primitive.md` § "PR 2 — BYOK consumer"). The architectural payoff: with PR 1's motebit-cloud-proxy as the only consumer of `dispatchRouting`, the role-as-instance pattern was doctrine-shaped but unproven structurally. PR 2 validates that the dispatcher is consumer-neutral by landing a second concrete consumer with a different catalog source (`BYOK_MODEL_CATALOG[vendor]`), no balance filter (BYOK pays vendors directly), no jurisdiction filter, and heuristic shape detection instead of LLM classification — all via the same `dispatchRouting` entry point unchanged.
+
+  Web consumer site lives at `apps/web/src/web-app.ts::WebApp.sendMessageStreaming` (the natural intercept point where the BYOK config and StreamingProvider reference both live). Registered as the 2nd CONSUMER in the drift gate `check-routing-decision-coverage` (#95). Per the gate's structural enforcement, the consumer references every `RoutingDecision.kind` value (`route` | `fallback` | `deny`).
+
+  Per `feedback_sovereignty_orthogonal`: this flag is orthogonal to tier — BYOK auto-routing is never subscription-gated. The user already has the vendor's key; the surface's job is to compose the canonical dispatcher over it.
+
+  Deferred follow-ups (named in the doctrine, not deferred indefinitely):
+  - Desktop + mobile mirror of the web consumer wire-up. Same shape (`_byokAutoRouteVendor` + `_currentProvider` + `setModel` per turn); cross-surface mirror follows per the one-pass-delivery doctrine. Each surface adds its own `byok-runtime-{desktop,mobile}` entry to the drift gate's CONSUMERS registry.
+  - Settings-side UI toggle exposing `autoRoute`. The flag is in the config type and respected by the runtime; the BYOK settings panel doesn't yet surface a toggle. Users today opt-in by editing localStorage or via a future settings UI commit.
+  - Classifier-mode shape detection. The heuristic shape detector (`@motebit/policy::extractTaskShape`) is the cheap default; surfaces wanting LLM-classifier-level accuracy compose their own detector and pass directly to `dispatchRouting`.
+
+- eed64ea: Add `autoRoute?: boolean` to `OnDeviceProviderConfig` — opts the user into per-turn auto-routing across the on-device backend's available models. When `true` AND the backend is multi-model (`local-server` today; `apple-fm` / `mlx` / `webllm` are single-model surfaces), surface runtimes consume the third-consumer half of the auto-routing primitive (`@motebit/policy::dispatchOnDeviceRouting`) to pick the best model for each turn's `TaskShape` from the backend's catalog. When `false` or omitted, the surface uses the single configured `model`.
+
+  Closes the auto-routing PR 3 doctrine arc (`docs/doctrine/auto-routing-as-protocol-primitive.md` § "PR 3 — on-device consumer"). The architectural payoff: with PR 1 (motebit-cloud-proxy) + PR 2 (BYOK across web/desktop/mobile) shipped, the role-as-instance pattern (7th instance of `agility-as-role.md`) had two consumers — same risk shape as a 2-instance closed registry. PR 3 makes it three. The doctrine claim "auto-routing is consumer-neutral" is now structurally proven across the full sovereignty spectrum (subscription / pay-per-call / zero-marginal).
+
+  Desktop consumer site lives at `apps/desktop/src/index.ts::DesktopApp.sendMessageStreaming` — the same intercept point PR 2 added for BYOK, now extended with a parallel on-device branch. The two state fields (`_byokAutoRouteVendor` + `_onDeviceAutoRouteBackend`) are mutually exclusive; `initAI` populates exactly one based on the unified config's mode + autoRoute flag.
+
+  Drift gate `check-routing-decision-coverage` (#95) gains `on-device-runtime-desktop` consumer entry. Same desktop file as `byok-runtime-desktop`, different dispatcher entry (`dispatchOnDeviceRouting`). The gate now enforces **5 consumers × 3 decision kinds**.
+
+  Per `feedback_sovereignty_orthogonal`: orthogonal to tier — on-device auto-routing is never subscription-gated. The user owns the hardware; the surface's job is to compose the canonical dispatcher over it.
+
+  Deferred follow-ups (named in the doctrine, all triggered by real-consumer signal):
+  - Web + mobile on-device consumer mirror. Web's WebLLM has download-cost per model swap making per-turn routing inappropriate (catalog is single-model on web today; dispatcher denies cleanly). Mobile's local-server is less common than desktop's Ollama. Mirror lands when there's surface-side signal.
+  - Per-policy on-device routing — surface-specific `REFERENCE_LOCAL_SERVER_ROUTING_POLICY` mapping `TaskShape` → local model names (e.g., `code: "codellama"`, `chat: "llama3.2"`). Today every on-device dispatch lands in `fallback` because the canonical `REFERENCE_ROUTING_POLICY` names cloud models. The role-vs-policy distinction makes this a clean future swap.
+  - Multi-model `apple-fm` / `mlx` / `webllm` catalogs. Today these backends are single-model; the dispatcher denies them by design (the honest signal). When per-backend multi-model support lands, the catalog grows additively.
+
+### Patch Changes
+
+- Updated dependencies [b0d068b]
+- Updated dependencies [92c2800]
+- Updated dependencies [6a46f33]
+- Updated dependencies [53e11b5]
+- Updated dependencies [2428248]
+- Updated dependencies [f1d3308]
+- Updated dependencies [a5abc51]
+- Updated dependencies [904d744]
+- Updated dependencies [4ea0127]
+- Updated dependencies [46189c6]
+- Updated dependencies [00585fc]
+- Updated dependencies [7dd54da]
+- Updated dependencies [be9275a]
+- Updated dependencies [343e81f]
+- Updated dependencies [8262902]
+  - @motebit/protocol@2.0.0
+
 ## 1.2.0
 
 ### Minor Changes

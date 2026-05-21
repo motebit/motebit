@@ -1,5 +1,45 @@
 # @motebit/state-export-client
 
+## 0.3.0
+
+### Minor Changes
+
+- ecc15f3: Receipt verification now structurally separates signature integrity from identity binding.
+
+  A verified signature proves the embedded key signed the receipt bytes; it does NOT prove that key belongs to the receipt's `motebit_id` — a forged receipt can embed any key and still verify. The result types now make that distinction unmistakable:
+  - `ReceiptVerifyResult` and `ReceiptVerification` carry a `keySource` field. `verifyReceiptChain` records whether the verifying key was resolved from the caller's trusted `knownKeys` map (`"external"` — identity binding established) or fell back to the receipt's own embedded `public_key` (`"embedded"` — byte-integrity only). `verifyReceipt` is always `"embedded"`.
+  - The browser inner-receipt verifier surfaces `identityBinding: "embedded-key-unverified"` on successful checks, so a UI never renders "from \<motebit\>" on the strength of an envelope-asserted key alone.
+
+  Callers MUST gate identity claims on `keySource === "external"` (or an external transparency/known-keys anchor). Additive and backward-compatible — callers that ignore the new fields are unaffected.
+
+- 6dedf51: `verifyReceiptDocument` now accepts an optional `identity` (the producing motebit's identity file) and upgrades the result to the `"pinned"` binding rung when the receipt's signing key is time-valid for that identity's succession chain and the `motebit_id` matches. The binding status is now a trust-minimization ladder — `unverified` / `integrity-only` / `pinned` — replacing the placeholder `"bound"` with the rung vocabulary from `docs/doctrine/identity-binding-verification.md`. Composes `@motebit/crypto`'s `verifyKeyBindingAtTime`; the `anchored` and `sovereign` rungs layer operator non-equivocation on top in later slices.
+- c84d13a: Add `verifyReceiptDocument` — verify a pasted or standalone `ExecutionReceipt` entirely offline and project it into an honest, display-ready view model that keeps signature **integrity** separate from identity **binding** (the brain behind a public receipt verifier). A valid offline check is `integrity-only` — it never claims the key belongs to the `motebit_id`; the `"bound"` status is reserved for a future trusted-anchor path. Malformed or non-receipt input surfaces typed reasons (`malformed_json` / `not_a_receipt` / `signature_invalid` / `missing_public_key` / `delegation_failed`) rather than throwing. Composes `@motebit/crypto`'s `verifyReceipt`; no new cryptography.
+
+### Patch Changes
+
+- Updated dependencies [b0d068b]
+- Updated dependencies [92c2800]
+- Updated dependencies [6a46f33]
+- Updated dependencies [02d09da]
+- Updated dependencies [de086d7]
+- Updated dependencies [31ceae3]
+- Updated dependencies [53e11b5]
+- Updated dependencies [2428248]
+- Updated dependencies [f1d3308]
+- Updated dependencies [a5abc51]
+- Updated dependencies [904d744]
+- Updated dependencies [4ea0127]
+- Updated dependencies [46189c6]
+- Updated dependencies [00585fc]
+- Updated dependencies [ecc15f3]
+- Updated dependencies [7dd54da]
+- Updated dependencies [44e55f0]
+- Updated dependencies [be9275a]
+- Updated dependencies [343e81f]
+- Updated dependencies [8262902]
+  - @motebit/protocol@2.0.0
+  - @motebit/crypto@1.4.0
+
 ## 0.2.0
 
 ### Minor Changes
