@@ -78,3 +78,10 @@ export type {
   InnerReceiptVerificationFailureReason,
   InnerReceiptsVerification,
 } from "./inner-receipts.js";
+
+export { verifyReceiptDocument } from "./receipt-document.js";
+export type {
+  ReceiptDocumentVerification,
+  ReceiptDocumentFailureReason,
+  ReceiptBindingStatus,
+} from "./receipt-document.js";
