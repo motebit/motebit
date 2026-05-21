@@ -57,6 +57,27 @@ if (inner.applicable && !inner.allValid) {
 
 `verifyInnerSignedReceipts` returns `applicable: false` for v1.0 bodies, non-execution-ledger bodies, or bodies with an empty `signed_receipts` field — calm-software default, no flag required. On v1.1 bodies, every entry is parsed, every signature is checked against its embedded public key, and `delegation_receipts` chains are walked recursively.
 
+## Quick start — verify a pasted receipt (receipt.computer)
+
+```ts
+import { verifyReceiptDocument } from "@motebit/state-export-client";
+
+const v = await verifyReceiptDocument(pastedJsonText);
+
+if (!v.integrity) {
+  show(`Verification failed: ${v.reason}`); // malformed_json | not_a_receipt | signature_invalid | …
+} else if (v.binding === "bound") {
+  show(`Verified — from ${v.motebitId}`); // key resolved from a trusted anchor
+} else {
+  // integrity-only: signature is valid but checked against the receipt's OWN
+  // embedded key — proves the bytes weren't tampered, NOT that the key belongs
+  // to motebitId. Never render "from <motebit>" here.
+  show("Signature verified — identity not anchored");
+}
+```
+
+`verifyReceiptDocument` is the brain behind a public, login-free receipt verifier. It runs entirely offline (no relay), never throws on bad input (typed `reason`s instead), and keeps **integrity** (the bytes were signed, untampered) strictly separate from **binding** (the key belongs to this `motebitId`). A valid offline check is always `integrity-only`; `"bound"` is reserved for a future trusted-anchor path.
+
 ## Trust-anchor chain
 
 ```
@@ -93,17 +114,18 @@ if (lookup.ok) {
 
 ## Programmatic surface
 
-| Export                                                     | Kind     | Role                                                                                                                       |
-| ---------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `fetchTransparencyAnchor(baseUrl, opts?)`                  | function | TOFU bootstrap — fetch `/.well-known/motebit-transparency.json`, verify self-signature, return pinned `TransparencyAnchor` |
-| `verifyTransparencyDeclaration(declaration)`               | function | Lower-level: verify a `SignedTransparencyDeclaration` from any source (cached, archived, fixture)                          |
-| `verifiedStateExportFetch(url, opts)`                      | function | Wrap `fetch` — verify outer envelope against body bytes + optional anchor pin                                              |
-| `verifyManifestAgainstBytes(manifest, bodyBytes, anchor?)` | function | Lower-level: verify a parsed `ContentArtifactManifest` against bytes you already have                                      |
-| `verifyInnerSignedReceipts(body)`                          | function | Recursive v1.1 inner-receipt audit — per-receipt verdict with typed failure reasons                                        |
-| `lookupTransparencyAnchor(opts)`                           | function | Onchain — query Solana RPC for a Memo program transaction posting the declaration hash                                     |
-| `verifyDeclarationOnchainAnchor(declaration, anchor)`      | function | Onchain — verify the Memo transaction's signer and content match the declaration                                           |
-| `StateExportFetchError`                                    | class    | Thrown on non-2xx HTTP; verifier never attempts to verify error envelopes                                                  |
-| `MANIFEST_HEADER`                                          | constant | The header name (`"X-Motebit-Content-Manifest"`) — exposed for custom transports                                           |
+| Export                                                     | Kind     | Role                                                                                                                                |
+| ---------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `fetchTransparencyAnchor(baseUrl, opts?)`                  | function | TOFU bootstrap — fetch `/.well-known/motebit-transparency.json`, verify self-signature, return pinned `TransparencyAnchor`          |
+| `verifyTransparencyDeclaration(declaration)`               | function | Lower-level: verify a `SignedTransparencyDeclaration` from any source (cached, archived, fixture)                                   |
+| `verifiedStateExportFetch(url, opts)`                      | function | Wrap `fetch` — verify outer envelope against body bytes + optional anchor pin                                                       |
+| `verifyManifestAgainstBytes(manifest, bodyBytes, anchor?)` | function | Lower-level: verify a parsed `ContentArtifactManifest` against bytes you already have                                               |
+| `verifyInnerSignedReceipts(body)`                          | function | Recursive v1.1 inner-receipt audit — per-receipt verdict with typed failure reasons                                                 |
+| `verifyReceiptDocument(jsonText)`                          | function | Verify a pasted/standalone receipt offline — honest view model separating integrity from identity binding (powers receipt.computer) |
+| `lookupTransparencyAnchor(opts)`                           | function | Onchain — query Solana RPC for a Memo program transaction posting the declaration hash                                              |
+| `verifyDeclarationOnchainAnchor(declaration, anchor)`      | function | Onchain — verify the Memo transaction's signer and content match the declaration                                                    |
+| `StateExportFetchError`                                    | class    | Thrown on non-2xx HTTP; verifier never attempts to verify error envelopes                                                           |
+| `MANIFEST_HEADER`                                          | constant | The header name (`"X-Motebit-Content-Manifest"`) — exposed for custom transports                                                    |
 
 All result types (`TransparencyAnchorResult`, `StateExportVerification`, `InnerReceiptsVerification`, etc.) and failure-reason unions are also exported — discriminated unions, type-narrowable by the `ok` / `valid` / `applicable` field.
 

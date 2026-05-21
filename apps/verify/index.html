@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Verify a motebit receipt</title>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      :root {
+        --bg: #0a0a0c;
+        --surface: #131318;
+        --surface-hover: #1a1a22;
+        --border: #25252e;
+        --border-subtle: #1e1e26;
+        --text: #e4e4e8;
+        --text-dim: #8888a0;
+        --text-muted: #5c5c70;
+        --accent: #7c8aff;
+        --green: #4ade80;
+        --green-dim: rgba(74, 222, 128, 0.12);
+        --cyan: #38bdf8;
+        --cyan-dim: rgba(56, 189, 248, 0.12);
+        --red: #f87171;
+        --red-dim: rgba(248, 113, 113, 0.12);
+        --radius: 10px;
+        --radius-sm: 6px;
+        --font-mono: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Helvetica, Arial,
+          sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 48px 24px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap {
+        width: 100%;
+        max-width: 560px;
+      }
+      .page-header {
+        text-align: center;
+        margin-bottom: 28px;
+      }
+      .page-header h1 {
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      .page-header p {
+        font-size: 13px;
+        color: var(--text-muted);
+        margin-top: 6px;
+      }
+      #receipt-input {
+        width: 100%;
+        min-height: 180px;
+        background: var(--surface);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 14px 16px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        resize: vertical;
+      }
+      #receipt-input:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 12px;
+      }
+      #verify-btn {
+        padding: 9px 22px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--bg);
+        background: var(--accent);
+        border: none;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+      }
+      #verify-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .hint {
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+      #result-container {
+        margin-top: 20px;
+      }
+      .result-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-left-width: 3px;
+        border-radius: var(--radius);
+        padding: 18px 20px;
+        margin-top: 12px;
+      }
+      .result-card.tone-bound {
+        border-left-color: var(--green);
+      }
+      .result-card.tone-integrity {
+        border-left-color: var(--cyan);
+      }
+      .result-card.tone-failed {
+        border-left-color: var(--red);
+      }
+      .result-badge {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .tone-bound .result-icon {
+        color: var(--green);
+      }
+      .tone-integrity .result-icon {
+        color: var(--cyan);
+      }
+      .tone-failed .result-icon {
+        color: var(--red);
+      }
+      .result-detail {
+        font-size: 13px;
+        color: var(--text-dim);
+        margin-top: 8px;
+      }
+      .result-meta {
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 1px solid var(--border-subtle);
+      }
+      .meta-row {
+        display: flex;
+        gap: 10px;
+        font-size: 12px;
+        margin-bottom: 5px;
+      }
+      .meta-label {
+        color: var(--text-muted);
+        min-width: 86px;
+        flex-shrink: 0;
+      }
+      .meta-value {
+        color: var(--text-dim);
+        word-break: break-all;
+      }
+      .meta-value.mono {
+        font-family: var(--font-mono);
+      }
+      .result-chain {
+        margin-top: 14px;
+      }
+      .result-chain h3 {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-muted);
+        margin-bottom: 8px;
+      }
+      .page-footer {
+        margin-top: 32px;
+        font-size: 12px;
+        color: var(--text-muted);
+        text-align: center;
+      }
+      .page-footer code {
+        font-family: var(--font-mono);
+        color: var(--text-dim);
+        background: var(--surface);
+        padding: 2px 6px;
+        border-radius: 4px;
+        border: 1px solid var(--border-subtle);
+      }
+      .page-footer a {
+        color: var(--text-dim);
+        text-decoration: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="page-header">
+        <h1>Verify a motebit receipt</h1>
+        <p>Paste a signed execution receipt. It's verified in your browser — no login, no relay.</p>
+      </div>
+
+      <textarea
+        id="receipt-input"
+        placeholder='{ "task_id": "...", "motebit_id": "...", "signature": "...", "suite": "motebit-jcs-ed25519-b64-v1", ... }'
+        spellcheck="false"
+      ></textarea>
+
+      <div class="actions">
+        <button id="verify-btn">Verify</button>
+        <span class="hint">⌘/Ctrl + Enter</span>
+      </div>
+
+      <div id="result-container"></div>
+
+      <div class="page-footer">
+        Same check at the terminal: <code>motebit verify &lt;receipt&gt;</code> · nothing is sent
+        anywhere · <a href="https://github.com/motebit/motebit">motebit/execution-ledger@1.0</a>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

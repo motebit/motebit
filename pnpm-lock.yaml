@@ -812,6 +812,22 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
 
+  apps/verify:
+    dependencies:
+      '@motebit/state-export-client':
+        specifier: workspace:*
+        version: link:../../packages/state-export-client
+    devDependencies:
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vite:
+        specifier: ^6.0.0
+        version: 6.4.1(@types/node@22.19.11)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.11)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.46.0)
+
   apps/vscode:
     dependencies:
       vscode-languageclient:

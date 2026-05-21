@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **50 packages · 7 architectural layers · 5 surfaces + 5 supporting apps · 8 services · 24 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **50 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 8 services · 24 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -40,6 +40,7 @@ motebit/
 │   ├── inspector/             [supporting]  React + Vite single-agent inspector. 12-tab interior view.
 │   ├── operator/              [supporting]  React + Vite relay-operator console. Withdrawals, federation peers, transparency, disputes, fees, anchoring.
 │   ├── identity/              [supporting]  Static browser tool for inspecting motebit.md files.
+│   ├── verify/                [supporting]  Static browser receipt verifier. Paste a signed receipt, verified in-tab; separates signature integrity from identity binding. No login, no relay.
 │   ├── vscode/                [supporting]  VS Code/Cursor extension. Thin shim that spawns `motebit lsp`.
 │   └── docs/                  [supporting]  Fumadocs + Next.js. This site.
 │
