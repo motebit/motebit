@@ -61,6 +61,7 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/treasury-custody.md`](docs/doctrine/treasury-custody.md) — receive-vs-outbound phase split; phase 1 hardware wallet + confirmation horizon; phase 2 (MPC / multi-sig / program-authority) deferred until forced
 - [`docs/doctrine/operator-transparency.md`](docs/doctrine/operator-transparency.md) — declared posture vs proven posture
 - [`docs/doctrine/self-attesting-system.md`](docs/doctrine/self-attesting-system.md) — every claim is user-verifiable
+- [`docs/doctrine/identity-binding-verification.md`](docs/doctrine/identity-binding-verification.md) — integrity (provable standalone) vs binding (key→`motebit_id`, never standalone); Key-Transparency split: sovereign genesis+rotation root, operator non-equivocable anchor; binding is a ladder (unverified/pinned/anchored/sovereign); deep lever = `motebit_id` commits to seed-derived genesis key
 - [`docs/doctrine/identity-restore.md`](docs/doctrine/identity-restore.md) — three-layer restore split; two entry points (motebit.md + recovery seed); seed-only mints new motebit_id; v1 hard-overwrite; preserveMemories re-key migration deferred to v1.x
 - [`docs/doctrine/hardware-attestation.md`](docs/doctrine/hardware-attestation.md) — software identity is the floor; hardware attestation is additive scoring via `HardwareAttestationSemiring`, never a gate; new platform = one `platform` union entry
 - [`docs/doctrine/surface-determinism.md`](docs/doctrine/surface-determinism.md) — affordances invoke capabilities, not prompts
