@@ -48,6 +48,11 @@ interface PackageRequirement {
 
 const PACKAGES_REQUIRING_PROPERTY_TESTS: ReadonlyArray<PackageRequirement> = [
   {
+    path: "packages/crypto",
+    reason:
+      "proof-composability root — `signBySuite`/`verifyBySuite`/`canonicalJson` ('Canonical JSON → SHA-256 → Ed25519 verify. Always.'). Round-trip soundness, any-message-mutation rejection, any-signature-mutation rejection, wrong-key rejection, and JCS key-order independence MUST hold across arbitrary bytes and every registered Ed25519 suite. Every signed artifact in motebit flows through here; a hole makes the entire self-attesting system unsound at the root",
+  },
+  {
     path: "packages/protocol",
     reason:
       "semiring algebra (`semiring-laws.test.ts`) — laws must hold across arbitrary weighted-digraph inputs; the foundational property motebit's routing/trust/reputation algebras inherit",
