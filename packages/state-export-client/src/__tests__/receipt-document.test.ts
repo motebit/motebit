@@ -6,10 +6,38 @@
  * exhaustively tested in @motebit/crypto — this pins the document-level bridge.
  */
 import { describe, it, expect } from "vitest";
-import { generateKeypair, bytesToHex, signExecutionReceipt } from "@motebit/crypto";
+import {
+  generateKeypair,
+  bytesToHex,
+  signExecutionReceipt,
+  type MotebitIdentityFile,
+} from "@motebit/crypto";
 import type { ExecutionReceipt } from "@motebit/protocol";
 
 import { verifyReceiptDocument } from "../receipt-document.js";
+
+// A minimal identity file whose current key (no rotations) is `currentKeyHex`,
+// created before any test receipt's completed_at (2000). Genesis = current key.
+function identityFor(motebitId: string, currentKeyHex: string): MotebitIdentityFile {
+  return {
+    spec: "motebit/identity@1.0",
+    motebit_id: motebitId,
+    created_at: new Date(1000).toISOString(),
+    owner_id: "owner",
+    identity: { algorithm: "Ed25519", public_key: currentKeyHex },
+    governance: {
+      trust_mode: "guarded",
+      max_risk_auto: "0",
+      require_approval_above: "0",
+      deny_above: "0",
+      operator_mode: false,
+    },
+    privacy: { default_sensitivity: "none", retention_days: {}, fail_closed: true },
+    memory: { half_life_days: 30, confidence_threshold: 0.5, per_turn_limit: 5 },
+    devices: [],
+    succession: [],
+  };
+}
 
 async function signedReceipt(overrides: Partial<ExecutionReceipt> = {}): Promise<ExecutionReceipt> {
   const kp = await generateKeypair();
@@ -40,6 +68,31 @@ describe("verifyReceiptDocument", () => {
     expect(v.motebitId).toBe("mote-x");
     expect(v.taskId).toBe("t-abc");
     expect(v.reason).toBeUndefined();
+  });
+
+  it("a matching identity file upgrades the binding to pinned", async () => {
+    const receipt = await signedReceipt({ task_id: "t-pin", motebit_id: "mote-x" });
+    const identity = identityFor("mote-x", receipt.public_key!);
+    const v = await verifyReceiptDocument(JSON.stringify(receipt), { identity });
+    expect(v.integrity).toBe(true);
+    expect(v.binding).toBe("pinned");
+  });
+
+  it("an identity file for a DIFFERENT motebit does not pin (stays integrity-only)", async () => {
+    const receipt = await signedReceipt({ task_id: "t-x", motebit_id: "mote-x" });
+    const identity = identityFor("mote-someone-else", receipt.public_key!);
+    const v = await verifyReceiptDocument(JSON.stringify(receipt), { identity });
+    expect(v.integrity).toBe(true);
+    expect(v.binding).toBe("integrity-only");
+  });
+
+  it("an identity file whose current key isn't the receipt's key does not pin", async () => {
+    const receipt = await signedReceipt({ task_id: "t-y", motebit_id: "mote-x" });
+    const otherKey = bytesToHex((await generateKeypair()).publicKey);
+    const identity = identityFor("mote-x", otherKey); // right motebit, wrong key
+    const v = await verifyReceiptDocument(JSON.stringify(receipt), { identity });
+    expect(v.integrity).toBe(true);
+    expect(v.binding).toBe("integrity-only");
   });
 
   it("a tampered signature → integrity false, binding unverified, signature_invalid", async () => {

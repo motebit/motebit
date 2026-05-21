@@ -84,4 +84,5 @@ export type {
   ReceiptDocumentVerification,
   ReceiptDocumentFailureReason,
   ReceiptBindingStatus,
+  VerifyReceiptDocumentOptions,
 } from "./receipt-document.js";

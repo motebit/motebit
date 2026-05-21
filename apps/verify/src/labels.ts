@@ -37,12 +37,12 @@ export function resultLabels(v: ReceiptDocumentVerification): ResultLabels {
       detail: FAILURE_DETAIL[v.reason ?? "unknown"] ?? FAILURE_DETAIL.unknown,
     };
   }
-  if (v.binding === "bound") {
+  if (v.binding === "pinned") {
     return {
       tone: "bound",
-      headline: "Verified — signature valid, identity anchored",
+      headline: "Verified — identity pinned",
       detail:
-        "The signature is valid and the signing key is bound to this motebit by a trusted anchor.",
+        "The signature is valid and the signing key is time-valid in the identity chain you supplied. That binds the key to this motebit's chain — it does not yet prove the chain is the operator's current, non-equivocable record (the anchored rung).",
     };
   }
   // integrity-only: the honest default. Signature is valid, but it was checked

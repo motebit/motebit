@@ -18,10 +18,10 @@ describe("resultLabels", () => {
     expect(l.headline.toLowerCase()).not.toContain("identity anchored");
   });
 
-  it("bound is the only state that claims identity", () => {
-    const l = resultLabels(ok({ binding: "bound" }));
+  it("pinned claims identity (against supplied material), tone bound", () => {
+    const l = resultLabels(ok({ binding: "pinned" }));
     expect(l.tone).toBe("bound");
-    expect(l.headline).toContain("identity anchored");
+    expect(l.headline).toContain("pinned");
   });
 
   it("failed signature reads as altered/forged, not a vague error", () => {

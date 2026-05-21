@@ -24,10 +24,18 @@
  */
 
 import type { ExecutionReceipt } from "@motebit/protocol";
-import { verifyReceipt } from "@motebit/crypto";
+import { verifyReceipt, verifyKeyBindingAtTime, type MotebitIdentityFile } from "@motebit/crypto";
 
-/** Identity-binding status of a receipt verification. */
-export type ReceiptBindingStatus = "bound" | "integrity-only" | "unverified";
+/**
+ * Identity-binding status — a ladder of increasing trust-minimization, per
+ * `docs/doctrine/identity-binding-verification.md`. `"unverified"` (signature
+ * failed) < `"integrity-only"` (signed, but checked against the receipt's own
+ * embedded key — not bound) < `"pinned"` (the signing key is time-valid for an
+ * identity file the caller supplied; sovereign chain verified, no operator
+ * anchor). The `"anchored"` and `"sovereign"` rungs add operator non-equivocation
+ * and arrive with the relay identity-transparency log.
+ */
+export type ReceiptBindingStatus = "pinned" | "integrity-only" | "unverified";
 
 export type ReceiptDocumentFailureReason =
   | "malformed_json"
@@ -45,11 +53,11 @@ export interface ReceiptDocumentVerification {
    */
   readonly integrity: boolean;
   /**
-   * Identity-binding status. `"bound"` only when the key was resolved from a
-   * trusted external anchor; `"integrity-only"` when verified against the
-   * receipt's own embedded key (the offline default); `"unverified"` when the
-   * signature did not verify. Surfaces MUST NOT render "from <motebit>" unless
-   * this is `"bound"`.
+   * Identity-binding status (the ladder). `"pinned"` when the signing key is
+   * time-valid for a caller-supplied identity file; `"integrity-only"` when only
+   * the signature is verified against the receipt's own embedded key;
+   * `"unverified"` when the signature did not verify. Surfaces MUST NOT render
+   * "from <motebit>" below `"pinned"`.
    */
   readonly binding: ReceiptBindingStatus;
   /** `did:key:z…` derived from the signing key when integrity holds. */
@@ -96,11 +104,9 @@ function toView(result: CryptoReceiptResult): ReceiptDocumentVerification {
     detail?: string;
   } = {
     integrity: result.valid,
-    // `verifyReceipt` resolves the key from the receipt's own embedded
-    // `public_key` (its result is typed `keySource: "embedded"`), so a valid
-    // offline check is always integrity-only — never "bound". The `"bound"`
-    // value is reserved for a future anchor path (verifyReceiptChain against a
-    // trusted known-keys map), at which point this projection upgrades.
+    // `verifyReceipt` checks the signature against the receipt's own embedded
+    // key, so on its own a valid check is integrity-only. `verifyReceiptDocument`
+    // upgrades the root to `"pinned"` when a matching identity file is supplied.
     binding: result.valid ? "integrity-only" : "unverified",
   };
   if (result.signer !== undefined) base.signerDid = result.signer;
@@ -127,13 +133,44 @@ function toView(result: CryptoReceiptResult): ReceiptDocumentVerification {
   return base;
 }
 
+export interface VerifyReceiptDocumentOptions {
+  /**
+   * The producing motebit's identity file (its self-signed succession material).
+   * When supplied, and the receipt's signing key is time-valid for it (and the
+   * `motebit_id` matches), the result's root upgrades to `binding: "pinned"` —
+   * verified against material the caller supplied. The `anchored` / `sovereign`
+   * rungs layer operator non-equivocation on top; see
+   * `docs/doctrine/identity-binding-verification.md`.
+   */
+  readonly identity?: MotebitIdentityFile;
+}
+
+/**
+ * Promote the root to `"pinned"` iff the supplied identity file is for this
+ * receipt's motebit and its succession chain makes the signing key valid at the
+ * receipt's `completed_at`. Returns `null` (no promotion) otherwise. The chain is
+ * verified inside `verifyKeyBindingAtTime`; this is the sovereign-root half of
+ * binding (no operator anchor).
+ */
+async function pinnedBinding(
+  receipt: ExecutionReceipt,
+  identity: MotebitIdentityFile,
+): Promise<"pinned" | null> {
+  if (typeof receipt.public_key !== "string") return null;
+  if (String(identity.motebit_id) !== String(receipt.motebit_id)) return null;
+  const r = await verifyKeyBindingAtTime(identity, receipt.public_key, receipt.completed_at);
+  return r.bound ? "pinned" : null;
+}
+
 /**
  * Verify a pasted receipt document (JSON text) entirely offline. Returns a typed
  * view model; never throws on bad input or a crypto failure — only `JSON.parse`
- * and shape errors map to `malformed_json` / `not_a_receipt`.
+ * and shape errors map to `malformed_json` / `not_a_receipt`. Pass
+ * `options.identity` to attempt the `"pinned"` binding rung.
  */
 export async function verifyReceiptDocument(
   jsonText: string,
+  options?: VerifyReceiptDocumentOptions,
 ): Promise<ReceiptDocumentVerification> {
   let parsed: unknown;
   try {
@@ -154,5 +191,10 @@ export async function verifyReceiptDocument(
       detail: "input is not an ExecutionReceipt (missing motebit_id / task_id / signature / suite)",
     };
   }
-  return toView(await verifyReceipt(parsed));
+  const view = toView(await verifyReceipt(parsed));
+  if (view.integrity && options?.identity) {
+    const pinned = await pinnedBinding(parsed, options.identity);
+    if (pinned) return { ...view, binding: pinned };
+  }
+  return view;
 }

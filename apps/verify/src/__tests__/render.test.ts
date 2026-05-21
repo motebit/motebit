@@ -33,16 +33,15 @@ describe("renderResult", () => {
     expect(el.textContent).toContain("signature integrity");
   });
 
-  it("bound → green tone, motebit_id labelled as proven identity", () => {
-    const el = renderResult(view({ binding: "bound" }));
+  it("pinned → green tone, motebit_id proven, identity-binding tier ok", () => {
+    const el = renderResult(view({ binding: "pinned" }));
     expect(el.classList.contains("tone-bound")).toBe(true);
-    expect(el.textContent).toContain("identity anchored");
     const labels = Array.from(el.querySelectorAll(".meta-label")).map((n) => n.textContent);
     expect(labels).toContain("motebit");
     expect(labels).not.toContain("claims to be");
     // binding tier reads as a positive (ok), not a caveat (warn).
     expect(el.querySelector(".tier-warn")).toBeNull();
-    expect(el.querySelector(".result-tiers")?.textContent).toContain("anchored");
+    expect(el.querySelector(".result-tiers")?.textContent).toContain("pinned");
   });
 
   it("failed → red tone, no identity meta shown", () => {

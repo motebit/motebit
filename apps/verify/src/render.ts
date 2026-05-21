@@ -71,8 +71,8 @@ export function renderResult(view: ReceiptDocumentVerification): HTMLElement {
     tiers.appendChild(
       tierRow(
         "identity binding",
-        view.binding === "bound" ? "anchored" : "not anchored",
-        view.binding === "bound" ? "ok" : "warn",
+        view.binding === "pinned" ? "pinned" : "not anchored",
+        view.binding === "pinned" ? "ok" : "warn",
       ),
     );
     const kids = view.delegations ?? [];
@@ -96,7 +96,7 @@ export function renderResult(view: ReceiptDocumentVerification): HTMLElement {
     // motebit_id is the receipt's CLAIM about who produced it — labelled as such
     // so the page never conflates it with proven identity on the integrity path.
     if (view.motebitId) {
-      meta.appendChild(row(view.binding === "bound" ? "motebit" : "claims to be", view.motebitId));
+      meta.appendChild(row(view.binding === "pinned" ? "motebit" : "claims to be", view.motebitId));
     }
     if (view.signerDid) meta.appendChild(row("signed by", view.signerDid));
     card.appendChild(meta);
