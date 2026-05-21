@@ -556,6 +556,16 @@ export function issueTrustCredential(trustRecord: {
 export const KEY_SUCCESSION_SUITE: "motebit-jcs-ed25519-hex-v1";
 
 // @public
+export interface KeyBindingResult {
+    activeFrom?: number;
+    activeUntil?: number;
+    // (undocumented)
+    bound: boolean;
+    genesisPublicKey?: string;
+    reason?: string;
+}
+
+// @public
 export interface KeyPair {
     // (undocumented)
     privateKey: Uint8Array;
@@ -1352,6 +1362,9 @@ export function verifyHorizonWitnessRequestSignature(body: HorizonWitnessRequest
 
 // @public @deprecated
 export function verifyIdentityFile(content: string): Promise<LegacyVerifyResult>;
+
+// @public
+export function verifyKeyBindingAtTime(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, guardianPublicKeyHex?: string): Promise<KeyBindingResult>;
 
 // @public
 export function verifyKeySuccession(record: KeySuccessionRecord, guardianPublicKeyHex?: string): Promise<boolean>;

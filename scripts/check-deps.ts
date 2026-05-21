@@ -264,6 +264,7 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "signGuardianRecoverySuccession",
     "verifyKeySuccession",
     "verifySuccessionChain",
+    "verifyKeyBindingAtTime",
     "signGuardianRevocation",
     "verifyGuardianRevocation",
     "signCollaborativeReceipt",

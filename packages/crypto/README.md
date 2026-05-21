@@ -113,6 +113,7 @@ const vc = await issueReputationCredential(
 - **`verifyDelegationChain(chain)`** — Verify a chain of delegations with scope narrowing.
 - **`verifyKeySuccession(record, guardianPublicKeyHex?)`** — Verify a key rotation record.
 - **`verifySuccessionChain(chain, guardianPublicKeyHex?)`** — Verify a full key rotation chain.
+- **`verifyKeyBindingAtTime(identity, signingKeyHex, atTimestampMs, guardianPublicKeyHex?)`** — Sovereign-root identity binding with time-windowing: was this key the motebit's legitimate key _at_ a given time? Verifies the succession chain, then checks the key's active window. Returns `KeyBindingResult`.
 
 ### Primitives
 
