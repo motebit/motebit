@@ -719,6 +719,7 @@ export interface ReceiptVerification {
     delegations: ReceiptVerification[];
     // (undocumented)
     error?: string;
+    keySource?: "external" | "embedded";
     // (undocumented)
     motebit_id: string;
     // (undocumented)
@@ -740,6 +741,7 @@ export interface ReceiptVerifyDetail {
 export interface ReceiptVerifyResult extends BaseResult {
     // (undocumented)
     delegations?: ReceiptVerifyResult[];
+    keySource?: "embedded";
     // (undocumented)
     receipt: ExecutionReceipt | null;
     // (undocumented)

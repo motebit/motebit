@@ -30,12 +30,28 @@ import { verifyReceipt } from "@motebit/crypto";
 export interface InnerReceiptVerification {
   /** Task identifier of the inner receipt. Pulled from the parsed receipt body. */
   readonly taskId: string;
-  /** The producing motebit's identifier — what the relay claims; the signature proves it. */
+  /**
+   * The producing motebit's identifier as carried in the receipt body.
+   * NOTE: a valid signature proves the embedded key signed these bytes, NOT
+   * that the key belongs to this `motebitId` — see `identityBinding`.
+   */
   readonly motebitId: string;
   /** `did:key:zXXX` derived from the receipt's embedded public key when verification succeeded. */
   readonly signerDid?: string;
   /** Whether the inner receipt's signature verifies against its embedded `public_key`. */
   readonly valid: boolean;
+  /**
+   * Identity-binding status of a *successful* signature check. Always
+   * `"embedded-key-unverified"` on this path: the signature is checked
+   * against the receipt's own `public_key`, which proves byte-integrity but
+   * NOT that the key belongs to `motebitId`. Establishing binding requires
+   * an external anchor (the relay's pinned transparency key / a known-keys
+   * map). Callers MUST NOT render this as "from <motebit>" without an anchor
+   * — mirrors the content-artifact path's `producer_key_mismatch` discipline
+   * (see package CLAUDE.md "Why the trust anchor is necessary"). Absent on
+   * failures.
+   */
+  readonly identityBinding?: "embedded-key-unverified";
   /** Typed failure reason when `valid === false`. */
   readonly reason?: InnerReceiptVerificationFailureReason;
   /** Free-form detail (e.g. underlying error message). */
@@ -143,6 +159,9 @@ async function verifyOneInner(entryJson: string): Promise<InnerReceiptVerificati
       motebitId: String(receipt.motebit_id),
       ...(result.signer !== undefined && { signerDid: result.signer }),
       valid: true,
+      ...(result.keySource === "embedded" && {
+        identityBinding: "embedded-key-unverified" as const,
+      }),
       ...(result.delegations !== undefined && result.delegations.length > 0
         ? { delegations: result.delegations.map(toInnerShape) }
         : {}),
@@ -196,6 +215,8 @@ function toInnerShape(r: Awaited<ReturnType<typeof verifyReceipt>>): InnerReceip
     motebitId: String(r.receipt?.motebit_id ?? "<unknown>"),
     ...(r.signer !== undefined && { signerDid: r.signer }),
     valid: r.valid,
+    ...(r.valid &&
+      r.keySource === "embedded" && { identityBinding: "embedded-key-unverified" as const }),
     ...(reason !== undefined && { reason }),
     ...(errs[0]?.message !== undefined && !r.valid && { detail: errs[0].message }),
     ...(r.delegations !== undefined && r.delegations.length > 0

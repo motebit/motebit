@@ -584,6 +584,18 @@ export interface ReceiptVerification {
   task_id: string;
   motebit_id: string;
   verified: boolean;
+  /**
+   * Where the verifying key came from. `"external"` = resolved from the
+   * caller's `knownKeys` map, so identity binding is established by the
+   * caller's trusted source. `"embedded"` = fell back to the receipt's own
+   * `public_key`, which proves the bytes are internally consistent but NOT
+   * that the key belongs to `motebit_id` — a forged receipt can embed any
+   * key and still report `verified: true`. Only `"external"` establishes
+   * binding. Absent when no key was resolved (`verified: false`,
+   * `error: "unknown motebit_id"`). Callers MUST NOT present an `"embedded"`
+   * result as proof of identity.
+   */
+  keySource?: "external" | "embedded";
   error?: string;
   delegations: ReceiptVerification[];
 }
@@ -605,10 +617,18 @@ export async function verifyReceiptChain(
 ): Promise<ReceiptVerification> {
   const { task_id, motebit_id } = receipt;
 
-  // Use embedded public key if available, otherwise look up from known keys.
+  // Resolve the verifying key. Prefer the caller's trusted `knownKeys` map
+  // (establishes identity binding); fall back to the receipt's own embedded
+  // `public_key` (proves byte-integrity only — NOT that the key belongs to
+  // `motebit_id`). `keySource` records which, so callers never mistake an
+  // envelope-asserted key for an externally-bound identity.
   let publicKey = knownKeys.get(motebit_id);
-  if (!publicKey && receipt.public_key) {
+  let keySource: "external" | "embedded" | undefined;
+  if (publicKey) {
+    keySource = "external";
+  } else if (receipt.public_key) {
     publicKey = hexToBytes(receipt.public_key);
+    keySource = "embedded";
   }
   if (!publicKey) {
     const delegations = await verifyDelegations(receipt, knownKeys);
@@ -627,7 +647,13 @@ export async function verifyReceiptChain(
 
   const delegations = await verifyDelegations(receipt, knownKeys);
 
-  const result: ReceiptVerification = { task_id, motebit_id, verified, delegations };
+  const result: ReceiptVerification = {
+    task_id,
+    motebit_id,
+    verified,
+    ...(keySource ? { keySource } : {}),
+    delegations,
+  };
   if (error) {
     /* v8 ignore next */
     result.error = error;

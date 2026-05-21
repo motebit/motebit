@@ -60,6 +60,10 @@ describe("verifyInnerSignedReceipts — happy path", () => {
     expect(result.results[0]!.taskId).toBe("t1");
     expect(result.results[1]!.taskId).toBe("t2");
     expect(result.results[0]!.signerDid).toMatch(/^did:key:/);
+    // Inner receipts verify against their own embedded key — integrity, not
+    // identity binding. The result must say so structurally so a UI never
+    // renders "from <motebit>" without an external anchor.
+    expect(result.results[0]!.identityBinding).toBe("embedded-key-unverified");
   });
 
   it("returns applicable=false on v1.0 bodies", async () => {

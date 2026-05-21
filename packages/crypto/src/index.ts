@@ -205,6 +205,16 @@ export interface ReceiptVerifyResult extends BaseResult {
   type: "receipt";
   receipt: ExecutionReceipt | null;
   signer?: string;
+  /**
+   * Always `"embedded"` when present: `verifyReceipt` resolves the key from
+   * the receipt's own `public_key`, which proves byte-integrity but NOT
+   * identity binding. Establishing that the key belongs to `motebit_id`
+   * requires an external anchor (transparency log / known-keys map /
+   * identity file); see `verifyReceiptChain` for the external-key path.
+   * Callers MUST NOT present a `valid: true` result as proof of identity
+   * on the strength of an embedded key alone.
+   */
+  keySource?: "embedded";
   delegations?: ReceiptVerifyResult[];
 }
 
@@ -1117,6 +1127,7 @@ export async function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptV
     valid: sigResult.valid && delegationErrors.length === 0,
     receipt,
     signer: signerDid,
+    keySource: "embedded",
     ...(delegations.length > 0 ? { delegations } : {}),
     ...(errors.length > 0 ? { errors } : {}),
   };

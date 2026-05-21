@@ -1088,6 +1088,7 @@ describe("verifyReceiptChain", () => {
     expect(result.task_id).toBe("task-001");
     expect(result.motebit_id).toBe("mote-123");
     expect(result.verified).toBe(true);
+    expect(result.keySource).toBe("external"); // resolved from knownKeys — binding established
     expect(result.error).toBeUndefined();
     expect(result.delegations).toEqual([]);
   });
@@ -1101,6 +1102,7 @@ describe("verifyReceiptChain", () => {
     const result = await verifyReceiptChain(signed, knownKeys);
 
     expect(result.verified).toBe(false);
+    expect(result.keySource).toBe("external"); // a known key was used, it just didn't match
     expect(result.error).toBeUndefined();
     expect(result.delegations).toEqual([]);
   });
@@ -1113,6 +1115,7 @@ describe("verifyReceiptChain", () => {
     const result = await verifyReceiptChain(signed, knownKeys);
 
     expect(result.verified).toBe(false);
+    expect(result.keySource).toBeUndefined(); // no key resolved at all
     expect(result.error).toBe("unknown motebit_id");
     expect(result.delegations).toEqual([]);
   });
@@ -1190,7 +1193,32 @@ describe("verifyReceiptChain", () => {
     const result = await verifyReceiptChain(signed, knownKeys);
 
     expect(result.verified).toBe(true);
+    expect(result.keySource).toBe("embedded"); // fell back to the envelope key
     expect(result.error).toBeUndefined();
+  });
+
+  it("embedded-key fallback flags keySource so callers can't mistake integrity for binding", async () => {
+    // A forger signs a receipt CLAIMING someone else's motebit_id with their
+    // OWN key, embedding that key. With no external knownKeys entry the
+    // signature verifies (byte-integrity holds) — but keySource is "embedded",
+    // the structural signal that identity binding was NOT established. Callers
+    // MUST gate identity claims on keySource === "external": an envelope-embedded
+    // key proves byte-integrity, never that the key belongs to the motebit_id.
+    const attackerKp = await generateKeypair();
+    const forged = await signExecutionReceipt(
+      {
+        ...makeReceipt({ motebit_id: "mote-victim" }),
+        public_key: bytesToHex(attackerKp.publicKey),
+      },
+      attackerKp.privateKey,
+    );
+
+    const knownKeys: KnownKeys = new Map(); // verifier has no pinned key for the victim
+    const result = await verifyReceiptChain(forged, knownKeys);
+
+    expect(result.verified).toBe(true); // signature is internally valid …
+    expect(result.keySource).toBe("embedded"); // … but binding is NOT established
+    expect(result.motebit_id).toBe("mote-victim");
   });
 
   it("empty delegation_receipts still verifies with empty delegations array", async () => {
