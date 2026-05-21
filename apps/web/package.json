@@ -44,7 +44,7 @@
     "@motebit/tools": "workspace:*",
     "@motebit/voice": "workspace:*",
     "buffer": "^6.0.3",
-    "three": "^0.170.0"
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@noble/curves": "^1.9.0",
