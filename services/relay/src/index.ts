@@ -826,6 +826,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Identity-transparency endpoint (identity-binding-verification doctrine) ---
   // GET /api/v1/identity/:motebitId — binding material + Merkle inclusion proof.
+  const { createIdentityLogAnchorTables } = await import("./identity-log-anchoring.js");
+  createIdentityLogAnchorTables(moteDb.db);
   const { registerIdentityTransparencyRoutes } = await import("./identity-transparency.js");
   registerIdentityTransparencyRoutes({ app, db: moteDb.db });
 
