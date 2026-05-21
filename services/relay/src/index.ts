@@ -824,6 +824,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     platformFeeRate,
   });
 
+  // --- Identity-transparency endpoint (identity-binding-verification doctrine) ---
+  // GET /api/v1/identity/:motebitId — binding material + Merkle inclusion proof.
+  const { registerIdentityTransparencyRoutes } = await import("./identity-transparency.js");
+  registerIdentityTransparencyRoutes({ app, db: moteDb.db });
+
   // --- Migration routes (migration-v1.md) ---
   const { registerMigrationRoutes, createMigrationTables } = await import("./migration.js");
   createMigrationTables(moteDb.db);
