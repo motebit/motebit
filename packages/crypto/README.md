@@ -114,6 +114,8 @@ const vc = await issueReputationCredential(
 - **`verifyKeySuccession(record, guardianPublicKeyHex?)`** — Verify a key rotation record.
 - **`verifySuccessionChain(chain, guardianPublicKeyHex?)`** — Verify a full key rotation chain.
 - **`verifyKeyBindingAtTime(identity, signingKeyHex, atTimestampMs, guardianPublicKeyHex?)`** — Sovereign-root identity binding with time-windowing: was this key the motebit's legitimate key _at_ a given time? Verifies the succession chain, then checks the key's active window. Returns `KeyBindingResult`.
+- **`identityLogLeaf(motebitId, currentKeyHex)`** — Canonical SHA-256 leaf of the identity-transparency log (the operator's `motebit_id → current key` commitment). Shared convention for the relay producer and the verifier.
+- **`verifyIdentityBindingAnchored(identity, signingKeyHex, atTimestampMs, proof, guardianPublicKeyHex?)`** — Anchored binding: sovereign-root binding AND Merkle inclusion of the current key in the transparency log under `proof.anchoredRoot`. Confirming the root is on-chain is the caller's cross-check.
 
 ### Primitives
 

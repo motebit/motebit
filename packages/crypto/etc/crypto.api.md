@@ -496,6 +496,17 @@ export function hexPublicKeyToDidKey(hexPublicKey: string): string;
 // @public (undocumented)
 export function hexToBytes(hex: string): Uint8Array;
 
+// @public
+export interface IdentityLogInclusionProof {
+    readonly anchoredRoot: string;
+    readonly index: number;
+    readonly layerSizes: number[];
+    readonly siblings: string[];
+}
+
+// @public
+export function identityLogLeaf(motebitId: string, currentKeyHex: string): Promise<string>;
+
 // @public (undocumented)
 export interface IdentityVerifyResult extends BaseResult {
     // (undocumented)
@@ -1359,6 +1370,9 @@ export function verifyHardwareAttestationClaim(claim: HardwareAttestationClaim, 
 
 // @public
 export function verifyHorizonWitnessRequestSignature(body: HorizonWitnessRequestBody, signatureBase64Url: string, issuerPublicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyIdentityBindingAnchored(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, proof: IdentityLogInclusionProof, guardianPublicKeyHex?: string): Promise<KeyBindingResult>;
 
 // @public @deprecated
 export function verifyIdentityFile(content: string): Promise<LegacyVerifyResult>;

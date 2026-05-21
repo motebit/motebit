@@ -23,6 +23,7 @@
  */
 
 import { verifyBySuite } from "./suite-dispatch.js";
+import { verifyMerkleInclusion } from "./merkle.js";
 // The @noble/ed25519 SHA-512 binding is performed in suite-dispatch.ts
 // as a side effect of module load. Importing verifyBySuite here is
 // enough to guarantee that the primitive is ready before any verify
@@ -1100,6 +1101,86 @@ export async function verifyKeyBindingAtTime(
     activeFrom: match.from,
     ...(match.until !== Number.POSITIVE_INFINITY ? { activeUntil: match.until } : {}),
   };
+}
+
+/**
+ * Canonical leaf of the identity-transparency log: the operator's
+ * non-equivocable commitment that motebit `motebitId`'s current identity key is
+ * `currentKeyHex`. Hex SHA-256 of the JCS-canonical commitment. The relay that
+ * produces the log and the verifier that checks inclusion MUST agree on this
+ * convention. See `docs/doctrine/identity-binding-verification.md`.
+ */
+export async function identityLogLeaf(motebitId: string, currentKeyHex: string): Promise<string> {
+  const canonical = canonicalJson({
+    type: "motebit-identity-binding",
+    motebit_id: motebitId,
+    public_key: currentKeyHex,
+  });
+  const hash = await sha256(new TextEncoder().encode(canonical));
+  return Array.from(hash)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Merkle inclusion proof of an identity-log leaf under an anchored root. */
+export interface IdentityLogInclusionProof {
+  /** Leaf position in the bottom layer (0-based). */
+  readonly index: number;
+  /** Sibling hashes, leaf-to-root order (hex). */
+  readonly siblings: string[];
+  /** Bottom-up layer cardinalities. */
+  readonly layerSizes: number[];
+  /**
+   * The anchored Merkle root the proof must reconstruct (hex). Confirming this
+   * root is actually posted on-chain by the operator is a SEPARATE check, the
+   * verifier-caller's responsibility — it is what makes anchored binding
+   * non-zero-network and defeats split-view equivocation.
+   */
+  readonly anchoredRoot: string;
+}
+
+/**
+ * Anchored identity binding: sovereign-root binding (via
+ * {@link verifyKeyBindingAtTime}) AND the motebit's current identity key is
+ * committed in the identity-transparency log under `proof.anchoredRoot`. The
+ * Merkle inclusion is the operator's non-equivocation — it cannot serve a forked
+ * chain whose head differs from the anchored leaf. Returns the sovereign
+ * `KeyBindingResult` when both hold; `bound: false` if either fails.
+ *
+ * NOTE: this proves inclusion under a *given* root; verifying that root is the
+ * one the operator anchored on-chain is the caller's cross-check.
+ */
+export async function verifyIdentityBindingAnchored(
+  identity: MotebitIdentityFile,
+  signingKeyHex: string,
+  atTimestampMs: number,
+  proof: IdentityLogInclusionProof,
+  guardianPublicKeyHex?: string,
+): Promise<KeyBindingResult> {
+  const sovereign = await verifyKeyBindingAtTime(
+    identity,
+    signingKeyHex,
+    atTimestampMs,
+    guardianPublicKeyHex,
+  );
+  if (!sovereign.bound) return sovereign;
+
+  const leaf = await identityLogLeaf(identity.motebit_id, identity.identity.public_key);
+  const included = await verifyMerkleInclusion(
+    leaf,
+    proof.index,
+    proof.siblings,
+    proof.layerSizes,
+    proof.anchoredRoot,
+  );
+  if (!included) {
+    return {
+      bound: false,
+      ...(sovereign.genesisPublicKey ? { genesisPublicKey: sovereign.genesisPublicKey } : {}),
+      reason: "identity key is not included in the anchored transparency log",
+    };
+  }
+  return sovereign;
 }
 
 // ===========================================================================
