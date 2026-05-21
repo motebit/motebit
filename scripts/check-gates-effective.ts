@@ -107,6 +107,21 @@ function mutateFile(relativePath: string, mutate: (src: string) => string): () =
 
 const PROBES: ReadonlyArray<Probe> = [
   {
+    script: "check-property-test-floor",
+    proves:
+      "flags a safety-critical-floor package whose package.json no longer declares the fast-check devDependency (the property-based / fuzz / mutation discipline regressed)",
+    perturb: () =>
+      // Strip fast-check from a listed floor package's devDependencies. The gate
+      // requires every PACKAGES_REQUIRING_PROPERTY_TESTS entry to declare it AND
+      // import it from a test; removing the devDep trips condition (a). Cleanup
+      // restores the original package.json verbatim (formatting included).
+      mutateFile("packages/virtual-accounts/package.json", (src) => {
+        const pkg = JSON.parse(src) as { devDependencies?: Record<string, string> };
+        if (pkg.devDependencies) delete pkg.devDependencies["fast-check"];
+        return JSON.stringify(pkg, null, 2) + "\n";
+      }),
+  },
+  {
     script: "check-service-primitives",
     proves: "flags a forbidden @motebit/encryption import inside a service",
     perturb: () =>
