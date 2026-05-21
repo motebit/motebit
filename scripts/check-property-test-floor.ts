@@ -82,6 +82,11 @@ const PACKAGES_REQUIRING_PROPERTY_TESTS: ReadonlyArray<PackageRequirement> = [
     reason:
       "TPM 2.0 quote verifier — any single mutation in a verified receipt MUST yield `valid: false`; covers all four segments (attest, signature, leaf-cert, intermediate-cert)",
   },
+  {
+    path: "services/relay",
+    reason:
+      "production money path — the same conservation invariants property-tested at `@motebit/virtual-accounts` (in-memory store) MUST hold against `SqliteAccountStore`, the SQLite-backed store the relay actually runs. The relay is the only checkpoint where money moves and the 5% fee is collected; an unguarded property suite here is the highest-consequence gap on the floor",
+  },
 ];
 
 interface Failure {
