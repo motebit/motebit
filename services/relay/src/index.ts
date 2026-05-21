@@ -579,6 +579,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const relayIdentity: RelayIdentity = await initRelayIdentity(
     moteDb.db,
     config.relayKeyPassphrase,
+    createLogger({ service: "relay" }),
   );
 
   // --- Task routing & federation query cache ---

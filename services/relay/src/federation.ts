@@ -518,6 +518,7 @@ export function isEncryptedFormat(value: string): boolean {
 export async function initRelayIdentity(
   db: DatabaseDriver,
   passphrase?: string,
+  logger?: { info(message: string, context?: Record<string, unknown>): void },
 ): Promise<RelayIdentity> {
   const existing = db.prepare("SELECT * FROM relay_identity LIMIT 1").get() as
     | { relay_motebit_id: string; public_key: string; private_key_hex: string; did: string }
@@ -541,6 +542,23 @@ export async function initRelayIdentity(
       }
     } else {
       privHex = existing.private_key_hex;
+      // Migrate plaintext → encrypted in place once a passphrase is configured.
+      // Re-encrypts the SAME private key (identity preserved — minting a new key
+      // would invalidate every signature and the transparency-anchor chain) and
+      // persists it, so the next boot takes the encrypted decrypt path above.
+      // Idempotent: after this runs, `isEncryptedFormat` is true on reload.
+      // Without this branch, setting MOTEBIT_RELAY_KEY_PASSPHRASE on an existing
+      // plaintext key is a silent no-op — the key stays plaintext at rest.
+      if (passphrase) {
+        const encrypted = encryptPrivateKey(privHex, passphrase);
+        db.prepare("UPDATE relay_identity SET private_key_hex = ? WHERE relay_motebit_id = ?").run(
+          encrypted,
+          existing.relay_motebit_id,
+        );
+        logger?.info("relay.key.migrated_to_encrypted", {
+          relay_motebit_id: existing.relay_motebit_id,
+        });
+      }
     }
     return {
       relayMotebitId: existing.relay_motebit_id,

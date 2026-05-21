@@ -76,6 +76,43 @@ describe("Relay Identity Encryption", () => {
     expect(bytesToHex(identity2.privateKey)).toBe(bytesToHex(identity1.privateKey));
   });
 
+  it("migrates an existing plaintext key to encrypted in place when a passphrase is later configured, preserving identity", async () => {
+    // Boot once WITHOUT a passphrase — key persisted as plaintext.
+    const before = await initRelayIdentity(db);
+    const rowBefore = db.prepare("SELECT private_key_hex FROM relay_identity LIMIT 1").get() as {
+      private_key_hex: string;
+    };
+    expect(isEncryptedFormat(rowBefore.private_key_hex)).toBe(false);
+
+    // Boot again WITH a passphrase — must encrypt the SAME key in place, never
+    // mint a new one (a new key would invalidate every prior signature and the
+    // transparency-anchor chain). Without the migration branch this is a silent
+    // no-op and the key stays plaintext at rest.
+    const passphrase = "migration-passphrase";
+    const migrated = await initRelayIdentity(db, passphrase);
+
+    // Identity preserved across the migration.
+    expect(migrated.relayMotebitId).toBe(before.relayMotebitId);
+    expect(migrated.publicKeyHex).toBe(before.publicKeyHex);
+    expect(migrated.did).toBe(before.did);
+    expect(bytesToHex(migrated.privateKey)).toBe(bytesToHex(before.privateKey));
+
+    // At-rest storage is now encrypted.
+    const rowAfter = db.prepare("SELECT private_key_hex FROM relay_identity LIMIT 1").get() as {
+      private_key_hex: string;
+    };
+    expect(isEncryptedFormat(rowAfter.private_key_hex)).toBe(true);
+
+    // Idempotent + correct: reload with the passphrase decrypts to the same key.
+    const reloaded = await initRelayIdentity(db, passphrase);
+    expect(bytesToHex(reloaded.privateKey)).toBe(bytesToHex(before.privateKey));
+
+    // The migrated key now refuses to load without the passphrase (fail-closed).
+    await expect(initRelayIdentity(db)).rejects.toThrow(
+      "Relay private key is encrypted but no passphrase provided",
+    );
+  });
+
   it("wrong passphrase fails to decrypt", async () => {
     const passphrase = "correct-passphrase";
     await initRelayIdentity(db, passphrase);
