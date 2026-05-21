@@ -24,7 +24,7 @@
 // per stream at call time.
 
 import type { ExecutionReceipt } from "@motebit/sdk";
-import { verifyReceiptChain, hexToBytes } from "@motebit/encryption";
+import { verifyReceiptChain } from "@motebit/encryption";
 
 import { bold, cyan, dim, error as errorColor, success, warn } from "./colors.js";
 
@@ -108,27 +108,6 @@ function statusGlyph(kind: "ok" | "fail" | "pending"): string {
 }
 
 /**
- * Build the known-keys map from every `public_key` field in the tree. This
- * mirrors `collectKnownKeys` from the web artifact — the receipts are
- * self-attesting so verification needs no external registry.
- */
-function collectKnownKeys(receipt: ExecutionReceipt): Map<string, Uint8Array> {
-  const keys = new Map<string, Uint8Array>();
-  const visit = (r: ExecutionReceipt): void => {
-    if (typeof r.public_key === "string" && r.public_key.length > 0) {
-      try {
-        keys.set(r.motebit_id, hexToBytes(r.public_key));
-      } catch {
-        // Malformed hex — verify will fail-closed on this receipt.
-      }
-    }
-    for (const child of r.delegation_receipts ?? []) visit(child);
-  };
-  visit(receipt);
-  return keys;
-}
-
-/**
  * Format a single receipt's header line with tree indentation. Called
  * recursively to walk `delegation_receipts`.
  */
@@ -184,6 +163,7 @@ function renderReceiptLine(receipt: ExecutionReceipt, depth: number, last: boole
 export async function renderReceipt(
   receipt: ExecutionReceipt,
   out: (line: string) => void = (s) => console.log(s),
+  trustedAnchor?: Map<string, Uint8Array>,
 ): Promise<{ verified: boolean; error?: string }> {
   const lines = renderReceiptLine(receipt, 0, true);
   const header = `${dim("─ receipt ")}${dim("·")} ${cyan(shortHash(receipt.task_id))}`;
@@ -191,16 +171,19 @@ export async function renderReceipt(
   out(header);
   for (const line of lines) out(line);
 
-  // Offline verify — the "oh" beat that makes the receipt evidence, not
-  // a claim. Zero relay contact; embedded `public_key` fields flow into
-  // the known-keys map for recursive chain verification.
+  // Offline verify — the "oh" beat that makes the receipt evidence, not a
+  // claim. Zero relay contact. Verify against the caller's trusted anchor; with
+  // none, the embedded `public_key` fallback still checks signatures, but the
+  // result is integrity-only — NOT proof the key belongs to the motebit_id.
   let verifiedFlag = false;
   let errorMsg: string | undefined;
+  let bound = false;
   try {
-    const knownKeys = collectKnownKeys(receipt);
-    const tree = await verifyReceiptChain(receipt, knownKeys);
+    const tree = await verifyReceiptChain(receipt, trustedAnchor ?? new Map<string, Uint8Array>());
     verifiedFlag = tree.verified && allDelegationsVerified(tree);
-    if (!verifiedFlag) {
+    if (verifiedFlag) {
+      bound = allDelegationsBound(tree);
+    } else {
       errorMsg = tree.error ?? firstUnverifiedError(tree) ?? "chain verification failed";
     }
   } catch (err) {
@@ -208,8 +191,14 @@ export async function renderReceipt(
     errorMsg = err instanceof Error ? err.message : String(err);
   }
 
-  if (verifiedFlag) {
+  if (verifiedFlag && bound) {
     out(`${dim("  ")}${success(statusGlyph("ok"))} ${dim("verified locally · chain intact")}`);
+  } else if (verifiedFlag) {
+    // Signature valid, but checked against the receipt's own embedded key —
+    // identity is NOT bound without a trust anchor. Honest, non-green status.
+    out(
+      `${dim("  ")}${warn(statusGlyph("ok"))} ${dim("signature verified · identity not anchored")}`,
+    );
   } else {
     out(
       `${dim("  ")}${errorColor(statusGlyph("fail"))} ${errorColor(
@@ -230,6 +219,7 @@ export async function renderReceipt(
 
 interface VerifyTreeLike {
   verified: boolean;
+  keySource?: "external" | "embedded";
   error?: string;
   delegations: VerifyTreeLike[];
 }
@@ -238,6 +228,17 @@ function allDelegationsVerified(tree: VerifyTreeLike): boolean {
   if (!tree.verified) return false;
   for (const child of tree.delegations ?? []) {
     if (!allDelegationsVerified(child)) return false;
+  }
+  return true;
+}
+
+// A verified tree is "bound" only when every node resolved its key from the
+// caller's trusted anchor (keySource === "external"), not from the receipt's
+// own embedded key. Mirrors render-engine's `bindingStatusFor`, across the chain.
+function allDelegationsBound(tree: VerifyTreeLike): boolean {
+  if (tree.keySource !== "external") return false;
+  for (const child of tree.delegations ?? []) {
+    if (!allDelegationsBound(child)) return false;
   }
   return true;
 }
