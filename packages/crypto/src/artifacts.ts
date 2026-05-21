@@ -623,14 +623,13 @@ export async function verifyReceiptChain(
   // `motebit_id`). `keySource` records which, so callers never mistake an
   // envelope-asserted key for an externally-bound identity.
   let publicKey = knownKeys.get(motebit_id);
-  let keySource: "external" | "embedded" | undefined;
+  let keySource: "external" | "embedded";
   if (publicKey) {
     keySource = "external";
   } else if (receipt.public_key) {
     publicKey = hexToBytes(receipt.public_key);
     keySource = "embedded";
-  }
-  if (!publicKey) {
+  } else {
     const delegations = await verifyDelegations(receipt, knownKeys);
     return { task_id, motebit_id, verified: false, error: "unknown motebit_id", delegations };
   }
@@ -651,7 +650,7 @@ export async function verifyReceiptChain(
     task_id,
     motebit_id,
     verified,
-    ...(keySource ? { keySource } : {}),
+    keySource,
     delegations,
   };
   if (error) {
