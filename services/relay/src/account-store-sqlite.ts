@@ -206,9 +206,17 @@ export class SqliteAccountStore implements AccountStore {
   }
 
   getTransactions(motebitId: string, limit = 50): AccountTransaction[] {
+    // Secondary sort on `rowid` (SQLite's monotonic insertion counter)
+    // breaks `created_at` ties deterministically: two transactions in
+    // the same millisecond would otherwise return in arbitrary order,
+    // making the per-row `balance_after` appear non-monotonic in the
+    // history view. `rowid` reflects true insertion order, so DESC on
+    // both keys yields a stable most-recent-first ordering whose reverse
+    // is the chronological running balance. (The table is not WITHOUT
+    // ROWID, so the implicit rowid is available.)
     return this.db
       .prepare(
-        "SELECT * FROM relay_transactions WHERE motebit_id = ? ORDER BY created_at DESC LIMIT ?",
+        "SELECT * FROM relay_transactions WHERE motebit_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
       )
       .all(motebitId, limit) as AccountTransaction[];
   }
