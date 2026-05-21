@@ -34,7 +34,6 @@ import {
   subtle,
   toBase64Url,
 } from "./test-helpers.js";
-import type { Chain } from "./test-helpers.js";
 
 describe("verifyTpmQuote — happy path", () => {
   it("verifies a well-formed fabricated chain against the injected vendor root", async () => {

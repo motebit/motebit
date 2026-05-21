@@ -20,10 +20,7 @@ import { describe, expect, it } from "vitest";
 import * as x509 from "@peculiar/x509";
 
 import { androidKeystoreVerifier } from "../index.js";
-import {
-  ANDROID_KEY_ATTESTATION_OID,
-  GOOGLE_ANDROID_KEYSTORE_ROOT_ECDSA_PEM,
-} from "../google-roots.js";
+import { GOOGLE_ANDROID_KEYSTORE_ROOT_ECDSA_PEM } from "../google-roots.js";
 import {
   SECURITY_LEVEL_SOFTWARE,
   SECURITY_LEVEL_STRONG_BOX,
@@ -41,8 +38,6 @@ import {
   FIXED_CLOCK,
   IDENT,
   MOTEBIT_ID,
-  RP_PACKAGE,
-  RP_SIGNING_HASH,
   VERIFIED_BOOT_KEY,
   buildChainWithKeyDescription,
   buildFakeRoot,
@@ -53,7 +48,6 @@ import {
   subtle,
   toBase64Url,
 } from "./test-helpers.js";
-import type { BuildChainOptions, BuiltChain } from "./test-helpers.js";
 
 // ── Tests ────────────────────────────────────────────────────────────
 

@@ -23,9 +23,6 @@
 
 import { describe, expect, it } from "vitest";
 import { encode as cborEncode } from "cbor2";
-import * as x509 from "@peculiar/x509";
-import { p256 } from "@noble/curves/p256";
-import { sha256 } from "@noble/hashes/sha256";
 
 import { verifyWebAuthnAttestation } from "../verify.js";
 import { webauthnVerifier } from "../index.js";
@@ -40,14 +37,8 @@ import {
   buildClientDataJSON,
   buildFullAttestationFixture,
   buildSelfAttestationFixture,
-  canonicalAttestationBody,
-  concat,
-  fromBase64Url,
-  sha256Bytes,
-  subtle,
   toBase64Url,
 } from "./test-helpers.js";
-import type { FullFixture } from "./test-helpers.js";
 
 // ── Tests ────────────────────────────────────────────────────────────
 

@@ -37,12 +37,10 @@ import {
   buildFixture,
   canonicalAttestationBody,
   concat,
-  encodeAppleNonceExtension,
   sha256,
   subtle,
   toBase64Url,
 } from "./test-helpers.js";
-import type { Chain } from "./test-helpers.js";
 
 // ── tests ────────────────────────────────────────────────────────────
 
