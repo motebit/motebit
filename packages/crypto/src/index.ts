@@ -1012,6 +1012,94 @@ async function verifySuccessionChain(
   }
 }
 
+/**
+ * Result of binding a signing key to a motebit identity at a point in time.
+ * `bound: true` means the key was this identity's legitimate key *at* the given
+ * timestamp — sovereign-root binding (rooted in the motebit's own genesis +
+ * rotation signatures), with time-windowing. See
+ * `docs/doctrine/identity-binding-verification.md`.
+ */
+export interface KeyBindingResult {
+  bound: boolean;
+  /** Genesis (root) public key of the identity's succession chain. */
+  genesisPublicKey?: string;
+  /** Start of the matched key's active window (ms epoch); absent ⇒ unbounded below. */
+  activeFrom?: number;
+  /** End of the matched key's active window (ms epoch); absent ⇒ still current. */
+  activeUntil?: number;
+  /** Why binding failed, when `bound` is false. */
+  reason?: string;
+}
+
+/**
+ * Sovereign-root identity binding with time-windowing: was `signingKeyHex` this
+ * motebit's legitimate key *at* `atTimestampMs`?
+ *
+ * Verifies the identity's succession chain (link signatures + continuity +
+ * temporal order, via {@link verifySuccessionChain}), then checks the key's
+ * active window contains the timestamp. A since-rotated key therefore does NOT
+ * bind a newer receipt, and a future key does not bind an older one — the
+ * time-windowing failure mode named in the doctrine.
+ *
+ * This roots in the motebit's own keys; no operator trust. Tying the genesis key
+ * to the `motebit_id` (the non-equivocable anchor) is the caller's responsibility
+ * — this primitive proves the key/identity-file relationship, not file/id.
+ */
+export async function verifyKeyBindingAtTime(
+  identity: MotebitIdentityFile,
+  signingKeyHex: string,
+  atTimestampMs: number,
+  guardianPublicKeyHex?: string,
+): Promise<KeyBindingResult> {
+  const chain = identity.succession ?? [];
+  const currentKey = identity.identity.public_key;
+
+  if (chain.length > 0) {
+    const chk = await verifySuccessionChain(chain, currentKey, guardianPublicKeyHex);
+    if (!chk.valid) {
+      return { bound: false, reason: chk.error ?? "succession chain invalid" };
+    }
+  }
+
+  const createdAtMs = Date.parse(identity.created_at);
+  const bornMs = Number.isNaN(createdAtMs) ? Number.NEGATIVE_INFINITY : createdAtMs;
+  const genesisKey = chain.length > 0 ? chain[0]!.old_public_key : currentKey;
+
+  // Contiguous active windows in chain order: genesis first, then each rotation's
+  // new key. The chain is already verified temporally ordered, so windows don't
+  // overlap and `[from, until)` is well-formed.
+  const windows: Array<{ key: string; from: number; until: number }> = [
+    { key: genesisKey, from: bornMs, until: chain[0]?.timestamp ?? Number.POSITIVE_INFINITY },
+  ];
+  for (let i = 0; i < chain.length; i++) {
+    windows.push({
+      key: chain[i]!.new_public_key,
+      from: chain[i]!.timestamp,
+      until: chain[i + 1]?.timestamp ?? Number.POSITIVE_INFINITY,
+    });
+  }
+
+  const match = windows.find(
+    (w) => w.key === signingKeyHex && atTimestampMs >= w.from && atTimestampMs < w.until,
+  );
+  if (!match) {
+    const inChain = windows.some((w) => w.key === signingKeyHex);
+    return {
+      bound: false,
+      genesisPublicKey: genesisKey,
+      reason: inChain
+        ? "signing key is in the succession chain but was not active at the given timestamp"
+        : "signing key is not in this identity's succession chain",
+    };
+  }
+  return {
+    bound: true,
+    genesisPublicKey: genesisKey,
+    ...(match.from !== Number.NEGATIVE_INFINITY ? { activeFrom: match.from } : {}),
+    ...(match.until !== Number.POSITIVE_INFINITY ? { activeUntil: match.until } : {}),
+  };
+}
+
 // ===========================================================================
 // Receipt verification
 // ===========================================================================
