@@ -69,6 +69,11 @@ describe("bootstrapIdentity", () => {
     // 32-byte Ed25519 public key = 64 hex chars
     expect(result.publicKeyHex).toHaveLength(64);
 
+    // The minted motebit_id is the sovereign commitment to the genesis key —
+    // a verifier confirms id↔key offline, no operator (the default mint).
+    const { verifySovereignBinding } = await import("@motebit/crypto");
+    expect(await verifySovereignBinding(result.motebitId, result.publicKeyHex)).toBe(true);
+
     // Key store should have received the private key
     expect(keyStore.storedKey).toBeTruthy();
     expect(keyStore.storedKey).toHaveLength(64); // 32-byte Ed25519 private key

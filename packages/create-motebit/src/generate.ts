@@ -89,6 +89,23 @@ function generateUUIDv7(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
 }
 
+/**
+ * Sovereign motebit_id: a UUIDv8 commitment to the genesis key — `sha256(pubkey)`
+ * shaped as a UUID. A new motebit's id IS this value, so the id↔key binding is
+ * self-certifying and recoverable from the genesis seed (`@motebit/crypto`'s
+ * `deriveSovereignMotebitId` — byte-identical; inlined to keep this package
+ * dependency-free). The verifier (receipt.computer) reaches the `sovereign` rung
+ * offline for ids minted this way.
+ */
+async function deriveSovereignMotebitId(publicKey: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", publicKey));
+  const b = digest.slice(0, 16);
+  b[6] = 0x80 | (b[6]! & 0x0f); // version 8 (RFC 9562, vendor-specific)
+  b[8] = 0x80 | (b[8]! & 0x3f); // variant 10b
+  const h = toHex(b);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+
 // ---------------------------------------------------------------------------
 // Crypto (inlined from @motebit/crypto)
 // ---------------------------------------------------------------------------
@@ -394,8 +411,10 @@ export async function generateIdentity(opts: {
   const publicKeyHex = toHex(publicKey);
   const privateKeyHex = toHex(secretKey);
 
-  // Generate IDs
-  const motebitId = generateUUIDv7();
+  // The motebit_id IS the sovereign commitment to the genesis key (UUIDv8 of
+  // sha256(pubkey)) — self-certifying and recoverable from the genesis seed.
+  // The device_id stays a random UUIDv7 (devices aren't sovereign-committed).
+  const motebitId = await deriveSovereignMotebitId(publicKey);
   const deviceId = generateUUIDv7();
 
   // Build identity file data — use service governance presets for service motebits

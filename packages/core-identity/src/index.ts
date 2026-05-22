@@ -4,6 +4,7 @@ import type { EventStoreAdapter } from "@motebit/event-log";
 import { EventStore } from "@motebit/event-log";
 import { generateKeypair, signKeySuccession, bytesToHex } from "@motebit/encryption";
 import type { KeySuccessionRecord } from "@motebit/encryption";
+import { deriveSovereignMotebitId } from "@motebit/crypto";
 
 // === UUID v7 Generation ===
 
@@ -566,11 +567,16 @@ export async function bootstrapIdentity(opts: {
     };
   }
 
-  // First launch — generate identity + keypair
-  const identity = await identityManager.create(surfaceName);
+  // First launch — generate the keypair FIRST so the motebit_id can be the
+  // sovereign commitment to it: `deriveSovereignMotebitId` is a UUIDv8 of
+  // sha256(genesis pubkey), so the id↔key binding is self-certifying (a verifier
+  // checks it offline) and recoverable from the genesis seed. This is the default
+  // mint for every surface; see docs/doctrine/identity-binding-verification.md.
   const keypair = await generateKeypair();
   const pubKeyHex = toHex(keypair.publicKey);
   const privKeyHex = toHex(keypair.privateKey);
+  const motebitId = await deriveSovereignMotebitId(pubKeyHex);
+  const identity = await identityManager.createWithId(motebitId, surfaceName);
 
   const device = await identityManager.registerDevice(identity.motebit_id, surfaceName, pubKeyHex);
 

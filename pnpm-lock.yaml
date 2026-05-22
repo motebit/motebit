@@ -1066,6 +1066,9 @@ importers:
 
   packages/core-identity:
     dependencies:
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../crypto
       '@motebit/encryption':
         specifier: workspace:*
         version: link:../encryption

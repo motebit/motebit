@@ -73,7 +73,7 @@ export interface BootstrapServiceIdentityOptions {
 }
 
 export interface BootstrapServiceIdentityResult {
-  /** Canonical motebit_id (UUID v7). Survives redeploys as long as the volume survives. */
+  /** Canonical motebit_id (sovereign UUIDv8 commitment to the genesis key). Survives redeploys as long as the volume survives. */
   motebitId: string;
   /** Device ID registered to this service instance. */
   deviceId: string;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { verify } from "@motebit/crypto";
+import { verify, deriveSovereignMotebitId, verifySovereignBinding } from "@motebit/crypto";
 import {
   generateIdentity,
   GOVERNANCE_PRESETS,
@@ -26,25 +26,38 @@ describe("generateIdentity", () => {
     expect(verification.identity!.identity.public_key).toBe(result.publicKeyHex);
   });
 
-  it("generates UUID v7 identifiers (version 7, variant 10)", async () => {
+  it("mints a sovereign motebit_id (UUIDv8) and a random UUIDv7 device_id", async () => {
     const result = await generateIdentity({
       name: "test",
       trustMode: "guarded",
       passphrase: "pw",
     });
 
-    // Standard UUID format
     const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     expect(result.motebitId).toMatch(uuidPattern);
     expect(result.deviceId).toMatch(uuidPattern);
 
-    // Version nibble (char 15, 0-indexed in the hex without dashes) should be '7'
-    expect(result.motebitId[14]).toBe("7");
+    // motebit_id is now the sovereign commitment → version nibble 8.
+    expect(result.motebitId[14]).toBe("8");
+    // device_id stays a random UUIDv7 (devices aren't sovereign-committed).
     expect(result.deviceId[14]).toBe("7");
 
-    // Variant nibble (char 20 in the formatted string) should be 8, 9, a, or b
+    // Variant nibble should be 8, 9, a, or b for both.
     expect(result.motebitId[19]).toMatch(/[89ab]/);
     expect(result.deviceId[19]).toMatch(/[89ab]/);
+  });
+
+  it("the minted motebit_id IS the sovereign commitment to the genesis key", async () => {
+    const result = await generateIdentity({
+      name: "sovereign-test",
+      trustMode: "guarded",
+      passphrase: "pw",
+    });
+    // The inlined derivation matches @motebit/crypto byte-for-byte, and the id
+    // verifies as the sovereign commitment — so receipt.computer reaches the
+    // `sovereign` rung for ids minted this way.
+    expect(result.motebitId).toBe(await deriveSovereignMotebitId(result.publicKeyHex));
+    expect(await verifySovereignBinding(result.motebitId, result.publicKeyHex)).toBe(true);
   });
 
   it("generates unique motebit_id and device_id per call", async () => {

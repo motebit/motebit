@@ -89,14 +89,15 @@ describe("golden path: generate -> verify -> decrypt -> match", () => {
     expect(derivedPublicKeyHex).toBe(result.publicKeyHex);
     expect(derivedPublicKeyHex).toBe(verification.identity!.identity.public_key);
 
-    // Step 5: Verify motebit_id is a valid UUID v7 (timestamp-based)
-    // UUID v7 has version nibble 7 in position 13 and variant bits 10xx in position 19.
+    // Step 5: motebit_id is now the sovereign commitment (UUIDv8 of sha256(key));
+    // device_id stays a random timestamp-based UUIDv7.
+    const uuidV8Regex = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
     const uuidV7Regex = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-    expect(result.motebitId).toMatch(uuidV7Regex);
+    expect(result.motebitId).toMatch(uuidV8Regex);
     expect(result.deviceId).toMatch(uuidV7Regex);
 
-    // Verify the timestamp portion is recent (within the last minute)
-    const timestampHex = result.motebitId.replace(/-/g, "").slice(0, 12);
+    // The device_id (still time-based) carries a recent timestamp.
+    const timestampHex = result.deviceId.replace(/-/g, "").slice(0, 12);
     const timestampMs = parseInt(timestampHex, 16);
     const now = Date.now();
     expect(timestampMs).toBeGreaterThan(now - 60_000);
