@@ -60,8 +60,13 @@ import {
   JSON_AUTH,
   AUTH_HEADER as AUTH,
   jsonAuthWithIdempotency,
+  buildP2pPaymentProof,
 } from "./test-helpers.js";
 import type { SyncRelay } from "../index.js";
+
+// Paid direct delegation settles P2P (Arc 3.5). The worker declares this
+// settlement address; the delegator submits a matching payment_proof.
+const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
 
 describe("Permissive-floor-only client — open-protocol proof", () => {
   let relay: SyncRelay;
@@ -92,6 +97,8 @@ describe("Permissive-floor-only client — open-protocol proof", () => {
         motebit_id: worker.motebitId,
         endpoint_url: "http://localhost:3200/mcp",
         capabilities: ["web_search"],
+        settlement_address: WORKER_ADDR,
+        settlement_modes: "relay,p2p",
       }),
     });
     await relay.app.request(`/api/v1/agents/${worker.motebitId}/listing`, {
@@ -124,7 +131,13 @@ describe("Permissive-floor-only client — open-protocol proof", () => {
       body: JSON.stringify({
         prompt: "mit-only client: search for motebit",
         submitted_by: delegator.motebitId,
+        target_agent: worker.motebitId,
         required_capabilities: ["web_search"],
+        delegator_acknowledges_no_history_risk: true,
+        payment_proof: buildP2pPaymentProof(relay, {
+          workerAddress: WORKER_ADDR,
+          unitCostMicro: 500_000,
+        }),
       }),
     });
     expect(submitRes.status).toBe(201);

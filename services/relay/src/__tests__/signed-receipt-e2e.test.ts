@@ -38,8 +38,13 @@ import {
   jsonAuthWithIdempotency,
   createTestRelay,
   createAgent,
+  buildP2pPaymentProof,
 } from "./test-helpers.js";
 import type { SyncRelay } from "../index.js";
+
+// Paid direct delegation settles P2P (Arc 3.5). Workers declare this
+// settlement address; delegators submit a matching payment_proof.
+const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
 
 async function registerWorker(
   relay: SyncRelay,
@@ -54,6 +59,8 @@ async function registerWorker(
       motebit_id: motebitId,
       endpoint_url: "http://localhost:3200/mcp",
       capabilities: [capability],
+      settlement_address: WORKER_ADDR,
+      settlement_modes: "relay,p2p",
     }),
   });
   await relay.app.request(`/api/v1/agents/${motebitId}/listing`, {
@@ -94,7 +101,13 @@ async function openTask(
     body: JSON.stringify({
       prompt,
       submitted_by: submittedBy,
+      target_agent: workerId,
       required_capabilities: [capability],
+      delegator_acknowledges_no_history_risk: true,
+      payment_proof: buildP2pPaymentProof(relay, {
+        workerAddress: WORKER_ADDR,
+        unitCostMicro: 500_000,
+      }),
     }),
   });
   expect(res.status).toBe(201);

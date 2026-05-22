@@ -23,6 +23,11 @@ import {
 } from "@motebit/encryption";
 import type { KeyPair, VerifiableCredential } from "@motebit/encryption";
 import type { MotebitId, DeviceId, ReputationCredentialSubject } from "@motebit/sdk";
+import { buildP2pPaymentProof } from "./test-helpers.js";
+
+// Paid direct delegation settles P2P (Arc 3.5). Workers declare this
+// settlement address; delegators submit a matching payment_proof.
+const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
 
 // === Helpers ===
 
@@ -582,6 +587,8 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
           endpoint_url: "http://localhost:9999/mcp",
           capabilities: ["web_search"],
           public_key: bytesToHex(kp.publicKey),
+          settlement_address: WORKER_ADDR,
+          settlement_modes: "relay,p2p",
         }),
       });
       // Register service listing
@@ -603,7 +610,16 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
       const taskRes = await routingRelay.app.request(`/agent/${bobId}/task`, {
         method: "POST",
         headers: { ...JSON_HEADERS, ...AUTH_R(tokenA), "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ prompt: `task ${i}`, submitted_by: aliceId }),
+        body: JSON.stringify({
+          prompt: `task ${i}`,
+          submitted_by: aliceId,
+          target_agent: bobId,
+          delegator_acknowledges_no_history_risk: true,
+          payment_proof: buildP2pPaymentProof(routingRelay, {
+            workerAddress: WORKER_ADDR,
+            unitCostMicro: 10_000,
+          }),
+        }),
       });
       const { task_id } = (await taskRes.json()) as { task_id: string };
 
@@ -638,7 +654,13 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
       body: JSON.stringify({
         prompt: "search the web",
         submitted_by: aliceId,
+        target_agent: bobId,
         required_capabilities: ["web_search"],
+        delegator_acknowledges_no_history_risk: true,
+        payment_proof: buildP2pPaymentProof(routingRelay, {
+          workerAddress: WORKER_ADDR,
+          unitCostMicro: 10_000,
+        }),
       }),
     });
     expect(routedRes.status).toBe(201);

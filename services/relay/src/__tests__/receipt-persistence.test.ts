@@ -32,8 +32,13 @@ import {
   jsonAuthWithIdempotency,
   createTestRelay,
   createAgent,
+  buildP2pPaymentProof,
 } from "./test-helpers.js";
 import type { SyncRelay } from "../index.js";
+
+// Paid direct delegation settles P2P (Arc 3.5). Workers declare this
+// settlement address; delegators submit a matching payment_proof.
+const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
 
 async function registerWorker(relay: SyncRelay, motebitId: string, unitCost = 0.5): Promise<void> {
   await relay.app.request("/api/v1/agents/register", {
@@ -43,6 +48,8 @@ async function registerWorker(relay: SyncRelay, motebitId: string, unitCost = 0.
       motebit_id: motebitId,
       endpoint_url: "http://localhost:3200/mcp",
       capabilities: ["web_search"],
+      settlement_address: WORKER_ADDR,
+      settlement_modes: "relay,p2p",
     }),
   });
   await relay.app.request(`/api/v1/agents/${motebitId}/listing`, {
@@ -124,7 +131,13 @@ describe("relay_receipts archive invariants", () => {
       body: JSON.stringify({
         prompt: "search",
         submitted_by: agentA.motebitId,
+        target_agent: agentB.motebitId,
         required_capabilities: ["web_search"],
+        delegator_acknowledges_no_history_risk: true,
+        payment_proof: buildP2pPaymentProof(relay, {
+          workerAddress: WORKER_ADDR,
+          unitCostMicro: 500_000,
+        }),
       }),
     });
     expect(taskRes.status).toBe(201);
@@ -224,7 +237,13 @@ describe("relay_receipts archive invariants", () => {
       body: JSON.stringify({
         prompt: "outer",
         submitted_by: agentA.motebitId,
+        target_agent: agentB.motebitId,
         required_capabilities: ["web_search"],
+        delegator_acknowledges_no_history_risk: true,
+        payment_proof: buildP2pPaymentProof(relay, {
+          workerAddress: WORKER_ADDR,
+          unitCostMicro: 500_000,
+        }),
       }),
     });
     const { task_id: taskAB } = (await resAB.json()) as { task_id: string };
@@ -235,7 +254,13 @@ describe("relay_receipts archive invariants", () => {
       body: JSON.stringify({
         prompt: "inner",
         submitted_by: agentB.motebitId,
+        target_agent: agentC.motebitId,
         required_capabilities: ["web_search"],
+        delegator_acknowledges_no_history_risk: true,
+        payment_proof: buildP2pPaymentProof(relay, {
+          workerAddress: WORKER_ADDR,
+          unitCostMicro: 500_000,
+        }),
       }),
     });
     const { task_id: taskBC } = (await resBC.json()) as { task_id: string };
@@ -330,7 +355,13 @@ describe("relay_receipts archive invariants", () => {
       body: JSON.stringify({
         prompt: "x",
         submitted_by: agentA.motebitId,
+        target_agent: agentB.motebitId,
         required_capabilities: ["web_search"],
+        delegator_acknowledges_no_history_risk: true,
+        payment_proof: buildP2pPaymentProof(relay, {
+          workerAddress: WORKER_ADDR,
+          unitCostMicro: 500_000,
+        }),
       }),
     });
     const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
