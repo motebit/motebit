@@ -1444,6 +1444,20 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     () => getEmergencyFreeze(),
   );
 
+  // --- Identity-log anchoring (identity-binding-verification doctrine) ---
+  // Snapshots the motebit_id → key binding set and anchors its Merkle root
+  // on-chain whenever a registration/rotation changes the root (within one
+  // check tick) or the set goes stale. The latest confirmed root is what the
+  // /identity endpoint serves proofs against once the verifier's on-chain
+  // cross-check lands — the producer half of the `anchored` rung.
+  const { startIdentityLogAnchorLoop } = await import("./identity-log-anchoring.js");
+  const identityLogAnchorInterval = startIdentityLogAnchorLoop(
+    moteDb.db,
+    relayIdentity,
+    { submitter: anchorSubmitter },
+    () => getEmergencyFreeze(),
+  );
+
   // --- Deposit detector (scans onchain Transfer events for agent wallets) ---
   const depositDetectorChain = x402Config.network;
   const depositDetectorInterval = startDepositDetector({
@@ -1653,6 +1667,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(batchAnchorInterval);
     clearInterval(agentAnchorInterval);
     clearInterval(credentialAnchorInterval);
+    clearInterval(identityLogAnchorInterval);
     clearInterval(depositDetectorInterval);
     if (treasuryReconciliationInterval) clearInterval(treasuryReconciliationInterval);
     if (p2pVerifierInterval) clearInterval(p2pVerifierInterval);

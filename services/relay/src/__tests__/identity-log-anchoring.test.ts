@@ -14,6 +14,8 @@ import {
   anchorIdentityLog,
   submitIdentityLogAnchorOnChain,
   getLatestAnchoredRoot,
+  runIdentityLogAnchorTick,
+  startIdentityLogAnchorLoop,
 } from "../identity-log-anchoring.js";
 import { buildIdentityLog } from "../identity-log.js";
 import { readIdentityBindings } from "../identity-transparency.js";
@@ -107,5 +109,119 @@ describe("identity-log anchoring", () => {
     const ok = await submitIdentityLogAnchorOnChain(db, rec!.anchor_id, mockSubmitter("x", true));
     expect(ok).toBe(false);
     expect(getLatestAnchoredRoot(db)).toBeNull();
+  });
+
+  describe("periodic anchor tick", () => {
+    /** A submitter whose confirmations we can count across ticks. */
+    function countingSubmitter(): { submitter: ChainAnchorSubmitter; calls: () => number } {
+      let n = 0;
+      const submitter = {
+        chain: "solana:mainnet",
+        network: "mainnet-beta",
+        submitMerkleRoot: async () => {
+          n += 1;
+          return { txHash: `tx-${n}` };
+        },
+      } as unknown as ChainAnchorSubmitter;
+      return { submitter, calls: () => n };
+    }
+
+    function anchorCount(): number {
+      return (
+        db.prepare("SELECT COUNT(*) AS c FROM relay_identity_log_anchors").get() as { c: number }
+      ).c;
+    }
+
+    it("anchors on the first tick when bindings exist, and confirms on-chain", async () => {
+      await register("mote-a");
+      const { submitter, calls } = countingSubmitter();
+
+      await runIdentityLogAnchorTick(db, relayIdentity, { submitter });
+
+      expect(anchorCount()).toBe(1);
+      expect(calls()).toBe(1);
+      expect(getLatestAnchoredRoot(db)).not.toBeNull();
+    });
+
+    it("does not re-anchor an unchanged set within the interval", async () => {
+      await register("mote-a");
+      const { submitter } = countingSubmitter();
+      // Large interval → only the root-change trigger can fire, not staleness.
+      const cfg = { submitter, intervalMs: 3_600_000 };
+
+      await runIdentityLogAnchorTick(db, relayIdentity, cfg);
+      await runIdentityLogAnchorTick(db, relayIdentity, cfg);
+      await runIdentityLogAnchorTick(db, relayIdentity, cfg);
+
+      expect(anchorCount()).toBe(1);
+    });
+
+    it("re-anchors when a new registration changes the root", async () => {
+      await register("mote-a");
+      const { submitter } = countingSubmitter();
+      const cfg = { submitter, intervalMs: 3_600_000 };
+
+      await runIdentityLogAnchorTick(db, relayIdentity, cfg);
+      expect(anchorCount()).toBe(1);
+
+      await register("mote-b"); // root moves
+      await runIdentityLogAnchorTick(db, relayIdentity, cfg);
+      expect(anchorCount()).toBe(2);
+    });
+
+    it("re-anchors an unchanged set once it is stale (freshness signal)", async () => {
+      await register("mote-a");
+      const { submitter } = countingSubmitter();
+
+      // intervalMs 0 → any prior anchor is immediately "stale".
+      await runIdentityLogAnchorTick(db, relayIdentity, { submitter, intervalMs: 0 });
+      await runIdentityLogAnchorTick(db, relayIdentity, { submitter, intervalMs: 0 });
+
+      expect(anchorCount()).toBe(2); // same root, re-attested
+    });
+
+    it("retries a previously signed-but-unsubmitted anchor", async () => {
+      await register("mote-a");
+      // A pre-existing signed anchor that never reached the chain.
+      const rec = await anchorIdentityLog(db, relayIdentity);
+      expect(getLatestAnchoredRoot(db)).toBeNull();
+
+      const { submitter, calls } = countingSubmitter();
+      await runIdentityLogAnchorTick(db, relayIdentity, { submitter, intervalMs: 3_600_000 });
+
+      // The stale signed record got submitted; root is unchanged so no new cut.
+      expect(calls()).toBe(1);
+      expect(anchorCount()).toBe(1);
+      const latest = getLatestAnchoredRoot(db);
+      expect(latest!.merkle_root).toBe(rec!.merkle_root);
+    });
+
+    it("anchors nothing when there are no bindings", async () => {
+      const { submitter } = countingSubmitter();
+      await runIdentityLogAnchorTick(db, relayIdentity, { submitter });
+      expect(anchorCount()).toBe(0);
+    });
+
+    it("the interval loop fires the tick and respects isFrozen", async () => {
+      await register("mote-a");
+      const { submitter } = countingSubmitter();
+
+      // Frozen: the loop ticks but the freeze gate short-circuits before any work.
+      const frozen = startIdentityLogAnchorLoop(
+        db,
+        relayIdentity,
+        { submitter, intervalMs: 10 },
+        () => true,
+      );
+      await new Promise((r) => setTimeout(r, 40));
+      clearInterval(frozen);
+      expect(anchorCount()).toBe(0);
+
+      // Unfrozen: the loop cuts an anchor on its own cadence.
+      const live = startIdentityLogAnchorLoop(db, relayIdentity, { submitter, intervalMs: 10 });
+      await new Promise((r) => setTimeout(r, 40));
+      clearInterval(live);
+      expect(anchorCount()).toBeGreaterThanOrEqual(1);
+    });
   });
 });
