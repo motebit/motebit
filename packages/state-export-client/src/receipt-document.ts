@@ -12,19 +12,29 @@
  *     when the verifying key came from a trusted external source, never from the
  *     receipt's own embedded `public_key`.
  *
- * This entry verifies against the receipt's embedded key (offline, no anchor), so
- * a successful check is `integrity-only`: it never claims identity binding. When a
- * trusted anchor (the package's `fetchTransparencyAnchor` / a known-keys registry)
- * is later threaded through, the same view model upgrades to `"bound"` — callers
- * branch on `binding`, not on `integrity`, before rendering "from <motebit>".
+ * Verified against the receipt's embedded key alone (offline, no options), a
+ * successful check is `integrity-only`: it never claims identity binding. Supply
+ * `options.identity` to reach `"pinned"` (the signing key is time-valid in the
+ * motebit's own succession chain), and additionally `options.anchor` to reach
+ * `"anchored"` (that binding is in the relay's transparency log AND the log root
+ * is independently confirmed on-chain). Callers branch on `binding`, not
+ * `integrity`, before rendering "from <motebit>".
  *
- * Browser-safe; composes `@motebit/crypto`'s `verifyReceipt` only — no new crypto.
+ * Browser-safe; composes `@motebit/crypto` verifiers + an injectable on-chain
+ * lookup — no new crypto here.
  *
  * Doctrine: `docs/doctrine/self-attesting-system.md`, `docs/doctrine/operator-transparency.md`.
  */
 
 import type { ExecutionReceipt } from "@motebit/protocol";
-import { verifyReceipt, verifyKeyBindingAtTime, type MotebitIdentityFile } from "@motebit/crypto";
+import {
+  verifyReceipt,
+  verifyKeyBindingAtTime,
+  verifyIdentityBindingAnchored,
+  type IdentityLogInclusionProof,
+  type MotebitIdentityFile,
+} from "@motebit/crypto";
+import { lookupIdentityLogAnchor, type IdentityAnchorLookupOptions } from "./identity-anchor.js";
 
 /**
  * Identity-binding status — a ladder of increasing trust-minimization, per
@@ -32,10 +42,12 @@ import { verifyReceipt, verifyKeyBindingAtTime, type MotebitIdentityFile } from 
  * failed) < `"integrity-only"` (signed, but checked against the receipt's own
  * embedded key — not bound) < `"pinned"` (the signing key is time-valid for an
  * identity file the caller supplied; sovereign chain verified, no operator
- * anchor). The `"anchored"` and `"sovereign"` rungs add operator non-equivocation
- * and arrive with the relay identity-transparency log.
+ * anchor) < `"anchored"` (the motebit's key is committed in the relay's
+ * identity-transparency log AND that log root is independently confirmed on-chain
+ * — operator non-equivocation). The `"sovereign"` rung (id commits to a
+ * seed-derived genesis key) arrives later.
  */
-export type ReceiptBindingStatus = "pinned" | "integrity-only" | "unverified";
+export type ReceiptBindingStatus = "anchored" | "pinned" | "integrity-only" | "unverified";
 
 export type ReceiptDocumentFailureReason =
   | "malformed_json"
@@ -53,13 +65,16 @@ export interface ReceiptDocumentVerification {
    */
   readonly integrity: boolean;
   /**
-   * Identity-binding status (the ladder). `"pinned"` when the signing key is
-   * time-valid for a caller-supplied identity file; `"integrity-only"` when only
-   * the signature is verified against the receipt's own embedded key;
-   * `"unverified"` when the signature did not verify. Surfaces MUST NOT render
-   * "from <motebit>" below `"pinned"`.
+   * Identity-binding status (the ladder). `"anchored"` when the binding is in the
+   * relay's transparency log AND that root is confirmed on-chain; `"pinned"` when
+   * the signing key is time-valid for a caller-supplied identity file;
+   * `"integrity-only"` when only the signature is verified against the receipt's
+   * own embedded key; `"unverified"` when the signature did not verify. Surfaces
+   * MUST NOT render "from <motebit>" below `"pinned"`.
    */
   readonly binding: ReceiptBindingStatus;
+  /** The Solana tx that anchored the log root, when `binding === "anchored"`. */
+  readonly anchorTxHash?: string;
   /** `did:key:z…` derived from the signing key when integrity holds. */
   readonly signerDid?: string;
   /** The producing `motebit_id` as carried in the receipt body — a claim, not proof. */
@@ -133,6 +148,22 @@ function toView(result: CryptoReceiptResult): ReceiptDocumentVerification {
   return base;
 }
 
+/**
+ * Material for the `anchored` rung: the relay's identity-transparency inclusion
+ * proof plus the out-of-band pinned relay Solana address to cross-check it
+ * against. Both come from the relay's `/identity/:motebitId` bundle EXCEPT
+ * `relayAnchorAddress`, which MUST be pinned independently (not taken from the
+ * bundle) — that's the trust root that makes the on-chain check non-circular.
+ */
+export interface ReceiptAnchorOptions {
+  /** The relay bundle's `anchored.proof` — its `anchoredRoot` is checked on-chain. */
+  readonly proof: IdentityLogInclusionProof;
+  /** Pinned relay Solana address (out-of-band trust root). */
+  readonly relayAnchorAddress: string;
+  /** Solana RPC / fetch injection for the on-chain lookup. */
+  readonly lookup?: IdentityAnchorLookupOptions;
+}
+
 export interface VerifyReceiptDocumentOptions {
   /**
    * The producing motebit's identity file (its self-signed succession material).
@@ -143,6 +174,14 @@ export interface VerifyReceiptDocumentOptions {
    * `docs/doctrine/identity-binding-verification.md`.
    */
   readonly identity?: MotebitIdentityFile;
+  /**
+   * Anchor material. Requires `identity` too — `anchored` is `pinned` PLUS an
+   * on-chain-confirmed transparency-log inclusion. When the inclusion proof and
+   * the on-chain root cross-check both pass, the root upgrades to
+   * `binding: "anchored"`; otherwise it degrades honestly to `pinned` /
+   * `integrity-only`.
+   */
+  readonly anchor?: ReceiptAnchorOptions;
 }
 
 /**
@@ -160,6 +199,37 @@ async function pinnedBinding(
   if (String(identity.motebit_id) !== String(receipt.motebit_id)) return null;
   const r = await verifyKeyBindingAtTime(identity, receipt.public_key, receipt.completed_at);
   return r.bound ? "pinned" : null;
+}
+
+/**
+ * Promote to `"anchored"` iff (a) the signing key is sovereign-bound to the
+ * supplied identity at `completed_at` AND included under `anchor.proof`'s root
+ * (`verifyIdentityBindingAnchored`), AND (b) that root is independently confirmed
+ * on-chain at the pinned relay address (`lookupIdentityLogAnchor`). The second
+ * check is what makes it `anchored` rather than `pinned` — without it a relay
+ * could assert any root. Returns the anchoring `txHash` for provenance, or `null`
+ * (no promotion) on any failure.
+ */
+async function anchoredBinding(
+  receipt: ExecutionReceipt,
+  identity: MotebitIdentityFile,
+  anchor: ReceiptAnchorOptions,
+): Promise<{ txHash: string } | null> {
+  if (typeof receipt.public_key !== "string") return null;
+  if (String(identity.motebit_id) !== String(receipt.motebit_id)) return null;
+  const bound = await verifyIdentityBindingAnchored(
+    identity,
+    receipt.public_key,
+    receipt.completed_at,
+    anchor.proof,
+  );
+  if (!bound.bound) return null;
+  const onchain = await lookupIdentityLogAnchor(
+    anchor.relayAnchorAddress,
+    anchor.proof.anchoredRoot,
+    anchor.lookup,
+  );
+  return onchain.ok ? { txHash: onchain.txHash } : null;
 }
 
 /**
@@ -193,6 +263,10 @@ export async function verifyReceiptDocument(
   }
   const view = toView(await verifyReceipt(parsed));
   if (view.integrity && options?.identity) {
+    if (options.anchor) {
+      const anchored = await anchoredBinding(parsed, options.identity, options.anchor);
+      if (anchored) return { ...view, binding: "anchored", anchorTxHash: anchored.txHash };
+    }
     const pinned = await pinnedBinding(parsed, options.identity);
     if (pinned) return { ...view, binding: pinned };
   }

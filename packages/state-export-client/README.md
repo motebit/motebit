@@ -66,8 +66,8 @@ const v = await verifyReceiptDocument(pastedJsonText);
 
 if (!v.integrity) {
   show(`Verification failed: ${v.reason}`); // malformed_json | not_a_receipt | signature_invalid | …
-} else if (v.binding === "bound") {
-  show(`Verified — from ${v.motebitId}`); // key resolved from a trusted anchor
+} else if (v.binding === "anchored" || v.binding === "pinned") {
+  show(`Verified — from ${v.motebitId}`); // key bound to the motebit (anchored adds on-chain non-equivocation)
 } else {
   // integrity-only: signature is valid but checked against the receipt's OWN
   // embedded key — proves the bytes weren't tampered, NOT that the key belongs
@@ -76,7 +76,7 @@ if (!v.integrity) {
 }
 ```
 
-`verifyReceiptDocument` is the brain behind a public, login-free receipt verifier. It runs entirely offline (no relay), never throws on bad input (typed `reason`s instead), and keeps **integrity** (the bytes were signed, untampered) strictly separate from **binding** (the key belongs to this `motebitId`). A valid offline check is always `integrity-only`; `"bound"` is reserved for a future trusted-anchor path.
+`verifyReceiptDocument` is the brain behind a public, login-free receipt verifier. It runs entirely offline (no relay) for the integrity check, never throws on bad input (typed `reason`s instead), and keeps **integrity** (the bytes were signed, untampered) strictly separate from **binding** (the key belongs to this `motebitId`). The binding ladder: `integrity-only` (no options) < `pinned` (pass `options.identity` — the key is time-valid in the motebit's own succession chain) < `anchored` (also pass `options.anchor` — the binding is in the relay's transparency log AND that root is independently confirmed on-chain). Never render "from &lt;motebit&gt;" below `pinned`.
 
 ## Trust-anchor chain
 
@@ -112,6 +112,21 @@ if (lookup.ok) {
 }
 ```
 
+The same on-chain channel raises a receipt's binding to `anchored`. The relay's `/identity/:motebitId` bundle carries a transparency-log inclusion proof and the tx that posted its root; `lookupIdentityLogAnchor` confirms that root really sits on-chain at the relay's **pinned** address (passed out-of-band, never from the bundle). Wire it through `verifyReceiptDocument`:
+
+```ts
+import { lookupIdentityLogAnchor, verifyReceiptDocument } from "@motebit/state-export-client";
+
+const v = await verifyReceiptDocument(pastedJsonText, {
+  identity, // the motebit's identity file (reaches `pinned`)
+  anchor: {
+    proof: bundle.anchored.proof, // from GET /api/v1/identity/:motebitId
+    relayAnchorAddress: PINNED_RELAY_SOLANA_ADDRESS, // out-of-band trust root
+  },
+});
+// v.binding === "anchored" only when inclusion AND the on-chain root cross-check both pass.
+```
+
 ## Programmatic surface
 
 | Export                                                     | Kind     | Role                                                                                                                                |
@@ -124,6 +139,7 @@ if (lookup.ok) {
 | `verifyReceiptDocument(jsonText)`                          | function | Verify a pasted/standalone receipt offline — honest view model separating integrity from identity binding (powers receipt.computer) |
 | `lookupTransparencyAnchor(opts)`                           | function | Onchain — query Solana RPC for a Memo program transaction posting the declaration hash                                              |
 | `verifyDeclarationOnchainAnchor(declaration, anchor)`      | function | Onchain — verify the Memo transaction's signer and content match the declaration                                                    |
+| `lookupIdentityLogAnchor(address, root, opts?)`            | function | Onchain — confirm a transparency-log root sits on-chain at the pinned relay address (the `anchored` binding rung)                   |
 | `StateExportFetchError`                                    | class    | Thrown on non-2xx HTTP; verifier never attempts to verify error envelopes                                                           |
 | `MANIFEST_HEADER`                                          | constant | The header name (`"X-Motebit-Content-Manifest"`) — exposed for custom transports                                                    |
 

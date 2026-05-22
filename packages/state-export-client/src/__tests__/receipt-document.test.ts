@@ -10,11 +10,12 @@ import {
   generateKeypair,
   bytesToHex,
   signExecutionReceipt,
+  identityLogLeaf,
   type MotebitIdentityFile,
 } from "@motebit/crypto";
 import type { ExecutionReceipt } from "@motebit/protocol";
 
-import { verifyReceiptDocument } from "../receipt-document.js";
+import { verifyReceiptDocument, type ReceiptAnchorOptions } from "../receipt-document.js";
 
 // A minimal identity file whose current key (no rotations) is `currentKeyHex`,
 // created before any test receipt's completed_at (2000). Genesis = current key.
@@ -124,6 +125,78 @@ describe("verifyReceiptDocument", () => {
     const v = await verifyReceiptDocument(JSON.stringify({ hello: "world" }));
     expect(v.integrity).toBe(false);
     expect(v.reason).toBe("not_a_receipt");
+  });
+
+  // ── anchored rung ──
+  // Single-leaf transparency log: the root IS the leaf, so the inclusion proof is
+  // {index:0, siblings:[], layerSizes:[1], anchoredRoot: leaf} (mirrors how the
+  // relay's buildIdentityLog would emit a one-binding log). A mock Solana RPC
+  // decides whether that root is "on-chain".
+  async function singleLeafAnchor(
+    motebitId: string,
+    keyHex: string,
+    onchain: boolean,
+  ): Promise<ReceiptAnchorOptions> {
+    const root = await identityLogLeaf(motebitId, keyHex);
+    const fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: onchain
+            ? [
+                {
+                  signature: "anchor-tx",
+                  slot: 1,
+                  err: null,
+                  memo: `motebit:anchor:v1:${root}:1`,
+                  blockTime: null,
+                },
+              ]
+            : [],
+        }),
+        { status: 200 },
+      )) as unknown as typeof globalThis.fetch;
+    return {
+      proof: { index: 0, siblings: [], layerSizes: [1], anchoredRoot: root },
+      relayAnchorAddress: "RelayPinnedAddr",
+      lookup: { fetch },
+    };
+  }
+
+  it("identity + on-chain-confirmed anchor upgrades the binding to anchored", async () => {
+    const receipt = await signedReceipt({ task_id: "t-anch", motebit_id: "mote-x" });
+    const identity = identityFor("mote-x", receipt.public_key!);
+    const anchor = await singleLeafAnchor("mote-x", receipt.public_key!, true);
+    const v = await verifyReceiptDocument(JSON.stringify(receipt), { identity, anchor });
+    expect(v.binding).toBe("anchored");
+    expect(v.anchorTxHash).toBe("anchor-tx");
+  });
+
+  it("a valid inclusion proof whose root is NOT on-chain degrades to pinned", async () => {
+    const receipt = await signedReceipt({ task_id: "t-noch", motebit_id: "mote-x" });
+    const identity = identityFor("mote-x", receipt.public_key!);
+    const anchor = await singleLeafAnchor("mote-x", receipt.public_key!, false);
+    const v = await verifyReceiptDocument(JSON.stringify(receipt), { identity, anchor });
+    expect(v.binding).toBe("pinned"); // inclusion holds, but the on-chain cross-check failed
+    expect(v.anchorTxHash).toBeUndefined();
+  });
+
+  it("an anchor proof for the wrong key does not anchor (degrades to pinned)", async () => {
+    const receipt = await signedReceipt({ task_id: "t-wrong", motebit_id: "mote-x" });
+    const identity = identityFor("mote-x", receipt.public_key!);
+    // Proof built over a DIFFERENT key → inclusion fails inside verifyIdentityBindingAnchored.
+    const otherKey = bytesToHex((await generateKeypair()).publicKey);
+    const anchor = await singleLeafAnchor("mote-x", otherKey, true);
+    const v = await verifyReceiptDocument(JSON.stringify(receipt), { identity, anchor });
+    expect(v.binding).toBe("pinned");
+  });
+
+  it("anchor without identity is ignored (anchored requires the identity file too)", async () => {
+    const receipt = await signedReceipt({ task_id: "t-noid", motebit_id: "mote-x" });
+    const anchor = await singleLeafAnchor("mote-x", receipt.public_key!, true);
+    const v = await verifyReceiptDocument(JSON.stringify(receipt), { anchor });
+    expect(v.binding).toBe("integrity-only");
   });
 
   it("carries a verified delegation through as a nested integrity-only result", async () => {

@@ -72,6 +72,13 @@ export type {
   OnchainAnchorFailureReason,
 } from "./onchain-anchor.js";
 
+export { lookupIdentityLogAnchor } from "./identity-anchor.js";
+export type {
+  IdentityAnchorLookupOptions,
+  IdentityAnchorResult,
+  IdentityAnchorFailureReason,
+} from "./identity-anchor.js";
+
 export { verifyInnerSignedReceipts } from "./inner-receipts.js";
 export type {
   InnerReceiptVerification,
@@ -84,5 +91,6 @@ export type {
   ReceiptDocumentVerification,
   ReceiptDocumentFailureReason,
   ReceiptBindingStatus,
+  ReceiptAnchorOptions,
   VerifyReceiptDocumentOptions,
 } from "./receipt-document.js";
