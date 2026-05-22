@@ -1680,7 +1680,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // Arc 3: pass the delegator's cold-start acknowledgment through to
       // the eligibility gate. Established pairs ignore it; new pairs
       // require it set true to unlock the bootstrap branch.
-      const eligibility = evaluateSettlementEligibility(
+      const eligibility = await evaluateSettlementEligibility(
         moteDb.db,
         submittedBy,
         body.target_agent,

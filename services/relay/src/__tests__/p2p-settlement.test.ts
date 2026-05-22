@@ -9,6 +9,7 @@ import type { SyncRelay } from "../index.js";
 import { generateKeypair, bytesToHex, signDisputeRequest } from "@motebit/encryption";
 import { SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
 import { evaluateSettlementEligibility } from "../task-routing.js";
+import { deriveSovereignMotebitId } from "@motebit/crypto";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 // === Helpers ===
@@ -75,10 +76,10 @@ describe("evaluateSettlementEligibility", () => {
   // result type is the disjunctive `SettlementEligibility` (allowed
   // implies mode: "p2p"; disallowed has no mode field).
 
-  it("allows established pair via trust + interactions branch (no acknowledgment needed)", () => {
+  it("allows established pair via trust + interactions branch (no acknowledgment needed)", async () => {
     setTrust(relay.moteDb.db, "del-elig", "wrk-elig", "verified", 10);
 
-    const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
+    const result = await evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
     expect(result.allowed).toBe(true);
     if (result.allowed) {
       expect(result.mode).toBe("p2p");
@@ -86,9 +87,9 @@ describe("evaluateSettlementEligibility", () => {
     }
   });
 
-  it("allows new pair via delegator-acknowledgment branch (Arc 3 bootstrap)", () => {
+  it("allows new pair via delegator-acknowledgment branch (Arc 3 bootstrap)", async () => {
     // No trust history. The acknowledgment unlocks the new-pair branch.
-    const result = evaluateSettlementEligibility(
+    const result = await evaluateSettlementEligibility(
       relay.moteDb.db,
       "del-elig",
       "wrk-elig",
@@ -108,55 +109,70 @@ describe("evaluateSettlementEligibility", () => {
     });
     setTrust(relay.moteDb.db, "del-elig", "wrk-noaddr", "trusted", 20);
 
-    const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-noaddr");
+    const result = await evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-noaddr");
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain("settlement address");
 
     // Even acknowledgment can't unlock — no destination exists.
-    const withAck = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-noaddr", true);
+    const withAck = await evaluateSettlementEligibility(
+      relay.moteDb.db,
+      "del-elig",
+      "wrk-noaddr",
+      true,
+    );
     expect(withAck.allowed).toBe(false);
     expect(withAck.reason).toContain("settlement address");
   });
 
-  it("rejects when trust + interactions below threshold AND no acknowledgment", () => {
+  it("rejects when trust + interactions below threshold AND no acknowledgment", async () => {
     setTrust(relay.moteDb.db, "del-elig", "wrk-elig", "first_contact", 2);
 
-    const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
+    const result = await evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain("did not acknowledge");
   });
 
-  it("rejects when interaction count below threshold AND no acknowledgment", () => {
+  it("rejects when interaction count below threshold AND no acknowledgment", async () => {
     setTrust(relay.moteDb.db, "del-elig", "wrk-elig", "verified", 3);
 
-    const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
+    const result = await evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain("did not acknowledge");
   });
 
-  it("unlocks below-threshold pair when delegator acknowledges (Arc 3 bootstrap)", () => {
+  it("unlocks below-threshold pair when delegator acknowledges (Arc 3 bootstrap)", async () => {
     setTrust(relay.moteDb.db, "del-elig", "wrk-elig", "first_contact", 2);
 
-    const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig", true);
+    const result = await evaluateSettlementEligibility(
+      relay.moteDb.db,
+      "del-elig",
+      "wrk-elig",
+      true,
+    );
     expect(result.allowed).toBe(true);
     if (result.allowed) {
       expect(result.mode).toBe("p2p");
     }
   });
 
-  it("rejects when worker is blocked (acknowledgment cannot unlock)", () => {
+  it("rejects when worker is blocked (acknowledgment cannot unlock)", async () => {
     setTrust(relay.moteDb.db, "del-elig", "wrk-elig", "blocked", 10);
 
-    const noAck = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
+    const noAck = await evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
     expect(noAck.allowed).toBe(false);
     expect(noAck.reason).toContain("blocked");
 
-    const withAck = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig", true);
+    const withAck = await evaluateSettlementEligibility(
+      relay.moteDb.db,
+      "del-elig",
+      "wrk-elig",
+      true,
+    );
     expect(withAck.allowed).toBe(false);
     expect(withAck.reason).toContain("blocked");
   });
 
-  it("rejects when active dispute exists between pair (both branches)", () => {
+  it("rejects when active dispute exists between pair (both branches)", async () => {
     setTrust(relay.moteDb.db, "del-elig", "wrk-elig", "trusted", 20);
 
     relay.moteDb.db
@@ -175,20 +191,65 @@ describe("evaluateSettlementEligibility", () => {
         Date.now() + 86400000,
       );
 
-    const noAck = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
+    const noAck = await evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
     expect(noAck.allowed).toBe(false);
     expect(noAck.reason).toContain("Active dispute");
 
     // Active dispute blocks even the acknowledgment branch.
-    const withAck = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig", true);
+    const withAck = await evaluateSettlementEligibility(
+      relay.moteDb.db,
+      "del-elig",
+      "wrk-elig",
+      true,
+    );
     expect(withAck.allowed).toBe(false);
     expect(withAck.reason).toContain("Active dispute");
   });
 
-  it("rejects when no trust history AND no acknowledgment", () => {
-    const result = evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
+  it("rejects when no trust history AND no acknowledgment", async () => {
+    const result = await evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-elig");
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain("No trust history");
+  });
+
+  it("sovereign-bound worker qualifies at the reduced cold-start bar (additive)", async () => {
+    const kp = await generateKeypair();
+    const pubKeyHex = bytesToHex(kp.publicKey);
+    const sovereignId = await deriveSovereignMotebitId(pubKeyHex);
+    await registerAgent(relay, sovereignId, pubKeyHex, {
+      settlementAddress: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv",
+      settlementModes: "relay,p2p",
+    });
+    // first_contact (0.3) + 2 interactions: below the strict 0.6/5 bar. An
+    // unbound worker with this exact footprint is rejected (see the strict
+    // "below threshold" test above) — sovereignty is the only thing that flips
+    // it, which is precisely what makes the branch additive, never a gate.
+    setTrust(relay.moteDb.db, "del-elig", sovereignId, "first_contact", 2);
+
+    const result = await evaluateSettlementEligibility(relay.moteDb.db, "del-elig", sovereignId);
+    expect(result.allowed).toBe(true);
+    if (result.allowed) {
+      expect(result.mode).toBe("p2p");
+      expect(result.reason).toContain("Sovereign-bound");
+    }
+  });
+
+  it("sovereign binding does not fabricate trust — below the reduced floor still rejects", async () => {
+    const kp = await generateKeypair();
+    const pubKeyHex = bytesToHex(kp.publicKey);
+    const sovereignId = await deriveSovereignMotebitId(pubKeyHex);
+    await registerAgent(relay, sovereignId, pubKeyHex, {
+      settlementAddress: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv",
+      settlementModes: "relay,p2p",
+    });
+    // Only 1 interaction — below even the sovereign floor of 2. No free pass:
+    // sovereignty relaxes the cold-start bar, it does not remove the need for
+    // real history with this specific worker.
+    setTrust(relay.moteDb.db, "del-elig", sovereignId, "first_contact", 1);
+
+    const result = await evaluateSettlementEligibility(relay.moteDb.db, "del-elig", sovereignId);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain("did not acknowledge");
   });
 });
 

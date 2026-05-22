@@ -47,6 +47,12 @@ Why this resolves the case-1 objection (self-certification kills recoverability)
 
 **Additive by construction:** the verifier + commitment primitive ship now, and nothing about the existing id format or the default mint path changes — sovereign minting is opt-in via `deriveSovereignMotebitId`. The remaining step is a product/onboarding decision: flip new-identity minting (`create-motebit` / `core-identity`) to derive `motebit_id` from the genesis key by default, so new motebits are sovereign out of the box. That touches `core-identity`, `create-motebit`, and [`identity-restore.md`](identity-restore.md) (the seed becomes the recovery root) — deferred until decided.
 
+## Binding strength feeds settlement — additive, never a gate
+
+The ladder is not only a verifier display; binding strength is consequential where it matters most — direct, relay-out-of-custody money movement. `evaluateSettlementEligibility` (`task-routing.ts`) grants P2P settlement on a strict bar (trust ≥ `verified`, ≥ 5 interactions) **or**, for a **sovereign-bound worker**, a reduced cold-start bar (`first_contact` + 2 interactions). A sovereign `motebit_id` commits to its signing key (~2^122 to grind a target id), so the worker cannot be a cheap throwaway sybil — the exact risk the strict bar mitigates — which is what justifies relaxing it. The check is offline (`verifySovereignBinding` over the registry `public_key`, no I/O on the hot path).
+
+This is the same shape as [`hardware-attestation.md`](hardware-attestation.md): identity assurance is **additive scoring, never an admission gate**. The sovereign branch is placed _after_ the strict branch and keyed on the sovereign check, so it only ever ADDS a way to qualify — unbound and legacy (UUIDv7) workers see byte-identical behavior, and sovereignty never _fabricates_ trust (real history with the specific worker is still required, it only lowers the cold-start floor). This is how "trust is the moat" acquires teeth: a commodity signed receipt earns the same standing as today, but a sovereign-bound counterparty transacts P2P sooner. Anchored-but-not-sovereign workers are a candidate future tier (the anchored check needs RPC, so it stays off the hot path for now).
+
 ## Failure modes the build must handle
 
 - **Time-windowing.** An old receipt was signed by a since-rotated key. Binding must check the key was valid _at_ `completed_at` against the dated rotation chain — not merely "is this the current tip." Otherwise a rotated-away key still appears to bind.

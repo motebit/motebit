@@ -12,6 +12,7 @@ import type { ReputationVC, TrustVC } from "@motebit/market";
 import type { CapabilityPrice, AgentTrustRecord, SettlementEligibility } from "@motebit/sdk";
 import { asMotebitId, asListingId, AgentTrustLevel } from "@motebit/sdk";
 import { trustLevelToScore } from "@motebit/market";
+import { verifySovereignBinding } from "@motebit/crypto";
 import type { ListingId } from "@motebit/sdk";
 import { hexPublicKeyToDidKey, didKeyToPublicKey, bytesToHex } from "@motebit/encryption";
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -1010,6 +1011,23 @@ const P2P_MIN_TRUST_SCORE = 0.6;
 const P2P_MIN_INTERACTIONS = 5;
 
 /**
+ * Reduced cold-start bar for a sovereign-bound worker (first_contact = 0.3,
+ * 2 interactions). A sovereign `motebit_id` cryptographically commits to its
+ * signing key (~2^122 to grind an id matching a target), so the worker cannot
+ * be a cheap throwaway — the sybil risk the established-pair bar exists to
+ * mitigate. This is the additive-binding pattern from
+ * `docs/doctrine/hardware-attestation.md`: stronger identity assurance raises
+ * standing, it never gates. The branch is placed AFTER the strict branch and
+ * keyed on an offline sovereign check, so it only ever ADDS a way to qualify —
+ * unbound workers never reach it and see byte-identical behavior. Real history
+ * is still required (first_contact trust + ≥2 completed interactions with this
+ * specific worker); sovereignty relaxes the cold-start floor, it does not
+ * fabricate trust.
+ */
+const P2P_SOVEREIGN_MIN_TRUST_SCORE = 0.3;
+const P2P_SOVEREIGN_MIN_INTERACTIONS = 2;
+
+/**
  * Evaluate whether a delegator→worker pair qualifies to transact at all.
  *
  * After Arc 3 of the off-ramp arc, P2P is the only worker-settlement
@@ -1048,17 +1066,18 @@ const P2P_MIN_INTERACTIONS = 5;
  * `allowed: false` has no `mode` field because there's no fallback
  * rail. The shape forces callers to handle the false case explicitly.
  */
-export function evaluateSettlementEligibility(
+export async function evaluateSettlementEligibility(
   db: DatabaseDriver,
   delegatorId: string,
   workerId: string,
   delegatorAcknowledgesNoHistoryRisk: boolean = false,
-): SettlementEligibility {
+): Promise<SettlementEligibility> {
   // Worker must have a settlement address (both branches require it —
-  // there's no destination without it).
+  // there's no destination without it). `public_key` feeds the offline
+  // sovereign-binding check used by the reduced-bar branch below.
   const worker = db
-    .prepare("SELECT settlement_address FROM agent_registry WHERE motebit_id = ?")
-    .get(workerId) as { settlement_address: string | null } | undefined;
+    .prepare("SELECT settlement_address, public_key FROM agent_registry WHERE motebit_id = ?")
+    .get(workerId) as { settlement_address: string | null; public_key: string | null } | undefined;
 
   if (!worker?.settlement_address) {
     return { allowed: false, reason: "Worker has no declared settlement address" };
@@ -1105,6 +1124,31 @@ export function evaluateSettlementEligibility(
         allowed: true,
         mode: "p2p",
         reason: `Established pair — trust ${score}, ${trustRow.interaction_count} interactions`,
+      };
+    }
+  }
+
+  // Sovereign-bound branch — additive, never a gate. A sovereign worker's
+  // `motebit_id` commits to its signing key, so it cannot be a throwaway sybil
+  // and the cold-start bar relaxes (first_contact + 2 interactions). Placed
+  // after the strict branch and keyed on an offline check, so it only ADDS a
+  // qualification path; unbound workers never reach it. See
+  // `docs/doctrine/hardware-attestation.md` (binding strength is additive
+  // scoring) and `docs/doctrine/identity-binding-verification.md`.
+  if (
+    trustRow &&
+    worker.public_key &&
+    (await verifySovereignBinding(workerId, worker.public_key))
+  ) {
+    const score = trustLevelToScore(trustRow.trust_level as AgentTrustLevel);
+    if (
+      score >= P2P_SOVEREIGN_MIN_TRUST_SCORE &&
+      trustRow.interaction_count >= P2P_SOVEREIGN_MIN_INTERACTIONS
+    ) {
+      return {
+        allowed: true,
+        mode: "p2p",
+        reason: `Sovereign-bound worker (motebit_id commits to key) — trust ${score}, ${trustRow.interaction_count} interactions (reduced bar ${P2P_SOVEREIGN_MIN_TRUST_SCORE}/${P2P_SOVEREIGN_MIN_INTERACTIONS})`,
       };
     }
   }
