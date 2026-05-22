@@ -14,7 +14,7 @@
  */
 
 import { signBalanceWaiver, secureErase, type BalanceWaiver } from "@motebit/encryption";
-import { fromMicro } from "@motebit/protocol";
+import { fromMicro } from "@motebit/sdk";
 import { createInterface } from "node:readline";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";

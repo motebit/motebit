@@ -98,7 +98,6 @@
     "@motebit/planner": "workspace:*",
     "@motebit/policy": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
-    "@motebit/protocol": "workspace:*",
     "@motebit/relay": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@motebit/sdk": "workspace:*",

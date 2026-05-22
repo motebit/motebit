@@ -205,9 +205,6 @@ importers:
       '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../../packages/privacy-layer
-      '@motebit/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
       '@motebit/relay':
         specifier: workspace:*
         version: link:../../services/relay
@@ -771,9 +768,6 @@ importers:
       '@motebit/privacy-layer':
         specifier: workspace:*
         version: link:../../packages/privacy-layer
-      '@motebit/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
       '@motebit/render-engine':
         specifier: workspace:*
         version: link:../../packages/render-engine

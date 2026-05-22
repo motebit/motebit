@@ -18,7 +18,6 @@
   },
   "dependencies": {
     "@motebit/sdk": "workspace:*",
-    "@motebit/protocol": "workspace:*",
     "@motebit/render-engine": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@motebit/semiring": "workspace:*",

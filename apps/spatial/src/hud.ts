@@ -17,7 +17,7 @@
  * the feature in the scene.
  */
 
-import { fromMicro } from "@motebit/protocol";
+import { fromMicro } from "@motebit/sdk";
 
 export type ConnectionState = "offline" | "connecting" | "online";
 

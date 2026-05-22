@@ -18,7 +18,7 @@
  */
 
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
-import { fromMicro } from "@motebit/protocol";
+import { fromMicro } from "@motebit/sdk";
 import { secureErase } from "@motebit/encryption";
 import { loadFullConfig } from "../config.js";
 import { loadActiveSigningKey, IdentityKeyError } from "../identity.js";
