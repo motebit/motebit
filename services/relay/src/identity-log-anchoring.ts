@@ -21,7 +21,7 @@ import type { ChainAnchorSubmitter } from "@motebit/sdk";
 import { canonicalJson, sign, bytesToHex } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
-import { buildIdentityLog } from "./identity-log.js";
+import { buildIdentityLog, type IdentityBinding } from "./identity-log.js";
 import { readIdentityBindings } from "./identity-transparency.js";
 
 const logger = createLogger({ service: "relay", module: "identity-log-anchoring" });
@@ -35,6 +35,7 @@ export function createIdentityLogAnchorTables(db: DatabaseDriver): void {
       merkle_root  TEXT NOT NULL,
       leaf_count   INTEGER NOT NULL,
       signature    TEXT NOT NULL,
+      bindings_json TEXT,
       tx_hash      TEXT,
       network      TEXT,
       anchored_at  INTEGER,
@@ -44,6 +45,16 @@ export function createIdentityLogAnchorTables(db: DatabaseDriver): void {
     CREATE INDEX IF NOT EXISTS idx_identity_anchors_status
       ON relay_identity_log_anchors(status) WHERE status != 'confirmed';
   `);
+  // Additive column for relays that created the table before snapshot
+  // persistence shipped (the table first landed without bindings_json). The
+  // snapshot is what lets the /identity endpoint serve proofs against an
+  // already-anchored root rather than rebuilding a fresh, unanchored one.
+  const cols = db.prepare("PRAGMA table_info(relay_identity_log_anchors)").all() as Array<{
+    name: string;
+  }>;
+  if (!cols.some((c) => c.name === "bindings_json")) {
+    db.exec("ALTER TABLE relay_identity_log_anchors ADD COLUMN bindings_json TEXT");
+  }
 }
 
 export interface IdentityLogAnchorRecord {
@@ -66,7 +77,8 @@ export async function anchorIdentityLog(
   db: DatabaseDriver,
   relayIdentity: RelayIdentity,
 ): Promise<IdentityLogAnchorRecord | null> {
-  const log = await buildIdentityLog(readIdentityBindings(db));
+  const bindings = readIdentityBindings(db);
+  const log = await buildIdentityLog(bindings);
   if (log.motebitCount === 0) return null;
 
   const anchorId = crypto.randomUUID();
@@ -80,11 +92,22 @@ export async function anchorIdentityLog(
     await sign(new TextEncoder().encode(canonicalJson(payload)), relayIdentity.privateKey),
   );
 
+  // Persist the exact binding set this root was built over. The root alone is
+  // unusable to a verifier — serving an inclusion proof against it requires
+  // rebuilding the same tree from the same leaves (getLatestAnchoredSnapshot).
   db.prepare(
     `INSERT INTO relay_identity_log_anchors
-       (anchor_id, relay_id, merkle_root, leaf_count, signature, status, created_at)
-     VALUES (?, ?, ?, ?, ?, 'signed', ?)`,
-  ).run(anchorId, relayIdentity.relayMotebitId, log.root, log.motebitCount, signature, Date.now());
+       (anchor_id, relay_id, merkle_root, leaf_count, signature, bindings_json, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'signed', ?)`,
+  ).run(
+    anchorId,
+    relayIdentity.relayMotebitId,
+    log.root,
+    log.motebitCount,
+    signature,
+    JSON.stringify(bindings),
+    Date.now(),
+  );
 
   logger.info("identity_log.anchor_cut", {
     anchor_id: anchorId,
@@ -161,6 +184,45 @@ export function getLatestAnchoredRoot(
     )
     .get() as { merkle_root: string; tx_hash: string; network: string } | undefined;
   return row ?? null;
+}
+
+/** The latest confirmed anchor plus the binding snapshot its root was built over. */
+export interface AnchoredSnapshot {
+  readonly merkle_root: string;
+  readonly tx_hash: string;
+  readonly network: string;
+  readonly bindings: IdentityBinding[];
+}
+
+/**
+ * The latest confirmed (on-chain) anchor together with the exact binding set its
+ * root commits to. This is what the `/identity` endpoint rebuilds the inclusion
+ * proof from, so the proof's root equals a root a verifier can find on-chain.
+ * `null` if nothing is confirmed yet, or the confirmed anchor predates snapshot
+ * persistence (no `bindings_json`) — both honest "not anchored yet" states.
+ */
+export function getLatestAnchoredSnapshot(db: DatabaseDriver): AnchoredSnapshot | null {
+  const row = db
+    .prepare(
+      "SELECT merkle_root, tx_hash, network, bindings_json FROM relay_identity_log_anchors WHERE status = 'confirmed' AND tx_hash IS NOT NULL ORDER BY anchored_at DESC LIMIT 1",
+    )
+    .get() as
+    | { merkle_root: string; tx_hash: string; network: string; bindings_json: string | null }
+    | undefined;
+  if (!row || row.bindings_json == null) return null;
+
+  let bindings: IdentityBinding[];
+  try {
+    bindings = JSON.parse(row.bindings_json) as IdentityBinding[];
+  } catch {
+    return null;
+  }
+  return {
+    merkle_root: row.merkle_root,
+    tx_hash: row.tx_hash,
+    network: row.network,
+    bindings,
+  };
 }
 
 // === Periodic Anchor Loop ===

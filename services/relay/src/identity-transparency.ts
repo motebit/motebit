@@ -8,16 +8,20 @@
  * verifier feeds these to `verifyKeyBindingAtTime` + `verifyIdentityBindingAnchored`.
  *
  * The relay is a CDN here, not a trust root: the succession records are signed by
- * the motebit's own keys, and the inclusion proof's root is what the relay anchors
- * on-chain (the anchoring + the verifier's on-chain cross-check are separate
- * pieces — until that lands, this proves inclusion under a relay-asserted root,
- * which is the `pinned`/in-progress state, NOT `anchored`).
+ * the motebit's own keys, and the inclusion proof is built against the latest
+ * root the relay has CONFIRMED on-chain (`getLatestAnchoredSnapshot`), carrying
+ * the anchor `tx_hash`. The relay still cannot make this `anchored` on its own —
+ * the verifier must independently confirm `proof.anchoredRoot` is posted on-chain
+ * at the relay's pinned address (`lookupIdentityLogAnchor` in
+ * `@motebit/state-export-client`). Until a motebit is included in a confirmed
+ * anchor, `anchored` is `null` and the verifier stays at `pinned`/integrity-only.
  */
 
 import type { Hono } from "hono";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { SuccessionRecord } from "@motebit/crypto";
 import { buildIdentityLog, type IdentityBinding, type IdentityLogProof } from "./identity-log.js";
+import { getLatestAnchoredSnapshot } from "./identity-log-anchoring.js";
 
 /** The relay's succession records are always under this suite (no per-row column). */
 const SUCCESSION_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
@@ -64,7 +68,17 @@ export function readSuccessionChain(db: DatabaseDriver, motebitId: string): Succ
   }));
 }
 
-/** The `/identity/:motebitId` response: binding material + inclusion proof. */
+/** Inclusion proof against the latest confirmed on-chain root, with its anchor tx. */
+export interface AnchoredInclusion {
+  /** Merkle proof; `proof.anchoredRoot` is the root the relay posted on-chain. */
+  readonly proof: IdentityLogProof;
+  /** The Solana tx that posted `anchoredRoot` — provenance for the verifier. */
+  readonly tx_hash: string;
+  /** CAIP-2 network of the anchor tx. */
+  readonly network: string;
+}
+
+/** The `/identity/:motebitId` response: binding material + (if anchored) inclusion proof. */
 export interface IdentityBindingBundle {
   readonly motebit_id: string;
   /** ISO timestamp the genesis key became active (the registration time). */
@@ -73,13 +87,24 @@ export interface IdentityBindingBundle {
   readonly current_public_key: string;
   /** The self-signed rotation chain (genesis → current). Empty if never rotated. */
   readonly succession: SuccessionRecord[];
-  /** Merkle inclusion proof of this binding under the log root (`proof.anchoredRoot`). */
-  readonly proof: IdentityLogProof;
+  /**
+   * Inclusion proof against the latest CONFIRMED on-chain anchored root plus its
+   * tx. `null` until this motebit's binding has been anchored — an honest
+   * "not anchored yet" state (the verifier stays at `pinned`/integrity-only). A
+   * non-null proof here is only `anchored` once the verifier independently
+   * confirms `proof.anchoredRoot` is on-chain at the relay's pinned address.
+   */
+  readonly anchored: AnchoredInclusion | null;
 }
 
 /**
  * Assemble the binding bundle for `motebitId`, or `null` if it isn't registered.
- * Builds the log over all current bindings and extracts this motebit's proof.
+ *
+ * The inclusion proof is built against the latest CONFIRMED on-chain anchored
+ * root — rebuilt from the binding snapshot that root was computed over — so the
+ * proof's root is one a verifier can actually find on-chain. If nothing is
+ * anchored yet, or this motebit registered after the latest anchor (so it isn't
+ * in that snapshot), `anchored` is `null`: honest, not an error.
  */
 export async function buildIdentityBindingBundle(
   db: DatabaseDriver,
@@ -90,16 +115,24 @@ export async function buildIdentityBindingBundle(
     .get(motebitId) as { public_key: string; registered_at: number } | undefined;
   if (!agent) return null;
 
-  const log = await buildIdentityLog(readIdentityBindings(db));
-  const proof = log.proofFor(motebitId);
-  if (!proof) return null;
+  let anchored: AnchoredInclusion | null = null;
+  const snapshot = getLatestAnchoredSnapshot(db);
+  if (snapshot) {
+    const log = await buildIdentityLog(snapshot.bindings);
+    const proof = log.proofFor(motebitId);
+    // Reproducing the snapshot must yield the anchored root; a mismatch means a
+    // corrupted snapshot, which we refuse to serve as `anchored` (fail closed).
+    if (proof && proof.anchoredRoot === snapshot.merkle_root) {
+      anchored = { proof, tx_hash: snapshot.tx_hash, network: snapshot.network };
+    }
+  }
 
   return {
     motebit_id: motebitId,
     created_at: new Date(agent.registered_at).toISOString(),
     current_public_key: agent.public_key,
     succession: readSuccessionChain(db, motebitId),
-    proof,
+    anchored,
   };
 }
 

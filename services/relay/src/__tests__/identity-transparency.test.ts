@@ -12,11 +12,18 @@ import {
   type MotebitIdentityFile,
 } from "@motebit/crypto";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
+import type { ChainAnchorSubmitter } from "@motebit/sdk";
+import type { RelayIdentity } from "../federation.js";
 import {
   readIdentityBindings,
   readSuccessionChain,
   buildIdentityBindingBundle,
 } from "../identity-transparency.js";
+import {
+  createIdentityLogAnchorTables,
+  anchorIdentityLog,
+  submitIdentityLogAnchorOnChain,
+} from "../identity-log-anchoring.js";
 
 async function key(): Promise<string> {
   return bytesToHex((await generateKeypair()).publicKey);
@@ -46,8 +53,17 @@ function identityFrom(
   };
 }
 
+function mockSubmitter(txHash: string): ChainAnchorSubmitter {
+  return {
+    chain: "solana:mainnet",
+    network: "mainnet-beta",
+    submitMerkleRoot: async () => ({ txHash }),
+  } as unknown as ChainAnchorSubmitter;
+}
+
 describe("identity-transparency bundle", () => {
   let db: DatabaseDriver;
+  let relayIdentity: RelayIdentity;
 
   beforeEach(async () => {
     db = (await openMotebitDatabase(":memory:")).db;
@@ -63,6 +79,15 @@ describe("identity-transparency bundle", () => {
         reason TEXT, old_key_signature TEXT, new_key_signature TEXT NOT NULL, recovery INTEGER DEFAULT 0,
         guardian_signature TEXT)`,
     );
+    createIdentityLogAnchorTables(db);
+    const kp = await generateKeypair();
+    relayIdentity = {
+      relayMotebitId: "relay-test",
+      publicKey: kp.publicKey,
+      privateKey: kp.privateKey,
+      publicKeyHex: bytesToHex(kp.publicKey),
+      did: "did:key:test",
+    };
   });
 
   function register(motebitId: string, publicKey: string, registeredAt: number): void {
@@ -71,23 +96,51 @@ describe("identity-transparency bundle", () => {
     ).run(motebitId, publicKey, registeredAt);
   }
 
-  it("assembles a bundle whose proof verifies against its own binding material", async () => {
+  /** Cut + confirm an anchor over the current binding set. */
+  async function anchorAndConfirm(txHash = "tx-1"): Promise<void> {
+    const rec = await anchorIdentityLog(db, relayIdentity);
+    await submitIdentityLogAnchorOnChain(db, rec!.anchor_id, mockSubmitter(txHash));
+  }
+
+  it("assembles an anchored bundle whose proof verifies against its own material", async () => {
     const k = await key();
     register("mote-a", k, Date.parse("2026-01-01T00:00:00Z"));
     register("mote-b", await key(), Date.parse("2026-01-02T00:00:00Z")); // non-trivial tree
+    await anchorAndConfirm("tx-anchor");
 
     const bundle = await buildIdentityBindingBundle(db, "mote-a");
     expect(bundle).not.toBeNull();
     expect(bundle!.current_public_key).toBe(k);
     expect(bundle!.succession).toEqual([]);
+    expect(bundle!.anchored).not.toBeNull();
+    expect(bundle!.anchored!.tx_hash).toBe("tx-anchor");
+    expect(bundle!.anchored!.network).toBe("mainnet-beta");
 
     const r = await verifyIdentityBindingAnchored(
       identityFrom(bundle!),
       k,
       Date.parse("2026-06-01T00:00:00Z"),
-      bundle!.proof,
+      bundle!.anchored!.proof,
     );
     expect(r.bound).toBe(true);
+  });
+
+  it("anchored is null before any anchor is confirmed (honest pending, not error)", async () => {
+    register("mote-a", await key(), 1000);
+    const bundle = await buildIdentityBindingBundle(db, "mote-a");
+    expect(bundle).not.toBeNull();
+    expect(bundle!.anchored).toBeNull();
+  });
+
+  it("anchored is null for a motebit that registered after the latest anchor", async () => {
+    register("mote-a", await key(), 1000);
+    await anchorAndConfirm(); // snapshot has only mote-a
+    register("mote-b", await key(), 2000); // joined after the anchor
+
+    const a = await buildIdentityBindingBundle(db, "mote-a");
+    expect(a!.anchored).not.toBeNull(); // in the snapshot
+    const b = await buildIdentityBindingBundle(db, "mote-b");
+    expect(b!.anchored).toBeNull(); // not in the snapshot yet
   });
 
   it("returns null for an unregistered motebit", async () => {
