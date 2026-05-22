@@ -42,8 +42,9 @@ interface RestoreState {
   originalContent: string | null;
   derivedPrivateKeyHex: string | null;
   /** True when entered via "Restore from seed" — metadata is synthesized
-   *  from the seed instead of read from a .md file, so the preview
-   *  rendering surfaces a "new motebit_id" warning banner. */
+   *  from the seed (the motebit_id is re-derived as the sovereign commitment
+   *  to the recovered key) instead of read from a .md file, so the preview
+   *  rendering surfaces a "re-derived motebit_id" banner. */
   seedOnly: boolean;
 }
 
@@ -65,9 +66,14 @@ function shortAddress(pubHex: string): string {
   return `${pubHex.slice(0, 6)}…${pubHex.slice(-4)}`;
 }
 
-function synthesizeSeedOnlyMetadata(publicKeyHex: string): ImportedIdentityMetadata {
+async function synthesizeSeedOnlyMetadata(publicKeyHex: string): Promise<ImportedIdentityMetadata> {
+  // Re-derive the sovereign motebit_id from the recovered key, NOT a random UUID.
+  // If the identity was sovereign-minted (the default), this IS its original id —
+  // so seed-only restore actually recovers it. Legacy random-UUID identities get
+  // a new sovereign id (their old random id is unrecoverable from the seed alone).
+  const { deriveSovereignMotebitId } = await import("@motebit/crypto");
   return {
-    motebitId: crypto.randomUUID(),
+    motebitId: await deriveSovereignMotebitId(publicKeyHex),
     publicKey: publicKeyHex,
     ownerId: "Web",
     bornAt: new Date().toISOString(),
@@ -192,7 +198,7 @@ export function initRestoreIdentity(ctx: WebContext): RestoreIdentityAPI {
     const lines: string[] = [];
     if (state.seedOnly) {
       lines.push(
-        `<div style="color: var(--status-warning, #f0a030); margin-bottom: 6px; font-family: -apple-system, BlinkMacSystemFont, sans-serif">⚠ Seed-only restore — original motebit_id not recoverable, a new one will be assigned</div>`,
+        `<div style="color: var(--status-warning, #f0a030); margin-bottom: 6px; font-family: -apple-system, BlinkMacSystemFont, sans-serif">⚠ Seed-only restore — motebit_id is re-derived from the seed. If your identity was sovereign (the default), this is your original id; a legacy random id can't be recovered from the seed alone.</div>`,
       );
     }
     lines.push(
@@ -317,9 +323,9 @@ export function initRestoreIdentity(ctx: WebContext): RestoreIdentityAPI {
   });
 
   // Seed-only step: paste seed → derive public key → synthesize metadata
-  // → advance to preview. No metadata-side guard (the seed IS the
-  // authority); the preview banner warns the user that a new motebit_id
-  // is being assigned.
+  // (motebit_id re-derived as the sovereign commitment to the recovered key)
+  // → advance to preview. No metadata-side guard (the seed IS the authority);
+  // the preview banner explains the id is re-derived from the seed.
   function evaluateSeedOnly(): void {
     const seedRaw = seedOnlyInput!.value.trim();
     seedOnlyNext!.disabled = true;
@@ -358,7 +364,7 @@ export function initRestoreIdentity(ctx: WebContext): RestoreIdentityAPI {
         const privBytes = hexToBytes(seedRaw);
         const pubBytes = await getPublicKeyBySuite(privBytes, "motebit-jcs-ed25519-hex-v1");
         const pubHex = bytesToHex(pubBytes);
-        const synthesized = synthesizeSeedOnlyMetadata(pubHex);
+        const synthesized = await synthesizeSeedOnlyMetadata(pubHex);
         state.metadata = synthesized;
         state.originalContent = null;
         state.derivedPrivateKeyHex = seedRaw;
