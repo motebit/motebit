@@ -44,6 +44,18 @@ describe("renderResult", () => {
     expect(el.querySelector(".result-tiers")?.textContent).toContain("pinned");
   });
 
+  it("anchored → green tone, on-chain tier, motebit proven, anchor tx shown", () => {
+    const el = renderResult(view({ binding: "anchored", anchorTxHash: "5xTxHashAbc" }));
+    expect(el.classList.contains("tone-bound")).toBe(true);
+    expect(el.textContent).toContain("anchored on-chain");
+    const labels = Array.from(el.querySelectorAll(".meta-label")).map((n) => n.textContent);
+    expect(labels).toContain("motebit");
+    expect(labels).not.toContain("claims to be");
+    expect(labels).toContain("anchored in tx");
+    expect(el.textContent).toContain("5xTxHashAbc");
+    expect(el.querySelector(".tier-warn")).toBeNull(); // binding is a positive, not a caveat
+  });
+
   it("failed → red tone, no identity meta shown", () => {
     const el = renderResult({
       integrity: false,

@@ -24,6 +24,15 @@ describe("resultLabels", () => {
     expect(l.headline).toContain("pinned");
   });
 
+  it("anchored claims the strongest binding — on-chain, non-equivocable, tone bound", () => {
+    const l = resultLabels(ok({ binding: "anchored" }));
+    expect(l.tone).toBe("bound");
+    expect(l.headline).toContain("anchored on-chain");
+    expect(l.detail).toContain("on-chain");
+    // Non-equivocation, stated in plain language (not the jargon "equivocate").
+    expect(l.detail).toContain("two verifiers different chains");
+  });
+
   it("failed signature reads as altered/forged, not a vague error", () => {
     const l = resultLabels({
       integrity: false,

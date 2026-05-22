@@ -37,6 +37,14 @@ export function resultLabels(v: ReceiptDocumentVerification): ResultLabels {
       detail: FAILURE_DETAIL[v.reason ?? "unknown"] ?? FAILURE_DETAIL.unknown,
     };
   }
+  if (v.binding === "anchored") {
+    return {
+      tone: "bound",
+      headline: "Verified — anchored on-chain",
+      detail:
+        "The signature is valid, the signing key is bound to this motebit's identity chain, and that binding is committed in the operator's transparency log whose root is confirmed on-chain. The operator cannot show two verifiers different chains without leaving on-chain-detectable evidence.",
+    };
+  }
   if (v.binding === "pinned") {
     return {
       tone: "bound",

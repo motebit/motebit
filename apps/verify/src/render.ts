@@ -68,11 +68,16 @@ export function renderResult(view: ReceiptDocumentVerification): HTMLElement {
     ),
   );
   if (view.integrity) {
+    const bound = view.binding === "anchored" || view.binding === "pinned";
     tiers.appendChild(
       tierRow(
         "identity binding",
-        view.binding === "pinned" ? "pinned" : "not anchored",
-        view.binding === "pinned" ? "ok" : "warn",
+        view.binding === "anchored"
+          ? "anchored on-chain"
+          : view.binding === "pinned"
+            ? "pinned"
+            : "not anchored",
+        bound ? "ok" : "warn",
       ),
     );
     const kids = view.delegations ?? [];
@@ -96,9 +101,14 @@ export function renderResult(view: ReceiptDocumentVerification): HTMLElement {
     // motebit_id is the receipt's CLAIM about who produced it — labelled as such
     // so the page never conflates it with proven identity on the integrity path.
     if (view.motebitId) {
-      meta.appendChild(row(view.binding === "pinned" ? "motebit" : "claims to be", view.motebitId));
+      const bound = view.binding === "anchored" || view.binding === "pinned";
+      meta.appendChild(row(bound ? "motebit" : "claims to be", view.motebitId));
     }
     if (view.signerDid) meta.appendChild(row("signed by", view.signerDid));
+    // Provenance for the anchored rung: the Solana tx that posted the log root.
+    if (view.binding === "anchored" && view.anchorTxHash) {
+      meta.appendChild(row("anchored in tx", view.anchorTxHash));
+    }
     card.appendChild(meta);
 
     const kids = view.delegations ?? [];
