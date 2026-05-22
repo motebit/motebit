@@ -270,17 +270,23 @@ export interface RevocationAnchorProof {
  * Verify a revocation anchor — confirm a key was revoked.
  *
  * The revocation memo format is: "motebit:revocation:v1:{public_key_hex}:{timestamp}"
- * The relay signs the payload "revocation:{type}:{motebit_id}:{timestamp}" with its
- * identity key. This function verifies:
+ * where the memo `timestamp` is the EFFECTIVE revocation time (see
+ * credential-anchor-v1.md §10.2). The relay separately signs the payload
+ * "revocation:{type}:{motebit_id}:{recording_timestamp}" with its identity key,
+ * where the payload timestamp is the RECORDING time and MAY be later than the
+ * memo's effective time. The two are decoupled deliberately, which is why
+ * `proof.timestamp` (used to rebuild the expected memo) and `revocationPayload`
+ * (the exact signed string) are passed as separate arguments. This function
+ * verifies:
  *
- * 1. The relay's Ed25519 signature over the revocation event
+ * 1. The relay's Ed25519 signature over the revocation event payload
  * 2. Optionally, the onchain memo transaction via a callback
  *
  * Both steps are offline-verifiable given the relay's public key. The onchain
  * step requires network access but ensures the relay cannot deny the revocation.
  *
- * @param proof - The revocation anchor proof fields
- * @param revocationPayload - The exact signed payload string (e.g., "revocation:key_rotated:mid-xxx:1712345678")
+ * @param proof - The revocation anchor proof fields (`proof.timestamp` is the effective/memo time)
+ * @param revocationPayload - The exact signed payload string (e.g., "revocation:key_rotated:mid-xxx:1712345678"), carrying the recording time
  * @param chainVerifier - Optional callback: given tx_hash + expected memo, verify onchain
  */
 export async function verifyRevocationAnchor(
