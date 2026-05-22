@@ -33,7 +33,7 @@
  */
 
 export { verifyFile, verifyArtifact, verifySkillDirectory, formatHuman } from "./lib.js";
-export type { VerifyFileOptions } from "./lib.js";
+export type { VerifyFileOptions, VerifyResultWithBinding } from "./lib.js";
 export type {
   VerifyResult,
   ArtifactType,

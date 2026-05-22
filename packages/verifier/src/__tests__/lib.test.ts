@@ -15,6 +15,7 @@ import * as ed from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha512";
 
 import type { ExecutionReceipt } from "@motebit/crypto";
+import { deriveSovereignMotebitId } from "@motebit/crypto";
 
 import { formatHuman, verifyArtifact, verifyFile } from "../lib.js";
 
@@ -74,6 +75,30 @@ async function signedReceipt(): Promise<ExecutionReceipt> {
   return { ...withSuite, signature: toBase64Url(sig) };
 }
 
+// A sovereign-minted receipt: motebit_id IS the commitment to the public key.
+async function sovereignReceipt(): Promise<ExecutionReceipt> {
+  const sk = ed.utils.randomSecretKey();
+  const pk = await ed.getPublicKeyAsync(sk);
+  const pkHex = toHex(pk);
+  const body: Omit<ExecutionReceipt, "signature" | "suite"> = {
+    task_id: "task-sovereign-test",
+    motebit_id: await deriveSovereignMotebitId(pkHex),
+    public_key: pkHex,
+    device_id: "dev-verifier-1",
+    submitted_at: 1_000_000,
+    completed_at: 1_001_000,
+    status: "completed",
+    result: "OK",
+    tools_used: [],
+    memories_formed: 0,
+    prompt_hash: "a".repeat(16),
+    result_hash: "b".repeat(16),
+  };
+  const withSuite = { ...body, suite: "motebit-jcs-ed25519-b64-v1" as const };
+  const sig = await ed.signAsync(new TextEncoder().encode(canonicalJson(withSuite)), sk);
+  return { ...withSuite, signature: toBase64Url(sig) };
+}
+
 // Tests write receipt files into a per-test tmp dir; collect them so
 // teardown is best-effort (tmp cleanup isn't load-bearing for
 // correctness).
@@ -90,6 +115,24 @@ afterEach(() => {
 });
 
 // ── tests ───────────────────────────────────────────────────────────
+
+describe("verifyArtifact — receipt binding rung (offline, receipt-alone)", () => {
+  it("reports sovereign:true when motebit_id commits to the key", async () => {
+    const r = await sovereignReceipt();
+    const result = await verifyArtifact(r);
+    expect(result.valid).toBe(true);
+    expect(result.sovereign).toBe(true);
+    expect(formatHuman(result)).toContain("sovereign · motebit_id commits to the key");
+  });
+
+  it("reports sovereign:false (integrity-only) for a random-id receipt", async () => {
+    const r = await signedReceipt(); // motebit_id is a fixed non-sovereign UUID
+    const result = await verifyArtifact(r);
+    expect(result.valid).toBe(true);
+    expect(result.sovereign).toBe(false);
+    expect(formatHuman(result)).toContain("integrity-only");
+  });
+});
 
 describe("verifyArtifact — receipt", () => {
   it("accepts a correctly signed receipt object", async () => {

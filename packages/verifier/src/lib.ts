@@ -22,6 +22,7 @@ import { join, basename } from "node:path";
 import {
   verify,
   verifySkillBundle,
+  verifySovereignBinding,
   type ArtifactType,
   type HardwareAttestationVerifiers,
   type SkillVerifyResult,
@@ -29,6 +30,15 @@ import {
   type VerifyOptions,
 } from "@motebit/crypto";
 import type { SkillEnvelope } from "@motebit/protocol";
+
+/**
+ * A {@link VerifyResult} augmented with the binding rung for receipts. The
+ * `sovereign` flag is computed offline from the receipt alone — `motebit_id`
+ * IS the commitment to `public_key` (`deriveSovereignMotebitId`), so the CLI
+ * reports the strongest binding with no relay and no identity file, matching
+ * receipt.computer's `sovereign` rung. Absent for non-receipt artifacts.
+ */
+export type VerifyResultWithBinding = VerifyResult & { readonly sovereign?: boolean };
 
 export interface VerifyFileOptions {
   /**
@@ -71,7 +81,10 @@ export interface VerifyFileOptions {
  *   - File → read as bytes and routed through `verifyArtifact`, which
  *     calls `@motebit/crypto`'s detector.
  */
-export async function verifyFile(path: string, opts?: VerifyFileOptions): Promise<VerifyResult> {
+export async function verifyFile(
+  path: string,
+  opts?: VerifyFileOptions,
+): Promise<VerifyResultWithBinding> {
   // I/O failures bubble up per the existing contract — the caller
   // (CLI, library consumer) decides whether to surface or transform.
   const stats = await stat(path);
@@ -246,10 +259,10 @@ function ioFailureSkillResult(
  * Verify an already-loaded artifact. Accepts a JSON string, an
  * already-parsed object, or a `motebit.md` identity string.
  */
-export function verifyArtifact(
+export async function verifyArtifact(
   content: string | object,
   opts?: VerifyFileOptions,
-): Promise<VerifyResult> {
+): Promise<VerifyResultWithBinding> {
   const cryptoOpts: VerifyOptions | undefined =
     opts?.expectedType !== undefined ||
     opts?.clockSkewSeconds !== undefined ||
@@ -264,7 +277,17 @@ export function verifyArtifact(
           }),
         }
       : undefined;
-  return verify(content, cryptoOpts);
+  const result = await verify(content, cryptoOpts);
+  // Receipts carry their own public_key, and a sovereign motebit_id IS the
+  // commitment to it — so the binding rung is checkable offline from the
+  // receipt alone, no relay (matches receipt.computer's `sovereign` rung).
+  if (result.valid && result.type === "receipt" && result.receipt) {
+    const pk = result.receipt.public_key;
+    const sovereign =
+      typeof pk === "string" ? await verifySovereignBinding(result.receipt.motebit_id, pk) : false;
+    return { ...result, sovereign };
+  }
+  return result;
 }
 
 /**
@@ -284,7 +307,7 @@ export function verifyArtifact(
  *     - signature mismatch
  *   ```
  */
-export function formatHuman(result: VerifyResult): string {
+export function formatHuman(result: VerifyResultWithBinding): string {
   const header = `${result.valid ? "VALID" : "INVALID"} (${result.type})`;
   const lines: string[] = [header];
 
@@ -307,7 +330,7 @@ export function formatHuman(result: VerifyResult): string {
   return lines.join("\n");
 }
 
-function summarizeValid(result: VerifyResult): ReadonlyArray<readonly [string, string]> {
+function summarizeValid(result: VerifyResultWithBinding): ReadonlyArray<readonly [string, string]> {
   switch (result.type) {
     case "identity": {
       if (!result.identity) return [];
@@ -325,6 +348,13 @@ function summarizeValid(result: VerifyResult): ReadonlyArray<readonly [string, s
       out.push(["task:", result.receipt.task_id]);
       out.push(["motebit:", result.receipt.motebit_id]);
       if (result.signer) out.push(["signer:", result.signer]);
+      // Binding rung — checkable offline from the receipt alone.
+      out.push([
+        "binding:",
+        result.sovereign
+          ? "sovereign · motebit_id commits to the key (offline, no operator)"
+          : "integrity-only · signature valid; identity not bound",
+      ]);
       return out;
     }
     case "credential": {
