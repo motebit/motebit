@@ -116,6 +116,8 @@ const vc = await issueReputationCredential(
 - **`verifyKeyBindingAtTime(identity, signingKeyHex, atTimestampMs, guardianPublicKeyHex?)`** — Sovereign-root identity binding with time-windowing: was this key the motebit's legitimate key _at_ a given time? Verifies the succession chain, then checks the key's active window. Returns `KeyBindingResult`.
 - **`identityLogLeaf(motebitId, currentKeyHex)`** — Canonical SHA-256 leaf of the identity-transparency log (the operator's `motebit_id → current key` commitment). Shared convention for the relay producer and the verifier.
 - **`verifyIdentityBindingAnchored(identity, signingKeyHex, atTimestampMs, proof, guardianPublicKeyHex?)`** — Anchored binding: sovereign-root binding AND Merkle inclusion of the current key in the transparency log under `proof.anchoredRoot`. Confirming the root is on-chain is the caller's cross-check.
+- **`deriveSovereignMotebitId(genesisPublicKeyHex)`** — The sovereign commitment of a genesis key: a deterministic UUIDv8 from `sha256(genesisKey)`. A sovereign-minted motebit's `motebit_id` IS this value, so the id↔key binding is self-certifying (offline, no operator). Second-preimage resistance ~2^122.
+- **`verifySovereignBinding(motebitId, genesisPublicKeyHex)`** — True iff `motebitId` is the sovereign commitment to the genesis key. `verifyKeyBindingAtTime` sets `sovereign: true` on its result when this holds.
 
 ### Primitives
 

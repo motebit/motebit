@@ -45,8 +45,9 @@ import { lookupKeyRevocation, type KeyRevocationLookupOptions } from "./key-revo
  * identity file the caller supplied; sovereign chain verified, no operator
  * anchor) < `"anchored"` (the motebit's key is committed in the relay's
  * identity-transparency log AND that log root is independently confirmed on-chain
- * — operator non-equivocation). The `"sovereign"` rung (id commits to a
- * seed-derived genesis key) arrives later.
+ * — operator non-equivocation) < `"sovereign"` (the `motebit_id` IS the commitment
+ * to the genesis key, verified offline from the identity file alone — no operator,
+ * no anchor, no chain; the strongest root).
  *
  * `"revoked"` is off the ladder — a poison verdict. The signature may be valid,
  * but the signing key was revoked on-chain at/before the receipt's timestamp, so
@@ -54,6 +55,7 @@ import { lookupKeyRevocation, type KeyRevocationLookupOptions } from "./key-revo
  */
 export type ReceiptBindingStatus =
   | "revoked"
+  | "sovereign"
   | "anchored"
   | "pinned"
   | "integrity-only"
@@ -226,6 +228,24 @@ async function pinnedBinding(
 }
 
 /**
+ * Promote to `"sovereign"` iff the signing key binds AND the identity's
+ * `motebit_id` is the sovereign commitment to its genesis key. This is the
+ * strongest rung and the only fully-offline one — `verifyKeyBindingAtTime`
+ * computes both the key's window and the id↔genesis commitment from the identity
+ * file alone, so no anchor, no relay, no chain is consulted. Returns `null`
+ * (no promotion) when the motebit wasn't minted sovereignly.
+ */
+async function sovereignBinding(
+  receipt: ExecutionReceipt,
+  identity: MotebitIdentityFile,
+): Promise<"sovereign" | null> {
+  if (typeof receipt.public_key !== "string") return null;
+  if (String(identity.motebit_id) !== String(receipt.motebit_id)) return null;
+  const r = await verifyKeyBindingAtTime(identity, receipt.public_key, receipt.completed_at);
+  return r.bound === true && r.sovereign === true ? "sovereign" : null;
+}
+
+/**
  * Promote to `"anchored"` iff (a) the signing key is sovereign-bound to the
  * supplied identity at `completed_at` AND included under `anchor.proof`'s root
  * (`verifyIdentityBindingAnchored`), AND (b) that root is independently confirmed
@@ -301,6 +321,10 @@ export async function verifyReceiptDocument(
       }
     }
     if (options?.identity) {
+      // Sovereign is the strongest root AND fully offline — check it first; a
+      // sovereign motebit needs no operator anchor at all.
+      const sovereign = await sovereignBinding(parsed, options.identity);
+      if (sovereign) return { ...view, binding: sovereign };
       if (options.anchor) {
         const anchored = await anchoredBinding(parsed, options.identity, options.anchor);
         if (anchored) return { ...view, binding: "anchored", anchorTxHash: anchored.txHash };

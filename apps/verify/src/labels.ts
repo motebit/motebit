@@ -47,6 +47,14 @@ export function resultLabels(v: ReceiptDocumentVerification): ResultLabels {
       detail: FAILURE_DETAIL[v.reason ?? "unknown"] ?? FAILURE_DETAIL.unknown,
     };
   }
+  if (v.binding === "sovereign") {
+    return {
+      tone: "bound",
+      headline: "Verified — sovereign identity",
+      detail:
+        "The signature is valid and the motebit's id IS the commitment to its genesis key — so the identity binds to the key by math alone, verified right here with no relay, no chain, and no operator to trust. The strongest binding there is.",
+    };
+  }
   if (v.binding === "anchored") {
     return {
       tone: "bound",

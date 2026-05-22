@@ -11,6 +11,7 @@ import {
   bytesToHex,
   signExecutionReceipt,
   identityLogLeaf,
+  deriveSovereignMotebitId,
   type MotebitIdentityFile,
 } from "@motebit/crypto";
 import type { ExecutionReceipt } from "@motebit/protocol";
@@ -197,6 +198,41 @@ describe("verifyReceiptDocument", () => {
     const anchor = await singleLeafAnchor("mote-x", receipt.public_key!, true);
     const v = await verifyReceiptDocument(JSON.stringify(receipt), { anchor });
     expect(v.binding).toBe("integrity-only");
+  });
+
+  // ── sovereign rung ──
+  // A sovereign-minted motebit's id IS the commitment to its genesis key, so the
+  // binding verifies offline from the identity alone — no anchor, no relay.
+  it("a sovereign-minted identity reaches binding: sovereign with only the identity (offline)", async () => {
+    const kp = await generateKeypair();
+    const keyHex = bytesToHex(kp.publicKey);
+    const sovereignId = await deriveSovereignMotebitId(keyHex);
+    const unsigned = {
+      task_id: "t-sov",
+      motebit_id: sovereignId,
+      device_id: "d",
+      submitted_at: 1000,
+      completed_at: 2000,
+      status: "completed",
+      result: "ok",
+      tools_used: [],
+      memories_formed: 0,
+      prompt_hash: "0".repeat(64),
+      result_hash: "1".repeat(64),
+      public_key: keyHex,
+    } as unknown as Parameters<typeof signExecutionReceipt>[0];
+    const receipt = await signExecutionReceipt(unsigned, kp.privateKey);
+    const identity = identityFor(sovereignId, keyHex);
+
+    const v = await verifyReceiptDocument(JSON.stringify(receipt), { identity });
+    expect(v.binding).toBe("sovereign"); // no anchor option needed
+  });
+
+  it("a non-sovereign (random-id) identity does NOT reach sovereign (stays pinned)", async () => {
+    const receipt = await signedReceipt({ task_id: "t-nsov", motebit_id: "mote-x" });
+    const identity = identityFor("mote-x", receipt.public_key!);
+    const v = await verifyReceiptDocument(JSON.stringify(receipt), { identity });
+    expect(v.binding).toBe("pinned");
   });
 
   // ── revoked rung (B) ──

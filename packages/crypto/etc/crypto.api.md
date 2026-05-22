@@ -264,6 +264,9 @@ export interface DeletionCertificateVerifyResult {
 }
 
 // @public
+export function deriveSovereignMotebitId(genesisPublicKeyHex: string): Promise<string>;
+
+// @public
 export const DEVICE_REGISTRATION_MAX_AGE_MS: number;
 
 // @public
@@ -574,6 +577,7 @@ export interface KeyBindingResult {
     bound: boolean;
     genesisPublicKey?: string;
     reason?: string;
+    sovereign?: boolean;
 }
 
 // @public
@@ -1441,6 +1445,9 @@ export function verifySkillManifest(manifest: SkillManifest, body: Uint8Array, p
 
 // @public
 export function verifySkillManifestDetailed(manifest: SkillManifest, body: Uint8Array, publicKey: Uint8Array): Promise<SkillVerifyDetail>;
+
+// @public
+export function verifySovereignBinding(motebitId: string, genesisPublicKeyHex: string): Promise<boolean>;
 
 // @public
 export function verifySuccessionChain(chain: KeySuccessionRecord[], guardianPublicKeyHex?: string): Promise<SuccessionChainResult>;

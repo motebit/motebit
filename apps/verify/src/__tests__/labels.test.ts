@@ -24,6 +24,13 @@ describe("resultLabels", () => {
     expect(l.headline).toContain("pinned");
   });
 
+  it("sovereign is the strongest rung — offline, no operator, tone bound", () => {
+    const l = resultLabels(ok({ binding: "sovereign" }));
+    expect(l.tone).toBe("bound");
+    expect(l.headline.toLowerCase()).toContain("sovereign");
+    expect(l.detail.toLowerCase()).toContain("no operator to trust");
+  });
+
   it("anchored claims the strongest binding — on-chain, non-equivocable, tone bound", () => {
     const l = resultLabels(ok({ binding: "anchored" }));
     expect(l.tone).toBe("bound");

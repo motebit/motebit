@@ -67,6 +67,16 @@ describe("renderResult", () => {
     expect(labels).toContain("key revoked at");
   });
 
+  it("sovereign → green tone, sovereign tier, motebit proven", () => {
+    const el = renderResult(view({ binding: "sovereign" }));
+    expect(el.classList.contains("tone-bound")).toBe(true);
+    expect(el.querySelector(".result-tiers")?.textContent).toContain("sovereign");
+    expect(el.querySelector(".tier-warn")).toBeNull();
+    const labels = Array.from(el.querySelectorAll(".meta-label")).map((n) => n.textContent);
+    expect(labels).toContain("motebit");
+    expect(labels).not.toContain("claims to be");
+  });
+
   it("failed → red tone, no identity meta shown", () => {
     const el = renderResult({
       integrity: false,

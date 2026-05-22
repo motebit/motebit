@@ -1028,8 +1028,60 @@ export interface KeyBindingResult {
   activeFrom?: number;
   /** End of the matched key's active window (ms epoch); absent ⇒ still current. */
   activeUntil?: number;
+  /**
+   * True when `motebit_id` is the sovereign commitment to the genesis key
+   * (`deriveSovereignMotebitId(genesisPublicKey) === motebit_id`). The id↔genesis
+   * link is then verifiable offline from the identity file alone — no operator,
+   * no anchor. This is the strongest binding root (the doctrine's `sovereign`
+   * rung); independent of `bound`, which is about the *signing* key's window.
+   */
+  sovereign?: boolean;
   /** Why binding failed, when `bound` is false. */
   reason?: string;
+}
+
+/**
+ * The sovereign commitment of a genesis key: a UUIDv8 (RFC 9562) deterministically
+ * derived from `sha256(genesisPublicKey)`. When a motebit is minted sovereignly,
+ * its `motebit_id` IS this value — so the id↔key binding is self-certifying and
+ * needs no operator: a verifier recomputes it and checks equality.
+ *
+ * Second-preimage resistance is ~2^122 (an attacker cannot grind a different
+ * genesis key whose commitment matches a target id), which is the security bar
+ * for "you cannot impersonate a sovereign motebit." Existing random UUIDv7 ids
+ * carry version nibble 7 and can never equal a v8 commitment, so non-sovereign
+ * motebits read as such cleanly. The genesis key derives deterministically from a
+ * 32-byte seed (an Ed25519 key *is* its seed), so the id is recoverable from the
+ * seed — self-certification AND recovery, the `sovereign` rung's whole point.
+ *
+ * See `docs/doctrine/identity-binding-verification.md`.
+ */
+export async function deriveSovereignMotebitId(genesisPublicKeyHex: string): Promise<string> {
+  const h = await sha256(hexToBytes(genesisPublicKeyHex));
+  const b = h.slice(0, 16);
+  b[6] = 0x80 | (b[6]! & 0x0f); // version 8 (vendor-specific, RFC 9562)
+  b[8] = 0x80 | (b[8]! & 0x3f); // variant 10b (RFC 4122/9562)
+  const hex = Array.from(b)
+    .map((x) => x.toString(16).padStart(2, "0"))
+    .join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * True iff `motebitId` is the sovereign commitment to `genesisPublicKeyHex` — the
+ * offline, operator-free check that an id is bound to a key. Case-insensitive on
+ * the id. Returns false (never throws) on malformed input — fail-closed.
+ */
+export async function verifySovereignBinding(
+  motebitId: string,
+  genesisPublicKeyHex: string,
+): Promise<boolean> {
+  try {
+    const expected = await deriveSovereignMotebitId(genesisPublicKeyHex);
+    return motebitId.toLowerCase() === expected;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1104,6 +1156,7 @@ export async function verifyKeyBindingAtTime(
   return {
     bound: true,
     genesisPublicKey: genesisKey,
+    sovereign: await verifySovereignBinding(identity.motebit_id, genesisKey),
     activeFrom: match.from,
     ...(match.until !== Number.POSITIVE_INFINITY ? { activeUntil: match.until } : {}),
   };

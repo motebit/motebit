@@ -68,15 +68,18 @@ export function renderResult(view: ReceiptDocumentVerification): HTMLElement {
     ),
   );
   if (view.integrity) {
-    const bound = view.binding === "anchored" || view.binding === "pinned";
+    const bound =
+      view.binding === "sovereign" || view.binding === "anchored" || view.binding === "pinned";
     const bindingStatus =
       view.binding === "revoked"
         ? "revoked"
-        : view.binding === "anchored"
-          ? "anchored on-chain"
-          : view.binding === "pinned"
-            ? "pinned"
-            : "not anchored";
+        : view.binding === "sovereign"
+          ? "sovereign (offline)"
+          : view.binding === "anchored"
+            ? "anchored on-chain"
+            : view.binding === "pinned"
+              ? "pinned"
+              : "not anchored";
     const bindingMark = view.binding === "revoked" ? "fail" : bound ? "ok" : "warn";
     tiers.appendChild(tierRow("identity binding", bindingStatus, bindingMark));
     const kids = view.delegations ?? [];
@@ -100,7 +103,8 @@ export function renderResult(view: ReceiptDocumentVerification): HTMLElement {
     // motebit_id is the receipt's CLAIM about who produced it — labelled as such
     // so the page never conflates it with proven identity on the integrity path.
     if (view.motebitId) {
-      const bound = view.binding === "anchored" || view.binding === "pinned";
+      const bound =
+        view.binding === "sovereign" || view.binding === "anchored" || view.binding === "pinned";
       meta.appendChild(row(bound ? "motebit" : "claims to be", view.motebitId));
     }
     if (view.signerDid) meta.appendChild(row("signed by", view.signerDid));
