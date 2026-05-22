@@ -64,6 +64,35 @@
         color: var(--text-muted);
         margin-top: 6px;
       }
+      .page-header .standard {
+        font-size: 11px;
+        color: var(--text-muted);
+        opacity: 0.7;
+        margin-top: 8px;
+      }
+      .checks-ladder {
+        margin-top: 16px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 7px 10px;
+        font-size: 11px;
+        color: var(--text-muted);
+      }
+      .checks-ladder .checks-label {
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-dim);
+      }
+      .checks-ladder .check {
+        font-family: var(--font-mono);
+        white-space: nowrap;
+      }
+      .checks-ladder .check::before {
+        content: "→";
+        margin-right: 7px;
+        opacity: 0.45;
+      }
       #receipt-input {
         width: 100%;
         min-height: 180px;
@@ -242,7 +271,8 @@
     <div class="wrap">
       <div class="page-header">
         <h1>Verify a motebit receipt</h1>
-        <p>Paste a signed execution receipt. It's verified in your browser — no login, no relay.</p>
+        <p>Paste a signed execution receipt — verified in your browser, no login, no relay.</p>
+        <p class="standard">motebit/execution-ledger · an open standard for signed agent-action receipts</p>
       </div>
 
       <textarea
@@ -260,6 +290,15 @@
         A valid signature proves <strong>integrity</strong> — the bytes weren't tampered. Binding
         that key to an <strong>identity</strong> requires a trusted anchor.
       </p>
+
+      <div class="checks-ladder" aria-label="What this verifier checks">
+        <span class="checks-label">Checks</span>
+        <span class="check">signature integrity</span>
+        <span class="check">identity binding</span>
+        <span class="check">transparency anchor</span>
+        <span class="check">sovereign identity</span>
+        <span class="check">revocation</span>
+      </div>
 
       <div id="result-container"></div>
 
