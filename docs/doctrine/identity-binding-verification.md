@@ -33,11 +33,13 @@ Each rung is strictly more trust-minimized than the last. `receipt.computer` sho
 
 ## What ships now
 
-The integrity-only floor is live and honest: `verifyReceiptDocument` in `@motebit/state-export-client` and the `apps/verify` surface separate integrity from binding and refuse to claim identity they cannot anchor. A valid offline check renders as `integrity-only`, never `bound`. The **pinned** rung is the cheapest real binding and needs no new infrastructure — it composes the existing `trustedAnchor` parameter.
+The integrity-only floor is live and honest: `verifyReceiptDocument` in `@motebit/state-export-client` and the `apps/verify` surface separate integrity from binding and refuse to claim identity they cannot anchor. A valid offline check renders as `integrity-only`, never `bound`. The **pinned** rung composes `verifyKeyBindingAtTime` against a caller-supplied identity file (the key is time-valid in the motebit's own succession chain) — no new infrastructure.
+
+The **anchored** rung is now built end-to-end. The relay runs an identity-transparency log of motebit→key bindings (`services/relay/src/identity-log.ts`), a periodic loop anchors its Merkle root on Solana whenever the binding set changes (`identity-log-anchoring.ts`, the generic `motebit:anchor:v1:` memo), and `GET /api/v1/identity/:motebitId` serves a binding plus a Merkle inclusion proof built against the latest **confirmed on-chain** root (with its `tx_hash`). The verifier closes the loop: `verifyIdentityBindingAnchored` (`@motebit/crypto`) checks inclusion under the proof's root, and `lookupIdentityLogAnchor` (`@motebit/state-export-client`) independently confirms that root is on-chain at the relay's **pinned** address before `verifyReceiptDocument` returns `binding: "anchored"`. It degrades honestly to `pinned` when the root isn't on-chain.
+
+Remaining: surfacing `anchored` in `receipt.computer`'s UI (the data path is ready; the UI rung is a follow-up), and **revocation** (below). The rotated-after-anchor edge currently degrades to `pinned` (the anchored snapshot commits to the old key).
 
 ## Named triggers for the higher rungs
-
-Build the **anchored** rung (a relay-run identity-transparency log of motebit→key bindings, a public endpoint that serves a binding plus a Merkle inclusion proof, and the four-step verifier check) when a third party — a counterparty, an auditor, or a federation peer — needs to confirm a receipt's producer without trusting the operator's word. It reuses the anchoring infrastructure; it ships with a drift gate tying the verifier's binding rungs to the log.
 
 Build the **sovereign** rung when the binding must root in math rather than operator attestation: evolve `motebit_id` minting so the identifier commits to a genesis key derived deterministically from the recovery seed. That makes binding self-certifying _and_ recoverable — the single change that removes the operator from the binding trust root entirely. It touches `core-identity` and [`identity-restore.md`](identity-restore.md) and is the endgame.
 
@@ -45,7 +47,7 @@ Build the **sovereign** rung when the binding must root in math rather than oper
 
 - **Time-windowing.** An old receipt was signed by a since-rotated key. Binding must check the key was valid _at_ `completed_at` against the dated rotation chain — not merely "is this the current tip." Otherwise a rotated-away key still appears to bind.
 - **Revocation.** A compromised, revoked key must fail binding for receipts dated after revocation.
-- **Split-view.** The verifier must check inclusion against the _on-chain_ root, not the operator's served root. This means binding above `pinned` is **not** zero-network (unlike integrity): it fetches the identity proof and reads a neutral chain. The verifier must say what it contacted.
+- **Split-view.** _Handled._ The verifier checks inclusion against the proof's root AND confirms that exact root is posted on-chain at the operator's pinned address (`lookupIdentityLogAnchor`) — it does not trust the served root alone. Binding above `pinned` is therefore **not** zero-network (unlike integrity): it fetches the identity proof and reads a neutral chain. The pinned relay address is the out-of-band trust root and MUST NOT come from the bundle (circular trust).
 - **Bootstrap.** The first pin of the operator's transparency key is trust-on-first-use; the on-chain anchor of the declaration mitigates a first-contact swap.
 
 ## Cross-cuts
