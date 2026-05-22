@@ -650,18 +650,19 @@ export async function handleReceiptIngestion(
             amount_settled: subSettlement.amount_settled,
             platform_fee: subSettlement.platform_fee,
             platform_fee_rate: subSettlement.platform_fee_rate,
-            // Multi-hop sub-receipt — Arc 3 carve-out. Sub-agent
-            // settlement here is intra-relay coordination: the parent
-            // task's allocation pays the sub-agent through the relay,
-            // not third-party transmission. The doctrine forbids
-            // relay-custody for direct delegator→worker paid flows
-            // (enforced at task submission via TASK_P2P_PROOF_REQUIRED
-            // once Arc 3.5 lands; today the structural enforcement is
-            // type-level only — see the canonical inline comment at
-            // ~line 1767 below); multi-hop is a different topology and
-            // stays `"relay"` until a future arc closes it via P2P
-            // sub-payments. See `docs/doctrine/off-ramp-as-user-action.md`
-            // § "Arc 3 carve-outs".
+            // Multi-hop sub-receipt settlement-write. NOTE the precise
+            // scope: the sub-task SUBMISSION (B→C) is a real
+            // `POST /agent/C/task` and, once Arc 3.5's gate lands, a *paid*
+            // sub-hop is gated exactly like a direct delegation (it needs
+            // its own P2P proof). This relay-mode WRITE is therefore a
+            // residual of the pre-gate topology — reachable only for a
+            // paid sub-receipt that has no settlement of its own (e.g. the
+            // sub-agent's receipt was nested in the parent's rather than
+            // posted directly). Reconciling this write to honor the
+            // sub-task's submitted settlement_mode (so a p2p-submitted
+            // sub-hop settles p2p, not relay) is the deferred
+            // multi-hop-as-P2P arc. See
+            // `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3.5".
             settlement_mode: "relay",
             status: subSettlement.status,
             settled_at: subSettlement.settled_at,
@@ -1769,16 +1770,23 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // === Arc 3.5: P2P-by-default submission gate (LANDS LAST) ===
     // The enforcing gate is added in the FINAL commit of this arc, once every
     // E2E test that exercised the relay-custody path supplies a P2P proof (or
-    // moves to x402 / self-delegation). Test-first ordering keeps the suite
-    // green at every step. VALIDATED: with this predicate active, the migrated
-    // Group-1 files pass and the un-migrated relay-custody delegations 402.
+    // is re-scoped). Test-first ordering keeps the suite green at every step.
+    // VALIDATED: with this predicate active, the migrated Group-1 files pass
+    // and the un-migrated relay-custody delegations 402.
     // Predicate when it lands:
     //   settlementMode === "relay" && x402TxHash == null &&
     //   unitCostAtSubmission > 0 && submittedBy != null && submittedBy !== motebitId
-    // Carve-outs (do not reach the gate): zero-cost (`unitCostAtSubmission === 0`),
-    // self-delegation (`submittedBy === motebitId`), x402-paid (own onchain proof),
-    // multi-hop sub-receipts (settled from the parent's allocation in
-    // `settleSubReceipt`). See `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3.5".
+    // True submission carve-outs (do not reach the gate): zero-cost
+    // (`unitCostAtSubmission === 0`), self-delegation (`submittedBy === motebitId`),
+    // x402-paid (own onchain proof; not test-drivable today). NOTE: multi-hop is
+    // NOT a submission carve-out — a sub-delegation (B→C) is a real
+    // `POST /agent/C/task` submission (it must be in `taskQueue` for
+    // `settleSubReceipt` at ~567 to settle it), so a *paid* sub-hop is gated
+    // exactly like a direct delegation and needs its own P2P proof. Only the
+    // sub-receipt *settlement-write* (`settleSubReceipt`, ~665) is relay-mode,
+    // and that path is now a residual of the pre-gate topology — reconciling it
+    // to honor the sub-task's submitted mode is the deferred multi-hop-as-P2P
+    // arc. See `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3.5".
 
     taskQueue.set(taskId, {
       task,

@@ -83,17 +83,27 @@ The registry membership IS the protocol-vs-product wall: if `"MOTE"` is ever add
 3. ~~**`SettlementAsset` sub-phase A**~~ **SHIPPED.** Closed union `SettlementAsset = "USDC"` + `ALL_SETTLEMENT_ASSETS` + `isSettlementAsset` in `@motebit/protocol`; `SovereignRail.asset` tightened from `string` to `SettlementAsset`; bespoke coverage in `settlement-asset.test.ts`. Sub-phase B (promotion to 8th registered registry) remains deferred until a second asset arrives as a real consumer — see the "Sub-phase B (deferred)" paragraph above.
 4. **Counsel meeting** — agenda shifts from "validate agent-of-payee structure" (was needed pre-Arcs 2+3) to "validate that the structural-zero-transmitter-surface architecture is read the same way by external compliance reviewers" once Arcs 2+3 land. Cheaper meeting, stronger position walking in.
 
-## Arc 3 carve-outs (deliberate, documented)
+## Arc 3.5 gate scope — submission carve-outs vs. the multi-hop correction
 
-After Arc 3, three settlement paths continue to use `settlement_mode='relay'` as deliberate carve-outs — they are NOT third-party transmission of delegator-paid funds and stay on the relay-custody path until the test suite migration in Arc 3.5:
+The Arc 3.5 gate fires at task **submission** (`POST /agent/:motebitId/task`) on the predicate `settlementMode === "relay" && x402TxHash == null && unitCostAtSubmission > 0 && submittedBy != null && submittedBy !== motebitId`. Only **two** flows are true submission carve-outs (they never reach the gate), plus x402:
 
-1. **Self-delegation** (worker is the delegator — same-party flow). The agent's allocation pays the agent's own account; no third party involved. The `isSelfDelegation` flag at `services/relay/src/tasks.ts:377` gates the trust-update and credential-issuance side effects already.
+1. **Self-delegation** (`submittedBy === motebitId` — worker is the delegator). Same-party flow; no third party. `isSelfDelegation` at `services/relay/src/tasks.ts:377` already gates the trust/credential side effects.
 
-2. **Zero-cost direct delegation** (unit_cost = 0; no real funds). The settlement record writes `amount_settled=0, platform_fee=0`. No transmission of value; the audit record exists for completeness but no money moves.
+2. **Zero-cost direct delegation** (`unitCostAtSubmission === 0`). No funds move; the audit record exists for completeness.
 
-3. **Multi-hop sub-receipts** (`services/relay/src/tasks.ts:644-688`). A parent task's allocation pays sub-agents through intra-relay coordination. Different topology from direct delegation — closing this requires the parent to construct P2P sub-payments at delegation time, which is a multi-hop-as-P2P arc of its own. Until then, multi-hop sub-receipt settlement stays `settlement_mode='relay'` with the carve-out documented inline.
+3. **x402-paid** (`x402TxHash != null`). Carries its own onchain payment proof; closing x402-worker-custody is a separate, larger re-architecture, not Arc 3.5. (Not test-drivable today — the `onAfterSettle` hook needs a real x402 payment — so tests cannot exercise this exemption; it exists for production.)
 
-The three carve-outs are not contradictions of the off-ramp doctrine; they're flows the doctrine doesn't apply to (same-party, no-fund, intra-coordination). The structural enforcement at the protocol type level (`WritableSettlementMode`) is documentary today and becomes operational at Arc 3.5; the submission-gate enforcement (reject paid direct delegation without payment_proof) lands in Arc 3.5 once the test suite is migrated.
+**Multi-hop is NOT a submission carve-out — this corrects the earlier framing.** A sub-delegation (B→C) is a real `POST /agent/C/task` submission (it must be in `taskQueue` for `settleSubReceipt` to settle it), so a **paid** sub-hop is gated exactly like a direct delegation and needs its own P2P proof. The sub-delegator funds it from its own wallet (it has not yet been paid for the parent task, so allocation-backed sub-payment is unavailable). What remains relay-mode is only the sub-receipt **settlement-write** in `settleSubReceipt` — and that path is now a residual of the pre-gate topology, reachable only for a paid sub-receipt that lacks its own settlement. Reconciling that write to honor the sub-task's submitted mode (so a p2p-submitted sub-hop settles p2p, not relay) is the deferred **multi-hop-as-P2P arc**.
+
+## Arc 3.5 test-migration consequences
+
+The gate retires deposit-funded relay-custody for paid cross-agent delegation, which is exactly what a large body of E2E tests exercised. There is **no x402-paid re-point** (x402 is not test-drivable), so those tests do not "migrate to another path" — their coverage moves:
+
+- **Incidental tests** (paid delegation as plumbing for receipt/credential/trust/routing assertions): supply a P2P `payment_proof`. Done for trust-flywheel, receipt-persistence, signed-receipt-e2e, permissive-client-only-e2e, peer-credential-e2e.
+- **Relay-custody-machinery tests** (`money-loop-*`, `budget-risk-factor`, `settlement-safety`, `virtual-accounts` HTTP paths, `dispute-cycle-e2e`): these test allocation / lock / credit / dispute-refund / withdraw — a path being deprecated for cross-agent delegation. Their primitive coverage lives at unit level (`@motebit/virtual-accounts`); dispute coverage moves to the **P2P trust-layer dispute** (already in `p2p-cycle-e2e` — "p2p dispute creates trust-layer complaint with no fund movement"). The E2E relay-custody-specific assertions are re-scoped to self-delegation (where the machinery still runs) or retired with a `paid-cross-agent-fails-with-TASK_P2P_PROOF_REQUIRED` test locking the closure.
+- **Coverage-delta audit** (not optional): the gate catches _reach-it-and-fail_, not _silently-routed-around_ (a worker quietly made zero-cost, `submitted_by` dropped, an `it.skip` that never returns). After the gate lands, every migrated file that previously asserted `balance > 0` against a worker must now assert either a `settlement_mode='p2p'` record exists **or** `unit_cost === 0` is explicit in setup.
+
+The structural enforcement at the protocol type level (`WritableSettlementMode`) is documentary today; the submission-gate enforcement lands in the final Arc 3.5 commit once the migration + audit complete.
 
 ## Cross-references
 
