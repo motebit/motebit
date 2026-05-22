@@ -1766,18 +1766,18 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       });
     }
 
-    // Arc 3 of the off-ramp arc lands type-level scaffolding
-    // (`WritableSettlementMode`, disjunctive eligibility gate) and
-    // doctrine. The structural operational enforcement — rejecting
-    // paid direct delegation without payment_proof — is deferred to
-    // a follow-on arc ("Arc 3.5: migrate test-suite + production
-    // delegator clients to P2P-by-default") because the existing
-    // relay-custody path is heavily exercised in E2E test coverage.
-    // Until Arc 3.5 lands, paid direct delegation can still use the
-    // relay-custody path; new delegator clients SHOULD prefer P2P but
-    // aren't structurally required to. See
-    // `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3 scope and
-    // Arc 3.5 deferred."
+    // === Arc 3.5: P2P-by-default submission gate (LANDS LAST) ===
+    // The gate that rejects paid direct delegation without a payment_proof is
+    // added in the FINAL commit of this arc, once every E2E test that
+    // exercised the relay-custody path supplies a P2P proof (or moves to x402
+    // / self-delegation). Test-first ordering keeps the suite green at every
+    // step. Predicate when it lands:
+    //   settlementMode === "relay" && x402TxHash == null &&
+    //   unitCostAtSubmission > 0 && submittedBy != null && submittedBy !== motebitId
+    // Carve-outs (do not reach the gate): zero-cost (`unitCostAtSubmission === 0`),
+    // self-delegation (`submittedBy === motebitId`), multi-hop sub-receipts
+    // (settled from the parent's allocation in `settleSubReceipt`).
+    // See `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3.5".
 
     taskQueue.set(taskId, {
       task,

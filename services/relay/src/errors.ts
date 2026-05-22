@@ -138,7 +138,8 @@ export class TaskError extends RelayError {
       | "TASK_P2P_ADDRESS_MISMATCH"
       | "TASK_P2P_AMOUNT_MISMATCH"
       | "TASK_P2P_FEE_ADDRESS_MISMATCH"
-      | "TASK_P2P_FEE_AMOUNT_MISMATCH",
+      | "TASK_P2P_FEE_AMOUNT_MISMATCH"
+      | "TASK_P2P_PROOF_REQUIRED",
     message: string,
     statusCode: number = 400,
     options?: ErrorOptions,

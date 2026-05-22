@@ -34,9 +34,14 @@ import {
   jsonAuthWithIdempotency,
   createTestRelay as _createTestRelay,
   createAgent,
+  buildP2pPaymentProof,
 } from "./test-helpers.js";
 
 const createTestRelay = () => _createTestRelay({ issueCredentials: true });
+
+// Paid direct delegation settles P2P (Arc 3.5). Workers declare this
+// settlement address; delegators submit a matching payment_proof.
+const WORKER_SOLANA_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
 
 async function delegateAndSettle(
   relay: SyncRelay,
@@ -51,7 +56,16 @@ async function delegateAndSettle(
     body: JSON.stringify({
       prompt,
       submitted_by: delegator.motebitId,
+      target_agent: worker.motebitId,
       required_capabilities: ["web_search"],
+      // Paid direct delegation settles P2P (Arc 3.5). $1 listing → net
+      // 1_000_000 micro; cold-start ack unlocks the new-pair eligibility
+      // branch (trust accrues across iterations, starting unverified).
+      delegator_acknowledges_no_history_risk: true,
+      payment_proof: buildP2pPaymentProof(relay, {
+        workerAddress: WORKER_SOLANA_ADDR,
+        unitCostMicro: 1_000_000,
+      }),
     }),
   });
   expect(taskRes.status).toBe(201);
@@ -112,6 +126,8 @@ describe("Trust Flywheel E2E", () => {
         motebit_id: worker.motebitId,
         endpoint_url: "http://localhost:3200/mcp",
         capabilities: ["web_search"],
+        settlement_address: WORKER_SOLANA_ADDR,
+        settlement_modes: "relay,p2p",
       }),
     });
     await relay.app.request(`/api/v1/agents/${worker.motebitId}/listing`, {
@@ -236,13 +252,24 @@ describe("Trust Flywheel E2E", () => {
       .all(worker.motebitId, "AgentReputationCredential") as Array<Record<string, unknown>>;
     expect(credRowsAfter2).toHaveLength(2);
 
-    // --- Worker earnings accumulated ---
+    // --- Worker earnings recorded as P2P settlements ---
+    // Under Arc 3.5, paid direct delegation settles P2P: the worker is paid
+    // onchain (delegator's atomic tx), so the relay-custody VA balance stays
+    // 0 — earnings live in the signed p2p settlement audit records, not the
+    // virtual account. The trust flywheel (above) is what this test proves;
+    // the balance is now a relay-custody artifact that no longer moves.
     const workerBalanceRes = await relay.app.request(`/api/v1/agents/${worker.motebitId}/balance`, {
       headers: AUTH,
     });
     const workerB = (await workerBalanceRes.json()) as { balance: number };
-    // Worker earned from two tasks (net after 5% platform fee each)
-    expect(workerB.balance).toBeGreaterThan(0);
+    expect(workerB.balance).toBe(0);
+    const p2pSettlements = relay.moteDb.db
+      .prepare(
+        "SELECT amount_settled FROM relay_settlements WHERE motebit_id = ? AND settlement_mode = 'p2p'",
+      )
+      .all(worker.motebitId) as Array<{ amount_settled: number }>;
+    expect(p2pSettlements).toHaveLength(2);
+    expect(p2pSettlements.every((s) => s.amount_settled === 1_000_000)).toBe(true);
 
     // --- Credentials visible via API ---
     const credsApiRes = await relay.app.request(
