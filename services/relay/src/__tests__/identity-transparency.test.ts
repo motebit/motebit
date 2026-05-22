@@ -191,4 +191,36 @@ describe("GET /api/v1/identity/:motebitId — public, no auth gate", () => {
     // 404 (unknown motebit) is fine; 401 would mean the catch-all gated it.
     expect(res.status).not.toBe(401);
   });
+
+  // REPRO of the prod 500: a real registered motebit (full agent_registry schema)
+  // + a confirmed identity-log anchor must return 200, not 500. The unit tests
+  // above use a minimal hand-built agent_registry; this exercises the real schema
+  // through the route after anchoring.
+  it("returns 200 (not 500) for a registered motebit after an anchor is confirmed", async () => {
+    const relay = await createTestRelay();
+    const db = relay.moteDb.db;
+    const idRow = db.prepare("SELECT * FROM relay_identity").get() as {
+      relay_motebit_id: string;
+      public_key: string;
+      private_key_hex: string;
+      did: string;
+    };
+    const relayIdentity: RelayIdentity = {
+      relayMotebitId: idRow.relay_motebit_id,
+      publicKey: Uint8Array.from(Buffer.from(idRow.public_key, "hex")),
+      privateKey: Uint8Array.from(Buffer.from(idRow.private_key_hex, "hex")),
+      publicKeyHex: idRow.public_key,
+      did: idRow.did,
+    };
+    const mid = "mote-real-repro";
+    db.prepare(
+      "INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, registered_at, last_heartbeat, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(mid, await key(), "https://x.example", Date.now(), Date.now(), Date.now() + 86_400_000);
+
+    const rec = await anchorIdentityLog(db, relayIdentity);
+    await submitIdentityLogAnchorOnChain(db, rec!.anchor_id, mockSubmitter("tx-repro"));
+
+    const res = await relay.app.request(`/api/v1/identity/${mid}`);
+    expect(res.status).toBe(200);
+  });
 });

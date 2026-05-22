@@ -1154,4 +1154,30 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 24,
+    name: "key_successions_recovery_columns",
+    up: (db) => {
+      // `relay_key_successions` gained `recovery` + `guardian_signature` (for
+      // guardian-recovery rotations, §3.8.3) in its CREATE without an ALTER, so
+      // DBs created before that change lack the columns. CREATE TABLE IF NOT
+      // EXISTS never alters an existing table. Both columns are referenced by
+      // `readSuccessionChain` — which runs on EVERY `/api/v1/identity` request —
+      // and by the rotation INSERTs, so a missing column 500s the entire
+      // identity-transparency endpoint. Add them idempotently for existing tables
+      // (fresh tables already have them; the guard skips when the table is absent).
+      const cols = db.prepare("PRAGMA table_info(relay_key_successions)").all() as Array<{
+        name: string;
+      }>;
+      if (cols.length > 0) {
+        const names = new Set(cols.map((c) => c.name));
+        if (!names.has("recovery")) {
+          db.exec("ALTER TABLE relay_key_successions ADD COLUMN recovery INTEGER DEFAULT 0");
+        }
+        if (!names.has("guardian_signature")) {
+          db.exec("ALTER TABLE relay_key_successions ADD COLUMN guardian_signature TEXT");
+        }
+      }
+    },
+  },
 ];

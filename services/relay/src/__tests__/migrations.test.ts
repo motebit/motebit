@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { SqlJsDriver, type DatabaseDriver } from "@motebit/persistence";
-import { runMigrations, getSchemaVersion, type Migration } from "../migrations.js";
+import { runMigrations, getSchemaVersion, relayMigrations, type Migration } from "../migrations.js";
 
 let db: DatabaseDriver;
 
@@ -166,5 +166,41 @@ describe("migration framework", () => {
     // All tables should exist in correct order
     const usersInfo = db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
     expect(usersInfo.map((c) => c.name)).toContain("email"); // email added by migration 2
+  });
+});
+
+// Regression: a relay deployed before `recovery` + `guardian_signature` were
+// added to the relay_key_successions CREATE has a table missing those columns
+// (CREATE IF NOT EXISTS never alters it). readSuccessionChain SELECTs them on
+// every /api/v1/identity request, so the missing column 500'd the endpoint in
+// prod. Migration 24 backfills them idempotently.
+describe("migration 24 — relay_key_successions recovery/guardian_signature backfill", () => {
+  function colNames(name: string): Set<string> {
+    const cols = db.prepare(`PRAGMA table_info(${name})`).all() as Array<{ name: string }>;
+    return new Set(cols.map((c) => c.name));
+  }
+  const m24 = relayMigrations.find((m) => m.version === 24)!;
+
+  it("adds both columns to an old table that lacks them", () => {
+    db.exec(`CREATE TABLE relay_key_successions (
+      id INTEGER PRIMARY KEY, motebit_id TEXT NOT NULL, old_public_key TEXT NOT NULL,
+      new_public_key TEXT NOT NULL, timestamp INTEGER NOT NULL, reason TEXT,
+      old_key_signature TEXT, new_key_signature TEXT NOT NULL, created_at TEXT
+    )`);
+    expect(colNames("relay_key_successions").has("recovery")).toBe(false);
+    m24.up(db);
+    expect(colNames("relay_key_successions").has("recovery")).toBe(true);
+    expect(colNames("relay_key_successions").has("guardian_signature")).toBe(true);
+  });
+
+  it("is a no-op (no throw) when the columns already exist", () => {
+    db.exec(`CREATE TABLE relay_key_successions (
+      id INTEGER PRIMARY KEY, motebit_id TEXT, recovery INTEGER DEFAULT 0, guardian_signature TEXT
+    )`);
+    expect(() => m24.up(db)).not.toThrow();
+  });
+
+  it("is a no-op (no throw) when the table doesn't exist yet", () => {
+    expect(() => m24.up(db)).not.toThrow();
   });
 });
