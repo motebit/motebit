@@ -23,4 +23,6 @@ Receipts are the unit motebit's trust ledger is built from. The [trust graph](/d
 
 A receipt that doesn't verify is treated as if the work didn't happen. That is the load-bearing claim: motebit's economics, trust, and governance all rest on signatures over canonical bytes that any third party can check.
 
+To see this for yourself with no install, paste any receipt into [receipt.computer](https://receipt.computer): a public, login-free verifier that checks the signature and reports where the receipt sits on the identity-binding ladder — `integrity-only → pinned → anchored → sovereign`. A sovereign receipt proves its own authorship offline, because the `motebit_id` is the commitment to the signing key; no relay and no account sit in the trust root. The `motebit-verify` CLI prints the same ladder rung.
+
 For the verification recipe and developer-level integration, see the [delegation guide](/docs/developer/delegation) and the Python reference verifier under [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier).

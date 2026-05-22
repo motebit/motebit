@@ -180,6 +180,8 @@ Three additional apps ship alongside the five surfaces and play narrower roles:
 
 ## Verify & integrate
 
+No install, no account: paste any receipt into **[receipt.computer](https://receipt.computer)** — a public verifier that checks the signature and reports where the receipt sits on the identity-binding ladder (`integrity-only → pinned → anchored → sovereign`). A sovereign receipt proves its own authorship offline — the `motebit_id` is the commitment to the signing key — so no relay and no operator are in the trust root.
+
 Verify any motebit artifact — identity files, receipts, credentials, presentations, skills, or content-artifact manifests on relay state exports — with zero dependencies:
 
 ```typescript

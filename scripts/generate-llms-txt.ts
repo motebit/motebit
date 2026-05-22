@@ -75,6 +75,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 
 - \`npm create motebit\` generates a signed agent identity in 30 seconds
 - \`@motebit/crypto\` signs and verifies any motebit artifact (identity files, receipts, credentials)
+- [receipt.computer](https://receipt.computer) is a public, login-free web verifier — paste any receipt to check its signature and read its identity-binding rung (integrity-only → pinned → anchored → sovereign), no install required
 - \`motebit/identity@1.0\` is the open specification (Apache-2.0 licensed)
 `;
 
