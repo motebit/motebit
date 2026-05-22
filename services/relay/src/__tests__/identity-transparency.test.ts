@@ -24,6 +24,7 @@ import {
   anchorIdentityLog,
   submitIdentityLogAnchorOnChain,
 } from "../identity-log-anchoring.js";
+import { createTestRelay } from "./test-helpers.js";
 
 async function key(): Promise<string> {
   return bytesToHex((await generateKeypair()).publicKey);
@@ -175,5 +176,19 @@ describe("identity-transparency bundle", () => {
     expect(chain[0]!.suite).toBe("motebit-jcs-ed25519-hex-v1");
     expect(chain[0]!.recovery).toBeUndefined(); // recovery 0 → omitted
     expect(chain[0]!.reason).toBeUndefined(); // null → omitted
+  });
+});
+
+// Full-stack regression: the unit tests above call buildIdentityBindingBundle
+// directly, bypassing the relay's catch-all `/api/v1/*` auth middleware — which
+// is exactly how a prod bug slipped through (the endpoint was 401-gated because
+// it wasn't in the public-path allowlist, silently breaking receipt.computer's
+// pinned/anchored/sovereign flow). This exercises the route through the real app.
+describe("GET /api/v1/identity/:motebitId — public, no auth gate", () => {
+  it("is NOT bearer-gated (public protocol artifact — services/relay rule 6)", async () => {
+    const relay = await createTestRelay();
+    const res = await relay.app.request("/api/v1/identity/unknown-motebit");
+    // 404 (unknown motebit) is fine; 401 would mean the catch-all gated it.
+    expect(res.status).not.toBe(401);
   });
 });

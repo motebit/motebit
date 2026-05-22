@@ -471,6 +471,14 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         c.req.path.startsWith("/api/v1/credential-anchors/") ||
         c.req.path.match(/\/api\/v1\/settlements\/[^/]+\/anchor-proof/) ||
         c.req.path.startsWith("/api/v1/settlement-anchors/") ||
+        // Identity-transparency binding material is a public protocol artifact
+        // (same rationale as anchor-proof above): a third-party verifier
+        // resolving a receipt's producer holds no relay token, and the bundle
+        // carries no secrets — current key, self-signed succession chain, and a
+        // Merkle inclusion proof, all independently verifiable. Gating it breaks
+        // receipt.computer's pinned/anchored/sovereign path. See
+        // docs/doctrine/identity-binding-verification.md + identity-transparency.ts.
+        c.req.path.startsWith("/api/v1/identity/") ||
         c.req.path.startsWith("/api/v1/stripe/") ||
         c.req.path.startsWith("/api/v1/bridge/") ||
         c.req.path.startsWith("/api/v1/subscriptions/") ||
