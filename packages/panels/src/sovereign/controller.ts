@@ -9,6 +9,8 @@
 // The adapter inverts the dependency on @motebit/runtime so the package stays
 // at Layer 5 without promoting. See ./CLAUDE.md for rules.
 
+import { fromMicro } from "@motebit/protocol";
+
 // ── Response shapes (relay wire format) ───────────────────────────────
 
 export interface CredentialEntry {
@@ -436,7 +438,7 @@ export function createSovereignController(adapter: SovereignFetchAdapter): Sover
     if (!address) return { address: null, usdc: null };
     try {
       const micro = await adapter.getSolanaBalanceMicro();
-      return { address, usdc: micro != null ? Number(micro) / 1_000_000 : null };
+      return { address, usdc: micro != null ? fromMicro(Number(micro)) : null };
     } catch {
       return { address, usdc: null };
     }
@@ -546,7 +548,7 @@ export function createSovereignController(adapter: SovereignFetchAdapter): Sover
       }>(res);
       // Relay returns threshold in micro-units; the balance shape carries
       // it in dollars, so convert before writing state.
-      const dollars = updated.sweep_threshold != null ? updated.sweep_threshold / 1_000_000 : null;
+      const dollars = updated.sweep_threshold != null ? fromMicro(updated.sweep_threshold) : null;
       const nextBalance: BalanceResponse | null = state.balance
         ? {
             ...state.balance,

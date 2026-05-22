@@ -18,6 +18,7 @@
  */
 
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
+import { fromMicro } from "@motebit/protocol";
 import { secureErase } from "@motebit/encryption";
 import { loadFullConfig } from "../config.js";
 import { loadActiveSigningKey, IdentityKeyError } from "../identity.js";
@@ -81,7 +82,7 @@ export async function handleWallet(options: WalletOptions = {}): Promise<void> {
   process.stdout.write(`  balance      Loading…`);
   try {
     const microUsdc = await rail.getBalance();
-    const usdc = Number(microUsdc) / 1_000_000;
+    const usdc = fromMicro(Number(microUsdc));
     process.stdout.write(`\r  balance      ${usdc.toFixed(2)} USDC         \n`);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

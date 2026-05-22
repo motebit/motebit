@@ -14,6 +14,7 @@
  */
 
 import { signBalanceWaiver, secureErase, type BalanceWaiver } from "@motebit/encryption";
+import { fromMicro } from "@motebit/protocol";
 import { createInterface } from "node:readline";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
@@ -34,7 +35,7 @@ async function loadIdentityPrivateKey(): Promise<Uint8Array | null> {
 }
 
 async function confirmWaiver(motebitId: string, balanceMicro: number): Promise<boolean> {
-  const usd = (balanceMicro / 1_000_000).toFixed(6);
+  const usd = fromMicro(balanceMicro).toFixed(6);
   process.stdout.write(
     `\n  This will forfeit $${usd} USD (${balanceMicro} micro-units) of ${motebitId}'s balance.\n  Signing a BalanceWaiver is irreversible — the relay retains the funds.\n  Continue? [y/N] `,
   );

@@ -17,6 +17,8 @@
  * the feature in the scene.
  */
 
+import { fromMicro } from "@motebit/protocol";
+
 export type ConnectionState = "offline" | "connecting" | "online";
 
 export interface HudBinding {
@@ -27,7 +29,7 @@ export interface HudBinding {
 
 export function formatBalance(micro: bigint | null): string {
   if (micro === null) return "— USDC";
-  return `${(Number(micro) / 1_000_000).toFixed(2)} USDC`;
+  return `${fromMicro(Number(micro)).toFixed(2)} USDC`;
 }
 
 export function bindHud(root: HTMLElement): HudBinding {
