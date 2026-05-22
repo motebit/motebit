@@ -113,7 +113,15 @@ export function registerIdentityTransparencyRoutes(deps: IdentityTransparencyDep
 
   // ── GET /api/v1/identity/:motebitId ──
   // Unauthenticated. Serves binding material for offline verification; no secrets.
-  /** @spec motebit/identity@1.0 */
+  /**
+   * @experimental
+   * @since 2026-05-21
+   * @stabilizes_by 2026-08-21
+   * @replacement none
+   * @reason Identity-transparency binding endpoint. The IdentityBindingBundle wire
+   *   format may change until the anchored rung is complete (the on-chain root
+   *   cross-check); it graduates to a versioned spec route once stable.
+   */
   app.get("/api/v1/identity/:motebitId", async (c) => {
     const motebitId = c.req.param("motebitId");
     const bundle = await buildIdentityBindingBundle(db, motebitId);
