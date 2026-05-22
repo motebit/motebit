@@ -865,6 +865,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         await insertRevocationEvent(moteDb.db, relayIdentity, "key_rotated", motebitId, {
           newPublicKey: publicKey,
           revokedPublicKey: existingAgent.public_key,
+          // The old key ceased to be authoritative at the (guardian-attested)
+          // rotation moment, not when the relay processed this registration —
+          // anchor the revocation memo at the succession timestamp so the
+          // verifier's poison window matches the chain.
+          effectiveAt: succession.timestamp,
         });
       } catch {
         /* best-effort */

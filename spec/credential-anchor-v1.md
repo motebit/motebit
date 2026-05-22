@@ -276,9 +276,9 @@ motebit:revocation:v1:{revoked_public_key_hex}:{timestamp}
 ```
 
 - `revoked_public_key_hex`: 64-character hex-encoded Ed25519 public key being revoked
-- `timestamp`: millisecond Unix timestamp of the revocation event
+- `timestamp`: millisecond Unix timestamp of the **effective** revocation — the moment the key ceased to be authoritative, which MAY precede the moment the relay recorded and anchored the event. For a succession-driven rotation (`key_rotated`) it is the guardian-attested succession `timestamp`; for a governance revoke (`agent_revoked`) it MAY be a caller-supplied backdated `compromised_at`. It MUST NOT be a future time. Verifiers treat a receipt dated at or after this timestamp as failing identity binding, so an effective time earlier than the recording time **narrows** — never widens — the `[true compromise, recorded revocation)` window during which a compromised key still appears bound.
 
-The memo is signed by the relay's Ed25519 identity key (the Solana transaction signer).
+The memo is signed by the relay's Ed25519 identity key (the Solana transaction signer). The transaction signature is the memo's integrity guarantee: a chain-only verifier confirms the memo lives at the relay's pinned anchor address and reads its effective timestamp directly, without re-deriving the relay's federation-event payload signature. The relay's separate federation-event signature covers the **recording** time (see §10.4 step 2), which is distinct from — and never earlier than — this effective time.
 
 ### 10.3 Anchoring Behavior
 
@@ -291,10 +291,10 @@ The chain submission is fire-and-forget: failure to anchor does not block the re
 Given a revocation anchor:
 
 1. **Memo format:** Validate the memo matches `motebit:revocation:v1:{key}:{timestamp}` and the public key is 64 hex characters
-2. **Relay signature:** The Solana transaction's signer is the relay's Ed25519 identity key. Verify the relay signed the revocation event payload (`revocation:{type}:{motebit_id}:{timestamp}`)
+2. **Relay signature:** The Solana transaction's signer is the relay's Ed25519 identity key. Verify the relay signed the revocation event payload (`revocation:{type}:{motebit_id}:{recording_timestamp}`). This payload's timestamp is the relay's **recording** time, which is the federation-sync ordering key and MAY be later than the memo's effective timestamp; supply the signed payload string directly rather than re-deriving it from the memo (`verifyRevocationAnchor` takes the proof and the payload as separate arguments for exactly this reason)
 3. **Onchain lookup:** Fetch the transaction by hash from any Solana RPC. Parse the memo instruction data. Confirm it contains the expected revoked public key
 
-Steps 1-2 are offline-verifiable given the relay's public key. Step 3 requires RPC access but ensures the relay cannot deny the revocation.
+Steps 1-2 are offline-verifiable given the relay's public key. Step 3 requires RPC access but ensures the relay cannot deny the revocation. The chain-only verification used by the identity-binding ladder (`lookupKeyRevocation`) performs steps 1 and 3 against the relay's pinned anchor address and skips step 2 — the transaction signature already attests the memo, so the effective revocation time is read straight from the chain.
 
 ### 10.5 Reference Implementation
 

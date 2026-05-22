@@ -5,12 +5,13 @@
  * processing of incoming events (valid/invalid signatures),
  * and unknown event type handling.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   createFederationTables,
   insertRevocationEvent,
   getRevocationEventsSince,
   processIncomingRevocations,
+  setRevocationAnchorSubmitter,
 } from "../federation.js";
 import type { RelayIdentity, RevocationEvent } from "../federation.js";
 import { advanceRevocationHorizon } from "../horizon.js";
@@ -244,6 +245,68 @@ describe("Revocation Propagation", () => {
       const result = await processIncomingRevocations(db, events, identity.publicKey);
       expect(result.processed).toBe(1); // processed (UPDATE affected 0 rows but no error)
       expect(result.rejected).toBe(0);
+    });
+  });
+
+  describe("effective revocation time (on-chain memo backdating)", () => {
+    let capturedMemo: { publicKeyHex: string; timestamp: number } | null;
+
+    beforeEach(() => {
+      capturedMemo = null;
+      setRevocationAnchorSubmitter({
+        isAvailable: async () => true,
+        submitRevocation: async (publicKeyHex, timestamp) => {
+          capturedMemo = { publicKeyHex, timestamp };
+          return { txHash: "tx-test" };
+        },
+      });
+    });
+
+    afterEach(() => {
+      setRevocationAnchorSubmitter(undefined);
+    });
+
+    const REVOKED_KEY = "ab".repeat(32);
+
+    it("anchors the memo at the backdated effective time while the recording time stays now", async () => {
+      const compromisedAt = Date.now() - 7 * 24 * 60 * 60 * 1000; // 7 days ago
+      const before = Date.now();
+      await insertRevocationEvent(db, identity, "agent_revoked", "agent-bd", {
+        revokedPublicKey: REVOKED_KEY,
+        effectiveAt: compromisedAt,
+      });
+      await vi.waitFor(() => expect(capturedMemo).not.toBeNull());
+      // Memo carries the effective (backdated) time — what the verifier honors.
+      expect(capturedMemo!.timestamp).toBe(compromisedAt);
+      expect(capturedMemo!.publicKeyHex).toBe(REVOKED_KEY);
+      // DB row keeps the recording time — never backdated (federation ordering).
+      const [event] = getRevocationEventsSince(db, 0);
+      expect(event!.timestamp).toBeGreaterThanOrEqual(before);
+      expect(event!.timestamp).toBeGreaterThan(compromisedAt);
+    });
+
+    it("clamps a future effective time to the recording time (revocations move only earlier)", async () => {
+      const future = Date.now() + 365 * 24 * 60 * 60 * 1000;
+      const before = Date.now();
+      await insertRevocationEvent(db, identity, "agent_revoked", "agent-fut", {
+        revokedPublicKey: REVOKED_KEY,
+        effectiveAt: future,
+      });
+      await vi.waitFor(() => expect(capturedMemo).not.toBeNull());
+      expect(capturedMemo!.timestamp).toBeGreaterThanOrEqual(before);
+      expect(capturedMemo!.timestamp).toBeLessThanOrEqual(Date.now());
+      expect(capturedMemo!.timestamp).not.toBe(future);
+    });
+
+    it("defaults the memo to the recording time when no effective time is given", async () => {
+      const before = Date.now();
+      await insertRevocationEvent(db, identity, "agent_revoked", "agent-def", {
+        revokedPublicKey: REVOKED_KEY,
+      });
+      await vi.waitFor(() => expect(capturedMemo).not.toBeNull());
+      const [event] = getRevocationEventsSince(db, 0);
+      expect(capturedMemo!.timestamp).toBe(event!.timestamp);
+      expect(capturedMemo!.timestamp).toBeGreaterThanOrEqual(before);
     });
   });
 });

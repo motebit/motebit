@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, createSignedToken, bytesToHex } from "@motebit/encryption";
-import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
+import { setRevocationAnchorSubmitter } from "../federation.js";
+import { AUTH_HEADER, JSON_AUTH, createTestRelay } from "./test-helpers.js";
 
 async function createIdentityAndDevice(
   relay: SyncRelay,
@@ -298,5 +299,80 @@ describe("Blacklist Cleanup", () => {
 
     // The startup cleanup code executed without error (tested by relay creation succeeding)
     expect(relay).toBeDefined();
+  });
+});
+
+describe("Identity Revocation — backdated compromise time", () => {
+  let relay: SyncRelay;
+  let capturedMemo: { publicKeyHex: string; timestamp: number } | null;
+
+  beforeEach(async () => {
+    relay = await createTestRelay();
+    capturedMemo = null;
+    setRevocationAnchorSubmitter({
+      isAvailable: async () => true,
+      submitRevocation: async (publicKeyHex, timestamp) => {
+        capturedMemo = { publicKeyHex, timestamp };
+        return { txHash: "tx-test" };
+      },
+    });
+  });
+
+  afterEach(async () => {
+    setRevocationAnchorSubmitter(undefined);
+    await relay.close();
+  });
+
+  function seedRegisteredAgent(): { motebitId: string; pubKeyHex: string } {
+    const motebitId = `mid-${crypto.randomUUID()}`;
+    const pubKeyHex = "ab".repeat(32);
+    const now = Date.now();
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, registered_at, last_heartbeat, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(motebitId, pubKeyHex, "http://test.local/mcp", now, now, now + 86_400_000);
+    return { motebitId, pubKeyHex };
+  }
+
+  it("anchors the revocation memo at the supplied compromised_at", async () => {
+    const { motebitId, pubKeyHex } = seedRegisteredAgent();
+    const compromisedAt = Date.now() - 7 * 24 * 60 * 60 * 1000; // 7 days ago
+
+    const res = await relay.app.request(`/api/v1/agents/${motebitId}/revoke`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({ compromised_at: compromisedAt }),
+    });
+    expect(res.status).toBe(200);
+
+    await vi.waitFor(() => expect(capturedMemo).not.toBeNull());
+    expect(capturedMemo!.publicKeyHex).toBe(pubKeyHex);
+    expect(capturedMemo!.timestamp).toBe(compromisedAt);
+  });
+
+  it("rejects a future compromised_at (revocations move only earlier)", async () => {
+    const { motebitId } = seedRegisteredAgent();
+    const res = await relay.app.request(`/api/v1/agents/${motebitId}/revoke`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({ compromised_at: Date.now() + 365 * 24 * 60 * 60 * 1000 }),
+    });
+    expect(res.status).toBe(400);
+    expect(capturedMemo).toBeNull();
+  });
+
+  it("a bare revoke (no body) anchors the memo at the recording time", async () => {
+    const { motebitId } = seedRegisteredAgent();
+    const before = Date.now();
+    const res = await relay.app.request(`/api/v1/agents/${motebitId}/revoke`, {
+      method: "POST",
+      headers: AUTH_HEADER, // no Content-Type, no body
+    });
+    expect(res.status).toBe(200);
+
+    await vi.waitFor(() => expect(capturedMemo).not.toBeNull());
+    expect(capturedMemo!.timestamp).toBeGreaterThanOrEqual(before);
+    expect(capturedMemo!.timestamp).toBeLessThanOrEqual(Date.now());
   });
 });

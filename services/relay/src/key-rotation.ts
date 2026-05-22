@@ -226,6 +226,31 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     if (callerMotebitId && callerMotebitId !== motebitId)
       throw new HTTPException(403, { message: "Cannot revoke another agent" });
+
+    // Optional `compromised_at` (epoch ms) backdates the on-chain revocation
+    // memo to the true compromise moment, narrowing the verifier's poison
+    // window. Body is optional — a bare revoke still works. Backdating only:
+    // a future timestamp is rejected so a caller can never un-poison a live
+    // attack window. See `credential-anchor-v1.md` §10.2.
+    let compromisedAt: number | undefined;
+    const raw = await c.req.text();
+    if (raw.trim().length > 0) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw new HTTPException(400, { message: "Invalid JSON body" });
+      }
+      const ca = (parsed as { compromised_at?: unknown }).compromised_at;
+      if (ca !== undefined) {
+        if (typeof ca !== "number" || !Number.isFinite(ca) || ca <= 0 || ca > Date.now())
+          throw new HTTPException(400, {
+            message: "compromised_at must be a positive past epoch-ms timestamp",
+          });
+        compromisedAt = ca;
+      }
+    }
+
     const agent = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(motebitId) as { public_key: string } | undefined;
@@ -233,6 +258,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     try {
       await insertRevocationEvent(moteDb.db, relayIdentity, "agent_revoked", motebitId, {
         revokedPublicKey: agent?.public_key,
+        effectiveAt: compromisedAt,
       });
     } catch {
       /* best-effort */

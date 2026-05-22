@@ -304,14 +304,45 @@ export async function insertRevocationEvent(
   relayIdentity: RelayIdentity,
   type: RevocationEvent["type"],
   motebitId: string,
-  opts?: { credentialId?: string; newPublicKey?: string; revokedPublicKey?: string },
+  opts?: {
+    credentialId?: string;
+    newPublicKey?: string;
+    revokedPublicKey?: string;
+    /**
+     * Effective revocation time (epoch ms) — the moment the key ceased to be
+     * authoritative. This is what the on-chain memo carries and what verifiers
+     * honor: a receipt dated at/after it fails binding. MUST be ≤ the recording
+     * time; a future, non-finite, or non-positive value is clamped to the
+     * recording time so a revocation can only ever be backdated, never
+     * forward-dated. Defaults to the recording time. A caller that knows the
+     * true compromise moment narrows the verifier's `[true compromise, recorded
+     * revocation)` poison window: a governance revoke passes a backdated
+     * `compromised_at`, and a succession-driven rotation passes the
+     * guardian-attested succession `timestamp`. See `credential-anchor-v1.md`
+     * §10.2.
+     */
+    effectiveAt?: number;
+  },
 ): Promise<RevocationEvent> {
-  const timestamp = Date.now();
+  // Recording time: the federation-sync ordering key (`getRevocationEventsSince`
+  // filters on it) and the signed-payload component peers reverify. Never
+  // backdated — a `timestamp` below a peer's sync cursor would silently drop the
+  // event from propagation, and changing the signed payload would break the
+  // federation signature contract.
+  const recordedAt = Date.now();
+  // Effective time: only the on-chain memo (and thus the verifier) sees this.
+  const effectiveAt =
+    opts?.effectiveAt != null &&
+    Number.isFinite(opts.effectiveAt) &&
+    opts.effectiveAt > 0 &&
+    opts.effectiveAt <= recordedAt
+      ? opts.effectiveAt
+      : recordedAt;
   const encoder = new TextEncoder();
-  const payload = `revocation:${type}:${motebitId}:${timestamp}`;
+  const payload = `revocation:${type}:${motebitId}:${recordedAt}`;
   const sig = await sign(encoder.encode(payload), relayIdentity.privateKey);
   const signatureHex = bytesToHex(sig);
-  const eventId = `rev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const eventId = `rev-${recordedAt}-${Math.random().toString(36).slice(2, 8)}`;
 
   db.prepare(
     "INSERT INTO relay_revocation_events (event_id, type, motebit_id, credential_id, new_public_key, timestamp, signature) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -321,14 +352,15 @@ export async function insertRevocationEvent(
     motebitId,
     opts?.credentialId ?? null,
     opts?.newPublicKey ?? null,
-    timestamp,
+    recordedAt,
     signatureHex,
   );
 
   // Fire-and-forget onchain revocation anchor for key-level events.
   // Revocations are rare and urgent — anchor immediately, no batching.
+  // The memo carries the EFFECTIVE time, not the recording time.
   if (revocationAnchorSubmitter && opts?.revokedPublicKey) {
-    anchorRevocationOnChain(opts.revokedPublicKey, timestamp).catch((err) => {
+    anchorRevocationOnChain(opts.revokedPublicKey, effectiveAt).catch((err) => {
       logger.error("revocation.anchor_failed", {
         motebitId,
         type,
@@ -342,7 +374,7 @@ export async function insertRevocationEvent(
     motebit_id: motebitId,
     credential_id: opts?.credentialId,
     new_public_key: opts?.newPublicKey,
-    timestamp,
+    timestamp: recordedAt,
     signature: signatureHex,
   };
 }
