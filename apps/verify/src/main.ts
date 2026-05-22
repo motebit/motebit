@@ -1,11 +1,13 @@
 /**
- * receipt verifier — main entry. DOM wiring only: read the pasted receipt,
- * verify it via @motebit/state-export-client, render the honest result.
+ * receipt verifier — main entry. DOM wiring only: read the pasted receipt, verify
+ * it via @motebit/state-export-client, render the graded verdict into the result
+ * pane. Verifies live (debounced) as you type — jwt.io-style — plus the button and
+ * ⌘/Ctrl+Enter.
  *
- * The integrity check runs entirely in this tab (no network). A verified receipt
- * is then upgraded toward pinned/anchored by fetching the producing motebit's
- * identity material from the relay (default `https://relay.motebit.com`,
- * overridable via VITE_RELAY_URL) — fail-closed: any relay failure keeps the
+ * The integrity check runs entirely in this tab. When the receipt names a producer,
+ * the binding is upgraded toward pinned/anchored/sovereign by fetching the relay's
+ * identity material (default https://relay.motebit.com, VITE_RELAY_URL) and the
+ * key's on-chain revocation status — fail-closed: any relay failure keeps the
  * offline integrity-only result.
  */
 
@@ -16,20 +18,23 @@ import { resolveReceiptBinding } from "./relay-binding.js";
 const input = document.getElementById("receipt-input") as HTMLTextAreaElement;
 const verifyBtn = document.getElementById("verify-btn") as HTMLButtonElement;
 const resultContainer = document.getElementById("result-container")!;
+// The initial child is the "what gets verified" empty state — re-shown when cleared.
+const emptyState = resultContainer.firstElementChild;
 
-// Same canonical var + default as apps/web (storage.ts) — the sync/identity relay.
 const RELAY_URL = import.meta.env.VITE_RELAY_URL ?? "https://relay.motebit.com";
 const SOLANA_RPC = import.meta.env.VITE_SOLANA_RPC_URL;
 
 async function run(): Promise<void> {
   const text = input.value.trim();
-  if (text.length === 0) return;
+  if (text.length === 0) {
+    if (emptyState) resultContainer.replaceChildren(emptyState);
+    return;
+  }
   verifyBtn.disabled = true;
   try {
     let view = await verifyReceiptDocument(text);
     // Upgrade past integrity-only when the receipt names a producer. Fail-closed:
-    // resolveReceiptBinding returns null on any relay failure, so an unreachable
-    // relay never blocks the offline integrity check.
+    // resolveReceiptBinding returns null on any relay failure.
     if (view.integrity && view.motebitId) {
       const resolved = await resolveReceiptBinding({
         relayBase: RELAY_URL,
@@ -40,8 +45,6 @@ async function run(): Promise<void> {
         view = await verifyReceiptDocument(text, {
           identity: resolved.identity,
           ...(resolved.anchor ? { anchor: resolved.anchor } : {}),
-          // Always scan for an on-chain revocation of the signing key — a revoked
-          // key poisons the binding even for an un-anchored motebit.
           revocation: {
             relayAnchorAddress: resolved.relayAnchorAddress,
             lookup: SOLANA_RPC ? { rpcUrl: SOLANA_RPC } : {},
@@ -55,8 +58,12 @@ async function run(): Promise<void> {
   }
 }
 
+let debounce: ReturnType<typeof setTimeout> | undefined;
+input.addEventListener("input", () => {
+  if (debounce) clearTimeout(debounce);
+  debounce = setTimeout(() => void run(), 400);
+});
 verifyBtn.addEventListener("click", () => void run());
-// Cmd/Ctrl+Enter from the textarea verifies, matching a code-editor reflex.
 input.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void run();
 });

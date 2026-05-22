@@ -15,6 +15,8 @@ export type ResultTone = "bound" | "integrity" | "failed";
 
 export interface ResultLabels {
   readonly tone: ResultTone;
+  /** Short, all-caps "grade" for the verdict badge (the rung reached). */
+  readonly grade: string;
   readonly headline: string;
   readonly detail: string;
 }
@@ -35,6 +37,7 @@ export function resultLabels(v: ReceiptDocumentVerification): ResultLabels {
   if (v.binding === "revoked") {
     return {
       tone: "failed",
+      grade: "REVOKED",
       headline: "Key revoked — do not trust",
       detail:
         "The signature matches, but the signing key was revoked on-chain at or before this receipt's time. A revoked key signals compromise or retirement — do not trust this receipt's identity claim, even though the bytes are intact.",
@@ -43,6 +46,7 @@ export function resultLabels(v: ReceiptDocumentVerification): ResultLabels {
   if (!v.integrity) {
     return {
       tone: "failed",
+      grade: "INVALID",
       headline: "Verification failed",
       detail: FAILURE_DETAIL[v.reason ?? "unknown"] ?? FAILURE_DETAIL.unknown,
     };
@@ -50,6 +54,7 @@ export function resultLabels(v: ReceiptDocumentVerification): ResultLabels {
   if (v.binding === "sovereign") {
     return {
       tone: "bound",
+      grade: "SOVEREIGN",
       headline: "Verified — sovereign identity",
       detail:
         "The signature is valid and the motebit's id IS the commitment to its genesis key — so the identity binds to the key by math alone, verified right here with no relay, no chain, and no operator to trust. The strongest binding there is.",
@@ -58,6 +63,7 @@ export function resultLabels(v: ReceiptDocumentVerification): ResultLabels {
   if (v.binding === "anchored") {
     return {
       tone: "bound",
+      grade: "ANCHORED",
       headline: "Verified — anchored on-chain",
       detail:
         "The signature is valid, the signing key is bound to this motebit's identity chain, and that binding is committed in the operator's transparency log whose root is confirmed on-chain. The operator cannot show two verifiers different chains without leaving on-chain-detectable evidence.",
@@ -66,6 +72,7 @@ export function resultLabels(v: ReceiptDocumentVerification): ResultLabels {
   if (v.binding === "pinned") {
     return {
       tone: "bound",
+      grade: "PINNED",
       headline: "Verified — identity pinned",
       detail:
         "The signature is valid and the signing key is time-valid in the identity chain you supplied. That binds the key to this motebit's chain — it does not yet prove the chain is the operator's current, non-equivocable record (the anchored rung).",
@@ -76,6 +83,7 @@ export function resultLabels(v: ReceiptDocumentVerification): ResultLabels {
   // tampered, NOT that the key belongs to this motebit.
   return {
     tone: "integrity",
+    grade: "INTEGRITY ONLY",
     headline: "Signature verified — identity not anchored",
     detail:
       "The signature is valid and the receipt is untampered, but it was checked against the receipt's own embedded key. That proves integrity, not that the key belongs to this motebit. No trust anchor was provided.",
