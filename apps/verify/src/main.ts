@@ -2,10 +2,11 @@
  * receipt verifier — main entry. DOM wiring only: read the pasted receipt,
  * verify it via @motebit/state-export-client, render the honest result.
  *
- * The integrity check runs entirely in this tab (no network). When VITE_RELAY_BASE
- * is configured, a verified receipt is then upgraded toward pinned/anchored by
- * fetching the producing motebit's identity material from the relay — fail-closed:
- * any relay failure keeps the offline integrity-only result.
+ * The integrity check runs entirely in this tab (no network). A verified receipt
+ * is then upgraded toward pinned/anchored by fetching the producing motebit's
+ * identity material from the relay (default `https://relay.motebit.com`,
+ * overridable via VITE_RELAY_URL) — fail-closed: any relay failure keeps the
+ * offline integrity-only result.
  */
 
 import { verifyReceiptDocument } from "@motebit/state-export-client";
@@ -16,8 +17,9 @@ const input = document.getElementById("receipt-input") as HTMLTextAreaElement;
 const verifyBtn = document.getElementById("verify-btn") as HTMLButtonElement;
 const resultContainer = document.getElementById("result-container")!;
 
-const RELAY_BASE = import.meta.env.VITE_RELAY_BASE;
-const SOLANA_RPC = import.meta.env.VITE_SOLANA_RPC;
+// Same canonical var + default as apps/web (storage.ts) — the sync/identity relay.
+const RELAY_URL = import.meta.env.VITE_RELAY_URL ?? "https://relay.motebit.com";
+const SOLANA_RPC = import.meta.env.VITE_SOLANA_RPC_URL;
 
 async function run(): Promise<void> {
   const text = input.value.trim();
@@ -25,12 +27,12 @@ async function run(): Promise<void> {
   verifyBtn.disabled = true;
   try {
     let view = await verifyReceiptDocument(text);
-    // Upgrade past integrity-only when a relay is configured and the receipt
-    // names a producer. Fail-closed: resolveReceiptBinding returns null on any
-    // relay failure, so an unreachable relay never blocks the offline check.
-    if (view.integrity && RELAY_BASE && view.motebitId) {
+    // Upgrade past integrity-only when the receipt names a producer. Fail-closed:
+    // resolveReceiptBinding returns null on any relay failure, so an unreachable
+    // relay never blocks the offline integrity check.
+    if (view.integrity && view.motebitId) {
       const resolved = await resolveReceiptBinding({
-        relayBase: RELAY_BASE,
+        relayBase: RELAY_URL,
         motebitId: view.motebitId,
         ...(SOLANA_RPC ? { solanaRpc: SOLANA_RPC } : {}),
       });

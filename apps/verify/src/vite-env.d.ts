@@ -2,14 +2,14 @@
 
 interface ImportMetaEnv {
   /**
-   * Base URL of the relay whose receipts this verifier resolves identity for
-   * (e.g. `https://relay.motebit.com`). When set, a verified receipt's binding
-   * is upgraded from `integrity-only` toward `pinned`/`anchored` by fetching the
-   * relay's identity material. Absent → the verifier stays purely offline.
+   * Sync/identity relay URL — the relay serving `/api/v1/identity/:motebitId` and
+   * `/.well-known/motebit-transparency.json`. Same canonical var + default as
+   * `apps/web` (`storage.ts`): defaults to `https://relay.motebit.com` so the
+   * binding upgrade works out of the box; override to point at another relay.
    */
-  readonly VITE_RELAY_BASE?: string;
+  readonly VITE_RELAY_URL?: string;
   /** Solana JSON-RPC for the on-chain anchored-root cross-check. Defaults to mainnet-beta. */
-  readonly VITE_SOLANA_RPC?: string;
+  readonly VITE_SOLANA_RPC_URL?: string;
 }
 
 interface ImportMeta {
