@@ -814,6 +814,9 @@ importers:
 
   apps/verify:
     dependencies:
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@motebit/state-export-client':
         specifier: workspace:*
         version: link:../../packages/state-export-client
