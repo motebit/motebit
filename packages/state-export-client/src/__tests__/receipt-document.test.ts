@@ -199,6 +199,73 @@ describe("verifyReceiptDocument", () => {
     expect(v.binding).toBe("integrity-only");
   });
 
+  // ── revoked rung (B) ──
+  // The signing key's revocation memo at the relay address poisons the binding,
+  // overriding pinned/anchored/integrity-only. Mock fetch decides the memo.
+  function revocationFetch(keyHex: string, revokedAt: number | null): typeof globalThis.fetch {
+    return (async () =>
+      new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result:
+            revokedAt === null
+              ? []
+              : [
+                  {
+                    signature: "rev-tx",
+                    slot: 1,
+                    err: null,
+                    memo: `motebit:revocation:v1:${keyHex}:${revokedAt}`,
+                    blockTime: null,
+                  },
+                ],
+        }),
+        { status: 200 },
+      )) as unknown as typeof globalThis.fetch;
+  }
+
+  it("a key revoked at/before completed_at → binding revoked (overrides pinned)", async () => {
+    const receipt = await signedReceipt({ task_id: "t-rev", motebit_id: "mote-x" }); // completed_at 2000
+    const identity = identityFor("mote-x", receipt.public_key!);
+    const v = await verifyReceiptDocument(JSON.stringify(receipt), {
+      identity, // would otherwise be pinned
+      revocation: {
+        relayAnchorAddress: "RelayAddr",
+        lookup: { fetch: revocationFetch(receipt.public_key!, 1500) },
+      },
+    });
+    expect(v.integrity).toBe(true); // signature is still valid
+    expect(v.binding).toBe("revoked"); // but the key is poisoned
+    expect(v.revokedAt).toBe(1500);
+  });
+
+  it("a key revoked AFTER completed_at does not revoke (receipt predates revocation)", async () => {
+    const receipt = await signedReceipt({ task_id: "t-pre", motebit_id: "mote-x" }); // completed_at 2000
+    const identity = identityFor("mote-x", receipt.public_key!);
+    const v = await verifyReceiptDocument(JSON.stringify(receipt), {
+      identity,
+      revocation: {
+        relayAnchorAddress: "RelayAddr",
+        lookup: { fetch: revocationFetch(receipt.public_key!, 3000) }, // revoked later
+      },
+    });
+    expect(v.binding).toBe("pinned"); // legitimately signed before the revocation
+  });
+
+  it("an unknown revocation status (RPC fail) does not falsely revoke", async () => {
+    const receipt = await signedReceipt({ task_id: "t-unk", motebit_id: "mote-x" });
+    const identity = identityFor("mote-x", receipt.public_key!);
+    const failFetch = (async () => {
+      throw new Error("rpc down");
+    }) as unknown as typeof globalThis.fetch;
+    const v = await verifyReceiptDocument(JSON.stringify(receipt), {
+      identity,
+      revocation: { relayAnchorAddress: "RelayAddr", lookup: { fetch: failFetch } },
+    });
+    expect(v.binding).toBe("pinned"); // can't prove revoked ⇒ don't claim it
+  });
+
   it("carries a verified delegation through as a nested integrity-only result", async () => {
     const child = await signedReceipt({ task_id: "t-child", motebit_id: "mote-child" });
     // Sign the parent WITH the child embedded so the parent's signature covers

@@ -108,6 +108,8 @@ describe("resolveReceiptBinding", () => {
     expect(r!.anchor).toBeDefined();
     expect(r!.anchor!.proof.anchoredRoot).toBe("ab".repeat(32));
     expect(r!.anchor!.relayAnchorAddress).toBe(base58btcEncode(relayPub));
+    // Surfaced at top level too — used for the revocation scan even when un-anchored.
+    expect(r!.relayAnchorAddress).toBe(base58btcEncode(relayPub));
 
     // The reconstructed identity is verifier-usable: the current key binds at a
     // time after created_at.

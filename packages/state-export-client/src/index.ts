@@ -79,6 +79,9 @@ export type {
   IdentityAnchorFailureReason,
 } from "./identity-anchor.js";
 
+export { lookupKeyRevocation } from "./key-revocation.js";
+export type { KeyRevocationLookupOptions, KeyRevocationResult } from "./key-revocation.js";
+
 export { verifyInnerSignedReceipts } from "./inner-receipts.js";
 export type {
   InnerReceiptVerification,

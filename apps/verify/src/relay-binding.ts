@@ -56,6 +56,12 @@ export interface ResolveBindingOptions {
 
 export interface ResolvedBinding {
   readonly identity: MotebitIdentityFile;
+  /**
+   * The relay's pinned Solana address (base58 of its key). Always present — the
+   * caller uses it for the on-chain revocation scan even when the motebit isn't
+   * anchored (a revoked key poisons the integrity-only claim too).
+   */
+  readonly relayAnchorAddress: string;
   /** Present only when the relay has an on-chain-anchored binding for this motebit. */
   readonly anchor?: ReceiptAnchorOptions;
 }
@@ -153,7 +159,7 @@ export async function resolveReceiptBinding(
         ...(options.solanaRpc ? { rpcUrl: options.solanaRpc } : {}),
       },
     };
-    return { identity, anchor };
+    return { identity, relayAnchorAddress, anchor };
   }
-  return { identity };
+  return { identity, relayAnchorAddress };
 }

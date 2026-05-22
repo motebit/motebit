@@ -35,6 +35,7 @@ import {
   type MotebitIdentityFile,
 } from "@motebit/crypto";
 import { lookupIdentityLogAnchor, type IdentityAnchorLookupOptions } from "./identity-anchor.js";
+import { lookupKeyRevocation, type KeyRevocationLookupOptions } from "./key-revocation.js";
 
 /**
  * Identity-binding status — a ladder of increasing trust-minimization, per
@@ -46,8 +47,17 @@ import { lookupIdentityLogAnchor, type IdentityAnchorLookupOptions } from "./ide
  * identity-transparency log AND that log root is independently confirmed on-chain
  * — operator non-equivocation). The `"sovereign"` rung (id commits to a
  * seed-derived genesis key) arrives later.
+ *
+ * `"revoked"` is off the ladder — a poison verdict. The signature may be valid,
+ * but the signing key was revoked on-chain at/before the receipt's timestamp, so
+ * the producer claim must NOT be trusted. It overrides every other status.
  */
-export type ReceiptBindingStatus = "anchored" | "pinned" | "integrity-only" | "unverified";
+export type ReceiptBindingStatus =
+  | "revoked"
+  | "anchored"
+  | "pinned"
+  | "integrity-only"
+  | "unverified";
 
 export type ReceiptDocumentFailureReason =
   | "malformed_json"
@@ -75,6 +85,8 @@ export interface ReceiptDocumentVerification {
   readonly binding: ReceiptBindingStatus;
   /** The Solana tx that anchored the log root, when `binding === "anchored"`. */
   readonly anchorTxHash?: string;
+  /** When `binding === "revoked"`: the on-chain revocation timestamp (ms). */
+  readonly revokedAt?: number;
   /** `did:key:z…` derived from the signing key when integrity holds. */
   readonly signerDid?: string;
   /** The producing `motebit_id` as carried in the receipt body — a claim, not proof. */
@@ -182,6 +194,18 @@ export interface VerifyReceiptDocumentOptions {
    * `integrity-only`.
    */
   readonly anchor?: ReceiptAnchorOptions;
+  /**
+   * On-chain revocation check. The signing key is scanned for a revocation memo
+   * at the relay's pinned address (read from the neutral chain, NOT the relay's
+   * word — the relay could hide a revocation that protects it). If the key was
+   * revoked at/before the receipt's `completed_at`, `binding` is `"revoked"`,
+   * overriding every other rung. Requires no `identity` — a revoked key poisons
+   * even the integrity-only claim.
+   */
+  readonly revocation?: {
+    readonly relayAnchorAddress: string;
+    readonly lookup?: KeyRevocationLookupOptions;
+  };
 }
 
 /**
@@ -262,13 +286,28 @@ export async function verifyReceiptDocument(
     };
   }
   const view = toView(await verifyReceipt(parsed));
-  if (view.integrity && options?.identity) {
-    if (options.anchor) {
-      const anchored = await anchoredBinding(parsed, options.identity, options.anchor);
-      if (anchored) return { ...view, binding: "anchored", anchorTxHash: anchored.txHash };
+  if (view.integrity) {
+    // Revocation is a poison verdict — check it first, independent of `identity`.
+    // A key revoked on-chain at/before completed_at must not bind, no matter what
+    // the succession chain says.
+    if (options?.revocation && typeof parsed.public_key === "string") {
+      const rev = await lookupKeyRevocation(
+        options.revocation.relayAnchorAddress,
+        parsed.public_key,
+        options.revocation.lookup,
+      );
+      if (rev.status === "revoked" && rev.revokedAt <= parsed.completed_at) {
+        return { ...view, binding: "revoked", revokedAt: rev.revokedAt };
+      }
     }
-    const pinned = await pinnedBinding(parsed, options.identity);
-    if (pinned) return { ...view, binding: pinned };
+    if (options?.identity) {
+      if (options.anchor) {
+        const anchored = await anchoredBinding(parsed, options.identity, options.anchor);
+        if (anchored) return { ...view, binding: "anchored", anchorTxHash: anchored.txHash };
+      }
+      const pinned = await pinnedBinding(parsed, options.identity);
+      if (pinned) return { ...view, binding: pinned };
+    }
   }
   return view;
 }

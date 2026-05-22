@@ -56,6 +56,17 @@ describe("renderResult", () => {
     expect(el.querySelector(".tier-warn")).toBeNull(); // binding is a positive, not a caveat
   });
 
+  it("revoked → red tone, revoked tier (fail), motebit_id NOT proven, revoked-at shown", () => {
+    const el = renderResult(view({ binding: "revoked", revokedAt: 1500 }));
+    expect(el.classList.contains("tone-failed")).toBe(true);
+    expect(el.textContent).toContain("do not trust");
+    expect(el.querySelector(".tier-fail")?.textContent).toContain("revoked");
+    const labels = Array.from(el.querySelectorAll(".meta-label")).map((n) => n.textContent);
+    expect(labels).toContain("claims to be"); // poisoned claim, never "motebit"
+    expect(labels).not.toContain("motebit");
+    expect(labels).toContain("key revoked at");
+  });
+
   it("failed → red tone, no identity meta shown", () => {
     const el = renderResult({
       integrity: false,

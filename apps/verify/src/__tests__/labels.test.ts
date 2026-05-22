@@ -33,6 +33,14 @@ describe("resultLabels", () => {
     expect(l.detail).toContain("two verifiers different chains");
   });
 
+  it("revoked is the loudest verdict — failed tone, do-not-trust, even with valid integrity", () => {
+    const l = resultLabels(ok({ binding: "revoked", revokedAt: 1500 }));
+    expect(l.tone).toBe("failed");
+    expect(l.headline.toLowerCase()).toContain("revoked");
+    expect(l.headline.toLowerCase()).toContain("do not trust");
+    expect(l.detail.toLowerCase()).toContain("revoked");
+  });
+
   it("failed signature reads as altered/forged, not a vague error", () => {
     const l = resultLabels({
       integrity: false,

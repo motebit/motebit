@@ -40,6 +40,12 @@ async function run(): Promise<void> {
         view = await verifyReceiptDocument(text, {
           identity: resolved.identity,
           ...(resolved.anchor ? { anchor: resolved.anchor } : {}),
+          // Always scan for an on-chain revocation of the signing key — a revoked
+          // key poisons the binding even for an un-anchored motebit.
+          revocation: {
+            relayAnchorAddress: resolved.relayAnchorAddress,
+            lookup: SOLANA_RPC ? { rpcUrl: SOLANA_RPC } : {},
+          },
         });
       }
     }

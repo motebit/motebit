@@ -30,6 +30,16 @@ const FAILURE_DETAIL: Record<ReceiptDocumentFailureReason, string> = {
 };
 
 export function resultLabels(v: ReceiptDocumentVerification): ResultLabels {
+  // Revoked is the loudest verdict — the signature may be valid, but the signing
+  // key was revoked on-chain at/before this receipt. Check it before everything.
+  if (v.binding === "revoked") {
+    return {
+      tone: "failed",
+      headline: "Key revoked — do not trust",
+      detail:
+        "The signature matches, but the signing key was revoked on-chain at or before this receipt's time. A revoked key signals compromise or retirement — do not trust this receipt's identity claim, even though the bytes are intact.",
+    };
+  }
   if (!v.integrity) {
     return {
       tone: "failed",

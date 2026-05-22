@@ -64,7 +64,9 @@ import { verifyReceiptDocument } from "@motebit/state-export-client";
 
 const v = await verifyReceiptDocument(pastedJsonText);
 
-if (!v.integrity) {
+if (v.binding === "revoked") {
+  show(`Key revoked — do not trust (revoked at ${new Date(v.revokedAt!).toISOString()})`);
+} else if (!v.integrity) {
   show(`Verification failed: ${v.reason}`); // malformed_json | not_a_receipt | signature_invalid | …
 } else if (v.binding === "anchored" || v.binding === "pinned") {
   show(`Verified — from ${v.motebitId}`); // key bound to the motebit (anchored adds on-chain non-equivocation)
@@ -76,7 +78,7 @@ if (!v.integrity) {
 }
 ```
 
-`verifyReceiptDocument` is the brain behind a public, login-free receipt verifier. It runs entirely offline (no relay) for the integrity check, never throws on bad input (typed `reason`s instead), and keeps **integrity** (the bytes were signed, untampered) strictly separate from **binding** (the key belongs to this `motebitId`). The binding ladder: `integrity-only` (no options) < `pinned` (pass `options.identity` — the key is time-valid in the motebit's own succession chain) < `anchored` (also pass `options.anchor` — the binding is in the relay's transparency log AND that root is independently confirmed on-chain). Never render "from &lt;motebit&gt;" below `pinned`.
+`verifyReceiptDocument` is the brain behind a public, login-free receipt verifier. It runs entirely offline (no relay) for the integrity check, never throws on bad input (typed `reason`s instead), and keeps **integrity** (the bytes were signed, untampered) strictly separate from **binding** (the key belongs to this `motebitId`). The binding ladder: `integrity-only` (no options) < `pinned` (pass `options.identity` — the key is time-valid in the motebit's own succession chain) < `anchored` (also pass `options.anchor` — the binding is in the relay's transparency log AND that root is independently confirmed on-chain). Never render "from &lt;motebit&gt;" below `pinned`. `revoked` is off the ladder — a poison verdict: pass `options.revocation` and if the signing key has an on-chain revocation memo dated at/before the receipt, `binding` is `revoked` regardless of everything else (read from the neutral chain, never the relay's word).
 
 ## Trust-anchor chain
 
@@ -129,19 +131,20 @@ const v = await verifyReceiptDocument(pastedJsonText, {
 
 ## Programmatic surface
 
-| Export                                                     | Kind     | Role                                                                                                                                |
-| ---------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `fetchTransparencyAnchor(baseUrl, opts?)`                  | function | TOFU bootstrap — fetch `/.well-known/motebit-transparency.json`, verify self-signature, return pinned `TransparencyAnchor`          |
-| `verifyTransparencyDeclaration(declaration)`               | function | Lower-level: verify a `SignedTransparencyDeclaration` from any source (cached, archived, fixture)                                   |
-| `verifiedStateExportFetch(url, opts)`                      | function | Wrap `fetch` — verify outer envelope against body bytes + optional anchor pin                                                       |
-| `verifyManifestAgainstBytes(manifest, bodyBytes, anchor?)` | function | Lower-level: verify a parsed `ContentArtifactManifest` against bytes you already have                                               |
-| `verifyInnerSignedReceipts(body)`                          | function | Recursive v1.1 inner-receipt audit — per-receipt verdict with typed failure reasons                                                 |
-| `verifyReceiptDocument(jsonText)`                          | function | Verify a pasted/standalone receipt offline — honest view model separating integrity from identity binding (powers receipt.computer) |
-| `lookupTransparencyAnchor(opts)`                           | function | Onchain — query Solana RPC for a Memo program transaction posting the declaration hash                                              |
-| `verifyDeclarationOnchainAnchor(declaration, anchor)`      | function | Onchain — verify the Memo transaction's signer and content match the declaration                                                    |
-| `lookupIdentityLogAnchor(address, root, opts?)`            | function | Onchain — confirm a transparency-log root sits on-chain at the pinned relay address (the `anchored` binding rung)                   |
-| `StateExportFetchError`                                    | class    | Thrown on non-2xx HTTP; verifier never attempts to verify error envelopes                                                           |
-| `MANIFEST_HEADER`                                          | constant | The header name (`"X-Motebit-Content-Manifest"`) — exposed for custom transports                                                    |
+| Export                                                     | Kind     | Role                                                                                                                                     |
+| ---------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `fetchTransparencyAnchor(baseUrl, opts?)`                  | function | TOFU bootstrap — fetch `/.well-known/motebit-transparency.json`, verify self-signature, return pinned `TransparencyAnchor`               |
+| `verifyTransparencyDeclaration(declaration)`               | function | Lower-level: verify a `SignedTransparencyDeclaration` from any source (cached, archived, fixture)                                        |
+| `verifiedStateExportFetch(url, opts)`                      | function | Wrap `fetch` — verify outer envelope against body bytes + optional anchor pin                                                            |
+| `verifyManifestAgainstBytes(manifest, bodyBytes, anchor?)` | function | Lower-level: verify a parsed `ContentArtifactManifest` against bytes you already have                                                    |
+| `verifyInnerSignedReceipts(body)`                          | function | Recursive v1.1 inner-receipt audit — per-receipt verdict with typed failure reasons                                                      |
+| `verifyReceiptDocument(jsonText)`                          | function | Verify a pasted/standalone receipt offline — honest view model separating integrity from identity binding (powers receipt.computer)      |
+| `lookupTransparencyAnchor(opts)`                           | function | Onchain — query Solana RPC for a Memo program transaction posting the declaration hash                                                   |
+| `verifyDeclarationOnchainAnchor(declaration, anchor)`      | function | Onchain — verify the Memo transaction's signer and content match the declaration                                                         |
+| `lookupIdentityLogAnchor(address, root, opts?)`            | function | Onchain — confirm a transparency-log root sits on-chain at the pinned relay address (the `anchored` binding rung)                        |
+| `lookupKeyRevocation(address, keyHex, opts?)`              | function | Onchain — find a `motebit:revocation:v1:` memo revoking a signing key (the `revoked` poison verdict; read from the chain, not the relay) |
+| `StateExportFetchError`                                    | class    | Thrown on non-2xx HTTP; verifier never attempts to verify error envelopes                                                                |
+| `MANIFEST_HEADER`                                          | constant | The header name (`"X-Motebit-Content-Manifest"`) — exposed for custom transports                                                         |
 
 All result types (`TransparencyAnchorResult`, `StateExportVerification`, `InnerReceiptsVerification`, etc.) and failure-reason unions are also exported — discriminated unions, type-narrowable by the `ok` / `valid` / `applicable` field.
 

@@ -69,17 +69,16 @@ export function renderResult(view: ReceiptDocumentVerification): HTMLElement {
   );
   if (view.integrity) {
     const bound = view.binding === "anchored" || view.binding === "pinned";
-    tiers.appendChild(
-      tierRow(
-        "identity binding",
-        view.binding === "anchored"
+    const bindingStatus =
+      view.binding === "revoked"
+        ? "revoked"
+        : view.binding === "anchored"
           ? "anchored on-chain"
           : view.binding === "pinned"
             ? "pinned"
-            : "not anchored",
-        bound ? "ok" : "warn",
-      ),
-    );
+            : "not anchored";
+    const bindingMark = view.binding === "revoked" ? "fail" : bound ? "ok" : "warn";
+    tiers.appendChild(tierRow("identity binding", bindingStatus, bindingMark));
     const kids = view.delegations ?? [];
     if (kids.length > 0) {
       const failed = kids.filter((k) => !k.integrity).length;
@@ -108,6 +107,10 @@ export function renderResult(view: ReceiptDocumentVerification): HTMLElement {
     // Provenance for the anchored rung: the Solana tx that posted the log root.
     if (view.binding === "anchored" && view.anchorTxHash) {
       meta.appendChild(row("anchored in tx", view.anchorTxHash));
+    }
+    // Revoked: when the key was revoked on-chain.
+    if (view.binding === "revoked" && view.revokedAt !== undefined) {
+      meta.appendChild(row("key revoked at", new Date(view.revokedAt).toISOString(), false));
     }
     card.appendChild(meta);
 
