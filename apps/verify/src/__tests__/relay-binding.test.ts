@@ -134,6 +134,22 @@ describe("resolveReceiptBinding", () => {
     expect(r!.identity.motebit_id).toBe("mote-x");
   });
 
+  it("reconstructs the guardian key so recovery rotations can be verified", async () => {
+    const guardianKey = "cd".repeat(32);
+    const withGuardian: IdentityBundle = { ...bundle(null), guardian_public_key: guardianKey };
+    const fetch = await routedFetch(withGuardian);
+    const r = await resolveReceiptBinding({ relayBase: RELAY, motebitId: "mote-x", fetch });
+    expect(r!.identity.guardian?.public_key).toBe(guardianKey);
+
+    // No guardian in the bundle → no guardian on the reconstructed identity.
+    const r2 = await resolveReceiptBinding({
+      relayBase: RELAY,
+      motebitId: "mote-x",
+      fetch: await routedFetch(bundle(null)),
+    });
+    expect(r2!.identity.guardian).toBeUndefined();
+  });
+
   it("fail-closed when the transparency anchor can't be fetched", async () => {
     const fetch = await routedFetch(bundle(ANCHORED), { declStatus: 404 });
     expect(

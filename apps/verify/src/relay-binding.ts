@@ -33,6 +33,8 @@ export interface IdentityBundle {
   readonly motebit_id: string;
   readonly created_at: string;
   readonly current_public_key: string;
+  /** Guardian public key (hex), if registered — needed to verify a recovery rotation. */
+  readonly guardian_public_key?: string;
   readonly succession: SuccessionRecord[];
   readonly anchored: {
     readonly proof: IdentityLogInclusionProof;
@@ -87,6 +89,11 @@ function reconstructIdentity(bundle: IdentityBundle): MotebitIdentityFile {
     created_at: bundle.created_at,
     owner_id: "",
     identity: { algorithm: "Ed25519", public_key: bundle.current_public_key },
+    // The guardian key is binding-relevant: verifyKeyBindingAtTime needs it to
+    // check a guardian-recovery rotation (the spec's key-compromise mechanism).
+    ...(bundle.guardian_public_key
+      ? { guardian: { public_key: bundle.guardian_public_key, established_at: bundle.created_at } }
+      : {}),
     governance: {
       trust_mode: "guarded",
       max_risk_auto: "0",

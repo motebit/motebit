@@ -70,7 +70,7 @@ describe("identity-transparency bundle", () => {
     // Controlled minimal schemas (independent of relay migrations).
     db.exec("DROP TABLE IF EXISTS agent_registry");
     db.exec(
-      "CREATE TABLE agent_registry (motebit_id TEXT PRIMARY KEY, public_key TEXT NOT NULL, registered_at INTEGER NOT NULL)",
+      "CREATE TABLE agent_registry (motebit_id TEXT PRIMARY KEY, public_key TEXT NOT NULL, registered_at INTEGER NOT NULL, guardian_public_key TEXT)",
     );
     db.exec("DROP TABLE IF EXISTS relay_key_successions");
     db.exec(
@@ -146,6 +146,20 @@ describe("identity-transparency bundle", () => {
   it("returns null for an unregistered motebit", async () => {
     register("mote-a", await key(), 1000);
     expect(await buildIdentityBindingBundle(db, "mote-unknown")).toBeNull();
+  });
+
+  it("carries the guardian public key when registered (needed to verify recovery rotations)", async () => {
+    const guardianKey = await key();
+    db.prepare(
+      "INSERT INTO agent_registry (motebit_id, public_key, registered_at, guardian_public_key) VALUES (?, ?, ?, ?)",
+    ).run("mote-g", await key(), 1000, guardianKey);
+    const withGuardian = await buildIdentityBindingBundle(db, "mote-g");
+    expect(withGuardian!.guardian_public_key).toBe(guardianKey);
+
+    // No guardian → field omitted (not null).
+    register("mote-ng", await key(), 1000);
+    const noGuardian = await buildIdentityBindingBundle(db, "mote-ng");
+    expect(noGuardian!.guardian_public_key).toBeUndefined();
   });
 
   it("readIdentityBindings reads agents; readSuccessionChain stamps the suite and omits empty fields", async () => {

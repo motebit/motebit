@@ -85,6 +85,13 @@ export interface IdentityBindingBundle {
   readonly created_at: string;
   /** The motebit's current identity public key (hex) — the chain head. */
   readonly current_public_key: string;
+  /**
+   * The motebit's guardian public key (hex), if it registered one. Required to
+   * verify a guardian-recovery rotation in the succession chain (the spec's
+   * key-compromise mechanism, §3.8.3) — without it a third party can't check a
+   * recovery link, so the whole chain fails to verify.
+   */
+  readonly guardian_public_key?: string;
   /** The self-signed rotation chain (genesis → current). Empty if never rotated. */
   readonly succession: SuccessionRecord[];
   /**
@@ -111,8 +118,12 @@ export async function buildIdentityBindingBundle(
   motebitId: string,
 ): Promise<IdentityBindingBundle | null> {
   const agent = db
-    .prepare("SELECT public_key, registered_at FROM agent_registry WHERE motebit_id = ?")
-    .get(motebitId) as { public_key: string; registered_at: number } | undefined;
+    .prepare(
+      "SELECT public_key, registered_at, guardian_public_key FROM agent_registry WHERE motebit_id = ?",
+    )
+    .get(motebitId) as
+    | { public_key: string; registered_at: number; guardian_public_key: string | null }
+    | undefined;
   if (!agent) return null;
 
   let anchored: AnchoredInclusion | null = null;
@@ -131,6 +142,7 @@ export async function buildIdentityBindingBundle(
     motebit_id: motebitId,
     created_at: new Date(agent.registered_at).toISOString(),
     current_public_key: agent.public_key,
+    ...(agent.guardian_public_key ? { guardian_public_key: agent.guardian_public_key } : {}),
     succession: readSuccessionChain(db, motebitId),
     anchored,
   };

@@ -1056,7 +1056,13 @@ export async function verifyKeyBindingAtTime(
   const currentKey = identity.identity.public_key;
 
   if (chain.length > 0) {
-    const chk = await verifySuccessionChain(chain, currentKey, guardianPublicKeyHex);
+    // A guardian-recovery rotation (the spec's key-compromise mechanism, §3.8.3)
+    // is guardian-signed, so verifying it needs the guardian key. Fall back to the
+    // identity file's own `guardian.public_key` when the caller doesn't pass one —
+    // otherwise a recovery chain carried in the identity file (e.g. served to a
+    // third-party verifier) would fail for lack of a key the file already names.
+    const guardianKey = guardianPublicKeyHex ?? identity.guardian?.public_key;
+    const chk = await verifySuccessionChain(chain, currentKey, guardianKey);
     if (!chk.valid) {
       return { bound: false, reason: chk.error ?? "succession chain invalid" };
     }

@@ -127,3 +127,96 @@ describe("verifyKeyBindingAtTime", () => {
     expect(r.reason).toMatch(/signature verification failed|invalid/);
   });
 });
+
+// A guardian-recovery rotation is the spec's key-compromise mechanism (§3.8.3):
+// the guardian signs the rotation away from the compromised key. It's the binding
+// ladder's "revocation" — the compromised key's window closes at the recovery, so
+// receipts dated after it must not bind. Verifying the recovery link needs the
+// guardian key; this exercises reading it from the identity file (the fix).
+async function recoveryRotation(
+  oldKp: KeyPair,
+  newKp: KeyPair,
+  guardianKp: KeyPair,
+  timestamp: number,
+): Promise<SuccessionRecord> {
+  const old_public_key = bytesToHex(oldKp.publicKey);
+  const new_public_key = bytesToHex(newKp.publicKey);
+  const reason = "guardian_recovery";
+  const msg = new TextEncoder().encode(
+    canonicalJson({
+      old_public_key,
+      new_public_key,
+      timestamp,
+      suite: SUITE,
+      reason,
+      recovery: true,
+    }),
+  );
+  return {
+    old_public_key,
+    new_public_key,
+    timestamp,
+    suite: SUITE,
+    reason,
+    recovery: true,
+    new_key_signature: bytesToHex(await signBySuite(SUITE, msg, newKp.privateKey)),
+    guardian_signature: bytesToHex(await signBySuite(SUITE, msg, guardianKp.privateKey)),
+  };
+}
+
+function identityWithGuardian(
+  currentKeyHex: string,
+  succession: SuccessionRecord[],
+  guardianKeyHex: string | undefined,
+): MotebitIdentityFile {
+  const base = identity(currentKeyHex, succession);
+  return guardianKeyHex
+    ? {
+        ...base,
+        guardian: { public_key: guardianKeyHex, established_at: new Date(T0).toISOString() },
+      }
+    : base;
+}
+
+describe("verifyKeyBindingAtTime — guardian-recovery (revocation via succession)", () => {
+  let compromised: KeyPair, recovered: KeyPair, guardian: KeyPair;
+  let chain: SuccessionRecord[];
+  let kComp: string, kRec: string, gKey: string;
+
+  beforeAll(async () => {
+    compromised = await generateKeypair();
+    recovered = await generateKeypair();
+    guardian = await generateKeypair();
+    kComp = bytesToHex(compromised.publicKey);
+    kRec = bytesToHex(recovered.publicKey);
+    gKey = bytesToHex(guardian.publicKey);
+    // Genesis key = the (later) compromised key; guardian recovers to a new key at T1.
+    chain = [await recoveryRotation(compromised, recovered, guardian, T1)];
+  });
+
+  it("with the guardian in the identity file, the recovery chain verifies", async () => {
+    const id = identityWithGuardian(kRec, chain, gKey);
+    // Recovered key binds after the recovery rotation.
+    expect((await verifyKeyBindingAtTime(id, kRec, T1 + DAY)).bound).toBe(true);
+  });
+
+  it("the compromised key does NOT bind after the recovery (its window closed)", async () => {
+    const id = identityWithGuardian(kRec, chain, gKey);
+    const after = await verifyKeyBindingAtTime(id, kComp, T1 + DAY);
+    expect(after.bound).toBe(false);
+    expect(after.reason).toContain("not active");
+    // But receipts it legitimately signed BEFORE the recovery still bind.
+    expect((await verifyKeyBindingAtTime(id, kComp, T0 + DAY)).bound).toBe(true);
+  });
+
+  it("WITHOUT the guardian (no field, no param), the recovery chain fails to verify", async () => {
+    const id = identityWithGuardian(kRec, chain, undefined);
+    const r = await verifyKeyBindingAtTime(id, kRec, T1 + DAY);
+    expect(r.bound).toBe(false); // the fix is what makes the guardian-in-file case pass
+  });
+
+  it("an explicit guardian param still works and overrides the file", async () => {
+    const id = identityWithGuardian(kRec, chain, undefined);
+    expect((await verifyKeyBindingAtTime(id, kRec, T1 + DAY, gKey)).bound).toBe(true);
+  });
+});
