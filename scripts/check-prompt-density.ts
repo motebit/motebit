@@ -88,8 +88,19 @@ const DOCTRINE_PATH = "docs/doctrine/runtime-invariants-over-prompt-rules.md";
  *     typed-truth field. Third graduation of
  *     runtime-invariants-over-prompt-rules and first slice of PR 1
  *     of the agent-surface pivot. Doctrine: chrome-as-state-render.
+ *
+ *   - 64 → 65 (2026-05-23): episodic-eager extraction — a "WHAT TO TAG"
+ *     clause inviting interest/trajectory memories tagged Episodic.
+ *     **B-grade (knowingly teaching).** Memory-worthiness ("what's worth
+ *     remembering about the user") is irreducibly a model judgment — the
+ *     runtime cannot guarantee "capture the user's intellectual
+ *     trajectory"; it only BOUNDS the result (low confidence 0.5-0.65 +
+ *     decay + sensitivity gating), which it already does. The
+ *     architecture (Episodic MemoryType, extractMemoryTags episodic
+ *     parsing, confidence-decay) was already in place; this clause
+ *     teaches the model to use it. Doctrine: memory-architecture.md.
  */
-const BASELINE = 64;
+const BASELINE = 65;
 
 function countRuleClauses(source: string): number {
   let count = 0;
