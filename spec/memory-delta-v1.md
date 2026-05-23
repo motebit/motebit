@@ -63,6 +63,19 @@ Given a complete event log in timestamp + `version_clock` order, a conforming im
 
 Every memory event carries `motebit_id`. The event log substrate (`@motebit/event-log`) signs the log tail with the motebit's Ed25519 identity key; any receiver verifying a synced batch verifies the signed tail before accepting the batch. The signing and verification primitives are in `@motebit/event-log` and `@motebit/crypto` respectively — this spec does not re-specify them.
 
+### §3.5 Bi-temporal validity invariant
+
+A memory carries two independent time dimensions, and a conforming implementation MUST NOT conflate them:
+
+- **Recording time** — when the motebit learned the memory. Carried by the wrapping `EventLogEntry` timestamp (Unix ms); already mandatory under §3.1.
+- **Validity time** — when the fact the memory asserts is true in the world. Carried by the OPTIONAL `valid_from` / `valid_until` fields on `MemoryFormedPayload` (§5.1).
+
+Validity fields are optional. A node without them is valid from its recording time with an open upper bound (`valid_until = null`); 1.0/1.1 logs therefore replay identically (§3.2 preserved). This separation is what lets a **backdated** memory record a `valid_from` earlier than its recording time (e.g. a fact learned in 2026 that was true from 2024) without violating the append-only invariant.
+
+Supersession is invalidation-with-provenance, never mutation. On a `memory_consolidated` event with `action: "supersede"` (§5.5), a conforming implementation MUST set the superseded node's `valid_until` to the validity-time at which its belief ceased to hold (the event's `superseded_valid_until`, defaulting to the superseding node's `valid_from`, or the event recording time if neither is given). It MUST NOT alter the superseded node's `content`, and the `Supersedes` relation (provenance) is retained. True removal remains `memory_deleted` (§5.4).
+
+As-of reconstruction: given a query validity-time `T`, a conforming implementation resolves "what was believed valid at `T`" by selecting live nodes whose `[valid_from, valid_until)` interval contains `T`. "Current memory" is the special case `T = now`. A memory's validity is therefore an attestable, point-in-time property — the same `recorded time ≠ effective time` separation the identity layer uses for backdated key revocation (`compromised_at`).
+
 ---
 
 ## 4. Event Taxonomy
@@ -111,6 +124,8 @@ Fields:
 - `sensitivity` (`SensitivityLevel`, required) — One of `"none" | "personal" | "medical" | "financial" | "secret"`. Emitter-authored. §3.3 governs forwarding policy.
 - `redacted` (`true`, optional) — Present only after a sync forwarder has replaced `content`. Original events MUST NOT carry this field.
 - `redacted_sensitivity` (`SensitivityLevel`, optional) — Present when `redacted === true` so downstream receivers retain the policy classification even without content.
+- `valid_from` (number, optional) — Unix ms. Validity-time start of the asserted fact (§3.5) — when it became true in the world, which MAY predate the recording timestamp (backdated memory). Absent ⇒ the wrapping event's recording timestamp.
+- `valid_until` (number | null, optional) — Unix ms, or `null`. Validity-time end of the asserted fact. Absent or `null` ⇒ an open interval (still true). A later `memory_consolidated` supersession (§5.5) is the normal way this transitions from open to closed.
 
 ### 5.2 — MemoryAccessedPayload
 
@@ -183,6 +198,7 @@ Fields:
 - `existing_node_id` (string | null, required) — The UUID of the node being merged into or superseded. `null` for `"accept"` and `"reject"` actions.
 - `new_node_id` (string | null, required) — The UUID of the newly-formed node. `null` for `"reject"` and `"supersede"`-in-place actions. When present, a corresponding `memory_formed` event MUST precede this event in the log.
 - `reason` (string, required) — Free-text rationale. Consumers MUST NOT parse it semantically. Implementations MAY truncate to a bounded length over the wire.
+- `superseded_valid_until` (number | null, optional) — Present only on `"supersede"` actions. Unix ms validity-time at which the superseded (`existing_node_id`) belief ceased to hold; a conforming consumer sets `valid_until` on that node to this value (§3.5). Absent ⇒ defaults to the superseding node's `valid_from`, or this event's recording time. This carries the value onto the existing node — it does NOT introduce a separate invalidation field on the wire.
 
 ### 5.6 — MemoryAuditPayload
 
@@ -295,7 +311,8 @@ Non-conformance modes and their consequences:
 
 ## Change Log
 
-| Version | Date       | Changes                                                                                                                                                                                                                                            |
-| ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1.0     | 2026-04-19 | Initial spec.                                                                                                                                                                                                                                      |
-| 1.1     | 2026-04-19 | Additive: `memory_promoted` event type + `MemoryPromotedPayload` (§5.8) for the tentative→absolute state transition. Reference heuristic in `@motebit/memory-graph/promotion.ts`. Paired with the Layer-1 memory index (always-loaded projection). |
+| Version | Date       | Changes                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.0     | 2026-04-19 | Initial spec.                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 1.1     | 2026-04-19 | Additive: `memory_promoted` event type + `MemoryPromotedPayload` (§5.8) for the tentative→absolute state transition. Reference heuristic in `@motebit/memory-graph/promotion.ts`. Paired with the Layer-1 memory index (always-loaded projection).                                                                                                                                                                                                   |
+| 1.2     | 2026-05-23 | Additive: bi-temporal validity (§3.5). Optional `valid_from` / `valid_until` on `MemoryFormedPayload` (§5.1) and `superseded_valid_until` on `MemoryConsolidatedPayload` (§5.5) separate recording time from validity time — enabling backdated memory and as-of reconstruction. All fields optional; 1.0/1.1 logs replay identically. Build target: `valid_from` / `valid_until` on `MemoryNode`. Doctrine: `docs/doctrine/memory-architecture.md`. |
