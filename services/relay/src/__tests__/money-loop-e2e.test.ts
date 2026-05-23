@@ -1,19 +1,21 @@
 /**
- * Money Loop E2E: The atomic proof of an agent economy.
+ * Money Loop E2E: the relay-custody money machinery, end-to-end.
  *
- * Proves the complete flow:
- *   deposit → discover → delegate → execute → receipt → settle → earn → withdraw
+ * Arc 3.5 closes deposit-funded relay-custody for paid CROSS-AGENT delegation —
+ * that path now settles P2P (delegator pays the worker onchain; see
+ * `p2p-cycle-e2e.test.ts` for the cross-agent earn flow). But the relay-custody
+ * money machinery itself — deposit → allocate → settle → platform fee →
+ * withdraw → reconcile — still runs for the surviving relay-custody paths
+ * (self-delegation, x402, multi-hop). This test exercises that machinery
+ * end-to-end via **self-delegation** (`submitted_by === worker`, a gate-exempt
+ * same-party flow): one agent funds itself, delegates to itself, the relay
+ * settles (taking the 5% fee), and the agent withdraws — the ledger reconciles
+ * throughout.
  *
- * Two agents on the same relay:
- *   - Delegator: has funds, needs web search done
- *   - Worker: priced service, earns from completing tasks
- *
- * After the loop completes:
- *   - Delegator's balance decreased by gross amount
- *   - Worker's balance increased by net amount (after 5% fee)
- *   - Platform fee captured
- *   - Worker can withdraw earnings with signed receipt
- *   - Ledger reconciles
+ * Coverage split after Arc 3.5:
+ *   - cross-agent paid earn flow → `p2p-cycle-e2e.test.ts` (P2P, onchain)
+ *   - allocation / credit / withdraw primitives → `virtual-accounts.test.ts` (unit)
+ *   - this file → the relay-custody integration loop survives via self-delegation
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
@@ -45,158 +47,120 @@ describe("Money Loop E2E", () => {
     await relay.close();
   });
 
-  it("complete money loop: deposit → delegate → receipt → settle → earn → withdraw → reconcile", async () => {
-    // === SETUP: Two agents ===
-    const workerKp = await generateKeypair();
-    const delegatorKp = await generateKeypair();
+  it("relay-custody money loop (self-delegation): deposit → settle → fee → withdraw → reconcile", async () => {
+    // === SETUP: one agent that delegates to itself ===
+    const kp = await generateKeypair();
+    const agent = await createAgent(relay, bytesToHex(kp.publicKey));
 
-    const worker = await createAgent(relay, bytesToHex(workerKp.publicKey));
-    const delegator = await createAgent(relay, bytesToHex(delegatorKp.publicKey));
-
-    // Register worker as a discoverable service agent
+    // Register as a priced service (it will delegate to itself).
     await relay.app.request("/api/v1/agents/register", {
       method: "POST",
       headers: JSON_AUTH,
       body: JSON.stringify({
-        motebit_id: worker.motebitId,
+        motebit_id: agent.motebitId,
         endpoint_url: "http://localhost:3200/mcp",
         capabilities: ["web_search"],
       }),
     });
-
-    // Create a priced service listing for the worker
-    const listingRes = await relay.app.request(`/api/v1/agents/${worker.motebitId}/listing`, {
+    const listingRes = await relay.app.request(`/api/v1/agents/${agent.motebitId}/listing`, {
       method: "POST",
       headers: JSON_AUTH,
       body: JSON.stringify({
         capabilities: ["web_search"],
         pricing: [{ capability: "web_search", unit_cost: 1.0, currency: "USD", per: "task" }],
         sla: { max_latency_ms: 5000, availability_guarantee: 0.99 },
-        description: "Web search service",
+        description: "Self-service web search",
         pay_to_address: "0x1234567890abcdef1234567890abcdef12345678",
       }),
     });
     expect(listingRes.status).toBe(200);
 
-    // === STEP 1: DEPOSIT — Delegator funds their account ===
-    const depositRes = await relay.app.request(`/api/v1/agents/${delegator.motebitId}/deposit`, {
+    // === STEP 1: DEPOSIT ===
+    const depositRes = await relay.app.request(`/api/v1/agents/${agent.motebitId}/deposit`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         amount: 10.0,
         reference: "initial-funding",
-        description: "Fund agent for delegation",
+        description: "Fund agent",
       }),
     });
     expect(depositRes.status).toBe(200);
-    const depositBody = (await depositRes.json()) as { balance: number };
-    expect(depositBody.balance).toBe(10.0);
+    expect(((await depositRes.json()) as { balance: number }).balance).toBe(10.0);
 
-    // === STEP 2: DISCOVER — Find the worker agent ===
-    const discoverRes = await relay.app.request(`/api/v1/agents/discover?capability=web_search`, {
-      headers: AUTH,
-    });
-    expect(discoverRes.status).toBe(200);
-    const discovered = (await discoverRes.json()) as {
-      agents: Array<{ motebit_id: string }>;
-    };
-    expect(discovered.agents.some((a) => a.motebit_id === worker.motebitId)).toBe(true);
-
-    // === STEP 3: DELEGATE — Submit a task (auto-debits delegator's balance) ===
-    const taskRes = await relay.app.request(`/agent/${worker.motebitId}/task`, {
+    // === STEP 2: SELF-DELEGATE — submitted_by === worker → gate-exempt, relay settles ===
+    const taskRes = await relay.app.request(`/agent/${agent.motebitId}/task`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
-        prompt: "search for motebit sovereign agents",
-        submitted_by: delegator.motebitId,
+        prompt: "self-delegated search",
+        submitted_by: agent.motebitId,
         required_capabilities: ["web_search"],
       }),
     });
     expect(taskRes.status).toBe(201);
-    const taskBody = (await taskRes.json()) as { task_id: string };
-    expect(taskBody.task_id).toBeDefined();
+    const { task_id } = (await taskRes.json()) as { task_id: string };
 
-    // Verify delegator balance was debited (allocation hold)
-    const midBalance = await relay.app.request(`/api/v1/agents/${delegator.motebitId}/balance`, {
-      headers: AUTH,
-    });
-    const midB = (await midBalance.json()) as { balance: number };
+    // Allocation locked → balance dropped below the deposit (gross hold).
+    const midB = (await (
+      await relay.app.request(`/api/v1/agents/${agent.motebitId}/balance`, { headers: AUTH })
+    ).json()) as { balance: number };
     expect(midB.balance).toBeLessThan(10.0);
-    // Funds were debited for allocation hold
-    expect(10.0 - midB.balance).toBeGreaterThan(0);
 
-    // === STEP 4: EXECUTE + RECEIPT — Worker completes and signs ===
+    // === STEP 3: RECEIPT + SETTLE ===
     const enc = new TextEncoder();
-    const promptHash = await sha256(enc.encode("search for motebit sovereign agents"));
-    const resultHash = await sha256(
-      enc.encode("Search results: motebit is a sovereign agent protocol"),
-    );
-
-    const unsignedReceipt = {
-      task_id: taskBody.task_id,
-      relay_task_id: taskBody.task_id,
-      motebit_id: worker.motebitId as unknown as MotebitId,
-      device_id: "web-search-service" as unknown as DeviceId,
-      submitted_at: Date.now() - 1000,
-      completed_at: Date.now(),
-      status: "completed" as const,
-      result: "Search results: motebit is a sovereign agent protocol",
-      tools_used: ["web_search"],
-      memories_formed: 0,
-      prompt_hash: promptHash,
-      result_hash: resultHash,
-    };
-    const signedReceipt = await signExecutionReceipt(unsignedReceipt, workerKp.privateKey);
-
-    // === STEP 5: SETTLE — Submit receipt, relay verifies and settles ===
-    const receiptRes = await relay.app.request(
-      `/agent/${worker.motebitId}/task/${taskBody.task_id}/result`,
+    const signedReceipt = await signExecutionReceipt(
       {
-        method: "POST",
-        headers: JSON_AUTH,
-        body: JSON.stringify(signedReceipt),
+        task_id,
+        relay_task_id: task_id,
+        motebit_id: agent.motebitId as unknown as MotebitId,
+        device_id: "web-search-service" as unknown as DeviceId,
+        submitted_at: Date.now() - 1000,
+        completed_at: Date.now(),
+        status: "completed" as const,
+        result: "Search results: motebit is a sovereign agent protocol",
+        tools_used: ["web_search"],
+        memories_formed: 0,
+        prompt_hash: await sha256(enc.encode("self-delegated search")),
+        result_hash: await sha256(
+          enc.encode("Search results: motebit is a sovereign agent protocol"),
+        ),
       },
+      kp.privateKey,
     );
+    const receiptRes = await relay.app.request(`/agent/${agent.motebitId}/task/${task_id}/result`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify(signedReceipt),
+    });
     expect(receiptRes.status).toBe(200);
 
-    // === STEP 6: VERIFY EARNINGS — Worker earned, platform took fee ===
-    const workerBalance = await relay.app.request(`/api/v1/agents/${worker.motebitId}/balance`, {
-      headers: AUTH,
-    });
-    const workerB = (await workerBalance.json()) as {
-      balance: number;
-      transactions: Array<{ type: string; amount: number }>;
-    };
-
-    // Worker should have earned (net after platform fee)
-    expect(workerB.balance).toBeGreaterThan(0);
-    const creditTxn = workerB.transactions.find((t) => t.type === "settlement_credit");
+    // === STEP 4: VERIFY MACHINERY — net credited back to the agent, only the 5% fee left the loop ===
+    const afterB = (await (
+      await relay.app.request(`/api/v1/agents/${agent.motebitId}/balance`, { headers: AUTH })
+    ).json()) as { balance: number; transactions: Array<{ type: string; amount: number }> };
+    // Self-delegation: gross was locked, net was credited back, the platform fee
+    // is the only net outflow. balance = 10 - gross + net = 10 - fee (~$0.05).
+    expect(afterB.balance).toBeLessThan(10.0); // fee was captured
+    expect(afterB.balance).toBeGreaterThan(9.0); // only the ~5% fee left the loop
+    const creditTxn = afterB.transactions.find((t) => t.type === "settlement_credit");
     expect(creditTxn).toBeDefined();
     expect(creditTxn!.amount).toBeGreaterThan(0);
 
-    // Platform fee: what delegator paid - what worker earned
-    const delegatorFinal = await relay.app.request(
-      `/api/v1/agents/${delegator.motebitId}/balance`,
-      { headers: AUTH },
-    );
-    const delegatorB = (await delegatorFinal.json()) as { balance: number };
-    const delegatorPaid = 10.0 - delegatorB.balance;
-    const platformFee = delegatorPaid - workerB.balance;
-    expect(platformFee).toBeGreaterThan(0);
+    // The platform fee is non-zero (relay captured it).
+    expect(10.0 - afterB.balance).toBeGreaterThan(0);
 
-    // === STEP 7: WITHDRAW — Worker withdraws earnings ===
-    // Back-date settlement to clear the 24h dispute window hold.
-    // In production, workers wait 24h before withdrawing recent earnings.
+    // === STEP 5: WITHDRAW (back-date to clear the 24h dispute-window hold) ===
     relay.moteDb.db
       .prepare("UPDATE relay_settlements SET settled_at = ? WHERE motebit_id = ?")
-      .run(Date.now() - 25 * 60 * 60 * 1000, worker.motebitId);
+      .run(Date.now() - 25 * 60 * 60 * 1000, agent.motebitId);
 
-    const withdrawRes = await relay.app.request(`/api/v1/agents/${worker.motebitId}/withdraw`, {
+    const withdrawRes = await relay.app.request(`/api/v1/agents/${agent.motebitId}/withdraw`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
-        amount: workerB.balance,
-        destination: "0xWorkerWallet",
+        amount: afterB.balance,
+        destination: "0xAgentWallet",
         idempotency_key: "first-withdrawal",
       }),
     });
@@ -205,17 +169,8 @@ describe("Money Loop E2E", () => {
       withdrawal: { withdrawal_id: string; status: string; amount: number };
     };
     expect(withdrawal.withdrawal.status).toBe("pending");
-    expect(withdrawal.withdrawal.amount).toBe(workerB.balance);
 
-    // Worker balance is now 0 (funds held for withdrawal)
-    const workerAfterWithdraw = await relay.app.request(
-      `/api/v1/agents/${worker.motebitId}/balance`,
-      { headers: AUTH },
-    );
-    const workerAfterB = (await workerAfterWithdraw.json()) as { balance: number };
-    expect(workerAfterB.balance).toBe(0);
-
-    // === STEP 8: ADMIN COMPLETES — Payout confirmed with signed receipt ===
+    // === STEP 6: ADMIN COMPLETES ===
     const completeRes = await relay.app.request(
       `/api/v1/admin/withdrawals/${withdrawal.withdrawal.withdrawal_id}/complete`,
       {
@@ -229,24 +184,11 @@ describe("Money Loop E2E", () => {
       },
     );
     expect(completeRes.status).toBe(200);
-    const completeBody = (await completeRes.json()) as {
-      status: string;
-      relay_signature: string;
-      relay_public_key: string;
-    };
-    expect(completeBody.status).toBe("completed");
-    expect(completeBody.relay_signature).toBeDefined();
-    expect(completeBody.relay_public_key).toBeDefined();
+    expect(((await completeRes.json()) as { status: string }).status).toBe("completed");
 
-    // === STEP 9: RECONCILE — Ledger is consistent ===
+    // === STEP 7: RECONCILE — ledger is consistent ===
     const reconciliation = reconcileLedger(relay.moteDb.db);
     expect(reconciliation.consistent).toBe(true);
     expect(reconciliation.errors).toHaveLength(0);
-
-    // === THE LOOP IS PROVEN ===
-    // An agent deposited funds, discovered a service, delegated a task,
-    // the service executed it, signed a receipt, the relay verified and
-    // settled, the service earned money, withdrew it with a signed receipt,
-    // and the ledger reconciles. This is an agent economy.
   });
 });
