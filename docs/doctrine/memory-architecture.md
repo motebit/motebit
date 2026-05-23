@@ -50,7 +50,7 @@ The in-store layer is **already built**: `MemoryContent.valid_from` / `valid_unt
 
 This is the same move motebit already trusts for **key revocation** — the effective `compromised_at` differs from the relay's recording time (the backdated-revocation work). `recorded time ≠ effective time`, applied to the interior. And it composes with the self-attesting thesis: a memory's validity interval becomes an **attestable** property — memory as auditable as a receipt.
 
-Two pieces are NOT yet built, and they are the protocol-grade half: (1) **wire emission** — the `memory_formed` and `memory_consolidated` events do not yet carry `valid_from` / `valid_until` / `superseded_valid_until`, so validity is local-only and does not sync across devices or federation (specced in [`spec/memory-delta-v1.md`](../../spec/memory-delta-v1.md) §3.5 / §5.1 / §5.5, emission pending); (2) **point-in-time as-of-T retrieval** — recall is hardcoded to `now` plus an all-or-nothing `includeExpired`, so it answers "current" and "all history" but not yet "what did I believe as of date `T`" (`valid_from ≤ T < valid_until`). Those two are the live deltas.
+Both protocol-grade pieces now ship: (1) **wire emission** — `memory_formed` carries `valid_from`/`valid_until` and `memory_consolidated` carries `superseded_valid_until` (spec [`memory-delta-v1.md`](../../spec/memory-delta-v1.md) §3.5/§5.1/§5.5), so validity syncs across devices and federation, not just locally; (2) **point-in-time as-of-`T` retrieval** — `recallRelevantCore`'s `asOf` option + the shared `isValidAt(node, t)` predicate select nodes whose `[valid_from, valid_until)` interval contains `T`, so recall answers "current," "all history," AND "what did I believe as of date `T`." Bi-temporal validity is therefore end-to-end.
 
 ## Sovereign, signed, sensitive — the moat layer
 
@@ -58,7 +58,7 @@ What the commodity shape structurally cannot have:
 
 - **Sovereign.** Memory is interior structure bound to the motebit's keypair, owned by the user — not a vendor's hosted store. Restoring the seed restores the memory's owner.
 - **Sensitive, fail-closed.** Sensitivity (`none` / `personal` / `medical` / `financial` / `secret`) is carried on every candidate and node; medical/financial/secret never reach external AI; retention obeys `MAX_RETENTION_DAYS_BY_SENSITIVITY` cliffs ([`retention-policy.md`](retention-policy.md)). Privacy is memory _physics_, not a setting.
-- **Signed.** Consolidation emits a `memory_consolidated` event (a registered `EventType`); the end state makes it a first-class signed artifact, so the memory's evolution is itself verifiable.
+- **Signed.** Each memory consolidation _cycle_ emits a signed `ConsolidationReceipt` (Ed25519/JCS via `signConsolidationReceipt`; portably verifiable with `verifyConsolidationReceipt`, no relay needed) attesting the cycle's `phases_run` (orient/gather/consolidate/prune/flush) + timing — Merkle-batched and anchored on-chain via `ConsolidationReceiptsAnchored`. The memory's _evolution_ is cryptographically attested at the cycle granularity (the meaningful unit), not per micro-decision. The per-decision `memory_consolidated` events ride the event log; the signed receipt is the cycle-level attestation.
 - **Self-auditing.** `notability.ts` scores memory health — **phantom** (isolated high-confidence belief), **conflict** (contradiction partner), **decay** (near-death) — through the `TrustSemiring`. Memory health and trust share one algebra.
 
 ## What must never happen
@@ -77,8 +77,7 @@ Shipped today: the typed graph, episodic/semantic nodes, the seven-edge taxonomy
 The deltas to reach the end-game (deliberate future work, in order):
 
 - **`DerivedFrom` edge** — provenance from a reflection-synthesized memory back to its source observations.
-- **Reliable bounded consolidation** — the idle cycle currently runs only when Proactive Interior is enabled; make it run by default within the governance bounds above.
-- **Signed `memory_consolidated`** — promote the consolidation event to a first-class signed artifact, fully realizing the "signed" leg.
+- **Reliable bounded consolidation** — the idle cycle currently runs only when Proactive Interior is enabled; make it run by default within the governance bounds above. This is the highest-leverage remaining delta: it activates not just episodic→semantic abstraction + curiosity, but also the _already-built_ signed `ConsolidationReceipt` emission + on-chain anchoring (which only fire when a cycle runs). The "signed" leg ships; this makes it fire.
 
 ## Cross-references
 
