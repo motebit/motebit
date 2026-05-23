@@ -554,6 +554,12 @@ function failureCopy(code: string, retryAfterSeconds?: number): string {
     }
     case "insufficient_balance":
       return "Insufficient balance. Open the Sovereign panel to fund the droplet.";
+    case "payment_proof_required":
+      // Arc 3.5 gate: that agent charges, and paid delegation settles
+      // peer-to-peer (the delegator pays the worker and fee onchain in one tx).
+      // This surface doesn't sign that payment yet — honest "not yet," not a
+      // funding problem. NOT "insufficient balance" (there may well be funds).
+      return "Paid delegation to that agent settles peer-to-peer onchain, which this surface can't sign yet.";
     case "trust_threshold_unmet":
       return "Trust below threshold for that capability. Reviews accumulate trust over time.";
     case "no_routing":

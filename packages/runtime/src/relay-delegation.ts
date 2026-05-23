@@ -39,6 +39,15 @@ export type DelegationErrorCode =
   | "rate_limited"
   /** Pre-flight. Relay returned HTTP 402 / INSUFFICIENT_FUNDS. */
   | "insufficient_balance"
+  /**
+   * Pre-flight. HTTP 402 / `TASK_P2P_PROOF_REQUIRED` — the Arc 3.5 gate. Paid
+   * direct delegation to a different worker must settle P2P: the submission
+   * needs a `payment_proof` (the delegator's atomic onchain worker + fee tx),
+   * which this client did not supply. Distinct from `insufficient_balance`
+   * (there are funds; the relay simply does not custody this flow). See
+   * `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3.5".
+   */
+  | "payment_proof_required"
   /** Pre-flight. Trust below the capability's threshold. */
   | "trust_threshold_unmet"
   /** Pre-flight. No agent advertises the capability. */
@@ -94,8 +103,13 @@ export interface SubmitAndPollParams {
 const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 2000;
 
-/** Map a relay error envelope to a `DelegationErrorCode`. */
-function classifyRelayError(
+/**
+ * Map a relay error envelope to a `DelegationErrorCode`. Exported so the
+ * code-mapping — in particular that `TASK_P2P_PROOF_REQUIRED` is distinguished
+ * from a bare 402 `insufficient_balance` — is unit-testable without a live
+ * relay; a reorder that lets the generic 402 swallow the gate code fails there.
+ */
+export function classifyRelayError(
   status: number,
   body: string,
   retryAfterHeader?: string | null,
@@ -119,6 +133,12 @@ function classifyRelayError(
   // 401 — auth expired / invalid.
   if (status === 401) {
     return { code: "auth_expired", message, status };
+  }
+  // 402 + TASK_P2P_PROOF_REQUIRED — the Arc 3.5 gate. Check before the generic
+  // 402 so a paid cross-agent delegation without a proof reports honestly
+  // ("this path settles P2P") instead of the misleading "insufficient balance."
+  if (relayCode === "TASK_P2P_PROOF_REQUIRED") {
+    return { code: "payment_proof_required", message, status };
   }
   // 402 — relay's economic-boundary signal.
   if (status === 402 || relayCode === "INSUFFICIENT_FUNDS") {
