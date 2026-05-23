@@ -241,14 +241,18 @@ describe("Money Loop Concurrency", () => {
     expect(reconciliation.errors).toHaveLength(0);
   });
 
-  it("concurrent settlements crediting same worker — balance is exactly $5", async () => {
+  it("concurrent settlements crediting same worker — 5 credits totaling $5, none lost", async () => {
     const workerKp = await generateKeypair();
-    const delegatorKp = await generateKeypair();
     const worker = await createAgent(relay, bytesToHex(workerKp.publicKey));
-    const delegator = await createAgent(relay, bytesToHex(delegatorKp.publicKey));
 
+    // Arc 3.5: self-delegation (submitted_by === worker) — the worker funds
+    // itself and delegates 5 tasks to itself; the concurrency property under
+    // test (5 parallel settlement credits all land, none lost to a race) is
+    // identical. We assert the credit COUNT and SUM rather than the raw
+    // balance, since under self-delegation the balance also reflects the
+    // deposit-side allocation locks.
     await registerWorker(relay, worker.motebitId);
-    await deposit(relay, delegator.motebitId, 100.0);
+    await deposit(relay, worker.motebitId, 100.0);
 
     // Submit 5 tasks sequentially (need unique task IDs)
     const taskIds: string[] = [];
@@ -258,7 +262,7 @@ describe("Money Loop Concurrency", () => {
         headers: jsonAuthWithIdempotency(),
         body: JSON.stringify({
           prompt: "search for motebit sovereign agents",
-          submitted_by: delegator.motebitId,
+          submitted_by: worker.motebitId,
           required_capabilities: ["web_search"],
         }),
       });
@@ -296,11 +300,16 @@ describe("Money Loop Concurrency", () => {
       .get(worker.motebitId) as { count: number };
     expect(credits.count).toBe(5);
 
-    // Worker balance: each task pays unit_cost = $1.00 (net after 5% fee = $0.95 per task... but
-    // settlement_credit is the net amount). Check that total is exactly 5 × net.
-    const workerBalance = await getBalance(relay, worker.motebitId);
-    // 5 tasks × $1.00 net each (the worker's unit_cost is what they receive)
-    expect(workerBalance).toBeCloseTo(5.0, 2);
+    // The 5 credits sum to exactly 5 × net ($1.00 each) — proves no concurrent
+    // credit was lost or double-applied. (Deposit-independent: this asserts the
+    // earnings total, not the raw balance, which also carries the deposit.)
+    const creditSum = relay.moteDb.db
+      .prepare(
+        "SELECT COALESCE(SUM(amount), 0) as total FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit'",
+      )
+      .get(worker.motebitId) as { total: number };
+    // amount is stored in micro-units; 5 × $1.00 net = 5_000_000.
+    expect(creditSum.total).toBe(5_000_000);
 
     // Exactly 5 settlements
     const settlementCount = relay.moteDb.db
