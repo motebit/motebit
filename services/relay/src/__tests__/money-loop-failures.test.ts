@@ -70,12 +70,19 @@ async function submitTask(
   workerMotebitId: string,
   delegatorMotebitId: string,
 ): Promise<{ taskId: string; status: number }> {
+  // Arc 3.5: paid direct delegation is now self-delegation in these failure
+  // tests (submitted_by === worker → gate-exempt same-party flow). They exercise
+  // the relay-custody failure machinery (stale-allocation cleanup, idempotency,
+  // signature rejection, withdrawal hold), which survives for self-delegation.
+  // The `delegatorMotebitId` arg is retained for call-site compatibility but the
+  // payer is the worker itself. Cross-agent paid flow → p2p-cycle-e2e.
+  void delegatorMotebitId;
   const res = await relay.app.request(`/agent/${workerMotebitId}/task`, {
     method: "POST",
     headers: jsonAuthWithIdempotency(),
     body: JSON.stringify({
       prompt: "search for motebit sovereign agents",
-      submitted_by: delegatorMotebitId,
+      submitted_by: workerMotebitId,
       required_capabilities: ["web_search"],
     }),
   });
@@ -142,20 +149,18 @@ describe("Money Loop Failure Injection", () => {
 
   it("worker disappears mid-task (no receipt) — allocation stays locked, stale cleanup returns funds", async () => {
     const workerKp = await generateKeypair();
-    const delegatorKp = await generateKeypair();
     const worker = await createAgent(relay, bytesToHex(workerKp.publicKey));
-    const delegator = await createAgent(relay, bytesToHex(delegatorKp.publicKey));
 
     await registerWorker(relay, worker.motebitId);
-    await deposit(relay, delegator.motebitId, 10.0);
+    await deposit(relay, worker.motebitId, 10.0);
 
     // Submit task — debits delegator
-    const { taskId, status } = await submitTask(relay, worker.motebitId, delegator.motebitId);
+    const { taskId, status } = await submitTask(relay, worker.motebitId, worker.motebitId);
     expect(status).toBe(201);
     expect(taskId).toBeTruthy();
 
     // Delegator balance decreased by the allocation hold
-    const midBalance = await getBalance(relay, delegator.motebitId);
+    const midBalance = await getBalance(relay, worker.motebitId);
     expect(midBalance).toBeLessThan(10.0);
     const lockedAmount = 10.0 - midBalance;
     expect(lockedAmount).toBeGreaterThan(0);
@@ -195,7 +200,7 @@ describe("Money Loop Failure Injection", () => {
     for (const a of staleAllocations) {
       creditAccount(
         relay.moteDb.db,
-        delegator.motebitId,
+        worker.motebitId,
         a.amount_locked,
         "allocation_release",
         a.allocation_id,
@@ -210,7 +215,7 @@ describe("Money Loop Failure Injection", () => {
     relay.moteDb.db.exec("COMMIT");
 
     // Funds returned to delegator
-    const afterBalance = await getBalance(relay, delegator.motebitId);
+    const afterBalance = await getBalance(relay, worker.motebitId);
     expect(afterBalance).toBeCloseTo(10.0, 2);
 
     // Allocation is now released
@@ -227,14 +232,12 @@ describe("Money Loop Failure Injection", () => {
 
   it("duplicate receipt submission — second is idempotent, worker credited once", async () => {
     const workerKp = await generateKeypair();
-    const delegatorKp = await generateKeypair();
     const worker = await createAgent(relay, bytesToHex(workerKp.publicKey));
-    const delegator = await createAgent(relay, bytesToHex(delegatorKp.publicKey));
 
     await registerWorker(relay, worker.motebitId);
-    await deposit(relay, delegator.motebitId, 10.0);
+    await deposit(relay, worker.motebitId, 10.0);
 
-    const { taskId } = await submitTask(relay, worker.motebitId, delegator.motebitId);
+    const { taskId } = await submitTask(relay, worker.motebitId, worker.motebitId);
     expect(taskId).toBeTruthy();
 
     const receipt = await buildSignedReceipt(taskId, worker.motebitId, workerKp.privateKey);
@@ -275,14 +278,12 @@ describe("Money Loop Failure Injection", () => {
   it("receipt with invalid signature — 403, no settlement, no balance change", async () => {
     const workerKp = await generateKeypair();
     const imposterKp = await generateKeypair(); // different keypair
-    const delegatorKp = await generateKeypair();
     const worker = await createAgent(relay, bytesToHex(workerKp.publicKey));
-    const delegator = await createAgent(relay, bytesToHex(delegatorKp.publicKey));
 
     await registerWorker(relay, worker.motebitId);
-    await deposit(relay, delegator.motebitId, 10.0);
+    await deposit(relay, worker.motebitId, 10.0);
 
-    const { taskId } = await submitTask(relay, worker.motebitId, delegator.motebitId);
+    const { taskId } = await submitTask(relay, worker.motebitId, worker.motebitId);
     expect(taskId).toBeTruthy();
 
     // Sign with the imposter's key, but claim to be the worker
@@ -297,9 +298,16 @@ describe("Money Loop Failure Injection", () => {
       .get(taskId) as { count: number };
     expect(settlements.count).toBe(0);
 
-    // Worker balance unchanged (still 0)
-    const workerBalance = await getBalance(relay, worker.motebitId);
-    expect(workerBalance).toBe(0);
+    // No settlement credit: the rejected receipt produced no earnings. Under
+    // self-delegation the worker is also the payer, so its balance reflects the
+    // still-locked allocation (< deposit) — what matters is that no
+    // settlement_credit transaction was written.
+    const credits = relay.moteDb.db
+      .prepare(
+        "SELECT COUNT(*) as count FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit'",
+      )
+      .get(worker.motebitId) as { count: number };
+    expect(credits.count).toBe(0);
 
     const reconciliation = reconcileLedger(relay.moteDb.db);
     expect(reconciliation.consistent).toBe(true);
@@ -326,11 +334,11 @@ describe("Money Loop Failure Injection", () => {
 
   it("withdrawal during pending allocation — only available balance is withdrawable", async () => {
     const agentKp = await generateKeypair();
-    const workerKp = await generateKeypair();
     const agent = await createAgent(relay, bytesToHex(agentKp.publicKey));
-    const worker = await createAgent(relay, bytesToHex(workerKp.publicKey));
 
-    await registerWorker(relay, worker.motebitId);
+    // Arc 3.5: the agent self-delegates (gate-exempt), locking its own balance
+    // across pending allocations — the withdrawal-hold machinery is identical.
+    await registerWorker(relay, agent.motebitId);
     await deposit(relay, agent.motebitId, 100.0);
 
     // Submit enough tasks to lock up ~$80 of the $100
@@ -338,7 +346,7 @@ describe("Money Loop Failure Injection", () => {
     // We need about 76 tasks to lock ~$80
     const taskIds: string[] = [];
     for (let i = 0; i < 76; i++) {
-      const { taskId, status } = await submitTask(relay, worker.motebitId, agent.motebitId);
+      const { taskId, status } = await submitTask(relay, agent.motebitId, agent.motebitId);
       if (status === 201) {
         taskIds.push(taskId);
       } else {
