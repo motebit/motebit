@@ -13,6 +13,8 @@ import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { format, resolveConfig } from "prettier";
+
 import { stampSchema } from "../src/spdx-stamp.js";
 import { buildAgentResolutionResultJsonSchema } from "../src/agent-resolution-result.js";
 import { buildAgentServiceListingJsonSchema } from "../src/agent-service-listing.js";
@@ -233,8 +235,17 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   },
 ];
 
+// Format output with the repo's Prettier config so the canonical writer
+// produces the canonical committed format. Without this, the raw
+// JSON.stringify output (expanded arrays) differs from the prettier-collapsed
+// form lint-staged commits — a cosmetic drift the semantic drift test can't
+// see, but one that gives anyone regenerating dozens of spurious diffs.
+const prettierOptions = (await resolveConfig(SCHEMA_DIR)) ?? {};
+
 for (const { filename, build } of SCHEMAS) {
   const outPath = join(SCHEMA_DIR, filename);
-  writeFileSync(outPath, JSON.stringify(stampSchema(build()), null, 2) + "\n", "utf-8");
+  const raw = JSON.stringify(stampSchema(build()), null, 2) + "\n";
+  const formatted = await format(raw, { ...prettierOptions, parser: "json" });
+  writeFileSync(outPath, formatted, "utf-8");
   console.log(`wrote ${outPath}`);
 }
