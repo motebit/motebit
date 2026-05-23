@@ -28,6 +28,7 @@ export {
   buildMemoryDigraph,
   relationTypeMultiplier,
   recallRelevantCore,
+  isValidAt,
 } from "./retrieval.js";
 export type {
   RecallRelevantOptions,

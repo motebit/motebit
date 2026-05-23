@@ -67,6 +67,29 @@ export interface RecallRelevantOptions {
   edgeDiscountFactor?: number;
   /** Include memories past valid_until. Default false. */
   includeExpired?: boolean;
+  /**
+   * Point-in-time recall: reconstruct "what was believed valid at `asOf`"
+   * (Unix ms) — selects nodes whose validity interval `[valid_from,
+   * valid_until)` contains `asOf`, including beliefs later superseded.
+   * Default is `Date.now()` (current memory). Bi-temporal validity,
+   * spec/memory-delta-v1.md §3.5. Ignored when `includeExpired` is set
+   * (which already returns all intervals).
+   */
+  asOf?: number;
+}
+
+/**
+ * Whether a node's validity interval `[valid_from, valid_until)` contains
+ * time `t`. A missing `valid_from` is treated as the open past (always
+ * started); a `null`/missing `valid_until` as the open future (still true).
+ * Legacy nodes (no validity fields) are therefore valid at every `t`, so
+ * pre-bi-temporal logs read identically.
+ */
+export function isValidAt(node: MemoryNode, t: number): boolean {
+  return (
+    (node.valid_from == null || node.valid_from <= t) &&
+    (node.valid_until == null || node.valid_until > t)
+  );
 }
 
 export interface ChainResult<T> {
@@ -222,6 +245,7 @@ export async function recallRelevantCore(params: {
     expandEdges = true,
     edgeDiscountFactor = 0.7,
     includeExpired = false,
+    asOf,
   } = options;
 
   const config = perCall ? { ...baseScoring, ...perCall } : baseScoring;
@@ -241,9 +265,8 @@ export async function recallRelevantCore(params: {
   });
 
   const now = Date.now();
-  const afterExpiry = includeExpired
-    ? candidates
-    : candidates.filter((n) => n.valid_until == null || n.valid_until > now);
+  const at = asOf ?? now;
+  const afterExpiry = includeExpired ? candidates : candidates.filter((n) => isValidAt(n, at));
 
   const scored = afterExpiry.map((node) => {
     const similarity = dotProduct(queryEmbedding, node.embedding);
@@ -273,8 +296,7 @@ export async function recallRelevantCore(params: {
         const neighbor = await storage.getNode(neighborId);
         if (!neighbor || neighbor.tombstoned) continue;
         if (sensitivityFilter && !sensitivityFilter.includes(neighbor.sensitivity)) continue;
-        if (!includeExpired && neighbor.valid_until != null && neighbor.valid_until <= now)
-          continue;
+        if (!includeExpired && !isValidAt(neighbor, at)) continue;
         const multiplier = relationTypeMultiplier(edge.relation_type);
         const neighborScore = ReliabilitySemiring.mul(
           parentScore,
