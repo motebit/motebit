@@ -25,6 +25,18 @@ import {
   createAgent,
 } from "./test-helpers.js";
 
+// Arc 3.5: both tests are relay-custody CROSS-AGENT fund-refund disputes — they
+// deposit, settle a paid cross-agent task into relay custody, then dispute and
+// move funds (refund / split). The gate now requires P2P for paid cross-agent
+// delegation, so a cross-agent relay-custody settlement can no longer be created
+// to dispute (x402-paid relay settlements survive but aren't test-drivable; self-
+// delegation has no opposing party to dispute). The SURVIVING dispute form — a
+// P2P trust-layer complaint with NO fund movement — is covered by
+// `p2p-cycle-e2e.test.ts` ("p2p dispute creates trust-layer complaint with no
+// fund movement"). The relay-custody dispute-refund LOGIC is preserved in code
+// (still reachable for x402 settlements); these E2E tests are skipped until a
+// drivable cross-agent relay-custody path exists. See off-ramp-as-user-action.md
+// § "Arc 3.5".
 describe("Dispute Cycle E2E", () => {
   let relay: SyncRelay;
 
@@ -36,7 +48,7 @@ describe("Dispute Cycle E2E", () => {
     await relay.close();
   });
 
-  it("settle → hold blocks → dispute → resolve refund → delegator withdraws", async () => {
+  it.skip("settle → hold blocks → dispute → resolve refund → delegator withdraws", async () => {
     // === SETUP ===
     const workerKp = await generateKeypair();
     const delegatorKp = await generateKeypair();
@@ -233,7 +245,7 @@ describe("Dispute Cycle E2E", () => {
     expect(reconciliation.errors).toHaveLength(0);
   });
 
-  it("settle → dispute → resolve split → both parties credited", async () => {
+  it.skip("settle → dispute → resolve split → both parties credited", async () => {
     // === SETUP (same as above) ===
     const workerKp = await generateKeypair();
     const delegatorKp = await generateKeypair();

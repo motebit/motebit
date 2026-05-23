@@ -1767,26 +1767,27 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       });
     }
 
-    // === Arc 3.5: P2P-by-default submission gate (LANDS LAST) ===
-    // The enforcing gate is added in the FINAL commit of this arc, once every
-    // E2E test that exercised the relay-custody path supplies a P2P proof (or
-    // is re-scoped). Test-first ordering keeps the suite green at every step.
-    // VALIDATED: with this predicate active, the migrated Group-1 files pass
-    // and the un-migrated relay-custody delegations 402.
-    // Predicate when it lands:
-    //   settlementMode === "relay" && x402TxHash == null &&
-    //   unitCostAtSubmission > 0 && submittedBy != null && submittedBy !== motebitId
-    // True submission carve-outs (do not reach the gate): zero-cost
+    // === Arc 3.5: P2P-by-default submission gate ===
+    // Paid direct delegation to a different worker MUST settle P2P. True
+    // submission carve-outs (do not reach the gate): zero-cost
     // (`unitCostAtSubmission === 0`), self-delegation (`submittedBy === motebitId`),
-    // x402-paid (own onchain proof; not test-drivable today). NOTE: multi-hop is
-    // NOT a submission carve-out — a sub-delegation (B→C) is a real
-    // `POST /agent/C/task` submission (it must be in `taskQueue` for
-    // `settleSubReceipt` at ~567 to settle it), so a *paid* sub-hop is gated
-    // exactly like a direct delegation and needs its own P2P proof. Only the
-    // sub-receipt *settlement-write* (`settleSubReceipt`, ~665) is relay-mode,
-    // and that path is now a residual of the pre-gate topology — reconciling it
-    // to honor the sub-task's submitted mode is the deferred multi-hop-as-P2P
-    // arc. See `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3.5".
+    // x402-paid (own onchain proof). Multi-hop is NOT a carve-out — a paid
+    // sub-delegation (B→C) is a real `POST /agent/C/task` submission and is
+    // gated like any direct delegation; only the `settleSubReceipt` relay-write
+    // (~665) is a deferred residual. See off-ramp-as-user-action.md § "Arc 3.5".
+    if (
+      settlementMode === "relay" &&
+      x402TxHash == null &&
+      unitCostAtSubmission > 0 &&
+      submittedBy != null &&
+      submittedBy !== motebitId
+    ) {
+      throw new TaskError(
+        "TASK_P2P_PROOF_REQUIRED",
+        "Paid direct delegation requires a P2P payment_proof: the delegator settles the worker and platform fee onchain in one atomic transaction. Deposit-funded relay-custody settlement is closed for this flow. See off-ramp-as-user-action.md.",
+        402,
+      );
+    }
 
     taskQueue.set(taskId, {
       task,

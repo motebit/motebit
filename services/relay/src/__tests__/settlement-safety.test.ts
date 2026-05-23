@@ -362,6 +362,15 @@ describe("Refund double-spend prevention", () => {
 
 // === Part B: Recursive Multi-Hop Settlement ===
 
+// Arc 3.5: these two tests exercise allocation-funded relay-custody multi-hop
+// (each hop A→B, B→C, C→D is a paid cross-agent task submission). The gate now
+// rejects paid cross-agent submission without a P2P proof, so the relay-custody
+// multi-hop chain can no longer be submitted this way. Re-enabling multi-hop via
+// P2P sub-payments (the sub-delegator funds the next hop from its own wallet) is
+// the deferred "multi-hop-as-P2P" arc named in off-ramp-as-user-action.md
+// § "Arc 3.5". The recursive `settleSubReceipt` logic these tests cover is
+// preserved in code; they are skipped (not deleted) until that arc rewrites them
+// with P2P sub-payments. See also services/relay/CLAUDE.md rule 8.
 describe("Recursive Multi-Hop Settlement", () => {
   let relay: SyncRelay;
 
@@ -373,7 +382,7 @@ describe("Recursive Multi-Hop Settlement", () => {
     await relay.close();
   });
 
-  it("settles three-level delegation chain (A delegates to B, B delegates to C, C delegates to D)", async () => {
+  it.skip("settles three-level delegation chain (A delegates to B, B delegates to C, C delegates to D)", async () => {
     // Setup: 4 agents — A (delegator), B (intermediate), C (intermediate), D (leaf worker)
     const kpA = await generateKeypair();
     const kpB = await generateKeypair();
@@ -530,7 +539,7 @@ describe("Recursive Multi-Hop Settlement", () => {
     expect(dSettlements.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("stops recursive settlement at depth limit (>10)", async () => {
+  it.skip("stops recursive settlement at depth limit (>10)", async () => {
     // This test verifies the depth guard by constructing a chain that would exceed depth 10.
     // We build a chain of 12 agents: A→B→C→...→L (12 levels).
     // The settlement should stop at depth 10, leaving the last 2 unsettled.

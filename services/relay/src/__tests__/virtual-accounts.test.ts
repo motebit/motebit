@@ -417,13 +417,9 @@ describe("Virtual Accounts", () => {
       }),
     });
 
-    // Set up a delegator with virtual balance
-    const delegatorKp = await generateKeypair();
-    const { motebitId: delegatorId } = await createIdentityAndDevice(
-      relay,
-      bytesToHex(delegatorKp.publicKey),
-    );
-    await deposit(relay, delegatorId, 1.0); // $1 — more than enough
+    // Arc 3.5: self-delegation (gate-exempt) — the worker funds itself, so the
+    // virtual-balance allocation path still runs end-to-end.
+    await deposit(relay, workerId, 1.0); // $1 — more than enough
 
     // Submit a task — should succeed with virtual balance (no x402)
     const taskRes = await relay.app.request(`/agent/${workerId}/task`, {
@@ -435,7 +431,7 @@ describe("Virtual Accounts", () => {
       },
       body: JSON.stringify({
         prompt: "Do something",
-        submitted_by: delegatorId,
+        submitted_by: workerId,
         required_capabilities: ["test-cap"],
       }),
     });
@@ -443,7 +439,7 @@ describe("Virtual Accounts", () => {
     expect(taskRes.status).toBe(201);
 
     // Verify balance was debited
-    const balance = await getBalance(relay, delegatorId);
+    const balance = await getBalance(relay, workerId);
     expect(balance.balance).toBeLessThan(1.0);
   });
 
@@ -515,12 +511,8 @@ describe("Virtual Accounts", () => {
     });
 
     // Set up delegator with balance
-    const delegatorKp = await generateKeypair();
-    const { motebitId: delegatorId } = await createIdentityAndDevice(
-      relay,
-      bytesToHex(delegatorKp.publicKey),
-    );
-    await deposit(relay, delegatorId, 5.0);
+    // Arc 3.5: self-delegation (gate-exempt) — the worker funds itself.
+    await deposit(relay, workerId, 5.0);
 
     // Submit task
     const taskRes = await relay.app.request(`/agent/${workerId}/task`, {
@@ -532,7 +524,7 @@ describe("Virtual Accounts", () => {
       },
       body: JSON.stringify({
         prompt: "Settle this",
-        submitted_by: delegatorId,
+        submitted_by: workerId,
         required_capabilities: ["settle-cap"],
       }),
     });
@@ -597,13 +589,8 @@ describe("Virtual Accounts", () => {
       }),
     });
 
-    // Set up delegator
-    const delegatorKp = await generateKeypair();
-    const { motebitId: delegatorId } = await createIdentityAndDevice(
-      relay,
-      bytesToHex(delegatorKp.publicKey),
-    );
-    await deposit(relay, delegatorId, 50.0);
+    // Arc 3.5: self-delegation (gate-exempt) — the worker funds itself.
+    await deposit(relay, workerId, 50.0);
 
     // Submit task
     const taskRes = await relay.app.request(`/agent/${workerId}/task`, {
@@ -615,7 +602,7 @@ describe("Virtual Accounts", () => {
       },
       body: JSON.stringify({
         prompt: "Fee test",
-        submitted_by: delegatorId,
+        submitted_by: workerId,
         required_capabilities: ["fee-cap"],
       }),
     });
@@ -649,17 +636,15 @@ describe("Virtual Accounts", () => {
     const workerBalance = await getBalance(relay, workerId);
     // gross = unit_cost / (1 - 0.05) = 10 / 0.95 ~= 10.526316
     // fee = gross * 0.05, net = gross - fee
-    // Worker should get the net amount (~ 10.0)
+    // Self-delegation: the worker funds itself, locks gross, is credited net.
+    // The platform fee is the only net outflow, so the agent's balance dropped
+    // by exactly the fee (deposit - final > 0) and the fee was never credited
+    // back. A settlement_credit (the net) was written.
     expect(workerBalance.balance).toBeGreaterThan(0);
-    // The gross amount is what was locked, the fee is not credited to anyone
-    // So worker balance < gross (deducted amount from delegator)
-    const delegatorBalance = await getBalance(relay, delegatorId);
-    // Delegator started with 50, had gross debited
-    expect(delegatorBalance.balance).toBeLessThan(50);
-    // The difference between what delegator lost and what worker gained = platform fee
-    const delegatorSpent = 50 - delegatorBalance.balance;
-    const platformFee = delegatorSpent - workerBalance.balance;
+    const platformFee = 50 - workerBalance.balance;
     expect(platformFee).toBeGreaterThan(0);
+    const creditTxn = workerBalance.transactions.find((t) => t.type === "settlement_credit");
+    expect(creditTxn).toBeDefined();
   });
 
   it("deposit requires auth", async () => {

@@ -37,6 +37,11 @@ import {
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 import type { ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
+import { buildP2pPaymentProof } from "./test-helpers.js";
+
+// Arc 3.5: paid A→B delegation settles P2P. B declares this settlement address
+// and A submits a matching payment_proof.
+const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
 
 // === Helpers ===
 
@@ -286,6 +291,10 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
         endpoint_url: "http://agent-b.example.com/mcp",
         capabilities: ["web_search", "general"],
         metadata: { description: "Agent B — web search service motebit" },
+        // Arc 3.5: paid direct delegation A→B settles P2P; B declares a payout
+        // address so A's payment_proof can target it.
+        settlement_address: WORKER_ADDR,
+        settlement_modes: "relay,p2p",
       }),
     });
 
@@ -624,7 +633,13 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       body: JSON.stringify({
         prompt: "Search the web for motebit architecture",
         submitted_by: motebitIdA,
+        target_agent: motebitIdB,
         required_capabilities: ["web_search"],
+        delegator_acknowledges_no_history_risk: true,
+        payment_proof: buildP2pPaymentProof(relay, {
+          workerAddress: WORKER_ADDR,
+          unitCostMicro: 1_000_000,
+        }),
       }),
     });
     expect(taskRes.status).toBe(201);
@@ -658,8 +673,10 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     expect(data.summary.total_settled).toBeGreaterThan(0);
     expect(data.summary.total_platform_fees).toBeGreaterThan(0);
 
-    // Verify individual settlement record
-    const settlement = data.settlements.find((s) => s.allocation_id === `x402-${settlementTaskId}`);
+    // Verify individual settlement record. Arc 3.5: paid A→B settles P2P, so the
+    // audit row's allocation_id is `p2p-…` (not `x402-…`); the fee and net are
+    // identical (the payment_proof encodes net 1_000_000 + fee 52632).
+    const settlement = data.settlements.find((s) => s.allocation_id === `p2p-${settlementTaskId}`);
     expect(settlement).toBeDefined();
     // Gross = toMicro($1.00 / 0.95) = 1052632 micro. Fee = round(1052632 * 0.05) = 52632.
     // Net = 1052632 - 52632 = 1000000 micro. Settlement values are in micro-units.
@@ -695,7 +712,13 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       body: JSON.stringify({
         prompt: "What is the capital of France?",
         submitted_by: motebitIdA,
+        target_agent: motebitIdB,
         required_capabilities: ["general"],
+        delegator_acknowledges_no_history_risk: true,
+        payment_proof: buildP2pPaymentProof(relay, {
+          workerAddress: WORKER_ADDR,
+          unitCostMicro: 1_000_000,
+        }),
       }),
     });
     expect(taskRes.status).toBe(201);
@@ -837,7 +860,13 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
       },
       body: JSON.stringify({
         prompt: "Signature forgery test",
+        target_agent: motebitIdB,
         required_capabilities: ["general"],
+        delegator_acknowledges_no_history_risk: true,
+        payment_proof: buildP2pPaymentProof(relay, {
+          workerAddress: WORKER_ADDR,
+          unitCostMicro: 1_000_000,
+        }),
       }),
     });
     expect(taskRes.status).toBe(201);
@@ -1019,7 +1048,7 @@ describe("x402 Payment Gate", () => {
     expect(body.platform_fee_rate).toBe(0.05);
   });
 
-  it("free agent (no pay_to_address) bypasses x402 gate", async () => {
+  it("priced cross-agent delegation requires a P2P proof even when x402 is bypassed (Arc 3.5 gate)", async () => {
     const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
     const tokenBListing = await makeSignedToken(
       motebitIdB,
@@ -1051,7 +1080,12 @@ describe("x402 Payment Gate", () => {
       { ws: bWs as never, deviceId: relayDeviceIdB, capabilities: ["web_search"] },
     ]);
 
-    // A submits task — should succeed without payment
+    // Arc 3.5: even though there's no pay_to_address (so x402 doesn't charge),
+    // this is a PAID cross-agent delegation with no P2P payment_proof — the
+    // submission gate rejects it. ("Free delegation to a priced agent" is closed;
+    // a worker that wants to be paid declares P2P and the delegator settles
+    // onchain.) This doubles as gate-fires coverage. See arc-3.5-gate.test.ts
+    // for the full carve-out matrix.
     const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
       method: "POST",
       headers: {
@@ -1060,12 +1094,14 @@ describe("x402 Payment Gate", () => {
         "Idempotency-Key": crypto.randomUUID(),
       },
       body: JSON.stringify({
-        prompt: "This should be free",
+        prompt: "This should require a P2P proof",
         submitted_by: motebitIdA,
         required_capabilities: ["web_search"],
       }),
     });
-    expect(taskRes.status).toBe(201);
+    expect(taskRes.status).toBe(402);
+    const gateBody = (await taskRes.json()) as { error?: string };
+    expect(gateBody.error ?? "").toMatch(/payment_proof/i);
 
     relay.connections.delete(motebitIdB);
   });
@@ -1103,6 +1139,32 @@ describe("x402 Payment Gate", () => {
       { ws: bWs as never, deviceId: relayDeviceIdB, capabilities: ["web_search"] },
     ]);
 
+    // This describe is sequential/shared-state; earlier tests may have mutated
+    // A→B trust and B's registry row. Set a clean established-pair trust and
+    // ensure B still declares its P2P settlement address, so this test isolates
+    // the price-snapshot behavior rather than accumulated state.
+    relay.moteDb.db
+      .prepare(
+        `INSERT OR REPLACE INTO agent_trust
+         (motebit_id, remote_motebit_id, trust_level, interaction_count, first_seen_at, last_seen_at)
+         VALUES (?, ?, 'verified', 10, ?, ?)`,
+      )
+      .run(motebitIdA, motebitIdB, Date.now(), Date.now());
+    // Ensure B is in the agent registry with a P2P settlement address (this
+    // describe sets B up via listing only; P2P eligibility reads the registry).
+    const tokenBReg = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "admin:query");
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tokenBReg}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        motebit_id: motebitIdB,
+        endpoint_url: "http://agent-b.example.com/mcp",
+        capabilities: ["web_search"],
+        settlement_address: WORKER_ADDR,
+        settlement_modes: "relay,p2p",
+      }),
+    });
+
     // A submits task at $2.00 price
     const taskRes = await relay.app.request(`/agent/${motebitIdB}/task`, {
       method: "POST",
@@ -1114,7 +1176,16 @@ describe("x402 Payment Gate", () => {
       body: JSON.stringify({
         prompt: "Price snapshot test",
         submitted_by: motebitIdA,
+        target_agent: motebitIdB,
         required_capabilities: ["web_search"],
+        // Arc 3.5: the P2P payment_proof IS the price snapshot — built at the
+        // submission-time price ($2). A later listing change to $5 cannot affect
+        // what was already settled onchain.
+        delegator_acknowledges_no_history_risk: true,
+        payment_proof: buildP2pPaymentProof(relay, {
+          workerAddress: WORKER_ADDR,
+          unitCostMicro: 2_000_000,
+        }),
       }),
     });
     expect(taskRes.status).toBe(201);
@@ -1155,11 +1226,12 @@ describe("x402 Payment Gate", () => {
       settlements: Array<{ allocation_id: string; amount_settled: number; platform_fee: number }>;
     };
 
-    const settlement = data.settlements.find((s) => s.allocation_id === `x402-${snapshotTaskId}`);
+    const settlement = data.settlements.find((s) => s.allocation_id === `p2p-${snapshotTaskId}`);
     expect(settlement).toBeDefined();
     // Gross = toMicro($2.00 / 0.95) = 2105263 micro. Fee = round(2105263 * 0.05) = 105263.
     // Net = 2105263 - 105263 = 2000000 micro. Settlement values are in micro-units.
-    // The key assertion: settlement is based on $2.00 snapshot, NOT current $5.00
+    // The key assertion: settlement is based on the $2.00 proof (built at
+    // submission), NOT the current $5.00 listing.
     expect(settlement!.amount_settled).toBe(2_000_000); // Would be ~5,000,000 if using $5.00
     expect(settlement!.platform_fee).toBe(105263); // Would be ~263,158 if using $5.00
 
