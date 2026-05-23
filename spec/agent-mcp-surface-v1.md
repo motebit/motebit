@@ -162,14 +162,14 @@ A motebit is conformant with `motebit/agent-mcp-surface@1.0` if all of:
 
 ## 9. Relationship to Other Specs
 
-| Spec                  | Relationship                                                                                                       |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| identity-v1.0         | `motebit_identity` exposes the identity surface defined here.                                                      |
-| execution-ledger-v1.0 | `motebit_task` returns the `ExecutionReceipt` shape pinned in §11.                                                 |
-| delegation-v1.0       | `motebit_service_listing` returns the `AgentServiceListing` pinned in §7.1.                                        |
-| credential-v1.0       | `motebit_credentials` returns the `VerifiablePresentation` pinned in §2.2.                                         |
-| memory-delta-v1.0     | `motebit_remember` writes produce `memory_formed` events under the emitter-authored sensitivity invariant in §3.3. |
-| auth-token-v1.0       | All tools are reachable behind motebit signed tokens or operator-configured bearer tokens.                         |
+| Spec                  | Relationship                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------------ |
+| identity-v1.0         | `motebit_identity` exposes the identity surface defined here.                                          |
+| execution-ledger-v1.0 | `motebit_task` returns the `ExecutionReceipt` shape pinned in §11.                                     |
+| delegation-v1.0       | `motebit_service_listing` returns the `AgentServiceListing` pinned in §7.1.                            |
+| credential-v1.0       | `motebit_credentials` returns the `VerifiablePresentation` pinned in §2.2.                             |
+| memory-delta-v1.0     | `motebit_remember` writes produce `memory_formed` events, gated by this spec's §3.5 sensitivity floor. |
+| auth-token-v1.0       | All tools are reachable behind motebit signed tokens or operator-configured bearer tokens.             |
 
 ---
 
