@@ -23,6 +23,7 @@ import { Modal, View, Text, TouchableOpacity, TextInput, Alert, ScrollView } fro
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import { hexToBytes, bytesToHex, getPublicKeyBySuite } from "@motebit/encryption";
+import { deriveSovereignMotebitId } from "@motebit/crypto";
 import type { ImportedIdentityMetadata, RestoreIdentityResult } from "@motebit/identity-file";
 
 import type { MobileApp } from "../mobile-app";
@@ -41,12 +42,13 @@ export interface RestoreIdentityModalProps {
   onRestored: () => void;
 }
 
-function synthesizeSeedOnlyMetadata(publicKeyHex: string): ImportedIdentityMetadata {
+async function synthesizeSeedOnlyMetadata(publicKeyHex: string): Promise<ImportedIdentityMetadata> {
+  // Re-derive the sovereign motebit_id from the recovered key, NOT a random UUID.
+  // If the identity was sovereign-minted (the default), this IS its original id —
+  // so seed-only restore actually recovers it. Legacy random-UUID identities get
+  // a new sovereign id (their old random id is unrecoverable from the seed alone).
   return {
-    motebitId:
-      typeof globalThis.crypto?.randomUUID === "function"
-        ? globalThis.crypto.randomUUID()
-        : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`,
+    motebitId: await deriveSovereignMotebitId(publicKeyHex),
     publicKey: publicKeyHex,
     ownerId: "Mobile",
     bornAt: new Date().toISOString(),
@@ -124,7 +126,7 @@ export function RestoreIdentityModal({
       const privBytes = hexToBytes(trimmed);
       const pubBytes = await getPublicKeyBySuite(privBytes, "motebit-jcs-ed25519-hex-v1");
       const pubHex = bytesToHex(pubBytes);
-      const synthesized = synthesizeSeedOnlyMetadata(pubHex);
+      const synthesized = await synthesizeSeedOnlyMetadata(pubHex);
       setMetadata(synthesized);
       setOriginalContent(null);
       setDerivedPrivateKey(trimmed);
@@ -295,9 +297,10 @@ export function RestoreIdentityModal({
                 marginBottom: 16,
               }}
             >
-              Paste your 64-hex-char recovery seed. The original motebit_id cannot be recovered from
-              the seed alone — a new one will be assigned. Your cryptographic identity (private key
-              + Solana address + funds) is preserved.
+              Paste your 64-hex-char recovery seed. Your motebit_id is re-derived from the seed — if
+              your identity was sovereign (the default), this recovers your original id; a legacy
+              random id can't be recovered from the seed alone. Your cryptographic identity (private
+              key + Solana address + funds) is preserved either way.
             </Text>
             <Text style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>
               Recovery seed (64 hex chars)
@@ -381,8 +384,9 @@ export function RestoreIdentityModal({
                   lineHeight: 16,
                 }}
               >
-                ⚠ Seed-only restore — original motebit_id not recoverable, a new one will be
-                assigned.
+                ⚠ Seed-only restore — motebit_id is re-derived from the seed. If your identity was
+                sovereign (the default), this is your original id; a legacy random id can't be
+                recovered from the seed alone.
               </Text>
             ) : null}
             <View
