@@ -13,6 +13,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
+import { requiresP2pProof } from "../tasks.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
 import {
@@ -139,5 +140,49 @@ describe("Arc 3.5 — TASK_P2P_PROOF_REQUIRED submission gate", () => {
       }),
     });
     expect(res.status).toBe(201);
+  });
+});
+
+/**
+ * The gate predicate as a pure truth table. The integration suite above drives
+ * four of the five carve-outs through the live route, but the **x402-paid**
+ * branch cannot be reached from the harness — `x402TxHash` is set only by the
+ * x402 `resourceServer.onAfterSettle` hook on a real onchain payment (a module
+ * closure in tasks.ts, not a spyable method). Extracting `requiresP2pProof` to a
+ * pure function makes that branch — the most compliance-relevant one, since x402
+ * is the surviving non-P2P paid path — testable here as plain boolean logic. A
+ * refactor that reorders or drops a condition fails this truth table.
+ */
+describe("requiresP2pProof — gate predicate truth table", () => {
+  const base = {
+    settlementMode: "relay" as const,
+    x402TxHash: null,
+    unitCostAtSubmission: 1,
+    submittedBy: "delegator-id",
+    workerId: "worker-id",
+  };
+
+  it("FIRES on paid cross-agent relay-custody delegation with no proof", () => {
+    expect(requiresP2pProof(base)).toBe(true);
+  });
+
+  it("carve: settlementMode 'p2p' (proof supplied) → no gate", () => {
+    expect(requiresP2pProof({ ...base, settlementMode: "p2p" })).toBe(false);
+  });
+
+  it("carve: x402-paid (x402TxHash present) → no gate", () => {
+    expect(requiresP2pProof({ ...base, x402TxHash: "5xFakeBase58SolanaTxSignature" })).toBe(false);
+  });
+
+  it("carve: zero-cost (unitCostAtSubmission === 0) → no gate", () => {
+    expect(requiresP2pProof({ ...base, unitCostAtSubmission: 0 })).toBe(false);
+  });
+
+  it("carve: no submitter (submittedBy null) → no gate", () => {
+    expect(requiresP2pProof({ ...base, submittedBy: null })).toBe(false);
+  });
+
+  it("carve: self-delegation (submittedBy === workerId) → no gate", () => {
+    expect(requiresP2pProof({ ...base, submittedBy: base.workerId })).toBe(false);
   });
 });

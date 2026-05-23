@@ -189,6 +189,36 @@ function getListingUnitCost(moteDb: MotebitDatabase, agentId: string): number {
   }
 }
 
+/**
+ * Arc 3.5 P2P-by-default gate predicate. Returns `true` ⟺ a submission must be
+ * rejected with `TASK_P2P_PROOF_REQUIRED` (402): paid direct delegation to a
+ * DIFFERENT worker, settling relay-custody, with no P2P proof and no x402 proof.
+ *
+ * Pure and exported so the carve-out matrix is unit-testable as a truth table.
+ * The x402-paid carve-out in particular is not integration-drivable — `x402TxHash`
+ * is set only by the x402 `resourceServer.onAfterSettle` hook on a real onchain
+ * payment (a module closure, not a spyable relay method), so a pure-function test
+ * is the only way to exercise that branch. The three carve-outs (false return):
+ * zero-cost (`unitCostAtSubmission === 0`), self-delegation (`submittedBy === workerId`),
+ * and x402-paid (`x402TxHash != null`). See docs/doctrine/off-ramp-as-user-action.md
+ * § "Arc 3.5".
+ */
+export function requiresP2pProof(args: {
+  settlementMode: "relay" | "p2p";
+  x402TxHash: string | null | undefined;
+  unitCostAtSubmission: number;
+  submittedBy: string | null | undefined;
+  workerId: string;
+}): boolean {
+  return (
+    args.settlementMode === "relay" &&
+    args.x402TxHash == null &&
+    args.unitCostAtSubmission > 0 &&
+    args.submittedBy != null &&
+    args.submittedBy !== args.workerId
+  );
+}
+
 function getAgentPricing(
   moteDb: MotebitDatabase,
   agentId: string,
@@ -1768,19 +1798,23 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     }
 
     // === Arc 3.5: P2P-by-default submission gate ===
-    // Paid direct delegation to a different worker MUST settle P2P. True
-    // submission carve-outs (do not reach the gate): zero-cost
-    // (`unitCostAtSubmission === 0`), self-delegation (`submittedBy === motebitId`),
-    // x402-paid (own onchain proof). Multi-hop is NOT a carve-out — a paid
-    // sub-delegation (B→C) is a real `POST /agent/C/task` submission and is
-    // gated like any direct delegation; only the `settleSubReceipt` relay-write
-    // (~665) is a deferred residual. See off-ramp-as-user-action.md § "Arc 3.5".
+    // Paid direct delegation to a different worker MUST settle P2P. The
+    // predicate is the pure, unit-tested `requiresP2pProof` (truth table in
+    // arc-3.5-gate.test.ts). True submission carve-outs (do not reach the gate):
+    // zero-cost (`unitCostAtSubmission === 0`), self-delegation
+    // (`submittedBy === motebitId`), x402-paid (own onchain proof). Multi-hop is
+    // NOT a carve-out — a paid sub-delegation (B→C) is a real `POST /agent/C/task`
+    // submission and is gated like any direct delegation; only the
+    // `settleSubReceipt` relay-write (~665) is a deferred residual. See
+    // off-ramp-as-user-action.md § "Arc 3.5".
     if (
-      settlementMode === "relay" &&
-      x402TxHash == null &&
-      unitCostAtSubmission > 0 &&
-      submittedBy != null &&
-      submittedBy !== motebitId
+      requiresP2pProof({
+        settlementMode,
+        x402TxHash,
+        unitCostAtSubmission,
+        submittedBy,
+        workerId: motebitId,
+      })
     ) {
       throw new TaskError(
         "TASK_P2P_PROOF_REQUIRED",
