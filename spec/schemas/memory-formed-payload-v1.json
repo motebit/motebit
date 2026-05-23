@@ -28,6 +28,14 @@
     "redacted_sensitivity": {
       "$ref": "#/definitions/MemoryFormedPayload/properties/sensitivity",
       "description": "Original sensitivity retained after redaction so downstream receivers honor policy without seeing content."
+    },
+    "valid_from": {
+      "type": "number",
+      "description": "Validity-time start (Unix ms) — when the fact became true; MAY predate recording time (backdated). Absent ⇒ recording time. Spec §3.5."
+    },
+    "valid_until": {
+      "type": ["number", "null"],
+      "description": "Validity-time end (Unix ms), or null for an open interval (still true). Closed by a later supersession."
     }
   },
   "required": ["node_id", "content", "sensitivity"],
@@ -58,6 +66,14 @@
         "redacted_sensitivity": {
           "$ref": "#/definitions/MemoryFormedPayload/properties/sensitivity",
           "description": "Original sensitivity retained after redaction so downstream receivers honor policy without seeing content."
+        },
+        "valid_from": {
+          "type": "number",
+          "description": "Validity-time start (Unix ms) — when the fact became true; MAY predate recording time (backdated). Absent ⇒ recording time. Spec §3.5."
+        },
+        "valid_until": {
+          "type": ["number", "null"],
+          "description": "Validity-time end (Unix ms), or null for an open interval (still true). Closed by a later supersession."
         }
       },
       "required": ["node_id", "content", "sensitivity"],

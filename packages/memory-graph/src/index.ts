@@ -713,7 +713,13 @@ export class MemoryGraph {
       motebit_id: this.motebitId,
       timestamp: now,
       event_type: EventType.MemoryFormed,
-      payload: { node_id: nodeId, content: candidate.content, sensitivity: candidate.sensitivity },
+      payload: {
+        node_id: nodeId,
+        content: candidate.content,
+        sensitivity: candidate.sensitivity,
+        valid_from: node.valid_from,
+        valid_until: node.valid_until ?? null,
+      },
       tombstoned: false,
     });
 
@@ -791,8 +797,9 @@ export class MemoryGraph {
         if (decision.existingNodeId) {
           await this.link(newNode.node_id, decision.existingNodeId, RT.Supersedes);
         }
-        // Log consolidation event
-        await this.logConsolidation(decision, newNode.node_id);
+        // Log consolidation event — carry the superseded node's valid_until
+        // (set to `now` above) so syncing peers close the same interval.
+        await this.logConsolidation(decision, newNode.node_id, now);
         return { node: newNode, decision };
       }
 
@@ -852,6 +859,7 @@ export class MemoryGraph {
   private async logConsolidation(
     decision: ConsolidationDecision,
     newNodeId?: string,
+    supersededValidUntil?: number,
   ): Promise<void> {
     try {
       await this.eventStore.appendWithClock({
@@ -864,6 +872,10 @@ export class MemoryGraph {
           existing_node_id: decision.existingNodeId ?? null,
           new_node_id: newNodeId ?? null,
           reason: decision.reason,
+          // Bi-temporal: carry the validity-time the superseded belief
+          // ended so a syncing peer sets valid_until on existing_node_id
+          // (spec/memory-delta-v1.md §3.5). Only present on supersession.
+          ...(supersededValidUntil != null ? { superseded_valid_until: supersededValidUntil } : {}),
         },
         tombstoned: false,
       });

@@ -73,6 +73,19 @@ export const MemoryFormedPayloadSchema = z
     redacted_sensitivity: SensitivityLevelSchema.optional().describe(
       "Original sensitivity retained after redaction so downstream receivers honor policy without seeing content.",
     ),
+    valid_from: z
+      .number()
+      .optional()
+      .describe(
+        "Validity-time start (Unix ms) — when the fact became true; MAY predate recording time (backdated). Absent ⇒ recording time. Spec §3.5.",
+      ),
+    valid_until: z
+      .number()
+      .nullable()
+      .optional()
+      .describe(
+        "Validity-time end (Unix ms), or null for an open interval (still true). Closed by a later supersession.",
+      ),
   })
   .passthrough();
 
@@ -240,6 +253,13 @@ export const MemoryConsolidatedPayloadSchema = z
       .string()
       .describe(
         "Free-text rationale from the consolidation decider. Consumers MUST NOT parse it semantically.",
+      ),
+    superseded_valid_until: z
+      .number()
+      .nullable()
+      .optional()
+      .describe(
+        'Present on "supersede": validity-time (Unix ms) the superseded belief ended; consumers set valid_until on existing_node_id. Spec §3.5.',
       ),
   })
   .passthrough();

@@ -52,6 +52,14 @@ export interface MemoryFormedPayload {
   /** Original sensitivity level retained after redaction so receiving
    *  peers can still honor policy without seeing the content. */
   readonly redacted_sensitivity?: SensitivityLevel;
+  /** Validity-time start (Unix ms) — when the asserted fact became true
+   *  in the world, which MAY predate the recording timestamp (backdated
+   *  memory). Absent ⇒ the wrapping event's recording time. Bi-temporal
+   *  validity, spec/memory-delta-v1.md §3.5. */
+  readonly valid_from?: number;
+  /** Validity-time end (Unix ms), or `null` for an open interval (still
+   *  true). A later `memory_consolidated` supersession closes it. */
+  readonly valid_until?: number | null;
 }
 
 /** Emitted when an existing memory node is read for recall, reflection,
@@ -94,6 +102,11 @@ export interface MemoryConsolidatedPayload {
   /** Human-readable rationale from the consolidation decider. Free
    *  text; consumers MUST NOT parse it semantically. */
   readonly reason: string;
+  /** Present on `"supersede"` actions: the validity-time (Unix ms) at
+   *  which the superseded (`existing_node_id`) belief ceased to hold. A
+   *  conforming consumer sets `valid_until` on that node to this value.
+   *  Bi-temporal validity, spec/memory-delta-v1.md §3.5. */
+  readonly superseded_valid_until?: number | null;
 }
 
 /** Emitted when the ai-core loop detects sensitivity patterns in a
