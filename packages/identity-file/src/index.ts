@@ -13,7 +13,7 @@
 import { sign as ed25519Sign, bytesToHex, canonicalJson } from "@motebit/encryption";
 export { publicKeyToDidKey, hexPublicKeyToDidKey } from "@motebit/encryption";
 import { RiskLevel } from "@motebit/sdk";
-import { parse, verify } from "@motebit/crypto";
+import { parse, verify, deriveSovereignMotebitId } from "@motebit/crypto";
 import type { MotebitIdentityFile, MotebitIdentityType } from "./schema.js";
 
 // Re-export parse/verify from @motebit/crypto
@@ -269,6 +269,46 @@ export interface ImportedIdentityMetadata {
 export type ImportIdentityResult =
   | { valid: true; metadata: ImportedIdentityMetadata }
   | { valid: false; reason: string };
+
+/**
+ * Build the minimal `ImportedIdentityMetadata` for a **seed-only restore** —
+ * the path where the user pastes a raw recovery seed and there is no motebit.md
+ * to read history from. The `motebitId` is **re-derived as the sovereign
+ * commitment to the recovered key** (`deriveSovereignMotebitId`), never a random
+ * UUID: since minting is sovereign-by-default, this regenerates the identity's
+ * ORIGINAL id from its seed alone — the whole point of the sovereign rung being
+ * self-certifying AND recoverable (see [`docs/doctrine/identity-restore.md`] and
+ * [`identity-binding-verification.md`] § "The sovereign rung").
+ *
+ * This is the single source of truth every restore surface MUST call. Each
+ * surface previously hand-copied this synthesis, and that duplication is exactly
+ * how seed-only restore silently regressed to `crypto.randomUUID()` on desktop
+ * and mobile while web re-derived — losing sovereign recovery on two of three
+ * surfaces (fixed in 6c0c710c; centralized here so it cannot drift again).
+ *
+ * @param publicKeyHex the hex public key derived from the pasted seed
+ * @param ownerLabel surface label recorded as `ownerId` (e.g. "Web" / "Desktop" / "Mobile")
+ */
+export async function synthesizeSeedRestoreMetadata(
+  publicKeyHex: string,
+  ownerLabel: string,
+): Promise<ImportedIdentityMetadata> {
+  return {
+    motebitId: await deriveSovereignMotebitId(publicKeyHex),
+    publicKey: publicKeyHex,
+    ownerId: ownerLabel,
+    bornAt: new Date().toISOString(),
+    devices: [],
+    governance: {
+      trust_mode: "guarded",
+      max_risk_auto: "R1_DRAFT",
+      require_approval_above: "R1_DRAFT",
+      deny_above: "R4_MONEY",
+      operator_mode: false,
+    },
+    memory: { half_life_days: 7, confidence_threshold: 0.3, per_turn_limit: 5 },
+  };
+}
 
 // --- Restore (the side-effecting flow that materializes an imported
 //     identity onto a device) ---

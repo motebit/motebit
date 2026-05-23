@@ -5,7 +5,7 @@ import {
   signGuardianRecoverySuccession,
   bytesToHex,
 } from "@motebit/encryption";
-import { verify as canonicalVerify } from "@motebit/crypto";
+import { verify as canonicalVerify, deriveSovereignMotebitId } from "@motebit/crypto";
 import {
   generate,
   importIdentityFile,
@@ -17,6 +17,7 @@ import {
   verify as verifyFromIdentityFile,
   publicKeyToDidKey,
   hexPublicKeyToDidKey,
+  synthesizeSeedRestoreMetadata,
   type ImportedIdentityMetadata,
 } from "../index";
 
@@ -1440,5 +1441,53 @@ describe("guardian identity", () => {
 
     const result = await verify(content);
     expect(result.valid).toBe(true);
+  });
+});
+
+describe("synthesizeSeedRestoreMetadata", () => {
+  it("re-derives the sovereign motebit_id from the key, NOT a random UUID", async () => {
+    const kp = await generateKeypair();
+    const pubHex = bytesToHex(kp.publicKey);
+
+    const meta = await synthesizeSeedRestoreMetadata(pubHex, "Web");
+
+    // The id IS the sovereign commitment to the recovered key — so a sovereign
+    // identity round-trips from its seed alone.
+    expect(meta.motebitId).toBe(await deriveSovereignMotebitId(pubHex));
+    expect(meta.publicKey).toBe(pubHex);
+    expect(meta.ownerId).toBe("Web");
+  });
+
+  it("is deterministic — same key yields the same id (anti-regression vs random UUID)", async () => {
+    const kp = await generateKeypair();
+    const pubHex = bytesToHex(kp.publicKey);
+
+    const a = await synthesizeSeedRestoreMetadata(pubHex, "Desktop");
+    const b = await synthesizeSeedRestoreMetadata(pubHex, "Mobile");
+
+    // If anyone reintroduces crypto.randomUUID(), these diverge and this fails.
+    expect(a.motebitId).toBe(b.motebitId);
+    expect(a.ownerId).toBe("Desktop");
+    expect(b.ownerId).toBe("Mobile");
+  });
+
+  it("carries the canonical guarded defaults and an empty device set", async () => {
+    const kp = await generateKeypair();
+    const meta = await synthesizeSeedRestoreMetadata(bytesToHex(kp.publicKey), "Web");
+
+    expect(meta.devices).toEqual([]);
+    expect(meta.governance).toEqual({
+      trust_mode: "guarded",
+      max_risk_auto: "R1_DRAFT",
+      require_approval_above: "R1_DRAFT",
+      deny_above: "R4_MONEY",
+      operator_mode: false,
+    });
+    expect(meta.memory).toEqual({
+      half_life_days: 7,
+      confidence_threshold: 0.3,
+      per_turn_limit: 5,
+    });
+    expect(() => new Date(meta.bornAt).toISOString()).not.toThrow();
   });
 });

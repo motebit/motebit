@@ -23,8 +23,11 @@ import { Modal, View, Text, TouchableOpacity, TextInput, Alert, ScrollView } fro
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import { hexToBytes, bytesToHex, getPublicKeyBySuite } from "@motebit/encryption";
-import { deriveSovereignMotebitId } from "@motebit/crypto";
-import type { ImportedIdentityMetadata, RestoreIdentityResult } from "@motebit/identity-file";
+import {
+  synthesizeSeedRestoreMetadata,
+  type ImportedIdentityMetadata,
+  type RestoreIdentityResult,
+} from "@motebit/identity-file";
 
 import type { MobileApp } from "../mobile-app";
 import { useSettingsStyles } from "./settings/settings-shared";
@@ -40,28 +43,6 @@ export interface RestoreIdentityModalProps {
   /** Fires after a successful restore. Parent should prompt the user to
    *  fully close + reopen the app so bootstrap picks up the new identity. */
   onRestored: () => void;
-}
-
-async function synthesizeSeedOnlyMetadata(publicKeyHex: string): Promise<ImportedIdentityMetadata> {
-  // Re-derive the sovereign motebit_id from the recovered key, NOT a random UUID.
-  // If the identity was sovereign-minted (the default), this IS its original id —
-  // so seed-only restore actually recovers it. Legacy random-UUID identities get
-  // a new sovereign id (their old random id is unrecoverable from the seed alone).
-  return {
-    motebitId: await deriveSovereignMotebitId(publicKeyHex),
-    publicKey: publicKeyHex,
-    ownerId: "Mobile",
-    bornAt: new Date().toISOString(),
-    devices: [],
-    governance: {
-      trust_mode: "guarded",
-      max_risk_auto: "R1_DRAFT",
-      require_approval_above: "R1_DRAFT",
-      deny_above: "R4_MONEY",
-      operator_mode: false,
-    },
-    memory: { half_life_days: 7, confidence_threshold: 0.3, per_turn_limit: 5 },
-  };
 }
 
 function relativeBornAt(bornAt: string): string {
@@ -126,7 +107,7 @@ export function RestoreIdentityModal({
       const privBytes = hexToBytes(trimmed);
       const pubBytes = await getPublicKeyBySuite(privBytes, "motebit-jcs-ed25519-hex-v1");
       const pubHex = bytesToHex(pubBytes);
-      const synthesized = await synthesizeSeedOnlyMetadata(pubHex);
+      const synthesized = await synthesizeSeedRestoreMetadata(pubHex, "Mobile");
       setMetadata(synthesized);
       setOriginalContent(null);
       setDerivedPrivateKey(trimmed);
