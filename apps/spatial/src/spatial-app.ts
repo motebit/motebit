@@ -57,6 +57,7 @@ import type {
   ResolverEnv,
 } from "@motebit/sdk";
 import { DeviceCapability, resolveProviderSpec, UnsupportedBackendError } from "@motebit/sdk";
+import { APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
 import type { McpServerConfig } from "@motebit/mcp-client";
 import { IdbConversationStore, IdbPlanStore, IdbGradientStore } from "@motebit/browser-persistence";
 import { OrbitalDynamics, estimateBodyAnchors, getAnchorForReference } from "./index";
@@ -604,17 +605,9 @@ export class SpatialApp {
 
     // Governance config → policy + memory governance
     const gov = config.governance;
-    const presetConfigs: Record<
-      string,
-      { maxRiskLevel: number; requireApprovalAbove: number; denyAbove: number }
-    > = {
-      cautious: { maxRiskLevel: 3, requireApprovalAbove: 0, denyAbove: 3 },
-      balanced: { maxRiskLevel: 3, requireApprovalAbove: 1, denyAbove: 3 },
-      autonomous: { maxRiskLevel: 4, requireApprovalAbove: 3, denyAbove: 4 },
-    };
     const preset = gov
-      ? (presetConfigs[gov.approvalPreset] ?? presetConfigs.balanced!)
-      : presetConfigs.balanced!;
+      ? (APPROVAL_PRESET_CONFIGS[gov.approvalPreset] ?? APPROVAL_PRESET_CONFIGS.balanced!)
+      : APPROVAL_PRESET_CONFIGS.balanced!;
 
     // Build signing keys from the already-loaded private key bytes (line ~425).
     // The same key signs identity assertions AND derives the sovereign Solana

@@ -129,7 +129,7 @@ import { createWebGoalsRunner } from "./goals-runner";
 import type { GoalsRunner } from "@motebit/panels";
 
 // Re-export shared presets for color-picker and settings modules
-import { COLOR_PRESETS } from "@motebit/sdk";
+import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
 import type { InteriorColor } from "@motebit/sdk";
 export { COLOR_PRESETS };
 export type { InteriorColor };
@@ -589,17 +589,9 @@ export class UnbootedWebApp {
     // Create runtime — no AI provider yet, will be set via connectProvider()
     const keyring = new LocalStorageKeyringAdapter();
     const govConfig = loadGovernanceConfig();
-    const presetConfigs: Record<
-      string,
-      { maxRiskLevel: number; requireApprovalAbove: number; denyAbove: number }
-    > = {
-      cautious: { maxRiskLevel: 3, requireApprovalAbove: 0, denyAbove: 3 },
-      balanced: { maxRiskLevel: 3, requireApprovalAbove: 1, denyAbove: 3 },
-      autonomous: { maxRiskLevel: 4, requireApprovalAbove: 3, denyAbove: 4 },
-    };
     const preset = govConfig
-      ? (presetConfigs[govConfig.approvalPreset] ?? presetConfigs.balanced!)
-      : presetConfigs.balanced!;
+      ? (APPROVAL_PRESET_CONFIGS[govConfig.approvalPreset] ?? APPROVAL_PRESET_CONFIGS.balanced!)
+      : APPROVAL_PRESET_CONFIGS.balanced!;
 
     // Load identity signing keys so the runtime can construct the sovereign
     // Solana wallet (settlement-v1.md §6). The Ed25519 seed is the same 32
@@ -1494,21 +1486,16 @@ export class UnbootedWebApp {
     const govConfig = govModule.loadGovernanceConfig();
 
     const RISK_NAMES = ["R0_READ", "R1_DRAFT", "R2_WRITE", "R3_EXECUTE", "R4_MONEY"];
-    const PRESET_GOV: Record<string, { require: number; deny: number }> = {
-      cautious: { require: 0, deny: 3 },
-      balanced: { require: 1, deny: 3 },
-      autonomous: { require: 3, deny: 4 },
-    };
     const presetKey = govConfig?.approvalPreset ?? "balanced";
-    const presetGov = PRESET_GOV[presetKey] ?? PRESET_GOV.balanced!;
+    const presetGov = APPROVAL_PRESET_CONFIGS[presetKey] ?? APPROVAL_PRESET_CONFIGS.balanced!;
     const governance = {
       trust_mode: (presetKey === "autonomous" ? "full" : "guarded") as
         | "full"
         | "guarded"
         | "minimal",
-      max_risk_auto: RISK_NAMES[presetGov.require]!,
-      require_approval_above: RISK_NAMES[presetGov.require]!,
-      deny_above: RISK_NAMES[presetGov.deny]!,
+      max_risk_auto: RISK_NAMES[presetGov.requireApprovalAbove]!,
+      require_approval_above: RISK_NAMES[presetGov.requireApprovalAbove]!,
+      deny_above: RISK_NAMES[presetGov.denyAbove]!,
       operator_mode: this.isOperatorMode,
     };
     const memory = {

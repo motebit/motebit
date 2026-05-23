@@ -123,6 +123,32 @@ function hasSdkReExport(src: string, name: string): boolean {
   return re.test(src);
 }
 
+// ── Approval-preset value-shadow probe ────────────────────────────────────
+// The per-identifier scan above is name-based, so a copy declared under a
+// DIFFERENT name that re-encodes the same governance numbers slips through.
+// That is exactly how the approval presets drifted: `presetConfigs` /
+// `PRESET_GOV` literals in web (×2), desktop, and spatial each re-encoded
+// APPROVAL_PRESET_CONFIGS under names this gate could not see (4 sites, fixed
+// 2026-05). The preset names are a closed vocabulary (`ApprovalPreset`), and a
+// surface consumes the canonical config by INDEXING it
+// (`APPROVAL_PRESET_CONFIGS[preset]`) — never by re-writing the keys. So a
+// literal mapping all three preset names to objects that carry governance
+// fields is a value-shadow regardless of the variable name. The governance-
+// field requirement keeps benign preset-keyed maps (label / icon lookups) out.
+const APPROVAL_PRESET_KEYS = ["cautious", "balanced", "autonomous"];
+
+function approvalPresetValueShadowLine(src: string): number | null {
+  const govObjectFor = (name: string): RegExpExecArray | null =>
+    new RegExp(
+      `\\b${name}\\s*:\\s*\\{[^}]*\\b(?:maxRiskLevel|requireApprovalAbove|denyAbove|maxRisk|require|deny)\\b`,
+      "m",
+    ).exec(src);
+  const matches = APPROVAL_PRESET_KEYS.map(govObjectFor);
+  if (matches.some((m) => m === null)) return null;
+  const earliest = Math.min(...matches.map((m) => (m as RegExpExecArray).index));
+  return src.slice(0, earliest).split("\n").length;
+}
+
 // ── Scanner ──────────────────────────────────────────────────────────────
 
 interface Violation {
@@ -185,6 +211,20 @@ function scanFile(app: string, file: string): Violation[] {
     violations.push({ app, file: shortPath, line, name, canonicalSource });
   }
 
+  // Value-shadow: a preset-keyed governance literal under any name.
+  if (!hasSdkReExport(src, "APPROVAL_PRESET_CONFIGS")) {
+    const shadowLine = approvalPresetValueShadowLine(src);
+    if (shadowLine !== null) {
+      violations.push({
+        app,
+        file: shortPath,
+        line: shadowLine,
+        name: "APPROVAL_PRESET_CONFIGS (value-shadow: preset-keyed governance literal)",
+        canonicalSource: "packages/sdk/src/approval-presets.ts",
+      });
+    }
+  }
+
   return violations;
 }
 
@@ -222,10 +262,10 @@ function main(): void {
     `\nDoctrine: @motebit/sdk owns the canonical preset vocabulary (packages/sdk/CLAUDE.md § Rules 3-4).`,
   );
   console.error(
-    `Fix: replace the local declaration with \`import { ${all[0].name} } from "@motebit/sdk"\`.`,
+    `Fix: import the canonical value from "@motebit/sdk" and index it (e.g. \`APPROVAL_PRESET_CONFIGS[preset]\`) instead of re-declaring the identifier or re-encoding the preset literal under another name.`,
   );
   console.error(
-    `If you need a local module trampoline, add \`export { ${all[0].name} } from "@motebit/sdk"\` alongside.`,
+    `If you need a local module path, re-export instead: \`export { X } from "@motebit/sdk"\`.`,
   );
   process.exit(1);
 }

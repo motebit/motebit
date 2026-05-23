@@ -66,6 +66,7 @@ import {
   formatWalletWarning,
 } from "@motebit/encryption";
 import type { KeyTransferPayload } from "@motebit/sdk";
+import { APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
 import {
   generate as generateIdentityFile,
   importIdentityFile as importIdentityFileFromContent,
@@ -341,17 +342,13 @@ export class IdentityManager {
     // Map approval_preset → identity-file governance fields
     const RISK_NAMES = ["R0_READ", "R1_DRAFT", "R2_WRITE", "R3_EXECUTE", "R4_MONEY"];
     const preset = configData.approval_preset as string | undefined;
-    const PRESET_GOV: Record<string, { require: number; deny: number }> = {
-      cautious: { require: 0, deny: 3 },
-      balanced: { require: 1, deny: 3 },
-      autonomous: { require: 3, deny: 4 },
-    };
-    const presetGov = PRESET_GOV[preset ?? "balanced"] ?? PRESET_GOV.balanced!;
+    const presetGov =
+      APPROVAL_PRESET_CONFIGS[preset ?? "balanced"] ?? APPROVAL_PRESET_CONFIGS.balanced!;
     const governance = {
       trust_mode: (preset === "autonomous" ? "full" : "guarded") as "full" | "guarded" | "minimal",
-      max_risk_auto: RISK_NAMES[presetGov.require]!,
-      require_approval_above: RISK_NAMES[presetGov.require]!,
-      deny_above: RISK_NAMES[presetGov.deny]!,
+      max_risk_auto: RISK_NAMES[presetGov.requireApprovalAbove]!,
+      require_approval_above: RISK_NAMES[presetGov.requireApprovalAbove]!,
+      deny_above: RISK_NAMES[presetGov.denyAbove]!,
       operator_mode: false,
     };
 
