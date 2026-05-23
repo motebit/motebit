@@ -46,9 +46,11 @@ The headline of the end-game. A memory has two independent time dimensions:
 - **Recording time** — when the motebit learned it (`created_at`, already present; the append-only horizon in [`retention-policy.md`](retention-policy.md)).
 - **Validity time** — when the fact it asserts was _true in the world_ (`valid_from` / `valid_until`).
 
-Today `MemoryNode` carries only recording time, and `Supersedes` invalidates at _recording_ time. That means motebit can say "I recorded this on May 23" but not "this was true May 10–18 and was superseded May 21." Bi-temporal validity closes that: supersession sets `valid_until` on the superseded node (event-time end) **and keeps the `Supersedes` edge** for provenance — one mechanism, never a parallel `invalidated_at` field, and never mutation of the old node. Retrieval can then answer both _"current memory"_ and _"as-of memory."_
+The in-store layer is **already built**: `MemoryContent.valid_from` / `valid_until` (`@motebit/protocol`) are inherited by `MemoryNode`; `formMemory` stamps `valid_from`; supersession (the consolidation `UPDATE` path in `@motebit/memory-graph`) sets `valid_until` on the superseded node, **keeps it live and keeps the `Supersedes` edge** for provenance — one mechanism, never a parallel `invalidated_at` field, never mutation or tombstoning of the old node; and every retrieval lens filters `valid_until` so current recall excludes superseded beliefs while an `includeExpired` flag reaches them.
 
-This is the same move motebit already trusts for **key revocation** — the effective `compromised_at` differs from the relay's recording time (the backdated-revocation work). `recorded time ≠ effective time`, applied to the interior. And it composes with the self-attesting thesis: a memory's validity interval becomes an **attestable** property — memory as auditable as a receipt. The reference shape (`valid_from` / `valid_until`) already exists in `@motebit/protocol`; the delta is putting it on `MemoryNode`.
+This is the same move motebit already trusts for **key revocation** — the effective `compromised_at` differs from the relay's recording time (the backdated-revocation work). `recorded time ≠ effective time`, applied to the interior. And it composes with the self-attesting thesis: a memory's validity interval becomes an **attestable** property — memory as auditable as a receipt.
+
+Two pieces are NOT yet built, and they are the protocol-grade half: (1) **wire emission** — the `memory_formed` and `memory_consolidated` events do not yet carry `valid_from` / `valid_until` / `superseded_valid_until`, so validity is local-only and does not sync across devices or federation (specced in [`spec/memory-delta-v1.md`](../../spec/memory-delta-v1.md) §3.5 / §5.1 / §5.5, emission pending); (2) **point-in-time as-of-T retrieval** — recall is hardcoded to `now` plus an all-or-nothing `includeExpired`, so it answers "current" and "all history" but not yet "what did I believe as of date `T`" (`valid_from ≤ T < valid_until`). Those two are the live deltas.
 
 ## Sovereign, signed, sensitive — the moat layer
 
@@ -70,11 +72,11 @@ The invariants this doctrine fences (the inverse of the moat):
 
 ## Shipped vs. delta
 
-Shipped today: the typed graph, episodic/semantic nodes, the seven-edge taxonomy, confidence + exponential decay reinforced on access, recency×importance×relevance + Hebbian retrieval, ADD/UPDATE/REINFORCE/NOOP consolidation, reflection + curiosity, the notability self-audit, sensitivity + retention + deletion certificates, and the idle consolidation cycle.
+Shipped today: the typed graph, episodic/semantic nodes, the seven-edge taxonomy, confidence + exponential decay reinforced on access, recency×importance×relevance + Hebbian retrieval, ADD/UPDATE/REINFORCE/NOOP consolidation, reflection + curiosity, the notability self-audit, sensitivity + retention + deletion certificates, the idle consolidation cycle, and **the in-store half of bi-temporal validity** (`valid_from`/`valid_until` on `MemoryContent`, `valid_from` stamped at formation, supersession sets `valid_until` and preserves the node, current retrieval filters it).
 
 The deltas to reach the end-game (deliberate future work, in order):
 
-- **Bi-temporal validity** — `valid_from` / `valid_until` on `MemoryNode`; supersession sets `valid_until`; as-of retrieval. Spec change first ([`spec/memory-delta-v1.md`](../../spec/memory-delta-v1.md)).
+- **Bi-temporal wire + as-of-T** — emit `valid_from` / `valid_until` on `memory_formed` and `superseded_valid_until` on `memory_consolidated` so validity syncs across devices/federation (specced in [`spec/memory-delta-v1.md`](../../spec/memory-delta-v1.md) §3.5/§5.1/§5.5); and add a point-in-time as-of-`T` retrieval (`valid_from ≤ T < valid_until`) beyond the current `now` + `includeExpired`. The in-store half already ships (above).
 - **`DerivedFrom` edge** — provenance from a reflection-synthesized memory back to its source observations.
 - **Episodic-eager extraction** — capture interest/trajectory memories via the existing `Episodic` type, not only high-confidence semantic facts; what turns a fact-store into a companion.
 - **Reliable bounded consolidation** — the idle cycle currently runs only when Proactive Interior is enabled; make it run by default within the governance bounds above.
