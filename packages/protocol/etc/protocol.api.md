@@ -2048,6 +2048,7 @@ export interface MemoryConsolidatedPayload {
     readonly existing_node_id: string | null;
     readonly new_node_id: string | null;
     readonly reason: string;
+    readonly superseded_valid_until?: number | null;
 }
 
 // @public
@@ -2082,6 +2083,8 @@ export interface MemoryFormedPayload {
     readonly redacted?: true;
     readonly redacted_sensitivity?: SensitivityLevel;
     readonly sensitivity: SensitivityLevel;
+    readonly valid_from?: number;
+    readonly valid_until?: number | null;
 }
 
 // @public

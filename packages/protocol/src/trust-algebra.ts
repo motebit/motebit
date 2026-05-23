@@ -85,7 +85,7 @@ export const REFERENCE_TRUST_THRESHOLDS: TrustTransitionThresholds = {
 };
 
 /**
- * @deprecated since 1.0.1, removed in 2.0.0. Use {@link REFERENCE_TRUST_THRESHOLDS} instead.
+ * @deprecated since 1.0.1, removed in 3.0.0. Use {@link REFERENCE_TRUST_THRESHOLDS} instead.
  *
  * Reason: the `DEFAULT_` prefix read as "THE value every motebit
  * implementation uses," but trust-transition thresholds are motebit

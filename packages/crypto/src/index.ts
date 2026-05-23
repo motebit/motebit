@@ -329,7 +329,7 @@ export interface VerifyOptions {
 // ===========================================================================
 
 /**
- * @deprecated since 1.0.0, removed in 2.0.0. Use {@link VerifyResult} instead.
+ * @deprecated since 1.0.0, removed in 3.0.0. Use {@link VerifyResult} instead.
  *
  * Reason: pre-0.4.0 return shape with a flat `error: string` field and no
  * type discriminator. The modern {@link VerifyResult} is a discriminated
@@ -1908,7 +1908,7 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
 /**
  * Verify a motebit.md identity file. Backward-compatible with pre-0.4.0.
  *
- * @deprecated since 1.0.0, removed in 2.0.0. Use `verify(content, { expectedType: "identity" })` instead.
+ * @deprecated since 1.0.0, removed in 3.0.0. Use `verify(content, { expectedType: "identity" })` instead.
  *
  * Reason: `verify()` is the unified dispatcher for every signed artifact
  * type (identity, receipt, credential, presentation) and returns a typed

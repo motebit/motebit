@@ -85,7 +85,7 @@ export const LOCAL_SERVER_SUGGESTED_MODELS = [
 ] as const;
 
 /**
- * @deprecated since 1.0.0, removed in 2.0.0. Use {@link LOCAL_SERVER_SUGGESTED_MODELS} instead.
+ * @deprecated since 1.0.0, removed in 3.0.0. Use {@link LOCAL_SERVER_SUGGESTED_MODELS} instead.
  *
  * Reason: the old name implied the list was Ollama-specific, but every
  * entry runs on every supported local inference server (Ollama, LM Studio,
@@ -157,7 +157,7 @@ export type OpenAIModel = (typeof OPENAI_MODELS)[number];
 export type GoogleModel = (typeof GOOGLE_MODELS)[number];
 export type LocalServerSuggestedModel = (typeof LOCAL_SERVER_SUGGESTED_MODELS)[number];
 /**
- * @deprecated since 1.0.0, removed in 2.0.0. Use {@link LocalServerSuggestedModel} instead.
+ * @deprecated since 1.0.0, removed in 3.0.0. Use {@link LocalServerSuggestedModel} instead.
  *
  * Reason: paired with {@link OLLAMA_SUGGESTED_MODELS}. Vendor-neutral
  * naming for the same underlying model set.
