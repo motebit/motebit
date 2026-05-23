@@ -72,13 +72,11 @@ The invariants this doctrine fences (the inverse of the moat):
 
 ## Shipped vs. delta
 
-Shipped today: the typed graph, episodic/semantic nodes, the seven-edge taxonomy, confidence + exponential decay reinforced on access, recency×importance×relevance + Hebbian retrieval, ADD/UPDATE/REINFORCE/NOOP consolidation, reflection + curiosity, the notability self-audit, sensitivity + retention + deletion certificates, the idle consolidation cycle, and **the in-store half of bi-temporal validity** (`valid_from`/`valid_until` on `MemoryContent`, `valid_from` stamped at formation, supersession sets `valid_until` and preserves the node, current retrieval filters it).
+Shipped today: the typed graph, episodic/semantic nodes, the seven-edge taxonomy, confidence + exponential decay reinforced on access, recency×importance×relevance + Hebbian retrieval, ADD/UPDATE/REINFORCE/NOOP consolidation, reflection + curiosity, the notability self-audit, sensitivity + retention + deletion certificates, the idle consolidation cycle, **bi-temporal validity end-to-end** (`valid_from`/`valid_until` on `MemoryContent`, stamped at formation, supersession sets `valid_until` and preserves the node, emitted on the `memory_formed`/`memory_consolidated` wire so it syncs across devices/federation, and point-in-time as-of-`T` retrieval — spec [`memory-delta-v1.md`](../../spec/memory-delta-v1.md) §3.5/§5.1/§5.5), and **episodic-eager extraction** (the tag instruction captures interest/trajectory memories as `Episodic`, not just high-confidence semantic facts — what makes the cognitive taxonomy load-bearing and motebit a thinking companion rather than a fact store; bounded by low confidence so one-off interests decay).
 
 The deltas to reach the end-game (deliberate future work, in order):
 
-- **Bi-temporal wire + as-of-T** — emit `valid_from` / `valid_until` on `memory_formed` and `superseded_valid_until` on `memory_consolidated` so validity syncs across devices/federation (specced in [`spec/memory-delta-v1.md`](../../spec/memory-delta-v1.md) §3.5/§5.1/§5.5); and add a point-in-time as-of-`T` retrieval (`valid_from ≤ T < valid_until`) beyond the current `now` + `includeExpired`. The in-store half already ships (above).
 - **`DerivedFrom` edge** — provenance from a reflection-synthesized memory back to its source observations.
-- **Episodic-eager extraction** — capture interest/trajectory memories via the existing `Episodic` type, not only high-confidence semantic facts; what turns a fact-store into a companion.
 - **Reliable bounded consolidation** — the idle cycle currently runs only when Proactive Interior is enabled; make it run by default within the governance bounds above.
 - **Signed `memory_consolidated`** — promote the consolidation event to a first-class signed artifact, fully realizing the "signed" leg.
 
