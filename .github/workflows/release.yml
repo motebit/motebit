@@ -192,12 +192,22 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
 
-      # Belt-and-suspenders publish — only runs when the action was
-      # skipped (state 3: all-ignored changesets accumulating). In
-      # states 1 and 2 the action above already handles publish; this
-      # step would be a no-op anyway, but skipping it explicitly avoids
-      # any chance of the action and this step racing on tag creation.
-      - name: Direct publish (idempotent — only fires in all-ignored state)
+      # Fires in state 3 (all-ignored changesets accumulating), which is the
+      # repo's STEADY state: the `ignore` list holds changesets for private
+      # packages indefinitely, so `changeset status` reports `releases: []`
+      # while leftover `.changeset/*.md` files persist — every release after a
+      # Version-Packages merge lands here, not in the action above.
+      #
+      # It is therefore NOT a no-op: when a Version-Packages merge bumped a
+      # published package's version, `changeset publish` ships it to npm here.
+      # The action's publish-mode niceties (push git tags + create GitHub
+      # Releases) do not run, so this step reproduces them: `changeset publish`
+      # creates local tags, we push them, and we open a GitHub Release per new
+      # tag. Fault-tolerant by design — a tag/release hiccup must never fail an
+      # npm publish that already succeeded (it's irreversible). Idempotent on
+      # re-run: already-published packages are skipped, pushed tags are no-ops,
+      # and existing releases are tolerated.
+      - name: Direct publish (publishes ignored-state leftovers + pushes tags + GitHub Releases)
         id: direct_publish
         if: steps.pending.outputs.state == 'skip'
         run: |
@@ -205,6 +215,17 @@ jobs:
           OUTPUT=$(pnpm release 2>&1 | tee /dev/stderr)
           if echo "$OUTPUT" | grep -qE "(New tag|Publishing)"; then
             echo "published=true" >> "$GITHUB_OUTPUT"
+            # changeset publish created local git tags for each published
+            # package — push them so every published version is traceable.
+            git push origin --tags || echo "::warning::tag push failed (already pushed?)"
+            # Create a GitHub Release per new tag, matching createGithubReleases
+            # on the action's publish path. Never fail the publish over a release.
+            echo "$OUTPUT" | grep -oE "New tag:[[:space:]]+[^[:space:]]+" | awk '{print $NF}' | while read -r TAG; do
+              [ -n "$TAG" ] || continue
+              gh release create "$TAG" --title "$TAG" \
+                --notes "Automated release of \`$TAG\`. See the package's CHANGELOG.md for details." \
+                --verify-tag || echo "::warning::GitHub Release for $TAG skipped (may already exist)"
+            done || true
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
             echo "Nothing to publish — every workspace package.json matches npm."
@@ -212,6 +233,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
+          GITHUB_TOKEN: ${{ secrets.CHANGESETS_TOKEN || secrets.GITHUB_TOKEN }}
 
       # Poll npm until every publishable workspace package's package.json
       # version is visible on the registry. Replaces a fixed `sleep 10`
