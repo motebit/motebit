@@ -99,7 +99,13 @@ describe("verifyReceiptDocument", () => {
 
   it("a tampered signature → integrity false, binding unverified, signature_invalid", async () => {
     const receipt = await signedReceipt();
-    const tampered = { ...receipt, signature: receipt.signature.slice(0, -2) + "AA" };
+    // Deterministic tamper: flip the first signature char to a guaranteed-
+    // different value. The old `slice(0,-2) + "AA"` was a no-op whenever the
+    // signature already ended in "AA" — leaving it valid, flipping this test
+    // red ~1/4096 CI runs (and, worse, not testing tamper-detection at all on
+    // the no-op runs). "A"/"B" are valid in both base64 and base58.
+    const flipped = (receipt.signature[0] === "A" ? "B" : "A") + receipt.signature.slice(1);
+    const tampered = { ...receipt, signature: flipped };
     const v = await verifyReceiptDocument(JSON.stringify(tampered));
     expect(v.integrity).toBe(false);
     expect(v.binding).toBe("unverified");
