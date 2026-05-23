@@ -1,8 +1,8 @@
 # motebit/memory-delta@1.0
 
 **Status:** Stable
-**Version:** 1.1
-**Date:** 2026-04-19
+**Version:** 1.2
+**Date:** 2026-05-23
 
 ---
 
