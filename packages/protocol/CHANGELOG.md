@@ -1,5 +1,372 @@
 # @motebit/protocol
 
+## 2.0.0
+
+### Major Changes
+
+- b0d068b: Introduce `WithdrawableGuestRail extends GuestRail` marker interface; remove `withdraw()` and `withdrawBatch?()` from the `GuestRail` base. Arc 1 Commit 2 of the off-ramp arc (sibling of `path-0-solana-sovereign-withdrawal` changeset). Same shape as the existing `DepositableGuestRail` / `BatchableGuestRail` discriminant-narrowing pattern, applied to the withdrawal axis.
+
+  **Why this is a major bump.** `withdraw()` is no longer on the base `GuestRail` interface — any external code that called `someRail.withdraw(...)` after typing the variable as bare `GuestRail` will fail to compile. The migration is mechanical (narrow through `isWithdrawableRail()` before calling) but it IS a breaking change in the public surface.
+
+  **Why this matters doctrinally.** The off-ramp arc's load-bearing invariant is _"Motebit is not a transmitter of user funds."_ Path 0 (Arc 1 Commit 1) made the sovereign return-of-custody path the structurally-preferred route. This commit makes the previously-bank-shaped fallback (Bridge user withdrawal) structurally impossible: `BridgeSettlementRail` cannot satisfy `WithdrawableGuestRail` because it carries `supportsWithdraw: false` and the `withdraw` method has been removed at the package level. The fence isn't a drift gate or a type narrowing at a single call site — it's the absence of the method on the type itself. Anywhere in the workspace, anywhere in any future contributor's code, `bridgeRail.withdraw(...)` is a compile error because the method does not exist.
+
+  ## Migration
+
+  Before:
+
+  ```ts
+  import type { GuestRail } from "@motebit/protocol";
+
+  function autoSettleWithdrawal(rail: GuestRail, ...args) {
+    return rail.withdraw(motebitId, amount, currency, destination, idempotencyKey);
+  }
+  ```
+
+  After:
+
+  ```ts
+  import type { GuestRail, WithdrawableGuestRail } from "@motebit/protocol";
+  import { isWithdrawableRail } from "@motebit/protocol";
+
+  function autoSettleWithdrawal(rail: GuestRail, ...args) {
+    if (!isWithdrawableRail(rail)) {
+      // Rail is registered for something other than user-facing withdrawal
+      // (treasury orchestration, deposit intake). Skip or route elsewhere.
+      return null;
+    }
+    // After narrowing, `rail` is `WithdrawableGuestRail` and `withdraw` is callable.
+    return rail.withdraw(motebitId, amount, currency, destination, idempotencyKey);
+  }
+
+  // Alternatively, type the parameter as WithdrawableGuestRail directly
+  // when the caller has already done the narrowing:
+  function fireWithdrawal(rail: WithdrawableGuestRail, ...args) {
+    return rail.withdraw(motebitId, amount, currency, destination, idempotencyKey);
+  }
+  ```
+
+  Rails that previously implemented `GuestRail` with a `withdraw()` method must now declare `implements WithdrawableGuestRail` instead, and add `readonly supportsWithdraw = true as const` alongside the existing `supportsDeposit` / `supportsBatch` discriminants. Rails that are registered for non-user-facing purposes (treasury orchestration, deposit-only, anchor submission) should declare `readonly supportsWithdraw = false as const` and either delete their `withdraw()` method or leave it undeclared — the structural absence IS the invariant.
+
+  The `BatchableGuestRail` interface now extends `WithdrawableGuestRail` (batch is a specialization of single withdraw). Batchable rails must implement both `supportsWithdraw: true` and `supportsBatch: true`.
+
+  **Rationale.** Marker-interface narrowing is the strongest structural enforcement available — stronger than drift gates (which catch at CI), stronger than type fences at a single dispatch site (which the next refactor can route around), stronger than `@deprecated` JSDoc (which compiles fine). The method's absence from the type IS the negative-proof. The pattern is already used in this package for deposit (`DepositableGuestRail`) and batch (`BatchableGuestRail`); the withdrawal axis now follows the same shape.
+
+  **Reference consumers** (not in changeset scope): `@motebit/settlement-rails` (major bump in its own changeset — `BridgeSettlementRail.withdraw` removed) and `services/relay/src/budget.ts` (Path 2 dispatch + Bridge webhook handler deleted; Path 1 narrows through `isWithdrawableRail`).
+
+- a5abc51: Arc 2 of the off-ramp arc — P2P fee leg now composes as a direct delegator→treasury leg in the same atomic Solana multi-output tx. `P2pPaymentProof` gains required `fee_to_address` + `fee_amount_micro` fields. `TxVerificationResult.confirmed` shape evolves from single-recipient `{from, to, amountMicro}` to `{from, transfers[]}` to support multi-recipient transactions cleanly. New `ConfirmedTransferLeg` type exported alongside.
+
+  **Why this is a major bump.** Two breaking shape changes:
+  1. `P2pPaymentProof.fee_to_address` and `P2pPaymentProof.fee_amount_micro` are required (not optional). Pre-Arc-2 callers that constructed `P2pPaymentProof` without these fields will fail to typecheck. The wire-format change is the structural enforcement: a delegator's P2P task submission cannot omit the fee leg because the type system rejects it. Closes the sibling-doc contradiction the settlement_mode arc surfaced (`CLAUDE.md` "5% applies through both lanes" vs `services/relay/CLAUDE.md` rule 8's pre-Arc-2 "Fee: zero on P2P").
+  2. `TxVerificationResult.confirmed` variant changed from `{from, to, amountMicro, slot, asset}` to `{from, transfers: ConfirmedTransferLeg[], slot, asset}`. Consumers that read `result.amountMicro` or `result.to` now read `result.transfers[i].amountMicro` / `result.transfers[i].to`. Multi-recipient transactions are now first-class (no longer rejected as `not_found`); single-payer is still required (multi-payer remains ambiguous). The only authorized consumer of this surface (`services/relay/src/p2p-verifier.ts`) was updated in the same arc.
+
+  ## Migration
+
+  `P2pPaymentProof` before:
+
+  ```ts
+  const proof: P2pPaymentProof = {
+    tx_hash,
+    chain,
+    network,
+    to_address: workerSolanaAddress,
+    amount_micro: workerNetMicro,
+  };
+  ```
+
+  After:
+
+  ```ts
+  import { deriveSolanaAddress } from "@motebit/wallet-solana";
+
+  const proof: P2pPaymentProof = {
+    tx_hash,
+    chain,
+    network,
+    to_address: workerSolanaAddress,
+    amount_micro: workerNetMicro,
+    // NEW — required after Arc 2. Treasury address derives from the
+    // relay's published Ed25519 public key.
+    fee_to_address: deriveSolanaAddress(relayPublicKeyBytes),
+    fee_amount_micro: Math.round(workerNetMicro / (1 - platformFeeRate)) - workerNetMicro,
+  };
+  ```
+
+  The delegator's runtime must construct a single atomic Solana transaction with TWO SPL Transfer instructions: one to `to_address` for `amount_micro`, one to `fee_to_address` for `fee_amount_micro`. Both signed by the same delegator keypair. The relay's `p2p-verifier` walks `transfers[]` on the tx and validates both legs match the declared amounts + addresses.
+
+  `TxVerificationResult` before:
+
+  ```ts
+  const r = await adapter.getTransaction(sig);
+  if (r.status === "confirmed") {
+    console.log(r.from, "→", r.to, ":", r.amountMicro);
+  }
+  ```
+
+  After:
+
+  ```ts
+  const r = await adapter.getTransaction(sig);
+  if (r.status === "confirmed") {
+    for (const leg of r.transfers) {
+      console.log(r.from, "→", leg.to, ":", leg.amountMicro);
+    }
+  }
+  ```
+
+  **Rationale.** The atomic multi-output composition is the doctrinally-clean answer to the sibling-doc contradiction surfaced during the settlement_mode arc. The five-iteration discipline converged on Option 2 (delegator-pays-relay-direct) over Options 1 (worker-pays-relay) or 3 (no settlement fee). Option 2 preserves the `endgame_architecture` 5%-at-settlement-checkpoint moat on every settlement while keeping the relay structurally out of the user-funds custody chain. The fee leg is the relay's own service-revenue collection (not held in trust for anyone) — distinguishable from FinCEN money transmission by the same logic that makes a vendor invoice payment legitimate.
+
+  Doctrine: [`docs/doctrine/off-ramp-as-user-action.md`](../docs/doctrine/off-ramp-as-user-action.md) "What Arc 1 did NOT close" → Arc 2 shipped section.
+
+- 343e81f: Add `settlement_mode: SettlementMode` as a required field on the signed `SettlementRecord` body — lane discriminant (`"relay"` vs `"p2p"`) is now part of the relay's attestation, not derivable from sibling fields. Doctrine: [`docs/doctrine/settlement-rails.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/settlement-rails.md) § "Lanes for external readers".
+
+  **Why this is a major bump.** Adding a required field to an interface is a breaking change for any caller constructing a `SettlementRecord` (directly or through `signSettlement(Omit<SettlementRecord, "signature" | "suite">, ...)`). External code that built receipts under the prior shape will fail to typecheck until it supplies the new field.
+
+  The custody split was already enforced at the type level (`GuestRail` vs `SovereignRail`), and the agent-registry already carried `settlement_modes: "relay" | "p2p"`, but the lane was missing from the per-settlement signed body. An auditor reading a `SettlementRecord` previously had to derive the custody posture from `custody × settlement_mode-on-table × x402_tx_hash-presence`. Now the lane is a required wire field on the signed receipt: instantly legible, signed into the canonical bytes, and structurally impossible for a relay to silently relabel after the fact.
+
+  Putting the lane inside the signature commits the relay to a specific custody posture per settlement. Tamper with `settlement_mode` and the Ed25519 signature stops verifying — same self-attestation contract as `amount_settled` and `platform_fee_rate`. This closes the legibility-but-not-architecture gap: graduation from `"relay"` to `"p2p"` was already mechanized via `evaluateSettlementEligibility`, but the lane chosen for each individual settlement was inferred, not declared.
+
+  **Reuses an existing registry.** `SettlementMode` is the seventh registered registry per [`registry-pattern-canonical.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/registry-pattern-canonical.md) — promoted 2026-05-15. This change adds a new wire-format consumer of the existing closed union; no new vocabulary, no new registry, no naming drift. `"treasury"` is deliberately not a member: treasury reconciliation is structurally a different audit shape (own-account operator fee accrual vs onchain balance) and never appears as a settlement lane.
+
+  ## Migration
+
+  Before:
+
+  ```ts
+  const record: SettlementRecord = {
+    settlement_id,
+    allocation_id,
+    receipt_hash,
+    ledger_hash,
+    amount_settled,
+    platform_fee,
+    platform_fee_rate,
+    status: "completed",
+    settled_at,
+    issuer_relay_id,
+    suite: "motebit-jcs-ed25519-b64-v1",
+    signature,
+  };
+  ```
+
+  After:
+
+  ```ts
+  const record: SettlementRecord = {
+    settlement_id,
+    allocation_id,
+    receipt_hash,
+    ledger_hash,
+    amount_settled,
+    platform_fee,
+    platform_fee_rate,
+    settlement_mode: "relay", // NEW — required; "relay" or "p2p"
+    status: "completed",
+    settled_at,
+    issuer_relay_id,
+    suite: "motebit-jcs-ed25519-b64-v1",
+    signature,
+  };
+  ```
+
+  Pick the lane by custody intent: `"relay"` when the relay holds the money (virtual-account credit/debit on its books — the default for guest-rail settlement), `"p2p"` when funds move agent-to-agent onchain via a `SovereignRail` and the relay records the audit only.
+
+  If you read pre-migration rows from a database, default to `"relay"` — the prior schema's only persisted lane was relay-custody since p2p audit rows already wrote their lane explicitly via raw SQL.
+
+  Rationale: the lane belongs in the signed body, not in storage-side metadata. A relay that custodied a settlement cannot retroactively relabel it as p2p; the signature commits the relay to its claimed custody posture. Auditors and counsel reading a single `SettlementRecord` should see the lane directly without consulting sibling fields or table-level defaults.
+
+### Minor Changes
+
+- 92c2800: Arc 3 of the off-ramp arc — type-level scaffolding for closing the in-flow direction of user funds. Introduces:
+
+  **`WritableSettlementMode`** — `type WritableSettlementMode = Extract<SettlementMode, "p2p">`. The asymmetric-typing enforcement shape: reads accept the full `SettlementMode` union (legacy `"relay"` rows must remain readable for audit + verifier + federation compat); writes are structurally restricted to `"p2p"`. Documents the post-Arc-3 architectural intent that new worker-settlement code should write only `"p2p"`. The Layer 1 enforcement shape is documentary at land — the type is exported and consumed at the `SettlementEligibility` result; future arcs (Arc 3.5, multi-hop-as-P2P) tighten the operational enforcement by adopting the narrow type at write sites.
+
+  **`SettlementEligibility`** evolves from `{ allowed: boolean; mode: SettlementMode; reason: string }` to a disjunctive shape:
+
+  ```ts
+  type SettlementEligibility =
+    | { allowed: true; mode: WritableSettlementMode; reason: string }
+    | { allowed: false; reason: string };
+  ```
+
+  The allowed branch carries `mode: "p2p"` (the only `WritableSettlementMode` value); the disallowed branch has no `mode` field because there's no fallback rail to route to (Arc 3 collapsed the relay-custody fallback for eligible-pair checks). Consumers that destructure `mode` must narrow via `if (result.allowed)` first — the type forces explicit handling of the disallowed case.
+
+  **Migration**: callers that read `result.mode` directly will fail to typecheck. Narrow via `if (result.allowed) { ... result.mode ... }`. Pre-Arc-3 callers that wrote `mode: "relay"` on the disallowed branch are no longer valid — disallowed has no mode field.
+
+  **Composition with prior arcs**: this is the third enforcement shape in the off-ramp arc's Layer 1 library. Arc 1 demonstrated surface deletion (`BridgeSettlementRail.withdraw` removed entirely) + marker interface (`WithdrawableGuestRail`). Arc 3 demonstrates asymmetric typing — the shape to reach for when reads must stay open but writes must be closed (legacy compat + structural future-closure). See the [`architecture_disjointness_by_construction`](../../../../../.claude/projects/-Users-daniel-src-motebit/memory/architecture_disjointness_by_construction.md) memory for the full six-shape library and the meta-principle.
+
+  **Companion** (not in changeset scope — relay is ignored): `services/relay/src/task-routing.ts` `evaluateSettlementEligibility` rewrites to the disjunctive form with established-pair branch (trust ≥ 0.6 AND interactions ≥ 5) OR new-pair branch (`delegatorAcknowledgesNoHistoryRisk` parameter). `services/relay/src/tasks.ts` task-submission payload gains optional `delegator_acknowledges_no_history_risk?: boolean` field that flows through to the eligibility check. The disjunctive gate solves the cold-start problem (new workers with no trust history) via explicit delegator consent rather than weakening the trust algebra with a free-starting-trust hack — see [`trust_as_economic_membrane`](../../../../../.claude/projects/-Users-daniel-src-motebit/memory/trust_as_economic_membrane.md) for the structural-floor-plus-economic-ceiling pattern.
+
+  **Arc 3.5 deferred**: the operational submission gate (`TASK_P2P_PROOF_REQUIRED` — reject paid direct delegation without payment_proof) was prototyped during Arc 3 implementation but rolled back because it breaks 32 existing E2E tests that exercise the relay-custody path as legacy contract. Migrating the test suite + production delegator clients to construct P2P payment_proofs for every paid direct delegation is its own bounded arc (Arc 3.5). Until then, paid direct delegation can still use the relay-custody path; new delegator clients SHOULD prefer P2P but aren't structurally required to. The structural enforcement at the protocol type level is in place; the submission-boundary enforcement lands in Arc 3.5.
+
+  Doctrine: [`docs/doctrine/off-ramp-as-user-action.md`](../docs/doctrine/off-ramp-as-user-action.md) § "Arc 3 scope and Arc 3.5 deferred" + "Arc 3 carve-outs."
+
+- 6a46f33: Auto-router as protocol primitive — `f(TaskShape × ProviderCapability × Constraints) → RoutingDecision`. Additive types for the model-selection primitive (drift gate #95, doctrine memo `auto-routing-as-protocol-primitive.md`).
+
+  New exports:
+
+  ```ts
+  type TaskShape = "quick" | "chat" | "reasoning" | "code" | "research" | "creative" | "math";
+  type InferenceHost = "anthropic" | "openai" | "google" | "groq"; // lifted from services/proxy
+  type ModelLab = "anthropic" | "openai" | "google" | "meta"; // lifted from services/proxy
+  type Jurisdiction = "US" | "CN" | "EU"; // lifted from services/proxy
+  interface ProviderCapability {
+    modelName;
+    host;
+    lab;
+    jurisdiction;
+    inputCostPerMillion;
+    outputCostPerMillion;
+  }
+  interface RoutingConstraint {
+    jurisdiction?;
+    maxInputCostPerMillion?;
+    maxOutputCostPerMillion?;
+    requiresToolUse?;
+    sensitivityCeiling?;
+  }
+  type RoutingDecision =
+    | { kind: "route"; model; reason }
+    | { kind: "fallback"; primary; backup; reason }
+    | { kind: "deny"; reason };
+  ```
+
+  Plus `ALL_TASK_SHAPES` frozen iteration, `isTaskShape` type guard, named constants per shape (`QUICK_TASK_SHAPE`, etc.). Additive — no existing exports renamed or removed.
+
+  The `InferenceHost` / `ModelLab` / `Jurisdiction` unions were previously declared in `services/proxy/src/validation.ts`; lifting them here makes the auto-router primitive in `@motebit/policy` consumable across motebit-cloud (proxy, PR 1), BYOK (PR 2), and on-device (PR 3) consumers. The proxy re-exports the unions for back-compat with proxy-internal callers; new code imports from `@motebit/protocol` directly.
+
+  The dispatcher itself (`dispatchRouting`, `applyBalanceFilter`, `REFERENCE_ROUTING_POLICY`) lives in `@motebit/policy` (private/BSL — separate ignored changeset). Three-instance-deep endgame validation (motebit-cloud / BYOK / on-device) mirrors chrome-as-state-render's web/mobile/spatial rollout.
+
+  Drift gate `check-routing-decision-coverage` (#95) enforces consumer registry. `TaskShape` literal coverage is TypeScript-enforced via the dispatcher's exhaustive switch with `never` fallthrough — gate doesn't scan it (redundant ceremony). Inventory: 96 → 97 invariants, 86 → 87 hard CI gates.
+
+  Doctrine: `docs/doctrine/auto-routing-as-protocol-primitive.md` (PR 1 scope, three-instance endgame validation, role-vs-policy distinction). `agility-as-role.md` extends from 6 → 7 instances: `TaskShape` is the role (closed registry); routing-policy is a consumer-side function — NOT a role. The plan-review session that produced this PR caught the role/policy conflation in an earlier draft; the correction is preserved in the doctrine.
+
+- 53e11b5: `EventType` promoted to canonical registry (sixth registered registry per `docs/doctrine/registry-pattern-canonical.md`). Additive, non-breaking: the existing enum + 59 entries are preserved; new exports are `ALL_EVENT_TYPES` (frozen iteration array, declaration order) and `isEventType` (type guard narrowing `unknown` to `EventType`). Same shape as `ALL_TASK_SHAPES` + `isTaskShape`, `ALL_SENSITIVITY_LEVELS` + `isSensitivityLevel`.
+
+  First template-growth proof of the meta-gate (`check-closed-registry-canonical`, #98) — the doctrine's claim that adding a sixth registry is mechanical-not-design holds. New per-registry coverage gate `check-event-type-canonical` (#99) enforces the three-way structural lock between the enum, `ALL_EVENT_TYPES`, and the gate's mirror; wire-format compliance verifies all 59 values are snake_case identifier-shaped. `REGISTERED_REGISTRIES` advances from 5 → 6 entries.
+
+- 2428248: Add `"goal-result"` as the 13th entry in the closed `ContentArtifactType` registry — the **first non-relay-state-export consumer** of the C2PA-shape content-provenance primitive. The prior twelve entries are all relay-assembled state-export bundles signed by `relayIdentity`; `goal-result` is signed by the **agent's** motebit identity at fire-time (per the goal-results Phase 3 doctrine close, `docs/doctrine/goal-results.md` §"Phase 3").
+
+  The registry's stated semantic generalizes cleanly — "content-artifact category for C2PA-shape provenance," not "relay state-export bundle." The producer-identity dimension is orthogonal to the category dimension: same JCS-canonical signing, same suite-dispatch verification, same `motebit-verify content-artifact` CLI entry point; just a different signer. Future motebit-direct artifacts (chat-bundle exports, generated documents, tool-call-result bundles) compose against this same shape without further registry expansion.
+
+  New exports:
+  - `"goal-result"` literal added to the `ContentArtifactType` union.
+  - `GOAL_RESULT_ARTIFACT` named constant.
+  - `ALL_CONTENT_ARTIFACT_TYPES` iteration array gains the new entry.
+
+  The runtime helper that consumes the new type (`@motebit/runtime::signGoalArtifact(content, { goalId, runId })`) wraps the artifact bytes via `signContentArtifact` from `@motebit/crypto` (pinned suite `motebit-jcs-ed25519-hex-v1`). Identity-load-pending fires return `null` fail-safe — never silently sign with a placeholder. Drift gate `check-artifact-type-canonical` mirrors the registry addition (scanned 896 files; passes).
+
+  Sibling doctrine updates:
+  - `docs/doctrine/goal-results.md` §"Phase 3" marked SHIPPED 2026-05-14.
+  - `docs/doctrine/receipts-unified.md` table extended (`ContentArtifactManifest` signer column now reads "Relay identity **or** agent (`goal-result`)").
+  - `docs/doctrine/nist-alignment.md` §8 gains "First non-relay-state-export consumer shipped 2026-05-14" paragraph naming the expansion + the verifier auto-support path + which drift gates scope to which producer (`check-state-export-signed` only to relay; `check-artifact-type-canonical` to both).
+
+  Test `artifact-type.test.ts` count assertion adjusted 12→13; named-constant enumeration updated.
+
+- f1d3308: Land the on-device auto-routing primitive — third-consumer half of the auto-router PR-3 arc (doctrine: `docs/doctrine/auto-routing-as-protocol-primitive.md` § "Three-instance endgame"). PR 1 (2026-05-13) shipped motebit-cloud-proxy; PR 2 (2026-05-14) shipped BYOK across web/desktop/mobile; PR 3 (this commit) closes the three-instance-deep validation by landing the third concrete consumer with fundamentally different cost semantics: zero marginal $/token (on-device runs on user hardware), no balance filter, no jurisdiction filter (the user's device IS the jurisdiction), dynamic catalog (what's installed locally varies per user).
+
+  The architectural payoff: validates the doctrine claim that `dispatchRouting(TaskShape × ProviderCapability × Constraints) → RoutingDecision` is consumer-neutral across all three sovereignty postures, not just two. With PR 1 + PR 2, the role-as-instance pattern (7th instance of `agility-as-role.md`) had two consumers — same risk shape as a 2-instance closed registry. PR 3 makes it three. Same dispatcher, same `RoutingDecision` discriminated union, same `REFERENCE_ROUTING_POLICY`, same closed `TaskShape` registry — across three consumers with three fundamentally different cost models (subscription / pay-per-call / zero-marginal).
+
+  **`@motebit/protocol`** — closed-registry expansions for the on-device case:
+  - `InferenceHost` += `"local-server"`. The on-device case: requests route to the user's own inference server (Ollama, LM Studio, llama.cpp, Jan, vLLM, text-generation-webui — all expose `/v1/chat/completions` via the OpenAI-compat shim). Mirrors the `OnDeviceBackend` value of the same name in `@motebit/sdk`. The proxy NEVER routes to `local-server` — defensive arms in `services/proxy/src/app/v1/messages/route.ts::getProviderApiKey` (returns null) and `buildProviderRequest` (throws) name the structural violation rather than silently degrading.
+  - `ModelLab` += `"mistral" | "microsoft" | "alibaba"`. The labs the canonical `LOCAL_SERVER_SUGGESTED_MODELS` set draws from: Mistral AI trains Mistral, Microsoft trains Phi-3, Alibaba trains Qwen2. The proxy never sees these labs (it doesn't host their models); the registry expansion is purely consumer-side (the on-device dispatcher's catalog), which is why the registry's stated semantic "who trained the weights" generalizes cleanly without protocol-layer churn.
+
+  **`@motebit/policy`** — new on-device router primitive (`on-device-router.ts`):
+  - `ON_DEVICE_MODEL_CATALOG: Record<OnDeviceBackend, readonly ProviderCapability[]>` — per-backend `ProviderCapability` catalog. Single populated backend today is `local-server` with 8 entries (Llama 3.2 / 3.1 / 3, Mistral, Codellama, Gemma2, Phi-3, Qwen2 — mirrors `LOCAL_SERVER_SUGGESTED_MODELS` in `@motebit/sdk/models.ts`). Single-model backends (`webllm`, `apple-fm`, `mlx`) ship empty catalogs by design — they're surfaces where the user picks one model at config time. All `local-server` entries have `inputCostPerMillion: 0` + `outputCostPerMillion: 0` (the truthful representation of marginal cost on user hardware) and `host: "local-server"` (the new InferenceHost registry entry). `as const satisfies Record<OnDeviceBackend, ...>` enforces backend coverage structurally.
+  - `buildOnDeviceCatalog(backend)` — pure dispatch on the union.
+  - `dispatchOnDeviceRouting(text, backend, constraints?)` — composed entry point. Reuses `extractTaskShape` from `byok-router.ts` (the heuristic detector is the right shape for any consumer that can't afford per-message LLM classification). Returns `RoutingDecision`; surfaces handle all three discriminator values.
+
+  Single-model backends return `{ kind: "deny" }` from the dispatcher because their catalog is empty — the honest signal ("nothing to auto-route across"). The same `RoutingDecision.kind === "deny"` channel covers both "constraints empty the catalog" (BYOK) and "catalog was empty to begin with" (on-device single-model). One shape; two semantic origins.
+
+  Coverage: 11 new tests under `__tests__/on-device-router.test.ts`, pure-function. Tests pin (a) backend coverage of `OnDeviceBackend`, (b) the zero-marginal-cost invariant, (c) every catalog entry routes through `host: "local-server"` (defense against a future bug smuggling a remote-host entry into the on-device catalog), (d) lab-coverage invariant matching `LOCAL_SERVER_SUGGESTED_MODELS`, (e) the composed dispatcher's behavior across the multi-model `local-server` path AND the single-model paths (which deny by design).
+
+  What this commit deliberately defers to commit B (sibling, this week):
+  - Desktop on-device consumer wire-up — `_onDeviceAutoRouteBackend` field on `DesktopApp`, `OnDeviceProviderConfig.autoRoute` flag in sdk, per-turn dispatch in desktop's `sendMessageStreaming`, drift-gate `on-device-runtime-desktop` consumer registration, doctrine PR 3 close. Land alongside the verifiable end-to-end consumer site.
+  - Web / mobile on-device mirror. Same shape as desktop; cross-surface mirror per one-pass-delivery follows when there's verifiable signal. Web's WebLLM path has download-cost per model swap making per-turn routing inappropriate; mobile's local-server is less common today than desktop's.
+
+- 904d744: `ProviderCapability` gains an optional `contextWindowTokens?: number` field per the new
+  [`intelligence-pluggability-contract`](../docs/doctrine/intelligence-pluggability-contract.md)
+  doctrine. Consumers performing pre-flight admission read this to decide whether the
+  selected model can carry the assembled prompt before invoking it:
+
+  ```text
+  systemPromptBudget + toolSchemaBudget + renderedStateBudget + userMessageReserve + outputReserve
+    ≤ providerCapability.contextWindowTokens
+  ```
+
+  Auto-routing dispatch does not consume this field today — it is a sibling deny semantic to
+  auto-router deny: "I cannot pick among catalog entries" (auto-routing) vs "the picked
+  model cannot carry the assembled prompt" (admission). The two share one calm-software
+  surface via the chrome's `routingNarration` slot but answer different questions.
+
+  Additive + optional. No existing consumer or implementer breaks.
+
+- 91b582e: Bi-temporal validity wire fields (memory-delta-v1 §3.5): optional `valid_from` / `valid_until` on `MemoryFormedPayload` and `superseded_valid_until` on `MemoryConsolidatedPayload`. Additive — pre-existing memory events replay unchanged. These let a memory's validity interval (already tracked in-store via `MemoryContent.valid_from`/`valid_until`) sync across devices and federation, not just live locally; supersession carries the validity-time at which the superseded belief ended so peers close the same interval.
+- 4ea0127: Add `SensitivityCleared<T>` phantom-type brand to `packages/protocol/src/sensitivity.ts`. Pure type-level precondition: `T` carrying an opaque type-level proof that `assertSensitivityPermitsAiCall()` fired before the value was produced. Symbol is `declare const`-only (no runtime), so the brand can be produced only via an explicit `as SensitivityCleared<T>` cast — and that cast lives inside the runtime's gate implementation as the single authorized production site.
+
+  **Layer 1 promotion of the privacy doctrine** ("Medical/financial/secret never reach external AI"). The brand sits on the `MotebitLoopDependencies` parameter of `runTurn` / `runTurnStreaming` in `@motebit/ai-core`, propagating through every indirect AI-egress path (`StreamingManager` resume-after-tool-approval in `@motebit/runtime`, `PlanEngine` per-step execution in `@motebit/planner`). Any code that reaches `runTurn` without threading the brand from a gate-firing producer is now a compile error — closes the off-gate cross-file and cross-package paths that the static `check-sensitivity-routing` drift gate cannot scan.
+
+  **Third Layer 1 promotion mechanism** in motebit's idiom — distinct from the view-type pattern (`BootedApp = Omit<WebApp, ...>` for callsite enforcement) and the phase-typing pattern (`UnbootedWebApp.bootstrap() → WebApp` for state-machine enforcement). Branded preconditions encode "you did X before consuming Y" at the type system; the production site is the only privileged cast, consumers are structurally locked to typed proof.
+
+  The static `check-sensitivity-routing` gate stays for `provider.generate(...)` direct calls (housekeeping completions: title generation, summarization, classification). Brand-typing for that family is a future arc — separate signature change with its own propagation surface.
+
+  Additive change. No existing consumer breaks; the brand is opt-in for callers that want to require it on their parameters.
+
+- 46189c6: Add `"summarizeConversation"` and `"runReflection"` to the `SensitivityGateEntry` closed union in `packages/protocol/src/perception.ts`. Third category of sub-axis entries (alongside direct AI-call entries and indirect continuation-site entries from the prior sub-axis arc): **indirect AI-call entries (housekeeping sites)** — the runtime fires the gate on background AI work that doesn't go through `runtime.generateCompletion`'s surface-facing path.
+
+  Pre-this-change, two cross-package direct-provider-call sites had **no gate enforcement at all**:
+  - `ConversationManager.summarize` / `runSummarization` (in `@motebit/runtime`) reached `summarizeConversation` (in `@motebit/ai-core`) with an unbranded provider lookup via `getProvider()`. Full conversation history fed to the AI with no sensitivity gate.
+  - `MotebitRuntime.reflect` / `reflectAndStore` reached `performReflection` (in `@motebit/reflection`) which read its provider via `deps.getProvider()`. History + memories + past reflections + audit summary composed into the prompt with no gate.
+
+  Both are bytes-leave moments with payload shapes meaningfully richer than `generateCompletion` (single-shot prompt). Reusing `"generateCompletion"` as the audit entry would conflate the housekeeping bundle category and hide the actual blocked site from a forensic consumer. The doctrinally accurate split names the actual entry — same justification that drove the prior `"resumeAfterToolApproval"` / `"executePlanStep"` continuation-site split.
+
+  Sub-axis refinement (not a registered registry) — the eight-artifact obligation does not apply. The union grew 7 → 9 across the two sub-axis arcs landed 2026-05-16.
+
+  Additive change: existing consumers of `SensitivityGateEntry` continue to compile against the wider union; no wire-format break (the payload field type widens but every previously-valid value remains valid).
+
+- 00585fc: Add `"resumeAfterToolApproval"` and `"executePlanStep"` to the `SensitivityGateEntry` closed union in `packages/protocol/src/perception.ts`. Sub-axis refinement (not a registered registry) — the union enumerates indirect-entry-point identifiers for audit, not an interop-law typed vocabulary; the doctrine for the structural-lock pattern with bespoke coverage applies.
+
+  Pre-this-change, the runtime's two indirect-entry call sites borrowed `"sendMessageStreaming"` as the audit label: `StreamingManager.resumeAfterApproval` (continuation after the user approves a paused tool call) and `PlanExecutionManager.executePlan` / `resumePlan` (per-step plan execution and resume). Both are bytes-leave moments and both fire the sensitivity gate, but the audit trail attributed every blocked egress to the surface-facing `sendMessageStreaming` entry — a consumer trying to localize a leak risk to "which continuation site went sovereign-blocked" had to cross-reference the stack rather than read the entry.
+
+  The two new entries split the audit category:
+  - `"resumeAfterToolApproval"` — `StreamingManager.resumeAfterApproval`. Sensitivity may have elevated during the pause for approval (a slab item dropped, a tier-bounded tool result observed); the dedicated entry attributes the blocked egress to the actual continuation site.
+  - `"executePlanStep"` — `PlanExecutionManager.executePlan` and `PlanExecutionManager.resumePlan`. Both fire the gate per-step. Single audit category for "the gate firing for a plan-step's bytes-leave moment" — initial execute and post-pause resume share the same audit identity.
+
+  Additive change: existing consumers of `SensitivityGateEntry` (audit projection in `@motebit/panels`, gate-fired tests in `@motebit/runtime`) continue to compile against the wider union. No wire-format break — the payload field type widens but every previously-valid value remains valid.
+
+- 7dd54da: Canonical registry tooling for `SensitivityLevel` (additive). `ALL_SENSITIVITY_LEVELS` (frozen iteration array, ordered `none` → `secret`) and `isSensitivityLevel` (type guard, narrows `unknown` to `SensitivityLevel`) land alongside the existing enum + `SENSITIVITY_RANK` algebra. Same shape as `ALL_SUITE_IDS` + `isSuiteId`, `ALL_TOKEN_AUDIENCES` + `isTokenAudience`, `ALL_CONTENT_ARTIFACT_TYPES` + `isContentArtifactType`, `ALL_TASK_SHAPES` + `isTaskShape`.
+
+  Closes the asymmetry surfaced by the registry-gate-family audit on 2026-05-14: `SensitivityLevel` was the only top-tier closed registry without the canonical `ALL_X` + `isX` iteration + guard pair. The new drift gate `check-sensitivity-canonical` (#97) holds the four-way structural lock between the enum, the iteration array, `SENSITIVITY_RANK`, and the gate's own reference mirror — a tier insertion is intentional protocol-level work across all four sites. The enum and all existing exports are preserved; no breaking changes.
+
+- be9275a: Sub-phase A of the asset-pluggability commitment named in [`docs/doctrine/off-ramp-as-user-action.md`](../docs/doctrine/off-ramp-as-user-action.md) § "The settlement-asset registry — sub-phase A SHIPPED."
+
+  **`SettlementAsset`** — closed union `type SettlementAsset = "USDC"`. Single member at land — USDC is the bootstrap stablecoin. The vocabulary IS the interop boundary: a third-party motebit receiving a sovereign-rail announcement with an unknown asset (`"USDT"`, `"DAI"`) must fail-closed at the type guard, not silently treat it as a settlement asset.
+
+  **`ALL_SETTLEMENT_ASSETS`** — frozen iteration array, same shape as `ALL_SETTLEMENT_MODES` / `ALL_EVENT_TYPES`.
+
+  **`isSettlementAsset(value: unknown): value is SettlementAsset`** — type guard for narrowing wire-format payloads at intake (discovery responses, signed `SovereignRail` declarations, peer-negotiation messages).
+
+  **`SovereignRail.asset` tightened from `string` to `SettlementAsset`** — the structural enforcement site. Reads remain backwards-compatible (a `SettlementAsset` value is still a `string`); implementers of `SovereignRail` outside the monorepo must now produce a value assignable to the closed union. The single in-tree implementer (`SolanaWalletRail` in `@motebit/wallet-solana`) already declared `asset = "USDC" as const`, so no implementation change was required. Adopters of `SovereignRail` who produce an unknown asset symbol will see a TypeScript error and must either register their asset (sub-phase B) or wrap in an adapter.
+
+  **Sub-phase B (deferred)** — promotion to the 8th registered registry per `docs/doctrine/registry-pattern-canonical.md` (per-registry coverage gate, perturbation probe, drift-defenses inventory entry, `REGISTERED_REGISTRIES` append) lands when a second asset (PYUSD, USDP, etc.) arrives as a real consumer. The sub-phase-A iteration array + type guard are already shaped so the promotion is a one-line `REGISTERED_REGISTRIES` append plus the per-registry coverage gate, not a refactor.
+
+  **Sibling-audit note** (not in this changeset): `SovereignReceiptRequest.asset: string` in `@motebit/runtime` and the matching wire-format declaration in `spec/delegation-v1.md` § 8.1 carry the same semantic. They retain `string` typing pending a follow-on that narrows the HTTP receipt-exchange boundary via the type guard at JSON intake. Two-step approach (type guard at boundary, then tighten the interface) so the tightening is purely additive on the wire format.
+
+  **Architectural intent**: the registry membership IS the protocol-vs-product wall named in `docs/doctrine/protocol-primacy.md` — if `"MOTE"` is ever added to `ALL_SETTLEMENT_ASSETS`, it's protocol; if it isn't, it's a motebit-cloud product overlay that converts to/from a protocol-level asset at its boundaries. See the `feedback_no_mote_stablecoin` memory for the current deferral framing.
+
+  Composes with the off-ramp arc's prior Layer 1 enforcement shapes (per the `architecture_disjointness_by_construction` memory): surface deletion (`BridgeSettlementRail.withdraw`), marker interface (`WithdrawableGuestRail`), asymmetric typing (`WritableSettlementMode`). Sub-phase A adds the **typed vocabulary** shape — a closed string-literal union whose membership is the protocol-vs-product wall.
+
+- 8262902: Promote `SettlementMode` to a registered registry — seventh instance of the canonical registry pattern per `docs/doctrine/registry-pattern-canonical.md`.
+
+  `SettlementMode` (the closed `"relay" | "p2p"` union in `packages/protocol/src/settlement-mode.ts`) discriminates how money moves for a task: through the relay's virtual accounts, or directly onchain. The union was already cross-package interop law — relays route on `SettlementEligibility.mode`, agent discovery declares `settlement_modes[]`, peer negotiation depends on agreement — but lacked the canonical iteration + guard primitives that every other interop-law typed vocabulary in `@motebit/protocol` carries.
+
+  This release adds the two new public exports:
+  - `ALL_SETTLEMENT_MODES: readonly SettlementMode[]` — frozen iteration array, the single source of truth for "every settlement mode."
+  - `isSettlementMode(value: unknown): value is SettlementMode` — type guard for narrowing values pulled from wire-format payloads or external sources.
+
+  Same shape as `ALL_EVENT_TYPES` / `isEventType` (sixth registry, shipped 2026-05-14), `ALL_SUITE_IDS` / `isSuiteId`, `ALL_TOKEN_AUDIENCES` / `isTokenAudience`, `ALL_CONTENT_ARTIFACT_TYPES` / `isContentArtifactType`, `ALL_TASK_SHAPES` / `isTaskShape`, `ALL_SENSITIVITY_LEVELS` / `isSensitivityLevel`. Adding a settlement mode is now intentional protocol-level work: new union arm + new entry in `ALL_SETTLEMENT_MODES` + gate-reference update; the per-registry coverage gate (`check-settlement-mode-canonical`) and the meta-gate (`check-closed-registry-canonical`) together enforce the sibling-alignment.
+
+  The minor bump reflects the additive surface (two new exports); no existing wire format or type contract changes.
+
 ## 1.3.0
 
 ### Minor Changes

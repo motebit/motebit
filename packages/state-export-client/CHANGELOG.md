@@ -1,5 +1,52 @@
 # @motebit/state-export-client
 
+## 0.3.0
+
+### Minor Changes
+
+- 964f98a: Add `lookupKeyRevocation` and the `revoked` binding rung. A verifier can now scan the relay's pinned Solana address for a `motebit:revocation:v1:{key}:{timestamp}` memo and, via `verifyReceiptDocument`'s new `revocation` option, refuse to bind a receipt whose signing key was revoked at or before the receipt's timestamp — `binding: "revoked"` overrides every other rung. Revocation is read from the neutral chain, never the relay's `/identity` response, because a relay could hide a revocation that protects a key it controls.
+- ecc15f3: Receipt verification now structurally separates signature integrity from identity binding.
+
+  A verified signature proves the embedded key signed the receipt bytes; it does NOT prove that key belongs to the receipt's `motebit_id` — a forged receipt can embed any key and still verify. The result types now make that distinction unmistakable:
+  - `ReceiptVerifyResult` and `ReceiptVerification` carry a `keySource` field. `verifyReceiptChain` records whether the verifying key was resolved from the caller's trusted `knownKeys` map (`"external"` — identity binding established) or fell back to the receipt's own embedded `public_key` (`"embedded"` — byte-integrity only). `verifyReceipt` is always `"embedded"`.
+  - The browser inner-receipt verifier surfaces `identityBinding: "embedded-key-unverified"` on successful checks, so a UI never renders "from \<motebit\>" on the strength of an envelope-asserted key alone.
+
+  Callers MUST gate identity claims on `keySource === "external"` (or an external transparency/known-keys anchor). Additive and backward-compatible — callers that ignore the new fields are unaffected.
+
+- 421dafd: Add the sovereign binding rung. `deriveSovereignMotebitId(genesisKey)` derives a UUIDv8 commitment from `sha256(genesisKey)`, and `verifySovereignBinding(motebitId, genesisKey)` checks it — so a sovereign-minted motebit's `motebit_id` IS the commitment to its genesis key, verifiable offline with no operator. `verifyKeyBindingAtTime` now reports `sovereign: true` on its result, and `verifyReceiptDocument` reaches `binding: "sovereign"` (the strongest rung, needing only the identity file — no anchor, no relay, no chain). The genesis key derives from a 32-byte seed, so sovereign ids are recoverable and rotation still works via succession. Additive: sovereign ids are UUIDv8, existing ids are UUIDv7, so they never collide; minting sovereign ids is opt-in.
+- 6dedf51: `verifyReceiptDocument` now accepts an optional `identity` (the producing motebit's identity file) and upgrades the result to the `"pinned"` binding rung when the receipt's signing key is time-valid for that identity's succession chain and the `motebit_id` matches. The binding status is now a trust-minimization ladder — `unverified` / `integrity-only` / `pinned` — replacing the placeholder `"bound"` with the rung vocabulary from `docs/doctrine/identity-binding-verification.md`. Composes `@motebit/crypto`'s `verifyKeyBindingAtTime`; the `anchored` and `sovereign` rungs layer operator non-equivocation on top in later slices.
+- c84d13a: Add `verifyReceiptDocument` — verify a pasted or standalone `ExecutionReceipt` entirely offline and project it into an honest, display-ready view model that keeps signature **integrity** separate from identity **binding** (the brain behind a public receipt verifier). A valid offline check is `integrity-only` — it never claims the key belongs to the `motebit_id`; the `"bound"` status is reserved for a future trusted-anchor path. Malformed or non-receipt input surfaces typed reasons (`malformed_json` / `not_a_receipt` / `signature_invalid` / `missing_public_key` / `delegation_failed`) rather than throwing. Composes `@motebit/crypto`'s `verifyReceipt`; no new cryptography.
+
+### Patch Changes
+
+- Updated dependencies [b0d068b]
+- Updated dependencies [92c2800]
+- Updated dependencies [6a46f33]
+- Updated dependencies [02d09da]
+- Updated dependencies [de086d7]
+- Updated dependencies [31ceae3]
+- Updated dependencies [1a7201c]
+- Updated dependencies [e4389bc]
+- Updated dependencies [53e11b5]
+- Updated dependencies [2428248]
+- Updated dependencies [1c90c5d]
+- Updated dependencies [f1d3308]
+- Updated dependencies [a5abc51]
+- Updated dependencies [904d744]
+- Updated dependencies [91b582e]
+- Updated dependencies [4ea0127]
+- Updated dependencies [46189c6]
+- Updated dependencies [00585fc]
+- Updated dependencies [ecc15f3]
+- Updated dependencies [7dd54da]
+- Updated dependencies [44e55f0]
+- Updated dependencies [be9275a]
+- Updated dependencies [343e81f]
+- Updated dependencies [8262902]
+- Updated dependencies [421dafd]
+  - @motebit/protocol@2.0.0
+  - @motebit/crypto@2.0.0
+
 ## 0.2.0
 
 ### Minor Changes

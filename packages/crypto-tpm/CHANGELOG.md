@@ -1,5 +1,37 @@
 # @motebit/crypto-tpm
 
+## 1.1.5
+
+### Patch Changes
+
+- Updated dependencies [b0d068b]
+- Updated dependencies [92c2800]
+- Updated dependencies [6a46f33]
+- Updated dependencies [02d09da]
+- Updated dependencies [de086d7]
+- Updated dependencies [31ceae3]
+- Updated dependencies [1a7201c]
+- Updated dependencies [e4389bc]
+- Updated dependencies [53e11b5]
+- Updated dependencies [2428248]
+- Updated dependencies [1c90c5d]
+- Updated dependencies [f1d3308]
+- Updated dependencies [a5abc51]
+- Updated dependencies [904d744]
+- Updated dependencies [91b582e]
+- Updated dependencies [4ea0127]
+- Updated dependencies [46189c6]
+- Updated dependencies [00585fc]
+- Updated dependencies [ecc15f3]
+- Updated dependencies [7dd54da]
+- Updated dependencies [44e55f0]
+- Updated dependencies [be9275a]
+- Updated dependencies [343e81f]
+- Updated dependencies [8262902]
+- Updated dependencies [421dafd]
+  - @motebit/protocol@2.0.0
+  - @motebit/crypto@2.0.0
+
 ## 1.1.4
 
 ### Patch Changes
