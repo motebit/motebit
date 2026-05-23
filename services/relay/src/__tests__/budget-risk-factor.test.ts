@@ -137,12 +137,17 @@ async function submitTask(
   delegatorId: string,
   cap = "test-cap",
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+  // Arc 3.5: the risk-buffer allocation machinery survives for self-delegation
+  // (submitted_by === worker, gate-exempt). These tests fund the worker and it
+  // delegates to itself, so the allocation/lock/surplus-release math is exercised
+  // on a single account. `delegatorId` is retained for call-site compatibility.
+  void delegatorId;
   const res = await relay.app.request(`/agent/${workerId}/task`, {
     method: "POST",
     headers: jsonAuthWithIdempotency(),
     body: JSON.stringify({
       prompt: "Do something",
-      submitted_by: delegatorId,
+      submitted_by: workerId,
       required_capabilities: [cap],
     }),
   });
@@ -172,12 +177,12 @@ describe("Budget Pre-Allocation with Risk Factor", () => {
 
     // grossPrice(1.0) ≈ 1.0526, riskLock ≈ 1.2632
     const expectedLock = riskLock(unitCost, 2.0);
-    await deposit(relay, delegatorId, 2.0);
+    await deposit(relay, worker.motebitId, 2.0);
 
     const { status } = await submitTask(relay, worker.motebitId, delegatorId);
     expect(status).toBe(201);
 
-    const balance = await getBalance(relay, delegatorId);
+    const balance = await getBalance(relay, worker.motebitId);
     expect(balance.balance).toBeCloseTo(2.0 - expectedLock, 4);
   });
 
@@ -194,13 +199,13 @@ describe("Budget Pre-Allocation with Risk Factor", () => {
     // grossPrice ≈ 1.0526, full lock ≈ 1.2632, deposit 1.15
     // allocateBudget caps at available: locks 1.15 (>= grossPrice, so succeeds)
     const depositAmount = grossPrice(unitCost) + 0.1;
-    await deposit(relay, delegatorId, depositAmount);
+    await deposit(relay, worker.motebitId, depositAmount);
 
     const { status } = await submitTask(relay, worker.motebitId, delegatorId);
     expect(status).toBe(201);
 
     // Balance should be ~0 (depositAmount deposited - depositAmount locked)
-    const balance = await getBalance(relay, delegatorId);
+    const balance = await getBalance(relay, worker.motebitId);
     expect(balance.balance).toBeCloseTo(0, 4);
   });
 
@@ -214,7 +219,7 @@ describe("Budget Pre-Allocation with Risk Factor", () => {
     );
 
     // Deposit less than grossPrice ≈ 1.0526 — allocateBudget returns null
-    await deposit(relay, delegatorId, grossPrice(unitCost) - 0.1);
+    await deposit(relay, worker.motebitId, grossPrice(unitCost) - 0.1);
 
     const { status } = await submitTask(relay, worker.motebitId, delegatorId);
     expect(status).toBe(402);
@@ -233,14 +238,14 @@ describe("Budget Pre-Allocation with Risk Factor", () => {
     // Deposit enough for full 1.2× risk buffer plus some extra
     const depositAmount = 2.0;
     const expectedLock = riskLock(unitCost, depositAmount);
-    await deposit(relay, delegatorId, depositAmount);
+    await deposit(relay, worker.motebitId, depositAmount);
 
     const { status, body } = await submitTask(relay, worker.motebitId, delegatorId);
     expect(status).toBe(201);
     const taskId = body.task_id as string;
 
     // After allocation
-    const balanceAfterAlloc = await getBalance(relay, delegatorId);
+    const balanceAfterAlloc = await getBalance(relay, worker.motebitId);
     expect(balanceAfterAlloc.balance).toBeCloseTo(depositAmount - expectedLock, 4);
 
     // Submit a receipt to trigger settlement
@@ -267,18 +272,24 @@ describe("Budget Pre-Allocation with Risk Factor", () => {
     });
     expect(receiptRes.status).toBe(200);
 
-    // Settlement uses price_snapshot (gross) as the settlement basis.
-    // surplus = amount_locked - gross is released back to delegator.
+    // Self-delegation: the risk-buffer surplus is released AND the net is
+    // credited, both to the same account. The only net outflow is the platform
+    // fee, so final = depositAmount - gross × PLATFORM_FEE_RATE. This corrected
+    // balance captures both the surplus release and the worker's net credit.
     const surplus = expectedLock - gross;
-    const expectedFinalBalance = depositAmount - expectedLock + surplus;
-    const finalBalance = await getBalance(relay, delegatorId);
+    expect(surplus).toBeGreaterThan(0); // risk buffer was actually released
+    const expectedFinalBalance = depositAmount - gross * PLATFORM_FEE_RATE;
+    const finalBalance = await getBalance(relay, worker.motebitId);
     expect(finalBalance.balance).toBeCloseTo(expectedFinalBalance, 4);
-    // Verify surplus is positive (risk buffer was actually released)
-    expect(surplus).toBeGreaterThan(0);
 
-    // Verify worker got paid: gross × (1 - PLATFORM_FEE_RATE)
-    const workerBalance = await getBalance(relay, worker.motebitId);
-    expect(workerBalance.balance).toBeCloseTo(gross * (1 - PLATFORM_FEE_RATE), 4);
+    // The worker was paid net via a settlement_credit (verified as a
+    // transaction, since under self-delegation worker and payer are one account).
+    const creditCount = relay.moteDb.db
+      .prepare(
+        "SELECT COUNT(*) as count FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit'",
+      )
+      .get(worker.motebitId) as { count: number };
+    expect(creditCount.count).toBe(1);
   });
 
   it("no surplus release when amount_locked equals grossAmount", async () => {
@@ -292,14 +303,14 @@ describe("Budget Pre-Allocation with Risk Factor", () => {
     );
 
     // Deposit exactly gross — allocateBudget caps at available (gross), no risk buffer room
-    await deposit(relay, delegatorId, gross);
+    await deposit(relay, worker.motebitId, gross);
 
     const { status, body } = await submitTask(relay, worker.motebitId, delegatorId);
     expect(status).toBe(201);
     const taskId = body.task_id as string;
 
     // After allocation, balance ≈ 0 (locked exactly gross)
-    const balanceAfterAlloc = await getBalance(relay, delegatorId);
+    const balanceAfterAlloc = await getBalance(relay, worker.motebitId);
     expect(balanceAfterAlloc.balance).toBeCloseTo(0, 4);
 
     // Submit receipt
@@ -326,9 +337,13 @@ describe("Budget Pre-Allocation with Risk Factor", () => {
     });
     expect(receiptRes.status).toBe(200);
 
-    // amount_locked (gross) == price_snapshot (gross) → no surplus release
-    // Delegator balance stays ~0
-    const finalBalance = await getBalance(relay, delegatorId);
-    expect(finalBalance.balance).toBeCloseTo(0, 4);
+    // amount_locked (gross) == price_snapshot (gross) → no surplus release.
+    // Under self-delegation the net is credited back to the same account, so
+    // the final balance is the net (gross - gross locked + net credited), not 0
+    // (the cross-agent delegator's residual). The invariant under test — no
+    // surplus released when locked == gross — still holds.
+    const net = gross * (1 - PLATFORM_FEE_RATE);
+    const finalBalance = await getBalance(relay, worker.motebitId);
+    expect(finalBalance.balance).toBeCloseTo(net, 4);
   });
 });
