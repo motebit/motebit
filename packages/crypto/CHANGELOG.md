@@ -1,5 +1,57 @@
 # @motebit/crypto Changelog
 
+## 2.0.0
+
+### Major Changes
+
+- 1a7201c: `@motebit/crypto` publicly exposes the settlement-receipt API whose shape is broken by `@motebit/protocol@2.0.0`'s now-required `SettlementRecord.settlement_mode`. The crypto major versions that break honestly.
+
+  **Why this is a major bump.** `packages/crypto/src/index.ts` does `export * from "./artifacts.js"`, surfacing three breaking changes in crypto's published API:
+  1. `signSettlement(settlement: Omit<SettlementRecord, "signature" | "suite">, ...)` now REQUIRES `settlement_mode` in its input — a caller that built the settlement object without it no longer typechecks.
+  2. `verifySettlement(settlement: SettlementRecord, ...)` takes the reshaped record.
+  3. The re-exported `SettlementRecord` type itself gained the required `settlement_mode` field — `import { SettlementRecord } from "@motebit/crypto"` consumers that construct one break.
+
+  `@motebit/crypto` is the standalone, zero-monorepo-dep verifier, so its published surface is a third-party contract. Shipping a required-field addition to `signSettlement`'s input as a minor would silently break `@motebit/crypto@^1` consumers. It majors in lockstep with the protocol break it re-exposes — the same reasoning as the sibling `@motebit/sdk` major.
+
+  ## Migration
+
+  Supply `settlement_mode: "relay" | "p2p"` when constructing the settlement object passed to `signSettlement`, exactly as for `@motebit/protocol@2.0.0`'s `SettlementRecord` change. Reads of `SettlementRecord` (including via `verifySettlement`) gain the field automatically.
+
+### Minor Changes
+
+- 02d09da: Add `identityLogLeaf` and `verifyIdentityBindingAnchored` — the verifier-side foundation of the anchored binding rung (`docs/doctrine/identity-binding-verification.md`). `identityLogLeaf` is the canonical SHA-256 leaf for the identity-transparency log (the operator's `motebit_id → current key` commitment — the convention the relay producer and verifier must share). `verifyIdentityBindingAnchored` binds only when BOTH hold: the sovereign succession chain places the signing key as time-valid AND the current key is Merkle-included under the supplied anchored root (`IdentityLogInclusionProof`). Confirming the root is the one anchored on-chain — and that `identity.motebit_id` is the receipt's claimed motebit — remains the caller's responsibility.
+- de086d7: Add `verifyKeyBindingAtTime` — sovereign-root identity binding with time-windowing. Given a motebit's identity file and a signing key, it verifies the succession chain (link signatures + continuity + temporal order) and then checks the key's active window contains a given timestamp, so a since-rotated key does not bind a newer receipt and a future key does not bind an older one. Returns `KeyBindingResult` (`bound`, `genesisPublicKey`, active window, typed reason). Roots in the motebit's own genesis + rotation signatures — no operator trust. A malformed `created_at` fails closed (the genesis key does not bind). The first verifier slice of the anchored binding rung (see `docs/doctrine/identity-binding-verification.md`).
+- 1c90c5d: `verifyKeyBindingAtTime` now falls back to `identity.guardian.public_key` when no explicit guardian key is passed. A guardian-recovery succession record (the key-compromise mechanism in `identity-v1.md` §3.8.3) is guardian-signed, so verifying it requires the guardian key — reading it from the identity file lets a third-party verifier check a recovery rotation carried in that file, instead of failing for lack of a key the file already names. Backward compatible: an explicit `guardianPublicKeyHex` argument still takes precedence.
+- ecc15f3: Receipt verification now structurally separates signature integrity from identity binding.
+
+  A verified signature proves the embedded key signed the receipt bytes; it does NOT prove that key belongs to the receipt's `motebit_id` — a forged receipt can embed any key and still verify. The result types now make that distinction unmistakable:
+  - `ReceiptVerifyResult` and `ReceiptVerification` carry a `keySource` field. `verifyReceiptChain` records whether the verifying key was resolved from the caller's trusted `knownKeys` map (`"external"` — identity binding established) or fell back to the receipt's own embedded `public_key` (`"embedded"` — byte-integrity only). `verifyReceipt` is always `"embedded"`.
+  - The browser inner-receipt verifier surfaces `identityBinding: "embedded-key-unverified"` on successful checks, so a UI never renders "from \<motebit\>" on the strength of an envelope-asserted key alone.
+
+  Callers MUST gate identity claims on `keySource === "external"` (or an external transparency/known-keys anchor). Additive and backward-compatible — callers that ignore the new fields are unaffected.
+
+- 44e55f0: Tightens `SovereignPaymentReceiptInput.asset` from `string` to `SettlementAsset` (re-exported from `@motebit/protocol`). Composes with the sub-phase A asset-pluggability commitment in [`docs/doctrine/off-ramp-as-user-action.md`](../docs/doctrine/off-ramp-as-user-action.md) § "The settlement-asset registry — sub-phase A SHIPPED" — the closed asset vocabulary now reaches the deepest wire-format presence in the codebase (the signed receipt body), not just the sovereign rail interface.
+
+  **Why this closes a coherency gap**: the asset value is embedded in the signed receipt's `result` string via canonical JSON, so it lives in the cryptographically-bound payload that downstream verifiers, federation peers, and audit consumers all read. Leaving the signing-input type as `string` while its sibling `SovereignRail.asset` (in `@motebit/protocol`) was tightened to `SettlementAsset` would have left the receipt-construction site as the asymmetric weak link.
+
+  **Migration**: callers of `signSovereignPaymentReceipt(input, ...)` who pass an unknown asset symbol (anything other than `"USDC"` today) will fail to typecheck. Use a registered asset, or wait for sub-phase B to add a new asset to the registry. The single in-tree caller chain (`MotebitRuntime.handleSovereignReceiptRequest` → `signSovereignPaymentReceipt`) already passes `request.asset` forwarded from `SovereignReceiptRequest.asset`, which is tightened in lockstep in `@motebit/runtime` (private package; type chain compiles end-to-end).
+
+  **Boundary defense (not in this changeset)**: the HTTP transport (`@motebit/runtime`'s `http-receipt-exchange.ts`) narrows the incoming wire payload's `asset` field via `isSettlementAsset` at intake and fails-closed with HTTP 400 on unknown values. This is the structural complement to the type-level tightening: TypeScript-checks for in-process callers, type-guard validation for external wire payloads. Together they make "the signed receipt body always carries a registered asset" structurally true regardless of how the receipt was produced.
+
+  **Sibling sites in lockstep** (no changesets, both private packages):
+  - `@motebit/runtime`'s `SovereignReceiptRequest.asset` tightened to `SettlementAsset`
+  - `@motebit/runtime`'s `http-receipt-exchange.ts` validates via `isSettlementAsset` at intake
+  - `spec/delegation-v1.md` § 8.1 wire-format annotation updated to `SettlementAsset`
+
+  Same shape as the `@motebit/protocol` sub-phase A changeset (`settlement-asset-sub-phase-a.md`) — minor bump with implementer-break note, matching the Arc 3 `WritableSettlementMode` precedent.
+
+- 421dafd: Add the sovereign binding rung. `deriveSovereignMotebitId(genesisKey)` derives a UUIDv8 commitment from `sha256(genesisKey)`, and `verifySovereignBinding(motebitId, genesisKey)` checks it — so a sovereign-minted motebit's `motebit_id` IS the commitment to its genesis key, verifiable offline with no operator. `verifyKeyBindingAtTime` now reports `sovereign: true` on its result, and `verifyReceiptDocument` reaches `binding: "sovereign"` (the strongest rung, needing only the identity file — no anchor, no relay, no chain). The genesis key derives from a 32-byte seed, so sovereign ids are recoverable and rotation still works via succession. Additive: sovereign ids are UUIDv8, existing ids are UUIDv7, so they never collide; minting sovereign ids is opt-in.
+
+### Patch Changes
+
+- 31ceae3: Internal: remove an unreachable branch in `verifyReceiptChain`'s key-source resolution. The no-key case now returns from the `else` arm, so `keySource` is definitely-assigned and emitted directly rather than through a conditional spread whose falsy side could never execute. No behavior change — it restores branch coverage that the dead arm had dropped below threshold.
+- e4389bc: Clarify `verifyRevocationAnchor`'s two-timestamp model in its published JSDoc: the revocation memo carries the **effective** revocation time (`proof.timestamp`), while the relay's signed `revocationPayload` carries the **recording** time, and the two are decoupled deliberately (which is why they are separate arguments). No behavior change — documents the producer-side `compromised_at` / succession-timestamp backdating now reflected in `credential-anchor-v1.md` §10.2.
+
 ## 1.3.0
 
 ### Minor Changes
