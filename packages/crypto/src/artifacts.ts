@@ -2042,3 +2042,25 @@ export async function verifyRelayMetadata(
     return false;
   }
 }
+
+/**
+ * Sign a `CredentialBundle` for migration export (spec/migration-v1.md §6 —
+ * "the agent signs the bundle; the relay does not," so the agent controls what
+ * it presents to a destination). The relay exports the bundle unsigned; the
+ * agent computes `bundle_hash` = SHA-256 (hex) of `canonicalJson(body)` and
+ * signs `canonicalJson(body + bundle_hash)` with its identity key, base64url.
+ * Producer for {@link verifyCredentialBundle}.
+ */
+export async function signCredentialBundle(
+  bundle: Omit<CredentialBundle, "bundle_hash" | "signature">,
+  privateKey: Uint8Array,
+): Promise<CredentialBundle> {
+  const bundle_hash = await hash(new TextEncoder().encode(canonicalJson(bundle)));
+  const withHash = { ...bundle, bundle_hash };
+  const sig = await signBySuite(
+    bundle.suite,
+    new TextEncoder().encode(canonicalJson(withHash)),
+    privateKey,
+  );
+  return { ...withHash, signature: toBase64Url(sig) };
+}

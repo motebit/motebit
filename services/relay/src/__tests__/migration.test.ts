@@ -13,8 +13,9 @@ import {
   canonicalJson,
 } from "@motebit/crypto";
 import type { MigrationToken, DepartureAttestation, BalanceWaiver } from "@motebit/protocol";
+import { performMigration } from "@motebit/runtime";
 import { creditAccount } from "../accounts.js";
-import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
+import { AUTH_HEADER, API_TOKEN, createTestRelay } from "./test-helpers.js";
 
 // === Helpers ===
 
@@ -599,5 +600,99 @@ describe("Migration: accept-migration (destination)", () => {
       body: JSON.stringify(payload),
     });
     expect(res2.status).toBe(409);
+  });
+});
+
+describe("Migration: end-to-end (performMigration across two relays)", () => {
+  let source: SyncRelay;
+  let dest: SyncRelay;
+  const SOURCE = "http://source.test";
+  const DEST = "http://dest.test";
+
+  beforeEach(async () => {
+    // The source advertises an endpoint URL so its issued tokens carry a valid
+    // source_relay_url (a real relay always has one).
+    source = await createTestRelay({
+      enableDeviceAuth: false,
+      federation: { endpointUrl: SOURCE },
+    });
+    dest = await createTestRelay({ enableDeviceAuth: false });
+  });
+  afterEach(async () => {
+    await source.close();
+    await dest.close();
+  });
+
+  // Route the orchestrator's fetch into the two in-process relay apps by host.
+  function twoRelayFetch(): typeof globalThis.fetch {
+    return (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.startsWith(SOURCE)) return source.app.request(url.slice(SOURCE.length) || "/", init);
+      if (url.startsWith(DEST)) return dest.app.request(url.slice(DEST.length) || "/", init);
+      return new Response("no route", { status: 404 });
+    }) as typeof globalThis.fetch;
+  }
+
+  it("an agent leaves the source relay and is onboarded + discoverable on the destination", async () => {
+    // The agent exists on the source relay.
+    const agentKp = await generateKeypair();
+    const agentPubHex = bytesToHex(agentKp.publicKey);
+    await registerAgent(source, "nomad-agent", agentPubHex);
+
+    // The destination establishes the source relay's identity the strong way
+    // (Tier 1): pin the source as a known federation peer using its real relay
+    // key from /.well-known/motebit.json.
+    const wk = await source.app.request("/.well-known/motebit.json");
+    const meta = (await wk.json()) as { relay_id: string; public_key: string };
+    dest.moteDb.db
+      .prepare(
+        `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score, peer_protocol_version)
+         VALUES (?, ?, ?, ?, 'active', ?, 0, 0, 0.5, ?)`,
+      )
+      .run(meta.relay_id, meta.public_key, SOURCE, "Source", null, "1.0");
+
+    // The agent performs the full migration.
+    const result = await performMigration({
+      sourceRelayUrl: SOURCE,
+      destRelayUrl: DEST,
+      motebitId: "nomad-agent",
+      publicKeyHex: agentPubHex,
+      signingPrivateKey: agentKp.privateKey,
+      sourceAuth: API_TOKEN,
+      reason: "moving to a relay I trust more",
+      fetch: twoRelayFetch(),
+    });
+
+    // The sovereign migration succeeded — the destination verified the source's
+    // relay-signed token against the pinned key and onboarded the agent,
+    // trusting neither the agent's self-report nor a fetched key.
+    expect(result).toEqual({ ok: true, acceptedMotebitId: "nomad-agent" });
+
+    const discover = await dest.app.request("/api/v1/discover/nomad-agent");
+    expect(((await discover.json()) as { found: boolean }).found).toBe(true);
+  });
+
+  it("the destination rejects the migration when it cannot establish the source's identity", async () => {
+    // Same flow, but the source is NOT pinned on the destination and its
+    // well-known is unreachable in-process → the destination cannot establish
+    // the source key → fail-closed (no onboarding).
+    const agentKp = await generateKeypair();
+    const agentPubHex = bytesToHex(agentKp.publicKey);
+    await registerAgent(source, "nomad-agent", agentPubHex);
+
+    const result = await performMigration({
+      sourceRelayUrl: SOURCE,
+      destRelayUrl: DEST,
+      motebitId: "nomad-agent",
+      publicKeyHex: agentPubHex,
+      signingPrivateKey: agentKp.privateKey,
+      sourceAuth: API_TOKEN,
+      fetch: twoRelayFetch(),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.step).toBe("accept");
+    const discover = await dest.app.request("/api/v1/discover/nomad-agent");
+    expect(((await discover.json()) as { found: boolean }).found).toBe(false);
   });
 });

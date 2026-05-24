@@ -7,6 +7,8 @@
 // visible through this barrel is a public-API event.
 
 export { canonicalJson } from "./execution-ledger.js";
+export { performMigration } from "./migration-client.js";
+export type { MigrationClientDeps, MigrationResult, MigrationStep } from "./migration-client.js";
 export {
   executeCommand,
   cmdSelfTest,

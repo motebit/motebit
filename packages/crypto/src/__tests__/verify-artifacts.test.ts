@@ -14,6 +14,7 @@ import {
   verifyDepartureAttestation,
   verifyMigrationPresentation,
   verifyCredentialBundle,
+  signCredentialBundle,
   verifyRelayMetadata,
 } from "../index";
 import type {
@@ -2283,6 +2284,21 @@ describe("migration artifact verifiers", () => {
     // Wrong key → signature invalid.
     const other = await generateKeypair();
     expect(await verifyCredentialBundle(bundle, other.publicKey)).toBe(false);
+  });
+
+  it("signCredentialBundle produces a bundle verifyCredentialBundle accepts (round-trip)", async () => {
+    const kp = await generateKeypair();
+    const unsigned = {
+      motebit_id: "m",
+      exported_at: 1,
+      credentials: [],
+      anchor_proofs: [],
+      key_succession: [],
+      suite: SUITE,
+    } as unknown as Parameters<typeof signCredentialBundle>[0];
+    const bundle = await signCredentialBundle(unsigned, kp.privateKey);
+    expect(bundle.bundle_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(await verifyCredentialBundle(bundle, kp.publicKey)).toBe(true);
   });
 });
 

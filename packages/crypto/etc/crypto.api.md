@@ -1019,6 +1019,9 @@ export interface SignContentArtifactOptions {
 }
 
 // @public
+export function signCredentialBundle(bundle: Omit<CredentialBundle, "bundle_hash" | "signature">, privateKey: Uint8Array): Promise<CredentialBundle>;
+
+// @public
 export function signDelegation(delegation: Omit<DelegationToken, "signature" | "suite">, delegatorPrivateKey: Uint8Array): Promise<DelegationToken>;
 
 // @public
