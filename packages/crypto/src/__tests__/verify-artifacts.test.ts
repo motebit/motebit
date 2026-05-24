@@ -14,6 +14,7 @@ import {
   verifyDepartureAttestation,
   verifyMigrationPresentation,
   verifyCredentialBundle,
+  verifyRelayMetadata,
 } from "../index";
 import type {
   GoalExecutionManifest,
@@ -23,6 +24,7 @@ import type {
   DepartureAttestation,
   MigrationPresentation,
   CredentialBundle,
+  RelayMetadata,
 } from "@motebit/protocol";
 import {
   generateKeypair,
@@ -2281,5 +2283,39 @@ describe("migration artifact verifiers", () => {
     // Wrong key → signature invalid.
     const other = await generateKeypair();
     expect(await verifyCredentialBundle(bundle, other.publicKey)).toBe(false);
+  });
+});
+
+describe("verifyRelayMetadata", () => {
+  // RelayMetadata uses the HEX suite (motebit-jcs-ed25519-hex-v1) — sign hex.
+  async function signedMetadata(
+    privateKey: Uint8Array,
+    publicKey: Uint8Array,
+  ): Promise<RelayMetadata> {
+    const body = {
+      protocol_version: "1.0",
+      relay_id: "relay-r",
+      public_key: bytesToHex(publicKey),
+      endpoint_url: "https://relay.test",
+      suite: "motebit-jcs-ed25519-hex-v1" as const,
+    };
+    const sig = await ed25519Sign(new TextEncoder().encode(canonicalJson(body)), privateKey);
+    return { ...body, signature: bytesToHex(sig) } as RelayMetadata;
+  }
+
+  it("verifies a hex-signed RelayMetadata against the signer key", async () => {
+    const kp = await generateKeypair();
+    const meta = await signedMetadata(kp.privateKey, kp.publicKey);
+    expect(await verifyRelayMetadata(meta, kp.publicKey)).toBe(true);
+  });
+
+  it("rejects tampered metadata and a wrong key", async () => {
+    const kp = await generateKeypair();
+    const meta = await signedMetadata(kp.privateKey, kp.publicKey);
+    expect(
+      await verifyRelayMetadata({ ...meta, relay_id: "evil" } as RelayMetadata, kp.publicKey),
+    ).toBe(false);
+    const other = await generateKeypair();
+    expect(await verifyRelayMetadata(meta, other.publicKey)).toBe(false);
   });
 });

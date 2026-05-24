@@ -2012,3 +2012,33 @@ export async function verifyCredentialBundle(
     return false;
   }
 }
+
+// === Relay discovery metadata (spec/discovery, /.well-known/motebit.json) ===
+
+import type { RelayMetadata } from "@motebit/protocol";
+
+/**
+ * Verify a `RelayMetadata` discovery document against `publicKey`. Unlike the
+ * migration family, RelayMetadata's declared suite is `motebit-jcs-ed25519-hex-v1`
+ * — a HEX signature — so the signature is hex-decoded. Verifies the Ed25519
+ * signature over `canonicalJson(body \ signature)`. Fail-closed.
+ *
+ * Trust note: this proves "the metadata was signed by the holder of `publicKey`,"
+ * not that `publicKey` is the relay's real key. A consumer with a pinned /
+ * anchored key (a federation peer key, or a key cross-checked against the
+ * relay's onchain-anchored transparency declaration) passes that key for an
+ * anti-MITM check; a trust-on-first-use bootstrap passes the embedded
+ * `metadata.public_key` to confirm integrity only.
+ */
+export async function verifyRelayMetadata(
+  metadata: RelayMetadata,
+  publicKey: Uint8Array,
+): Promise<boolean> {
+  const { signature, ...rest } = metadata;
+  const message = new TextEncoder().encode(canonicalJson(rest));
+  try {
+    return await verifyBySuite(metadata.suite, message, hexToBytes(signature), publicKey);
+  } catch {
+    return false;
+  }
+}

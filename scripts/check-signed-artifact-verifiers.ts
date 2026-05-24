@@ -97,6 +97,10 @@ const REGISTRY: Record<string, Classification> = {
   DepartureAttestation: { kind: "verifier", verifier: "verifyDepartureAttestation" },
   MigrationPresentation: { kind: "verifier", verifier: "verifyMigrationPresentation" },
   CredentialBundle: { kind: "verifier", verifier: "verifyCredentialBundle" },
+  // Relay discovery metadata — verifier added 2026-05-24 with the migration
+  // trust-root hardening (accept-migration now verifies the source relay's
+  // metadata rather than trusting a bare well-known fetch).
+  RelayMetadata: { kind: "verifier", verifier: "verifyRelayMetadata" },
 
   // ── B: verified within a parent artifact's verifier ─────────────────────
   CredentialAnchorBatch: {
@@ -148,10 +152,6 @@ const REGISTRY: Record<string, Classification> = {
   AgentSettlementAnchorProof: {
     kind: "gap",
     note: "settlement-anchor inclusion proof; portable verifier not yet built",
-  },
-  RelayMetadata: {
-    kind: "gap",
-    note: "discovery metadata carries suite+signature but has no verifier in any package",
   },
   VoteRequest: {
     kind: "gap",

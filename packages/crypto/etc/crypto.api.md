@@ -25,6 +25,7 @@ import type { HorizonWitnessRequestBody } from '@motebit/protocol';
 import type { MigrationPresentation } from '@motebit/protocol';
 import type { MigrationRequest } from '@motebit/protocol';
 import type { MigrationToken } from '@motebit/protocol';
+import type { RelayMetadata } from '@motebit/protocol';
 import type { RetentionManifest } from '@motebit/protocol';
 import type { SettlementAsset } from '@motebit/protocol';
 import type { SettlementRecord } from '@motebit/protocol';
@@ -1446,6 +1447,9 @@ export function verifyReceiptSequence(chain: ReceiptChainEntry[]): Promise<{
     error?: string;
     index?: number;
 }>;
+
+// @public
+export function verifyRelayMetadata(metadata: RelayMetadata, publicKey: Uint8Array): Promise<boolean>;
 
 // @public (undocumented)
 export type VerifyResult = IdentityVerifyResult | ReceiptVerifyResult | CredentialVerifyResult | PresentationVerifyResult | SkillVerifyResult;

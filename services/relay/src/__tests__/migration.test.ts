@@ -8,6 +8,9 @@ import {
   signBalanceWaiver,
   verifyMigrationToken,
   verifyDepartureAttestation,
+  ed25519Sign,
+  toBase64Url,
+  canonicalJson,
 } from "@motebit/crypto";
 import type { MigrationToken, DepartureAttestation, BalanceWaiver } from "@motebit/protocol";
 import { creditAccount } from "../accounts.js";
@@ -38,6 +41,81 @@ async function initiateMigration(
     body: JSON.stringify({ reason: "test migration" }),
   });
   return res.json() as Promise<{ ok: boolean; migration_token: MigrationToken }>;
+}
+
+/**
+ * Build an accept-migration payload whose source relay is a PINNED federation
+ * peer (Tier 1 trust) with real base64url signatures on the token + attestation.
+ * Exercises the hardened, fail-closed verification path — not the old fail-open
+ * "source unreachable → skip verify" shortcut. The credential bundle stays
+ * unsigned-shape (accept-migration verifies token + attestation only).
+ */
+async function buildPinnedAcceptPayload(
+  relay: SyncRelay,
+  opts: { motebitId: string; tokenId: string; sourceRelayId?: string },
+): Promise<Record<string, unknown>> {
+  const sourceRelayId = opts.sourceRelayId ?? "source-relay-id";
+  const sourceKp = await generateKeypair();
+  // Pin the source relay as a known, active federation peer.
+  relay.moteDb.db
+    .prepare(
+      `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score, peer_protocol_version)
+       VALUES (?, ?, ?, ?, 'active', ?, 0, 0, 0.5, ?)`,
+    )
+    .run(
+      sourceRelayId,
+      bytesToHex(sourceKp.publicKey),
+      "http://source-relay",
+      "Source",
+      null,
+      "1.0",
+    );
+
+  const now = Date.now();
+  const sign = async (b: Record<string, unknown>): Promise<string> =>
+    toBase64Url(await ed25519Sign(new TextEncoder().encode(canonicalJson(b)), sourceKp.privateKey));
+
+  const tokenBody = {
+    token_id: opts.tokenId,
+    motebit_id: opts.motebitId,
+    source_relay_id: sourceRelayId,
+    source_relay_url: "http://source-relay",
+    issued_at: now,
+    expires_at: now + 72 * 60 * 60 * 1000,
+    suite: "motebit-jcs-ed25519-b64-v1" as const,
+  };
+  const attBody = {
+    attestation_id: `att-${opts.tokenId}`,
+    motebit_id: opts.motebitId,
+    source_relay_id: sourceRelayId,
+    source_relay_url: "http://source-relay",
+    first_seen: now - 86_400_000,
+    last_active: now,
+    trust_level: "verified",
+    successful_tasks: 10,
+    failed_tasks: 1,
+    credentials_issued: 5,
+    balance_at_departure: 0,
+    attested_at: now,
+    suite: "motebit-jcs-ed25519-b64-v1" as const,
+  };
+  const agentKp = await generateKeypair();
+  return {
+    migration_token: { ...tokenBody, signature: await sign(tokenBody) },
+    departure_attestation: { ...attBody, signature: await sign(attBody) },
+    credential_bundle: {
+      motebit_id: opts.motebitId,
+      exported_at: now,
+      credentials: [],
+      anchor_proofs: [],
+      key_succession: [],
+      bundle_hash: "deadbeef",
+      suite: "motebit-jcs-ed25519-b64-v1",
+      signature: "deadbeef",
+    },
+    motebit_id: opts.motebitId,
+    public_key: bytesToHex(agentKp.publicKey),
+  };
 }
 
 // === Tests ===
@@ -378,60 +456,16 @@ describe("Migration: accept-migration (destination)", () => {
     await relay.close();
   });
 
-  it("accepts a valid migration presentation", async () => {
-    const kp = await generateKeypair();
-    const pubHex = bytesToHex(kp.publicKey);
-
-    // Construct a minimal migration presentation
-    // (source relay is unreachable in test, so signature verification is skipped)
-    const now = Date.now();
-    const token: MigrationToken = {
-      token_id: `mig-test-${now}`,
-      motebit_id: "incoming-agent",
-      source_relay_id: "source-relay-id",
-      source_relay_url: "http://unreachable:9999",
-      issued_at: now,
-      expires_at: now + 72 * 60 * 60 * 1000,
-      suite: "motebit-jcs-ed25519-b64-v1",
-      signature: "deadbeef",
-    };
-
-    const attestation: DepartureAttestation = {
-      attestation_id: "att-test",
-      motebit_id: "incoming-agent",
-      source_relay_id: "source-relay-id",
-      source_relay_url: "http://unreachable:9999",
-      first_seen: now - 86400000,
-      last_active: now,
-      trust_level: "verified",
-      successful_tasks: 10,
-      failed_tasks: 1,
-      credentials_issued: 5,
-      balance_at_departure: 0,
-      attested_at: now,
-      suite: "motebit-jcs-ed25519-b64-v1",
-      signature: "deadbeef",
-    };
+  it("accepts a valid migration presentation (pinned source relay, real signatures)", async () => {
+    const payload = await buildPinnedAcceptPayload(relay, {
+      motebitId: "incoming-agent",
+      tokenId: `mig-test-${Date.now()}`,
+    });
 
     const res = await relay.app.request(`/api/v1/agents/accept-migration`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({
-        migration_token: token,
-        departure_attestation: attestation,
-        credential_bundle: {
-          motebit_id: "incoming-agent",
-          exported_at: now,
-          credentials: [],
-          anchor_proofs: [],
-          key_succession: [],
-          bundle_hash: "deadbeef",
-          suite: "motebit-jcs-ed25519-b64-v1",
-          signature: "deadbeef",
-        },
-        motebit_id: "incoming-agent",
-        public_key: pubHex,
-      }),
+      body: JSON.stringify(payload),
     });
     expect(res.status).toBe(200);
 
@@ -443,6 +477,59 @@ describe("Migration: accept-migration (destination)", () => {
     const discoverRes = await relay.app.request(`/api/v1/discover/incoming-agent`);
     const discoverBody = (await discoverRes.json()) as { found: boolean };
     expect(discoverBody.found).toBe(true);
+  });
+
+  it("rejects a migration whose source relay identity cannot be established (fail-closed)", async () => {
+    // No pinned peer + unreachable well-known → key cannot be established → reject.
+    const now = Date.now();
+    const res = await relay.app.request(`/api/v1/agents/accept-migration`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        migration_token: {
+          token_id: `unverifiable-${now}`,
+          motebit_id: "ghost-agent",
+          source_relay_id: "unknown-relay",
+          source_relay_url: "http://unreachable:9999",
+          issued_at: now,
+          expires_at: now + 72 * 60 * 60 * 1000,
+          suite: "motebit-jcs-ed25519-b64-v1",
+          signature: "deadbeef",
+        },
+        departure_attestation: {
+          attestation_id: "att-ghost",
+          motebit_id: "ghost-agent",
+          source_relay_id: "unknown-relay",
+          source_relay_url: "http://unreachable:9999",
+          first_seen: now,
+          last_active: now,
+          trust_level: "unknown",
+          successful_tasks: 0,
+          failed_tasks: 0,
+          credentials_issued: 0,
+          balance_at_departure: 0,
+          attested_at: now,
+          suite: "motebit-jcs-ed25519-b64-v1",
+          signature: "deadbeef",
+        },
+        credential_bundle: {
+          motebit_id: "ghost-agent",
+          exported_at: now,
+          credentials: [],
+          anchor_proofs: [],
+          key_succession: [],
+          bundle_hash: "deadbeef",
+          suite: "motebit-jcs-ed25519-b64-v1",
+          signature: "deadbeef",
+        },
+        motebit_id: "ghost-agent",
+        public_key: "00".repeat(32),
+      }),
+    });
+    expect(res.status).toBe(400);
+    // And the agent must NOT have been onboarded.
+    const discover = await relay.app.request(`/api/v1/discover/ghost-agent`);
+    expect(((await discover.json()) as { found: boolean }).found).toBe(false);
   });
 
   it("rejects expired migration token", async () => {
@@ -492,50 +579,10 @@ describe("Migration: accept-migration (destination)", () => {
   });
 
   it("rejects duplicate migration token (replay prevention §10)", async () => {
-    const kp = await generateKeypair();
-    const pubHex = bytesToHex(kp.publicKey);
-    const now = Date.now();
-
-    const payload = {
-      migration_token: {
-        token_id: "replay-token",
-        motebit_id: "replay-agent",
-        source_relay_id: "src",
-        source_relay_url: "http://unreachable:9999",
-        issued_at: now,
-        expires_at: now + 72 * 60 * 60 * 1000,
-        suite: "motebit-jcs-ed25519-b64-v1",
-        signature: "deadbeef",
-      },
-      departure_attestation: {
-        attestation_id: "att-replay",
-        motebit_id: "replay-agent",
-        source_relay_id: "src",
-        source_relay_url: "http://unreachable:9999",
-        first_seen: now,
-        last_active: now,
-        trust_level: "unknown",
-        successful_tasks: 0,
-        failed_tasks: 0,
-        credentials_issued: 0,
-        balance_at_departure: 0,
-        attested_at: now,
-        suite: "motebit-jcs-ed25519-b64-v1",
-        signature: "deadbeef",
-      },
-      credential_bundle: {
-        motebit_id: "replay-agent",
-        exported_at: now,
-        credentials: [],
-        anchor_proofs: [],
-        key_succession: [],
-        bundle_hash: "deadbeef",
-        suite: "motebit-jcs-ed25519-b64-v1",
-        signature: "deadbeef",
-      },
-      motebit_id: "replay-agent",
-      public_key: pubHex,
-    };
+    const payload = await buildPinnedAcceptPayload(relay, {
+      motebitId: "replay-agent",
+      tokenId: "replay-token",
+    });
 
     // First submission — success
     const res1 = await relay.app.request(`/api/v1/agents/accept-migration`, {

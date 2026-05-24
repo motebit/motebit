@@ -14,6 +14,7 @@ import {
   verifyBalanceWaiver,
   verifyMigrationToken,
   verifyDepartureAttestation,
+  verifyRelayMetadata,
   toBase64Url,
 } from "@motebit/crypto";
 import type {
@@ -22,6 +23,7 @@ import type {
   CredentialBundle,
   MigrationState,
   BalanceWaiver,
+  RelayMetadata,
 } from "@motebit/protocol";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
@@ -415,36 +417,62 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       throw new HTTPException(400, { message: "Token motebit_id does not match" });
     }
 
-    // Step 2: Verify token signature against source relay
-    // Fetch source relay's public key via well-known endpoint
-    let sourceRelayPublicKey: string | null = null;
-    try {
-      const wellKnownResp = await fetch(
-        `${migration_token.source_relay_url}/.well-known/motebit.json`,
-        { signal: AbortSignal.timeout(10000) },
-      );
-      if (wellKnownResp.ok) {
-        const metadata = (await wellKnownResp.json()) as { public_key: string; relay_id: string };
-        if (metadata.relay_id === migration_token.source_relay_id) {
-          sourceRelayPublicKey = metadata.public_key;
+    // Step 2: Establish the source relay's signing key — FAIL-CLOSED.
+    //
+    // Two tiers. Tier 1 (strong): if the source relay is a known federation
+    // peer, use its PINNED public key (established at the federation handshake),
+    // never a fresh fetch — this is anti-MITM. Tier 2 (TOFU): otherwise fetch
+    // the source's signed RelayMetadata and verify its self-signature against
+    // its embedded key, confirming integrity (cross-checking that key against
+    // the source's onchain-anchored transparency declaration is the deferred
+    // next layer for full non-peer anti-MITM). If neither tier yields a key,
+    // REJECT — never accept a migration whose source identity we cannot
+    // establish. (Previously a failed well-known fetch SKIPPED verification and
+    // accepted the migration — a fail-open hole this closes.)
+    let sourcePk: Uint8Array | null = null;
+
+    const pinnedPeer = db
+      .prepare(
+        "SELECT public_key FROM relay_peers WHERE peer_relay_id = ? AND state IN ('active', 'suspended')",
+      )
+      .get(migration_token.source_relay_id) as { public_key: string } | undefined;
+
+    if (pinnedPeer) {
+      sourcePk = hexToBytes(pinnedPeer.public_key);
+    } else {
+      try {
+        const wellKnownResp = await fetch(
+          `${migration_token.source_relay_url}/.well-known/motebit.json`,
+          { signal: AbortSignal.timeout(10000) },
+        );
+        if (wellKnownResp.ok) {
+          const metadata = (await wellKnownResp.json()) as RelayMetadata;
+          if (
+            metadata.relay_id === migration_token.source_relay_id &&
+            (await verifyRelayMetadata(metadata, hexToBytes(metadata.public_key)))
+          ) {
+            sourcePk = hexToBytes(metadata.public_key);
+          }
         }
+      } catch {
+        // Unreachable / malformed metadata — sourcePk stays null → rejected.
       }
-    } catch {
-      // Source relay unreachable — continue with other validation
     }
 
-    if (sourceRelayPublicKey) {
-      // Route through the portable verifiers (relay Rule 1 — no inline crypto
-      // plumbing) rather than reconstructing canonical-JSON + verify here. They
-      // base64url-decode the signature, matching the corrected encoding.
-      const sourcePk = hexToBytes(sourceRelayPublicKey);
-      if (!(await verifyMigrationToken(migration_token, sourcePk))) {
-        throw new HTTPException(400, { message: "Migration token signature invalid" });
-      }
-      // Step 3: Verify departure attestation signature (§8.2 step 3)
-      if (!(await verifyDepartureAttestation(departure_attestation, sourcePk))) {
-        throw new HTTPException(400, { message: "Departure attestation signature invalid" });
-      }
+    if (!sourcePk) {
+      throw new HTTPException(400, {
+        message: "Cannot establish source relay identity — migration rejected",
+      });
+    }
+
+    // Step 3: Verify token + attestation against the established key. Routed
+    // through the portable verifiers (relay Rule 1 — no inline crypto plumbing);
+    // they base64url-decode the signatures. Always runs — fail-closed.
+    if (!(await verifyMigrationToken(migration_token, sourcePk))) {
+      throw new HTTPException(400, { message: "Migration token signature invalid" });
+    }
+    if (!(await verifyDepartureAttestation(departure_attestation, sourcePk))) {
+      throw new HTTPException(400, { message: "Departure attestation signature invalid" });
     }
 
     // Step 4: Check for replay (§10)
