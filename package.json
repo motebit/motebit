@@ -28,6 +28,7 @@
     "coverage-graduation": "npx tsx scripts/coverage-graduation.ts",
     "demo-anchor": "npx tsx scripts/demo-anchor.ts",
     "demo-migration": "npx tsx scripts/demo-migration.ts",
+    "migrate-live": "npx tsx scripts/migrate-live.ts",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "lint:fix": "turbo run lint -- --fix",
