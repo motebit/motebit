@@ -9,8 +9,10 @@ import type { BalanceWaiver } from '@motebit/protocol';
 import type { ComputerSessionActionRecord } from '@motebit/protocol';
 import type { ConsolidationReceipt } from '@motebit/protocol';
 import type { ContentArtifactType } from '@motebit/protocol';
+import type { CredentialBundle } from '@motebit/protocol';
 import type { DelegationToken } from '@motebit/protocol';
 import type { DeletionCertificate } from '@motebit/protocol';
+import type { DepartureAttestation } from '@motebit/protocol';
 import type { DisputeAppeal } from '@motebit/protocol';
 import type { DisputeEvidence } from '@motebit/protocol';
 import type { DisputeRequest } from '@motebit/protocol';
@@ -20,6 +22,9 @@ import type { GoalExecutionManifest } from '@motebit/protocol';
 import type { HardwareAttestationClaim } from '@motebit/protocol';
 import type { HorizonWitness } from '@motebit/protocol';
 import type { HorizonWitnessRequestBody } from '@motebit/protocol';
+import type { MigrationPresentation } from '@motebit/protocol';
+import type { MigrationRequest } from '@motebit/protocol';
+import type { MigrationToken } from '@motebit/protocol';
 import type { RetentionManifest } from '@motebit/protocol';
 import type { SettlementAsset } from '@motebit/protocol';
 import type { SettlementRecord } from '@motebit/protocol';
@@ -1340,6 +1345,9 @@ export interface VerifyContentArtifactResult {
 export function verifyCredentialAnchor(credential: Record<string, unknown>, anchorProof: CredentialAnchorProofFields, chainVerifier?: ChainAnchorVerifier): Promise<CredentialAnchorVerifyResult>;
 
 // @public
+export function verifyCredentialBundle(bundle: CredentialBundle, publicKey: Uint8Array): Promise<boolean>;
+
+// @public
 export function verifyDelegation(delegation: DelegationToken, options?: {
     checkExpiry?: boolean;
     now?: number;
@@ -1353,6 +1361,9 @@ export function verifyDelegationChain(chain: DelegationToken[]): Promise<{
 
 // @public
 export function verifyDeletionCertificate(cert: DeletionCertificate, ctx: DeletionCertificateVerifyContext): Promise<DeletionCertificateVerifyResult>;
+
+// @public
+export function verifyDepartureAttestation(attestation: DepartureAttestation, publicKey: Uint8Array): Promise<boolean>;
 
 // @public (undocumented)
 export function verifyDeviceRegistration(body: SignableDeviceRegistration, now?: number): Promise<DeviceRegistrationVerifyResult>;
@@ -1405,6 +1416,15 @@ export function verifyKeySuccession(record: KeySuccessionRecord, guardianPublicK
 
 // @public
 export function verifyMerkleInclusion(leaf: string, index: number, siblings: string[], layerSizes: number[], expectedRoot: string): Promise<boolean>;
+
+// @public
+export function verifyMigrationPresentation(presentation: MigrationPresentation, publicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyMigrationRequest(request: MigrationRequest, publicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyMigrationToken(token: MigrationToken, publicKey: Uint8Array): Promise<boolean>;
 
 // @public (undocumented)
 export interface VerifyOptions {

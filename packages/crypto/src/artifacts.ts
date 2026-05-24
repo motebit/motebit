@@ -1925,3 +1925,90 @@ export async function verifyGoalExecutionManifest(
   const ok = await verifyBySuite("motebit-jcs-ed25519-b64-v1", hashBytes, sig, publicKey);
   return ok ? { valid: true } : { valid: false, reason: "signature_invalid" };
 }
+
+// === Migration artifacts (spec/migration-v1.md) ===
+
+import type {
+  MigrationRequest,
+  MigrationToken,
+  DepartureAttestation,
+  CredentialBundle,
+  MigrationPresentation,
+  SuiteId,
+} from "@motebit/protocol";
+
+/**
+ * Verify a detached base64url Ed25519 signature over the JCS canonicalization
+ * of the artifact minus its `signature` field, under the body's declared
+ * `suite`. The shared shape for the migration family: every artifact signs
+ * `canonicalJson(body \ signature)` and base64url-encodes the result (the
+ * suite the schema declares, `motebit-jcs-ed25519-b64-v1`). Generic over the
+ * body so all fields except `signature` enter the canonical form. Fail-closed
+ * on unknown suite / malformed signature.
+ */
+async function verifyDetachedB64Signature<
+  T extends { readonly suite: SuiteId; readonly signature: string },
+>(body: T, publicKey: Uint8Array): Promise<boolean> {
+  const { signature, ...rest } = body;
+  const message = new TextEncoder().encode(canonicalJson(rest));
+  try {
+    return await verifyBySuite(body.suite, message, fromBase64Url(signature), publicKey);
+  } catch {
+    return false;
+  }
+}
+
+/** Verify a `MigrationRequest` (agent-signed declaration of intent). */
+export function verifyMigrationRequest(
+  request: MigrationRequest,
+  publicKey: Uint8Array,
+): Promise<boolean> {
+  return verifyDetachedB64Signature(request, publicKey);
+}
+
+/** Verify a `MigrationToken` (source-relay-signed authorization). */
+export function verifyMigrationToken(
+  token: MigrationToken,
+  publicKey: Uint8Array,
+): Promise<boolean> {
+  return verifyDetachedB64Signature(token, publicKey);
+}
+
+/** Verify a `DepartureAttestation` (source-relay-signed history snapshot). */
+export function verifyDepartureAttestation(
+  attestation: DepartureAttestation,
+  publicKey: Uint8Array,
+): Promise<boolean> {
+  return verifyDetachedB64Signature(attestation, publicKey);
+}
+
+/** Verify a `MigrationPresentation` envelope's own signature (agent-signed).
+ *  The nested token / attestation / bundle verify via their own verifiers. */
+export function verifyMigrationPresentation(
+  presentation: MigrationPresentation,
+  publicKey: Uint8Array,
+): Promise<boolean> {
+  return verifyDetachedB64Signature(presentation, publicKey);
+}
+
+/**
+ * Verify a `CredentialBundle` (agent-signed export of portable reputation).
+ * Two checks: (1) `bundle_hash` recomputes as SHA-256 (hex) of
+ * `canonicalJson(body \ {bundle_hash, signature})`; (2) the base64url Ed25519
+ * `signature` over `canonicalJson(body \ signature)` (which commits to
+ * `bundle_hash`) verifies against `publicKey`. Fail-closed.
+ */
+export async function verifyCredentialBundle(
+  bundle: CredentialBundle,
+  publicKey: Uint8Array,
+): Promise<boolean> {
+  const { signature, bundle_hash, ...rest } = bundle;
+  const recomputed = await hash(new TextEncoder().encode(canonicalJson(rest)));
+  if (recomputed !== bundle_hash) return false;
+  const message = new TextEncoder().encode(canonicalJson({ ...rest, bundle_hash }));
+  try {
+    return await verifyBySuite(bundle.suite, message, fromBase64Url(signature), publicKey);
+  } catch {
+    return false;
+  }
+}

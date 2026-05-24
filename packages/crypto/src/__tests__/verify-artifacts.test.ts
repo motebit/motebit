@@ -3,8 +3,27 @@
  * functions directly for coverage attribution.
  */
 import { describe, it, expect } from "vitest";
-import { computeExecutionTimelineHash, verifyGoalExecutionManifest, toBase64Url } from "../index";
-import type { GoalExecutionManifest, ExecutionTimelineEntry } from "@motebit/protocol";
+import {
+  computeExecutionTimelineHash,
+  verifyGoalExecutionManifest,
+  toBase64Url,
+  canonicalJson,
+  hash,
+  verifyMigrationToken,
+  verifyMigrationRequest,
+  verifyDepartureAttestation,
+  verifyMigrationPresentation,
+  verifyCredentialBundle,
+} from "../index";
+import type {
+  GoalExecutionManifest,
+  ExecutionTimelineEntry,
+  MigrationToken,
+  MigrationRequest,
+  DepartureAttestation,
+  MigrationPresentation,
+  CredentialBundle,
+} from "@motebit/protocol";
 import {
   generateKeypair,
   ed25519Sign,
@@ -2185,5 +2204,82 @@ describe("verifyGoalExecutionManifest", () => {
       valid: false,
       reason: "signature_missing",
     });
+  });
+});
+
+describe("migration artifact verifiers", () => {
+  const SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+  // base64url Ed25519 over canonicalJson(body) — mirrors the signer the relay
+  // and agent clients use for the migration family (spec/migration-v1.md).
+  async function signB64(body: Record<string, unknown>, priv: Uint8Array): Promise<string> {
+    const sig = await ed25519Sign(new TextEncoder().encode(canonicalJson(body)), priv);
+    return toBase64Url(sig);
+  }
+
+  it("verifyMigrationToken accepts a valid token, rejects tamper + wrong key", async () => {
+    const kp = await generateKeypair();
+    const body = {
+      token_id: "t1",
+      motebit_id: "m",
+      source_relay_id: "r",
+      source_relay_url: "u",
+      issued_at: 1,
+      expires_at: 2,
+      suite: SUITE,
+    };
+    const token = { ...body, signature: await signB64(body, kp.privateKey) } as MigrationToken;
+
+    expect(await verifyMigrationToken(token, kp.publicKey)).toBe(true);
+    expect(
+      await verifyMigrationToken(
+        { ...token, motebit_id: "impostor" } as MigrationToken,
+        kp.publicKey,
+      ),
+    ).toBe(false);
+    const other = await generateKeypair();
+    expect(await verifyMigrationToken(token, other.publicKey)).toBe(false);
+  });
+
+  it("request / attestation / presentation verify via the shared detached-signature path", async () => {
+    const kp = await generateKeypair();
+    const body = { motebit_id: "m", field: "x", suite: SUITE };
+    const signed = { ...body, signature: await signB64(body, kp.privateKey) };
+    expect(await verifyMigrationRequest(signed as unknown as MigrationRequest, kp.publicKey)).toBe(
+      true,
+    );
+    expect(
+      await verifyDepartureAttestation(signed as unknown as DepartureAttestation, kp.publicKey),
+    ).toBe(true);
+    expect(
+      await verifyMigrationPresentation(signed as unknown as MigrationPresentation, kp.publicKey),
+    ).toBe(true);
+  });
+
+  it("verifyCredentialBundle checks bundle_hash recompute + signature", async () => {
+    const kp = await generateKeypair();
+    const rest = {
+      motebit_id: "m",
+      exported_at: 1,
+      credentials: [],
+      anchor_proofs: [],
+      key_succession: [],
+      suite: SUITE,
+    };
+    const bundle_hash = await hash(new TextEncoder().encode(canonicalJson(rest)));
+    const signature = await signB64({ ...rest, bundle_hash }, kp.privateKey);
+    const bundle = { ...rest, bundle_hash, signature } as unknown as CredentialBundle;
+
+    expect(await verifyCredentialBundle(bundle, kp.publicKey)).toBe(true);
+    // Tampered bundle_hash → recompute mismatch.
+    expect(
+      await verifyCredentialBundle(
+        { ...bundle, bundle_hash: "00".repeat(32) } as CredentialBundle,
+        kp.publicKey,
+      ),
+    ).toBe(false);
+    // Wrong key → signature invalid.
+    const other = await generateKeypair();
+    expect(await verifyCredentialBundle(bundle, other.publicKey)).toBe(false);
   });
 });
