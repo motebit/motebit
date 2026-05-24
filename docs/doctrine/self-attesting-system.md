@@ -30,7 +30,7 @@ Four compounding effects make this worth naming as doctrine:
 
 1. **Forcing function for honesty.** A self-attested claim cannot silently lie. Signing _"this relay does not retain X"_ while retaining X makes the lie provable the moment it is discovered. Claims get honest by construction, not by legal exposure.
 2. **Substitutes cryptography for courts.** Trust-based systems rely on lawsuits to enforce claims. Self-attesting systems rely on mathematics. Cryptography scales; legal enforcement does not (jurisdictional gaps, cost asymmetries, statute-of-limitations, forum shopping).
-3. **Comparison without trust.** Two self-attesting operators can be compared on their claims by a user who trusts neither. Sovereignty-preserving migration (`spec/migration-v1.md`) only has value if destinations can be compared before the user commits.
+3. **Comparison without trust.** Two self-attesting operators can be compared on their claims by a user who trusts neither. Sovereignty-preserving migration (`spec/migration-v1.md`) only has value if destinations can be compared before the user commits. Runnable end-to-end — an agent picks up its identity + reputation and walks from one relay to another, the destination verifying the source's signature against a pinned key and trusting neither party: `pnpm demo-migration` (`scripts/demo-migration.ts`), built on `performMigration` from `@motebit/runtime`.
 4. **Operator-Byzantine-tolerant.** Once a claim is anchored (signed + public record), even a compromised or malicious operator cannot retroactively erase it. Past claims survive the operator's continued existence — the disappearance test made precise.
 
 ## Where it is exhibited in motebit
