@@ -90,6 +90,13 @@ const REGISTRY: Record<string, Classification> = {
   },
   SkillEnvelope: { kind: "verifier", verifier: "verifySkillEnvelope" },
   SignedTransparencyDeclaration: { kind: "verifier", verifier: "verifyTransparencyDeclaration" },
+  // Migration family (spec/migration-v1.md) — portable verifiers added
+  // 2026-05-24 alongside the relay hex→base64url encoding fix.
+  MigrationRequest: { kind: "verifier", verifier: "verifyMigrationRequest" },
+  MigrationToken: { kind: "verifier", verifier: "verifyMigrationToken" },
+  DepartureAttestation: { kind: "verifier", verifier: "verifyDepartureAttestation" },
+  MigrationPresentation: { kind: "verifier", verifier: "verifyMigrationPresentation" },
+  CredentialBundle: { kind: "verifier", verifier: "verifyCredentialBundle" },
 
   // ── B: verified within a parent artifact's verifier ─────────────────────
   CredentialAnchorBatch: {
@@ -154,14 +161,7 @@ const REGISTRY: Record<string, Classification> = {
     kind: "gap",
     note: "collaboration proposal response carries a signature but has no verifier",
   },
-  CredentialBundle: { kind: "gap", note: "migration bundle; no verifier" },
-  DepartureAttestation: { kind: "gap", note: "migration departure attestation; no verifier" },
-  MigrationPresentation: { kind: "gap", note: "migration presentation; no verifier" },
-  MigrationRequest: { kind: "gap", note: "migration request; no verifier" },
-  MigrationToken: {
-    kind: "gap",
-    note: "migration token; embedded in MigrationPresentation; no verifier",
-  },
+  // (migration family closed 2026-05-24 — moved to the verifier section above)
   SolvencyProof: { kind: "gap", note: "settlement-mode solvency proof; no verifier" },
 };
 

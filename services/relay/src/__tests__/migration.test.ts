@@ -3,14 +3,12 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
+import { generateKeypair, bytesToHex, hexToBytes } from "@motebit/encryption";
 import {
-  generateKeypair,
-  bytesToHex,
-  verify,
-  canonicalJson,
-  hexToBytes,
-} from "@motebit/encryption";
-import { signBalanceWaiver } from "@motebit/crypto";
+  signBalanceWaiver,
+  verifyMigrationToken,
+  verifyDepartureAttestation,
+} from "@motebit/crypto";
 import type { MigrationToken, DepartureAttestation, BalanceWaiver } from "@motebit/protocol";
 import { creditAccount } from "../accounts.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
@@ -66,7 +64,8 @@ describe("Migration: POST /api/v1/agents/:motebitId/migrate", () => {
     expect(migration_token.motebit_id).toBe("migrate-agent");
     expect(migration_token.source_relay_id).toBeTruthy();
     expect(migration_token.expires_at).toBeGreaterThan(Date.now());
-    expect(migration_token.signature).toMatch(/^[0-9a-f]+$/);
+    // base64url signature per the declared suite + published schema.
+    expect(migration_token.signature).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
   it("token signature is verifiable with relay public key", async () => {
@@ -76,13 +75,8 @@ describe("Migration: POST /api/v1/agents/:motebitId/migrate", () => {
     const wkRes = await relay.app.request("/.well-known/motebit.json");
     const metadata = (await wkRes.json()) as { public_key: string };
 
-    const { signature, ...payload } = migration_token;
-    const canonical = canonicalJson(payload);
-    const valid = await verify(
-      hexToBytes(signature),
-      new TextEncoder().encode(canonical),
-      hexToBytes(metadata.public_key),
-    );
+    // Verify via the portable verifier (the third-party path).
+    const valid = await verifyMigrationToken(migration_token, hexToBytes(metadata.public_key));
     expect(valid).toBe(true);
   });
 
@@ -133,7 +127,7 @@ describe("Migration: GET attestation", () => {
     expect(typeof att.successful_tasks).toBe("number");
     expect(typeof att.failed_tasks).toBe("number");
     expect(typeof att.credentials_issued).toBe("number");
-    expect(att.signature).toMatch(/^[0-9a-f]+$/);
+    expect(att.signature).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
   it("attestation signature is verifiable", async () => {
@@ -147,11 +141,8 @@ describe("Migration: GET attestation", () => {
     const wkRes = await relay.app.request("/.well-known/motebit.json");
     const metadata = (await wkRes.json()) as { public_key: string };
 
-    const { signature, ...payload } = body.departure_attestation;
-    const canonical = canonicalJson(payload);
-    const valid = await verify(
-      hexToBytes(signature),
-      new TextEncoder().encode(canonical),
+    const valid = await verifyDepartureAttestation(
+      body.departure_attestation,
       hexToBytes(metadata.public_key),
     );
     expect(valid).toBe(true);

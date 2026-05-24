@@ -9,8 +9,13 @@
  */
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { sign, verify, canonicalJson, bytesToHex, hexToBytes } from "@motebit/encryption";
-import { verifyBalanceWaiver } from "@motebit/crypto";
+import { sign, canonicalJson, hexToBytes } from "@motebit/encryption";
+import {
+  verifyBalanceWaiver,
+  verifyMigrationToken,
+  verifyDepartureAttestation,
+  toBase64Url,
+} from "@motebit/crypto";
 import type {
   MigrationToken,
   DepartureAttestation,
@@ -177,9 +182,12 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
     const canonical = canonicalJson(tokenPayload);
     const sig = await sign(new TextEncoder().encode(canonical), relayIdentity.privateKey);
-    const signatureHex = bytesToHex(sig);
+    // base64url to match the declared suite (motebit-jcs-ed25519-b64-v1), the
+    // published JSON Schema, and verifyMigrationToken. (Was hex — see the
+    // suite/encoding-mismatch fix.)
+    const signature = toBase64Url(sig);
 
-    const token: MigrationToken = { ...tokenPayload, signature: signatureHex };
+    const token: MigrationToken = { ...tokenPayload, signature };
 
     // Store in DB
     db.prepare(
@@ -192,7 +200,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       body.reason ?? null,
       issuedAt,
       expiresAt,
-      signatureHex,
+      signature,
     );
 
     logger.info("migration.token_issued", { motebitId, tokenId, expiresAt });
@@ -287,9 +295,10 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
     const canonical = canonicalJson(attestationPayload);
     const sig = await sign(new TextEncoder().encode(canonical), relayIdentity.privateKey);
-    const signatureHex = bytesToHex(sig);
+    // base64url to match the declared suite + published schema + verifier.
+    const signature = toBase64Url(sig);
 
-    const attestation: DepartureAttestation = { ...attestationPayload, signature: signatureHex };
+    const attestation: DepartureAttestation = { ...attestationPayload, signature };
 
     logger.info("migration.attestation_issued", { motebitId, attestationId });
     return c.json({ ok: true, departure_attestation: attestation });
@@ -425,26 +434,15 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     }
 
     if (sourceRelayPublicKey) {
-      const { signature: tokenSig, ...tokenPayload } = migration_token;
-      const tokenCanonical = canonicalJson(tokenPayload);
-      const tokenValid = await verify(
-        hexToBytes(tokenSig),
-        new TextEncoder().encode(tokenCanonical),
-        hexToBytes(sourceRelayPublicKey),
-      );
-      if (!tokenValid) {
+      // Route through the portable verifiers (relay Rule 1 — no inline crypto
+      // plumbing) rather than reconstructing canonical-JSON + verify here. They
+      // base64url-decode the signature, matching the corrected encoding.
+      const sourcePk = hexToBytes(sourceRelayPublicKey);
+      if (!(await verifyMigrationToken(migration_token, sourcePk))) {
         throw new HTTPException(400, { message: "Migration token signature invalid" });
       }
-
       // Step 3: Verify departure attestation signature (§8.2 step 3)
-      const { signature: attSig, ...attPayload } = departure_attestation;
-      const attCanonical = canonicalJson(attPayload);
-      const attValid = await verify(
-        hexToBytes(attSig),
-        new TextEncoder().encode(attCanonical),
-        hexToBytes(sourceRelayPublicKey),
-      );
-      if (!attValid) {
+      if (!(await verifyDepartureAttestation(departure_attestation, sourcePk))) {
         throw new HTTPException(400, { message: "Departure attestation signature invalid" });
       }
     }
