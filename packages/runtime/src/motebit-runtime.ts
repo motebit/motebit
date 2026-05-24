@@ -2669,6 +2669,11 @@ export class MotebitRuntime {
           memoryGovernor: this.memoryGovernor,
           privacy: this.privacy,
           getProvider: () => this.provider,
+          // Fail-closed privacy floor for the `consolidate` phase's direct
+          // `provider.generate(...)`: on a non-sovereign provider, ≥Medical
+          // episodics are filtered out of LLM summarization in `gather`
+          // (CLAUDE.md "medical/financial/secret never reach external AI").
+          providerIsSovereign: () => this.providerIsSovereign(),
           // Consolidation-cycle reflection — fires the gate at
           // each cycle (sensitivity may elevate between cycles via
           // a slab item or tier-bounded tool result). Gate failure

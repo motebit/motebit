@@ -202,6 +202,70 @@ describe("runConsolidationCycle", () => {
     expect(semantic[0]!.content).toBe("Consolidated insight.");
   });
 
+  async function seedEpisodics(
+    h: Harness,
+    sensitivity: SensitivityLevel,
+    count = 3,
+  ): Promise<void> {
+    const embedding = new Array(384).fill(0.1);
+    const fortyDaysAgo = Date.now() - 40 * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < count; i++) {
+      const node = await h.runtime.memory.formMemory(
+        {
+          content: `Saw the user open editor at ${i}am`,
+          confidence: 0.75,
+          sensitivity,
+          memory_type: MemoryType.Episodic,
+        },
+        embedding,
+        SEVEN_DAYS,
+      );
+      node.created_at = fortyDaysAgo;
+      node.last_accessed = fortyDaysAgo;
+      await h.memoryStorage.saveNode(node);
+    }
+  }
+
+  it("excludes ≥Medical episodics from consolidation on a non-sovereign provider (fail-closed)", async () => {
+    // Default harness: `providerIsSovereign` is undefined → treated as
+    // non-sovereign (external/BYOK). Medical bodies must never reach the
+    // consolidate phase's provider.generate (CLAUDE.md privacy floor).
+    await seedEpisodics(harness, SensitivityLevel.Medical);
+
+    const result = await runConsolidationCycle(harness.deps, { phases: ["gather", "consolidate"] });
+
+    expect(result.summary.gatherClusters ?? 0).toBe(0);
+    expect(result.summary.consolidateMerged ?? 0).toBe(0);
+    const after = await harness.runtime.memory.exportAll();
+    const live = after.nodes.filter((n) => !n.tombstoned);
+    // The three originals survive untouched; no semantic summary formed.
+    expect(live.filter((n) => n.memory_type === MemoryType.Episodic)).toHaveLength(3);
+    expect(live.filter((n) => n.memory_type === MemoryType.Semantic)).toHaveLength(0);
+  });
+
+  it("consolidates ≥Medical episodics on a sovereign (on-device) provider — no egress to protect", async () => {
+    harness.deps.providerIsSovereign = () => true;
+    await seedEpisodics(harness, SensitivityLevel.Medical);
+
+    const result = await runConsolidationCycle(harness.deps, { phases: ["gather", "consolidate"] });
+
+    expect(result.summary.gatherClusters ?? 0).toBeGreaterThanOrEqual(1);
+    expect(result.summary.consolidateMerged ?? 0).toBeGreaterThanOrEqual(1);
+    const after = await harness.runtime.memory.exportAll();
+    const live = after.nodes.filter((n) => !n.tombstoned);
+    expect(live.filter((n) => n.memory_type === MemoryType.Semantic).length).toBeGreaterThanOrEqual(
+      1,
+    );
+  });
+
+  it("still consolidates Personal episodics on a non-sovereign provider (below the floor)", async () => {
+    await seedEpisodics(harness, SensitivityLevel.Personal);
+
+    const result = await runConsolidationCycle(harness.deps, { phases: ["gather", "consolidate"] });
+
+    expect(result.summary.consolidateMerged ?? 0).toBeGreaterThanOrEqual(1);
+  });
+
   it("aborts mid-cycle when the parent signal fires before the next phase", async () => {
     const ctrl = new AbortController();
     ctrl.abort(new Error("user message arrived"));

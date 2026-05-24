@@ -36,7 +36,13 @@
  * wasteful.
  */
 
-import { EventType, MemoryType, RelationType, SensitivityLevel } from "@motebit/sdk";
+import {
+  EventType,
+  MemoryType,
+  RelationType,
+  SensitivityLevel,
+  rankSensitivity,
+} from "@motebit/sdk";
 import type {
   MemoryNode,
   ConversationStoreAdapter,
@@ -73,6 +79,17 @@ export interface ConsolidationCycleDeps {
   /** Resolve current AI provider (may change over lifetime). null disables
    *  LLM-dependent work in gather + consolidate; prune still runs. */
   getProvider(): StreamingProvider | null;
+  /** Whether the active provider keeps inference on-device (sovereign). When
+   *  false — an external provider (BYOK or relay) — episodic candidates at or
+   *  above `Medical` sensitivity are excluded from the `gather`/`consolidate`
+   *  LLM summarization, enforcing the doctrine floor "medical/financial/secret
+   *  never reach external AI" (CLAUDE.md). This makes real the premise the
+   *  `check-sensitivity-routing` consolidation carve-out rests on (the
+   *  `consolidatePhase` direct `provider.generate(...)` is exempt from the
+   *  static gate *because* high-sensitivity bodies never reach it). Omitted →
+   *  treated as non-sovereign (fail-closed). Sovereign providers consolidate
+   *  every tier locally — no egress, nothing to protect. */
+  providerIsSovereign?: () => boolean;
   /** Optional reflection trigger. The cycle invokes during the gather
    *  phase if provided AND a provider is available. Left optional so the
    *  cycle composes standalone in tests. The runtime supplies
@@ -385,9 +402,22 @@ async function gatherPhase(
 
   const notable = rankNotableMemories(live, edges, { nowMs: ctx.now });
 
+  // Fail-closed privacy floor: when inference leaves the device (BYOK /
+  // relay), high-sensitivity bodies must never enter the `consolidate`
+  // phase's `provider.generate(...)`. This is the enforcement the
+  // `check-sensitivity-routing` consolidation carve-out assumes (CLAUDE.md
+  // "medical/financial/secret never reach external AI"). Sovereign
+  // (on-device) providers consolidate every tier — no egress.
+  const externalProvider = !(deps.providerIsSovereign?.() ?? false);
   const candidates = live.filter((n) => {
     if (n.pinned) return false;
     if (n.memory_type !== MemoryType.Episodic) return false;
+    if (
+      externalProvider &&
+      rankSensitivity(n.sensitivity) >= rankSensitivity(SensitivityLevel.Medical)
+    ) {
+      return false;
+    }
     const elapsed = ctx.now - n.created_at;
     return elapsed > n.half_life * 0.5;
   });

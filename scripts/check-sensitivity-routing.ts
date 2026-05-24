@@ -46,13 +46,16 @@
  *
  * Consolidation calls (`provider.generate(...)` for memory
  * consolidation) are intentionally exempted via
- * `DIRECT_PROVIDER_CALL_ALLOWLIST`: they operate on memories that
- * have already passed through `CONTEXT_SAFE_SENSITIVITY` at retrieval
- * time, so high-sensitivity bytes never enter the consolidation
- * path. Locking that invariant is the memory-retrieval filter's job,
- * not this gate's. The carve-out also covers
- * `runtime/consolidation-cycle.ts:consolidatePhase` (same content-
- * filter justification, cross-file from this scan).
+ * `DIRECT_PROVIDER_CALL_ALLOWLIST`: high-sensitivity bytes never enter
+ * the consolidation path, so there is nothing for this gate to clear.
+ * Locking that invariant is the consolidation cycle's job, not this
+ * gate's: `runtime/consolidation-cycle.ts:gatherPhase` filters episodic
+ * candidates at or above `Medical` out of LLM clustering/summarization
+ * whenever the provider is non-sovereign (`deps.providerIsSovereign()`
+ * false → BYOK / relay). Sovereign (on-device) providers consolidate
+ * every tier — no egress, nothing to protect. The carve-out also covers
+ * `consolidatePhase`, which only ever sees the already-filtered cluster
+ * set (cross-file from this scan).
  *
  * ── Relationship to the `SensitivityCleared<T>` brand ──────────────
  *
@@ -110,17 +113,19 @@ const GATE_PATTERN = /\bthis\.assertSensitivityPermitsAiCall\s*\(/g;
 
 /**
  * Methods exempt from the direct-provider-call check. The consolidation
- * provider built inside `wireLoopDeps` operates on memories that have
- * already passed through `CONTEXT_SAFE_SENSITIVITY` at retrieval time,
- * so high-sensitivity bytes never enter that path — locking that
- * invariant is the memory-retrieval filter's job, not this gate's.
+ * provider built inside `wireLoopDeps` only ever sees memory bodies the
+ * consolidation cycle has already filtered: `consolidation-cycle.ts`
+ * gatherPhase drops ≥`Medical` episodics before clustering whenever the
+ * provider is non-sovereign, so high-sensitivity bytes never enter that
+ * path. Enforcing that invariant is the cycle's job, not this gate's.
  *
  * Adding an entry is a privacy-load-bearing decision: name the
  * justification in the comment so future readers can audit.
  */
 const DIRECT_PROVIDER_CALL_ALLOWLIST: ReadonlySet<string> = new Set([
   // Constructs `consolidationProvider`; the inner `provider.generate`
-  // call only sees memory bodies pre-filtered by `CONTEXT_SAFE_SENSITIVITY`.
+  // call only sees the sensitivity-filtered cluster set produced by
+  // `consolidation-cycle.ts:gatherPhase` (≥Medical dropped on non-sovereign).
   "wireLoopDeps",
 ]);
 
