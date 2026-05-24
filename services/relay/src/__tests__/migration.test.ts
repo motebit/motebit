@@ -626,7 +626,7 @@ describe("Migration: end-to-end (performMigration across two relays)", () => {
   // Route the orchestrator's fetch into the two in-process relay apps by host.
   function twoRelayFetch(): typeof globalThis.fetch {
     return (async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input.toString();
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.startsWith(SOURCE)) return source.app.request(url.slice(SOURCE.length) || "/", init);
       if (url.startsWith(DEST)) return dest.app.request(url.slice(DEST.length) || "/", init);
       return new Response("no route", { status: 404 });

@@ -19,7 +19,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 /** A fetch double that serves canned responses keyed by URL substring. */
 function routedFetch(routes: Record<string, () => Response>): typeof globalThis.fetch {
   return (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input.toString();
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     for (const [needle, make] of Object.entries(routes)) {
       if (url.includes(needle)) return make();
     }
@@ -59,7 +59,7 @@ describe("performMigration", () => {
   it("calls source endpoints with the source bearer token, dest with its own", async () => {
     const calls: { url: string; auth: string | null }[] = [];
     const spyFetch = (async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input.toString();
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const auth = new Headers(init?.headers).get("Authorization");
       calls.push({ url, auth });
       for (const [needle, make] of Object.entries(happyRoutes))

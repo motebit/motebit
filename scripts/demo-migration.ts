@@ -88,7 +88,7 @@ async function main(): Promise<void> {
     step(3, "nomad migrates ALPHA → BETA (one call: performMigration)");
     // Route the agent's fetch into the two in-process relays.
     const routedFetch = (async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input.toString();
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.startsWith(SOURCE_URL))
         return alpha.app.request(url.slice(SOURCE_URL.length) || "/", init);
       if (url.startsWith(DEST_URL))
