@@ -113,6 +113,66 @@ describe("MotebitRuntime — proactive reflection via idle-tick", () => {
     expect(await countIdleTickEvents(runtime)).toBe(1);
   });
 
+  // Governance bound: the consolidation cycle's reflection is the only
+  // unconditional LLM call per cycle. It is gated on "a new user message
+  // landed since the last cycle" so an idle, default-on motebit stops
+  // firing reflections against the user's provider every interval. The
+  // gate calls `assertSensitivityPermitsAiCall("runReflection")` only when
+  // it decides to reflect, so that call is the observable.
+  const reflectionAttempted = (entries: Array<readonly unknown[]>): boolean =>
+    entries.some((c) => c[0] === "runReflection");
+
+  it("runs cycle reflection when a new user message landed since the last cycle", async () => {
+    const provider = createMockProvider();
+    const runtime = new MotebitRuntime(
+      { motebitId: "gate-mote", tickRateHz: 0 },
+      createAdapters(provider),
+    );
+    runtime.setProvider(provider); // wires loopDeps so the gate can clear
+    (runtime as unknown as { _lastUserMessageAt: number })._lastUserMessageAt = Date.now();
+    const assertSpy = vi.spyOn(runtime, "assertSensitivityPermitsAiCall");
+
+    await runtime.consolidationCycle();
+
+    expect(reflectionAttempted(assertSpy.mock.calls)).toBe(true);
+  });
+
+  it("skips cycle reflection when no new user message landed since the last cycle", async () => {
+    const provider = createMockProvider();
+    const runtime = new MotebitRuntime(
+      { motebitId: "gate-mote", tickRateHz: 0 },
+      createAdapters(provider),
+    );
+    runtime.setProvider(provider);
+    const fields = runtime as unknown as {
+      _lastUserMessageAt: number;
+      _lastConsolidationCycleAt: number;
+    };
+    fields._lastUserMessageAt = 1000;
+    fields._lastConsolidationCycleAt = 2000; // a cycle already ran after that message
+    const assertSpy = vi.spyOn(runtime, "assertSensitivityPermitsAiCall");
+
+    await runtime.consolidationCycle();
+
+    expect(reflectionAttempted(assertSpy.mock.calls)).toBe(false);
+  });
+
+  it("arms the gate after a cycle — a back-to-back cycle with no new message skips reflection", async () => {
+    const provider = createMockProvider();
+    const runtime = new MotebitRuntime(
+      { motebitId: "gate-mote", tickRateHz: 0 },
+      createAdapters(provider),
+    );
+    runtime.setProvider(provider);
+    (runtime as unknown as { _lastUserMessageAt: number })._lastUserMessageAt = Date.now();
+
+    await runtime.consolidationCycle(); // reflects + records _lastConsolidationCycleAt
+    const assertSpy = vi.spyOn(runtime, "assertSensitivityPermitsAiCall");
+    await runtime.consolidationCycle(); // no new message → reflection skipped
+
+    expect(reflectionAttempted(assertSpy.mock.calls)).toBe(false);
+  });
+
   it("logs the heartbeat event BEFORE running the action, so a failed reflection doesn't lose the cadence signal", async () => {
     const warnings: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
     const provider = createMockProvider();

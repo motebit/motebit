@@ -350,6 +350,15 @@ export class MotebitRuntime {
   /** Unix ms timestamp of the last user-sent message, or null. */
   private _lastUserMessageAt: number | null = null;
   /**
+   * Unix ms `finished_at` of the last consolidation cycle that ran, or null.
+   * Governance bound on default-on consolidation: the cycle's unconditional
+   * reflection LLM call is skipped when no new user message has landed since
+   * this timestamp — otherwise an idle motebit would fire a reflection every
+   * idle interval indefinitely (wasteful even on a user's own BYOK key). New
+   * turns re-arm it. Prune/flush (retention, no LLM) and cluster consolidation
+   * (work-gated by candidate count) still run every cycle regardless. */
+  private _lastConsolidationCycleAt: number | null = null;
+  /**
    * The user-typed-intent attestation accompanying the in-flight
    * `sendMessageStreaming` turn, if any. Set when the surface
    * passes `options.userActionAttestation` (typed-and-sent chat
@@ -2683,6 +2692,17 @@ export class MotebitRuntime {
           // still emits before the throw so the blocked egress
           // shows in the SensitivityGateFired log.
           performReflection: () => {
+            // Governance bound on default-on consolidation: skip the
+            // reflection LLM call when no new user message has landed since
+            // the last cycle (`_lastConsolidationCycleAt`). Prune/flush
+            // (retention, no LLM) and cluster consolidation (work-gated) in
+            // this same cycle still run — only the unconditional reflection
+            // call is bounded, so an idle motebit stops firing reflections
+            // against the user's provider every interval.
+            const lastMsg = this._lastUserMessageAt;
+            const hasNewActivity =
+              lastMsg != null && lastMsg > (this._lastConsolidationCycleAt ?? -Infinity);
+            if (!hasNewActivity) return Promise.resolve();
             try {
               const clearedProvider = projectProviderClearance(
                 this.assertSensitivityPermitsAiCall("runReflection"),
@@ -2728,6 +2748,10 @@ export class MotebitRuntime {
       if (this._signingKeys && result.phasesRun.length > 0) {
         await this.signAndEmitConsolidationReceipt(result);
       }
+      // Record cycle completion so the next idle tick can skip the reflection
+      // LLM call when no new user message has landed since (see
+      // `_lastConsolidationCycleAt` + the `performReflection` novelty guard).
+      this._lastConsolidationCycleAt = result.finishedAt;
       return result;
     } finally {
       if (config.signal && callerOnAbort) {
