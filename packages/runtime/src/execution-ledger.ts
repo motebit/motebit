@@ -18,6 +18,7 @@ import type {
   AuditLogSink,
 } from "@motebit/sdk";
 import { sign, toBase64Url, hexToBytes } from "@motebit/encryption";
+import { computeExecutionTimelineHash } from "@motebit/crypto";
 import type { EventStore } from "@motebit/event-log";
 
 // === Canonical JSON ===
@@ -46,8 +47,11 @@ export async function hashString(data: string): Promise<string> {
 }
 
 export async function computeTimelineHash(timeline: ExecutionTimelineEntry[]): Promise<string> {
-  const lines = timeline.map((entry) => canonicalJson(entry));
-  return hashString(lines.join("\n"));
+  // Delegate to the single-source canonical hash in @motebit/crypto (spec §6)
+  // so this signer and `verifyGoalExecutionManifest` never drift on
+  // canonical-JSON edge cases (e.g. `undefined` object values). The local
+  // `canonicalJson`/`hashString` stay for their other exported consumers.
+  return computeExecutionTimelineHash(timeline);
 }
 
 // === Replay ===

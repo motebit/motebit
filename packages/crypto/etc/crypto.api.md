@@ -15,6 +15,8 @@ import type { DisputeAppeal } from '@motebit/protocol';
 import type { DisputeEvidence } from '@motebit/protocol';
 import type { DisputeRequest } from '@motebit/protocol';
 import type { DisputeResolution } from '@motebit/protocol';
+import type { ExecutionTimelineEntry } from '@motebit/protocol';
+import type { GoalExecutionManifest } from '@motebit/protocol';
 import type { HardwareAttestationClaim } from '@motebit/protocol';
 import type { HorizonWitness } from '@motebit/protocol';
 import type { HorizonWitnessRequestBody } from '@motebit/protocol';
@@ -109,6 +111,9 @@ export const COLLABORATIVE_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
 export function computeCredentialLeaf(credential: Record<string, unknown>): Promise<string>;
+
+// @public
+export function computeExecutionTimelineHash(timeline: ExecutionTimelineEntry[]): Promise<string>;
 
 // @public
 export const COMPUTER_SESSION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
@@ -372,6 +377,14 @@ export function generateKeypair(): Promise<KeyPair>;
 
 // @public
 export function getPublicKeyBySuite(privateKey: Uint8Array, suite: SuiteId): Promise<Uint8Array>;
+
+// @public (undocumented)
+export type GoalExecutionManifestVerification = {
+    valid: true;
+} | {
+    valid: false;
+    reason: "content_hash_mismatch" | "signature_missing" | "signature_invalid" | "malformed";
+};
 
 // @public (undocumented)
 export interface GradientCredentialSubject {
@@ -1361,6 +1374,9 @@ export function verifyExecutionReceipt(receipt: SignableReceipt, publicKey: Uint
 
 // @public (undocumented)
 export function verifyExecutionReceiptDetailed(receipt: SignableReceipt, publicKey: Uint8Array): Promise<ReceiptVerifyDetail>;
+
+// @public
+export function verifyGoalExecutionManifest(manifest: GoalExecutionManifest, publicKey: Uint8Array): Promise<GoalExecutionManifestVerification>;
 
 // @public
 export function verifyGuardianRevocation(revocation: {

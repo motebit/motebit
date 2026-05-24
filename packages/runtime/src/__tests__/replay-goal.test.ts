@@ -2,9 +2,17 @@ import { describe, it, expect } from "vitest";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { PlatformAdapters } from "../index";
 import { EventType, PlanStatus, StepStatus } from "@motebit/sdk";
-import type { EventLogEntry, MotebitId, EventId, PlanId, GoalId } from "@motebit/sdk";
+import type {
+  EventLogEntry,
+  MotebitId,
+  EventId,
+  PlanId,
+  GoalId,
+  GoalExecutionManifest,
+} from "@motebit/sdk";
 import { InMemoryPlanStore } from "@motebit/planner";
 import { InMemoryAuditSink } from "@motebit/policy";
+import { generateKeypair, verifyGoalExecutionManifest } from "@motebit/crypto";
 
 const MOTEBIT_ID = "replay-test" as MotebitId;
 const GOAL_ID = "goal-replay-1" as GoalId;
@@ -536,5 +544,62 @@ describe("MotebitRuntime.replayGoal", () => {
     const { computeTimelineHash } = await import("../execution-ledger.js");
     const recomputedHash = await computeTimelineHash(manifest.timeline);
     expect(recomputedHash).toBe(hash1);
+  });
+
+  // Cross-package byte-compat: the manifest the runtime signs must verify
+  // through @motebit/crypto's verifyGoalExecutionManifest. This is the drift
+  // defense for the single-source canonical hash — if the runtime signer's
+  // canonical-JSON and the crypto verifier's ever diverge, this fails.
+  it("signs a manifest that verifyGoalExecutionManifest accepts (and rejects tamper / wrong key)", async () => {
+    const planStore = new InMemoryPlanStore();
+    const auditSink = new InMemoryAuditSink();
+    const adapters = createTestAdapters(planStore, auditSink);
+    const runtime = new MotebitRuntime({ motebitId: MOTEBIT_ID, tickRateHz: 0 }, adapters);
+    const now = Date.now();
+
+    planStore.savePlan({
+      plan_id: PLAN_ID,
+      goal_id: GOAL_ID,
+      motebit_id: MOTEBIT_ID,
+      title: "Round-trip plan",
+      status: PlanStatus.Completed,
+      created_at: now,
+      updated_at: now + 1000,
+      current_step_index: 0,
+      total_steps: 1,
+    });
+    const eventStore = adapters.storage.eventStore;
+    await eventStore.append(makeEvent("rt-1", EventType.GoalCreated, { goal_id: GOAL_ID }, now));
+    await eventStore.append(
+      makeEvent("rt-2", EventType.PlanCompleted, { plan_id: PLAN_ID }, now + 1000),
+    );
+
+    const kp = await generateKeypair();
+    const manifest = await runtime.replayGoal(GOAL_ID, kp.privateKey);
+    expect(manifest).not.toBeNull();
+    expect(manifest!.signature).toBeDefined();
+
+    // Positive: signer output verifies against the verifier.
+    expect(await verifyGoalExecutionManifest(manifest!, kp.publicKey)).toEqual({ valid: true });
+
+    // Tamper the timeline → content_hash recompute mismatch.
+    const tampered: GoalExecutionManifest = {
+      ...manifest!,
+      timeline: [
+        ...manifest!.timeline,
+        { timestamp: now + 99, type: "plan_failed", payload: { plan_id: PLAN_ID, reason: "x" } },
+      ],
+    };
+    expect(await verifyGoalExecutionManifest(tampered, kp.publicKey)).toEqual({
+      valid: false,
+      reason: "content_hash_mismatch",
+    });
+
+    // Wrong key → signature_invalid.
+    const other = await generateKeypair();
+    expect(await verifyGoalExecutionManifest(manifest!, other.publicKey)).toEqual({
+      valid: false,
+      reason: "signature_invalid",
+    });
   });
 });

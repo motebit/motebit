@@ -1866,3 +1866,62 @@ export async function verifyDeviceRegistration(
   const ok = await verifyBySuite(body.suite, message, sigBytes, pkBytes);
   return ok ? { valid: true } : { valid: false, reason: "bad_signature" };
 }
+
+// === Goal Execution Manifest (execution-ledger spec §6) ===
+
+import type { GoalExecutionManifest, ExecutionTimelineEntry } from "@motebit/protocol";
+
+/**
+ * Canonical content hash for an execution-ledger manifest: SHA-256 (hex) over
+ * the newline-joined canonical-JSON of each timeline entry. THE single source
+ * of this hash (spec/execution-ledger-v1.md §6); the runtime's `replayGoal`
+ * signs over it and delegates here so signer + verifier never drift on
+ * canonical-JSON edge cases (e.g. `undefined` object values).
+ */
+export async function computeExecutionTimelineHash(
+  timeline: ExecutionTimelineEntry[],
+): Promise<string> {
+  const lines = timeline.map((entry) => canonicalJson(entry)).join("\n");
+  return hash(new TextEncoder().encode(lines));
+}
+
+export type GoalExecutionManifestVerification =
+  | { valid: true }
+  | {
+      valid: false;
+      reason: "content_hash_mismatch" | "signature_missing" | "signature_invalid" | "malformed";
+    };
+
+/**
+ * Verify a `GoalExecutionManifest` (execution-ledger spec §6) against the
+ * motebit's public key, with no relay contact — closes the self-attesting
+ * consumer side for the manifest `replayGoal` signs.
+ *
+ * Two independent checks: (1) the `content_hash` recomputes from the timeline
+ * (integrity of the proof-of-work record); (2) the Ed25519 `signature` over
+ * the raw 32-byte hash verifies against `publicKey`. The signer signs the hash
+ * bytes directly (spec §6) — not a canonical body — so verification routes the
+ * hash bytes through `verifyBySuite` (every Ed25519 suite arm verifies the
+ * given bytes directly; the manifest carries no `suite` field, so the canonical
+ * b64 suite is used as the dispatch key). Fail-closed on every mismatch. Inner
+ * `signed_receipts` are verified separately by `verifyInnerSignedReceipts`.
+ */
+export async function verifyGoalExecutionManifest(
+  manifest: GoalExecutionManifest,
+  publicKey: Uint8Array,
+): Promise<GoalExecutionManifestVerification> {
+  const recomputed = await computeExecutionTimelineHash(manifest.timeline);
+  if (recomputed !== manifest.content_hash)
+    return { valid: false, reason: "content_hash_mismatch" };
+  if (manifest.signature === undefined) return { valid: false, reason: "signature_missing" };
+  let sig: Uint8Array;
+  let hashBytes: Uint8Array;
+  try {
+    sig = fromBase64Url(manifest.signature);
+    hashBytes = hexToBytes(manifest.content_hash);
+  } catch {
+    return { valid: false, reason: "malformed" };
+  }
+  const ok = await verifyBySuite("motebit-jcs-ed25519-b64-v1", hashBytes, sig, publicKey);
+  return ok ? { valid: true } : { valid: false, reason: "signature_invalid" };
+}

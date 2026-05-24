@@ -3,6 +3,8 @@
  * functions directly for coverage attribution.
  */
 import { describe, it, expect } from "vitest";
+import { computeExecutionTimelineHash, verifyGoalExecutionManifest, toBase64Url } from "../index";
+import type { GoalExecutionManifest, ExecutionTimelineEntry } from "@motebit/protocol";
 import {
   generateKeypair,
   ed25519Sign,
@@ -2128,5 +2130,60 @@ describe("signComputerSessionReceipt / verifyComputerSessionReceipt", () => {
     // Verifier independently recomputes from the per-action records.
     const recomputed = await hashComputerSessionActions(actions);
     expect(recomputed).toBe(signed.actions_hash);
+  });
+});
+
+describe("verifyGoalExecutionManifest", () => {
+  const timeline: ExecutionTimelineEntry[] = [
+    { timestamp: 1, type: "goal_created", payload: { goal_id: "g" } },
+    { timestamp: 2, type: "plan_completed", payload: { plan_id: "p" } },
+  ];
+
+  async function signedManifest(privateKey: Uint8Array): Promise<GoalExecutionManifest> {
+    const content_hash = await computeExecutionTimelineHash(timeline);
+    // Signs the raw 32-byte hash directly (execution-ledger spec §6).
+    const sig = await ed25519Sign(hexToBytes(content_hash), privateKey);
+    return {
+      spec: "motebit/execution-ledger@1.0",
+      motebit_id: "m",
+      goal_id: "g",
+      plan_id: "p",
+      started_at: 1,
+      completed_at: 2,
+      status: "completed",
+      timeline,
+      steps: [],
+      delegation_receipts: [],
+      content_hash,
+      signature: toBase64Url(sig),
+    };
+  }
+
+  it("accepts a valid signed manifest", async () => {
+    const kp = await generateKeypair();
+    expect(
+      await verifyGoalExecutionManifest(await signedManifest(kp.privateKey), kp.publicKey),
+    ).toEqual({
+      valid: true,
+    });
+  });
+
+  it("rejects a content_hash that does not recompute from the timeline", async () => {
+    const kp = await generateKeypair();
+    const m = await signedManifest(kp.privateKey);
+    expect(
+      await verifyGoalExecutionManifest({ ...m, content_hash: "00".repeat(32) }, kp.publicKey),
+    ).toEqual({ valid: false, reason: "content_hash_mismatch" });
+  });
+
+  it("rejects a manifest with no signature", async () => {
+    const kp = await generateKeypair();
+    const { signature: _omit, ...unsigned } = await signedManifest(kp.privateKey);
+    expect(
+      await verifyGoalExecutionManifest(unsigned as GoalExecutionManifest, kp.publicKey),
+    ).toEqual({
+      valid: false,
+      reason: "signature_missing",
+    });
   });
 });
