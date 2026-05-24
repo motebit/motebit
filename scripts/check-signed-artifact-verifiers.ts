@@ -35,7 +35,7 @@
  *
  * Run: `tsx scripts/check-signed-artifact-verifiers.ts` (exit 1 on violation).
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -48,7 +48,7 @@ const VERIFIER_PKG_SRCS = [
   join(ROOT, "packages/state-export-client/src"),
 ];
 
-type Classification =
+export type Classification =
   | { kind: "verifier"; verifier: string }
   | { kind: "within"; verifier: string; note: string }
   | { kind: "gap"; note: string };
@@ -57,8 +57,13 @@ type Classification =
  * Canonical mapping of every signed `@motebit/protocol` wire artifact to how it
  * is verified. Adding a signed type? Add it here. Closing a gap? Flip it to
  * `verifier`. Keyed by the exact exported type name in `packages/protocol/src`.
+ *
+ * Exported as the single source of truth: `check-signed-artifact-consumed-verified`
+ * (#108) reads the `verifier`-kind function names to know which verifiers a relay
+ * inbound consumer must actually CALL — #107 proves the verifier exists, #108
+ * proves it is invoked.
  */
-const REGISTRY: Record<string, Classification> = {
+export const REGISTRY: Record<string, Classification> = {
   // ── A: dedicated portable verifier ──────────────────────────────────────
   ComputerSessionReceipt: { kind: "verifier", verifier: "verifyComputerSessionReceipt" },
   CredentialAnchorProof: { kind: "verifier", verifier: "verifyCredentialAnchor" },
@@ -278,4 +283,7 @@ function main(): void {
   process.stdout.write(`✓ check-signed-artifact-verifiers: every signed type is classified.\n`);
 }
 
-main();
+// Run only when invoked directly — #108 imports REGISTRY from this module.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}

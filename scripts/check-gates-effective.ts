@@ -166,6 +166,17 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-signed-artifact-consumed-verified",
+    proves:
+      "flags a relay inbound consumer that imports a signed-artifact verifier but loses the call — the require-but-not-verify incident (accept-migration imported-but-never-called verifyCredentialBundle, 2026-05-24). Renames the call so the import remains but no call site exists; Rule B (manifest-missing-call) fires.",
+    perturb: () =>
+      mutateFile("services/relay/src/migration.ts", (src) =>
+        // The import line is `  verifyCredentialBundle,` (no paren) so only the
+        // call `verifyCredentialBundle(` is renamed — import stays, call vanishes.
+        src.replace(/verifyCredentialBundle\(/, "__probe_dropped_verifyCredentialBundle("),
+      ),
+  },
+  {
     script: "check-affordance-routing",
     proves:
       "flags a UI handler that routes a capability-named prompt through handleSend (surface-determinism anti-pattern)",
