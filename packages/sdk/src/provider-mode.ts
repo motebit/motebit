@@ -199,3 +199,27 @@ export function isLocalServerUrl(url: string | undefined | null): boolean {
 export function defaultProviderConfig(): MotebitCloudProviderConfig {
   return { mode: "motebit-cloud" };
 }
+
+/**
+ * Whether inference under this provider mode is free to the user — the
+ * user's own compute (`on-device`) or own vendor API key (`byok`) pays
+ * for it, not a metered allocation the operator bills. `motebit-cloud`
+ * is metered (subscription / proxy allocation), so background work the
+ * user did not initiate must stay opt-in there.
+ *
+ * Single source of truth for the "proactive consolidation defaults ON
+ * only when inference is free" policy (`docs/doctrine/proactive-interior.md`).
+ * Every surface (web / desktop / mobile) consumes this instead of inlining
+ * the mode comparison, so the default-on policy cannot drift between them.
+ * Exhaustive switch: a future `ProviderMode` entry forces an explicit
+ * free-or-metered decision here rather than silently defaulting on.
+ */
+export function inferenceIsFreeToUser(mode: ProviderMode): boolean {
+  switch (mode) {
+    case "on-device":
+    case "byok":
+      return true;
+    case "motebit-cloud":
+      return false;
+  }
+}

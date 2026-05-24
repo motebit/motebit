@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isLocalServerUrl, defaultProviderConfig } from "../index";
+import { isLocalServerUrl, defaultProviderConfig, inferenceIsFreeToUser } from "../index";
 
 describe("isLocalServerUrl", () => {
   it("detects localhost variants", () => {
@@ -28,5 +28,15 @@ describe("defaultProviderConfig", () => {
   it("returns motebit-cloud by default", () => {
     const c = defaultProviderConfig();
     expect(c.mode).toBe("motebit-cloud");
+  });
+});
+
+describe("inferenceIsFreeToUser", () => {
+  it("is free for on-device and BYOK (user's own compute / key)", () => {
+    expect(inferenceIsFreeToUser("on-device")).toBe(true);
+    expect(inferenceIsFreeToUser("byok")).toBe(true);
+  });
+  it("is metered for motebit-cloud (operator-billed allocation)", () => {
+    expect(inferenceIsFreeToUser("motebit-cloud")).toBe(false);
   });
 });

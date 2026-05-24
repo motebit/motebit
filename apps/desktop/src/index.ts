@@ -50,6 +50,7 @@ import {
   DEFAULT_GOVERNANCE_CONFIG,
   DEFAULT_MOTEBIT_CLOUD_URL,
   EventType,
+  inferenceIsFreeToUser,
   type GovernanceConfig,
   type AppearanceConfig,
 } from "@motebit/sdk";
@@ -1140,7 +1141,12 @@ export class DesktopApp {
     }
 
     const proactive = config.proactive ?? {};
-    const proactiveEnabled = proactive.enabled ?? false;
+    // Default ON when inference is free to the user (on-device / BYOK),
+    // opt-in on metered motebit-cloud. Policy lives in the SDK's
+    // `inferenceIsFreeToUser` (single source across surfaces). An explicit
+    // stored toggle (`proactive.enabled`) always wins over the default.
+    const proactiveEnabled =
+      proactive.enabled ?? inferenceIsFreeToUser(desktopConfigToUnified(config).mode);
     const solanaRpcUrl = "https://api.mainnet-beta.solana.com";
     const proactiveAnchor = await resolveProactiveAnchor({
       proactiveEnabled,
@@ -1190,10 +1196,12 @@ export class DesktopApp {
         // retrieval stays consistent. See
         // `packages/runtime/src/memory-formation-queue.ts`.
         deferMemoryFormation: true,
-        // Proactive interior — opt-in. When enabled, the runtime runs
-        // a 4-phase consolidation cycle during idle windows. Presence
-        // transitions tending→idle, memory delta lands in the graph,
-        // audit event emitted. See `docs/doctrine/proactive-interior.md`.
+        // Proactive interior — defaults ON when inference is free
+        // (on-device / BYOK), opt-in on metered motebit-cloud; an explicit
+        // toggle wins (see `proactiveEnabled` above). When enabled, the
+        // runtime runs a 4-phase consolidation cycle during idle windows.
+        // Presence transitions tending→idle, memory delta lands in the
+        // graph, audit event emitted. See `docs/doctrine/proactive-interior.md`.
         proactiveTickMs: proactiveEnabled ? (proactive.tickIntervalMs ?? 5 * 60_000) : undefined,
         proactiveQuietWindowMs: proactive.quietWindowMs ?? 90_000,
         proactiveAction: proactiveEnabled ? "consolidate" : "none",

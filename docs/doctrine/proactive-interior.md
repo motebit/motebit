@@ -40,6 +40,12 @@ When presence is `tending`, the AI loop's tool registry is filtered to a small a
 
 This is sovereign default writ at the tool boundary: the motebit cannot do anything proactively until the user explicitly says yes, and even then only memory-touching things. Implementation in [`packages/runtime/src/scoped-tool-registry.ts`](../../packages/runtime/src/scoped-tool-registry.ts).
 
+## Default posture — on when inference is free
+
+The consolidation cycle is the interior thinking alongside the user, so it should run by default — but only where running it costs the user nothing. The enable default is **mode-derived**: proactive consolidation defaults **on** when inference is free to the user (`on-device` runs locally, `byok` spends the user's own vendor key), and stays **opt-in** on metered `motebit-cloud` (the operator's allocation — background work the user did not initiate must never silently spend it). The policy is one function, [`inferenceIsFreeToUser`](../../packages/sdk/src/provider-mode.ts) in `@motebit/sdk`; web, desktop, and mobile all consume it rather than inlining the mode check, so the default cannot drift between surfaces. An explicit user toggle always wins over the default — a stored choice is never overridden by the mode.
+
+**Sensitivity floor on the cycle itself.** The `consolidate` phase summarizes clusters via the LLM through a direct `provider.generate(...)`, so the doctrine floor "medical/financial/secret never reach external AI" (`CLAUDE.md`) applies inside the cycle, not just on interactive turns. `gatherPhase` drops episodic candidates at or above `Medical` from clustering whenever the provider is non-sovereign (`deps.providerIsSovereign()` false → BYOK / relay); sovereign on-device providers consolidate every tier because nothing leaves the device. Omitted signal → non-sovereign (fail-closed). This is the enforcement the `check-sensitivity-routing` consolidation carve-out assumes; the cycle owns making it true. Sensitive memories still decay and prune locally — they are excluded only from external summarization.
+
 ## Why we unified
 
 Before this work, motebit had two parallel maintenance paths: `runHousekeeping` (timer-scheduled in cli/web/mobile) and `proactiveAction:"reflect"` (idle-tick triggered). They overlapped in scope (both touched memory consolidation), differed in shape, and would have drifted further apart with each new consumer. The cycle is the unification.

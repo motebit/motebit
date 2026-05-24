@@ -42,6 +42,7 @@ import {
   DEFAULT_APPEARANCE_CONFIG,
   migrateVoiceConfig,
   migrateAppearanceConfig,
+  inferenceIsFreeToUser,
   type ProviderSpec,
   type ResolverEnv,
   type UnifiedProviderConfig,
@@ -311,6 +312,23 @@ export function mobileSettingsToUnifiedProvider(
         maxTokens: settings.maxTokens,
       };
   }
+}
+
+/**
+ * Apply the "proactive consolidation defaults ON when inference is free"
+ * policy to a settings object whose proactive choice was never persisted.
+ * Free = on-device / BYOK (user's own compute or key); metered motebit-cloud
+ * stays opt-in. Policy from the SDK's `inferenceIsFreeToUser` (single source
+ * across web / desktop / mobile). Callers gate on "untouched" before calling.
+ */
+function withProactiveDefault(settings: MobileSettings): MobileSettings {
+  return {
+    ...settings,
+    proactive: {
+      ...settings.proactive,
+      enabled: inferenceIsFreeToUser(mobileSettingsToUnifiedProvider(settings).mode),
+    },
+  };
 }
 
 /**
@@ -1052,9 +1070,10 @@ export class MobileApp {
         // the next turn's retrieval. See
         // packages/runtime/src/memory-formation-queue.ts.
         deferMemoryFormation: true,
-        // Proactive interior — defaults off; user opts in via Settings →
-        // Governance → Proactive Interior. See
-        // `docs/doctrine/proactive-interior.md`.
+        // Proactive interior — defaults ON when inference is free
+        // (on-device / BYOK), opt-in on metered motebit-cloud; resolved in
+        // loadSettings via `withProactiveDefault`, an explicit toggle wins.
+        // See `docs/doctrine/proactive-interior.md`.
         proactiveTickMs: persistedSettings.proactive.enabled ? 5 * 60_000 : undefined,
         proactiveQuietWindowMs: 90_000,
         proactiveAction: persistedSettings.proactive.enabled ? "consolidate" : "none",
@@ -1565,7 +1584,8 @@ export class MobileApp {
 
   async loadSettings(): Promise<MobileSettings> {
     const raw = await AsyncStorage.getItem(SETTINGS_KEY);
-    if (raw == null || raw === "") return { ...DEFAULT_SETTINGS };
+    // Brand-new / corrupt blob: never-touched proactive → mode-derived default.
+    if (raw == null || raw === "") return withProactiveDefault({ ...DEFAULT_SETTINGS });
     try {
       const parsed = JSON.parse(raw) as Partial<MobileSettings> & { provider?: string };
       // Migrate provider union renames and legacy flat fields (e.g.,
@@ -1583,9 +1603,13 @@ export class MobileApp {
       if (loaded.appearance.colorPreset === "borosilicate") {
         loaded.appearance = { ...loaded.appearance, colorPreset: "moonlight" };
       }
-      return loaded;
+      // Proactive consolidation defaults ON when inference is free (on-device
+      // / BYOK), opt-in on metered motebit-cloud — but only when the user
+      // never persisted a proactive choice (`parsed.proactive` absent).
+      // A stored proactive block (the toggle was touched) always wins.
+      return parsed.proactive === undefined ? withProactiveDefault(loaded) : loaded;
     } catch {
-      return { ...DEFAULT_SETTINGS };
+      return withProactiveDefault({ ...DEFAULT_SETTINGS });
     }
   }
 

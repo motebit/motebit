@@ -409,6 +409,9 @@ export const GROQ_CANONICAL_URL = "https://api.groq.com/openai/v1";
 // @public
 export const GROQ_MODELS: readonly ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"];
 
+// @public
+export function inferenceIsFreeToUser(mode: ProviderMode): boolean;
+
 // @public (undocumented)
 export interface IntelligenceProvider {
     // (undocumented)

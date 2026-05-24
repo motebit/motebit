@@ -121,6 +121,7 @@ import {
   markMigrationDone,
   loadGovernanceConfig,
   loadProactiveConfig,
+  loadProviderConfig,
   loadSyncUrl,
 } from "./storage.js";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
@@ -129,7 +130,12 @@ import { createWebGoalsRunner } from "./goals-runner";
 import type { GoalsRunner } from "@motebit/panels";
 
 // Re-export shared presets for color-picker and settings modules
-import { COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
+import {
+  COLOR_PRESETS,
+  APPROVAL_PRESET_CONFIGS,
+  inferenceIsFreeToUser,
+  defaultProviderConfig,
+} from "@motebit/sdk";
 import type { InteriorColor } from "@motebit/sdk";
 export { COLOR_PRESETS };
 export type { InteriorColor };
@@ -625,12 +631,17 @@ export class UnbootedWebApp {
     const env = (import.meta as { env?: Record<string, string | undefined> }).env;
     const solanaRpcUrl = env?.VITE_SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 
-    // Proactive interior — opt-in. Mirrors desktop's wire shape so the
-    // same toggle does the same thing on every surface (capability rings
-    // doctrine: ring 1 identical everywhere). Anchor policy resolves
-    // through the runtime's shared helper so producer + consumer +
-    // submitter wire-up stays one source of truth.
-    const proactive = loadProactiveConfig();
+    // Proactive interior — defaults ON when inference is free to the user
+    // (on-device / BYOK), opt-in on metered motebit-cloud. The default is
+    // derived from the persisted provider mode (the runtime connects its
+    // provider post-construction via connectProvider, so the last-used mode
+    // is the right signal); an explicit stored toggle always wins. Policy
+    // lives in the SDK's `inferenceIsFreeToUser` so it can't drift across
+    // surfaces. Mirrors desktop/mobile wire shape (capability rings: ring 1
+    // identical everywhere). Anchor policy resolves through the runtime's
+    // shared helper so producer + consumer + submitter stay one source.
+    const persistedProviderMode = (loadProviderConfig() ?? defaultProviderConfig()).mode;
+    const proactive = loadProactiveConfig(inferenceIsFreeToUser(persistedProviderMode));
     const proactiveAnchor = await resolveProactiveAnchor({
       proactiveEnabled: proactive.enabled,
       anchorOnchain: proactive.anchorOnchain,

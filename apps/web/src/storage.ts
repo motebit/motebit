@@ -169,8 +169,11 @@ export function loadGovernanceConfig(): GovernanceConfig | null {
 
 // === Proactive Interior Config ===
 //
-// Mirrors `DesktopAIConfig.proactive`. Defaults to disabled — sovereign
-// fail-closed posture matches the doctrine in
+// Mirrors `DesktopAIConfig.proactive`. The base default is disabled; the
+// effective default for an untouched toggle is mode-derived at load —
+// `loadProactiveConfig(defaultEnabled)` defaults ON when inference is free
+// to the user (on-device / BYOK), opt-in on metered motebit-cloud. Policy
+// from the SDK's `inferenceIsFreeToUser`. See
 // `docs/doctrine/proactive-interior.md`.
 
 export interface WebProactiveConfig {
@@ -193,14 +196,22 @@ export function saveProactiveConfig(config: WebProactiveConfig): void {
   }
 }
 
-export function loadProactiveConfig(): WebProactiveConfig {
+/**
+ * `defaultEnabled` is the mode-derived default applied ONLY when proactive
+ * config has never been persisted (untouched toggle). Callers pass
+ * `inferenceIsFreeToUser(providerMode)` so consolidation defaults ON for
+ * on-device / BYOK and stays opt-in on metered motebit-cloud. An explicit
+ * stored `enabled` (the user touched the toggle) always wins over it.
+ */
+export function loadProactiveConfig(defaultEnabled = false): WebProactiveConfig {
+  const fallback: WebProactiveConfig = { ...DEFAULT_PROACTIVE_CONFIG, enabled: defaultEnabled };
   try {
     const raw = localStorage.getItem(PROACTIVE_KEY);
-    if (raw == null || raw === "") return { ...DEFAULT_PROACTIVE_CONFIG };
+    if (raw == null || raw === "") return fallback;
     const parsed = JSON.parse(raw) as Partial<WebProactiveConfig>;
-    return { ...DEFAULT_PROACTIVE_CONFIG, ...parsed };
+    return { ...fallback, ...parsed };
   } catch {
-    return { ...DEFAULT_PROACTIVE_CONFIG };
+    return fallback;
   }
 }
 
