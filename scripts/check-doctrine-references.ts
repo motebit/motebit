@@ -170,8 +170,9 @@ const BACKTICK_IDENT = /`([A-Za-z_][A-Za-z0-9_]*)`/g;
  */
 const IDENTIFIER_ALLOWLIST: Record<string, string> = {
   // ----- Anticipated future symbols -----
-  DerivedFrom:
-    "anticipated future RelationType member — `memory-architecture.md` names this in the deltas section as a provenance edge from a reflection-synthesized memory back to its source observations. Lands when reflection provenance is wired; until then the seven shipped RelationType members (Related/CausedBy/FollowedBy/ConflictsWith/Reinforces/PartOf/Supersedes) are the canonical set.",
+  // (DerivedFrom landed 2026-05-24 as the 8th RelationType member + reflection
+  // provenance wiring — allowlist entry removed; it now resolves to a real
+  // source token.)
   contextWindow:
     "anticipated future ByokVendor field — `intelligence-pluggability-contract.md` names this as the model's declared context-window size that the pre-flight admission check measures the assembled prompt against. Lands when the typed admission path replaces the current byte-budget pre-flight.",
   renderedMemoryBudget:

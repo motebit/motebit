@@ -6,8 +6,8 @@
  * side effects; the conversation/plan modules are pure.
  */
 
-import { EventType, SensitivityLevel, MemoryType } from "@motebit/sdk";
-import type { ConversationMessage, SensitivityCleared } from "@motebit/sdk";
+import { EventType, SensitivityLevel, MemoryType, RelationType } from "@motebit/sdk";
+import type { ConversationMessage, SensitivityCleared, MemoryNode } from "@motebit/sdk";
 import type {
   StreamingProvider,
   TaskRouter,
@@ -75,7 +75,11 @@ export async function performReflection(
   const summary = deps.getConversationSummary();
 
   const recentMemories = await deps.memory.exportAll();
-  const memories = recentMemories.nodes.slice(0, 10).map((n) => ({ content: n.content }));
+  // The same slice fed to the LLM is the insight's source observations —
+  // kept as full nodes (not just content) so persisted insights can link
+  // back to their antecedents via `DerivedFrom` (provenance).
+  const sourceNodes = recentMemories.nodes.slice(0, 10);
+  const memories = sourceNodes.map((n) => ({ content: n.content }));
 
   // Query past reflections for trajectory — the creature sees its own reflection history
   const pastReflections = await loadPastReflections(deps, 5);
@@ -102,7 +106,7 @@ export async function performReflection(
   // Selective persistence: store high-signal insights as semantic memories.
   // Generic self-talk stays in the event log only. High-signal insights
   // reference concrete entities, pass a novelty check, and aren't repeated.
-  void persistHighSignalInsights(deps, result.insights, pastReflections);
+  void persistHighSignalInsights(deps, result.insights, pastReflections, sourceNodes);
 
   void logReflectionCompleted(deps, result);
 
@@ -234,6 +238,19 @@ const REPETITION_THRESHOLD = 0.7;
 const REFLECTION_CONFIDENCE = 0.6;
 
 /**
+ * Minimum cosine similarity between a persisted insight and one of the
+ * reflection's source observations for a `DerivedFrom` provenance edge to be
+ * drawn. Below the dedup `NOVELTY_THRESHOLD` (0.8) — an antecedent is related,
+ * not a near-duplicate — but high enough that the link means "this insight
+ * generalizes that observation," not "loosely co-occurred."
+ */
+const DERIVED_FROM_THRESHOLD = 0.5;
+
+/** Max provenance edges per insight — keeps fan-out bounded; the most-relevant
+ *  antecedents carry the signal. */
+const MAX_DERIVED_FROM_EDGES = 3;
+
+/**
  * Heuristic: does this insight reference concrete entities rather than being
  * pure self-talk? Checks for proper nouns, quoted terms, numbers, or
  * specific capability/tool names.
@@ -282,6 +299,7 @@ async function persistHighSignalInsights(
   deps: ReflectionDeps,
   insights: string[],
   pastReflections: PastReflection[],
+  sourceNodes: MemoryNode[] = [],
 ): Promise<number> {
   if (insights.length === 0) return 0;
 
@@ -327,8 +345,28 @@ async function persistHighSignalInsights(
       const [decision] = deps.memoryGovernor.evaluate([candidate]);
       if (!decision || decision.memoryClass === MemoryClass.REJECTED) continue;
 
-      await deps.memory.formMemory(decision.candidate, embedding, REFLECTION_HALF_LIFE);
+      const insightNode = await deps.memory.formMemory(
+        decision.candidate,
+        embedding,
+        REFLECTION_HALF_LIFE,
+      );
       persisted++;
+
+      // Provenance: link the insight back to the source observations it was
+      // derived from — the reflection-input nodes most similar to it (above
+      // DERIVED_FROM_THRESHOLD, capped at MAX_DERIVED_FROM_EDGES). Reuses the
+      // insight embedding already computed. The reflection analog of
+      // consolidation's PartOf cluster→summary edge. Doctrine:
+      // docs/doctrine/memory-architecture.md.
+      const antecedents = sourceNodes
+        .filter((n) => n.node_id !== insightNode.node_id && n.embedding.length > 0)
+        .map((n) => ({ node: n, sim: cosineSimilarity(embedding, n.embedding) }))
+        .filter((x) => x.sim >= DERIVED_FROM_THRESHOLD)
+        .sort((a, b) => b.sim - a.sim)
+        .slice(0, MAX_DERIVED_FROM_EDGES);
+      for (const { node } of antecedents) {
+        await deps.memory.link(insightNode.node_id, node.node_id, RelationType.DerivedFrom);
+      }
     }
   } catch {
     // Persistence is best-effort — don't crash the runtime

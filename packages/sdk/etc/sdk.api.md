@@ -663,6 +663,8 @@ export enum RelationType {
     // (undocumented)
     ConflictsWith = "conflicts_with",
     // (undocumented)
+    DerivedFrom = "derived_from",
+    // (undocumented)
     FollowedBy = "followed_by",
     // (undocumented)
     PartOf = "part_of",

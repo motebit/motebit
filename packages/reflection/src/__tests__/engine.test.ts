@@ -34,10 +34,10 @@ vi.mock("@motebit/memory-graph", async () => {
 import { performReflection, runReflectionSafe } from "../engine.js";
 import type { ReflectionDeps } from "../engine.js";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
-import { MemoryGraph, InMemoryMemoryStorage } from "@motebit/memory-graph";
+import { MemoryGraph, InMemoryMemoryStorage, embedText } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
 import { MemoryGovernor } from "@motebit/policy";
-import { EventType, SensitivityLevel, MemoryType } from "@motebit/sdk";
+import { EventType, SensitivityLevel, MemoryType, RelationType } from "@motebit/sdk";
 import type {
   AIResponse,
   ContextPack,
@@ -561,5 +561,102 @@ describe("runReflectionSafe", () => {
     const pushSpy = vi.spyOn(state, "pushUpdate");
     await runReflectionSafe(deps, provider);
     expect(pushSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("performReflection — DerivedFrom provenance", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const PROVENANCE_INSIGHT = "The user repeatedly asks about relay_task_id binding semantics";
+  const PROVENANCE_REFLECTION = `INSIGHTS:
+- ${PROVENANCE_INSIGHT}
+
+ADJUSTMENTS:
+- Explain relay_task_id proactively
+
+ASSESSMENT:
+Surfaced a recurring binding question.`;
+
+  // Build a vector with an EXACT cosine to `h`: rotate `h` 90° within
+  // adjacent dimension pairs to get an orthogonal `e` of equal norm, then
+  // s = cos·h + sin·e ⇒ cosine(h, s) = cos. Lets the test place a source
+  // node precisely in the provenance band ([0.5, 0.8): related enough to
+  // link, not so similar the novelty gate rejects the insight).
+  function withCosine(h: number[], cos: number): number[] {
+    const e = new Array<number>(h.length).fill(0);
+    for (let i = 0; i + 1 < h.length; i += 2) {
+      e[i] = h[i + 1] ?? 0;
+      e[i + 1] = -(h[i] ?? 0);
+    }
+    const sin = Math.sqrt(1 - cos * cos);
+    return h.map((v, i) => cos * v + sin * (e[i] ?? 0));
+  }
+
+  it("links a persisted insight to the source observation it was derived from", async () => {
+    const { deps, provider, memory } = makeDeps({ responseText: PROVENANCE_REFLECTION });
+    // Seed one source observation whose embedding sits at cosine 0.65 to the
+    // insight — a related antecedent, below the 0.8 dedup threshold.
+    const insightEmbedding = await embedText(PROVENANCE_INSIGHT);
+    const source = await memory.formMemory(
+      {
+        content: "Yesterday the user opened a ticket about relay_task_id",
+        confidence: 0.7,
+        sensitivity: SensitivityLevel.None,
+        memory_type: MemoryType.Episodic,
+      },
+      withCosine(insightEmbedding, 0.65),
+    );
+
+    await performReflection(deps, provider);
+
+    // Persistence is fire-and-forget (`void persistHighSignalInsights`), so
+    // wait for the insight + its provenance edge to land.
+    await vi.waitFor(async () => {
+      const { nodes, edges } = await memory.exportAll();
+      const insightNode = nodes.find(
+        (n) => n.memory_type === MemoryType.Semantic && n.content === PROVENANCE_INSIGHT,
+      );
+      expect(insightNode).toBeDefined();
+      const provenanceEdges = edges.filter(
+        (e) => e.source_id === insightNode!.node_id && e.relation_type === RelationType.DerivedFrom,
+      );
+      expect(provenanceEdges.map((e) => e.target_id)).toEqual([source.node_id]);
+    });
+  });
+
+  it("draws no provenance edge when no source observation is related enough", async () => {
+    const { deps, provider, memory } = makeDeps({ responseText: PROVENANCE_REFLECTION });
+    // Source at cosine 0.2 — below DERIVED_FROM_THRESHOLD (0.5).
+    const insightEmbedding = await embedText(PROVENANCE_INSIGHT);
+    await memory.formMemory(
+      {
+        content: "The weather was pleasant on the walk",
+        confidence: 0.7,
+        sensitivity: SensitivityLevel.None,
+        memory_type: MemoryType.Episodic,
+      },
+      withCosine(insightEmbedding, 0.2),
+    );
+
+    await performReflection(deps, provider);
+
+    // Wait for the insight to persist (proves the pipeline ran), then assert
+    // no provenance edge was drawn to the unrelated source.
+    let insightId: string | undefined;
+    await vi.waitFor(async () => {
+      const { nodes } = await memory.exportAll();
+      const insightNode = nodes.find(
+        (n) => n.memory_type === MemoryType.Semantic && n.content === PROVENANCE_INSIGHT,
+      );
+      expect(insightNode).toBeDefined();
+      insightId = insightNode!.node_id;
+    });
+    const { edges } = await memory.exportAll();
+    const provenanceEdges = edges.filter(
+      (e) => e.source_id === insightId && e.relation_type === RelationType.DerivedFrom,
+    );
+    expect(provenanceEdges).toHaveLength(0);
   });
 });

@@ -52,6 +52,11 @@ export enum RelationType {
   Reinforces = "reinforces",
   PartOf = "part_of",
   Supersedes = "supersedes",
+  // Provenance: a reflection-synthesized memory points back to the source
+  // observations it was derived from (`source_id` = the insight, `target_id`
+  // = an antecedent observation). The reflection analog of `PartOf` (which
+  // consolidation uses for cluster→summary). Doctrine: memory-architecture.md.
+  DerivedFrom = "derived_from",
 }
 
 // === State Vector ===
