@@ -10,7 +10,13 @@ import {
   type SovereignFetchAdapter,
   type SovereignFetchInit,
   type SovereignState,
+  type VerifiedFetchResult,
 } from "@motebit/panels";
+import {
+  fetchTransparencyAnchor,
+  verifiedStateExportFetch,
+  type TransparencyAnchor,
+} from "@motebit/state-export-client";
 
 // === DOM refs ===
 
@@ -65,6 +71,35 @@ function truncate(text: string, max: number): string {
 // Desktop's sync auth is a static master token held in config. The controller
 // asks for a fetch strategy; this closure wires Tauri config + Bearer header
 // through the shared @motebit/panels state layer.
+// Trust-anchor bootstrap (TOFU, one fetch per session). Pins the relay's
+// signing key so every verified state-export checks against the same key (a
+// swap → producer_key_mismatch). Mirrors apps/web + apps/inspector. A failed
+// bootstrap degrades to anchor-less self-consistency verification.
+let cachedAnchor: TransparencyAnchor | undefined;
+let anchorInflight: Promise<TransparencyAnchor | undefined> | undefined;
+
+async function bootstrapAnchor(syncUrl: string): Promise<TransparencyAnchor | undefined> {
+  if (cachedAnchor !== undefined) return cachedAnchor;
+  if (anchorInflight !== undefined) return anchorInflight;
+  anchorInflight = (async () => {
+    try {
+      const result = await fetchTransparencyAnchor(syncUrl);
+      if (result.ok) {
+        cachedAnchor = result.anchor;
+        return result.anchor;
+      }
+    } catch {
+      // Degrade to anchor-less verification.
+    }
+    return undefined;
+  })();
+  try {
+    return await anchorInflight;
+  } finally {
+    anchorInflight = undefined;
+  }
+}
+
 function createDesktopAdapter(ctx: DesktopContext): SovereignFetchAdapter {
   const buildRequest = (path: string, init?: SovereignFetchInit): Request | null => {
     const config = ctx.getConfig();
@@ -93,6 +128,35 @@ function createDesktopAdapter(ctx: DesktopContext): SovereignFetchAdapter {
       const req = buildRequest(path, init);
       if (!req) throw new Error("No relay configured");
       return fetch(req);
+    },
+    // Verified fetch for relay state-export endpoints (the controller routes
+    // /api/v1/goals through this). Same syncMasterToken auth as `fetch`, then
+    // verifies X-Motebit-Content-Manifest against the body + pinned anchor so
+    // the relay cannot equivocate about the user's own ledger undetected.
+    // Doctrine: docs/doctrine/self-attesting-system.md.
+    async verifiedFetch(path: string, init?: SovereignFetchInit): Promise<VerifiedFetchResult> {
+      const config = ctx.getConfig();
+      const syncUrl = config?.syncUrl;
+      if (!syncUrl) throw new Error("No relay configured");
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      };
+      if (config.syncMasterToken) headers["Authorization"] = `Bearer ${config.syncMasterToken}`;
+      const anchor = await bootstrapAnchor(syncUrl);
+      const res = await verifiedStateExportFetch<unknown>(`${syncUrl}${path}`, {
+        ...(anchor !== undefined && { anchor }),
+        init: {
+          method: init?.method ?? "GET",
+          headers,
+          body: init?.body != null ? JSON.stringify(init.body) : undefined,
+        },
+      });
+      return {
+        ok: true,
+        json: res.verification.valid ? res.body : null,
+        verification: res.verification.valid ? "verified" : "failed",
+      };
     },
     getSolanaAddress: () => ctx.app.getRuntime()?.getSolanaAddress?.() ?? null,
     getSolanaBalanceMicro: async () => {
@@ -198,6 +262,23 @@ function renderLedger(state: SovereignState, hasRelay: boolean, ctrl: SovereignC
   }
 
   ledgerEmpty.style.display = "none";
+
+  // Self-attesting payoff: show the relay ledger was cryptographically
+  // verified, not merely trusted. Calm — muted `verified`, prominent `failed`
+  // (a tampering signal). Nothing when `unverified`. Doctrine:
+  // docs/doctrine/self-attesting-system.md.
+  if (state.ledgerVerification !== "unverified") {
+    const verified = state.ledgerVerification === "verified";
+    const badge = document.createElement("div");
+    badge.className = "ledger-verification";
+    badge.style.cssText = `font-size:11px;margin-bottom:8px;letter-spacing:0.02em;${
+      verified ? "color:var(--text-ghost);" : "color:#c0392b;font-weight:600;"
+    }`;
+    badge.textContent = verified
+      ? "✓ Verified — signed by the relay, checked against the pinned key"
+      : "⚠ Verification failed — this ledger may have been altered in transit";
+    ledgerList.appendChild(badge);
+  }
 
   for (const goal of state.goals) {
     const item = document.createElement("div");

@@ -41,6 +41,7 @@
     "@motebit/sdk": "workspace:*",
     "@motebit/skills": "workspace:*",
     "@motebit/sqlite-migrations": "workspace:*",
+    "@motebit/state-export-client": "workspace:*",
     "@motebit/state-vector": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
     "@motebit/tools": "workspace:*",

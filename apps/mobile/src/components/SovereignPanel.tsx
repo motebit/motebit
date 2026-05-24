@@ -22,7 +22,13 @@ import {
   type SovereignFetchInit,
   type SovereignState,
   type SovereignTab,
+  type VerifiedFetchResult,
 } from "@motebit/panels";
+import {
+  fetchTransparencyAnchor,
+  verifiedStateExportFetch,
+  type TransparencyAnchor,
+} from "@motebit/state-export-client";
 
 const TYPE_COLORS: Record<string, string> = {
   reputation: "#4caf50",
@@ -59,6 +65,35 @@ interface SovereignPanelProps {
   onClose: () => void;
 }
 
+// Trust-anchor bootstrap (TOFU, one fetch per session). Pins the relay's
+// signing key so every verified state-export checks against the same key.
+// Mirrors apps/web + apps/desktop + apps/inspector. A failed bootstrap
+// degrades to anchor-less self-consistency verification.
+let cachedAnchor: TransparencyAnchor | undefined;
+let anchorInflight: Promise<TransparencyAnchor | undefined> | undefined;
+
+async function bootstrapAnchor(syncUrl: string): Promise<TransparencyAnchor | undefined> {
+  if (cachedAnchor !== undefined) return cachedAnchor;
+  if (anchorInflight !== undefined) return anchorInflight;
+  anchorInflight = (async () => {
+    try {
+      const result = await fetchTransparencyAnchor(syncUrl);
+      if (result.ok) {
+        cachedAnchor = result.anchor;
+        return result.anchor;
+      }
+    } catch {
+      // Degrade to anchor-less verification.
+    }
+    return undefined;
+  })();
+  try {
+    return await anchorInflight;
+  } finally {
+    anchorInflight = undefined;
+  }
+}
+
 // Mobile's sync URL comes from AsyncStorage (async). The adapter's `syncUrl`
 // getter is synchronous, so we cache the URL in a ref and prime it in the
 // effect before calling refresh().
@@ -87,6 +122,35 @@ function createMobileAdapter(
         headers,
         body: init?.body != null ? JSON.stringify(init.body) : undefined,
       });
+    },
+    // Verified fetch for relay state-export endpoints (the controller routes
+    // /api/v1/goals through this). Same per-call signed-token auth as `fetch`,
+    // then verifies X-Motebit-Content-Manifest against the body + pinned
+    // anchor so the relay cannot equivocate about the user's own ledger
+    // undetected. Doctrine: docs/doctrine/self-attesting-system.md.
+    async verifiedFetch(path: string, init?: SovereignFetchInit): Promise<VerifiedFetchResult> {
+      const syncUrl = syncUrlRef.current;
+      if (!syncUrl) throw new Error("No relay URL configured");
+      const token = await app.createSyncToken();
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const anchor = await bootstrapAnchor(syncUrl);
+      const res = await verifiedStateExportFetch<unknown>(`${syncUrl}${path}`, {
+        ...(anchor !== undefined && { anchor }),
+        init: {
+          method: init?.method ?? "GET",
+          headers,
+          body: init?.body != null ? JSON.stringify(init.body) : undefined,
+        },
+      });
+      return {
+        ok: true,
+        json: res.verification.valid ? res.body : null,
+        verification: res.verification.valid ? "verified" : "failed",
+      };
     },
     getSolanaAddress: () => app.getRuntime()?.getSolanaAddress?.() ?? null,
     getSolanaBalanceMicro: async () => {
@@ -136,6 +200,7 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
     localIdentity: null,
     presentation: null,
     verifyResult: null,
+    ledgerVerification: "unverified",
     loading: false,
     error: null,
   }));
@@ -353,6 +418,24 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
             keyExtractor={(item) => item.goal_id}
             style={styles.list}
             contentContainerStyle={styles.listContent}
+            ListHeaderComponent={
+              // Self-attesting payoff: show the relay ledger was verified, not
+              // merely trusted. Calm — muted `verified`, prominent `failed`
+              // (a tampering signal). Doctrine: self-attesting-system.md.
+              state.ledgerVerification === "unverified" ? null : (
+                <Text
+                  style={
+                    state.ledgerVerification === "verified"
+                      ? styles.ledgerVerified
+                      : styles.ledgerVerifyFailed
+                  }
+                >
+                  {state.ledgerVerification === "verified"
+                    ? "✓ Verified — signed by the relay, checked against the pinned key"
+                    : "⚠ Verification failed — this ledger may have been altered in transit"}
+                </Text>
+              )
+            }
             renderItem={({ item: goal }) => {
               const isExpanded = expandedGoalId === goal.goal_id;
               const manifest = state.ledgerDetails.get(goal.goal_id);
@@ -844,6 +927,19 @@ function createStyles(c: ThemeColors) {
     },
     credentialTypeText: { fontSize: 11, fontWeight: "700" },
     credentialMeta: { color: c.textMuted, fontSize: 11, marginTop: 1 },
+    ledgerVerified: {
+      color: c.textGhost,
+      fontSize: 11,
+      letterSpacing: 0.2,
+      marginBottom: 8,
+    },
+    ledgerVerifyFailed: {
+      color: c.errorBannerText,
+      fontSize: 11,
+      fontWeight: "700",
+      letterSpacing: 0.2,
+      marginBottom: 8,
+    },
     ledgerItem: {
       paddingVertical: 8,
       borderBottomWidth: StyleSheet.hairlineWidth,

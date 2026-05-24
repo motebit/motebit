@@ -110,7 +110,7 @@ const CONSUMER_ALLOWLIST: Record<string, string> = {
   // entry stays because the controller legitimately delegates rather than
   // importing the verifier; it is not pending-but-unbuilt.
   "packages/panels/src/sovereign/controller.ts":
-    "surface-agnostic delegator: verification is adapter-supplied via the optional `verifiedFetch` method (panels zero-dep rule). The verifier import lives in each surface adapter — apps/web wired 2026-05-23, desktop/mobile staged.",
+    "surface-agnostic delegator: verification is adapter-supplied via the optional `verifiedFetch` method (panels zero-dep rule). The verifier import lives in each surface adapter — web + desktop + mobile all wired 2026-05-23.",
 };
 
 const SCAN_ROOTS = [join(REPO_ROOT, "apps"), join(REPO_ROOT, "packages")];
