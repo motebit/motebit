@@ -587,6 +587,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-state-export-consumer-verifies",
   },
   {
+    name: "check-signed-artifact-verifiers",
+    defends:
+      'every exported `@motebit/protocol` type carrying a `*signature` field MUST be classified in the gate\'s REGISTRY as `verifier` (a dedicated portable verify* in @motebit/crypto / encryption / state-export-client), `within` (verified inside a named parent verifier), or `gap` (signed but no portable verifier yet — explicit, enumerated debt). Fails when a NEW signed type is added without classification, when a registry entry no longer has a signature field (stale), or when a named verifier is not an export. The self-attesting moat ("a claim is self-attesting only if a third party can verify it") as a structural invariant — generalized from the `GoalExecutionManifest` sign-without-verify gap (signed by replayGoal, spec §6 promised verification, no verifier shipped) found 2026-05-24. Surfaced 11 existing gaps (AgentSettlementAnchor×2, RelayMetadata, VoteRequest, ProposalResponse, 5 migration types, SolvencyProof) as a tracked backlog rather than invisible truth. Closing a gap = build its verifier + flip its classification. Doctrine: `docs/doctrine/self-attesting-system.md`.',
+    script: "check-signed-artifact-verifiers",
+  },
+  {
     name: "check-transparency-onchain-anchored",
     defends:
       'every relay startup file (`services/relay/src/index.ts`) that constructs a `SolanaMemoSubmitter` MUST also call `anchorTransparencyDeclaration` so the operator-transparency declaration\'s hash is committed onchain via the Memo program. Closes the trust-on-first-use (TOFU) "savant gap" on `/.well-known/motebit-transparency.json`: without an onchain anchor, the first fetch trusts HTTPS + DNS + CAs — a DNS hijack or malicious ISP can substitute a different declaration whose self-signature verifies (against the attacker\'s key). With the anchor, a verifier with the relay\'s pinned anchor address (`@motebit/state-export-client::lookupTransparencyAnchor`) cross-checks the declaration hash against a Solana memo at that address — a second channel the network provider cannot tamper with. The gate is narrow on purpose (the relay startup file is the unique trust-anchor surface); Solana submitters constructed elsewhere (tests, scripts) are not forced to anchor. Doctrine: `docs/doctrine/operator-transparency.md` § Stage 2 onchain anchor (lifted forward 2026-05-11, decoupled from the multi-operator wire-format spec); `docs/doctrine/nist-alignment.md` §8 "savant gap closure".',

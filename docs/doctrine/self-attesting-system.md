@@ -57,6 +57,7 @@ Verification must reach the **product surface**, not only the diagnostic tools. 
 Self-attesting via code-is-public plus CI enforcement — verification is "clone this repository and run the check":
 
 - Drift defenses (`scripts/check-*.ts` plus `scripts/check.ts` runner)
+- **Signed-artifact ⇒ verifier** (`scripts/check-signed-artifact-verifiers.ts`) — the invariant that makes "a claim is self-attesting only if a third party can verify it" structural, not aspirational. Every signed `@motebit/protocol` wire type must be classified as having a portable verifier, being verified within a parent, or an explicitly-enumerated gap; a new signed artifact cannot ship without a verifier or a tracked-gap decision. The initial sweep surfaced 11 existing gaps (settlement anchors, relay metadata, federation vote/proposal, the migration family, solvency proofs) — now a visible backlog rather than invisible truth, since a third party cannot self-verify those with the verification packages alone.
 - Meta-probe (`scripts/check-gates-effective.ts` — attests every gate fires)
 - License enforcement (`scripts/check-deps.ts` plus root `LICENSE` / `NOTICE` / `LICENSING.md` and per-package `LICENSE` files on the permissive floor)
 - Cryptosuite compliance (`check-suite-declared`, `check-suite-dispatch`)

@@ -145,6 +145,27 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-signed-artifact-verifiers",
+    proves:
+      "flags a new signed @motebit/protocol type (an exported type carrying a signature field) that is not classified in the verifier REGISTRY — i.e. a signed artifact added without a verifier-or-tracked-gap decision",
+    perturb: () =>
+      writeFixture(
+        `packages/protocol/src/${PROBE_PREFIX}signed_artifact.ts`,
+        // An exported signed artifact absent from the gate's REGISTRY. The
+        // gate discovers any protocol type with a *signature field and
+        // requires it be classified (verifier / within / gap); an unknown
+        // one trips the "not classified" failure.
+        [
+          `// Probe fixture — an unregistered signed protocol artifact.`,
+          `export interface ProbeUnregisteredSignedArtifact {`,
+          `  motebit_id: string;`,
+          `  signature: string;`,
+          `}`,
+          ``,
+        ].join("\n"),
+      ),
+  },
+  {
     script: "check-affordance-routing",
     proves:
       "flags a UI handler that routes a capability-named prompt through handleSend (surface-determinism anti-pattern)",

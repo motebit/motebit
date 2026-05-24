@@ -91,6 +91,7 @@
     "check-artifact-type-canonical": "npx tsx scripts/check-artifact-type-canonical.ts",
     "check-state-export-signed": "npx tsx scripts/check-state-export-signed.ts",
     "check-state-export-consumer-verifies": "npx tsx scripts/check-state-export-consumer-verifies.ts",
+    "check-signed-artifact-verifiers": "npx tsx scripts/check-signed-artifact-verifiers.ts",
     "check-transparency-onchain-anchored": "npx tsx scripts/check-transparency-onchain-anchored.ts",
     "check-transparency-processors-canonical": "npx tsx scripts/check-transparency-processors-canonical.ts",
     "check-publishable-package-metadata": "npx tsx scripts/check-publishable-package-metadata.ts",
