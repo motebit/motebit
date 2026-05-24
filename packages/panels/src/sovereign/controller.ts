@@ -128,12 +128,59 @@ export interface LocalIdentitySnapshot {
   readonly ownerId: string | null; // null if event payload lacks owner_id
 }
 
+/**
+ * Whether a relay state-export response was cryptographically verified
+ * against its `X-Motebit-Content-Manifest` (the self-attesting moat made
+ * legible on the surface the user trusts most — their own ledger):
+ *
+ *   - `verified`   — manifest checked against the body and the relay's
+ *                    pinned transparency anchor; the relay cannot have
+ *                    equivocated about this data undetected.
+ *   - `unverified` — the surface did not verify (no `verifiedFetch`
+ *                    adapter, or local-only data). Honest "we didn't
+ *                    check," not a claim of safety.
+ *   - `failed`     — verification ran and the manifest did NOT match the
+ *                    body. A tampering / equivocation signal — surface it
+ *                    loudly per UI doctrine (system message, not a toast).
+ */
+export type StateExportVerificationStatus = "verified" | "unverified" | "failed";
+
+/**
+ * Result of an adapter-supplied verified fetch of a relay state-export
+ * endpoint. The body is already parsed (the verifier must read the bytes
+ * to check the manifest, so the controller cannot re-read a `Response`).
+ */
+export interface VerifiedFetchResult {
+  /** HTTP-level ok (status 2xx). */
+  readonly ok: boolean;
+  /** Parsed JSON body, or null when `!ok`. */
+  readonly json: unknown;
+  /** Cryptographic verification status of the signed manifest. */
+  readonly verification: StateExportVerificationStatus;
+}
+
 export interface SovereignFetchAdapter {
   readonly syncUrl: string | null;
   readonly motebitId: string | null;
   // Surface-supplied auth'd fetch. Desktop injects `syncMasterToken`, web
   // mints a signed sync token per call, mobile currently passes none.
   fetch(path: string, init?: SovereignFetchInit): Promise<Response>;
+  /**
+   * Optional verified fetch for relay state-export endpoints (the families
+   * `services/relay/src/state-export.ts` signs with
+   * `X-Motebit-Content-Manifest` — `goals`, `state`, `audit`, …). When the
+   * surface implements it, the controller routes signed-family fetches
+   * through it and records the {@link StateExportVerificationStatus} in
+   * state so the renderer can show the user that their own sovereign data
+   * was verified, not merely trusted. Verification is adapter-supplied for
+   * the same reason auth is (panels Rule 3): the browser-safe verifier +
+   * transparency-anchor store live at the surface, not in this zero-dep
+   * BSL package. Surfaces that omit it fall back to {@link fetch} and the
+   * status is `"unverified"` — no regression. Staged like
+   * {@link getLocalIdentity} / {@link getLocalLedger}: web first, then
+   * desktop + mobile.
+   */
+  verifiedFetch?(path: string, init?: SovereignFetchInit): Promise<VerifiedFetchResult>;
   // Runtime accessors — surface wires its runtime instance here so the
   // controller never imports @motebit/runtime directly.
   getSolanaAddress(): string | null;
@@ -195,6 +242,12 @@ export interface SovereignState {
   localIdentity: LocalIdentitySnapshot | null;
   presentation: unknown;
   verifyResult: { valid: boolean; reason?: string } | null;
+  // Verification status of the last relay goals/ledger state-export fetch
+  // (signed with X-Motebit-Content-Manifest). `unverified` until a fetch
+  // with an adapter that implements `verifiedFetch` completes. The Ledger
+  // tab renders this so the user sees their own data was verified, not
+  // merely trusted. Doctrine: docs/doctrine/self-attesting-system.md.
+  ledgerVerification: StateExportVerificationStatus;
   loading: boolean;
   error: string | null;
 }
@@ -214,6 +267,7 @@ function initialState(): SovereignState {
     localIdentity: null,
     presentation: null,
     verifyResult: null,
+    ledgerVerification: "unverified",
     loading: false,
     error: null,
   };
@@ -357,13 +411,34 @@ export function createSovereignController(adapter: SovereignFetchAdapter): Sover
 
     let relay: GoalRow[] = [];
     if (adapter.syncUrl && adapter.motebitId) {
+      const path = `/api/v1/goals/${adapter.motebitId}`;
       try {
-        const res = await adapter.fetch(`/api/v1/goals/${adapter.motebitId}`);
-        if (res.ok) {
-          const data = (await res.json()) as { goals?: GoalRow[] };
-          relay = (data.goals ?? []).filter(
+        // `/api/v1/goals/...` is a relay state-export family signed with
+        // X-Motebit-Content-Manifest. Route through the adapter's verified
+        // fetch when it implements one (web today; desktop/mobile staged)
+        // so the relay cannot equivocate about the user's own ledger
+        // undetected — the self-attesting moat on the surface that needs
+        // it most. Surfaces without `verifiedFetch` fall back to the raw
+        // fetch and the status stays `unverified` (honest, no regression).
+        if (adapter.verifiedFetch) {
+          const vr = await adapter.verifiedFetch(path);
+          // `json` is null when verification failed (the verifier withholds
+          // unverified bytes) — guard the access so the `failed` status is
+          // still recorded rather than thrown past.
+          const data = (vr.ok ? vr.json : null) as { goals?: GoalRow[] } | null;
+          relay = (data?.goals ?? []).filter(
             (g) => g.status === "completed" || g.status === "failed",
           );
+          patch({ ledgerVerification: vr.verification });
+        } else {
+          const res = await adapter.fetch(path);
+          if (res.ok) {
+            const data = (await res.json()) as { goals?: GoalRow[] };
+            relay = (data.goals ?? []).filter(
+              (g) => g.status === "completed" || g.status === "failed",
+            );
+          }
+          patch({ ledgerVerification: "unverified" });
         }
       } catch {
         // Relay failure is non-fatal — local goals still render.

@@ -915,6 +915,9 @@ importers:
       '@motebit/skills':
         specifier: workspace:*
         version: link:../../packages/skills
+      '@motebit/state-export-client':
+        specifier: workspace:*
+        version: link:../../packages/state-export-client
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector

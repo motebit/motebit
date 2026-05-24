@@ -3,6 +3,8 @@ export {
   type SovereignController,
   type SovereignFetchAdapter,
   type SovereignFetchInit,
+  type VerifiedFetchResult,
+  type StateExportVerificationStatus,
   type SovereignState,
   type SovereignTab,
   type CredentialEntry,

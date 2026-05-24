@@ -98,12 +98,19 @@ const CONSUMER_ALLOWLIST: Record<string, string> = {
   // does not fetch.
   "packages/protocol/src/artifact-type.ts":
     "doctrine-shape reference: ContentArtifactType registry comments name the URL per type for documentation; no runtime fetch.",
-  // Sovereign panel still uses the adapter-injected fetch shape; wiring
-  // the adapter through verifiedStateExportFetch is pending. Allowlisted
-  // with explicit handoff so the drift is visible — when the surface's
-  // adapter implementation wraps the verifier, remove this entry.
+  // Sovereign panel is the surface-agnostic delegator: per @motebit/panels'
+  // zero-dep rule it must NOT import the browser verifier directly, so
+  // verification is adapter-supplied (panels Rule 3, like auth). The
+  // controller routes /api/v1/goals through the optional `verifiedFetch`
+  // adapter method when present and records the verification status in
+  // state. The verifier import lives in the SURFACE adapter — apps/web's
+  // sovereign-panels.ts wraps verifiedStateExportFetch (wired 2026-05-23);
+  // desktop + mobile implement `verifiedFetch` next (staged, like the
+  // getLocalIdentity?/getLocalLedger? optional-capability pattern). This
+  // entry stays because the controller legitimately delegates rather than
+  // importing the verifier; it is not pending-but-unbuilt.
   "packages/panels/src/sovereign/controller.ts":
-    "pending: sovereign panel uses adapter.fetch — surface adapter (web/desktop/mobile) must route through verifiedStateExportFetch; tracked as the next consumer-wiring follow-up.",
+    "surface-agnostic delegator: verification is adapter-supplied via the optional `verifiedFetch` method (panels zero-dep rule). The verifier import lives in each surface adapter — apps/web wired 2026-05-23, desktop/mobile staged.",
 };
 
 const SCAN_ROOTS = [join(REPO_ROOT, "apps"), join(REPO_ROOT, "packages")];

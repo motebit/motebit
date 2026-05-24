@@ -18,7 +18,13 @@ import {
   type SovereignFetchAdapter,
   type SovereignFetchInit,
   type SovereignState,
+  type VerifiedFetchResult,
 } from "@motebit/panels";
+import {
+  fetchTransparencyAnchor,
+  verifiedStateExportFetch,
+  type TransparencyAnchor,
+} from "@motebit/state-export-client";
 
 export interface SovereignPanelsAPI {
   open(): void;
@@ -48,6 +54,39 @@ function truncate(text: string, max: number): string {
   return text.slice(0, max - 3) + "...";
 }
 
+// --- Trust-anchor bootstrap (TOFU, one fetch per session) ---
+//
+// `/.well-known/motebit-transparency.json` pins the relay's signing key.
+// Cached after the first successful fetch so every verified state-export
+// call checks against the same pinned key (a key swap → producer_key_mismatch
+// rather than silent acceptance). Mirrors apps/inspector/src/api.ts. A failed
+// bootstrap is non-fatal: verification proceeds anchor-less (self-consistency
+// only), matching the inspector's degrade path.
+let cachedAnchor: TransparencyAnchor | undefined;
+let anchorInflight: Promise<TransparencyAnchor | undefined> | undefined;
+
+async function bootstrapAnchor(syncUrl: string): Promise<TransparencyAnchor | undefined> {
+  if (cachedAnchor !== undefined) return cachedAnchor;
+  if (anchorInflight !== undefined) return anchorInflight;
+  anchorInflight = (async () => {
+    try {
+      const result = await fetchTransparencyAnchor(syncUrl);
+      if (result.ok) {
+        cachedAnchor = result.anchor;
+        return result.anchor;
+      }
+    } catch {
+      // Network/parse failure — degrade to anchor-less verification.
+    }
+    return undefined;
+  })();
+  try {
+    return await anchorInflight;
+  } finally {
+    anchorInflight = undefined;
+  }
+}
+
 // --- Adapter ---
 
 // Web's sync auth is a rotating signed token minted per-call (`createSyncToken`).
@@ -75,6 +114,38 @@ function createWebAdapter(ctx: WebContext): SovereignFetchAdapter {
         headers,
         body: init?.body != null ? JSON.stringify(init.body) : undefined,
       });
+    },
+    // Verified fetch for relay state-export endpoints (the controller routes
+    // `/api/v1/goals/...` through this). Same per-call signed-token auth as
+    // `fetch`, then verifies the `X-Motebit-Content-Manifest` against the
+    // body and the pinned transparency anchor — so the relay cannot
+    // equivocate about the user's own ledger undetected. Doctrine:
+    // docs/doctrine/self-attesting-system.md.
+    async verifiedFetch(path: string, init?: SovereignFetchInit): Promise<VerifiedFetchResult> {
+      const syncUrl = loadSyncUrl();
+      if (!syncUrl) throw new Error("No relay URL configured");
+      const token = await ctx.app.createSyncToken();
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const anchor = await bootstrapAnchor(syncUrl);
+      const res = await verifiedStateExportFetch<unknown>(`${syncUrl}${path}`, {
+        ...(anchor !== undefined && { anchor }),
+        init: {
+          method: init?.method ?? "GET",
+          headers,
+          body: init?.body != null ? JSON.stringify(init.body) : undefined,
+        },
+      });
+      // Never surface unverified bytes: body is null unless the manifest
+      // verified. `valid:false` → tampering/equivocation signal.
+      return {
+        ok: true,
+        json: res.verification.valid ? res.body : null,
+        verification: res.verification.valid ? "verified" : "failed",
+      };
     },
     getSolanaAddress: () => ctx.app.getRuntime()?.getSolanaAddress?.() ?? null,
     getSolanaBalanceMicro: async () => {
@@ -216,6 +287,25 @@ function renderLedger(
   }
 
   ledgerEmpty.style.display = "none";
+
+  // Self-attesting payoff: show that the relay-fetched ledger was
+  // cryptographically verified, not merely trusted. Calm — `verified` is a
+  // muted line (the user need not act); `failed` is a prominent warning (a
+  // tampering/equivocation signal, per UI doctrine a security message);
+  // `unverified` shows nothing (no relay verification ran — don't clutter).
+  // Doctrine: docs/doctrine/self-attesting-system.md.
+  if (state.ledgerVerification !== "unverified") {
+    const verified = state.ledgerVerification === "verified";
+    const badge = document.createElement("div");
+    badge.className = "ledger-verification";
+    badge.style.cssText = `font-size:11px;margin-bottom:8px;letter-spacing:0.02em;${
+      verified ? "opacity:0.55;" : "color:#c0392b;font-weight:600;"
+    }`;
+    badge.textContent = verified
+      ? "✓ Verified — signed by the relay, checked against the pinned key"
+      : "⚠ Verification failed — this ledger may have been altered in transit";
+    ledgerList.appendChild(badge);
+  }
 
   for (const goal of state.goals) {
     const item = document.createElement("div");
