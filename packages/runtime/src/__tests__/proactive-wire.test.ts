@@ -103,6 +103,64 @@ describe("Runtime — proactive interior wire-in", () => {
     expect(events.length).toBeGreaterThan(0);
   });
 
+  it("catchUpConsolidationIfOverdue runs a cycle when none has run recently", async () => {
+    const rt = new MotebitRuntime(
+      {
+        motebitId: "catchup-fresh",
+        tickRateHz: 0,
+        proactiveTickMs: 1000,
+        proactiveAction: "consolidate",
+      },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    const cycleSpy = vi.spyOn(rt, "consolidationCycle");
+
+    expect(await rt.catchUpConsolidationIfOverdue()).toBe(true);
+    expect(cycleSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("catchUpConsolidationIfOverdue skips when a cycle ran within the window", async () => {
+    const rt = new MotebitRuntime(
+      {
+        motebitId: "catchup-recent",
+        tickRateHz: 0,
+        proactiveTickMs: 1000,
+        proactiveAction: "consolidate",
+        proactiveCatchUpMaxAgeMs: 60 * 60 * 1000,
+      },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    // Seed a recent run in the persistent event log.
+    await rt.events.appendWithClock({
+      event_id: crypto.randomUUID(),
+      motebit_id: rt.motebitId,
+      timestamp: Date.now(),
+      event_type: EventType.ConsolidationCycleRun,
+      payload: {},
+      tombstoned: false,
+    });
+    const cycleSpy = vi.spyOn(rt, "consolidationCycle");
+
+    expect(await rt.catchUpConsolidationIfOverdue()).toBe(false);
+    expect(cycleSpy).not.toHaveBeenCalled();
+  });
+
+  it("catchUpConsolidationIfOverdue no-ops when consolidation isn't the proactive action", async () => {
+    const rt = new MotebitRuntime(
+      {
+        motebitId: "catchup-off",
+        tickRateHz: 0,
+        proactiveTickMs: 1000,
+        proactiveAction: "reflect",
+      },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    const cycleSpy = vi.spyOn(rt, "consolidationCycle");
+
+    expect(await rt.catchUpConsolidationIfOverdue()).toBe(false);
+    expect(cycleSpy).not.toHaveBeenCalled();
+  });
+
   it("scoped tool registry filters tools to empty during tending mode", async () => {
     const { SimpleToolRegistry } = await import("../index");
     const proactiveRuntime = new MotebitRuntime(

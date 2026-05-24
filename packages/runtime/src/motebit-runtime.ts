@@ -309,6 +309,10 @@ const TENDING_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "search_conversations",
 ]);
 
+/** Default catch-up window for `catchUpConsolidationIfOverdue` — one hour.
+ *  See `RuntimeConfig.proactiveCatchUpMaxAgeMs`. */
+const DEFAULT_PROACTIVE_CATCH_UP_MAX_AGE_MS = 60 * 60 * 1000;
+
 // Slab-projection policy for tool calls (kind × mode × endState per
 // tool name) lives in `./tool-policy.ts`. See that file for the
 // doctrine mapping; this module is a consumer.
@@ -358,6 +362,11 @@ export class MotebitRuntime {
    * turns re-arm it. Prune/flush (retention, no LLM) and cluster consolidation
    * (work-gated by candidate count) still run every cycle regardless. */
   private _lastConsolidationCycleAt: number | null = null;
+  /** True when `proactiveAction: "consolidate"` was configured — gates the
+   *  one-shot startup catch-up. */
+  private _proactiveConsolidationEnabled = false;
+  /** Catch-up window in ms (see `proactiveCatchUpMaxAgeMs`). */
+  private _proactiveCatchUpMaxAgeMs = DEFAULT_PROACTIVE_CATCH_UP_MAX_AGE_MS;
   /**
    * The user-typed-intent attestation accompanying the in-flight
    * `sendMessageStreaming` turn, if any. Set when the surface
@@ -682,6 +691,10 @@ export class MotebitRuntime {
       const tickMs = config.proactiveTickMs;
       const quietMs = config.proactiveQuietWindowMs ?? 60_000;
       const action = config.proactiveAction ?? "none";
+      // Catch-up only when consolidation is the configured idle action.
+      this._proactiveConsolidationEnabled = action === "consolidate";
+      this._proactiveCatchUpMaxAgeMs =
+        config.proactiveCatchUpMaxAgeMs ?? DEFAULT_PROACTIVE_CATCH_UP_MAX_AGE_MS;
       this._idleTick = createIdleTickController({
         intervalMs: tickMs,
         quietWindowMs: quietMs,
@@ -1073,6 +1086,11 @@ export class MotebitRuntime {
     // Proactive idle-tick starts alongside the state engine when
     // configured. See `RuntimeConfig.proactiveTickMs`.
     this._idleTick?.start();
+    // One-shot catch-up for sessions that close before the idle-tick's
+    // first fire (short sessions / never-idle). Fire-and-forget — the
+    // cycle it may run is fully abortable (a user message yields it), and
+    // it no-ops unless consolidation is enabled and none ran recently.
+    void this.catchUpConsolidationIfOverdue().catch(() => {});
   }
 
   stop(): void {
@@ -2760,6 +2778,49 @@ export class MotebitRuntime {
       this._currentCycleAbortController = null;
       if (entered) this.presence.exitTending();
     }
+  }
+
+  /**
+   * One-shot catch-up: run a consolidation cycle now if proactive
+   * consolidation is enabled and none has run within the catch-up window.
+   * Bridges the gap the idle-tick leaves for short sessions — a user who
+   * never idles past the quiet window, or closes the app before the first
+   * tick fires, would otherwise never consolidate.
+   *
+   * Reads the last cycle time from the persistent `ConsolidationCycleRun`
+   * event log (the in-memory `_lastConsolidationCycleAt` resets each process
+   * start), so "recently" survives restarts. Not a parallel loop —
+   * `consolidationCycle` stays the only proactive loop
+   * (`docs/doctrine/proactive-interior.md`); this is a single invocation that
+   * `start()` fires once. The cycle it runs is fully abortable: a user
+   * message flips presence to responsive and yields it. Returns whether a
+   * cycle was run. No-ops when consolidation isn't the proactive action,
+   * when a turn is in flight, or when a cycle ran within the window.
+   */
+  async catchUpConsolidationIfOverdue(): Promise<boolean> {
+    if (!this._proactiveConsolidationEnabled) return false;
+    if (this._isProcessing) return false;
+    const lastRunAt = await this.lastConsolidationRunAtFromLog();
+    if (lastRunAt != null && Date.now() - lastRunAt < this._proactiveCatchUpMaxAgeMs) {
+      return false;
+    }
+    await this.consolidationCycle();
+    return true;
+  }
+
+  /** Most recent `ConsolidationCycleRun` event timestamp across this
+   *  motebit's log, or null if none has ever run. The persistent source of
+   *  "when did consolidation last happen" — survives process restarts where
+   *  the in-memory `_lastConsolidationCycleAt` does not. */
+  private async lastConsolidationRunAtFromLog(): Promise<number | null> {
+    const events = await this.events.query({
+      motebit_id: this.motebitId,
+      event_types: [EventType.ConsolidationCycleRun],
+    });
+    if (events.length === 0) return null;
+    let max = 0;
+    for (const e of events) if (e.timestamp > max) max = e.timestamp;
+    return max;
   }
 
   /** AbortController for the in-flight cycle, or null when idle. The

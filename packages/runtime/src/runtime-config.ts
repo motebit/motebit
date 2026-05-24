@@ -188,6 +188,18 @@ export interface RuntimeConfig {
    *  `proactiveTickMs` is not set. */
   proactiveQuietWindowMs?: number;
   /**
+   * Catch-up window for `catchUpConsolidationIfOverdue()`. On
+   * `start()`, when `proactiveAction` is `"consolidate"`, the runtime
+   * runs one cycle if none has run within this many ms (read from the
+   * persistent `ConsolidationCycleRun` event log, so it survives
+   * restarts). Bridges the gap the idle-tick leaves for short sessions
+   * — a user who never idles past the quiet window, or closes the app
+   * before the first tick, would otherwise never consolidate. Default
+   * 3_600_000 (one hour). Ignored when `proactiveAction` is not
+   * `"consolidate"`.
+   */
+  proactiveCatchUpMaxAgeMs?: number;
+  /**
    * What the motebit does on each qualifying idle tick. Ignored when
    * `proactiveTickMs` is not set.
    *
