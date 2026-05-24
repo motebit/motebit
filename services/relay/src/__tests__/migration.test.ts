@@ -11,6 +11,8 @@ import {
   ed25519Sign,
   toBase64Url,
   canonicalJson,
+  deriveSovereignMotebitId,
+  signCredentialBundle,
 } from "@motebit/crypto";
 import type { MigrationToken, DepartureAttestation, BalanceWaiver } from "@motebit/protocol";
 import { performMigration } from "@motebit/runtime";
@@ -53,8 +55,12 @@ async function initiateMigration(
  */
 async function buildPinnedAcceptPayload(
   relay: SyncRelay,
-  opts: { motebitId: string; tokenId: string; sourceRelayId?: string },
-): Promise<Record<string, unknown>> {
+  opts: { tokenId: string; sourceRelayId?: string },
+): Promise<{
+  payload: Record<string, unknown>;
+  motebitId: string;
+  agentKp: Awaited<ReturnType<typeof generateKeypair>>;
+}> {
   const sourceRelayId = opts.sourceRelayId ?? "source-relay-id";
   const sourceKp = await generateKeypair();
   // Pin the source relay as a known, active federation peer.
@@ -72,13 +78,20 @@ async function buildPinnedAcceptPayload(
       "1.0",
     );
 
+  // The migrating agent is sovereign — its motebit_id IS the commitment to its
+  // key, so the destination can bind key↔id offline (§8.2 step 6). The agent
+  // signs its own credential bundle (§6); the relay never holds the agent key.
+  const agentKp = await generateKeypair();
+  const agentPubHex = bytesToHex(agentKp.publicKey);
+  const motebitId = await deriveSovereignMotebitId(agentPubHex);
+
   const now = Date.now();
   const sign = async (b: Record<string, unknown>): Promise<string> =>
     toBase64Url(await ed25519Sign(new TextEncoder().encode(canonicalJson(b)), sourceKp.privateKey));
 
   const tokenBody = {
     token_id: opts.tokenId,
-    motebit_id: opts.motebitId,
+    motebit_id: motebitId,
     source_relay_id: sourceRelayId,
     source_relay_url: "http://source-relay",
     issued_at: now,
@@ -87,7 +100,7 @@ async function buildPinnedAcceptPayload(
   };
   const attBody = {
     attestation_id: `att-${opts.tokenId}`,
-    motebit_id: opts.motebitId,
+    motebit_id: motebitId,
     source_relay_id: sourceRelayId,
     source_relay_url: "http://source-relay",
     first_seen: now - 86_400_000,
@@ -100,22 +113,27 @@ async function buildPinnedAcceptPayload(
     attested_at: now,
     suite: "motebit-jcs-ed25519-b64-v1" as const,
   };
-  const agentKp = await generateKeypair();
-  return {
-    migration_token: { ...tokenBody, signature: await sign(tokenBody) },
-    departure_attestation: { ...attBody, signature: await sign(attBody) },
-    credential_bundle: {
-      motebit_id: opts.motebitId,
+  const credentialBundle = await signCredentialBundle(
+    {
+      motebit_id: motebitId,
       exported_at: now,
       credentials: [],
       anchor_proofs: [],
       key_succession: [],
-      bundle_hash: "deadbeef",
       suite: "motebit-jcs-ed25519-b64-v1",
-      signature: "deadbeef",
     },
-    motebit_id: opts.motebitId,
-    public_key: bytesToHex(agentKp.publicKey),
+    agentKp.privateKey,
+  );
+  return {
+    payload: {
+      migration_token: { ...tokenBody, signature: await sign(tokenBody) },
+      departure_attestation: { ...attBody, signature: await sign(attBody) },
+      credential_bundle: credentialBundle,
+      motebit_id: motebitId,
+      public_key: agentPubHex,
+    },
+    motebitId,
+    agentKp,
   };
 }
 
@@ -458,8 +476,7 @@ describe("Migration: accept-migration (destination)", () => {
   });
 
   it("accepts a valid migration presentation (pinned source relay, real signatures)", async () => {
-    const payload = await buildPinnedAcceptPayload(relay, {
-      motebitId: "incoming-agent",
+    const { payload, motebitId } = await buildPinnedAcceptPayload(relay, {
       tokenId: `mig-test-${Date.now()}`,
     });
 
@@ -472,12 +489,89 @@ describe("Migration: accept-migration (destination)", () => {
 
     const body = (await res.json()) as { ok: boolean; motebit_id: string };
     expect(body.ok).toBe(true);
-    expect(body.motebit_id).toBe("incoming-agent");
+    expect(body.motebit_id).toBe(motebitId);
 
     // Agent should now be discoverable on this relay
-    const discoverRes = await relay.app.request(`/api/v1/discover/incoming-agent`);
+    const discoverRes = await relay.app.request(`/api/v1/discover/${motebitId}`);
     const discoverBody = (await discoverRes.json()) as { found: boolean };
     expect(discoverBody.found).toBe(true);
+  });
+
+  it("rejects a bundle whose agent signature is invalid (§8.2 step 4 — required-and-verified)", async () => {
+    const { payload } = await buildPinnedAcceptPayload(relay, {
+      tokenId: `mig-tamper-${Date.now()}`,
+    });
+    // Tamper the bundle after the agent signed it (a man-in-the-middle inflating
+    // reputation). Sovereign binding still holds (key↔id unchanged) — the bundle
+    // signature is what catches the tamper.
+    const tampered = {
+      ...payload,
+      credential_bundle: {
+        ...(payload.credential_bundle as Record<string, unknown>),
+        credentials: [{ forged: true }],
+      },
+    };
+    const res = await relay.app.request(`/api/v1/agents/accept-migration`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(tampered),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a stolen token presented under an attacker's key (§13 token theft — sovereign binding)", async () => {
+    // The canonical attack: an adversary holds a victim's source-signed token +
+    // attestation (both verify against the pinned source key) but NOT the
+    // victim's private key. They substitute their own key and re-sign the bundle
+    // with it. The bundle signature verifies against the attacker key — but the
+    // motebit_id commits to the VICTIM's key, so sovereign binding fails and the
+    // identity cannot be hijacked.
+    const { payload } = await buildPinnedAcceptPayload(relay, {
+      tokenId: `mig-theft-${Date.now()}`,
+    });
+    const victimMotebitId = payload.motebit_id as string;
+    const attacker = await generateKeypair();
+    const attackerPubHex = bytesToHex(attacker.publicKey);
+    const reSignedBundle = await signCredentialBundle(
+      {
+        motebit_id: victimMotebitId,
+        exported_at: Date.now(),
+        credentials: [],
+        anchor_proofs: [],
+        key_succession: [],
+        suite: "motebit-jcs-ed25519-b64-v1",
+      },
+      attacker.privateKey,
+    );
+    const hijack = { ...payload, credential_bundle: reSignedBundle, public_key: attackerPubHex };
+    const res = await relay.app.request(`/api/v1/agents/accept-migration`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(hijack),
+    });
+    expect(res.status).toBe(400);
+    // The victim's identity was NOT onboarded under the attacker's key.
+    const discover = await relay.app.request(`/api/v1/discover/${victimMotebitId}`);
+    expect(((await discover.json()) as { found: boolean }).found).toBe(false);
+  });
+
+  it("rejects a bundle whose motebit_id does not match the presentation", async () => {
+    const { payload } = await buildPinnedAcceptPayload(relay, {
+      tokenId: `mig-mismatch-${Date.now()}`,
+    });
+    const mismatched = {
+      ...payload,
+      credential_bundle: {
+        ...(payload.credential_bundle as Record<string, unknown>),
+        motebit_id: "some-other-id",
+      },
+    };
+    const res = await relay.app.request(`/api/v1/agents/accept-migration`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(mismatched),
+    });
+    expect(res.status).toBe(400);
   });
 
   it("rejects a migration whose source relay identity cannot be established (fail-closed)", async () => {
@@ -580,8 +674,7 @@ describe("Migration: accept-migration (destination)", () => {
   });
 
   it("rejects duplicate migration token (replay prevention §10)", async () => {
-    const payload = await buildPinnedAcceptPayload(relay, {
-      motebitId: "replay-agent",
+    const { payload } = await buildPinnedAcceptPayload(relay, {
       tokenId: "replay-token",
     });
 
@@ -634,10 +727,12 @@ describe("Migration: end-to-end (performMigration across two relays)", () => {
   }
 
   it("an agent leaves the source relay and is onboarded + discoverable on the destination", async () => {
-    // The agent exists on the source relay.
+    // The agent exists on the source relay. Its id is the sovereign commitment
+    // to its key, so the destination can bind key↔id offline.
     const agentKp = await generateKeypair();
     const agentPubHex = bytesToHex(agentKp.publicKey);
-    await registerAgent(source, "nomad-agent", agentPubHex);
+    const motebitId = await deriveSovereignMotebitId(agentPubHex);
+    await registerAgent(source, motebitId, agentPubHex);
 
     // The destination establishes the source relay's identity the strong way
     // (Tier 1): pin the source as a known federation peer using its real relay
@@ -655,7 +750,7 @@ describe("Migration: end-to-end (performMigration across two relays)", () => {
     const result = await performMigration({
       sourceRelayUrl: SOURCE,
       destRelayUrl: DEST,
-      motebitId: "nomad-agent",
+      motebitId,
       publicKeyHex: agentPubHex,
       signingPrivateKey: agentKp.privateKey,
       sourceAuth: API_TOKEN,
@@ -664,11 +759,12 @@ describe("Migration: end-to-end (performMigration across two relays)", () => {
     });
 
     // The sovereign migration succeeded — the destination verified the source's
-    // relay-signed token against the pinned key and onboarded the agent,
-    // trusting neither the agent's self-report nor a fetched key.
-    expect(result).toEqual({ ok: true, acceptedMotebitId: "nomad-agent" });
+    // relay-signed token against the pinned key, bound the agent's key to its id,
+    // verified the agent-signed bundle, and onboarded — trusting neither the
+    // agent's self-report nor a fetched key.
+    expect(result).toEqual({ ok: true, acceptedMotebitId: motebitId });
 
-    const discover = await dest.app.request("/api/v1/discover/nomad-agent");
+    const discover = await dest.app.request(`/api/v1/discover/${motebitId}`);
     expect(((await discover.json()) as { found: boolean }).found).toBe(true);
   });
 
@@ -678,12 +774,13 @@ describe("Migration: end-to-end (performMigration across two relays)", () => {
     // the source key → fail-closed (no onboarding).
     const agentKp = await generateKeypair();
     const agentPubHex = bytesToHex(agentKp.publicKey);
-    await registerAgent(source, "nomad-agent", agentPubHex);
+    const motebitId = await deriveSovereignMotebitId(agentPubHex);
+    await registerAgent(source, motebitId, agentPubHex);
 
     const result = await performMigration({
       sourceRelayUrl: SOURCE,
       destRelayUrl: DEST,
-      motebitId: "nomad-agent",
+      motebitId,
       publicKeyHex: agentPubHex,
       signingPrivateKey: agentKp.privateKey,
       sourceAuth: API_TOKEN,
@@ -692,7 +789,7 @@ describe("Migration: end-to-end (performMigration across two relays)", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.step).toBe("accept");
-    const discover = await dest.app.request("/api/v1/discover/nomad-agent");
+    const discover = await dest.app.request(`/api/v1/discover/${motebitId}`);
     expect(((await discover.json()) as { found: boolean }).found).toBe(false);
   });
 });

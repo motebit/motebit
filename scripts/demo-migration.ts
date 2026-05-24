@@ -18,7 +18,7 @@
 import { createSyncRelay } from "@motebit/relay";
 import type { SyncRelay } from "@motebit/relay";
 import { performMigration } from "@motebit/runtime";
-import { generateKeypair, bytesToHex } from "@motebit/crypto";
+import { generateKeypair, bytesToHex, deriveSovereignMotebitId } from "@motebit/crypto";
 
 const API_TOKEN = "demo-token";
 const SOURCE_URL = "http://relay-alpha.demo";
@@ -54,23 +54,26 @@ async function main(): Promise<void> {
   );
 
   try {
-    // The agent: its own Ed25519 identity. The relay never holds this key.
+    // The agent: its own Ed25519 identity. The relay never holds this key. Its
+    // motebit_id IS the sovereign commitment to that key — so any relay can bind
+    // key↔id offline, trusting no one.
     const agent = await generateKeypair();
     const agentPubHex = bytesToHex(agent.publicKey);
+    const motebitId = await deriveSovereignMotebitId(agentPubHex);
     const auth = { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" };
 
-    step(1, "The agent 'nomad' lives on Relay ALPHA");
+    step(1, "A sovereign agent 'nomad' lives on Relay ALPHA");
     await alpha.app.request("/api/v1/agents/register", {
       method: "POST",
       headers: auth,
       body: JSON.stringify({
-        motebit_id: "nomad",
+        motebit_id: motebitId,
         endpoint_url: "https://nomad.example/mcp",
         capabilities: ["web_search", "summarize"],
         public_key: agentPubHex,
       }),
     });
-    say("      Registered on ALPHA with its sovereign public key.");
+    say(`      Registered on ALPHA. motebit_id ${motebitId} = sha256(public key).`);
 
     step(2, "Relay BETA learns ALPHA's identity (federation handshake → pinned key)");
     const wk = await alpha.app.request("/.well-known/motebit.json");
@@ -104,7 +107,7 @@ async function main(): Promise<void> {
     const result = await performMigration({
       sourceRelayUrl: SOURCE_URL,
       destRelayUrl: DEST_URL,
-      motebitId: "nomad",
+      motebitId,
       publicKeyHex: agentPubHex,
       signingPrivateKey: agent.privateKey,
       sourceAuth: API_TOKEN,
@@ -118,8 +121,8 @@ async function main(): Promise<void> {
       return;
     }
 
-    step(4, "BETA verified ALPHA's token against the pinned key, and onboarded nomad");
-    const discover = await beta.app.request("/api/v1/discover/nomad");
+    step(4, "BETA verified ALPHA's token, bound nomad's key to its id, and onboarded it");
+    const discover = await beta.app.request(`/api/v1/discover/${motebitId}`);
     const found = ((await discover.json()) as { found: boolean }).found;
     say(`      nomad is now discoverable on BETA: ${found ? "YES" : "NO"}`);
 
@@ -129,7 +132,9 @@ async function main(): Promise<void> {
     say("  • nomad moved relays carrying its identity (same motebit_id + key)");
     say("    and its relay-attested reputation — no re-earning trust from zero.");
     say("  • BETA trusted NEITHER nomad's self-report NOR a key fetched over the");
-    say("    wire — only ALPHA's signature against a key it had pinned.");
+    say("    wire — only ALPHA's signature against a key it had pinned, plus the");
+    say("    math binding nomad's key to its id and nomad's own bundle signature.");
+    say("    A stolen token under a different key would fail the binding check.");
     say("  • The agent owns the key; the relays are interchangeable. That is the");
     say("    moat no agent platform with a vendor-owned identity layer can copy.");
     say("════════════════════════════════════════════════════════════════\n");

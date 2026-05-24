@@ -15,6 +15,8 @@ import {
   verifyMigrationToken,
   verifyDepartureAttestation,
   verifyRelayMetadata,
+  verifyCredentialBundle,
+  verifySovereignBinding,
   toBase64Url,
 } from "@motebit/crypto";
 import type {
@@ -473,6 +475,40 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     }
     if (!(await verifyDepartureAttestation(departure_attestation, sourcePk))) {
       throw new HTTPException(400, { message: "Departure attestation signature invalid" });
+    }
+
+    // Step 3b: Bind the presented key to the motebit_id, then verify the agent's
+    // bundle signature (§8.2 steps 4 + 6). The token and attestation are
+    // SOURCE-signed and commit to neither the agent's key nor the bundle — so
+    // without this, a stolen MigrationToken (§13 "Token theft") would let a thief
+    // onboard the victim's motebit_id under the THIEF's own key, hijacking the
+    // identity. The defense is two cryptographic checks the destination runs
+    // offline, trusting no one:
+    //
+    //   (i) the presented public_key is cryptographically bound to the
+    //       motebit_id — the id IS the sovereign commitment to the key
+    //       (deriveSovereignMotebitId), so a thief cannot substitute a key;
+    //  (ii) the credential bundle is signed by that now-bound key (the agent
+    //       signs the bundle, not the relay — §6).
+    //
+    // A required-but-unverified bundle signature is ceremony; this makes it real.
+    if (credential_bundle.motebit_id !== body.motebit_id) {
+      throw new HTTPException(400, { message: "Credential bundle motebit_id does not match" });
+    }
+    // (i) Sovereign binding. The migrating identity must be sovereign-rooted: its
+    // motebit_id commits to its genesis key, so key↔id is verifiable with no
+    // operator trust. Rotated-key binding via a transmitted identity_file
+    // succession chain (§8.2 step 6, verifyKeyBindingAtTime) is the deferred next
+    // tier — performMigration does not yet carry the identity_file, so it is
+    // untestable end-to-end today (tracked: docs/drift-defenses.md migration row).
+    if (!(await verifySovereignBinding(body.motebit_id, body.public_key))) {
+      throw new HTTPException(400, {
+        message: "Migrating identity is not sovereign-bound to the presented key",
+      });
+    }
+    // (ii) Bundle signature against the now-bound key.
+    if (!(await verifyCredentialBundle(credential_bundle, hexToBytes(body.public_key)))) {
+      throw new HTTPException(400, { message: "Credential bundle signature invalid" });
     }
 
     // Step 4: Check for replay (§10)
