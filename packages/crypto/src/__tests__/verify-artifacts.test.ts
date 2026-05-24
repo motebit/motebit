@@ -2208,6 +2208,14 @@ describe("verifyGoalExecutionManifest", () => {
       reason: "signature_missing",
     });
   });
+
+  it("rejects a malformed (non-base64url) signature", async () => {
+    const kp = await generateKeypair();
+    const m = await signedManifest(kp.privateKey);
+    expect(
+      await verifyGoalExecutionManifest({ ...m, signature: "!!! not base64url !!!" }, kp.publicKey),
+    ).toEqual({ valid: false, reason: "malformed" });
+  });
 });
 
 describe("migration artifact verifiers", () => {
@@ -2242,6 +2250,21 @@ describe("migration artifact verifiers", () => {
     ).toBe(false);
     const other = await generateKeypair();
     expect(await verifyMigrationToken(token, other.publicKey)).toBe(false);
+  });
+
+  it("rejects a malformed (non-base64url) signature (fail-closed, no throw)", async () => {
+    const kp = await generateKeypair();
+    const token = {
+      token_id: "t1",
+      motebit_id: "m",
+      source_relay_id: "r",
+      source_relay_url: "u",
+      issued_at: 1,
+      expires_at: 2,
+      suite: SUITE,
+      signature: "!!! not base64url !!!",
+    } as MigrationToken;
+    expect(await verifyMigrationToken(token, kp.publicKey)).toBe(false);
   });
 
   it("request / attestation / presentation verify via the shared detached-signature path", async () => {
@@ -2299,6 +2322,27 @@ describe("migration artifact verifiers", () => {
     const bundle = await signCredentialBundle(unsigned, kp.privateKey);
     expect(bundle.bundle_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(await verifyCredentialBundle(bundle, kp.publicKey)).toBe(true);
+  });
+
+  it("verifyCredentialBundle rejects a malformed signature after a valid bundle_hash (fail-closed)", async () => {
+    const kp = await generateKeypair();
+    const rest = {
+      motebit_id: "m",
+      exported_at: 1,
+      credentials: [],
+      anchor_proofs: [],
+      key_succession: [],
+      suite: SUITE,
+    };
+    const bundle_hash = await hash(new TextEncoder().encode(canonicalJson(rest)));
+    // Correct bundle_hash → passes the recompute; malformed signature → the
+    // signature-decode catch returns false rather than throwing.
+    const bundle = {
+      ...rest,
+      bundle_hash,
+      signature: "!!! not base64url !!!",
+    } as unknown as CredentialBundle;
+    expect(await verifyCredentialBundle(bundle, kp.publicKey)).toBe(false);
   });
 });
 
