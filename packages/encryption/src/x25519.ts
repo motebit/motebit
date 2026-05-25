@@ -9,7 +9,7 @@
  * through the relay. The relay never sees the plaintext key.
  */
 
-import { x25519 } from "@noble/curves/ed25519";
+import { x25519 } from "@noble/curves/ed25519.js";
 import type { KeyTransferPayload } from "@motebit/protocol";
 import { encrypt, decrypt, secureErase, bytesToHex, hexToBytes, base58btcEncode } from "./index.js";
 
@@ -23,7 +23,7 @@ export interface X25519Keypair {
 
 /** Generate an ephemeral X25519 keypair for one-time key agreement. */
 export function generateX25519Keypair(): X25519Keypair {
-  const privateKey = x25519.utils.randomPrivateKey();
+  const privateKey = x25519.utils.randomSecretKey(); // v2 rename of randomPrivateKey
   const publicKey = x25519.getPublicKey(privateKey);
   return { publicKey, privateKey };
 }

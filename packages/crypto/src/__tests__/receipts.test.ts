@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import * as ed from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha512";
+import { sha512 } from "@noble/hashes/sha2.js";
 import { verify } from "../index";
 import type { ExecutionReceipt, ReceiptVerifyResult } from "../index";
 

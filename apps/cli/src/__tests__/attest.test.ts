@@ -18,7 +18,7 @@
 import { describe, expect, it, beforeAll } from "vitest";
 
 import * as ed from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha512";
+import { sha512 } from "@noble/hashes/sha2.js";
 
 import { verify } from "@motebit/crypto";
 

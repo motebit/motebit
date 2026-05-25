@@ -22,8 +22,8 @@
 import { encode as cborEncode } from "cbor2";
 import * as x509 from "@peculiar/x509";
 import { Crypto } from "@peculiar/webcrypto";
-import { p256 } from "@noble/curves/p256";
-import { sha256 } from "@noble/hashes/sha256";
+import { p256 } from "@noble/curves/nist.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 x509.cryptoProvider.set(new Crypto() as unknown as globalThis.Crypto);
 
@@ -244,10 +244,10 @@ export async function buildFullAttestationFixture(input: {
   const leafPrivBytes = fromBase64Url(leafPrivateJwk.d as string);
   const signedBytes = concat(authData, clientDataHash);
   const digest = sha256(signedBytes);
-  const sigRaw = input.forgeBadSignature
-    ? p256.sign(new Uint8Array(32), leafPrivBytes, { prehash: false })
-    : p256.sign(digest, leafPrivBytes, { prehash: false });
-  const sigDer = sigRaw.toDERRawBytes();
+  // v2: sign returns encoded bytes directly; request DER (replaces .toDERRawBytes()).
+  const sigDer = input.forgeBadSignature
+    ? p256.sign(new Uint8Array(32), leafPrivBytes, { prehash: false, format: "der" })
+    : p256.sign(digest, leafPrivBytes, { prehash: false, format: "der" });
 
   const x5c: Uint8Array[] = [new Uint8Array(leaf.rawData)];
   if (intermediateCert) x5c.push(new Uint8Array(intermediateCert.rawData));
@@ -273,7 +273,7 @@ export async function buildSelfAttestationFixture(input: {
   deviceId: string;
   attestedAt: number;
 }): Promise<{ receipt: string }> {
-  const credPriv = p256.utils.randomPrivateKey();
+  const credPriv = p256.utils.randomSecretKey(); // v2 rename of randomPrivateKey
   const credPubUncompressed = p256.getPublicKey(credPriv, false);
   // Uncompressed: 0x04 || x(32) || y(32)
   const credX = credPubUncompressed.slice(1, 33);
@@ -295,8 +295,7 @@ export async function buildSelfAttestationFixture(input: {
   const clientDataHash = await sha256Bytes(clientDataJSON);
   const signedBytes = concat(authData, clientDataHash);
   const digest = sha256(signedBytes);
-  const sigRaw = p256.sign(digest, credPriv, { prehash: false });
-  const sigDer = sigRaw.toDERRawBytes();
+  const sigDer = p256.sign(digest, credPriv, { prehash: false, format: "der" });
 
   const attestationObject = cborEncode({
     fmt: "packed",

@@ -10,8 +10,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { p256 } from "@noble/curves/p256";
-import { sha256 } from "@noble/hashes/sha256";
+import { p256 } from "@noble/curves/nist.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 import type { HardwareAttestationClaim } from "@motebit/protocol";
 
@@ -31,16 +31,16 @@ function toHex(bytes: Uint8Array): string {
 }
 
 function makeSeKeypair(): { privateKey: Uint8Array; publicKeyHex: string } {
-  const privateKey = p256.utils.randomPrivateKey();
+  const privateKey = p256.utils.randomSecretKey(); // v2 rename of randomPrivateKey
   const publicKey = p256.getPublicKey(privateKey, true); // compressed
   return { privateKey, publicKeyHex: toHex(publicKey) };
 }
 
 function signBody(bodyBytes: Uint8Array, privateKey: Uint8Array): Uint8Array {
-  // ECDSA-SHA256 over the body. Production SE does the same.
+  // ECDSA-SHA256 over the body. Production SE does the same. v2: sign returns
+  // the encoded bytes directly; request DER (matches the verifier).
   const digest = sha256(bodyBytes);
-  const sig = p256.sign(digest, privateKey, { prehash: false });
-  return sig.toDERRawBytes();
+  return p256.sign(digest, privateKey, { prehash: false, format: "der" });
 }
 
 function mintValidReceipt(opts: {

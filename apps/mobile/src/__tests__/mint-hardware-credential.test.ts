@@ -56,9 +56,9 @@ vi.mock("react-native", () => ({
 }));
 
 import * as ed from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha512";
-import { p256 } from "@noble/curves/p256";
-import { sha256 } from "@noble/hashes/sha256";
+import { sha512 } from "@noble/hashes/sha2.js";
+import { p256 } from "@noble/curves/nist.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 import { verify } from "@motebit/crypto";
 import { canonicalJson, toBase64Url } from "@motebit/crypto";
@@ -113,7 +113,7 @@ function simulateSeMint(args: {
   identityPublicKeyHex: string;
   attestedAt: number;
 }): SeMintResult {
-  const sePrivate = p256.utils.randomPrivateKey();
+  const sePrivate = p256.utils.randomSecretKey(); // v2 rename of randomPrivateKey
   const sePublicBytes = p256.getPublicKey(sePrivate, true);
   const sePublicHex = toHex(sePublicBytes);
 
@@ -128,8 +128,7 @@ function simulateSeMint(args: {
   });
   const bodyBytes = new TextEncoder().encode(bodyJson);
   const digest = sha256(bodyBytes);
-  const sig = p256.sign(digest, sePrivate, { prehash: false });
-  const sigDer = sig.toDERRawBytes();
+  const sigDer = p256.sign(digest, sePrivate, { prehash: false, format: "der" });
 
   return {
     body_base64: toBase64Url(bodyBytes),

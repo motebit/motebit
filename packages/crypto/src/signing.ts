@@ -10,11 +10,15 @@
  */
 
 import * as ed from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha512";
+// @noble/hashes v2: sha512 moved from /sha512 to the consolidated /sha2 entrypoint.
+import { sha512 } from "@noble/hashes/sha2.js";
 
-// @noble/ed25519 v3 requires explicit SHA-512 binding
+// @noble/ed25519 v3 requires explicit SHA-512 binding. The cast bridges a
+// type-only friction between @noble/hashes v2 (return typed
+// Uint8Array<ArrayBufferLike>) and ed25519's setter (wants Uint8Array<ArrayBuffer>);
+// the runtime SHA-512 is identical.
 if (!ed.hashes.sha512) {
-  ed.hashes.sha512 = (msg: Uint8Array) => sha512(msg);
+  ed.hashes.sha512 = sha512 as unknown as (typeof ed.hashes)["sha512"];
 }
 
 // === Types ===

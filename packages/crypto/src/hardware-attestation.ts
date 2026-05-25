@@ -587,8 +587,9 @@ export async function mintSecureEnclaveReceiptForTest(input: {
 }): Promise<{ claim: HardwareAttestationClaim; sePublicKeyHex: string }> {
   // Lazy import — keeps this helper from being dragged into the
   // production verifier's import graph any earlier than necessary.
-  const { p256 } = await import("@noble/curves/p256");
-  const privateKey = p256.utils.randomPrivateKey();
+  // @noble/curves v2 moved the NIST curves under the /nist entrypoint.
+  const { p256 } = await import("@noble/curves/nist.js");
+  const privateKey = p256.utils.randomSecretKey(); // v2 rename of randomPrivateKey
   const sePublicKey = p256.getPublicKey(privateKey, true); // compressed
   const sePublicKeyHex = bytesToHexLocal(sePublicKey);
   const bodyBytes = canonicalSecureEnclaveBodyForTest({
@@ -599,7 +600,9 @@ export async function mintSecureEnclaveReceiptForTest(input: {
     attested_at: input.attested_at,
   });
   const digest = await sha256Local(bodyBytes);
-  const sigBytes = p256.sign(digest, privateKey, { prehash: false }).toDERRawBytes();
+  // v2: sign returns the encoded signature bytes directly; request DER (the
+  // format the verifier + real Apple Secure Enclave receipts use).
+  const sigBytes = p256.sign(digest, privateKey, { prehash: false, format: "der" });
   const receipt = encodeSecureEnclaveReceiptForTest(bodyBytes, sigBytes);
   return {
     claim: {

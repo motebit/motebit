@@ -35,13 +35,15 @@
 // other source file in this package for `ed.verifyAsync` / `ed.signAsync`
 // and fails CI if they appear outside this file.
 import * as ed from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha512";
-import { sha256 } from "@noble/hashes/sha256";
+// @noble/hashes v2 consolidated sha256/sha512 under the /sha2 entrypoint
+// (the /sha256 + /sha512 subpaths were removed).
+import { sha256, sha512 } from "@noble/hashes/sha2.js";
 // P-256 ECDSA for hardware-attestation receipts (Apple Secure Enclave
 // generates P-256 keys; this is the verifier side). Centralizing the
 // primitive call here keeps the same single-home-for-primitives
-// discipline the Ed25519 path follows.
-import { p256 } from "@noble/curves/p256";
+// discipline the Ed25519 path follows. @noble/curves v2 moved the NIST
+// curves (p256/p384/p521) under the /nist entrypoint.
+import { p256 } from "@noble/curves/nist.js";
 // Type-only — `SuiteId` is a pure string-literal union with no runtime
 // footprint, so the erased import preserves @motebit/crypto's Layer 0
 // "zero internal deps" invariant (enforced by check-deps).
@@ -51,7 +53,12 @@ import type { SuiteId } from "@motebit/protocol";
 // binding twice is harmless, but some test environments import
 // signing.ts first — the check guards against redundant assignment.
 if (!ed.hashes.sha512) {
-  ed.hashes.sha512 = (msg: Uint8Array) => sha512(msg);
+  // @noble/ed25519 v3 needs an explicit SHA-512 binding. @noble/hashes v2's
+  // sha512 is the correct, identical SHA-512 at runtime; the cast bridges a
+  // type-only friction between the two @noble subpackages (v2's return is typed
+  // Uint8Array<ArrayBufferLike> while ed25519's setter wants the stricter
+  // Uint8Array<ArrayBuffer>).
+  ed.hashes.sha512 = sha512 as unknown as (typeof ed.hashes)["sha512"];
 }
 
 /**
@@ -215,7 +222,9 @@ export function verifyP256EcdsaSha256(
   try {
     const digest = sha256(messageBytes);
     const pubKeyBytes = hexToBytes(publicKeyCompressedHex);
-    return p256.verify(signatureDerBytes, digest, pubKeyBytes, { prehash: false });
+    // @noble/curves v2 defaults to compact-encoded signatures; Apple Secure
+    // Enclave (and our mint helper) produce DER, so request DER parsing explicitly.
+    return p256.verify(signatureDerBytes, digest, pubKeyBytes, { prehash: false, format: "der" });
   } catch {
     return false;
   }
