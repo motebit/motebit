@@ -12,12 +12,49 @@ concurrency:
   group: deploy-relay-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: read # read the CI run status for the gate below
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
+      # The relay is the durability-sensitive trust root; never deploy a commit
+      # whose CI is failing. This workflow and CI both fire on the same push, so
+      # we wait for the CI run on THIS sha to conclude and refuse to deploy unless
+      # it is green. Manual `workflow_dispatch` bypasses the gate (an operator
+      # deploying by hand has already decided). Drift-defense: the prod deploy was
+      # previously ungated — a red CI did not block it.
+      - name: Gate on CI success
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sha='${{ github.sha }}'
+          echo "Waiting for CI to conclude on ${sha} before deploying prod…"
+          for i in $(seq 1 80); do
+            run=$(gh run list --repo '${{ github.repository }}' --workflow ci.yml \
+              --branch main --json headSha,status,conclusion \
+              --jq "[.[] | select(.headSha==\"${sha}\")][0]")
+            status=$(echo "${run}" | jq -r '.status // "pending"')
+            conclusion=$(echo "${run}" | jq -r '.conclusion // ""')
+            echo "  attempt ${i}: CI status=${status} conclusion=${conclusion}"
+            if [ "${status}" = "completed" ]; then
+              if [ "${conclusion}" = "success" ]; then
+                echo "CI is green — proceeding to deploy."
+                exit 0
+              fi
+              echo "::error::CI concluded '${conclusion}' for ${sha} — refusing to deploy prod relay."
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "::error::Timed out waiting for CI to conclude on ${sha}."
+          exit 1
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - uses: superfly/flyctl-actions/setup-flyctl@63da3ecc5e2793b98a3f2519b3d75d4f4c11cec2 # master
