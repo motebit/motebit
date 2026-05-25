@@ -1425,6 +1425,9 @@ export function verifyKeySuccession(record: KeySuccessionRecord, guardianPublicK
 export function verifyMerkleInclusion(leaf: string, index: number, siblings: string[], layerSizes: number[], expectedRoot: string): Promise<boolean>;
 
 // @public
+export function verifyMigratingKeyBinding(motebitId: string, presentedKeyHex: string, identityFile?: MotebitIdentityFile): Promise<boolean>;
+
+// @public
 export function verifyMigrationPresentation(presentation: MigrationPresentation, publicKey: Uint8Array): Promise<boolean>;
 
 // @public

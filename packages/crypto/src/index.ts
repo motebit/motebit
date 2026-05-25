@@ -1163,6 +1163,42 @@ export async function verifyKeyBindingAtTime(
 }
 
 /**
+ * Does `presentedKeyHex` legitimately control `motebitId` *right now*? The
+ * offline, operator-free binding check a destination relay runs before
+ * onboarding a migrating agent (spec/migration-v1.md §8.2 step 6). Two tiers,
+ * fail-closed (returns false, never throws, on any unmet condition):
+ *
+ *  1. **Sovereign genesis** — `motebitId` is the sovereign commitment to
+ *     `presentedKeyHex` itself (a never-rotated identity). No identity file
+ *     needed; this is {@link verifySovereignBinding}.
+ *  2. **Sovereign-rooted succession** — with an `identityFile`, `presentedKeyHex`
+ *     is the key active *now* in a verified succession chain
+ *     ({@link verifyKeyBindingAtTime}) whose genesis is the sovereign commitment
+ *     to the file's `motebit_id`, and that file is *for this* `motebitId`. This
+ *     binds a ROTATED key to the id — a sovereign agent that has rotated its key
+ *     keeps `motebit_id = sha256(genesis key)`, so tier 1 alone would lock it
+ *     out of migration; the chain re-establishes the binding without operator
+ *     trust.
+ *
+ * A non-sovereign (legacy random) id satisfies neither tier and cannot migrate —
+ * by design, only sovereign-rooted identities migrate without trusting an operator.
+ */
+export async function verifyMigratingKeyBinding(
+  motebitId: string,
+  presentedKeyHex: string,
+  identityFile?: MotebitIdentityFile,
+): Promise<boolean> {
+  if (await verifySovereignBinding(motebitId, presentedKeyHex)) return true;
+  if (!identityFile || identityFile.motebit_id !== motebitId) return false;
+  try {
+    const r = await verifyKeyBindingAtTime(identityFile, presentedKeyHex, Date.now());
+    return r.bound === true && r.sovereign === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Canonical leaf of the identity-transparency log: the operator's
  * non-equivocable commitment that motebit `motebitId`'s current identity key is
  * `currentKeyHex`. Hex SHA-256 of the JCS-canonical commitment. The relay that

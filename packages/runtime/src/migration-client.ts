@@ -23,6 +23,7 @@
  */
 import type { MigrationToken, DepartureAttestation, CredentialBundle } from "@motebit/sdk";
 import { signCredentialBundle, signMigrationRequest } from "@motebit/crypto";
+import type { MotebitIdentityFile } from "@motebit/crypto";
 
 export interface MigrationClientDeps {
   /** The relay the agent is leaving (its current sync URL). */
@@ -36,6 +37,11 @@ export interface MigrationClientDeps {
   /** The migrating motebit's identity private key — used to sign the exported
    *  credential bundle (§6: the agent, not the relay, signs what it presents). */
   readonly signingPrivateKey: Uint8Array;
+  /** The agent's identity file (spec §3). REQUIRED only when the current key is
+   *  not the genesis key (i.e. the agent has rotated): the destination binds the
+   *  rotated key to the motebit_id via the file's succession chain (§8.2 step 6).
+   *  Omit for a never-rotated sovereign identity (bound directly via the id). */
+  readonly identityFile?: MotebitIdentityFile;
   /** Bearer token authenticating the agent to the SOURCE relay (its sync auth).
    *  A string or a per-call minter (web mints a fresh signed token per request). */
   readonly sourceAuth: string | (() => Promise<string>);
@@ -172,6 +178,9 @@ export async function performMigration(deps: MigrationClientDeps): Promise<Migra
         credential_bundle: bundle,
         motebit_id: deps.motebitId,
         public_key: deps.publicKeyHex,
+        // Carried only for rotated keys — lets the destination bind the current
+        // (non-genesis) key to the motebit_id via the succession chain (§8.2 step 6).
+        ...(deps.identityFile !== undefined ? { identity_file: deps.identityFile } : {}),
       }),
     });
     if (!res.ok) return fail("accept", res.status, await safeText(res));

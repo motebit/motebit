@@ -101,10 +101,10 @@ const REQUIRED_USAGE: ReadonlyArray<{
       "verifyDepartureAttestation",
       "verifyCredentialBundle",
       "verifyBalanceWaiver",
-      "verifySovereignBinding",
+      "verifyMigratingKeyBinding",
       "verifyRelayMetadata",
     ],
-    note: "/migrate verifies the agent's signed MigrationRequest (§4.1 — the departure authorization) + accept-migration (§8.2 steps 2-6: token + attestation + bundle signature + key↔id binding) + depart balance waiver + source-relay metadata tier-2 trust root",
+    note: "/migrate verifies the agent's signed MigrationRequest (§4.1 — the departure authorization) + accept-migration (§8.2 steps 2-6: token + attestation + bundle signature + key↔id binding via verifyMigratingKeyBinding — sovereign genesis OR sovereign-rooted succession) + depart balance waiver + source-relay metadata tier-2 trust root",
   },
   {
     file: "services/relay/src/disputes.ts",

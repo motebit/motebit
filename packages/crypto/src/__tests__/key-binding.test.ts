@@ -12,6 +12,8 @@ import {
   canonicalJson,
   bytesToHex,
   verifyKeyBindingAtTime,
+  verifyMigratingKeyBinding,
+  deriveSovereignMotebitId,
   type KeyPair,
   type MotebitIdentityFile,
   type SuccessionRecord,
@@ -218,5 +220,59 @@ describe("verifyKeyBindingAtTime — guardian-recovery (revocation via successio
   it("an explicit guardian param still works and overrides the file", async () => {
     const id = identityWithGuardian(kRec, chain, undefined);
     expect((await verifyKeyBindingAtTime(id, kRec, T1 + DAY, gKey)).bound).toBe(true);
+  });
+});
+
+describe("verifyMigratingKeyBinding (migration §8.2 step 6 — the two-tier bind)", () => {
+  let genesis: KeyPair, rotated: KeyPair;
+  let gHex: string, rHex: string, sid: string, chain: SuccessionRecord[];
+
+  beforeAll(async () => {
+    genesis = await generateKeypair();
+    rotated = await generateKeypair();
+    gHex = bytesToHex(genesis.publicKey);
+    rHex = bytesToHex(rotated.publicKey);
+    // motebit_id is the sovereign commitment to the GENESIS key (T1 is past, so
+    // the rotated key is the one active "now").
+    sid = await deriveSovereignMotebitId(gHex);
+    chain = [await rotation(genesis, rotated, T1)];
+  });
+
+  it("tier 1: a never-rotated sovereign id binds its own key with no file", async () => {
+    const k = bytesToHex((await generateKeypair()).publicKey);
+    const id = await deriveSovereignMotebitId(k);
+    expect(await verifyMigratingKeyBinding(id, k)).toBe(true);
+    // A different key, no file → false (the token-theft substitution).
+    expect(await verifyMigratingKeyBinding(id, gHex)).toBe(false);
+  });
+
+  it("tier 2: a ROTATED key binds via a sovereign-rooted succession chain", async () => {
+    const file: MotebitIdentityFile = { ...identity(rHex, chain), motebit_id: sid };
+    // The rotated key is not the sovereign commitment to sid → tier 1 fails…
+    expect(await verifyMigratingKeyBinding(sid, rHex)).toBe(false);
+    // …but the identity file's chain (sovereign genesis → rotated) re-binds it.
+    expect(await verifyMigratingKeyBinding(sid, rHex, file)).toBe(true);
+  });
+
+  it("rejects a chain whose genesis is not the sovereign root of the id", async () => {
+    const file: MotebitIdentityFile = {
+      ...identity(rHex, chain),
+      motebit_id: "mote-not-sovereign",
+    };
+    expect(await verifyMigratingKeyBinding("mote-not-sovereign", rHex, file)).toBe(false);
+  });
+
+  it("rejects an identity file issued for a different motebit_id", async () => {
+    const file: MotebitIdentityFile = { ...identity(rHex, chain), motebit_id: sid };
+    const otherSid = await deriveSovereignMotebitId(
+      bytesToHex((await generateKeypair()).publicKey),
+    );
+    expect(await verifyMigratingKeyBinding(otherSid, rHex, file)).toBe(false);
+  });
+
+  it("rejects a key absent from the chain", async () => {
+    const file: MotebitIdentityFile = { ...identity(rHex, chain), motebit_id: sid };
+    const stranger = bytesToHex((await generateKeypair()).publicKey);
+    expect(await verifyMigratingKeyBinding(sid, stranger, file)).toBe(false);
   });
 });

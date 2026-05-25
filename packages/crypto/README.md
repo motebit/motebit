@@ -118,6 +118,7 @@ const vc = await issueReputationCredential(
 - **`verifyIdentityBindingAnchored(identity, signingKeyHex, atTimestampMs, proof, guardianPublicKeyHex?)`** — Anchored binding: sovereign-root binding AND Merkle inclusion of the current key in the transparency log under `proof.anchoredRoot`. Confirming the root is on-chain is the caller's cross-check.
 - **`deriveSovereignMotebitId(genesisPublicKeyHex)`** — The sovereign commitment of a genesis key: a deterministic UUIDv8 from `sha256(genesisKey)`. A sovereign-minted motebit's `motebit_id` IS this value, so the id↔key binding is self-certifying (offline, no operator). Second-preimage resistance ~2^122.
 - **`verifySovereignBinding(motebitId, genesisPublicKeyHex)`** — True iff `motebitId` is the sovereign commitment to the genesis key. `verifyKeyBindingAtTime` sets `sovereign: true` on its result when this holds.
+- **`verifyMigratingKeyBinding(motebitId, presentedKeyHex, identityFile?)`** — Does `presentedKeyHex` legitimately control `motebitId` right now? The migration key↔id check (spec/migration-v1.md §8.2 step 6), fail-closed: a never-rotated sovereign id binds its key directly; a rotated key binds via the identity file's sovereign-rooted succession chain. Composes `verifySovereignBinding` and `verifyKeyBindingAtTime`.
 
 ### Primitives
 

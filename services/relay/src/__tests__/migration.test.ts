@@ -14,6 +14,7 @@ import {
   deriveSovereignMotebitId,
   signCredentialBundle,
   signMigrationRequest,
+  signBySuite,
 } from "@motebit/crypto";
 import type { MigrationToken, DepartureAttestation, BalanceWaiver } from "@motebit/protocol";
 import { performMigration } from "@motebit/runtime";
@@ -643,6 +644,116 @@ describe("Migration: accept-migration (destination)", () => {
       body: JSON.stringify(mismatched),
     });
     expect(res.status).toBe(400);
+  });
+
+  it("accepts a ROTATED sovereign agent via its succession chain (§8.2 step 6, tier 2)", async () => {
+    // The agent's motebit_id commits to its GENESIS key; it has since rotated.
+    // Tier-1 sovereign binding (id == sha256(presented key)) fails for the
+    // rotated key — only the identity_file's chain (genesis → rotated) re-binds.
+    const sourceRelayId = "rotated-source";
+    const sourceKp = await generateKeypair();
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score, peer_protocol_version)
+         VALUES (?, ?, ?, ?, 'active', ?, 0, 0, 0.5, ?)`,
+      )
+      .run(sourceRelayId, bytesToHex(sourceKp.publicKey), "http://src", "Src", null, "1.0");
+
+    const genesis = await generateKeypair();
+    const rotated = await generateKeypair();
+    const gHex = bytesToHex(genesis.publicKey);
+    const rHex = bytesToHex(rotated.publicKey);
+    const sid = await deriveSovereignMotebitId(gHex);
+    const HEX = "motebit-jcs-ed25519-hex-v1" as const;
+    const rotTs = Date.now() - 30 * 24 * 60 * 60 * 1000; // rotated 30d ago
+    const rotMsg = new TextEncoder().encode(
+      canonicalJson({ old_public_key: gHex, new_public_key: rHex, timestamp: rotTs, suite: HEX }),
+    );
+    const succession = [
+      {
+        old_public_key: gHex,
+        new_public_key: rHex,
+        timestamp: rotTs,
+        suite: HEX,
+        old_key_signature: bytesToHex(await signBySuite(HEX, rotMsg, genesis.privateKey)),
+        new_key_signature: bytesToHex(await signBySuite(HEX, rotMsg, rotated.privateKey)),
+      },
+    ];
+    const identity_file = {
+      spec: "motebit/identity@1.0",
+      motebit_id: sid,
+      created_at: new Date(rotTs - 24 * 60 * 60 * 1000).toISOString(),
+      owner_id: "owner",
+      identity: { algorithm: "Ed25519", public_key: rHex },
+      succession,
+    };
+
+    const now = Date.now();
+    const sign = async (b: Record<string, unknown>): Promise<string> =>
+      toBase64Url(
+        await ed25519Sign(new TextEncoder().encode(canonicalJson(b)), sourceKp.privateKey),
+      );
+    const tokenBody = {
+      token_id: `rot-${now}`,
+      motebit_id: sid,
+      source_relay_id: sourceRelayId,
+      source_relay_url: "http://src",
+      issued_at: now,
+      expires_at: now + 72 * 60 * 60 * 1000,
+      suite: "motebit-jcs-ed25519-b64-v1" as const,
+    };
+    const attBody = {
+      attestation_id: `att-rot-${now}`,
+      motebit_id: sid,
+      source_relay_id: sourceRelayId,
+      source_relay_url: "http://src",
+      first_seen: now - 1_000_000,
+      last_active: now,
+      trust_level: "verified",
+      successful_tasks: 3,
+      failed_tasks: 0,
+      credentials_issued: 0,
+      balance_at_departure: 0,
+      attested_at: now,
+      suite: "motebit-jcs-ed25519-b64-v1" as const,
+    };
+    // The bundle is signed by the CURRENT (rotated) key.
+    const bundle = await signCredentialBundle(
+      {
+        motebit_id: sid,
+        exported_at: now,
+        credentials: [],
+        anchor_proofs: [],
+        key_succession: succession,
+        suite: "motebit-jcs-ed25519-b64-v1",
+      },
+      rotated.privateKey,
+    );
+    const base = {
+      migration_token: { ...tokenBody, signature: await sign(tokenBody) },
+      departure_attestation: { ...attBody, signature: await sign(attBody) },
+      credential_bundle: bundle,
+      motebit_id: sid,
+      public_key: rHex,
+    };
+
+    // Without the identity_file the rotated key fails tier-1 sovereign bind → 400.
+    const noFile = await relay.app.request(`/api/v1/agents/accept-migration`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(base),
+    });
+    expect(noFile.status).toBe(400);
+
+    // With the identity_file the chain re-binds the rotated key → onboarded.
+    const withFile = await relay.app.request(`/api/v1/agents/accept-migration`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ ...base, identity_file }),
+    });
+    expect(withFile.status).toBe(200);
+    const disc = await relay.app.request(`/api/v1/discover/${sid}`);
+    expect(((await disc.json()) as { found: boolean }).found).toBe(true);
   });
 
   it("rejects a migration whose source relay identity cannot be established (fail-closed)", async () => {

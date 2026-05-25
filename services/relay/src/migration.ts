@@ -17,9 +17,10 @@ import {
   verifyDepartureAttestation,
   verifyRelayMetadata,
   verifyCredentialBundle,
-  verifySovereignBinding,
+  verifyMigratingKeyBinding,
   toBase64Url,
 } from "@motebit/crypto";
+import type { MotebitIdentityFile } from "@motebit/crypto";
 import type {
   MigrationToken,
   DepartureAttestation,
@@ -409,7 +410,12 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       migration_token: MigrationToken;
       departure_attestation: DepartureAttestation;
       credential_bundle: CredentialBundle;
-      identity_file?: string;
+      // The agent's identity file (spec §3) — optional, carried only when the
+      // agent has rotated its key, so the destination can bind the (non-genesis)
+      // current key to the motebit_id via the succession chain (§8.2 step 6).
+      // Verified fail-closed; no schema needed — verifyMigratingKeyBinding rejects
+      // any malformed / non-sovereign-rooted chain.
+      identity_file?: MotebitIdentityFile;
       motebit_id: string;
       public_key: string;
     }>();
@@ -518,15 +524,14 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     if (credential_bundle.motebit_id !== body.motebit_id) {
       throw new HTTPException(400, { message: "Credential bundle motebit_id does not match" });
     }
-    // (i) Sovereign binding. The migrating identity must be sovereign-rooted: its
-    // motebit_id commits to its genesis key, so key↔id is verifiable with no
-    // operator trust. Rotated-key binding via a transmitted identity_file
-    // succession chain (§8.2 step 6, verifyKeyBindingAtTime) is the deferred next
-    // tier — performMigration does not yet carry the identity_file, so it is
-    // untestable end-to-end today (tracked: docs/drift-defenses.md migration row).
-    if (!(await verifySovereignBinding(body.motebit_id, body.public_key))) {
+    // (i) Key↔id binding (§8.2 step 6), offline + operator-free, fail-closed:
+    // either the motebit_id is the sovereign commitment to the presented key
+    // (never-rotated), or the agent's identity_file proves the presented key is
+    // the current key in a sovereign-rooted succession chain (rotated key). A
+    // thief who substituted a key satisfies neither.
+    if (!(await verifyMigratingKeyBinding(body.motebit_id, body.public_key, body.identity_file))) {
       throw new HTTPException(400, {
-        message: "Migrating identity is not sovereign-bound to the presented key",
+        message: "Migrating identity is not bound to the presented key",
       });
     }
     // (ii) Bundle signature against the now-bound key.
