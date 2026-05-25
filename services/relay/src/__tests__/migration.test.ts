@@ -13,6 +13,7 @@ import {
   canonicalJson,
   deriveSovereignMotebitId,
   signCredentialBundle,
+  signMigrationRequest,
 } from "@motebit/crypto";
 import type { MigrationToken, DepartureAttestation, BalanceWaiver } from "@motebit/protocol";
 import { performMigration } from "@motebit/runtime";
@@ -37,11 +38,23 @@ async function registerAgent(relay: SyncRelay, motebitId: string, publicKeyHex: 
 async function initiateMigration(
   relay: SyncRelay,
   motebitId: string,
+  privateKey: Uint8Array,
 ): Promise<{ ok: boolean; migration_token: MigrationToken }> {
+  // §4.1 — the agent signs its MigrationRequest; the relay verifies it against
+  // the registered key, so only the agent can initiate its own departure.
+  const request = await signMigrationRequest(
+    {
+      motebit_id: motebitId,
+      reason: "test migration",
+      requested_at: Date.now(),
+      suite: "motebit-jcs-ed25519-b64-v1",
+    },
+    privateKey,
+  );
   const res = await relay.app.request(`/api/v1/agents/${motebitId}/migrate`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-    body: JSON.stringify({ reason: "test migration" }),
+    body: JSON.stringify(request),
   });
   return res.json() as Promise<{ ok: boolean; migration_token: MigrationToken }>;
 }
@@ -141,13 +154,12 @@ async function buildPinnedAcceptPayload(
 
 describe("Migration: POST /api/v1/agents/:motebitId/migrate", () => {
   let relay: SyncRelay;
-  let agentPubHex: string;
+  let agentKp: Awaited<ReturnType<typeof generateKeypair>>;
 
   beforeEach(async () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
-    const kp = await generateKeypair();
-    agentPubHex = bytesToHex(kp.publicKey);
-    await registerAgent(relay, "migrate-agent", agentPubHex);
+    agentKp = await generateKeypair();
+    await registerAgent(relay, "migrate-agent", bytesToHex(agentKp.publicKey));
   });
 
   afterEach(async () => {
@@ -155,7 +167,11 @@ describe("Migration: POST /api/v1/agents/:motebitId/migrate", () => {
   });
 
   it("issues a signed MigrationToken", async () => {
-    const { ok, migration_token } = await initiateMigration(relay, "migrate-agent");
+    const { ok, migration_token } = await initiateMigration(
+      relay,
+      "migrate-agent",
+      agentKp.privateKey,
+    );
     expect(ok).toBe(true);
     expect(migration_token.token_id).toBeTruthy();
     expect(migration_token.motebit_id).toBe("migrate-agent");
@@ -166,7 +182,7 @@ describe("Migration: POST /api/v1/agents/:motebitId/migrate", () => {
   });
 
   it("token signature is verifiable with relay public key", async () => {
-    const { migration_token } = await initiateMigration(relay, "migrate-agent");
+    const { migration_token } = await initiateMigration(relay, "migrate-agent", agentKp.privateKey);
 
     // Get relay public key from well-known
     const wkRes = await relay.app.request("/.well-known/motebit.json");
@@ -178,27 +194,80 @@ describe("Migration: POST /api/v1/agents/:motebitId/migrate", () => {
   });
 
   it("rejects migration for nonexistent agent", async () => {
+    // A well-formed, signed request for an unregistered agent — 404 at the agent
+    // lookup (before signature verification, which has no key to check against).
+    const request = await signMigrationRequest(
+      {
+        motebit_id: "nonexistent",
+        requested_at: Date.now(),
+        suite: "motebit-jcs-ed25519-b64-v1",
+      },
+      agentKp.privateKey,
+    );
     const res = await relay.app.request(`/api/v1/agents/nonexistent/migrate`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-      body: JSON.stringify({}),
+      body: JSON.stringify(request),
     });
     expect(res.status).toBe(404);
   });
 
+  it("rejects an unsigned / schema-invalid request (§4.1)", async () => {
+    const res = await relay.app.request(`/api/v1/agents/migrate-agent/migrate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ reason: "no signature here" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a request signed by a key other than the agent's (§4.1 — the authz gap)", async () => {
+    // The closed hole: pre-fix, /migrate ignored the signature, so anyone could
+    // mint a departure token for any agent (→ griefing + attestation/export leak).
+    const impostor = await generateKeypair();
+    const request = await signMigrationRequest(
+      {
+        motebit_id: "migrate-agent",
+        requested_at: Date.now(),
+        suite: "motebit-jcs-ed25519-b64-v1",
+      },
+      impostor.privateKey,
+    );
+    const res = await relay.app.request(`/api/v1/agents/migrate-agent/migrate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(request),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects a request whose motebit_id does not match the path", async () => {
+    const request = await signMigrationRequest(
+      { motebit_id: "someone-else", requested_at: Date.now(), suite: "motebit-jcs-ed25519-b64-v1" },
+      agentKp.privateKey,
+    );
+    const res = await relay.app.request(`/api/v1/agents/migrate-agent/migrate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(request),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("replaces previous migration token (§4.4)", async () => {
-    const first = await initiateMigration(relay, "migrate-agent");
-    const second = await initiateMigration(relay, "migrate-agent");
+    const first = await initiateMigration(relay, "migrate-agent", agentKp.privateKey);
+    const second = await initiateMigration(relay, "migrate-agent", agentKp.privateKey);
     expect(first.migration_token.token_id).not.toBe(second.migration_token.token_id);
   });
 });
 
 describe("Migration: GET attestation", () => {
   let relay: SyncRelay;
+  let kp: Awaited<ReturnType<typeof generateKeypair>>;
 
   beforeEach(async () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
-    const kp = await generateKeypair();
+    kp = await generateKeypair();
     await registerAgent(relay, "att-agent", bytesToHex(kp.publicKey));
   });
 
@@ -207,7 +276,7 @@ describe("Migration: GET attestation", () => {
   });
 
   it("issues a signed DepartureAttestation", async () => {
-    await initiateMigration(relay, "att-agent");
+    await initiateMigration(relay, "att-agent", kp.privateKey);
 
     const res = await relay.app.request(`/api/v1/agents/att-agent/migration/attestation`, {
       headers: AUTH_HEADER,
@@ -228,7 +297,7 @@ describe("Migration: GET attestation", () => {
   });
 
   it("attestation signature is verifiable", async () => {
-    await initiateMigration(relay, "att-agent");
+    await initiateMigration(relay, "att-agent", kp.privateKey);
 
     const res = await relay.app.request(`/api/v1/agents/att-agent/migration/attestation`, {
       headers: AUTH_HEADER,
@@ -255,10 +324,11 @@ describe("Migration: GET attestation", () => {
 
 describe("Migration: GET export", () => {
   let relay: SyncRelay;
+  let kp: Awaited<ReturnType<typeof generateKeypair>>;
 
   beforeEach(async () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
-    const kp = await generateKeypair();
+    kp = await generateKeypair();
     await registerAgent(relay, "export-agent", bytesToHex(kp.publicKey));
   });
 
@@ -267,7 +337,7 @@ describe("Migration: GET export", () => {
   });
 
   it("returns credential bundle", async () => {
-    await initiateMigration(relay, "export-agent");
+    await initiateMigration(relay, "export-agent", kp.privateKey);
 
     const res = await relay.app.request(`/api/v1/agents/export-agent/migration/export`, {
       headers: AUTH_HEADER,
@@ -300,10 +370,11 @@ describe("Migration: GET export", () => {
 
 describe("Migration: cancel + depart", () => {
   let relay: SyncRelay;
+  let kp: Awaited<ReturnType<typeof generateKeypair>>;
 
   beforeEach(async () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
-    const kp = await generateKeypair();
+    kp = await generateKeypair();
     await registerAgent(relay, "lifecycle-agent", bytesToHex(kp.publicKey));
   });
 
@@ -312,7 +383,7 @@ describe("Migration: cancel + depart", () => {
   });
 
   it("cancels an active migration", async () => {
-    await initiateMigration(relay, "lifecycle-agent");
+    await initiateMigration(relay, "lifecycle-agent", kp.privateKey);
 
     const res = await relay.app.request(`/api/v1/agents/lifecycle-agent/migrate/cancel`, {
       method: "POST",
@@ -328,7 +399,7 @@ describe("Migration: cancel + depart", () => {
   });
 
   it("departs successfully with zero balance", async () => {
-    await initiateMigration(relay, "lifecycle-agent");
+    await initiateMigration(relay, "lifecycle-agent", kp.privateKey);
 
     const res = await relay.app.request(`/api/v1/agents/lifecycle-agent/migrate/depart`, {
       method: "POST",
@@ -372,7 +443,7 @@ describe("Migration: depart with BalanceWaiver (§7.2 + §7.3)", () => {
 
   async function fundAndSign(balance: number, overrides?: Partial<BalanceWaiver>) {
     creditAccount(relay.moteDb.db, motebitId, balance, "deposit", null, "test");
-    await initiateMigration(relay, motebitId);
+    await initiateMigration(relay, motebitId, agentPrivateKey);
     const body = {
       motebit_id: overrides?.motebit_id ?? motebitId,
       waived_amount: overrides?.waived_amount ?? balance,
@@ -391,7 +462,7 @@ describe("Migration: depart with BalanceWaiver (§7.2 + §7.3)", () => {
 
   it("positive balance with no waiver — 409 naming both paths", async () => {
     creditAccount(relay.moteDb.db, motebitId, 1_000_000, "deposit", null, "test");
-    await initiateMigration(relay, motebitId);
+    await initiateMigration(relay, motebitId, agentPrivateKey);
     const res = await depart();
     expect(res.status).toBe(409);
     expect(await res.text()).toMatch(/withdrawn or waived/i);
@@ -442,7 +513,7 @@ describe("Migration: depart with BalanceWaiver (§7.2 + §7.3)", () => {
 
   it("waiver signed by wrong key — 400", async () => {
     creditAccount(relay.moteDb.db, motebitId, 1_000_000, "deposit", null, "test");
-    await initiateMigration(relay, motebitId);
+    await initiateMigration(relay, motebitId, agentPrivateKey);
     const impostorKp = await generateKeypair();
     const waiver = await signBalanceWaiver(
       { motebit_id: motebitId, waived_amount: 1_000_000, waived_at: Date.now() },

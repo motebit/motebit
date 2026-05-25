@@ -12,6 +12,7 @@ import { HTTPException } from "hono/http-exception";
 import { sign, canonicalJson, hexToBytes } from "@motebit/encryption";
 import {
   verifyBalanceWaiver,
+  verifyMigrationRequest,
   verifyMigrationToken,
   verifyDepartureAttestation,
   verifyRelayMetadata,
@@ -33,6 +34,7 @@ import { createLogger } from "./logger.js";
 import { getCredentialAnchorProof } from "./credential-anchoring.js";
 import { sqliteAccountStoreFor } from "./account-store-sqlite.js";
 import {
+  MigrationRequestSchema,
   MigrationTokenSchema,
   DepartureAttestationSchema,
   CredentialBundleSchema,
@@ -146,11 +148,23 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
   /** @spec motebit/migration@1.0 */
   app.post("/api/v1/agents/:motebitId/migrate", async (c) => {
     const motebitId = c.req.param("motebitId");
-    const body = await c.req.json<{
-      destination_relay?: string;
-      reason?: string;
-      signature: string;
-    }>();
+
+    // §4.1 — the agent's SIGNED MigrationRequest is the authorization. This route
+    // is not behind the bearer-auth middleware (it predates it in registration
+    // order); the request signature, verified against the agent's registered key,
+    // is what proves the agent itself is initiating its own departure. Without
+    // this, an unauthenticated caller could mint a departure token for ANY agent
+    // — which cancels their active migration (griefing) and opens the
+    // attestation/export chain that leaks the agent's balance + credentials.
+    // Validate shape, then verify the signature, fail-closed.
+    const parsed = MigrationRequestSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.flatten() }, 400);
+    }
+    const request = parsed.data;
+    if (request.motebit_id !== motebitId) {
+      throw new HTTPException(400, { message: "MigrationRequest motebit_id does not match path" });
+    }
 
     // Verify agent exists and is not revoked
     const agent = db
@@ -159,6 +173,15 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
     if (!agent) throw new HTTPException(404, { message: "Agent not found" });
     if (agent.revoked) throw new HTTPException(403, { message: "Agent is revoked" });
+
+    // The request must carry the agent's own signature over its registered key
+    // (§4.1). No registered key ⇒ cannot authorize departure ⇒ reject.
+    if (
+      !agent.public_key ||
+      !(await verifyMigrationRequest(request, hexToBytes(agent.public_key)))
+    ) {
+      throw new HTTPException(401, { message: "MigrationRequest signature invalid" });
+    }
 
     // Check no active migration in progress (§4.4: one active token per agent)
     const existing = getActiveMigration(db, motebitId);
@@ -200,8 +223,8 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       tokenId,
       motebitId,
       "initiated",
-      body.destination_relay ?? null,
-      body.reason ?? null,
+      request.destination_relay ?? null,
+      request.reason ?? null,
       issuedAt,
       expiresAt,
       signature,

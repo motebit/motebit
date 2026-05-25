@@ -1096,6 +1096,9 @@ export function signHorizonWitnessRequestBody(body: HorizonWitnessRequestBody, p
 export function signKeySuccession(oldPrivateKey: Uint8Array, newPrivateKey: Uint8Array, newPublicKey: Uint8Array, oldPublicKey: Uint8Array, reason?: string): Promise<KeySuccessionRecord>;
 
 // @public
+export function signMigrationRequest(request: Omit<MigrationRequest, "signature">, privateKey: Uint8Array): Promise<MigrationRequest>;
+
+// @public
 export function signSettlement(settlement: Omit<SettlementRecord, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<SettlementRecord>;
 
 // @public

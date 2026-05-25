@@ -11,6 +11,7 @@ import {
   hash,
   verifyMigrationToken,
   verifyMigrationRequest,
+  signMigrationRequest,
   verifyDepartureAttestation,
   verifyMigrationPresentation,
   verifyCredentialBundle,
@@ -2265,6 +2266,32 @@ describe("migration artifact verifiers", () => {
       signature: "!!! not base64url !!!",
     } as MigrationToken;
     expect(await verifyMigrationToken(token, kp.publicKey)).toBe(false);
+  });
+
+  it("signMigrationRequest round-trips and is tamper-evident", async () => {
+    const kp = await generateKeypair();
+    const signed = await signMigrationRequest(
+      {
+        motebit_id: "m1",
+        destination_relay: "https://dest.example",
+        reason: "moving",
+        requested_at: 1234,
+        suite: SUITE,
+      },
+      kp.privateKey,
+    );
+    expect(signed.signature).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(await verifyMigrationRequest(signed, kp.publicKey)).toBe(true);
+    // Wrong key → false.
+    const other = await generateKeypair();
+    expect(await verifyMigrationRequest(signed, other.publicKey)).toBe(false);
+    // Tampered field (the destination an attacker would rewrite) → false.
+    expect(
+      await verifyMigrationRequest(
+        { ...signed, destination_relay: "https://evil.example" },
+        kp.publicKey,
+      ),
+    ).toBe(false);
   });
 
   it("request / attestation / presentation verify via the shared detached-signature path", async () => {

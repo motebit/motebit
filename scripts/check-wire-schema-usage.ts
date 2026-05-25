@@ -70,12 +70,13 @@ const REQUIRED_USAGE: ReadonlyArray<{
   {
     file: "services/relay/src/migration.ts",
     schemas: [
+      "MigrationRequestSchema",
       "MigrationTokenSchema",
       "DepartureAttestationSchema",
       "CredentialBundleSchema",
       "BalanceWaiverSchema",
     ],
-    note: "POST /agents/:id/migrate/* — four signed wire artifacts",
+    note: "POST /agents/:id/migrate/* — five signed wire artifacts (MigrationRequest authorizes departure)",
   },
   {
     file: "services/relay/src/disputes.ts",

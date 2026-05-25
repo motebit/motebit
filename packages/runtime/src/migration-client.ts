@@ -22,7 +22,7 @@
  * deferred follow-on; the producers pair with the verifiers in @motebit/crypto.
  */
 import type { MigrationToken, DepartureAttestation, CredentialBundle } from "@motebit/sdk";
-import { signCredentialBundle } from "@motebit/crypto";
+import { signCredentialBundle, signMigrationRequest } from "@motebit/crypto";
 
 export interface MigrationClientDeps {
   /** The relay the agent is leaving (its current sync URL). */
@@ -98,13 +98,24 @@ export async function performMigration(deps: MigrationClientDeps): Promise<Migra
   // ── 1. Initiate migration → MigrationToken (§4) ──────────────────────────
   let token: MigrationToken;
   try {
+    // The agent signs its declaration of intent with its identity key (§4.1).
+    // The relay verifies this signature against the agent's registered key —
+    // the signature IS the authorization, so only the agent can initiate its
+    // own departure.
+    const migrationRequest = await signMigrationRequest(
+      {
+        motebit_id: deps.motebitId,
+        destination_relay: deps.destRelayUrl,
+        ...(deps.reason !== undefined ? { reason: deps.reason } : {}),
+        requested_at: Date.now(),
+        suite: "motebit-jcs-ed25519-b64-v1",
+      },
+      deps.signingPrivateKey,
+    );
     const res = await doFetch(`${deps.sourceRelayUrl}/api/v1/agents/${deps.motebitId}/migrate`, {
       method: "POST",
       headers: await authedHeaders(deps.sourceAuth),
-      body: JSON.stringify({
-        destination_relay: deps.destRelayUrl,
-        ...(deps.reason !== undefined ? { reason: deps.reason } : {}),
-      }),
+      body: JSON.stringify(migrationRequest),
     });
     if (!res.ok) return fail("request", res.status, await safeText(res));
     const data = (await res.json()) as { migration_token?: MigrationToken };

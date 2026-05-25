@@ -1966,6 +1966,26 @@ export function verifyMigrationRequest(
   return verifyDetachedB64Signature(request, publicKey);
 }
 
+/**
+ * Sign a `MigrationRequest` — the agent's declaration of intent to leave a relay
+ * (spec/migration-v1.md §4.1). The agent signs `canonicalJson(request \ signature)`
+ * with its identity key, base64url. Producer for {@link verifyMigrationRequest}:
+ * the source relay's `/migrate` verifies this against the agent's registered
+ * public key, so only the agent (holding its private key) can initiate its own
+ * departure — the request's signature IS the authorization.
+ */
+export async function signMigrationRequest(
+  request: Omit<MigrationRequest, "signature">,
+  privateKey: Uint8Array,
+): Promise<MigrationRequest> {
+  const sig = await signBySuite(
+    request.suite,
+    new TextEncoder().encode(canonicalJson(request)),
+    privateKey,
+  );
+  return { ...request, signature: toBase64Url(sig) };
+}
+
 /** Verify a `MigrationToken` (source-relay-signed authorization). */
 export function verifyMigrationToken(
   token: MigrationToken,
