@@ -11,6 +11,7 @@
     "@motebit/ai-core",
     "@motebit/behavior-engine",
     "@motebit/browser-persistence",
+    "@motebit/browser-sandbox",
     "@motebit/circuit-breaker",
     "@motebit/code-review",
     "@motebit/core-identity",
