@@ -1,5 +1,18 @@
 # @motebit/sdk Changelog
 
+## 2.1.0
+
+### Minor Changes
+
+- 3d103ed: Add `inferenceIsFreeToUser(mode)` — the canonical predicate for whether inference under a given `ProviderMode` is free to the user (`on-device` / `byok`) versus operator-metered (`motebit-cloud`). Single source of truth for the "proactive consolidation defaults ON only when inference is free" policy; web / desktop / mobile consume it instead of inlining the mode comparison, so the default-on policy cannot drift between surfaces. Exhaustive switch — a future `ProviderMode` entry forces an explicit free-or-metered decision. See `docs/doctrine/proactive-interior.md` § "Default posture".
+- bfa0168: Add `RelationType.DerivedFrom` — the eighth memory-graph edge. Provenance from a reflection-synthesized memory back to the source observations it was derived from (`source_id` = the insight, `target_id` = an antecedent observation); the reflection analog of `PartOf` (consolidation's cluster→summary edge). Additive enum member. See `docs/doctrine/memory-architecture.md`.
+
+### Patch Changes
+
+- 0d031b9: Re-target five past-due deprecation sunsets from `removed in 2.0.0` to `removed in 3.0.0`. These symbols (sdk `OLLAMA_SUGGESTED_MODELS` / `OllamaSuggestedModel`, crypto's `VerifyResult` alias + the typed `verify` overload, protocol's trust-thresholds alias) were promised for removal in 2.0.0 but 2.0.0 shipped with them still present. 2.0.0 is immutable on npm and removing a public export is breaking (major-only), so the honest fix is to keep the trivial since-1.0.0 aliases through 2.x and remove them at the next real 3.0.0. Comment-only change — no API or behavior change.
+- Updated dependencies [0d031b9]
+  - @motebit/protocol@2.0.1
+
 ## 2.0.0
 
 ### Major Changes
