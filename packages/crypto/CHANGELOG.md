@@ -1,5 +1,24 @@
 # @motebit/crypto Changelog
 
+## 2.1.0
+
+### Minor Changes
+
+- 9633741: Add `signMigrationRequest` — the agent-side producer for the existing `verifyMigrationRequest` (spec/migration-v1.md §4.1). The agent signs `canonicalJson(request \ signature)` with its identity key; the source relay's `/migrate` verifies it against the agent's registered key, so the request signature is the departure authorization.
+
+  Closes the gap where the verifier shipped without its signer — leaving `/migrate` unable to authenticate departure requests, so any caller could mint a departure token for any agent (and trigger the attestation/export chain). Additive: existing exports unchanged.
+
+- becd049: Add `verifyMigratingKeyBinding` — the offline, operator-free key↔id binding check a destination relay runs before onboarding a migrating agent (spec/migration-v1.md §8.2 step 6). Two tiers, fail-closed: a never-rotated sovereign id binds its key directly (`verifySovereignBinding`); a rotated key binds via its identity file's sovereign-rooted succession chain (`verifyKeyBindingAtTime`). Lets a sovereign agent that has rotated its key migrate — previously locked out, since `motebit_id` commits to the genesis key. Additive.
+- e1274cb: Add `signCredentialBundle` — the producer for `verifyCredentialBundle` (spec/migration-v1.md §6). The agent computes `bundle_hash` over the relay-exported (unsigned) bundle and signs it with its identity key, so the agent — not the relay — controls what it presents to a destination. Used by the agent-side migration client (`performMigration`).
+- 4629ac9: Add `verifyGoalExecutionManifest` + `computeExecutionTimelineHash` — the missing verifier for the execution-ledger `GoalExecutionManifest`. `replayGoal` signs the manifest (raw Ed25519 over the 32-byte `content_hash`, spec §6) and the spec promises third-party verification, but no verifier shipped — a sign-without-verify asymmetry. The verifier recomputes `content_hash` from the timeline and verifies the signature against the motebit's public key with no relay contact, fail-closed. `computeExecutionTimelineHash` is now the single source of the §6 hash; the runtime's signer delegates to it so signer and verifier never drift on canonical-JSON edge cases. Returns a typed `GoalExecutionManifestVerification`.
+- b296474: Add portable verifiers for the migration family — `verifyMigrationRequest`, `verifyMigrationToken`, `verifyDepartureAttestation`, `verifyMigrationPresentation`, `verifyCredentialBundle`. Each verifies a base64url Ed25519 signature over `canonicalJson(body \ signature)` under the declared suite (the bundle also recomputes `bundle_hash`), matching `spec/migration-v1.md` + the published JSON Schemas. Closes the consumer side of agent portability: a migrating agent or destination relay can verify a source relay's authorization/attestation — and an agent's own bundle — with no relay contact, exactly the sovereignty guarantee migration exists to provide. Five of the eleven signed-artifact verifier gaps tracked by `check-signed-artifact-verifiers`.
+- d905fea: Add `verifyRelayMetadata` — verifies a `/.well-known/motebit.json` `RelayMetadata` discovery document (hex `motebit-jcs-ed25519-hex-v1` suite) against a public key. Lets a consumer confirm the metadata was signed by a pinned/anchored key (anti-MITM) or, in trust-on-first-use, confirm integrity against the embedded key. Closes the `RelayMetadata` verifier gap and underpins the migration trust-root hardening (the destination relay no longer trusts a source relay's key from an unverified fetch).
+
+### Patch Changes
+
+- 0d031b9: Re-target five past-due deprecation sunsets from `removed in 2.0.0` to `removed in 3.0.0`. These symbols (sdk `OLLAMA_SUGGESTED_MODELS` / `OllamaSuggestedModel`, crypto's `VerifyResult` alias + the typed `verify` overload, protocol's trust-thresholds alias) were promised for removal in 2.0.0 but 2.0.0 shipped with them still present. 2.0.0 is immutable on npm and removing a public export is breaking (major-only), so the honest fix is to keep the trivial since-1.0.0 aliases through 2.x and remove them at the next real 3.0.0. Comment-only change — no API or behavior change.
+- 8ee9db6: Migrate to `@noble/curves` v2 + `@noble/hashes` v2 (and `@noble/ed25519` 3.1.0). v2 reorganized the entrypoints (`sha256`/`sha512` → `@noble/hashes/sha2.js`; `p256` → `@noble/curves/nist.js`) and renamed APIs (`utils.randomPrivateKey` → `randomSecretKey`; `sign()` returns encoded bytes with an explicit `{ format }` instead of a Signature object, so DER is requested via `{ format: "der" }`). Internal-only: signing/hashing/verification output is byte-identical (Ed25519/SHA-2/P-256 are standards), no public API change.
+
 ## 2.0.0
 
 ### Major Changes
