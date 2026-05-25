@@ -4,6 +4,15 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Maturity gate (cooldown): don't open a PR until a release has been out long
+    # enough to shake out .0 bugs and yanks; majors wait longest. The "let it
+    # mature" behavior — does NOT delay security advisories, which still fire
+    # immediately. Added after the long-tail major pileup (≈15 open PRs, mostly
+    # bleeding-edge majors branched off stale main).
+    cooldown:
+      default-days: 7
+      semver-minor-days: 7
+      semver-major-days: 21
     # Grouping strategy: isolate blast radius.
     #
     # Crypto deps are security-critical — any compromise undermines the thesis,
@@ -151,4 +160,7 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 5
+      semver-major-days: 14
     open-pull-requests-limit: 5
