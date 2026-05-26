@@ -6,8 +6,9 @@
 
 import { describe, it, expect, vi } from "vitest";
 import type { EvmRpcAdapter } from "@motebit/evm-rpc";
-import { reconcileTreasury } from "../reconciler.js";
-import { InMemoryTreasuryReconciliationStore } from "../store.js";
+// Import through the public barrel so the package's `index.ts` re-export surface
+// is exercised (and stays the consumed contract), not the internal modules.
+import { reconcileTreasury, InMemoryTreasuryReconciliationStore } from "../index.js";
 
 const CHAIN = "eip155:8453";
 const TREASURY = "0xee51c5a65c6Fa81c9CC85505884290e90C09D285";
@@ -169,6 +170,88 @@ describe("reconcileTreasury", () => {
       "treasury.reconciliation.rpc_error",
       expect.objectContaining({ chain: CHAIN, treasuryAddress: TREASURY }),
     );
+  });
+
+  it("emits the cycle info-log on a consistent result when a logger is present", async () => {
+    // Production always injects a logger, so the consistent-path info-log is a
+    // live branch — covers reconciler.ts:132 (logger?.info on consistent).
+    const store = new InMemoryTreasuryReconciliationStore({
+      seededSettlements: [
+        { chain: CHAIN, feeMicro: 1_000_000n, settledAtMs: NOW_MS - BUFFER_MS - 1_000 },
+      ],
+    });
+    const rpc = stubRpc({ balance: 2_000_000n });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const result = await reconcileTreasury({
+      rpc,
+      store,
+      chain: CHAIN,
+      treasuryAddress: TREASURY,
+      usdcContractAddress: USDC,
+      confirmationLagBufferMs: BUFFER_MS,
+      generateReconciliationId: () => ID,
+      now: () => NOW_MS,
+      logger,
+    });
+
+    expect(result.consistent).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith(
+      "treasury.reconciliation.cycle",
+      expect.objectContaining({ chain: CHAIN, driftMicro: "1000000" }),
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("stringifies a non-Error store throw and error-logs it when a logger is present", async () => {
+    // The `String(err)` arm (reconciler.ts:53) + the logger?.error present arm
+    // (line 54) — a store that throws a non-Error value, with a logger injected.
+    const store = new InMemoryTreasuryReconciliationStore();
+    store.getRecordedFeeSumMicro = () => {
+      throw "raw string failure"; // eslint-disable-line @typescript-eslint/only-throw-error -- exercises the non-Error arm
+    };
+    const rpc = stubRpc({ balance: 0n });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const result = await reconcileTreasury({
+      rpc,
+      store,
+      chain: CHAIN,
+      treasuryAddress: TREASURY,
+      usdcContractAddress: USDC,
+      confirmationLagBufferMs: BUFFER_MS,
+      generateReconciliationId: () => ID,
+      now: () => NOW_MS,
+      logger,
+    });
+
+    expect(result.error).toBe("store.getRecordedFeeSumMicro: raw string failure");
+    expect(store.getPersistedRecords()).toHaveLength(0);
+    expect(logger.error).toHaveBeenCalledWith(
+      "treasury.reconciliation.store_error",
+      expect.objectContaining({ chain: CHAIN, error: "raw string failure" }),
+    );
+  });
+
+  it("stringifies a non-Error RPC throw", async () => {
+    // The `String(err)` arm in the rpc catch (reconciler.ts:81) — a non-Error
+    // rejection value.
+    const store = new InMemoryTreasuryReconciliationStore();
+    const rpc = stubRpc({ throws: { code: 503 } as unknown as Error });
+
+    const result = await reconcileTreasury({
+      rpc,
+      store,
+      chain: CHAIN,
+      treasuryAddress: TREASURY,
+      usdcContractAddress: USDC,
+      confirmationLagBufferMs: BUFFER_MS,
+      generateReconciliationId: () => ID,
+      now: () => NOW_MS,
+    });
+
+    expect(result.error).toMatch(/^rpc\.getBalance: /);
+    expect(store.getPersistedRecords()).toHaveLength(0);
   });
 
   it("handles the empty case (zero settlements + zero balance) as consistent", async () => {

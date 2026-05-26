@@ -63,6 +63,11 @@ import {
 } from "./task-routing.js";
 import type { TaskRouter } from "./task-routing.js";
 import { persistReceiptChain } from "./receipts-store.js";
+import {
+  MAX_SETTLEMENT_DEPTH,
+  exceedsSettlementDepth,
+  settlementTreeDepths,
+} from "./multihop-depth.js";
 import type { ConnectedDevice } from "./index.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { createLogger } from "./logger.js";
@@ -569,21 +574,21 @@ export async function handleReceiptIngestion(
   // --- Multi-hop settlement (recursive) ---
   const delegationReceipts = receipt.delegation_receipts ?? [];
   if (delegationReceipts.length > 0) {
-    const MAX_SETTLEMENT_DEPTH = deps.maxSettlementDepth ?? 10;
+    const maxSettlementDepth = deps.maxSettlementDepth ?? MAX_SETTLEMENT_DEPTH;
 
     const settleSubReceipt = async (
       sub: ExecutionReceipt,
       parentTaskId: string,
       depth: number,
     ): Promise<void> => {
-      if (depth > MAX_SETTLEMENT_DEPTH) {
+      if (exceedsSettlementDepth(depth, maxSettlementDepth)) {
         const subRelayTaskId = (sub as unknown as Record<string, unknown>).relay_task_id;
         logger.error("multihop.settlement.depth_limit_exceeded", {
           correlationId: parentTaskId,
           subAgent: sub.motebit_id,
           subTaskId: typeof subRelayTaskId === "string" ? subRelayTaskId : null,
           depth,
-          maxDepth: MAX_SETTLEMENT_DEPTH,
+          maxDepth: maxSettlementDepth,
           reason: "depth_limit_exceeded",
           action: "unsettled — agent will not be paid for this sub-delegation",
         });
@@ -651,6 +656,29 @@ export async function handleReceiptIngestion(
           }
           return;
         }
+
+        // ARC-MARKER(multi-hop-as-P2P): we are about to perform the relay-mode
+        // multi-hop settlement WRITE — the deferred residual (services/relay/CLAUDE.md
+        // rule 8). Post Arc-3.5 (P2P-by-default gate, live 2026-05-17) a paid
+        // cross-agent sub-delegation is gated like any direct delegation, so this
+        // write is reachable only for (a) legacy nested settlements submitted
+        // before the cutoff and only now completing, or (b) the x402-paid carve-out
+        // (which `requiresP2pProof`'s own doc notes is not integration-drivable).
+        // It is instrumented LOUDLY rather than thrown: at ~8 days post-cutoff a
+        // legacy in-flight nested settlement can still legitimately land here, and
+        // a throw would regress exactly the state this residual was preserved for.
+        // The multi-hop-as-P2P arc INVERTS this marker to a hard throw when it
+        // replaces the branch wholesale. The error-level event name below is the
+        // metric (the relay's observability surface is structured logs, not a
+        // counter facility) — alerting keys on `multihop.settlement.relay_residual_fired`.
+        logger.error("multihop.settlement.relay_residual_fired", {
+          correlationId: parentTaskId,
+          subTaskId: subRelayTaskId,
+          subAgent: sub.motebit_id,
+          depth,
+          amountLocked: subGross,
+          marker: "ARC:multi-hop-as-P2P",
+        });
 
         const subSettlementId = asSettlementId(crypto.randomUUID());
         const subAllocationId = asAllocationId(`x402-${subRelayTaskId}`);
@@ -776,9 +804,12 @@ export async function handleReceiptIngestion(
       }
     };
 
+    const treeNodes = settlementTreeDepths(receipt, maxSettlementDepth);
     logger.info("multihop.settlement.start", {
       correlationId: taskId,
       count: delegationReceipts.length,
+      treeDepth: treeNodes.reduce((m, n) => Math.max(m, n.depth), 0),
+      depthBlockedCount: treeNodes.filter((n) => n.depthBlocked).length,
     });
     for (const sub of delegationReceipts) {
       await settleSubReceipt(sub, taskId, 1);

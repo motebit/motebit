@@ -695,6 +695,24 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-money-boundary",
   },
   {
+    name: "check-multihop-depth-single-site",
+    defends:
+      "the multi-hop settlement recursion depth-limit comparison lives in exactly one place — `services/relay/src/multihop-depth.ts`'s `exceedsSettlementDepth`. The relay-mode multi-hop settlement WRITE recurses over nested `delegation_receipts` and its only safety bound is `depth > MAX_SETTLEMENT_DEPTH`; a re-inlined comparison (or magic-number `depth >= 10`) under `services/relay/src` is a CI failure. Why: this write is a deferred residual (services/relay/CLAUDE.md rule 8) that fires only on legacy / non-integration-drivable paths, so it is exactly the code a reviewer skims — a comparison that silently diverges from the recursion it guards re-opens unbounded settlement recursion. The pure predicate is truth-table tested in `multihop-depth.test.ts`; this gate enforces the structural half (single call site) the test cannot. Same single-home shape as `check-money-boundary` (#) and the cryptosuite-dispatch series.",
+    script: "check-multihop-depth-single-site",
+  },
+  {
+    name: "check-coverage-config-present",
+    defends:
+      "coverage-floor governance, fail-closed. (Amendment 1) every package under `packages/` with a `src/__tests__/` directory declares a `vitest.config.ts` with explicit `coverage.thresholds` — closing the fail-open that `coverage-graduation` (opt-in) cannot: a package that never declares a config is invisible to every threshold check and can silently regress to 0%. The predicate is locked as test-bearing-under-packages/ (NOT `private !== true`, which in this monorepo's `0.0.0-private` world would miss `panels`/`skills`). (Floor) every money/identity-path registry member (`scripts/money-identity-path.ts`) declares thresholds ≥ its tier floor (money 90/85/90/90, identity 85/80/85/85) unless carried in `coverage-graduation.json`. The gate caught four pre-existing fail-opens on its first run (panels/skills/state-export-client missing configs; self-knowledge using raw `defineConfig` with no thresholds). Same single-source-of-truth shape as the closed-registry series; `check-money-identity-path-canonical` locks the registry it reads.",
+    script: "check-coverage-config-present",
+  },
+  {
+    name: "check-money-identity-path-canonical",
+    defends:
+      "the money/identity-path coverage registry (`scripts/money-identity-path.ts`) is self-consistent — every MEMBERSHIP_TRIGGER is itself a registry member (triggers ⊊ registry) and every registry entry names a real workspace package (no stale entries). The fail-closed membership derivation (Amendment 2 — any `packages/` package whose direct `dependencies`/`peerDependencies` include a trigger must be a registry member, so a new money/attestation primitive cannot dodge a floor) is written and `packages/`-scoped but GATED OFF (`AMENDMENT_2_ENABLED = false`) until the runtime sovereign-rail adapter refactor removes its one real over-fire (`@motebit/runtime` value-imports `@motebit/wallet-solana`) — issue #110. Until then the registry is hand-maintained with a loud marker. No WAIVERS escape hatch by design (a per-diff waiver list is the fail-open this gate exists to close).",
+    script: "check-money-identity-path-canonical",
+  },
+  {
     name: "check-typed-truth-perception",
     defends:
       "every typed-truth field the AI branches on (`already_there`, `not_in_control`, `text_appeared`, `slow_load`, `bytes_omitted_reason`, `visual_content_detected` / `blank_page_detected` / `access_denied_detected`) appears in BOTH the AI's `PERCEPTION_DOCTRINE` clause (`packages/ai-core/src/prompt.ts`) AND at least one dispatch source. Closes the doctrine drift class where one half quietly disappears: prompt teaches a field nothing emits (confabulation), or dispatch emits a field the AI doesn't know to read (silent typed truth). Closed-registry shape with bidirectional drift check, same as `check-tool-modes` / `check-mode-contract-readers` / `check-drop-handlers` — adding a typed-truth field MUST update the registry plus both halves. Doctrine: `docs/doctrine/typed-truth-perception.md`; CLAUDE.md root principle `Typed truth on results, prompt for interpretation`. (Invariant #80, added 2026-05-09 with six instances already shipping in production: `already_there` / `slow_load` / `visual_content_detected` / `blank_page_detected` / `access_denied_detected` from the navigate-noop + slow-load slices, `text_appeared` from the type-action truth slice, `bytes_omitted_reason` from the pixel-consent gate, and `not_in_control` from co-browse Slice 1 — the shape is stable enough to mechanize.)",
