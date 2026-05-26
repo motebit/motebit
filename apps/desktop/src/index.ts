@@ -15,6 +15,7 @@ import {
   cmdSelfTest,
 } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
+import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import {
   renderSlabItem,
@@ -1148,11 +1149,27 @@ export class DesktopApp {
     const proactiveEnabled =
       proactive.enabled ?? inferenceIsFreeToUser(desktopConfigToUnified(config).mode);
     const solanaRpcUrl = "https://api.mainnet-beta.solana.com";
-    const proactiveAnchor = await resolveProactiveAnchor({
+    // Construct the sovereign Solana rail + anchor submitter at the surface and
+    // inject them; the runtime consumes the `SovereignWalletRail` port and no
+    // longer depends on @motebit/wallet-solana (issue #110).
+    const solanaWallet = signingKeys
+      ? createSolanaWalletRail({ rpcUrl: solanaRpcUrl, identitySeed: signingKeys.privateKey })
+      : undefined;
+    let anchorSubmitter: ReturnType<typeof createSolanaMemoSubmitter> | undefined;
+    if (proactive.anchorOnchain === true && signingKeys) {
+      try {
+        anchorSubmitter = createSolanaMemoSubmitter({
+          rpcUrl: solanaRpcUrl,
+          identitySeed: signingKeys.privateKey,
+        });
+      } catch {
+        // Submitter construction failure falls through to local-only anchoring.
+      }
+    }
+    const proactiveAnchor = resolveProactiveAnchor({
       proactiveEnabled,
-      anchorOnchain: proactive.anchorOnchain === true,
       signingKeys,
-      solanaRpcUrl,
+      submitter: anchorSubmitter,
     });
     this.runtime = new MotebitRuntime(
       {
@@ -1188,7 +1205,7 @@ export class DesktopApp {
             }
           }
         },
-        solana: signingKeys ? { rpcUrl: solanaRpcUrl } : undefined,
+        solanaWallet,
         // Deferred memory formation — desktop is the first opt-in
         // surface. The user's turn returns as soon as the response
         // streams; embedding + consolidation run in the background

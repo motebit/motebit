@@ -44,6 +44,7 @@
     "@motebit/sync-engine": "workspace:*",
     "@motebit/tools": "workspace:*",
     "@motebit/voice": "workspace:*",
+    "@motebit/wallet-solana": "workspace:*",
     "buffer": "^6.0.3",
     "three": "^0.170.0"
   },

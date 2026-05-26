@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Keypair } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 
 // Mock just `getAccount` from @solana/spl-token. Everything else
 // (TokenAccountNotFoundError, getAssociatedTokenAddress, instruction
@@ -745,6 +745,30 @@ describe("deriveSolanaAddress", () => {
     );
     expect(() => deriveSolanaAddress(new Uint8Array(0))).toThrow(
       /expects a 32-byte Ed25519 public key, got 0 bytes/,
+    );
+  });
+
+  // Byte-compat regression guard for the base58 relocation (#110): deriveSolanaAddress
+  // now delegates to `@motebit/protocol`'s base58Encode instead of PublicKey.toBase58().
+  // This must remain byte-identical to web3.js across ALL pubkeys, including
+  // leading-zero keys (which exercise the base58 leading-'1' path) — a mismatch
+  // would silently change sovereign addresses.
+  it("is byte-identical to PublicKey.toBase58() across many random keys", () => {
+    for (let i = 0; i < 256; i++) {
+      const pk = Keypair.generate().publicKey;
+      expect(deriveSolanaAddress(pk.toBytes())).toBe(pk.toBase58());
+    }
+  });
+
+  it("matches web3.js for leading-zero public keys (the base58 '1'-prefix path)", () => {
+    for (const leadingZeros of [1, 2, 5, 31]) {
+      const bytes = new Uint8Array(32);
+      for (let i = leadingZeros; i < 32; i++) bytes[i] = (i * 73 + 19) & 0xff || 1;
+      expect(deriveSolanaAddress(bytes)).toBe(new PublicKey(bytes).toBase58());
+    }
+    // All-zero key → the Solana System Program id.
+    expect(deriveSolanaAddress(new Uint8Array(32))).toBe(
+      new PublicKey(new Uint8Array(32)).toBase58(),
     );
   });
 });

@@ -68,9 +68,6 @@
     },
     {
       "path": "../sync-engine"
-    },
-    {
-      "path": "../wallet-solana"
     }
   ]
 }

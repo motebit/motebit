@@ -8,6 +8,7 @@ import {
   bindSlabControllerToRenderer,
   createRelayBackedSandboxTokenSource,
 } from "@motebit/runtime";
+import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
 import type {
   StreamChunk,
   StorageAdapters,
@@ -642,11 +643,29 @@ export class UnbootedWebApp {
     // shared helper so producer + consumer + submitter stay one source.
     const persistedProviderMode = (loadProviderConfig() ?? defaultProviderConfig()).mode;
     const proactive = loadProactiveConfig(inferenceIsFreeToUser(persistedProviderMode));
-    const proactiveAnchor = await resolveProactiveAnchor({
+    // Construct the sovereign Solana rail + anchor submitter at the surface and
+    // inject them; the runtime consumes the `SovereignWalletRail` port and no
+    // longer depends on @motebit/wallet-solana (issue #110). The address is the
+    // identity pubkey by curve coincidence, so the rail derives from the seed.
+    const solanaWallet =
+      signingKeys != null
+        ? createSolanaWalletRail({ rpcUrl: solanaRpcUrl, identitySeed: signingKeys.privateKey })
+        : undefined;
+    let anchorSubmitter: ReturnType<typeof createSolanaMemoSubmitter> | undefined;
+    if (proactive.anchorOnchain && signingKeys != null) {
+      try {
+        anchorSubmitter = createSolanaMemoSubmitter({
+          rpcUrl: solanaRpcUrl,
+          identitySeed: signingKeys.privateKey,
+        });
+      } catch {
+        // Submitter construction failure falls through to local-only anchoring.
+      }
+    }
+    const proactiveAnchor = resolveProactiveAnchor({
       proactiveEnabled: proactive.enabled,
-      anchorOnchain: proactive.anchorOnchain,
       signingKeys,
-      solanaRpcUrl,
+      submitter: anchorSubmitter,
     });
 
     this.runtime = new MotebitRuntime(
@@ -669,7 +688,7 @@ export class UnbootedWebApp {
           : undefined,
         taskRouter: PLANNING_TASK_ROUTER,
         signingKeys,
-        solana: { rpcUrl: solanaRpcUrl },
+        solanaWallet,
         // Deferred memory formation — desktop flipped first
         // (c931fefa); web joins to complete one-pass delivery of the
         // autoDream-shape path. Turns return as soon as the response

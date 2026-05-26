@@ -147,44 +147,36 @@ describe("MotebitRuntime — sovereign Solana wallet (pre-built rail injected)",
     expect(isReachable).toHaveBeenCalledOnce();
   });
 
-  it("ignores the inline `solana` config when `solanaWallet` is pre-built", async () => {
-    // solana config would require signing keys, which we don't provide here.
-    // If the runtime accidentally tried to build the rail from the config,
-    // it would fail. The pre-built rail path must take priority.
-    const rail = await makeMockRail({ ownAddress: "PrebuiltWins" });
+  it("uses the injected rail's address when a rail is configured", async () => {
+    const rail = await makeMockRail({ ownAddress: "InjectedRailAddr" });
     const runtime = new MotebitRuntime(
-      {
-        motebitId: "wallet-mote",
-        tickRateHz: 0,
-        solanaWallet: rail,
-        solana: { rpcUrl: "https://should-be-ignored.example.com" },
-      },
+      { motebitId: "wallet-mote", tickRateHz: 0, solanaWallet: rail },
       createAdapters(),
     );
 
-    expect(runtime.getSolanaAddress()).toBe("PrebuiltWins");
+    expect(runtime.getSolanaAddress()).toBe("InjectedRailAddr");
   });
 });
 
-describe("MotebitRuntime — sovereign Solana wallet (inline config path)", () => {
-  it("does NOT build a rail when `solana` is set but signing keys are absent", async () => {
-    // The rail requires the identity Ed25519 seed to derive the Solana
-    // keypair. Without signing keys, the inline config path cannot
-    // construct a rail; the runtime falls back to the no-wallet state.
+describe("MotebitRuntime — sovereign address (no-rail fallback)", () => {
+  // Post-#110 the runtime no longer constructs rails; surfaces inject
+  // `solanaWallet`. But the sovereign address is still knowable from the
+  // identity key alone (Solana address = base58 of the Ed25519 pubkey), so
+  // `getSolanaAddress()` derives it via `@motebit/protocol`'s base58Encode
+  // when no rail is configured — no wallet-solana dependency in the runtime.
+  it("returns null when neither a rail nor signing keys are configured", async () => {
     const runtime = new MotebitRuntime(
-      {
-        motebitId: "no-keys-mote",
-        tickRateHz: 0,
-        solana: { rpcUrl: "https://api.devnet.solana.com" },
-      },
+      { motebitId: "no-keys-mote", tickRateHz: 0 },
       createAdapters(),
     );
 
     expect(runtime.getSolanaAddress()).toBeNull();
   });
 
-  it("builds a rail from inline config when signing keys are present", async () => {
+  it("derives the sovereign address from signing keys alone when no rail is configured", async () => {
     const { generateKeypair } = await import("@motebit/encryption");
+    // eslint-disable-next-line no-restricted-imports -- test asserts derivation parity
+    const { deriveSolanaAddress } = await import("@motebit/wallet-solana");
     const kp = await generateKeypair();
 
     const runtime = new MotebitRuntime(
@@ -192,19 +184,15 @@ describe("MotebitRuntime — sovereign Solana wallet (inline config path)", () =
         motebitId: "keyed-mote",
         tickRateHz: 0,
         signingKeys: { privateKey: kp.privateKey, publicKey: kp.publicKey },
-        solana: { rpcUrl: "https://api.devnet.solana.com" },
       },
       createAdapters(),
     );
 
-    // Address is the base58 encoding of the Ed25519 public key — deterministic
-    // and matches what `@solana/web3.js` derives via Keypair.fromSeed. We don't
-    // pin the exact value because it depends on the random key; we just
-    // verify it's a non-empty base58-shaped string of plausible length.
+    // No rail injected → fallback path. The result must equal the canonical
+    // wallet-solana derivation (which is itself byte-compat with web3.js).
     const addr = runtime.getSolanaAddress();
     expect(addr).not.toBeNull();
+    expect(addr).toBe(deriveSolanaAddress(kp.publicKey));
     expect(addr!).toMatch(/^[1-9A-HJ-NP-Za-km-z]+$/);
-    expect(addr!.length).toBeGreaterThanOrEqual(32);
-    expect(addr!.length).toBeLessThanOrEqual(44);
   });
 });

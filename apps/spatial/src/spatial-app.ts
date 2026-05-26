@@ -31,6 +31,7 @@ import {
   bindSlabControllerToRenderer,
 } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
+import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
 import { createBrowserStorage } from "@motebit/browser-persistence";
 import type { EventStoreAdapter } from "@motebit/event-log";
@@ -625,6 +626,16 @@ export class SpatialApp {
       }
     }
 
+    // Construct the sovereign Solana rail at the surface and inject it; the
+    // runtime consumes the `SovereignWalletRail` port and no longer depends on
+    // @motebit/wallet-solana (issue #110).
+    const solanaWallet = signingKeys
+      ? createSolanaWalletRail({
+          rpcUrl: "https://api.mainnet-beta.solana.com",
+          identitySeed: signingKeys.privateKey,
+        })
+      : undefined;
+
     this.runtime = new MotebitRuntime(
       {
         motebitId: this.motebitId,
@@ -645,7 +656,7 @@ export class SpatialApp {
           : undefined,
         taskRouter: PLANNING_TASK_ROUTER,
         signingKeys,
-        solana: signingKeys ? { rpcUrl: "https://api.mainnet-beta.solana.com" } : undefined,
+        solanaWallet,
       },
       { storage, renderer: this.adapter, ai: provider, keyring: this.keyring },
     );

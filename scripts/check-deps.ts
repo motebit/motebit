@@ -203,6 +203,14 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "fromMicro",
     "toCents",
     "fromCents",
+    // base58btc codec — pure, chain-agnostic byte → string encoding (Bitcoin
+    // alphabet; shared by Solana addresses, IPFS CIDv0, etc.). Same category as
+    // the money converters above: deterministic byte math, no I/O, no chain
+    // awareness. Hosting it here lets the runtime derive a sovereign address
+    // (`base58Encode(ed25519_pubkey)`) without depending on a settlement-rail
+    // package. NOT a Solana primitive — the "address = base58(pubkey)" knowledge
+    // stays at the call site.
+    "base58Encode",
     // Token audiences — pure type guard over a frozen closed-union
     // registry. Same shape as `isSuiteId` above.
     "isTokenAudience",

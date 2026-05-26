@@ -71,13 +71,11 @@ export const TIER_FLOOR: Readonly<Record<PathTier, CoverageFloor>> = {
  * Eight-artifact closed-registry shape — adding a money/identity primitive means
  * an entry here (cross-locked by check-money-identity-path-canonical).
  *
- * ⚠️ HAND-MAINTAINED TODAY — KNOWN GAP, time-bounded. Amendment-2 (fail-closed
- * membership via dependency derivation, which would make a forgotten entry a CI
- * failure instead of a silent omission) ships with the runtime sovereign-rail
- * adapter refactor — see issue #110. Until then, adding a new money/identity
- * primitive MUST include a manual entry here. This marker removes itself when
- * Amendment-2 lands (same loud-known-incomplete shape as the ARC:multi-hop-as-P2P
- * marker in services/relay/src/tasks.ts).
+ * Membership is fail-closed: `check-money-identity-path-canonical`'s Amendment-2
+ * derivation flags any package under packages/ whose direct dependencies include
+ * a MEMBERSHIP_TRIGGER but which is not listed here — so a forgotten entry is a
+ * CI failure, not a silent omission. (Enabled once issue #110's runtime
+ * sovereign-rail refactor removed the lone over-fire.)
  */
 export const MONEY_IDENTITY_PATH: ReadonlyMap<string, PathTier> = new Map([
   ["@motebit/virtual-accounts", "money"],

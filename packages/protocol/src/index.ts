@@ -1906,6 +1906,35 @@ export interface SovereignRail extends SettlementRail {
   getBalance(): Promise<bigint>;
 }
 
+/**
+ * Outcome of a sovereign-rail value transfer. Chain-neutral shape — a tx
+ * identifier, the slot/height it landed in (0 if not yet confirmed), and
+ * whether the configured commitment level was reached.
+ */
+export interface SovereignSendResult {
+  /** Transaction identifier (base58 signature on Solana). */
+  signature: string;
+  /** Slot / block height the transaction landed in (0 if not yet confirmed). */
+  slot: number;
+  /** Whether the network reached the configured commitment level. */
+  confirmed: boolean;
+}
+
+/**
+ * The sovereign wallet rail as the interior CONSUMES it — the port the runtime
+ * depends on, not the concrete rail. Extends `SovereignRail` (address +
+ * getBalance) with the send + liveness operations the runtime invokes. A
+ * concrete rail (`@motebit/wallet-solana`'s `SolanaWalletRail`) satisfies this
+ * structurally; the runtime imports this port, never the provider. "The interior
+ * defines the port; the provider implements it" — the adapter principle as a type.
+ */
+export interface SovereignWalletRail extends SovereignRail {
+  /** Send `microAmount` (micro-units) of the rail's asset to `toAddress`. */
+  send(toAddress: string, microAmount: bigint): Promise<SovereignSendResult>;
+  /** Whether the rail can currently reach its chain (RPC liveness). */
+  isAvailable(): Promise<boolean>;
+}
+
 // === Collaborative Plan Proposals ===
 
 export interface CollaborativePlanProposal {
@@ -2540,6 +2569,7 @@ export { ALL_SETTLEMENT_MODES, isSettlementMode } from "./settlement-mode.js";
 
 export type { SettlementAsset } from "./settlement-asset.js";
 export { ALL_SETTLEMENT_ASSETS, isSettlementAsset } from "./settlement-asset.js";
+export { base58Encode } from "./base58.js";
 
 // === Cryptosuite Registry ===
 // Every signed wire-format artifact in motebit declares its verification

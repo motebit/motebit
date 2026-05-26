@@ -22,6 +22,7 @@ import {
   cmdSelfTest,
 } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
+import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
 import type {
   StreamChunk,
   OperatorModeResult,
@@ -1047,11 +1048,27 @@ export class MobileApp {
     const persistedSettings = await this.loadSettings().catch(() => ({
       proactive: { enabled: false, anchorOnchain: false },
     }));
-    const proactiveAnchor = await resolveProactiveAnchor({
+    // Construct the sovereign Solana rail + anchor submitter at the surface and
+    // inject them; the runtime consumes the `SovereignWalletRail` port and no
+    // longer depends on @motebit/wallet-solana (issue #110).
+    const solanaWallet = signingKeys
+      ? createSolanaWalletRail({ rpcUrl: solanaRpcUrl, identitySeed: signingKeys.privateKey })
+      : undefined;
+    let anchorSubmitter: ReturnType<typeof createSolanaMemoSubmitter> | undefined;
+    if (persistedSettings.proactive.anchorOnchain && signingKeys) {
+      try {
+        anchorSubmitter = createSolanaMemoSubmitter({
+          rpcUrl: solanaRpcUrl,
+          identitySeed: signingKeys.privateKey,
+        });
+      } catch {
+        // Submitter construction failure falls through to local-only anchoring.
+      }
+    }
+    const proactiveAnchor = resolveProactiveAnchor({
       proactiveEnabled: persistedSettings.proactive.enabled,
-      anchorOnchain: persistedSettings.proactive.anchorOnchain,
       signingKeys,
-      solanaRpcUrl,
+      submitter: anchorSubmitter,
     });
 
     this.runtime = new MotebitRuntime(
@@ -1061,7 +1078,7 @@ export class MobileApp {
         policy: policyConfig,
         taskRouter: PLANNING_TASK_ROUTER,
         signingKeys,
-        solana: signingKeys ? { rpcUrl: solanaRpcUrl } : undefined,
+        solanaWallet,
         // Deferred memory formation — mobile benefits most from the
         // autoDream-shape path because on-device embedding is slower
         // than on desktop/web. Turns return as soon as the response

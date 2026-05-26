@@ -15,7 +15,7 @@
  * vendor: the agent's identity public key IS its Solana address.
  */
 
-import type { SovereignRail } from "@motebit/protocol";
+import type { SovereignWalletRail } from "@motebit/protocol";
 import type { SolanaRpcAdapter } from "./adapter.js";
 import type { SendUsdcResult, SendUsdcBatchItemResult } from "./adapter.js";
 import { Web3JsRpcAdapter } from "./web3js-adapter.js";
@@ -56,7 +56,7 @@ export interface SolanaWalletRailConfig {
   disableAutoGas?: boolean;
 }
 
-export class SolanaWalletRail implements SovereignRail {
+export class SolanaWalletRail implements SovereignWalletRail {
   /** Stable rail vocabulary — independent of which chain library is used. */
   readonly custody = "agent" as const;
   readonly name = "solana-wallet" as const;

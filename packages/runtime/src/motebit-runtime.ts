@@ -213,7 +213,8 @@ import type { PlanStoreAdapter } from "@motebit/planner";
 import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor, ChainedAuditSink } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
-import { createSolanaWalletRail, deriveSolanaAddress } from "@motebit/wallet-solana";
+import { base58Encode } from "@motebit/protocol";
+import type { SovereignWalletRail, SovereignSendResult } from "@motebit/protocol";
 import {
   verifyExecutionReceipt,
   signSovereignPaymentReceipt,
@@ -470,7 +471,7 @@ export class MotebitRuntime {
    * the motebit's onchain address, balance, and USDC send capability via
    * `getSolanaAddress`, `getSolanaBalance`, and `sendUsdc`.
    */
-  private _solanaWallet: import("@motebit/wallet-solana").SolanaWalletRail | null = null;
+  private _solanaWallet: SovereignWalletRail | null = null;
   /**
    * Sovereign receipt exchange transport. Null when no transport is
    * configured — in that state, the runtime can still send USDC via
@@ -597,20 +598,13 @@ export class MotebitRuntime {
           publicKey: new Uint8Array(config.signingKeys.publicKey),
         }
       : null;
-    // Sovereign Solana wallet rail. The runtime owns at most one instance.
-    // Priority: pre-built rail (for tests / custom adapters) > inline config
-    // > nothing (sovereign rail disabled). Requires signing keys either way
-    // because the rail derives its keypair from the identity seed.
-    if (config.solanaWallet) {
-      this._solanaWallet = config.solanaWallet;
-    } else if (config.solana && this._signingKeys) {
-      this._solanaWallet = createSolanaWalletRail({
-        rpcUrl: config.solana.rpcUrl,
-        identitySeed: this._signingKeys.privateKey,
-        usdcMint: config.solana.usdcMint,
-        commitment: config.solana.commitment,
-      });
-    }
+    // Sovereign Solana wallet rail. The runtime owns at most one instance but
+    // never CONSTRUCTS it — the interior consumes the injected `SovereignWalletRail`
+    // port and stays free of any settlement-rail provider dependency (the adapter
+    // principle: the interior defines the port, the caller/SDK supplies the rail).
+    // Surfaces build the concrete rail (`createSolanaWalletRail` in @motebit/wallet-solana)
+    // and inject it as `config.solanaWallet`.
+    this._solanaWallet = config.solanaWallet ?? null;
     // Sovereign receipt exchange transport. Register an incoming-request
     // handler so this runtime automatically signs receipts when other
     // motebits request them via the same transport. Handler registration
@@ -4019,7 +4013,10 @@ export class MotebitRuntime {
    */
   getSolanaAddress(): string | null {
     if (this._solanaWallet) return this._solanaWallet.address;
-    if (this._signingKeys) return deriveSolanaAddress(this._signingKeys.publicKey);
+    // No-rail fallback: the sovereign address is knowable from the identity key
+    // alone (Solana address = base58 of the 32-byte Ed25519 pubkey). Uses the
+    // shared chain-agnostic codec so the runtime needs no wallet-solana dep.
+    if (this._signingKeys) return base58Encode(this._signingKeys.publicKey);
     return null;
   }
 
@@ -4047,10 +4044,7 @@ export class MotebitRuntime {
    * insufficient balance, invalid counterparty address, or RPC errors
    * (see @motebit/wallet-solana error types).
    */
-  async sendUsdc(
-    toAddress: string,
-    microAmount: bigint,
-  ): Promise<import("@motebit/wallet-solana").SendResult | null> {
+  async sendUsdc(toAddress: string, microAmount: bigint): Promise<SovereignSendResult | null> {
     if (!this._solanaWallet) return null;
     return this._solanaWallet.send(toAddress, microAmount);
   }
