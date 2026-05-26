@@ -41,10 +41,11 @@ import { join, resolve } from "node:path";
 import { MONEY_IDENTITY_PATH, MEMBERSHIP_TRIGGERS } from "./money-identity-path.js";
 
 /**
- * Fail-closed membership derivation. OFF until the runtime sovereign-rail adapter
- * refactor removes the lone real over-fire (issue #110). Flip to true in that PR.
+ * Fail-closed membership derivation. Enabled once the runtime sovereign-rail
+ * adapter refactor (issue #110) removed runtime's direct wallet-solana dep — the
+ * runtime now consumes the `SovereignWalletRail` port from `@motebit/protocol`.
  */
-const AMENDMENT_2_ENABLED = false;
+const AMENDMENT_2_ENABLED = true;
 
 const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
 const WORKSPACE_ROOTS = ["packages", "services", "apps"];

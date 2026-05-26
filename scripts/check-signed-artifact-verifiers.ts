@@ -51,7 +51,12 @@ const VERIFIER_PKG_SRCS = [
 export type Classification =
   | { kind: "verifier"; verifier: string }
   | { kind: "within"; verifier: string; note: string }
-  | { kind: "gap"; note: string };
+  | { kind: "gap"; note: string }
+  // The `signature` field is NOT a motebit cryptographic signature — it is a
+  // chain transaction identifier (Solana calls a tx id its "signature"). Such a
+  // field is not a signed-artifact surface and needs no verifier. Requires a
+  // note so the false-positive class is documented, not silently allowlisted.
+  | { kind: "exempt"; note: string };
 
 /**
  * Canonical mapping of every signed `@motebit/protocol` wire artifact to how it
@@ -168,6 +173,12 @@ export const REGISTRY: Record<string, Classification> = {
   },
   // (migration family closed 2026-05-24 — moved to the verifier section above)
   SolvencyProof: { kind: "gap", note: "settlement-mode solvency proof; no verifier" },
+
+  // ── D: EXEMPT — a `signature` field that is not a cryptographic signature ─
+  SovereignSendResult: {
+    kind: "exempt",
+    note: "the `signature` field is a chain transaction id (Solana's term for a tx hash) returned by a sovereign-rail send, not a motebit Ed25519 signature over the object — no signed-artifact verifier applies",
+  },
 };
 
 function tsFiles(dir: string): string[] {
@@ -258,7 +269,9 @@ function main(): void {
   }
 
   const gaps = Object.entries(REGISTRY).filter(([, c]) => c.kind === "gap");
-  const verified = Object.values(REGISTRY).filter((c) => c.kind !== "gap").length;
+  const verified = Object.values(REGISTRY).filter(
+    (c) => c.kind === "verifier" || c.kind === "within",
+  ).length;
 
   process.stdout.write(
     `\n▸ check-signed-artifact-verifiers — every signed @motebit/protocol artifact must have a verifier ` +

@@ -7,6 +7,7 @@ import {
   type InvokeFn,
 } from "../index";
 import { resolveProactiveAnchor } from "@motebit/runtime";
+import { createSolanaMemoSubmitter } from "@motebit/wallet-solana";
 
 // ---------------------------------------------------------------------------
 // DesktopApp
@@ -324,47 +325,46 @@ describe("DesktopApp.initAI — proactive interior", () => {
     };
     const RPC = "https://api.mainnet-beta.solana.com";
 
-    it("returns undefined when proactive is disabled", async () => {
-      const result = await resolveProactiveAnchor({
+    it("returns undefined when proactive is disabled", () => {
+      const result = resolveProactiveAnchor({
         proactiveEnabled: false,
-        anchorOnchain: true,
         signingKeys: fakeKeys,
-        solanaRpcUrl: RPC,
       });
       expect(result).toBeUndefined();
     });
 
-    it("returns undefined when signing keys are absent", async () => {
-      const result = await resolveProactiveAnchor({
+    it("returns undefined when signing keys are absent", () => {
+      const result = resolveProactiveAnchor({
         proactiveEnabled: true,
-        anchorOnchain: true,
         signingKeys: undefined,
-        solanaRpcUrl: RPC,
       });
       expect(result).toBeUndefined();
     });
 
-    it("returns local-only policy when proactive is on but anchorOnchain is off", async () => {
-      const result = await resolveProactiveAnchor({
+    it("returns local-only policy when proactive is on but no submitter is injected", () => {
+      const result = resolveProactiveAnchor({
         proactiveEnabled: true,
-        anchorOnchain: false,
         signingKeys: fakeKeys,
-        solanaRpcUrl: RPC,
       });
       expect(result).toBeDefined();
       expect(result!.batchThreshold).toBe(8);
       expect(result!.submitter).toBeUndefined();
     });
 
-    it("constructs a SolanaMemoSubmitter when both proactive and anchorOnchain are on", async () => {
-      const result = await resolveProactiveAnchor({
+    it("carries the caller-injected submitter through to the policy", () => {
+      // Post-#110 the surface constructs the submitter (the runtime package no
+      // longer depends on wallet-solana); the resolver just threads it through.
+      const submitter = createSolanaMemoSubmitter({
+        rpcUrl: RPC,
+        identitySeed: fakeKeys.privateKey,
+      });
+      const result = resolveProactiveAnchor({
         proactiveEnabled: true,
-        anchorOnchain: true,
         signingKeys: fakeKeys,
-        solanaRpcUrl: RPC,
+        submitter,
       });
       expect(result).toBeDefined();
-      expect(result!.submitter).toBeDefined();
+      expect(result!.submitter).toBe(submitter);
       expect(result!.submitter!.chain).toBe("solana");
       expect(result!.batchThreshold).toBe(8);
     });

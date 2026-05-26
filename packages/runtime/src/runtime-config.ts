@@ -15,6 +15,7 @@ import type {
   ServerVerifier,
   StorageAdapters,
 } from "@motebit/sdk";
+import type { SovereignWalletRail } from "@motebit/protocol";
 import type { RenderAdapter } from "@motebit/render-engine/spec";
 import type { StreamingProvider } from "@motebit/ai-core";
 import type { PolicyConfig, MemoryGovernanceConfig } from "@motebit/policy";
@@ -257,30 +258,18 @@ export interface RuntimeConfig {
   /** Ed25519 signing keys for issuing verifiable credentials (gradient, trust). */
   signingKeys?: { privateKey: Uint8Array; publicKey: Uint8Array };
   /**
-   * Sovereign Solana wallet rail configuration.
+   * The sovereign wallet rail, constructed by the caller and injected.
    *
-   * When set (and `signingKeys` is also set), the runtime derives a
-   * `SolanaWalletRail` from the identity private key as a 32-byte Ed25519
-   * seed — the Solana address is the identity public key itself, by
-   * mathematical accident of curve choice. See `spec/settlement-v1.md` §6.
-   *
-   * Omit this field to run without any sovereign wallet rail. The runtime
-   * still works exactly as before; it just has no Solana wallet exposed.
+   * The runtime consumes the `SovereignWalletRail` PORT (`@motebit/protocol`);
+   * it does not construct rails and has no settlement-rail provider dependency.
+   * Surfaces build the concrete rail — `createSolanaWalletRail` from
+   * `@motebit/wallet-solana`, whose Solana address is the identity public key
+   * itself by curve coincidence (see `spec/settlement-v1.md` §6) — and pass it
+   * here. Tests inject a rail with a mocked RPC adapter. Omit to run without a
+   * sovereign wallet rail; `getSolanaAddress()` still returns the identity-derived
+   * address (no rail needed for derivation).
    */
-  solana?: {
-    /** Solana RPC endpoint URL (mainnet-beta, devnet, or custom). */
-    rpcUrl: string;
-    /** USDC SPL mint (base58). Defaults to mainnet USDC inside wallet-solana. */
-    usdcMint?: string;
-    /** RPC commitment level. Defaults to "confirmed" inside wallet-solana. */
-    commitment?: "processed" | "confirmed" | "finalized";
-  };
-  /**
-   * Pre-built sovereign Solana wallet rail. Overrides `solana` when set.
-   * Intended for tests (inject a rail with a mocked RPC adapter) and for
-   * surface apps that want to control rail construction directly.
-   */
-  solanaWallet?: import("@motebit/wallet-solana").SolanaWalletRail;
+  solanaWallet?: SovereignWalletRail;
   /**
    * Sovereign receipt exchange transport. When provided, the runtime
    * can request signed receipts from counterparties via

@@ -416,6 +416,9 @@ export interface BalanceWaiver {
 }
 
 // @public
+export function base58Encode(bytes: Uint8Array): string;
+
+// @public
 export interface BatchableGuestRail extends WithdrawableGuestRail {
     // (undocumented)
     readonly supportsBatch: true;
@@ -3259,6 +3262,19 @@ export interface SovereignRail extends SettlementRail {
     // (undocumented)
     readonly custody: "agent";
     getBalance(): Promise<bigint>;
+}
+
+// @public
+export interface SovereignSendResult {
+    confirmed: boolean;
+    signature: string;
+    slot: number;
+}
+
+// @public
+export interface SovereignWalletRail extends SovereignRail {
+    isAvailable(): Promise<boolean>;
+    send(toAddress: string, microAmount: bigint): Promise<SovereignSendResult>;
 }
 
 // @public

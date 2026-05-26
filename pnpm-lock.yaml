@@ -616,6 +616,9 @@ importers:
       '@motebit/voice':
         specifier: workspace:*
         version: link:../../packages/voice
+      '@motebit/wallet-solana':
+        specifier: workspace:*
+        version: link:../../packages/wallet-solana
       '@react-native-async-storage/async-storage':
         specifier: ^2.1.0
         version: 2.2.0(react-native@0.83.6(@babel/core@7.29.0)(@types/react@19.2.14)(bufferutil@4.1.0)(react@19.2.4)(utf-8-validate@6.0.6))
@@ -798,6 +801,9 @@ importers:
       '@motebit/voice':
         specifier: workspace:*
         version: link:../../packages/voice
+      '@motebit/wallet-solana':
+        specifier: workspace:*
+        version: link:../../packages/wallet-solana
       '@ricky0123/vad-web':
         specifier: ^0.0.22
         version: 0.0.22
@@ -936,6 +942,9 @@ importers:
       '@motebit/voice':
         specifier: workspace:*
         version: link:../../packages/voice
+      '@motebit/wallet-solana':
+        specifier: workspace:*
+        version: link:../../packages/wallet-solana
       buffer:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1848,10 +1857,10 @@ importers:
       '@motebit/sync-engine':
         specifier: workspace:*
         version: link:../sync-engine
+    devDependencies:
       '@motebit/wallet-solana':
         specifier: workspace:*
         version: link:../wallet-solana
-    devDependencies:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11

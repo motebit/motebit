@@ -19,6 +19,7 @@
  */
 
 import { Connection, Keypair, PublicKey, Transaction, type Commitment } from "@solana/web3.js";
+import { base58Encode } from "@motebit/protocol";
 
 /**
  * Derive the motebit's sovereign Solana address from its Ed25519 identity
@@ -38,7 +39,12 @@ export function deriveSolanaAddress(publicKey: Uint8Array): string {
       `deriveSolanaAddress expects a 32-byte Ed25519 public key, got ${publicKey.length} bytes`,
     );
   }
-  return new PublicKey(publicKey).toBase58();
+  // A Solana address IS the base58btc encoding of the 32-byte Ed25519 public
+  // key — no hashing, no checksum. Delegating to the shared chain-agnostic codec
+  // (`@motebit/protocol`) keeps a single base58 implementation across the repo
+  // and lets non-rail consumers (the runtime's no-rail address fallback) derive
+  // the address without depending on this provider package.
+  return base58Encode(publicKey);
 }
 import {
   createAssociatedTokenAccountInstruction,
