@@ -2,5 +2,54 @@
   "policy": "soft-signal",
   "scope": "money + identity path packages",
   "doctrine": "docs/doctrine/coverage-graduation.md",
-  "packages": []
+  "packages": [
+    {
+      "package": "@motebit/core-identity",
+      "vitest_config": "packages/core-identity/vitest.config.ts",
+      "current": { "statements": 82, "branches": 93, "functions": 83, "lines": 82 },
+      "target": { "statements": 85, "branches": 93, "functions": 85, "lines": 85 },
+      "target_date": "2026-08-15",
+      "rationale": "Short of the identity floor (85/80/85/85) on statements/functions/lines — the gap is the service-layer error/retry branches in bootstrap + register-with-relay, exercised today only on the happy path. Plan: a dedicated PR adding register-with-relay failure-path tests (relay 4xx/5xx, signature-mismatch) + bootstrap re-entry/partial-state tests, which cover the uncovered branches without touching the pure crypto. Lever: those named error paths, not a coverage knob."
+    },
+    {
+      "package": "@motebit/crypto-appattest",
+      "vitest_config": "packages/crypto-appattest/vitest.config.ts",
+      "current": { "statements": 90, "branches": 75, "functions": 100, "lines": 90 },
+      "target": { "statements": 90, "branches": 80, "functions": 100, "lines": 90 },
+      "target_date": "2026-09-30",
+      "rationale": "Branches 75 < 80 floor — the systematic cert-chain rare-error gap shared by all four platform verifiers (malformed/expired/wrong-root attestation paths exercised only by a few hand-built fixtures). Plan: a shared fuzz/property-based malformed-certificate fixture generator across the four verifiers so the rejection branches are exercised systematically. Lever: that fixture generator (one PR, four packages); raise-now would be hand-stubbed branches = the test-theater we ruled out."
+    },
+    {
+      "package": "@motebit/crypto-android-keystore",
+      "vitest_config": "packages/crypto-android-keystore/vitest.config.ts",
+      "current": { "statements": 85, "branches": 70, "functions": 100, "lines": 85 },
+      "target": { "statements": 85, "branches": 80, "functions": 100, "lines": 85 },
+      "target_date": "2026-09-30",
+      "rationale": "Branches 70 < 80 floor — same cert-chain rare-error gap. Plan: the shared fuzz-based malformed-attestation fixture generator (see crypto-appattest entry) covers the Google RSA + ECDSA P-384 root rejection branches. Lever: that shared fixture infra."
+    },
+    {
+      "package": "@motebit/crypto-tpm",
+      "vitest_config": "packages/crypto-tpm/vitest.config.ts",
+      "current": { "statements": 85, "branches": 70, "functions": 100, "lines": 85 },
+      "target": { "statements": 85, "branches": 80, "functions": 100, "lines": 85 },
+      "target_date": "2026-09-30",
+      "rationale": "Branches 70 < 80 floor — same cert-chain rare-error gap. Plan: the shared fuzz-based malformed-EK-chain fixture generator (see crypto-appattest entry) covers the vendor-root rejection branches. Lever: that shared fixture infra. (Real-device EK fixtures remain structurally unpublishable — EK certs identify chips — so fuzz fixtures are the only honest lever.)"
+    },
+    {
+      "package": "@motebit/crypto-webauthn",
+      "vitest_config": "packages/crypto-webauthn/vitest.config.ts",
+      "current": { "statements": 85, "branches": 75, "functions": 100, "lines": 85 },
+      "target": { "statements": 85, "branches": 80, "functions": 100, "lines": 85 },
+      "target_date": "2026-09-30",
+      "rationale": "Branches 75 < 80 floor — same cert-chain rare-error gap. Plan: the shared fuzz-based malformed-attestation fixture generator (see crypto-appattest entry) covers the FIDO root (Apple/Yubico/Microsoft) rejection branches. Lever: that shared fixture infra."
+    },
+    {
+      "package": "@motebit/verify",
+      "vitest_config": "packages/verify/vitest.config.ts",
+      "current": { "statements": 90, "branches": 75, "functions": 100, "lines": 90 },
+      "target": { "statements": 90, "branches": 80, "functions": 100, "lines": 90 },
+      "target_date": "2026-09-30",
+      "rationale": "New registry member (canonical motebit-verify aggregator; verification is the identity path). Branches 75 < 80 — inherits the bundled leaf verifiers' cert-chain gap plus its own CLI error branches. Plan: rides the shared cert-chain fuzz fixtures (see crypto-appattest entry) + a PR covering the CLI's unsupported-suite / post-quantum-pending branches. Lever: shared fixtures + named CLI error paths."
+    }
+  ]
 }

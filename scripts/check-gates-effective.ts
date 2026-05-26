@@ -107,6 +107,41 @@ function mutateFile(relativePath: string, mutate: (src: string) => string): () =
 
 const PROBES: ReadonlyArray<Probe> = [
   {
+    script: "check-multihop-depth-single-site",
+    proves:
+      "flags a re-inlined settlement depth-limit comparison outside the canonical multihop-depth.ts (the recursion-safety invariant: the depth bound lives in exactly one place)",
+    perturb: () =>
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}reinlined_depth.ts`,
+        // A re-inlined depth comparison in a non-test relay file. Numeric form so
+        // the fixture needs no imports — the gate scans textually, not by typecheck.
+        `export function probe(depth: number): boolean {\n  return depth > 10;\n}\n`,
+      ),
+  },
+  {
+    script: "check-coverage-config-present",
+    proves:
+      "flags a money/identity registry member whose declared coverage thresholds fall below its tier floor",
+    perturb: () =>
+      // Drop treasury-reconciliation's declared statements below the money floor
+      // (90). The gate checks the DECLARED threshold against the floor, so no test
+      // run is needed; cleanup restores the config verbatim.
+      mutateFile("packages/treasury-reconciliation/vitest.config.ts", (src) =>
+        src.replace("statements: 90", "statements: 50"),
+      ),
+  },
+  {
+    script: "check-money-identity-path-canonical",
+    proves:
+      "flags a stale registry entry (a member naming no real workspace package) — the registry-integrity half that ships today; Amendment-2 membership derivation is gated off until issue #110",
+    perturb: () =>
+      // Inject a bogus member into the registry Map. The integrity check fails
+      // because it names no real workspace package. Cleanup restores verbatim.
+      mutateFile("scripts/money-identity-path.ts", (src) =>
+        src.replace("new Map([", 'new Map([\n  ["@motebit/__gate_probe_stale__", "money"],'),
+      ),
+  },
+  {
     script: "check-property-test-floor",
     proves:
       "flags a safety-critical-floor package whose package.json no longer declares the fast-check devDependency (the property-based / fuzz / mutation discipline regressed)",
