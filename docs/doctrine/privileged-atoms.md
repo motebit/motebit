@@ -31,6 +31,8 @@ The spine question — framed, deliberately not answered:
 
 The custody shift is the whole decision. Moving the secret into a relay-held atom makes the atom's host a new trust root for that credential — its compromise is the credential's compromise. That recursion (you now protect the atom host the way you protect the relay key) is part of what a second consumer must justify. It is not obviously worth it for a one-off the operator can run themselves.
 
+Sharper, for the one leg that matters: `import` (restore) runs precisely when the relay is dead or being rebuilt, so a relay-hosted restore atom would need the relay to restore the relay — `export` and `verify` escape this (the relay is alive, or the check is artifact-only), but a restore atom cannot bootstrap its own host. The only escape is an independent-availability host — for relay DR, a federated peer (relay-B restoring relay-A) — which keeps this consumer-#1-intrinsic, since federation already exists in the stack; when a _different_ domain or a multi-party policy makes the custody shift worth it in general is consumer #2's to ground, not this note's.
+
 ### Named trigger for crystallization
 
 Crystallize a `PrivilegedAtom` typed class (with the eight-artifact closed registry per [`registry-pattern-canonical.md`](registry-pattern-canonical.md)) when a **second, independent credential-holding consumer arrives — of any kind**. Broad aperture is deliberate: a same-domain repeat (a second relay-key operation) would look alike trivially and false-positive the shape. The informative signal comes from a different credential entirely — an AWS access key, an SSH key, an OAuth refresh token, an MCP server credential, a third-party API key.
