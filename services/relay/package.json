@@ -6,6 +6,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "relay-key": "./dist/cli.js"
+  },
   "motebit": {
     "implements": [
       "spec/relay-federation-v1.md"
@@ -15,6 +18,7 @@
     "build": "tsc -b",
     "dev": "sh -c 'set -a; [ -f .env ] && . ./.env; set +a; exec tsx watch src/server.ts'",
     "start": "node dist/server.js",
+    "relay-key": "node dist/cli.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
