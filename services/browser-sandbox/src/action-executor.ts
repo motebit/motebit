@@ -50,7 +50,7 @@ import type {
   TypeIntoAction,
   UserInputEvent,
 } from "@motebit/protocol";
-import type { Page } from "playwright-core";
+import type { Page, Request } from "playwright-core";
 
 import type { BrowserSession } from "./chromium-pool.js";
 import { ServiceError } from "./errors.js";
@@ -260,39 +260,134 @@ async function dispatchAction(
 
 // ── Per-kind implementations ─────────────────────────────────────────
 
+/**
+ * Settle window for observing whether a submit-shaped action triggered
+ * a real document navigation. Cross-document navigations are async — the
+ * top-level request is issued after the page's event handler runs, after
+ * `click()` / `keyboard.press()` has already resolved — so we register a
+ * wait and give it a brief window to fire. Resolves early the instant a
+ * navigation request appears; only non-navigating submit actions pay the
+ * full window, and each pays it at most once.
+ */
+const NAVIGATION_SETTLE_MS = 600;
+
+/**
+ * Run a submit-shaped action and report `navigation_triggered` — whether
+ * it caused a real document navigation. This is the proposition the AI's
+ * "Done." / "submitted" / "search ran" claim asserts, and the input the
+ * dishonest-closing intercept (`@motebit/ai-core`) reads to catch a
+ * success claim the wire contradicts.
+ *
+ * Why this replaces the `beforeUrl !== afterUrl` string diff. That
+ * synchronous URL comparison was wrong in BOTH directions:
+ *
+ *   - False positive (the prod regression). A same-document history
+ *     mutation — `pushState` / `replaceState` / hash change — rewrites
+ *     `page.url()` synchronously WITHOUT the page moving. Google's
+ *     homepage appends a `?zx=<timestamp>` anti-cache token to its own
+ *     URL on interaction (the same pattern already documented on
+ *     `frameStaleRetryDelayMs` above). Enter went nowhere, the search
+ *     never ran, yet the URL string changed → the diff reported
+ *     `navigation_triggered: true` → the intercept saw a successful
+ *     submit and stayed silent → the model's "Done." stood on a search
+ *     that never happened. This is the exact case `navigation_triggered`
+ *     was introduced to catch (witnessed 2026-05-12), defeated by the
+ *     very site it was built for (regressed in prod 2026-05-26,
+ *     URL `www.google.com/?zx=…`, page still the homepage).
+ *   - False negative. A real cross-document navigation is async; the
+ *     request commits AFTER `press()` / `click()` resolves, so the
+ *     immediate `url()` read still showed the old URL.
+ *
+ * Two signals, OR'd:
+ *
+ *   1. A cross-document navigation issues a top-level document request
+ *      on the main frame. We wait for it — the canonical Playwright
+ *      "did this action navigate" pattern (register the wait, then act,
+ *      so a request issued synchronously by the action is not missed).
+ *   2. A same-document navigation that changes the PATH (an SPA route
+ *      move via pushState — real, but issues no request) counts too. A
+ *      same-PATH query/hash mutation (the `?zx=` cache-buster, a hash
+ *      anchor) does NOT — that's the page editing its own URL in place,
+ *      not moving. Comparing origin+path only is what separates the two.
+ *
+ * Signal 2 keeps the intercept from over-firing on legitimate SPA
+ * submits (the doctrine's stated bias: miss before over-fire), which a
+ * request-only signal would have mis-reported as "didn't move."
+ *
+ * Same defense-in-depth shape as the rest of the typed-truth-perception
+ * family: the wire field carries the truth, the prompt teaches reading
+ * it. Doctrine: docs/doctrine/typed-truth-perception.md,
+ * runtime-invariants-over-prompt-rules.md.
+ */
+async function runWithNavigationTruth(page: Page, act: () => Promise<void>): Promise<boolean> {
+  const isMainFrameNav = (req: Request): boolean =>
+    req.isNavigationRequest() && req.frame() === page.mainFrame();
+  // Register BEFORE acting so a navigation request the action issues
+  // synchronously is observed. Resolves true on the first main-frame
+  // document request; resolves false when the window elapses with none.
+  const documentRequest = page
+    .waitForRequest(isMainFrameNav, { timeout: NAVIGATION_SETTLE_MS })
+    .then(() => true)
+    .catch(() => false);
+  const beforePath = navigationPathKey(page.url());
+  await act();
+  // Same-document path change (SPA route) commits synchronously during
+  // the action — check it immediately rather than paying the request
+  // settle window for the common pushState case.
+  const afterPath = navigationPathKey(page.url());
+  if (beforePath !== null && beforePath !== afterPath) return true;
+  return documentRequest;
+}
+
+/**
+ * Origin + path of a URL, ignoring query and fragment, for navigation
+ * comparison. A change here is a real move; a change confined to query
+ * or fragment (Google's `?zx=` cache-buster, a hash anchor) is the page
+ * rewriting its own URL in place. Returns null for unparseable input —
+ * a null never compares equal to a path, and the caller treats "couldn't
+ * read the path" as "no path-change signal," deferring to the request
+ * signal (fail-safe, not fail-open).
+ */
+function navigationPathKey(rawUrl: string): string | null {
+  try {
+    const u = new URL(rawUrl);
+    const path = u.pathname === "" ? "/" : u.pathname;
+    return `${u.origin}${path}`;
+  } catch {
+    return null;
+  }
+}
+
 async function doClick(session: BrowserSession, action: ClickAction): Promise<ActionResult> {
-  // Typed-truth `navigation_triggered`: capture URL before + after so
-  // coordinate clicks on submit buttons report whether the page
-  // actually moved. Same shape `doClickElement` + `doKey` ship for
-  // their respective paths — closes the parallel confabulation gap
-  // where coordinate-based click on a submit element returned ok:true
-  // but the form didn't submit (overlay intercept, bot detection
-  // silently dropping). The AI reads false and surfaces the truth
-  // instead of claiming "Done."
-  const beforeUrl = session.page.url();
-  await session.page.mouse.click(action.target.x, action.target.y, {
-    button: parseButton(action.button),
+  // Typed-truth `navigation_triggered`: report whether a coordinate click
+  // on a submit button actually moved the page. The AI reads false and
+  // surfaces the truth instead of claiming "Done." — see
+  // `runWithNavigationTruth` for why a navigation request, not a URL
+  // diff, is the load-bearing signal.
+  const navigation_triggered = await runWithNavigationTruth(session.page, async () => {
+    await session.page.mouse.click(action.target.x, action.target.y, {
+      button: parseButton(action.button),
+    });
+    session.lastCursorX = action.target.x;
+    session.lastCursorY = action.target.y;
   });
-  session.lastCursorX = action.target.x;
-  session.lastCursorY = action.target.y;
-  const afterUrl = session.page.url();
-  return { kind: "click", ok: true, navigation_triggered: beforeUrl !== afterUrl };
+  return { kind: "click", ok: true, navigation_triggered };
 }
 
 async function doDoubleClick(
   session: BrowserSession,
   action: DoubleClickAction,
 ): Promise<ActionResult> {
-  // Sibling of doClick — same `navigation_triggered` capture so
-  // double-clicks on submit / link elements report navigation truth.
-  const beforeUrl = session.page.url();
-  await session.page.mouse.dblclick(action.target.x, action.target.y, {
-    button: parseButton(action.button),
+  // Sibling of doClick — same `navigation_triggered` truth so
+  // double-clicks on submit / link elements report navigation honestly.
+  const navigation_triggered = await runWithNavigationTruth(session.page, async () => {
+    await session.page.mouse.dblclick(action.target.x, action.target.y, {
+      button: parseButton(action.button),
+    });
+    session.lastCursorX = action.target.x;
+    session.lastCursorY = action.target.y;
   });
-  session.lastCursorX = action.target.x;
-  session.lastCursorY = action.target.y;
-  const afterUrl = session.page.url();
-  return { kind: "double_click", ok: true, navigation_triggered: beforeUrl !== afterUrl };
+  return { kind: "double_click", ok: true, navigation_triggered };
 }
 
 async function doMouseMove(
@@ -420,20 +515,19 @@ async function doKey(session: BrowserSession, action: KeyAction): Promise<Action
   // (e.g. `"cmd+c"`, `"ctrl+shift+t"`, `"Escape"`). No separate
   // modifier list — the translator splits + renames + rejoins.
   //
-  // Typed-truth `navigation_triggered`: capture URL before + after so
-  // form-submission via key("Enter") reports whether the page
-  // actually moved. Same shape `doClickElement` ships for the click
-  // path. When false, the keystroke fired but no navigation happened
-  // — the AI shouldn't claim "submitted" / "done" until it reads the
-  // post-state. Witnessed bug 2026-05-12: AI pressed Enter on the
-  // Google search input, got `ok: true`, said "Done" — but the form
-  // didn't submit (Google's promo overlay intercepted) and the page
-  // stayed on the homepage. The wire field carries the truth; the
-  // prompt teaches reading it.
-  const beforeUrl = session.page.url();
-  await pressKeyCombo(session.page, action.key);
-  const afterUrl = session.page.url();
-  return { kind: "key", ok: true, navigation_triggered: beforeUrl !== afterUrl };
+  // Typed-truth `navigation_triggered`: report whether form submission
+  // via key("Enter") actually moved the page. When false, the keystroke
+  // fired but no navigation happened — the AI shouldn't claim
+  // "submitted" / "done" until it reads the post-state. This is the
+  // witnessed case (2026-05-12: Enter on the Google search input,
+  // `ok: true`, "Done" — but the search never ran). The earlier fix
+  // diffed the URL string, which Google's `?zx=` same-document rewrite
+  // defeated; `runWithNavigationTruth` keys on the navigation request
+  // instead. See its comment for the full regression story.
+  const navigation_triggered = await runWithNavigationTruth(session.page, () =>
+    pressKeyCombo(session.page, action.key),
+  );
+  return { kind: "key", ok: true, navigation_triggered };
 }
 
 async function doScroll(session: BrowserSession, action: ScrollAction): Promise<ActionResult> {
@@ -1335,16 +1429,20 @@ async function doClickElement(
     };
   }
   await locator.first().scrollIntoViewIfNeeded({ timeout: 5_000 });
-  const beforeUrl = session.page.url();
-  await locator.first().click({ timeout: 10_000 });
-  const truth = await session.page.evaluate(clickElementTruth, { selector });
-  const afterUrl = session.page.url();
+  let truth: { clicked_tag: string | null; focused_typeable: boolean } | undefined;
+  const navigation_triggered = await runWithNavigationTruth(session.page, async () => {
+    await locator.first().click({ timeout: 10_000 });
+    // Snapshot the clicked element's truth immediately — before any
+    // navigation the click triggers tears the element (and its frame)
+    // down underneath the evaluate.
+    truth = await session.page.evaluate(clickElementTruth, { selector });
+  });
   return {
     kind: "click_element",
     ok: true,
-    clicked_tag: truth.clicked_tag,
-    focused_typeable: truth.focused_typeable,
-    navigation_triggered: beforeUrl !== afterUrl,
+    clicked_tag: truth?.clicked_tag ?? null,
+    focused_typeable: truth?.focused_typeable ?? false,
+    navigation_triggered,
   };
 }
 
