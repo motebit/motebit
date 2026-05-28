@@ -823,15 +823,24 @@
         display: flex;
         flex-direction: column;
         opacity: 0;
+        /* Same autofill-anchor fix as #pin-backdrop: visibility:hidden keeps the
+           BYOK API-key fields out of the layout + autofill tree when closed. */
+        visibility: hidden;
         pointer-events: none;
         transition:
           opacity 0.25s,
-          transform 0.25s;
+          transform 0.25s,
+          visibility 0s linear 0.25s;
       }
       #settings-modal.open {
         opacity: 1;
+        visibility: visible;
         pointer-events: auto;
         transform: translate(-50%, -50%) scale(1);
+        transition:
+          opacity 0.25s,
+          transform 0.25s,
+          visibility 0s;
       }
 
       /* Tab bar */
@@ -2808,15 +2817,27 @@
         z-index: 40;
         background: var(--bg-overlay);
         opacity: 0;
+        /* visibility:hidden (not just opacity:0) drops the centered PIN field
+           out of the layout + autofill tree when closed, so password managers
+           (e.g. iCloud Passwords) cannot anchor an "Enable AutoFill" prompt
+           over the creature's face. Delayed 0.25s on close so the fade still
+           plays; flipped to visible immediately on open. */
+        visibility: hidden;
         pointer-events: none;
-        transition: opacity 0.25s;
+        transition:
+          opacity 0.25s,
+          visibility 0s linear 0.25s;
         display: flex;
         align-items: center;
         justify-content: center;
       }
       #pin-backdrop.open {
         opacity: 1;
+        visibility: visible;
         pointer-events: auto;
+        transition:
+          opacity 0.25s,
+          visibility 0s;
       }
       #pin-dialog {
         background: var(--bg-glass-strong);
@@ -2998,15 +3019,25 @@
         z-index: 42;
         background: var(--bg-overlay);
         opacity: 0;
+        /* Same autofill-anchor fix as #pin-backdrop: visibility:hidden keeps the
+           centered recovery-seed field out of the layout + autofill tree when
+           closed. */
+        visibility: hidden;
         pointer-events: none;
-        transition: opacity 0.25s;
+        transition:
+          opacity 0.25s,
+          visibility 0s linear 0.25s;
         display: flex;
         align-items: center;
         justify-content: center;
       }
       #restore-backdrop.open {
         opacity: 1;
+        visibility: visible;
         pointer-events: auto;
+        transition:
+          opacity 0.25s,
+          visibility 0s;
       }
       #restore-dialog {
         background: var(--bg-glass-strong);
@@ -8596,6 +8627,9 @@
                     <input
                       id="anthropic-api-key"
                       type="password"
+                      autocomplete="off"
+                      data-1p-ignore
+                      data-lpignore="true"
                       placeholder="sk-ant-..."
                       autocomplete="new-password"
                     />
@@ -8628,6 +8662,9 @@
                     <input
                       id="openai-api-key"
                       type="password"
+                      autocomplete="off"
+                      data-1p-ignore
+                      data-lpignore="true"
                       placeholder="sk-..."
                       autocomplete="new-password"
                     />
@@ -8659,6 +8696,9 @@
                     <input
                       id="google-api-key"
                       type="password"
+                      autocomplete="off"
+                      data-1p-ignore
+                      data-lpignore="true"
                       placeholder="AIza..."
                       autocomplete="new-password"
                     />
@@ -8689,6 +8729,9 @@
                     <input
                       id="groq-api-key"
                       type="password"
+                      autocomplete="off"
+                      data-1p-ignore
+                      data-lpignore="true"
                       placeholder="gsk_..."
                       autocomplete="new-password"
                     />
@@ -8722,6 +8765,9 @@
                     <input
                       id="deepseek-api-key"
                       type="password"
+                      autocomplete="off"
+                      data-1p-ignore
+                      data-lpignore="true"
                       placeholder="sk-..."
                       autocomplete="new-password"
                     />
@@ -8886,6 +8932,9 @@
                 <input
                   id="tts-elevenlabs-key"
                   type="password"
+                  autocomplete="off"
+                  data-1p-ignore
+                  data-lpignore="true"
                   placeholder="sk_..."
                   autocomplete="new-password"
                 />
@@ -8909,6 +8958,9 @@
                 <input
                   id="tts-inworld-key"
                   type="password"
+                  autocomplete="off"
+                  data-1p-ignore
+                  data-lpignore="true"
                   placeholder="..."
                   autocomplete="new-password"
                 />
@@ -8932,6 +8984,9 @@
                 <input
                   id="tts-deepgram-key"
                   type="password"
+                  autocomplete="off"
+                  data-1p-ignore
+                  data-lpignore="true"
                   placeholder="..."
                   autocomplete="new-password"
                 />
@@ -9287,6 +9342,9 @@
         <input
           id="pin-input"
           type="password"
+          autocomplete="off"
+          data-1p-ignore
+          data-lpignore="true"
           maxlength="6"
           placeholder="PIN"
           inputmode="numeric"
@@ -9295,6 +9353,9 @@
         <input
           id="pin-confirm-input"
           type="password"
+          autocomplete="off"
+          data-1p-ignore
+          data-lpignore="true"
           maxlength="6"
           placeholder="Confirm PIN"
           inputmode="numeric"
@@ -9353,6 +9414,9 @@
               autocomplete="off"
               data-1p-ignore
               data-lpignore="true"
+              autocomplete="off"
+              data-1p-ignore
+              data-lpignore="true"
               placeholder="Paste your recovery seed"
             />
             <div id="restore-seed-only-status" class="restore-status"></div>
@@ -9372,6 +9436,9 @@
             <input
               id="restore-seed"
               type="password"
+              autocomplete="off"
+              data-1p-ignore
+              data-lpignore="true"
               autocomplete="off"
               data-1p-ignore
               data-lpignore="true"

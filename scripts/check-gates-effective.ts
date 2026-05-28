@@ -591,6 +591,19 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-credential-input-autofill",
+    proves:
+      'flags a `<input type="password">` in apps/**/*.html that is missing the autofill-suppression contract (autocomplete="off" + data-1p-ignore + data-lpignore) — the leak that let iCloud Passwords anchor over the creature\'s face',
+    perturb: () =>
+      // Write a probe HTML with a bare password input carrying none of the
+      // three suppression attributes. The gate scans apps/**/*.html and should
+      // fire, listing the field as missing all three. writeFixture cleans up.
+      writeFixture(
+        `apps/web/${PROBE_PREFIX}credential.html`,
+        `<input type="password" id="probe" placeholder="probe" />\n`,
+      ),
+  },
+  {
     script: "check-docs-cli-claims",
     proves:
       'flags a backtick-anchored `motebit <subcommand>` invocation in any in-scope doc whose subcommand has no `if (subcommand === "X")` arm in apps/cli/src/index.ts (the original incident: `motebit pair` in get-your-agent.mdx after the pairing protocol shipped only on desktop/mobile)',
