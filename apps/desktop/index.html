@@ -7174,7 +7174,7 @@
               <div class="settings-field">
                 <label for="settings-apikey">API Key</label>
                 <div class="settings-key-row">
-                  <input id="settings-apikey" type="password" placeholder="sk-ant-..." autocomplete="new-password" />
+                  <input id="settings-apikey" type="password" placeholder="sk-ant-..." autocomplete="new-password" data-1p-ignore data-lpignore="true" />
                   <button id="settings-apikey-toggle" type="button">Show</button>
                 </div>
               </div>
@@ -7261,7 +7261,7 @@
             <div class="settings-field">
               <label for="settings-elevenlabs-apikey">ElevenLabs API Key</label>
               <div class="settings-key-row">
-                <input id="settings-elevenlabs-apikey" type="password" placeholder="xi-..." autocomplete="new-password" />
+                <input id="settings-elevenlabs-apikey" type="password" placeholder="xi-..." autocomplete="new-password" data-1p-ignore data-lpignore="true" />
                 <button id="settings-elevenlabs-apikey-toggle" type="button">Show</button>
               </div>
               <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
@@ -7271,7 +7271,7 @@
             <div class="settings-field" style="margin-top: 10px">
               <label for="settings-inworld-apikey">Inworld API Key</label>
               <div class="settings-key-row">
-                <input id="settings-inworld-apikey" type="password" placeholder="..." autocomplete="new-password" />
+                <input id="settings-inworld-apikey" type="password" placeholder="..." autocomplete="new-password" data-1p-ignore data-lpignore="true" />
                 <button id="settings-inworld-apikey-toggle" type="button">Show</button>
               </div>
               <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
@@ -7281,7 +7281,7 @@
             <div class="settings-field" style="margin-top: 10px">
               <label for="settings-deepgram-apikey">Deepgram API Key</label>
               <div class="settings-key-row">
-                <input id="settings-deepgram-apikey" type="password" placeholder="..." autocomplete="new-password" />
+                <input id="settings-deepgram-apikey" type="password" placeholder="..." autocomplete="new-password" data-1p-ignore data-lpignore="true" />
                 <button id="settings-deepgram-apikey-toggle" type="button">Show</button>
               </div>
               <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
@@ -7632,8 +7632,7 @@
               id="restore-seed-only-input"
               type="password"
               autocomplete="off"
-              placeholder="Paste your recovery seed"
-            />
+              placeholder="Paste your recovery seed" data-1p-ignore data-lpignore="true" />
             <div id="restore-seed-only-status" class="restore-status"></div>
           </div>
           <div class="restore-actions">
@@ -7651,8 +7650,7 @@
               id="restore-seed"
               type="password"
               autocomplete="off"
-              placeholder="Paste your recovery seed"
-            />
+              placeholder="Paste your recovery seed" data-1p-ignore data-lpignore="true" />
             <div id="restore-seed-status" class="restore-status"></div>
           </div>
           <label class="restore-checkbox restore-checkbox-active">
@@ -7698,16 +7696,14 @@
           maxlength="6"
           placeholder="PIN"
           inputmode="numeric"
-          pattern="\d*"
-        />
+          pattern="\d*" autocomplete="off" data-1p-ignore data-lpignore="true" />
         <input
           id="pin-confirm-input"
           type="password"
           maxlength="6"
           placeholder="Confirm PIN"
           inputmode="numeric"
-          pattern="\d*"
-        />
+          pattern="\d*" autocomplete="off" data-1p-ignore data-lpignore="true" />
         <div id="pin-hint">4–6 digits</div>
         <div
           id="pin-confirm-text"
