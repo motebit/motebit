@@ -1,6 +1,6 @@
 # Merkle tree-hash versioning — RFC 6962 domain separation as a registry append
 
-**Status:** design / scoped, not yet implemented. Green-lit for staged rollout; PR1 (agility infrastructure, zero behavior change) lands autonomously, PR2 (first real v2 producer) returns for review.
+**Status:** in progress. PR1 part 1 (the `MerkleTreeVersion` registry) landed at commit `9cf876a8`; PR1 part 2 (Merkle-primitive plumbing + wire field + dispatch gate + registration closure) is next, autonomous and zero-behavior-change; PR2 (first real v2 producer — agent-settlement) returns for review.
 
 ## The problem is live drift, not a deferral
 
@@ -74,8 +74,8 @@ These call the high-level verifiers rather than `verifyMerkleInclusion` directly
 
 A closed-registry canonical gate (sibling of `check-suite-dispatch` and the closed-registry-canonical meta-gate) asserts:
 
-1. No inline `concat`-then-`sha256` Merkle combine or leaf hash outside the version-dispatching primitive (the single-call-site invariant, sibling of `check-suite-dispatch`).
-2. `MerkleTreeVersion` union ↔ registry ↔ dispatch arms stay in sync (closed-registry shape).
+1. **Load-bearing assertion (sketch it before writing the gate):** every leaf-builder and every combine path either (a) routes through the version-dispatched primitive, or (b) appears on a documented exclusion list with a reason. This is the `check-suite-dispatch` shape — anything weaker ("registry exists, dispatch arms enumerated, all v1 IDs present") is the cosmetic registry-self-consistency shape that passes **vacuously** while the actual invariant (no inline `concat`-then-`sha256` outside the primitive) goes unchecked. Do not drift toward self-consistency.
+2. `MerkleTreeVersion` union ↔ registry ↔ dispatch arms stay in sync (closed-registry shape) — the secondary check, not the load-bearing one.
 3. The spec's RFC-6962 claim resolves to a producer that mints v2.
 
 **Assertion (3) needs a structural mechanism, not doc-text matching — decide before writing the gate (a fail-open trap otherwise):**
@@ -89,13 +89,16 @@ Each PR carries its own gate-effectiveness probe (inject the violation, assert t
 
 ## 7. Known-answer vectors
 
-Pin the `0x00`/`0x01` byte layout against an **independent production RFC-6962 implementation**, not a hand-rolled vector: Google's Certificate Transparency reference or Sigstore rekor (both active CT/transparency-log RFC-6962 implementations). A vector from a live CT log is worth more than one we compute ourselves with the same code under test.
+Pin the `0x00`/`0x01` byte layout against a **named existing RFC-6962 test vector**, not a hand-rolled one (a self-rolled vector that matches our own implementation is a tautology, not a check). Source: Trillian's `merkle/rfc6962/rfc6962_test.go` (the canonical vectors verbatim from the RFC) or Sigstore rekor's `pkg/util/` fixtures (the production-credibility variant). Cite repo + commit hash + file + line in the test. **Include a multi-leaf asymmetric tree (e.g. 3 leaves, so the left subtree is taller)** — a single-leaf tree never exercises the node-tag path, which is the entire point of §2.1.
 
 ## 8. Staged rollout — three+ PRs, not one
 
 Bundling hides whether the plumbing is correct independently of the first real consumer.
 
-- **PR1 — agility infrastructure (autonomous, zero behavior change):** the `MerkleTreeVersion` registry + closed-registry gate; `treeHashVersion` param on both Merkle primitives and all leaf builders, **v1 default everywhere**; `tree_hash_version?` on the Proof wire types; the verifier-surface threading of §5. All existing tests stay green because v1 is byte-identical to today. Reviewable as infrastructure.
+- **PR1 — agility infrastructure (autonomous, zero behavior change).** Split into two landable slices:
+  - **Part 1 (LANDED, commit `9cf876a8`):** the `MerkleTreeVersion` registry in `@motebit/protocol` + tests + minor changeset. Lands green on its own as a dormant dispatch-axis closed union — the registered-registry meta-gate does NOT force promotion while it has no consumers.
+  - **Part 2 (next):** `treeHashVersion` param on both Merkle primitives and all leaf builders, **v1 default everywhere**; `tree_hash_version?` on the Proof wire types; the verifier-surface threading of §5. All existing tests stay green because v1 is byte-identical to today. Three eyeballs from review: **(eyeball 1)** the gate's load-bearing assertion is §6's route-through-or-documented-exclusion, not self-consistency; **(eyeball 2)** wire-schemas round-trips absent→v1 AND two NEGATIVE fixtures — a v2-tagged proof presented to v1-only verifier code must **reject** (not silent-downgrade), and a v2 proof with the field stripped, verified against a known v2 anchor, must **fail on hash-chain mismatch** (confirm that is the actual failure mode, not silent acceptance of a different root); **(eyeball 3)** no per-hash allocation — module-level `LEAF_TAG_V2 = Uint8Array([0x00])` / `NODE_TAG_V2 = Uint8Array([0x01])` resolved once into a local before the combine loop; a `concat(tag, l, r)` per node is fine, allocating the tag per node is not.
+  - **Registration closure ships WITH part 2, not a part 3.** The moment the wire field lands + dispatch goes live + multiple consumers route through it, all four registered-registry criteria (interop law, multi-consumer, wire-format presence, anticipated drift) flip true — so the `REGISTERED_REGISTRIES` append + drift-defenses row + the per-registry coverage gate (§6) must land alongside the plumbing, or the closed-registry meta-gate goes red the moment the plumbing does.
 - **PR2 — agent-settlement migrates to v2 (returns for review):** the RFC-6962-citing spec's producer emits v2; producer/verifier symmetry and the deploy-verifier-first ordering get focused review; KAT vectors land here.
 - **PR3+ — one consumer per PR:** credential-anchor, identity-log, consolidation-anchor, then federation-settlement (with the item-4 convergence).
 
@@ -105,5 +108,6 @@ Q1 was answered "sibling spec," reasoning from "cryptosuite is its own spec." Co
 
 ## 10. Open items
 
-- Confirm the gate-enforcement mechanism (§6 Option A vs B) at PR1.
+- PR1 part 1 landed (registry, `9cf876a8`). Next: PR1 part 2 (plumbing + registration closure, per §8) — picked up fresh.
+- Confirm the gate-enforcement mechanism (§6 Option A vs B) at PR1 part 2.
 - Federation-settlement (§2, PR3+) is the natural merge point for the deferred item-4 convergence (`agent-settlement-anchor-v1.md` §9.1) — the federated leaf becomes a verbatim-artifact hash under v2 in the same pass.
