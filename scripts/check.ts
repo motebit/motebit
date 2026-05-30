@@ -353,6 +353,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-docs-default-models",
   },
   {
+    name: "check-public-fee-claims",
+    defends:
+      'public fee prose stays consistent with the code: every fee-percentage claim on a user-facing surface (README.md, DOCTRINE.md, apps/docs/content MDX, the committed llms.txt/llms-full.txt) matches the canonical percent derived from PLATFORM_FEE_RATE in packages/protocol/src/index.ts (Rule A), and no line conjoins a settlement/P2P context with a fee-exemption phrase ("zero fees", "fee-free", …) since the platform fee applies at EVERY settlement checkpoint — relay AND P2P (Rule B). Defends the "prose-ahead-of-proof" money-path class that produced the #125 stale "P2P = zero fees" claim after Arc 2 shipped the P2P fee leg (invariant #113, full history in docs/drift-defenses.md)',
+    script: "check-public-fee-claims",
+  },
+  {
     name: "check-llms-txt-fresh",
     defends:
       "apps/docs/public/llms.txt and apps/docs/public/llms-full.txt match exactly what scripts/generate-llms-txt.ts would write from current source (docs MDX + DOCTRINE.md + the nine chain documents); same-shape gate as check-api-surface, applied to the LLM-facing surface, closes the freshness drift class where source MDX or a foundational doc was edited without rerunning the generator (invariant #57, full history in docs/drift-defenses.md)",

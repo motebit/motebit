@@ -119,6 +119,7 @@
     "check-docs-cli-claims": "npx tsx scripts/check-docs-cli-claims.ts",
     "check-docs-slash-claims": "npx tsx scripts/check-docs-slash-claims.ts",
     "check-docs-default-models": "npx tsx scripts/check-docs-default-models.ts",
+    "check-public-fee-claims": "npx tsx scripts/check-public-fee-claims.ts",
     "check-llms-txt-fresh": "npx tsx scripts/check-llms-txt-fresh.ts",
     "check-doctrine-format": "npx tsx scripts/check-doctrine-format.ts",
     "check-license-doc-sync": "npx tsx scripts/check-license-doc-sync.ts",

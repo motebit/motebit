@@ -646,6 +646,19 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-public-fee-claims",
+    proves:
+      "flags a public surface claiming a fee-free settlement — the exact 2026-05-30 #125 incident where README/docs/llms said P2P settlement charges 'zero fees' after Arc 2 shipped the 5% P2P fee leg. Rule B fires on a line conjoining a settlement/P2P context with a fee-exemption phrase.",
+    perturb: () =>
+      // The gate scans apps/docs/content MDX (among README/DOCTRINE/llms). Drop
+      // a fixture page replaying the verbatim pre-#125 stale claim — a P2P
+      // settlement context plus "zero fees". writeFixture cleans it up.
+      writeFixture(
+        `apps/docs/content/${PROBE_PREFIX}fee-claim.mdx`,
+        `# Probe\n\nP2P: delegator sends USDC directly to the worker's wallet when trust is high enough — zero fees, relay records the audit trail.\n`,
+      ),
+  },
+  {
     script: "check-license-doc-sync",
     proves:
       "flags a permissive-package directory present in the canonical license-field-derived set but missing from CONTRIBUTING.md's § License permissive-floor list",
