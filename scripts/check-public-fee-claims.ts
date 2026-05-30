@@ -49,6 +49,14 @@
  * fee rules. The shape — read a canonical constant from code, forbid public
  * prose that contradicts it — generalizes to any load-bearing public claim.
  *
+ * Relationship to the structural fix: the deeper move is to code-interpolate
+ * `PLATFORM_FEE_RATE` into the rate prose (a generated snippet) so there is no
+ * hand-typed number to drift — gate-as-floor, snippet-as-ceiling. That would
+ * RETIRE Rule A, but NOT Rule B: you cannot interpolate the ABSENCE of a claim.
+ * "P2P settlement is fee-free" is a false categorical assertion an author can
+ * still write next to a correctly-interpolated rate. Rule B is therefore the
+ * gate's permanent value, not a holdover.
+ *
  * Usage:
  *   tsx scripts/check-public-fee-claims.ts        # exit 1 on violation
  */
