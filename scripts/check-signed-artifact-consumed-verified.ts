@@ -24,10 +24,11 @@
  * Two rules (mirroring #87):
  *
  *   (A) Import-and-call parity. Any artifact-verifier (a function named in
- *       #107's REGISTRY as a `verifier`/`within` entry) imported from
- *       `@motebit/crypto` / `@motebit/encryption` in a `services/relay/src/*.ts`
- *       file MUST be called (`verifyX(`) in that file. Catches a refactor that
- *       drops the call but keeps the import.
+ *       #107's REGISTRY as a `verifier`/`within` entry) imported from any
+ *       verification package — `@motebit/crypto` / `@motebit/encryption` /
+ *       `@motebit/state-export-client` (the same set as #107's VERIFIER_PKG_SRCS)
+ *       — in a `services/relay/src/*.ts` file MUST be called (`verifyX(`) in
+ *       that file. Catches a refactor that drops the call but keeps the import.
  *
  *   (B) Required-usage manifest. Named relay files that consume specific inbound
  *       signed artifacts MUST import AND call the listed verifiers. Catches the
@@ -56,7 +57,14 @@ const SERVICES_RELAY_SRC = resolve(ROOT, "services", "relay", "src");
  */
 const ARTIFACT_VERIFIERS: ReadonlySet<string> = new Set(
   Object.values(REGISTRY)
-    .filter((c): c is { kind: "verifier" | "within"; verifier: string } => c.kind !== "gap")
+    // Only `verifier` / `within` entries carry a `verifier` field. `gap`,
+    // `exempt`, and `precursor` do not — narrowing on `kind !== "gap"` would
+    // wrongly admit `exempt`/`precursor` and leak `undefined` into the set
+    // (their `.verifier` is undefined). Match the two kinds that have one.
+    .filter(
+      (c): c is { kind: "verifier" | "within"; verifier: string } =>
+        c.kind === "verifier" || c.kind === "within",
+    )
     .map((c) => c.verifier),
 );
 
@@ -144,10 +152,18 @@ function walkTs(dir: string): string[] {
   return out;
 }
 
-/** Function names a file imports from `@motebit/crypto` or `@motebit/encryption`. */
+/**
+ * Function names a file imports from a verification package. Scope mirrors #107's
+ * `VERIFIER_PKG_SRCS` exactly — `@motebit/crypto`, `@motebit/encryption`, AND
+ * `@motebit/state-export-client` — so an artifact verifier that lives outside
+ * crypto/encryption (e.g. `verifyTransparencyDeclaration`, exported by
+ * state-export-client and registered in #107) cannot be imported-without-call
+ * through a blind spot in Rule A's scan.
+ */
 function importedFns(src: string): Set<string> {
   const out = new Set<string>();
-  const re = /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*["']@motebit\/(?:crypto|encryption)["']/g;
+  const re =
+    /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*["']@motebit\/(?:crypto|encryption|state-export-client)["']/g;
   for (const m of src.matchAll(re)) {
     for (const raw of (m[1] ?? "").split(",")) {
       const name = raw

@@ -1680,6 +1680,52 @@ export async function probeMint(): Promise<string> {
       }),
   },
   {
+    script: "check-state-export-signed",
+    proves:
+      "flags a state read served via a NON-GET verb (here app.post) that emits no signed manifest — the verb-scope widening (2026-05-30). Pre-widening the gate scanned only app.get, so a read smuggled in under POST/PUT/ALL escaped; this probe injects an unsigned app.post and asserts the widened scan now catches it. (The sibling probe above proves the original app.get path.)",
+    perturb: () =>
+      mutateFile(`services/relay/src/state-export.ts`, (src) => {
+        const probe = `
+  // PROBE: synthetic unsigned NON-GET read — the verb-widened
+  // check-state-export-signed must reject this. Reverted on cleanup.
+  app.post("/api/v1/__probe-unsigned-post", (c) => c.json({ probe: true }));
+`;
+        const anchor = `  // --- State vector snapshot ---`;
+        const idx = src.indexOf(anchor);
+        if (idx === -1) throw new Error("probe anchor missing in state-export.ts");
+        return src.slice(0, idx) + probe + "\n" + src.slice(idx);
+      }),
+  },
+  {
+    script: "check-signed-artifact-consumed-verified",
+    proves:
+      "flags a relay file importing an artifact-verifier from @motebit/state-export-client without calling it — the import-scope widening (2026-05-30). verifyTransparencyDeclaration is a #107 REGISTRY verifier exported by state-export-client; pre-widening Rule A's import scan (crypto|encryption only) was blind to it, so an import-without-call escaped. This probe imports it without a call and asserts Rule A now fires.",
+    perturb: () =>
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}consumed_verified_seclient.ts`,
+        // Imports a state-export-client artifact-verifier but never calls it.
+        // `void X;` references the symbol (no paren) so it is NOT a call site.
+        `import { verifyTransparencyDeclaration } from "@motebit/state-export-client";\nvoid verifyTransparencyDeclaration;\n`,
+      ),
+  },
+  {
+    script: "check-signed-artifact-verifiers",
+    proves:
+      "flags an unclassified signed type defined in a VERIFICATION PACKAGE (here packages/crypto/src) — the discovery-scope widening (2026-05-30). Pre-widening the gate discovered only packages/protocol/src, so a signed artifact authored in crypto/encryption/state-export-client was unregisterable and untracked (the IdentityLogAnchorRecord/ContentArtifactManifest class). This probe drops an unregistered signed type into crypto/src and asserts the widened discovery now demands a classification. (The sibling protocol/src probe above proves the original scope.)",
+    perturb: () =>
+      writeFixture(
+        `packages/crypto/src/${PROBE_PREFIX}signed_artifact.ts`,
+        [
+          `// Probe fixture — an unregistered signed artifact in a verification package.`,
+          `export interface ProbeUnregisteredCryptoSignedArtifact {`,
+          `  motebit_id: string;`,
+          `  signature: string;`,
+          `}`,
+          ``,
+        ].join("\n"),
+      ),
+  },
+  {
     script: "check-state-export-consumer-verifies",
     proves:
       "flags a source file in `apps/` or `packages/` that contains a state-export URL template without importing `@motebit/state-export-client`. Drift class: a consumer fetches a state-export endpoint and discards the producer-signed manifest — invisible truth on the consumer side that the producer-side drift gate cannot catch.",

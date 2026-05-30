@@ -9,17 +9,30 @@
  * `GoalExecutionManifest` (signed by `replayGoal`, spec §6 promised verification,
  * but no verifier existed) until 2026-05-24.
  *
- * This gate makes the invariant enforceable. It discovers every exported
- * `@motebit/protocol` type carrying a `*signature` field and requires each to be
- * classified in `REGISTRY` as one of:
+ * This gate makes the invariant enforceable. It discovers every exported type
+ * carrying a `*signature` field in `@motebit/protocol` AND in the verification
+ * packages themselves (`@motebit/crypto` / `encryption` / `state-export-client`)
+ * and requires each to be classified in `REGISTRY` as one of:
  *
  *   - `verifier`  — a dedicated portable verify* function (in @motebit/crypto /
  *                   encryption / state-export-client) verifies it standalone.
  *   - `within`    — it is a nested / sub-signature verified as part of a parent
  *                   artifact's verifier (named here).
+ *   - `precursor` — a signing-input mirror (`Signable*`) or field-helper
+ *                   (`*Fields`) for a registered artifact; not standalone.
  *   - `gap`       — KNOWN: signed but no portable verifier yet. Visible,
  *                   enumerated debt — NOT silent. A third party cannot
  *                   self-verify these with the verification packages alone.
+ *
+ * Scope note: a signed artifact typed *outside* both — i.e. in a service or a
+ * non-verification package — is still invisible to this gate. By doctrine a
+ * signed WIRE artifact belongs in `@motebit/protocol`, so the only legitimate
+ * out-of-scope signed types are relay-INTERNAL records whose signature never
+ * crosses the wire (e.g. `IdentityLogAnchorRecord` in
+ * `services/relay/src/identity-log-anchoring.ts` — the relay's own anchor-liveness
+ * sig, persisted locally; the `anchored` rung verifies via the on-chain Merkle
+ * root + sovereign succession chain, never this signature). Those need no
+ * portable verifier and are deliberately not tracked here.
  *
  * Fail-closed behavior (exit 1):
  *   1. A discovered signed type is NOT in REGISTRY — a NEW signed artifact was
@@ -52,6 +65,13 @@ export type Classification =
   | { kind: "verifier"; verifier: string }
   | { kind: "within"; verifier: string; note: string }
   | { kind: "gap"; note: string }
+  // A signing-input mirror or field-helper for a registered wire artifact — not
+  // a standalone artifact. Surfaced once discovery widened to the verification
+  // packages (crypto/encryption/state-export-client), where the `Signable*`
+  // precursors and `*Fields` bundles live alongside the canonical types they
+  // feed. `canonical` names the registered REGISTRY artifact whose verifier
+  // covers these bytes; the gate asserts it resolves so a precursor can't dangle.
+  | { kind: "precursor"; canonical: string; note: string }
   // The `signature` field is NOT a motebit cryptographic signature — it is a
   // chain transaction identifier (Solana calls a tx id its "signature"). Such a
   // field is not a signed-artifact surface and needs no verifier. Requires a
@@ -71,6 +91,11 @@ export type Classification =
 export const REGISTRY: Record<string, Classification> = {
   // ── A: dedicated portable verifier ──────────────────────────────────────
   AgentSettlementAnchorProof: { kind: "verifier", verifier: "verifyAgentSettlementAnchor" },
+  // Wire artifacts defined in @motebit/crypto (not protocol/src) — discovered
+  // since the scan widened to the verification packages 2026-05-30. Both cross
+  // the wire and ship a portable verifier; the gate now tracks them.
+  ContentArtifactManifest: { kind: "verifier", verifier: "verifyContentArtifact" },
+  RevocationAnchorProof: { kind: "verifier", verifier: "verifyRevocationAnchor" },
   ComputerSessionReceipt: { kind: "verifier", verifier: "verifyComputerSessionReceipt" },
   CredentialAnchorProof: { kind: "verifier", verifier: "verifyCredentialAnchor" },
   AdjudicatorVote: { kind: "verifier", verifier: "verifyAdjudicatorVote" },
@@ -177,6 +202,47 @@ export const REGISTRY: Record<string, Classification> = {
     kind: "exempt",
     note: "the `signature` field is a chain transaction id (Solana's term for a tx hash) returned by a sovereign-rail send, not a motebit Ed25519 signature over the object — no signed-artifact verifier applies",
   },
+
+  // ── E: PRECURSOR — signing-input mirror / field-helper in @motebit/crypto ─
+  // Surfaced by the 2026-05-30 scan widen to the verification packages. Each is
+  // the unsigned-or-mirror input the crypto signer builds, or a field bundle the
+  // canonical proof embeds — never passed standalone over the wire. The bytes are
+  // covered by `canonical`'s registered verifier.
+  SignableReceipt: {
+    kind: "precursor",
+    canonical: "ExecutionReceipt",
+    note: "crypto signing-input mirror of the wire ExecutionReceipt; verified by verifyExecutionReceipt",
+  },
+  SignableDeviceRegistration: {
+    kind: "precursor",
+    canonical: "DeviceRegistrationRequest",
+    note: "crypto signing-input mirror of DeviceRegistrationRequest; verified by verifyDeviceRegistration",
+  },
+  SignableCollaborativeReceipt: {
+    kind: "precursor",
+    canonical: "CollaborativeReceipt",
+    note: "crypto signing-input mirror of CollaborativeReceipt; verified by verifyCollaborativeReceipt",
+  },
+  SignableToolInvocationReceipt: {
+    kind: "precursor",
+    canonical: "ToolInvocationReceipt",
+    note: "crypto signing-input mirror of ToolInvocationReceipt; verified by verifyToolInvocationReceipt",
+  },
+  CredentialAnchorProofFields: {
+    kind: "precursor",
+    canonical: "CredentialAnchorProof",
+    note: "the field bundle whose batch_signature the parent CredentialAnchorProof embeds; verified inside verifyCredentialAnchor",
+  },
+  AgentSettlementAnchorProofFields: {
+    kind: "precursor",
+    canonical: "AgentSettlementAnchorProof",
+    note: "the field bundle whose batch_signature the parent AgentSettlementAnchorProof embeds; verified inside verifyAgentSettlementAnchor",
+  },
+  SuccessionRecord: {
+    kind: "precursor",
+    canonical: "KeySuccessionRecord",
+    note: "the per-link succession-chain record (old/new/guardian key signatures); the chain is verified within key-binding verification — same artifact family as the registered KeySuccessionRecord",
+  },
 };
 
 function tsFiles(dir: string): string[] {
@@ -190,27 +256,33 @@ function tsFiles(dir: string): string[] {
   });
 }
 
-/** Discover exported protocol types carrying a `*signature` field. Mirrors the
- *  catalog scan: an exported interface/type whose body has a line declaring a
- *  field ending in `signature`. */
+/** Discover exported types carrying a `*signature` field. Mirrors the catalog
+ *  scan: an exported interface/type whose body has a line declaring a field
+ *  ending in `signature`. Scans `@motebit/protocol` (the canonical wire-type
+ *  home) AND the verification packages, where `Signable*` precursors, `*Fields`
+ *  bundles, and a few wire artifacts authored in crypto-by-exception
+ *  (`ContentArtifactManifest`, `RevocationAnchorProof`) live. A name found in
+ *  more than one tree keeps its first (protocol-preferred) attribution. */
 function discoverSignedTypes(): Map<string, string> {
   const found = new Map<string, string>();
-  for (const file of tsFiles(PROTOCOL_SRC)) {
-    const rel = file.slice(ROOT.length + 1);
-    let name: string | null = null;
-    let open = false;
-    for (const line of readFileSync(file, "utf8").split("\n")) {
-      const m = line.match(/^export (?:interface|type) (\w+)/);
-      if (m) {
-        name = m[1] ?? null;
-        open = true;
-      } else if (open && name && /signature\??\s*:/.test(line)) {
-        // Substring (not \b): catches `signature`, `issuer_signature`,
-        // `skill_signature`, … — every field whose name ends in `signature`.
-        found.set(name, rel);
-        open = false;
-      } else if (/^\}/.test(line)) {
-        open = false;
+  for (const root of [PROTOCOL_SRC, ...VERIFIER_PKG_SRCS]) {
+    for (const file of tsFiles(root)) {
+      const rel = file.slice(ROOT.length + 1);
+      let name: string | null = null;
+      let open = false;
+      for (const line of readFileSync(file, "utf8").split("\n")) {
+        const m = line.match(/^export (?:interface|type) (\w+)/);
+        if (m) {
+          name = m[1] ?? null;
+          open = true;
+        } else if (open && name && /signature\??\s*:/.test(line)) {
+          // Substring (not \b): catches `signature`, `issuer_signature`,
+          // `skill_signature`, … — every field whose name ends in `signature`.
+          if (!found.has(name)) found.set(name, rel);
+          open = false;
+        } else if (/^\}/.test(line)) {
+          open = false;
+        }
       }
     }
   }
@@ -242,6 +314,8 @@ function main(): void {
         `${type} (${file}) carries a signature field but is not classified in REGISTRY. ` +
           `Add a portable verifier (preferred) and register it as { kind: "verifier", verifier: "verifyX" }, ` +
           `or — if it is verified inside a parent — { kind: "within", ... }, ` +
+          `or — if it is a Signable*/.*Fields signing-input for a registered artifact — ` +
+          `{ kind: "precursor", canonical: "X", ... }, ` +
           `or explicitly track it as { kind: "gap", note: "..." }.`,
       );
     }
@@ -251,7 +325,8 @@ function main(): void {
   for (const type of Object.keys(REGISTRY)) {
     if (!discovered.has(type)) {
       errors.push(
-        `${type} is in REGISTRY but no longer has a signature field in @motebit/protocol — remove the stale entry.`,
+        `${type} is in REGISTRY but no longer has a signature field in @motebit/protocol or a ` +
+          `verification package — remove the stale entry.`,
       );
     }
   }
@@ -266,10 +341,24 @@ function main(): void {
     }
   }
 
+  // 4. Every precursor's `canonical` must resolve to a registered artifact whose
+  //    bytes are actually verified (verifier/within) — a precursor can't dangle.
+  for (const [type, c] of Object.entries(REGISTRY)) {
+    if (c.kind !== "precursor") continue;
+    const target = REGISTRY[c.canonical];
+    if (!target || (target.kind !== "verifier" && target.kind !== "within")) {
+      errors.push(
+        `${type} is a precursor naming canonical "${c.canonical}", but that is not a ` +
+          `verifier/within REGISTRY entry — point it at the registered artifact whose verifier covers these bytes.`,
+      );
+    }
+  }
+
   const gaps = Object.entries(REGISTRY).filter(([, c]) => c.kind === "gap");
   const verified = Object.values(REGISTRY).filter(
     (c) => c.kind === "verifier" || c.kind === "within",
   ).length;
+  const precursors = Object.values(REGISTRY).filter((c) => c.kind === "precursor").length;
 
   process.stdout.write(
     `\n▸ check-signed-artifact-verifiers — every signed @motebit/protocol artifact must have a verifier ` +
@@ -277,7 +366,7 @@ function main(): void {
       `verifies a claim with the verification packages + a public key, no relay.\n`,
   );
   process.stdout.write(
-    `  scanned ${discovered.size} signed types — ${verified} verified, ${gaps.length} tracked gaps.\n`,
+    `  scanned ${discovered.size} signed types — ${verified} verified, ${precursors} precursors, ${gaps.length} tracked gaps.\n`,
   );
   if (gaps.length > 0) {
     process.stdout.write(`  tracked gaps (no portable verifier yet — backlog):\n`);

@@ -16,9 +16,11 @@
  * sibling (`check-doctrine-citations`) caught at the doctrine-prose
  * layer — now caught at the consumer-wiring layer.
  *
- * Forbidden: an `app.get(...)` registration in
- * `services/relay/src/state-export.ts` whose handler body does not
- * call `emitSignedExport(...)` before returning.
+ * Forbidden: a route registration of ANY verb (`app.get`, `app.post`,
+ * `app.put`, `app.patch`, `app.all`, `app.delete`) in
+ * `services/relay/src/state-export.ts` whose handler body does not call
+ * `emitSignedExport(...)` before returning — UNLESS the route is an
+ * explicitly-classified mutation in `MUTATION_ALLOWLIST`.
  *
  *   ✗  app.get("/api/v1/state/:motebitId", async (c) => {
  *        const ...;
@@ -31,10 +33,14 @@
  *      });
  *
  * Scope: only `services/relay/src/state-export.ts`. The file's own
- * header declares "Pure reads"; every `app.get(...)` here is a state
- * export by definition, and every state export must be signed. The
- * single `app.delete(...)` (memory tombstone) is a mutation, not an
- * export, and is out of scope; the gate inspects GETs only.
+ * header declares "Pure reads"; every read here is a state export by
+ * definition, and every state export must be signed. Earlier this gate
+ * inspected only GETs — a state read smuggled in under POST/PUT/ALL would
+ * have escaped silently (the gate's scan was narrower than the "every state
+ * export is signed" invariant). It now scans every verb. Genuine mutations
+ * (today: the `app.delete(...)` memory tombstone) are exempted by an explicit
+ * `MUTATION_ALLOWLIST` entry — the read-vs-mutation classification is an
+ * audited line, not an invisible verb-scope gap.
  *
  * Adding a state-export endpoint without a signed manifest emission
  * fails CI here; remove the endpoint or wire it through
@@ -51,6 +57,20 @@ import { resolve } from "node:path";
 
 const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
 const TARGET = "services/relay/src/state-export.ts";
+
+/**
+ * Routes that are genuine MUTATIONS, not state exports — they need their own
+ * signing decision and are exempt from the emit-signed requirement. Listed
+ * explicitly (method + route) so the read-vs-mutation classification is an
+ * AUDITED line in this file, not an invisible consequence of "the gate only
+ * scanned GETs." Adding a non-GET route to state-export.ts forces a choice:
+ * route it through `emitSignedExport` (it serves a read) or add it here (it
+ * mutates). A read smuggled in under POST/PUT/ALL can no longer hide.
+ */
+const MUTATION_ALLOWLIST: ReadonlyArray<{ method: string; route: string }> = [
+  // Memory tombstone — deletes a memory node. A mutation; no signed export.
+  { method: "delete", route: "/api/v1/memory/:motebitId/:nodeId" },
+];
 
 /**
  * Strip line-comments and string-literals so paren counting works
@@ -115,6 +135,7 @@ function stripCommentsAndStrings(src: string): string {
 }
 
 interface Finding {
+  method: string;
   route: string;
   startLine: number;
   endLine: number;
@@ -127,14 +148,18 @@ function scanFile(absPath: string): Finding[] {
   const lines = src.split("\n");
   const findings: Finding[] = [];
 
-  // Walk character-by-character on the stripped source, find each
-  // `app.get(` registration, paren-track to its closing `)`, then map
-  // back to lines + check the original source slice for the helper call.
-  const re = /\bapp\.get\s*\(/g;
+  // Walk character-by-character on the stripped source, find each route
+  // registration of ANY verb (`app.get(`, `app.post(`, `app.put(`,
+  // `app.patch(`, `app.all(`, `app.delete(`), paren-track to its closing
+  // `)`, then map back to lines + check the original source slice for the
+  // helper call. Scanning every verb — not just GET — closes the blind spot
+  // where a state read served via POST/PUT/ALL would never be checked for a
+  // signed manifest. Genuine mutations are exempted via MUTATION_ALLOWLIST.
+  const re = /\bapp\.(get|post|put|patch|all|delete)\s*\(/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(stripped)) !== null) {
-    const openParenIdx = stripped.indexOf("(", m.index + "app.get".length);
-    if (openParenIdx === -1) continue;
+    const method = m[1]!; // the HTTP verb
+    const openParenIdx = m.index + m[0].length - 1; // the `(` is the last char of the match
     let depth = 1;
     let j = openParenIdx + 1;
     while (j < stripped.length && depth > 0) {
@@ -147,10 +172,13 @@ function scanFile(absPath: string): Finding[] {
     const closeIdx = j; // points to char AFTER closing `)`
     const bodySlice = src.slice(m.index, closeIdx);
 
-    // Locate the route literal — `app.get("...", ...)` — from the
+    // Locate the route literal — `app.<verb>("...", ...)` — from the
     // original (non-stripped) source to preserve quote content.
-    const routeMatch = bodySlice.match(/app\.get\s*\(\s*["'`]([^"'`]+)["'`]/);
+    const routeMatch = bodySlice.match(/app\.\w+\s*\(\s*["'`]([^"'`]+)["'`]/);
     const route = routeMatch ? routeMatch[1]! : "<unknown>";
+
+    // A genuine mutation (explicitly classified) is not an export — skip it.
+    if (MUTATION_ALLOWLIST.some((a) => a.method === method && a.route === route)) continue;
 
     // Lines spanned (1-based) for reporting.
     const startLine = src.slice(0, m.index).split("\n").length;
@@ -158,10 +186,14 @@ function scanFile(absPath: string): Finding[] {
 
     if (!/\bemitSignedExport\s*\(/.test(bodySlice)) {
       findings.push({
+        method,
         route,
         startLine,
         endLine,
-        reason: "handler returns without calling emitSignedExport(...)",
+        reason:
+          method === "get"
+            ? "handler returns without calling emitSignedExport(...)"
+            : `${method.toUpperCase()} route is neither signed (emitSignedExport) nor in MUTATION_ALLOWLIST — a state read served via ${method.toUpperCase()} must emit a signed manifest`,
       });
     }
   }
@@ -173,6 +205,7 @@ function scanFile(absPath: string): Finding[] {
   // flag (loud failure), so this is a belt-and-suspenders sibling check.
   if (!/\bfunction\s+emitSignedExport\s*\(/.test(stripped)) {
     findings.push({
+      method: "-",
       route: "<sibling alignment>",
       startLine: 0,
       endLine: 0,
@@ -191,11 +224,13 @@ function main(): void {
   const findings = scanFile(abs);
 
   console.log(
-    `check-state-export-signed — scanned ${TARGET} for app.get(...) registrations missing emitSignedExport(...)\n`,
+    `check-state-export-signed — scanned ${TARGET} for app.<verb>(...) route registrations missing emitSignedExport(...) (mutations exempted via MUTATION_ALLOWLIST)\n`,
   );
 
   if (findings.length === 0) {
-    console.log(`✓ Every state-export GET registration emits a signed manifest.`);
+    console.log(
+      `✓ Every state-export route registration emits a signed manifest (or is an allowlisted mutation).`,
+    );
     return;
   }
 
@@ -204,7 +239,9 @@ function main(): void {
     if (f.startLine === 0) {
       console.log(`  ${TARGET}:?  ${f.reason}`);
     } else {
-      console.log(`  ${TARGET}:${f.startLine}-${f.endLine}  GET ${f.route}  (${f.reason})`);
+      console.log(
+        `  ${TARGET}:${f.startLine}-${f.endLine}  ${f.method.toUpperCase()} ${f.route}  (${f.reason})`,
+      );
     }
   }
   console.log(
