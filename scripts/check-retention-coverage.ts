@@ -135,23 +135,47 @@ interface AlteredColumn {
 }
 
 function extractCreateTables(content: string, surface: string): CreateTableStmt[] {
-  // Match: CREATE TABLE [IF NOT EXISTS] <name> ( <body> )
-  // Body may contain newlines and nested parens (e.g. CHECK constraints
-  // or DEFAULT expressions), but the matched body terminates at the
-  // last `)` before the next CREATE/INSERT/--/ALTER on a fresh line.
-  // This is heuristic — exhaustive SQL parsing is over-scoped — but
-  // motebit's at-rest schemas are simple flat-column DDL and the
-  // pattern fires reliably on them.
-  const pattern =
-    /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\s*\(([\s\S]*?)\)\s*;/gi;
+  // Match the CREATE TABLE header + opening paren, then capture the body by
+  // BALANCED-PAREN scanning to the matching close paren.
+  //
+  // The prior implementation terminated the body at `)\s*;` — a closing paren
+  // followed by a semicolon. That silently matched NOTHING in the
+  // template-literal SQL migration files (`packages/persistence/...-registry.ts`,
+  // `apps/mobile/...-migrations.ts`), because those write each statement as a
+  // `\`CREATE TABLE x ( ... )\`` template literal with NO trailing semicolon —
+  // so the regex's lazy body ran past the table's own `)` hunting for a `);`
+  // that never came (or, once any `)` `;` appeared anywhere in the file — e.g.
+  // inside a comment — it over-captured everything up to it). The gate was thus
+  // structurally BLIND to those surfaces. Balanced-paren scanning terminates at
+  // the table's actual closing paren regardless of any trailing `;`, and handles
+  // nested parens (CHECK / DEFAULT(...)) via the depth counter. The effectiveness
+  // probe in check-gates-effective plants a `;`-less fixture so this
+  // blindness class cannot recur silently.
+  const header = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\s*\(/gi;
   const stmts: CreateTableStmt[] = [];
   let m: RegExpExecArray | null;
-  while ((m = pattern.exec(content)) !== null) {
+  while ((m = header.exec(content)) !== null) {
+    const openIdx = header.lastIndex - 1; // index of the opening '('
+    let depth = 0;
+    let close = -1;
+    for (let i = openIdx; i < content.length; i++) {
+      const ch = content[i];
+      if (ch === "(") depth++;
+      else if (ch === ")") {
+        depth--;
+        if (depth === 0) {
+          close = i;
+          break;
+        }
+      }
+    }
+    if (close === -1) continue; // unbalanced — skip rather than over-capture
     stmts.push({
       surface,
       tableName: m[1]!.toLowerCase(),
-      body: m[2]!,
+      body: content.slice(openIdx + 1, close),
     });
+    header.lastIndex = close + 1; // resume scanning after this table
   }
   return stmts;
 }

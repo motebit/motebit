@@ -1399,6 +1399,24 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       ),
   },
   {
+    script: "check-retention-coverage",
+    proves:
+      "fires on a sensitivity-bearing CREATE TABLE written as a SEMICOLON-LESS template-literal statement — the input shape the prior `)\\s*;` body terminator was structurally blind to (the persistence/mobile migration registries write SQL as `\\`CREATE TABLE … )\\`` template literals with no statement-terminating semicolon, so the blind parser matched NOTHING in them). The sibling probe above injects a `;`-terminated CREATE, which the blind parser still caught — so it alone could not detect this regression. Guards the blindness class: a drift-gate parser that assumes a statement terminator a sibling input shape doesn't carry.",
+    perturb: () =>
+      // Inject a `;`-LESS template-literal CREATE TABLE (the shape the
+      // migration registries actually use) for an unregistered
+      // sensitivity-bearing table into a scanned migration file. A `)\s*;`
+      // parser never matches it — the SQL `)` is followed by a backtick, not
+      // a semicolon — so the gate would NOT fire; the balanced-paren parser
+      // does. mutateFile restores byte-identical on cleanup.
+      mutateFile("packages/persistence/src/migrations-registry.ts", (src) =>
+        src.replace(
+          "export const PERSISTENCE_MIGRATIONS",
+          "const __GATE_PROBE_TEMPLATE_SQL = `CREATE TABLE IF NOT EXISTS __probe_unregistered_template (\n  id TEXT PRIMARY KEY,\n  sensitivity TEXT\n)`;\nvoid __GATE_PROBE_TEMPLATE_SQL;\nexport const PERSISTENCE_MIGRATIONS",
+        ),
+      ),
+  },
+  {
     script: "check-relay-retention-coverage",
     proves:
       "flags a `RETENTION_MANIFEST_CONTENT.stores[]` entry whose `store_id` has no matching alias in `RELAY_STORE_TABLE_ALIASES` — the missing-alias drift class (a manifest declaration of an enforcement that doesn't exist, the operator's transparency claim silently rotting). Sibling to check-retention-coverage's probe but scoped to the relay-side manifest projection rather than the runtime-side registry.",
