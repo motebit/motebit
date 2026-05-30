@@ -489,50 +489,30 @@ export function isSettlementPendingBatch(db: DatabaseDriver, settlementId: strin
 
 interface AgentSettlementRow {
   settlement_id: string;
-  motebit_id: string;
-  receipt_hash: string;
-  ledger_hash: string | null;
-  amount_settled: number;
-  platform_fee: number;
-  platform_fee_rate: number;
-  // Lane discriminant — part of the signed body since SettlementRecord
-  // gained the field, so it MUST be included in the canonical
-  // reconstruction below or the leaf hash won't match the relay's
-  // signature and anchor verification breaks.
-  settlement_mode: string;
-  status: string;
   settled_at: number;
-  issuer_relay_id: string;
-  suite: string;
-  signature: string;
+  // The EXACT canonical signed bytes of the SettlementRecord
+  // (relay_settlements.record_json, written verbatim at settlement time per
+  // services/relay/CLAUDE.md rule 11). The leaf is SHA-256 of THESE bytes —
+  // never a column re-projection — so it equals what a worker computes over
+  // the record they hold. (The earlier projection swapped
+  // allocation_id→motebit_id and dropped x402; it could not be reproduced
+  // from the worker's record and silently broke self-verification. The fix
+  // is to hash the object, not a hand-typed field list.)
+  record_json: string;
 }
 
 /**
- * Compute the leaf hash for a per-agent settlement: SHA-256 over the
- * canonical-JSON of the signed record fields. Identical to the bytes
- * the relay signed over (minus signature itself? — no, including
- * signature: the leaf commits the WHOLE signed artifact).
- *
- * External verifiers reconstruct this by canonicalizing the
- * SettlementRecord they hold and hashing — no relay code needed.
+ * Per-agent settlement leaf = SHA-256 of the exact canonical signed bytes
+ * the relay persisted (`record_json`) and the worker holds. A third party
+ * derives the identical value via `@motebit/crypto`'s
+ * `computeAgentSettlementLeaf(record)` over their own `SettlementRecord`,
+ * because `record_json === canonicalJson(record)` by construction (written
+ * with the same JCS canonicalizer at settlement time). This is the SCITT /
+ * RFC 6962 invariant: anchor the exact signed object; reproduce the leaf
+ * from the holder's bytes — no re-projection.
  */
-async function computeAgentSettlementLeaf(row: AgentSettlementRow): Promise<string> {
-  const canonical = canonicalJson({
-    settlement_id: row.settlement_id,
-    motebit_id: row.motebit_id,
-    receipt_hash: row.receipt_hash,
-    ledger_hash: row.ledger_hash,
-    amount_settled: row.amount_settled,
-    platform_fee: row.platform_fee,
-    platform_fee_rate: row.platform_fee_rate,
-    settlement_mode: row.settlement_mode,
-    status: row.status,
-    settled_at: row.settled_at,
-    issuer_relay_id: row.issuer_relay_id,
-    suite: row.suite,
-    signature: row.signature,
-  });
-  const h = await sha256(new TextEncoder().encode(canonical));
+async function agentSettlementLeaf(recordJson: string): Promise<string> {
+  const h = await sha256(new TextEncoder().encode(recordJson));
   return bytesToHex(h);
 }
 
@@ -552,12 +532,9 @@ export async function cutAgentSettlementBatch(
 ): Promise<AnchorRecord | null> {
   const rows = db
     .prepare(
-      `SELECT settlement_id, motebit_id, receipt_hash, ledger_hash,
-              amount_settled, platform_fee, platform_fee_rate,
-              COALESCE(settlement_mode, 'relay') AS settlement_mode, status,
-              settled_at, issuer_relay_id, suite, signature
+      `SELECT settlement_id, settled_at, record_json
        FROM relay_settlements
-       WHERE anchor_batch_id IS NULL AND signature IS NOT NULL
+       WHERE anchor_batch_id IS NULL AND signature IS NOT NULL AND record_json IS NOT NULL
        ORDER BY settled_at ASC, settlement_id ASC
        LIMIT ?`,
     )
@@ -567,7 +544,7 @@ export async function cutAgentSettlementBatch(
 
   const leaves: string[] = [];
   for (const row of rows) {
-    leaves.push(await computeAgentSettlementLeaf(row));
+    leaves.push(await agentSettlementLeaf(row.record_json));
   }
 
   const tree = await buildMerkleTree(leaves);
@@ -583,6 +560,14 @@ export async function cutAgentSettlementBatch(
     first_settled_at: firstSettledAt,
     last_settled_at: lastSettledAt,
     relay_id: relayIdentity.relayMotebitId,
+    // Suite is signature-bound (cryptosuite-agility): part of the signed
+    // batch payload so a cross-suite confusion cannot pass verification.
+    // `verifyAgentSettlementAnchor` reconstructs this exact field set (key
+    // order irrelevant — JCS sorts). The sibling federation batch payload
+    // (cutBatch above) still omits suite — a pre-existing inconsistency
+    // tracked in spec/agent-settlement-anchor-v1.md §9.1 (federation-anchor
+    // convergence), not introduced here.
+    suite: AGENT_SETTLEMENT_ANCHOR_SUITE,
   };
   const sigBytes = new TextEncoder().encode(canonicalJson(anchorPayload));
   const sig = await sign(sigBytes, relayIdentity.privateKey);
@@ -877,10 +862,7 @@ export async function getAgentSettlementProof(
 ): Promise<AgentSettlementAnchorProof | null> {
   const settlement = db
     .prepare(
-      `SELECT settlement_id, motebit_id, receipt_hash, ledger_hash,
-              amount_settled, platform_fee, platform_fee_rate,
-              COALESCE(settlement_mode, 'relay') AS settlement_mode, status,
-              settled_at, issuer_relay_id, suite, signature, anchor_batch_id
+      `SELECT settlement_id, settled_at, record_json, anchor_batch_id
        FROM relay_settlements
        WHERE settlement_id = ?`,
     )
@@ -913,12 +895,9 @@ export async function getAgentSettlementProof(
   // Reconstruct tree in the same sort order cutAgentSettlementBatch used.
   const batchSettlements = db
     .prepare(
-      `SELECT settlement_id, motebit_id, receipt_hash, ledger_hash,
-              amount_settled, platform_fee, platform_fee_rate,
-              COALESCE(settlement_mode, 'relay') AS settlement_mode, status,
-              settled_at, issuer_relay_id, suite, signature
+      `SELECT settlement_id, settled_at, record_json
        FROM relay_settlements
-       WHERE anchor_batch_id = ?
+       WHERE anchor_batch_id = ? AND record_json IS NOT NULL
        ORDER BY settled_at ASC, settlement_id ASC`,
     )
     .all(batchId) as AgentSettlementRow[];
@@ -927,7 +906,7 @@ export async function getAgentSettlementProof(
   let targetIndex = -1;
   for (let i = 0; i < batchSettlements.length; i++) {
     const row = batchSettlements[i]!;
-    leaves.push(await computeAgentSettlementLeaf(row));
+    leaves.push(await agentSettlementLeaf(row.record_json));
     if (row.settlement_id === settlementId) {
       targetIndex = i;
     }

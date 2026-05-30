@@ -703,6 +703,8 @@ export async function handleReceiptIngestion(
           {
             settlement_id: subSettlement.settlement_id,
             allocation_id: subSettlement.allocation_id,
+            // Payee = the sub-agent named on the sub-receipt.
+            motebit_id: subSettlement.motebit_id,
             receipt_hash: subSettlement.receipt_hash,
             ledger_hash: subSettlement.ledger_hash,
             amount_settled: subSettlement.amount_settled,
@@ -734,8 +736,8 @@ export async function handleReceiptIngestion(
           moteDb.db
             .prepare(
               `INSERT OR IGNORE INTO relay_settlements
-             (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, issuer_relay_id, suite, signature)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, issuer_relay_id, suite, signature, record_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               signedSubSettlement.settlement_id,
@@ -753,6 +755,9 @@ export async function handleReceiptIngestion(
               signedSubSettlement.issuer_relay_id,
               signedSubSettlement.suite,
               signedSubSettlement.signature,
+              // Rule 11: store the exact canonical signed bytes. The anchor
+              // leaf is SHA-256 of THIS, so it equals the bytes the worker holds.
+              canonicalJson(signedSubSettlement),
             );
 
           moteDb.db
@@ -871,6 +876,8 @@ export async function handleReceiptIngestion(
           {
             settlement_id: p2pSettlementId as never,
             allocation_id: `p2p-${taskId}` as never,
+            // Payee = the worker that executed and was paid onchain.
+            motebit_id: motebitId,
             receipt_hash: receipt.result_hash ?? "",
             ledger_hash: null,
             amount_settled: p2pWorkerAmount,
@@ -894,8 +901,8 @@ export async function handleReceiptIngestion(
              (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
               amount_settled, platform_fee, platform_fee_rate, status, settled_at,
               settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-              issuer_relay_id, suite, signature)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              issuer_relay_id, suite, signature, record_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             p2pSettlementId,
@@ -915,6 +922,7 @@ export async function handleReceiptIngestion(
             signedP2pAudit.issuer_relay_id,
             signedP2pAudit.suite,
             signedP2pAudit.signature,
+            canonicalJson(signedP2pAudit),
           );
       }
 
@@ -1026,6 +1034,9 @@ export async function handleReceiptIngestion(
             {
               settlement_id: settlement.settlement_id,
               allocation_id: settlement.allocation_id,
+              // Payee = the executing agent named on the receipt
+              // (settleOnReceipt sets it to receipt.motebit_id).
+              motebit_id: settlement.motebit_id,
               receipt_hash: settlement.receipt_hash,
               ledger_hash: settlement.ledger_hash,
               amount_settled: settlement.amount_settled,
@@ -1062,8 +1073,8 @@ export async function handleReceiptIngestion(
           moteDb.db
             .prepare(
               `INSERT OR IGNORE INTO relay_settlements
-               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, x402_tx_hash, x402_network, issuer_relay_id, suite, signature)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, x402_tx_hash, x402_network, issuer_relay_id, suite, signature, record_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               signedSettlement.settlement_id,
@@ -1083,6 +1094,7 @@ export async function handleReceiptIngestion(
               signedSettlement.issuer_relay_id,
               signedSettlement.suite,
               signedSettlement.signature,
+              canonicalJson(signedSettlement),
             );
 
           if (persistentAlloc) {

@@ -120,6 +120,11 @@ const vc = await issueReputationCredential(
 - **`verifySovereignBinding(motebitId, genesisPublicKeyHex)`** — True iff `motebitId` is the sovereign commitment to the genesis key. `verifyKeyBindingAtTime` sets `sovereign: true` on its result when this holds.
 - **`verifyMigratingKeyBinding(motebitId, presentedKeyHex, identityFile?)`** — Does `presentedKeyHex` legitimately control `motebitId` right now? The migration key↔id check (spec/migration-v1.md §8.2 step 6), fail-closed: a never-rotated sovereign id binds its key directly; a rotated key binds via the identity file's sovereign-rooted succession chain. Composes `verifySovereignBinding` and `verifyKeyBindingAtTime`.
 
+### Settlement anchoring
+
+- **`verifyAgentSettlementAnchor(record, proof, chainVerifier?)`** — Worker-side self-verification of a per-agent settlement Merkle inclusion proof (`spec/agent-settlement-anchor-v1.md`): the held `SettlementRecord` hashes to the anchored leaf, the Merkle path reconstructs to the root, and the relay's batch signature (suite `AGENT_SETTLEMENT_ANCHOR_SUITE`) checks out — all offline, with only the record, the proof, and the relay's public key. SCITT / RFC 6962 shape. The optional `chainVerifier` adds the onchain non-repudiation cross-check.
+- **`computeAgentSettlementLeaf(record)`** — The leaf hash for a `SettlementRecord`: `SHA-256(canonicalJson(record))` over the whole signed object (never a field projection), so producer and holder derive the identical leaf from the bytes they each hold.
+
 ### Primitives
 
 - **`generateKeypair()`** — Generate an Ed25519 keypair.

@@ -41,6 +41,57 @@ export const ADJUDICATOR_VOTE_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 export { AdjudicatorVote }
 
+// @public
+export const AGENT_SETTLEMENT_ANCHOR_SUITE: "motebit-jcs-ed25519-hex-v1";
+
+// @public
+export interface AgentSettlementAnchorProofFields {
+    // (undocumented)
+    anchor: {
+        chain: string;
+        network: string;
+        tx_hash: string;
+        anchored_at: number;
+    } | null;
+    // (undocumented)
+    batch_id: string;
+    // (undocumented)
+    batch_signature: string;
+    // (undocumented)
+    first_settled_at: number;
+    // (undocumented)
+    last_settled_at: number;
+    // (undocumented)
+    layer_sizes: number[];
+    // (undocumented)
+    leaf_count: number;
+    // (undocumented)
+    leaf_index: number;
+    // (undocumented)
+    merkle_root: string;
+    // (undocumented)
+    relay_id: string;
+    // (undocumented)
+    relay_public_key: string;
+    // (undocumented)
+    settlement_hash: string;
+    // (undocumented)
+    siblings: string[];
+    suite: typeof AGENT_SETTLEMENT_ANCHOR_SUITE;
+}
+
+// @public
+export interface AgentSettlementAnchorVerifyResult {
+    errors: string[];
+    steps: {
+        hash_valid: boolean;
+        merkle_valid: boolean;
+        relay_signature_valid: boolean;
+        chain_verified: boolean | null;
+    };
+    valid: boolean;
+}
+
 // @public (undocumented)
 export type ArtifactType = VerifyResult["type"];
 
@@ -114,6 +165,9 @@ export type ChainAnchorVerifier = (anchor: {
 
 // @public
 export const COLLABORATIVE_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export function computeAgentSettlementLeaf(settlement: Record<string, unknown>): Promise<string>;
 
 // @public
 export function computeCredentialLeaf(credential: Record<string, unknown>): Promise<string>;
@@ -1316,6 +1370,9 @@ export function verify(artifact: unknown, options?: VerifyOptions): Promise<Veri
 
 // @public
 export function verifyAdjudicatorVote(vote: AdjudicatorVote, peerPublicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyAgentSettlementAnchor(settlement: Record<string, unknown>, proof: AgentSettlementAnchorProofFields, chainVerifier?: ChainAnchorVerifier): Promise<AgentSettlementAnchorVerifyResult>;
 
 // @public
 export function verifyBalanceWaiver(waiver: BalanceWaiver, agentPublicKey: Uint8Array): Promise<boolean>;

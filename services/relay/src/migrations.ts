@@ -1180,4 +1180,27 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 25,
+    name: "settlements_record_json",
+    up: (db) => {
+      // Store the EXACT canonical bytes of each signed SettlementRecord, so
+      // the per-agent anchor leaf is `SHA-256(record_json)` — a hash of the
+      // very bytes the worker holds, never a re-typed column projection.
+      // This is the SCITT / RFC 6962 invariant (anchor the exact signed
+      // object) and mirrors `relay_receipts.receipt_json` (rule 11): the
+      // column equals `canonicalJson(record)` at write time and is read back
+      // verbatim. A column projection cannot be reproduced from the worker's
+      // record and silently breaks self-verification (the bug this closes —
+      // the old leaf swapped `allocation_id`→`motebit_id` and dropped x402).
+      //
+      // PRAGMA-guarded — same idempotency rationale as the v13/v14 ALTERs.
+      const cols = (
+        db.prepare("PRAGMA table_info(relay_settlements)").all() as { name: string }[]
+      ).map((c) => c.name);
+      if (!cols.includes("record_json")) {
+        db.exec("ALTER TABLE relay_settlements ADD COLUMN record_json TEXT;");
+      }
+    },
+  },
 ];

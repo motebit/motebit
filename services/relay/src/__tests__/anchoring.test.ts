@@ -17,7 +17,8 @@ import {
   isSettlementPendingBatch,
 } from "../anchoring.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct sign access
-import { signSettlement } from "@motebit/encryption";
+import { signSettlement, canonicalJson } from "@motebit/encryption";
+import { verifyAgentSettlementAnchor } from "@motebit/crypto";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
@@ -364,6 +365,7 @@ async function insertSignedAgentSettlement(opts: {
     {
       settlement_id: id as never,
       allocation_id: allocId as never,
+      motebit_id: motebitId as never,
       receipt_hash: receiptHash,
       ledger_hash: null,
       amount_settled: opts.amount ?? 950_000,
@@ -382,8 +384,8 @@ async function insertSignedAgentSettlement(opts: {
       `INSERT INTO relay_settlements
        (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash,
         amount_settled, platform_fee, platform_fee_rate, status, settled_at,
-        settlement_mode, issuer_relay_id, suite, signature)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        settlement_mode, issuer_relay_id, suite, signature, record_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -401,6 +403,7 @@ async function insertSignedAgentSettlement(opts: {
       signed.issuer_relay_id,
       signed.suite,
       signed.signature,
+      canonicalJson(signed),
     );
   return id;
 }
@@ -603,6 +606,137 @@ describe("getAgentAnchorBatch", () => {
     expect(batch!.suite).toBe("motebit-jcs-ed25519-hex-v1");
     expect(batch!.signature).toMatch(/^[0-9a-f]+$/);
     expect(batch!.anchor).toBeNull(); // not yet onchain
+  });
+});
+
+// ===========================================================================
+// The SCITT / RFC 6962 round-trip: a third party who holds ONLY the signed
+// SettlementRecord, the inclusion proof, and the relay's public key (carried
+// in the proof) verifies offline that the relay anchored exactly that record.
+// This is the proof the architecture actually closes the self-attesting loop
+// — not just that the proof has the right shape. It exercises the REAL
+// producer (cutAgentSettlementBatch + getAgentSettlementProof) against the
+// REAL portable verifier (@motebit/crypto verifyAgentSettlementAnchor).
+// ===========================================================================
+
+describe("verifyAgentSettlementAnchor — third-party round-trip", () => {
+  beforeEach(async () => {
+    await setupAgentTestRelay();
+  });
+
+  /** Sign a SettlementRecord and persist it exactly as the relay does
+   *  (record_json = the canonical signed bytes). Returns the record the
+   *  worker would hold. */
+  async function signAndInsert(
+    opts: { settlementMode?: "relay" | "p2p"; x402TxHash?: string; x402Network?: string } = {},
+  ): Promise<{ id: string; record: Awaited<ReturnType<typeof signSettlement>> }> {
+    const id = crypto.randomUUID();
+    const record = await signSettlement(
+      {
+        settlement_id: id as never,
+        allocation_id: `alloc-${id}` as never,
+        motebit_id: `mote-${id}` as never,
+        receipt_hash: `receipt-${id}`,
+        ledger_hash: null,
+        amount_settled: 950_000,
+        platform_fee: 50_000,
+        platform_fee_rate: 0.05,
+        settlement_mode: opts.settlementMode ?? "relay",
+        status: "completed",
+        settled_at: Date.now(),
+        ...(opts.x402TxHash != null ? { x402_tx_hash: opts.x402TxHash } : {}),
+        ...(opts.x402Network != null ? { x402_network: opts.x402Network } : {}),
+        issuer_relay_id: agentRelayIdentity.relayMotebitId,
+      },
+      agentRelayIdentity.privateKey,
+    );
+    agentDb
+      .prepare(
+        `INSERT INTO relay_settlements
+           (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash,
+            amount_settled, platform_fee, platform_fee_rate, status, settled_at,
+            settlement_mode, x402_tx_hash, x402_network, issuer_relay_id, suite, signature, record_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.settlement_id,
+        record.allocation_id,
+        `task-${id}`,
+        record.motebit_id,
+        record.receipt_hash,
+        record.ledger_hash,
+        record.amount_settled,
+        record.platform_fee,
+        record.platform_fee_rate,
+        record.status,
+        record.settled_at,
+        record.settlement_mode,
+        record.x402_tx_hash ?? null,
+        record.x402_network ?? null,
+        record.issuer_relay_id,
+        record.suite,
+        record.signature,
+        canonicalJson(record),
+      );
+    return { id, record };
+  }
+
+  it("verifies with only (record, proof) — proof carries the relay public key", async () => {
+    const { id, record } = await signAndInsert();
+    // Siblings so the Merkle path is non-trivial (not a single-leaf root).
+    await insertSignedAgentSettlement({});
+    await insertSignedAgentSettlement({});
+
+    await cutAgentSettlementBatch(agentDb, agentRelayIdentity);
+    const proof = await getAgentSettlementProof(agentDb, id);
+    expect(proof).not.toBeNull();
+
+    const result = await verifyAgentSettlementAnchor(
+      record as unknown as Record<string, unknown>,
+      proof!,
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.valid).toBe(true);
+    expect(result.steps.hash_valid).toBe(true);
+    expect(result.steps.merkle_valid).toBe(true);
+    expect(result.steps.relay_signature_valid).toBe(true);
+  });
+
+  it("rejects a record whose fields were tampered after signing", async () => {
+    const { id, record } = await signAndInsert();
+    await insertSignedAgentSettlement({});
+    await cutAgentSettlementBatch(agentDb, agentRelayIdentity);
+    const proof = await getAgentSettlementProof(agentDb, id);
+
+    // A worker who claims they were paid more than the relay signed: the
+    // held record no longer hashes to the anchored leaf.
+    const tampered = { ...record, amount_settled: 999_999_999 };
+    const bad = await verifyAgentSettlementAnchor(
+      tampered as unknown as Record<string, unknown>,
+      proof!,
+    );
+    expect(bad.valid).toBe(false);
+    expect(bad.steps.hash_valid).toBe(false);
+  });
+
+  it("verifies an x402-paid settlement (optional fields are anchored verbatim)", async () => {
+    // The old column-projection leaf dropped x402 fields → this case is
+    // exactly what would have silently failed before.
+    const { id, record } = await signAndInsert({
+      settlementMode: "p2p",
+      x402TxHash: "0xabc123",
+      x402Network: "eip155:8453",
+    });
+    await insertSignedAgentSettlement({});
+    await cutAgentSettlementBatch(agentDb, agentRelayIdentity);
+    const proof = await getAgentSettlementProof(agentDb, id);
+
+    expect(record.x402_tx_hash).toBe("0xabc123");
+    const result = await verifyAgentSettlementAnchor(
+      record as unknown as Record<string, unknown>,
+      proof!,
+    );
+    expect(result.valid).toBe(true);
   });
 });
 

@@ -1560,6 +1560,18 @@ export const PLATFORM_FEE_RATE = 0.05;
 export interface SettlementRecord {
   settlement_id: SettlementId;
   allocation_id: AllocationId;
+  /**
+   * The payee — the `motebit_id` of the worker this settlement pays. A
+   * settlement receipt names *who was paid* in its signed body, not only
+   * the relay-internal `allocation_id` (which is an opaque bookkeeping
+   * handle a sovereign verifier cannot resolve offline). This makes the
+   * receipt self-contained: a worker proves "I (W) was paid X for receipt
+   * H by relay R" from the signed bytes alone, with no relay-side
+   * allocation→payee join. Carried in the signed body so the payee is part
+   * of the relay's attestation and cannot be re-pointed after the fact.
+   * Equals the executing agent's `ExecutionReceipt.motebit_id`.
+   */
+  motebit_id: MotebitId;
   receipt_hash: string;
   ledger_hash: string | null;
   /** Amount paid to the executing agent (after platform fee deduction). */

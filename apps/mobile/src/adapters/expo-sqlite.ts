@@ -1958,6 +1958,10 @@ export class ExpoBudgetAllocationStore {
 interface SettlementRow {
   settlement_id: string;
   allocation_id: string;
+  // Payee added by expo-sqlite migration v26. Nullable for backward-compat;
+  // legacy NULLs surface as "" and fail wire-schema downstream (same
+  // fail-closed signal as the self-attestation columns below).
+  motebit_id: string | null;
   receipt_hash: string;
   ledger_hash: string | null;
   amount_settled: number;
@@ -1982,6 +1986,7 @@ function rowToSettlement(row: SettlementRow): SettlementRecord {
   return {
     settlement_id: row.settlement_id as SettlementId,
     allocation_id: row.allocation_id as AllocationId,
+    motebit_id: (row.motebit_id ?? "") as MotebitId,
     receipt_hash: row.receipt_hash,
     ledger_hash: row.ledger_hash,
     amount_settled: row.amount_settled,
@@ -2010,11 +2015,12 @@ export class ExpoSettlementStore {
   async create(settlement: SettlementRecord): Promise<void> {
     this.db.runSync(
       `INSERT INTO settlements
-       (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, issuer_relay_id, suite, signature)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (settlement_id, allocation_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, issuer_relay_id, suite, signature)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         settlement.settlement_id,
         settlement.allocation_id,
+        settlement.motebit_id,
         settlement.receipt_hash,
         settlement.ledger_hash,
         settlement.amount_settled,
