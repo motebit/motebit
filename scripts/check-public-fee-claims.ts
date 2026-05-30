@@ -40,7 +40,10 @@
  * `README.md`, `DOCTRINE.md`, every `.md`/`.mdx` under `apps/docs/content/`,
  * and the committed `apps/docs/public/llms{,-full}.txt`. CLAUDE.md / spec /
  * doctrine internals are out of scope here — they are engineering surfaces with
- * their own gates; this gate defends the consumer-facing fee representation.
+ * their own gates; this gate defends the consumer-facing fee representation. The
+ * surface set is the closed, curated `SURFACE_FILES` / `SURFACE_TREES` constant
+ * below, whose doc-comment records every deliberate exclusion and the trigger to
+ * extend it (so a future marketing/app-copy surface is a loud miss, not silent).
  *
  * Extending to a second economic claim: add its anchor + patterns alongside the
  * fee rules. The shape — read a canonical constant from code, forbid public
@@ -59,6 +62,39 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 
 const PROTOCOL_INDEX = path.join(REPO_ROOT, "packages/protocol/src/index.ts");
 const DOCS_CONTENT = path.join(REPO_ROOT, "apps/docs/content");
+
+/**
+ * The closed set of public, user-facing prose surfaces this gate guards — the
+ * surfaces #125 actually drifted on, named explicitly so the scope is auditable
+ * rather than an opaque glob.
+ *
+ *   - SURFACE_FILES: singleton files — README.md, DOCTRINE.md, and the two
+ *     committed llms exports.
+ *   - SURFACE_TREES: recursive trees — every .md/.mdx under apps/docs/content,
+ *     so a new docs page is covered automatically.
+ *
+ * Deliberately EXCLUDED, each a conscious call documented so the miss is loud,
+ * not silent (verified 2026-05-30: no fee claim exists on any of these today):
+ *   - CLI help text (apps/cli) and runtime error messages — operational
+ *     strings, not fee representations.
+ *   - The web/desktop/mobile app *source* (apps/web, …) — interactive UI code,
+ *     not prose. The only `fee` string outside scope is apps/operator's
+ *     "(no fee history)" empty-state, a record-count label that matches neither
+ *     rule.
+ *   - A future marketing surface (e.g. apps/marketing) is NOT auto-covered —
+ *     "public surface" is not structurally decidable, so this set is curated.
+ *     TRIGGER: the moment a user-facing fee representation lands in app or
+ *     marketing copy, add its root to SURFACE_FILES / SURFACE_TREES here.
+ */
+const SURFACE_FILES: readonly string[] = [
+  "README.md",
+  "DOCTRINE.md",
+  "apps/docs/public/llms.txt",
+  "apps/docs/public/llms-full.txt",
+];
+const SURFACE_TREES: readonly { root: string; match: (p: string) => boolean }[] = [
+  { root: DOCS_CONTENT, match: (p) => p.endsWith(".mdx") || p.endsWith(".md") },
+];
 
 const SKIP_DIRS = new Set([
   "node_modules",
@@ -190,13 +226,8 @@ function main(): void {
   }
 
   const docs = [
-    ...["README.md", "DOCTRINE.md"]
-      .map((f) => path.join(REPO_ROOT, f))
-      .filter((p) => fs.existsSync(p)),
-    ...findFiles(DOCS_CONTENT, (p) => p.endsWith(".mdx") || p.endsWith(".md")),
-    ...["apps/docs/public/llms.txt", "apps/docs/public/llms-full.txt"]
-      .map((f) => path.join(REPO_ROOT, f))
-      .filter((p) => fs.existsSync(p)),
+    ...SURFACE_FILES.map((f) => path.join(REPO_ROOT, f)).filter((p) => fs.existsSync(p)),
+    ...SURFACE_TREES.flatMap((t) => findFiles(t.root, t.match)),
   ];
 
   const allFindings: Finding[] = [];
