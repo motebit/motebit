@@ -45,6 +45,7 @@ const relayFee = PLATFORM_FEE_RATE; // 0.05 — the universal 5% relay fee.
 - **Event-log vocabulary** — `EventType` closed enum (59 entries spanning identity / memory / goals / approvals / plans / consolidation / co-browse / agents); `ALL_EVENT_TYPES` for iteration, `isEventType` for narrowing wire-format payloads pulled from sync peers or federation
 - **Storage adapters** — pluggable persistence contracts for any backend
 - **Cryptosuite registry** — `SuiteId` union for crypto-agile wire artifacts
+- **Merkle tree-hash registry** — `MerkleTreeVersion` closed union (RFC 6962 §2.1 leaf/node domain separation as an agility axis) with `MERKLE_TREE_VERSION_REGISTRY` + `ALL_MERKLE_TREE_VERSIONS` for iteration, `isMerkleTreeVersion` / `getMerkleTreeVersionEntry` for narrowing/lookup, and `DEFAULT_MERKLE_TREE_VERSION` — the absent ⇒ v1 downgrade-safety default for a proof's optional `tree_hash_version` field
 - **Auto-router registry** — `TaskShape` closed union (`ALL_TASK_SHAPES`, `isTaskShape`) for the model-selection primitive; named constants `QUICK_TASK_SHAPE`, `CHAT_TASK_SHAPE`, `REASONING_TASK_SHAPE`, `CODE_TASK_SHAPE`, `RESEARCH_TASK_SHAPE`, `CREATIVE_TASK_SHAPE`, `MATH_TASK_SHAPE`. Paired with `ProviderCapability` + `RoutingConstraint` + `RoutingDecision` types consumed by `@motebit/policy::dispatchRouting`
 
 Product-level types (state vectors, creature behavior, rendering spec) live in [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk), which re-exports everything here plus the product vocabulary.
