@@ -16,6 +16,11 @@
       "minLength": 1,
       "description": "Identifier of the BudgetAllocation this settlement closes. The allocation locked funds when the task was submitted; this record finalizes them."
     },
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The payee — `motebit_id` of the worker this settlement pays (equals the executing agent's `ExecutionReceipt.motebit_id`). Named in the signed body so the receipt is self-contained: a worker proves it was paid from the bytes alone, without a relay-side allocation→payee join. The relay cannot re-point the payee after the fact."
+    },
     "receipt_hash": {
       "type": "string",
       "minLength": 1,
@@ -78,6 +83,7 @@
   "required": [
     "settlement_id",
     "allocation_id",
+    "motebit_id",
     "receipt_hash",
     "ledger_hash",
     "amount_settled",
@@ -104,6 +110,11 @@
           "type": "string",
           "minLength": 1,
           "description": "Identifier of the BudgetAllocation this settlement closes. The allocation locked funds when the task was submitted; this record finalizes them."
+        },
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The payee — `motebit_id` of the worker this settlement pays (equals the executing agent's `ExecutionReceipt.motebit_id`). Named in the signed body so the receipt is self-contained: a worker proves it was paid from the bytes alone, without a relay-side allocation→payee join. The relay cannot re-point the payee after the fact."
         },
         "receipt_hash": {
           "type": "string",
@@ -167,6 +178,7 @@
       "required": [
         "settlement_id",
         "allocation_id",
+        "motebit_id",
         "receipt_hash",
         "ledger_hash",
         "amount_settled",

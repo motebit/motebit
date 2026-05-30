@@ -70,6 +70,7 @@ export type Classification =
  */
 export const REGISTRY: Record<string, Classification> = {
   // ── A: dedicated portable verifier ──────────────────────────────────────
+  AgentSettlementAnchorProof: { kind: "verifier", verifier: "verifyAgentSettlementAnchor" },
   ComputerSessionReceipt: { kind: "verifier", verifier: "verifyComputerSessionReceipt" },
   CredentialAnchorProof: { kind: "verifier", verifier: "verifyCredentialAnchor" },
   AdjudicatorVote: { kind: "verifier", verifier: "verifyAdjudicatorVote" },
@@ -113,6 +114,11 @@ export const REGISTRY: Record<string, Classification> = {
   RelayMetadata: { kind: "verifier", verifier: "verifyRelayMetadata" },
 
   // ── B: verified within a parent artifact's verifier ─────────────────────
+  AgentSettlementAnchorBatch: {
+    kind: "within",
+    verifier: "verifyAgentSettlementAnchor",
+    note: "the batch root + signature are reconstructed and verified inside verifyAgentSettlementAnchor (step 3); the Batch type is never passed standalone — the proof carries the batch fields",
+  },
   CredentialAnchorBatch: {
     kind: "within",
     verifier: "verifyCredentialAnchor",
@@ -155,14 +161,6 @@ export const REGISTRY: Record<string, Classification> = {
   },
 
   // ── C: KNOWN GAP — signed but no portable verifier yet (tracked backlog) ─
-  AgentSettlementAnchorBatch: {
-    kind: "gap",
-    note: "relay-constructed settlement-anchor batch; portable verifier not yet built",
-  },
-  AgentSettlementAnchorProof: {
-    kind: "gap",
-    note: "settlement-anchor inclusion proof; portable verifier not yet built",
-  },
   VoteRequest: {
     kind: "gap",
     note: "verified inline in services/relay/src/federation.ts (verify() over canonical JSON), not via a portable verify* — a third party cannot self-verify with @motebit/crypto alone",

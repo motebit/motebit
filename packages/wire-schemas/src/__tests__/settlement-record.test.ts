@@ -9,6 +9,7 @@ import { SettlementRecordSchema } from "../settlement-record.js";
 const SAMPLE: Record<string, unknown> = {
   settlement_id: "01HTV8X9QZ-settlement-1",
   allocation_id: "01HTV8X9QZ-alloc-1",
+  motebit_id: "01HTV8X9QZ-payee-1",
   receipt_hash: "a".repeat(64),
   ledger_hash: "b".repeat(64),
   amount_settled: 950_000, // $0.95 in micro-units

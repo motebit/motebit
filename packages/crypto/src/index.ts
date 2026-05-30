@@ -2017,6 +2017,13 @@ export {
   type RevocationAnchorProof,
 } from "./credential-anchor.js";
 export {
+  AGENT_SETTLEMENT_ANCHOR_SUITE,
+  computeAgentSettlementLeaf,
+  verifyAgentSettlementAnchor,
+  type AgentSettlementAnchorVerifyResult,
+  type AgentSettlementAnchorProofFields,
+} from "./agent-settlement-anchor.js";
+export {
   SKILL_SIGNATURE_SUITE,
   canonicalizeSkillManifestBytes,
   canonicalizeSkillEnvelopeBytes,

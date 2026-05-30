@@ -3001,6 +3001,7 @@ export interface SettlementRecord {
     issuer_relay_id: string;
     // (undocumented)
     ledger_hash: string | null;
+    motebit_id: MotebitId;
     platform_fee: number;
     platform_fee_rate: number;
     // (undocumented)

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { openMotebitDB } from "../idb.js";
 import { IdbSettlementStore } from "../settlement-store.js";
 import type { SettlementRecord } from "@motebit/sdk";
-import { asSettlementId, asAllocationId } from "@motebit/sdk";
+import { asSettlementId, asAllocationId, asMotebitId } from "@motebit/sdk";
 
 describe("IdbSettlementStore", () => {
   let store: IdbSettlementStore;
@@ -11,6 +11,7 @@ describe("IdbSettlementStore", () => {
     return {
       settlement_id: asSettlementId(crypto.randomUUID()),
       allocation_id: asAllocationId("alloc-1"),
+      motebit_id: asMotebitId("mote-1"),
       receipt_hash: "sha256-abc",
       ledger_hash: null,
       amount_settled: 450000,

@@ -140,11 +140,12 @@ describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => 
     expect(outcomeCols.some((c) => c.name === "response_full")).toBe(true);
     expect(outcomeCols.some((c) => c.name === "signed_manifest")).toBe(true);
 
-    // v5 column — settlement lane discriminant
+    // v5 + v6 columns — settlement lane discriminant + payee
     const settlementCols = db.prepare("PRAGMA table_info(settlements)").all() as Array<{
       name: string;
     }>;
     expect(settlementCols.some((c) => c.name === "settlement_mode")).toBe(true);
+    expect(settlementCols.some((c) => c.name === "motebit_id")).toBe(true);
 
     const version = db.prepare("PRAGMA user_version").get() as { user_version: number };
     expect(version.user_version).toBe(latest);

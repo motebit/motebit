@@ -504,6 +504,7 @@ describe("signSettlement / verifySettlement", () => {
     return {
       settlement_id: "settle-001" as never,
       allocation_id: "alloc-001" as never,
+      motebit_id: "mote-001" as never,
       receipt_hash: "a".repeat(64),
       ledger_hash: null,
       amount_settled: 950_000,

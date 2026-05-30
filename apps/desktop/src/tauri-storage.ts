@@ -1817,6 +1817,9 @@ export class TauriBudgetAllocationStore implements BudgetAllocationStoreAdapter 
 interface SettlementRow {
   settlement_id: string;
   allocation_id: string;
+  // Payee. Nullable for backward-compat; legacy rows surface "" and fail
+  // wire-schema downstream (same fail-closed signal as the columns below).
+  motebit_id: string | null;
   receipt_hash: string;
   ledger_hash: string | null;
   amount_settled: number;
@@ -1846,6 +1849,7 @@ function rowToSettlement(row: SettlementRow): SettlementRecord {
   const record: SettlementRecord = {
     settlement_id: asSettlementId(row.settlement_id),
     allocation_id: asAllocationId(row.allocation_id),
+    motebit_id: asMotebitId(row.motebit_id ?? ""),
     receipt_hash: row.receipt_hash,
     ledger_hash: row.ledger_hash,
     amount_settled: row.amount_settled,
@@ -1879,11 +1883,12 @@ export class TauriSettlementStore implements SettlementStoreAdapter {
   async create(settlement: SettlementRecord): Promise<void> {
     await dbExecute(
       this.invoke,
-      `INSERT OR REPLACE INTO settlements (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, settlement_mode, x402_tx_hash, x402_network, status, settled_at, issuer_relay_id, suite, signature)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO settlements (settlement_id, allocation_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, settlement_mode, x402_tx_hash, x402_network, status, settled_at, issuer_relay_id, suite, signature)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         settlement.settlement_id,
         settlement.allocation_id,
+        settlement.motebit_id,
         settlement.receipt_hash,
         settlement.ledger_hash,
         settlement.amount_settled,

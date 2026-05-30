@@ -149,6 +149,8 @@ export function settleOnReceipt(
     return {
       settlement_id: settlementId,
       allocation_id: allocation.allocation_id,
+      // Payee = the executing agent named on the receipt.
+      motebit_id: receipt.motebit_id,
       receipt_hash: receiptHash,
       ledger_hash: ledger?.content_hash ?? null,
       amount_settled: 0,
@@ -201,6 +203,8 @@ export function settleOnReceipt(
   return {
     settlement_id: settlementId,
     allocation_id: allocation.allocation_id,
+    // Payee = the executing agent named on the receipt.
+    motebit_id: receipt.motebit_id,
     receipt_hash: receiptHash,
     ledger_hash: ledger?.content_hash ?? null,
     amount_settled: net,

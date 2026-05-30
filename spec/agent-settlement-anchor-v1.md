@@ -24,28 +24,19 @@ This is the per-agent analogue of inter-relay settlement anchoring (relay-federa
 
 ## 3. Per-Agent Settlement Leaf Hash
 
-A per-agent settlement leaf is the SHA-256 hash of the canonical JSON of the **whole signed `SettlementRecord`** (signature included). The leaf commits the entire signed artifact, so reconstructing it requires only the bytes the worker already holds:
+A per-agent settlement leaf is the SHA-256 hash of the canonical JSON of the **whole signed `SettlementRecord`, verbatim** (signature included):
 
 ```
-agent_settlement_leaf = SHA-256(canonicalJson({
-  settlement_id,
-  motebit_id,
-  receipt_hash,
-  ledger_hash,
-  amount_settled,
-  platform_fee,
-  platform_fee_rate,
-  status,
-  settled_at,
-  issuer_relay_id,
-  suite,
-  signature
-}))
+agent_settlement_leaf = SHA-256(canonicalJson(settlement_record))
 ```
 
-`canonicalJson` is JCS/RFC 8785 deterministic serialization, the same canonicalization the relay used to sign the record itself.
+where `settlement_record` is the exact signed `SettlementRecord` object as defined in `settlement-v1.md` §3 — **every field it carries, hashed as-is**. Implementations MUST hash the record object, NOT a hand-typed projection of its fields. A re-typed subset cannot be reproduced from the bytes the worker holds, so the receipt would not self-verify. (This is the SCITT [`draft-ietf-scitt-architecture`] / RFC 6962 invariant: anchor the exact signed object; reproduce the leaf from the holder's bytes. An earlier draft of this spec hand-listed the leaf fields, and the reference producer drifted from that list — swapping `allocation_id`→`motebit_id` and dropping `x402_*` — which silently broke self-verification. The fix is to hash the object, never a field list.)
 
-The signature is included in the leaf because the worker holds the signed artifact end-to-end. The leaf commits "the relay attested to exactly this record" rather than "the relay attested to a record with these fields." This avoids a re-signing ambiguity at verification time.
+For reference, the signed `SettlementRecord` carries: `settlement_id`, `allocation_id`, `motebit_id` (the payee), `receipt_hash`, `ledger_hash`, `amount_settled`, `platform_fee`, `platform_fee_rate`, `settlement_mode`, `x402_tx_hash`? , `x402_network`? , `status`, `settled_at`, `issuer_relay_id`, `suite`, `signature`. Optional fields (`x402_*`) appear in the canonical JSON only when present (JCS omits absent keys) — which is exactly why hashing the object, not a fixed list, is mandatory.
+
+`canonicalJson` is JCS/RFC 8785 deterministic serialization, the same canonicalization the relay used to sign the record itself. The reference relay persists these exact canonical bytes (`relay_settlements.record_json`) at settlement time and hashes them directly, guaranteeing the anchored leaf equals what a worker computes over the record they hold.
+
+The signature is included in the leaf because the worker holds the signed artifact end-to-end. The leaf commits "the relay attested to exactly this record" rather than "the relay attested to a record with these fields."
 
 ### 3.1 Verification
 
@@ -106,11 +97,14 @@ batch_payload = canonicalJson({
   leaf_count,
   first_settled_at,
   last_settled_at,
-  relay_id
+  relay_id,
+  suite            // "motebit-jcs-ed25519-hex-v1" — signature-bound, not assumed
 })
 
 signature = Ed25519.sign(batch_payload, relay_private_key)
 ```
+
+`suite` is included in the signed payload so the cryptosuite is signature-bound (cryptosuite-agility): a verifier cannot be tricked into accepting a batch signature under a different suite than the one the relay committed to. (The sibling `credential-anchor-v1.md` binds `suite` the same way; the per-agent and federation settlement-anchor batch payloads must converge on this — see §9.1 for the tracked federation convergence.)
 
 ### 4.3 Batch Triggers
 
@@ -242,3 +236,13 @@ Three anchoring streams use the same Merkle primitive but serve distinct audienc
 | **Public access**      | Federation peer (auth)                              | Public (no auth) — rule 6                   | Public (no auth) — rule 6                         |
 
 All three use the same `buildMerkleTree`, `getMerkleProof`, and `verifyMerkleProof` primitives from the shared Merkle library, and the same `ChainAnchorSubmitter` interface (`@motebit/protocol`).
+
+### 9.1 Deferred: federation-anchor convergence
+
+The per-agent stream (this spec) and the credential stream are **self-verifiable offline** — a holder reconstructs the leaf from the exact signed artifact it holds, the batch payload binds `suite`, and a portable `verify*` in `@motebit/crypto` closes the loop (`verifyAgentSettlementAnchor`, `verifyCredentialAnchor`). The **federation settlement stream is not yet**, on three counts:
+
+1. **Leaf is a column projection, not a whole-artifact hash.** `computeSettlementLeaf` (federation) hashes a hand-typed subset of `relay_federation_settlements` fields — the same fragility class the per-agent leaf was just moved off of (a re-typed field list drifts from what a holder can reproduce). The federation leaf must become `SHA-256(canonicalJson(the exact signed federation-settlement artifact))`.
+2. **Batch payload omits `suite`.** The federation `anchorPayload` is not suite-bound; per-agent and credential both bind it (§4.2). Cross-suite confusion is not signature-caught on the federation path.
+3. **No portable verifier, and untracked.** There is no `FederationSettlementAnchorProof` type in `@motebit/protocol`, so `check-signed-artifact-verifiers` cannot track it and a peer cannot self-verify a federation inclusion proof with `@motebit/crypto` alone.
+
+**Trigger:** before federation settlements anchor for real (no production federation-settlement-anchor data exists yet — the same clean window that made the per-agent fix safe applies here), or the first peer/sovereign consumer that needs offline verification of a federated settlement. **Convergence target:** federation adopts the verbatim-leaf + suite-bound-payload shape, the federation proof becomes a typed `@motebit/protocol` artifact, and `verifyFederationSettlementAnchor` lands in `@motebit/crypto` as the fourth Merkle consumer — flipping a (then-tracked) gap to a verifier exactly as the per-agent stream did.

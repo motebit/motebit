@@ -56,6 +56,12 @@ export const SettlementRecordSchema = z
       .describe(
         "Identifier of the BudgetAllocation this settlement closes. The allocation locked funds when the task was submitted; this record finalizes them.",
       ),
+    motebit_id: z
+      .string()
+      .min(1)
+      .describe(
+        "The payee — `motebit_id` of the worker this settlement pays (equals the executing agent's `ExecutionReceipt.motebit_id`). Named in the signed body so the receipt is self-contained: a worker proves it was paid from the bytes alone, without a relay-side allocation→payee join. The relay cannot re-point the payee after the fact.",
+      ),
     receipt_hash: z
       .string()
       .min(1)

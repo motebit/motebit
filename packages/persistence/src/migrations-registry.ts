@@ -337,4 +337,17 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE settlements ADD COLUMN settlement_mode TEXT DEFAULT 'relay'",
     ],
   },
+  {
+    version: 38,
+    description: "settlements.motebit_id — the payee named in the signed settlement receipt",
+    statements: [
+      // SettlementRecord gained a required `motebit_id` (payee) wire field so
+      // a settlement receipt names who was paid in its signed body, not only
+      // the relay-internal allocation_id. Nullable in the DB for backward-
+      // compat reads: rowToSettlement surfaces legacy rows as "" so wire-schema
+      // validation rejects them — the intended fail-closed signal. New writes
+      // persist the payee explicitly.
+      "ALTER TABLE settlements ADD COLUMN motebit_id TEXT",
+    ],
+  },
 ];

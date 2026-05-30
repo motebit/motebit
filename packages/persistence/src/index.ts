@@ -2514,6 +2514,11 @@ export class SqliteBudgetAllocationStore {
 interface SettlementRow {
   settlement_id: string;
   allocation_id: string;
+  // Payee. Nullable in the DB for backward-compat with rows persisted
+  // before SettlementRecord named its payee; `rowToSettlement` surfaces
+  // legacy rows as "" which fails wire-schema downstream (same fail-closed
+  // signal as the self-attestation columns below).
+  motebit_id: string | null;
   receipt_hash: string;
   ledger_hash: string | null;
   amount_settled: number;
@@ -2544,6 +2549,7 @@ function rowToSettlement(row: SettlementRow): SettlementRecord {
   return {
     settlement_id: row.settlement_id as SettlementId,
     allocation_id: row.allocation_id as AllocationId,
+    motebit_id: (row.motebit_id ?? "") as MotebitId,
     receipt_hash: row.receipt_hash,
     ledger_hash: row.ledger_hash,
     amount_settled: row.amount_settled,
@@ -2575,8 +2581,8 @@ export class SqliteSettlementStore {
     this.stmtGet = db.prepare(`SELECT * FROM settlements WHERE settlement_id = ?`);
     this.stmtCreate = db.prepare(
       `INSERT INTO settlements
-       (settlement_id, allocation_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, issuer_relay_id, suite, signature)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (settlement_id, allocation_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, issuer_relay_id, suite, signature)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtListByAllocation = db.prepare(
       `SELECT * FROM settlements WHERE allocation_id = ? ORDER BY settled_at DESC`,
@@ -2592,6 +2598,7 @@ export class SqliteSettlementStore {
     this.stmtCreate.run(
       settlement.settlement_id,
       settlement.allocation_id,
+      settlement.motebit_id,
       settlement.receipt_hash,
       settlement.ledger_hash,
       settlement.amount_settled,
