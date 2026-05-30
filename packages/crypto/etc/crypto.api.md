@@ -22,6 +22,7 @@ import type { GoalExecutionManifest } from '@motebit/protocol';
 import type { HardwareAttestationClaim } from '@motebit/protocol';
 import type { HorizonWitness } from '@motebit/protocol';
 import type { HorizonWitnessRequestBody } from '@motebit/protocol';
+import type { MerkleTreeVersion } from '@motebit/protocol';
 import type { MigrationPresentation } from '@motebit/protocol';
 import type { MigrationRequest } from '@motebit/protocol';
 import type { MigrationToken } from '@motebit/protocol';
@@ -1479,7 +1480,7 @@ export function verifyKeyBindingAtTime(identity: MotebitIdentityFile, signingKey
 export function verifyKeySuccession(record: KeySuccessionRecord, guardianPublicKeyHex?: string): Promise<boolean>;
 
 // @public
-export function verifyMerkleInclusion(leaf: string, index: number, siblings: string[], layerSizes: number[], expectedRoot: string): Promise<boolean>;
+export function verifyMerkleInclusion(leaf: string, index: number, siblings: string[], layerSizes: number[], expectedRoot: string, treeHashVersion?: MerkleTreeVersion): Promise<boolean>;
 
 // @public
 export function verifyMigratingKeyBinding(motebitId: string, presentedKeyHex: string, identityFile?: MotebitIdentityFile): Promise<boolean>;
