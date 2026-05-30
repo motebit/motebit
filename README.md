@@ -142,7 +142,7 @@ motebit migrate cancel                                     # abort migration
 
 `motebit run` is the operator daemon — REPL plus task-acceptance in one process. `motebit serve` (used by the scaffold's `npm run dev`) exposes your agent as an MCP server with no REPL. Both accept paid tasks; pick the one that matches whether you want a console or a pure service.
 
-Every task settles through the relay or directly peer-to-peer. Relay-mediated: budget locked → execution → signed receipt → worker paid (5% fee). P2P: delegator sends USDC directly to worker's wallet when trust is high enough — zero fees, relay records the audit trail. Settlement mode selected per-task by policy. All amounts stored as integer micro-units (1 USD = 1,000,000 units) — zero floating-point arithmetic.
+Every task settles through the relay or directly peer-to-peer. Relay-mediated: budget locked → execution → signed receipt → worker paid (5% fee). P2P: delegator sends USDC directly to the worker's wallet when trust is high enough — the same 5% fee rides along as a direct delegator→treasury leg in one atomic Solana transaction, so the relay records the audit but never custodies the funds. Settlement mode selected per-task by policy. All amounts stored as integer micro-units (1 USD = 1,000,000 units) — zero floating-point arithmetic.
 
 ## Federation
 

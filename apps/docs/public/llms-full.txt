@@ -5720,7 +5720,7 @@ Eight services in four roles. All are reference implementations of the protocol 
 | **Atoms**     | `web-search` ($0.05/request), `read-url`, `summarize`, `embed` | Stateless capability providers. Single-hop reference implementations of the delegation spec.                                                                       |
 | **Glue**      | `proxy`                                                        | Vercel edge CORS proxy for the web app (Anthropic API, fetch, embed).                                                                                              |
 
-Every task settles through the relay or directly peer-to-peer. Relay-mediated: budget locked → execution → signed receipt → worker paid (5% fee). P2P: delegator sends USDC directly to the worker's wallet when trust is high enough — zero fees, relay records audit only.
+Every task settles through the relay or directly peer-to-peer. Relay-mediated: budget locked → execution → signed receipt → worker paid (5% fee). P2P: delegator sends USDC directly to the worker's wallet when trust is high enough — the same 5% fee rides along as a direct delegator→treasury leg in one atomic Solana transaction, so the relay records the audit but never custodies the funds.
 
 ## Specifications
 
