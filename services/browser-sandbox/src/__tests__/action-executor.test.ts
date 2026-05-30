@@ -40,6 +40,15 @@ interface MockSession {
   setEvaluateImpl(fn: () => Promise<unknown>): void;
   setPageUrlImpl(fn: () => string): void;
   setLocatorCountImpl(fn: (selector: string) => number): void;
+  /**
+   * Arm (or disarm) a main-frame document navigation for the next
+   * submit-shaped action. When armed, `waitForRequest` resolves with a
+   * synthetic navigation request → `navigation_triggered: true`. When
+   * disarmed (default), the wait times out → false. Models the real
+   * distinction the dispatcher reads: a real navigation issues a
+   * document request; a same-document URL mutation does not.
+   */
+  setNavigatesOnAction(navigates: boolean): void;
   mockPage: {
     goto: ReturnType<typeof vi.fn>;
     waitForLoadState: ReturnType<typeof vi.fn>;
@@ -50,6 +59,8 @@ interface MockSession {
     mouse: BrowserSession["page"]["mouse"];
     keyboard: BrowserSession["page"]["keyboard"];
     locator: ReturnType<typeof vi.fn>;
+    mainFrame: ReturnType<typeof vi.fn>;
+    waitForRequest: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -98,8 +109,30 @@ function makeMockSession(): MockSession {
     botDetection: false,
   });
   let pageUrlImpl: () => string = () => currentUrl;
+  // Navigation-truth arming — see `setNavigatesOnAction`. A stable
+  // main-frame identity lets the dispatcher's predicate
+  // (`req.frame() === page.mainFrame()`) match the synthetic request.
+  let navArmed = false;
+  const mockMainFrame = {};
 
   const mockPage = {
+    mainFrame: vi.fn(() => mockMainFrame),
+    // Canonical Playwright "did this action navigate" wait. Resolves
+    // with a synthetic main-frame document request when armed; rejects
+    // (the timeout branch) otherwise. The dispatcher maps resolve→true,
+    // reject→false. Rejecting promptly keeps non-navigating tests fast —
+    // the unit test asserts the branch outcome, not the real settle
+    // duration.
+    waitForRequest: vi.fn((predicate: (req: unknown) => boolean, opts?: { timeout?: number }) => {
+      if (navArmed) {
+        const req = {
+          isNavigationRequest: () => true,
+          frame: () => mockMainFrame,
+        };
+        if (predicate(req)) return Promise.resolve(req);
+      }
+      return Promise.reject(new Error(`waitForRequest timeout after ${opts?.timeout ?? 0}ms`));
+    }),
     goto: vi.fn(async (url: string, opts: unknown) => gotoImpl(url, opts)),
     waitForLoadState: vi.fn(async (state: string, opts?: unknown) =>
       waitForLoadStateImpl(state, opts),
@@ -199,6 +232,9 @@ function makeMockSession(): MockSession {
     setLocatorCountImpl(fn: (selector: string) => number): void {
       locatorCountImpl = fn;
     },
+    setNavigatesOnAction(navigates: boolean): void {
+      navArmed = navigates;
+    },
     mockPage,
   } as unknown as MockSession;
 }
@@ -275,11 +311,7 @@ describe("executeAction", () => {
 
     it("navigation_triggered: true when click triggers a navigation (link / form submit)", async () => {
       const mock = makeMockSession();
-      let urlReadCount = 0;
-      mock.setPageUrlImpl(() => {
-        urlReadCount++;
-        return urlReadCount === 1 ? "https://example.com/" : "https://example.com/landing";
-      });
+      mock.setNavigatesOnAction(true);
       const result = (await executeAction(
         mock.session,
         { kind: "click", target: { x: 100, y: 200 } },
@@ -312,11 +344,7 @@ describe("executeAction", () => {
 
     it("navigation_triggered: true when double_click triggers a navigation", async () => {
       const mock = makeMockSession();
-      let urlReadCount = 0;
-      mock.setPageUrlImpl(() => {
-        urlReadCount++;
-        return urlReadCount === 1 ? "https://example.com/" : "https://example.com/result";
-      });
+      mock.setNavigatesOnAction(true);
       const result = (await executeAction(
         mock.session,
         { kind: "double_click", target: { x: 100, y: 200 } },
@@ -576,11 +604,10 @@ describe("executeAction", () => {
     describe("navigation_triggered typed-truth field", () => {
       it("navigation_triggered: false when Enter does NOT trigger navigation (witnessed bug)", async () => {
         const mock = makeMockSession();
-        // Default mock: page.url() returns "about:blank" both before
-        // and after the key press — no navigation fired. Mirrors the
-        // 2026-05-12 witnessed bug where the AI pressed Enter on the
-        // Google search input, Google's promo overlay intercepted,
-        // and the page stayed on the homepage.
+        // Default mock: no navigation request fires — the wait times
+        // out. Mirrors the 2026-05-12 witnessed bug where the AI
+        // pressed Enter on the Google search input, the keystroke went
+        // nowhere, and the page stayed on the homepage.
         const result = (await executeAction(
           mock.session,
           { kind: "key", key: "Enter" },
@@ -592,15 +619,61 @@ describe("executeAction", () => {
 
       it("navigation_triggered: true when Enter triggers a form submission", async () => {
         const mock = makeMockSession();
-        // Simulate Playwright's url() returning different values
-        // before and after the keypress — form submission navigated
-        // the page.
+        // A real form submission issues a main-frame document request.
+        mock.setNavigatesOnAction(true);
+        const result = (await executeAction(
+          mock.session,
+          { kind: "key", key: "Enter" },
+          deps,
+        )) as Record<string, unknown>;
+        expect(result.ok).toBe(true);
+        expect(result.navigation_triggered).toBe(true);
+      });
+
+      // Prod regression 2026-05-26 — the load-bearing guard. Google's
+      // homepage rewrites its own URL to `?zx=<ts>` via history
+      // replaceState on interaction, WITHOUT navigating. The earlier
+      // `beforeUrl !== afterUrl` check read that string change as a
+      // navigation → `navigation_triggered: true` → the dishonest-
+      // closing intercept stayed silent → the model's "Done." stood on
+      // a search that never ran. A same-document mutation issues NO
+      // document request, so the request-keyed signal correctly reports
+      // false even though the URL string changed.
+      it("navigation_triggered: false when the URL mutates same-document (Google ?zx=)", async () => {
+        const mock = makeMockSession();
+        // No navigation request armed (replaceState issues none)…
+        mock.setNavigatesOnAction(false);
+        // …but the URL string DOES change, exactly as Google's ?zx=
+        // rewrite does. The old URL-diff signal would flip to true here.
         let urlReadCount = 0;
         mock.setPageUrlImpl(() => {
           urlReadCount++;
           return urlReadCount === 1
-            ? "https://example.com/form"
-            : "https://example.com/submit-result";
+            ? "https://www.google.com/"
+            : "https://www.google.com/?zx=1779853601769";
+        });
+        const result = (await executeAction(
+          mock.session,
+          { kind: "key", key: "Enter" },
+          deps,
+        )) as Record<string, unknown>;
+        expect(result.ok).toBe(true);
+        expect(result.navigation_triggered).toBe(false);
+      });
+
+      // SPA route move via pushState — a real navigation that issues no
+      // document request. The PATH changes (/ → /results), so it counts;
+      // this is the case a request-only signal would have mis-reported
+      // as "didn't move," over-firing the dishonest-closing intercept.
+      it("navigation_triggered: true when a same-document push changes the path (SPA route)", async () => {
+        const mock = makeMockSession();
+        mock.setNavigatesOnAction(false); // no document request
+        let urlReadCount = 0;
+        mock.setPageUrlImpl(() => {
+          urlReadCount++;
+          return urlReadCount === 1
+            ? "https://app.example.com/"
+            : "https://app.example.com/results";
         });
         const result = (await executeAction(
           mock.session,
@@ -980,13 +1053,9 @@ describe("executeAction", () => {
       expect(clickActions.length).toBe(1);
     });
 
-    it("returns navigation_triggered: true when URL changes during click", async () => {
+    it("returns navigation_triggered: true when the click triggers a navigation", async () => {
       const m = makeMockSession();
-      let urlCallCount = 0;
-      m.setPageUrlImpl(() => {
-        urlCallCount++;
-        return urlCallCount === 1 ? "https://example.com/" : "https://example.com/landing";
-      });
+      m.setNavigatesOnAction(true);
       m.setEvaluateImpl(async () => ({ clicked_tag: "a", focused_typeable: false }));
       const result = (await executeAction(
         m.session,
