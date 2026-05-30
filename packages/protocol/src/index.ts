@@ -2601,6 +2601,26 @@ export type {
 } from "./crypto-suite.js";
 export { SUITE_REGISTRY, ALL_SUITE_IDS, isSuiteId, getSuiteEntry } from "./crypto-suite.js";
 
+// Merkle tree-hash version registry — the agility axis for leaf/node domain
+// separation (RFC 6962 §2.1). Separate from `SuiteId` (signature recipe): this
+// names the tree-hash recipe that builds the root the signature commits to. A
+// signed proof carries an optional `tree_hash_version`; absent ⇒ v1. See
+// `packages/protocol/src/merkle-tree-hash.ts` for the registry and
+// `docs/doctrine/merkle-tree-hash-versioning.md` for the migration.
+export type {
+  MerkleTreeVersion,
+  MerkleTreeVersionEntry,
+  MerkleTreeVersionStatus,
+  MerkleHashFunction,
+} from "./merkle-tree-hash.js";
+export {
+  MERKLE_TREE_VERSION_REGISTRY,
+  ALL_MERKLE_TREE_VERSIONS,
+  DEFAULT_MERKLE_TREE_VERSION,
+  isMerkleTreeVersion,
+  getMerkleTreeVersionEntry,
+} from "./merkle-tree-hash.js";
+
 // ── Retention policy (protocol-level) ────────────────────────────────
 // Three retention shapes, one signed `DeletionCertificate` discriminated
 // union, sensitivity ceilings as interop law + reference defaults,

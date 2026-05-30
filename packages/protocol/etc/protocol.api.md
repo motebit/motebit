@@ -244,6 +244,9 @@ export const ALL_CONTENT_ARTIFACT_TYPES: readonly ContentArtifactType[];
 export const ALL_EVENT_TYPES: readonly EventType[];
 
 // @public
+export const ALL_MERKLE_TREE_VERSIONS: readonly MerkleTreeVersion[];
+
+// @public
 export const ALL_SENSITIVITY_LEVELS: readonly SensitivityLevel[];
 
 // @public
@@ -979,6 +982,9 @@ export enum DataClass {
     SECRET = "secret"
 }
 
+// @public
+export const DEFAULT_MERKLE_TREE_VERSION: MerkleTreeVersion;
+
 // @public @deprecated (undocumented)
 export const DEFAULT_TRUST_THRESHOLDS: TrustTransitionThresholds;
 
@@ -1630,6 +1636,12 @@ export function fromCents(cents: number): number;
 export function fromMicro(micro: number): number;
 
 // @public
+export function getMerkleTreeVersionEntry(id: MerkleTreeVersion): MerkleTreeVersionEntry;
+
+// @public (undocumented)
+export function getMerkleTreeVersionEntry(id: string): MerkleTreeVersionEntry | undefined;
+
+// @public
 export function getSuiteEntry(id: SuiteId): SuiteEntry;
 
 // @public (undocumented)
@@ -1864,6 +1876,9 @@ export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail
 
 // @public
 export function isEventType(value: unknown): value is EventType;
+
+// @public
+export function isMerkleTreeVersion(value: unknown): value is MerkleTreeVersion;
 
 // @public
 export function isSensitivityLevel(value: unknown): value is SensitivityLevel;
@@ -2114,8 +2129,14 @@ export enum MemoryType {
     Semantic = "semantic"
 }
 
+// @public (undocumented)
+export const MERKLE_TREE_VERSION_REGISTRY: Readonly<Record<MerkleTreeVersion, MerkleTreeVersionEntry>>;
+
 // @public
 export type MerkleAlgo = "merkle-sha256-v1";
+
+// @public
+export type MerkleHashFunction = "SHA-256";
 
 // @public
 export interface MerkleInclusionProof {
@@ -2126,6 +2147,25 @@ export interface MerkleInclusionProof {
     // (undocumented)
     readonly siblings: string[];
 }
+
+// @public
+export type MerkleTreeVersion = "merkle-sha256-plain-v1" | "merkle-sha256-rfc6962-v2";
+
+// @public
+export interface MerkleTreeVersionEntry {
+    readonly description: string;
+    // (undocumented)
+    readonly hash: MerkleHashFunction;
+    // (undocumented)
+    readonly id: MerkleTreeVersion;
+    readonly leafTag: number | null;
+    readonly nodeTag: number | null;
+    // (undocumented)
+    readonly status: MerkleTreeVersionStatus;
+}
+
+// @public
+export type MerkleTreeVersionStatus = "preferred" | "allowed" | "legacy";
 
 // @public
 export const MICRO = 1000000;
