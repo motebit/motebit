@@ -137,4 +137,52 @@ describe("verifyAgentSettlementAnchor", () => {
     expect(r.valid).toBe(false);
     expect(r.steps.relay_signature_valid).toBe(false);
   });
+
+  it("fails the Merkle step when the proof does not reconstruct to the claimed root", async () => {
+    const kp = await generateKeypair();
+    const proof = await makeProof(RECORD, kp);
+    proof.merkle_root = "f".repeat(64); // leaf no longer reconstructs to this root
+    const r = await verifyAgentSettlementAnchor(RECORD, proof);
+    expect(r.valid).toBe(false);
+    expect(r.steps.merkle_valid).toBe(false);
+  });
+
+  const ANCHOR = {
+    chain: "eip155",
+    network: "eip155:8453",
+    tx_hash: "0xdeadbeef",
+    anchored_at: 1_700_000_000_000,
+  };
+
+  it("runs the optional onchain step and passes when the chain verifier confirms the root", async () => {
+    const kp = await generateKeypair();
+    const proof = { ...(await makeProof(RECORD, kp)), anchor: ANCHOR };
+    const r = await verifyAgentSettlementAnchor(RECORD, proof, async (a) => {
+      // The verifier is handed the proof's anchor plus the expected root.
+      expect(a.expected_root).toBe(proof.merkle_root);
+      return true;
+    });
+    expect(r.valid).toBe(true);
+    expect(r.steps.chain_verified).toBe(true);
+  });
+
+  it("fails when the chain verifier reports the root is not anchored", async () => {
+    const kp = await generateKeypair();
+    const proof = { ...(await makeProof(RECORD, kp)), anchor: ANCHOR };
+    const r = await verifyAgentSettlementAnchor(RECORD, proof, async () => false);
+    expect(r.valid).toBe(false);
+    expect(r.steps.chain_verified).toBe(false);
+    expect(r.errors.some((e) => /onchain anchor verification failed/i.test(e))).toBe(true);
+  });
+
+  it("fails closed when the chain verifier throws", async () => {
+    const kp = await generateKeypair();
+    const proof = { ...(await makeProof(RECORD, kp)), anchor: ANCHOR };
+    const r = await verifyAgentSettlementAnchor(RECORD, proof, async () => {
+      throw new Error("rpc unreachable");
+    });
+    expect(r.valid).toBe(false);
+    expect(r.steps.chain_verified).toBe(false);
+    expect(r.errors.some((e) => /onchain verification error/i.test(e))).toBe(true);
+  });
 });
