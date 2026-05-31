@@ -121,6 +121,7 @@ export interface AgentSettlementAnchorProof {
     settlement_id: string;
     siblings: string[];
     suite: "motebit-jcs-ed25519-hex-v1";
+    tree_hash_version?: MerkleTreeVersion;
 }
 
 // @public
@@ -758,6 +759,7 @@ export interface ConsolidationAnchor {
     motebit_id: MotebitId;
     network?: string;
     receipt_ids: ReadonlyArray<string>;
+    tree_hash_version?: MerkleTreeVersion;
     tx_hash?: string;
 }
 
@@ -922,6 +924,7 @@ export interface CredentialAnchorProof {
     relay_public_key: string;
     siblings: string[];
     suite: "motebit-jcs-ed25519-hex-v1";
+    tree_hash_version?: MerkleTreeVersion;
 }
 
 // @public
@@ -1619,6 +1622,54 @@ export interface FederationGraphAnchor {
     readonly algo: MerkleAlgo;
     readonly leaf_count: number;
     readonly merkle_root: string;
+}
+
+// @public
+export interface FederationSettlementAnchorProof {
+    anchor: FederationSettlementChainAnchor | null;
+    batch_id: string;
+    batch_signature: string;
+    first_settled_at: number;
+    last_settled_at: number;
+    layer_sizes: number[];
+    leaf_count: number;
+    leaf_index: number;
+    merkle_root: string;
+    relay_id: string;
+    relay_public_key: string;
+    settlement_hash: string;
+    settlement_id: string;
+    siblings: string[];
+    suite: "motebit-jcs-ed25519-hex-v1";
+    tree_hash_version?: MerkleTreeVersion;
+}
+
+// @public
+export interface FederationSettlementChainAnchor {
+    anchored_at: number;
+    chain: string;
+    network: string;
+    tx_hash: string;
+}
+
+// @public
+export interface FederationSettlementRecord {
+    agent_id: string | null;
+    downstream_relay_id: string | null;
+    fee_amount: number;
+    fee_rate: number;
+    gross_amount: number;
+    issuer_relay_id: string;
+    net_amount: number;
+    receipt_hash: string;
+    settled_at: number;
+    settlement_id: string;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    task_id: string;
+    upstream_relay_id: string;
+    x402_network?: string;
+    x402_tx_hash?: string;
 }
 
 // @alpha

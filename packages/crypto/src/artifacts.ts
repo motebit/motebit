@@ -1220,8 +1220,8 @@ export async function verifyBalanceWaiver(
 
 // === Settlement Records ===
 
-import type { SettlementRecord } from "@motebit/protocol";
-export type { SettlementRecord };
+import type { SettlementRecord, FederationSettlementRecord } from "@motebit/protocol";
+export type { SettlementRecord, FederationSettlementRecord };
 
 /** The one suite SettlementRecords sign under today. */
 export const SETTLEMENT_RECORD_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
@@ -1271,6 +1271,59 @@ export async function verifySettlement(
   issuerPublicKey: Uint8Array,
 ): Promise<boolean> {
   if (settlement.suite !== SETTLEMENT_RECORD_SUITE) return false;
+  const { signature, ...body } = settlement;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(settlement.suite, message, sig, issuerPublicKey);
+  } catch {
+    return false;
+  }
+}
+
+/** The one suite FederationSettlementRecords sign under today. */
+export const FEDERATION_SETTLEMENT_RECORD_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/**
+ * Sign a federation settlement record. Each relay signs its OWN copy of a
+ * federated settlement (the issuer is the booking relay), committing to the
+ * (gross, fee, net, rate) tuple so it cannot issue inconsistent records to
+ * different observers — the per-agent `signSettlement` move applied to the
+ * inter-relay stream (relay-federation-v1.md §7.6).
+ *
+ * The signed record is the verbatim-artifact whose canonical bytes become the
+ * Merkle leaf (spec/agent-settlement-anchor-v1.md §9.1): the relay persists
+ * `canonicalJson(record)` and anchors `canonicalLeaf(record)`, so a peer that
+ * holds the record reproduces the leaf with `@motebit/crypto` alone.
+ *
+ * Callers pass the record without `signature` or `suite`; the signer owns both.
+ */
+export async function signFederationSettlement(
+  settlement: Omit<FederationSettlementRecord, "signature" | "suite">,
+  issuerPrivateKey: Uint8Array,
+): Promise<FederationSettlementRecord> {
+  const body = { ...settlement, suite: FEDERATION_SETTLEMENT_RECORD_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(FEDERATION_SETTLEMENT_RECORD_SUITE, message, issuerPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify a federation settlement record's signature. Reconstructs canonical
+ * JSON over all fields except `signature` and verifies Ed25519 against the
+ * issuing relay's public key (resolved from `issuer_relay_id` via the
+ * federation peer registry).
+ *
+ * Fail-closed on missing/unknown `suite`, base64url decode errors, or
+ * primitive-level verification failure.
+ */
+export async function verifyFederationSettlement(
+  settlement: FederationSettlementRecord,
+  issuerPublicKey: Uint8Array,
+): Promise<boolean> {
+  if (settlement.suite !== FEDERATION_SETTLEMENT_RECORD_SUITE) return false;
   const { signature, ...body } = settlement;
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);

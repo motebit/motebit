@@ -91,6 +91,13 @@ export type Classification =
 export const REGISTRY: Record<string, Classification> = {
   // ── A: dedicated portable verifier ──────────────────────────────────────
   AgentSettlementAnchorProof: { kind: "verifier", verifier: "verifyAgentSettlementAnchor" },
+  // Federation settlement anchoring (PR6, the RFC 6962 arc-closer). The
+  // inter-relay peer-audit analogue of the per-agent pair above: the signed
+  // record is the verbatim leaf, the proof is the portable inclusion proof.
+  FederationSettlementAnchorProof: {
+    kind: "verifier",
+    verifier: "verifyFederationSettlementAnchor",
+  },
   // Wire artifacts defined in @motebit/crypto (not protocol/src) — discovered
   // since the scan widened to the verification packages 2026-05-30. Both cross
   // the wire and ship a portable verifier; the gate now tracks them.
@@ -112,6 +119,7 @@ export const REGISTRY: Record<string, Classification> = {
   GoalExecutionManifest: { kind: "verifier", verifier: "verifyGoalExecutionManifest" },
   KeySuccessionRecord: { kind: "verifier", verifier: "verifyKeySuccession" },
   SettlementRecord: { kind: "verifier", verifier: "verifySettlement" },
+  FederationSettlementRecord: { kind: "verifier", verifier: "verifyFederationSettlement" },
   ToolInvocationReceipt: { kind: "verifier", verifier: "verifyToolInvocationReceipt" },
   BalanceWaiver: { kind: "verifier", verifier: "verifyBalanceWaiver" },
   DeletionCertificate: { kind: "verifier", verifier: "verifyDeletionCertificate" },
@@ -237,6 +245,11 @@ export const REGISTRY: Record<string, Classification> = {
     kind: "precursor",
     canonical: "AgentSettlementAnchorProof",
     note: "the field bundle whose batch_signature the parent AgentSettlementAnchorProof embeds; verified inside verifyAgentSettlementAnchor",
+  },
+  FederationSettlementAnchorProofFields: {
+    kind: "precursor",
+    canonical: "FederationSettlementAnchorProof",
+    note: "the field bundle whose batch_signature the parent FederationSettlementAnchorProof embeds; verified inside verifyFederationSettlementAnchor",
   },
   SuccessionRecord: {
     kind: "precursor",

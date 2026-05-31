@@ -228,7 +228,15 @@ export function createFederationTables(db: DatabaseDriver): void {
       net_amount INTEGER NOT NULL,
       fee_rate REAL NOT NULL,
       settled_at INTEGER NOT NULL,
-      receipt_hash TEXT NOT NULL
+      receipt_hash TEXT NOT NULL,
+      -- The verbatim canonical bytes of the signed FederationSettlementRecord
+      -- this relay booked (canonicalJson of the record), written at settlement
+      -- time by federation-callbacks.ts. The Merkle anchor leaf is SHA-256 of
+      -- THESE bytes (RFC 6962 section 2.1 leaf tag under v2), so a peer holding
+      -- the record reproduces it — the section 9.1 verbatim-artifact convergence.
+      -- NULL for any pre-PR6 row (skipped by the anchor loop, which requires it).
+      -- Migration v29 adds this to existing prod DBs; a fresh DB gets it here.
+      record_json TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_fed_settlements_task ON relay_federation_settlements(task_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_fed_settlements_dedup ON relay_federation_settlements(task_id, upstream_relay_id);
@@ -2160,11 +2168,15 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       });
     }
 
-    const proof = await getSettlementProof(db, settlementId);
-    if (!proof) {
+    // Returns `{ proof, record }` — the typed FederationSettlementAnchorProof
+    // plus the signed FederationSettlementRecord the leaf commits, so a peer
+    // self-verifies offline with `verifyFederationSettlementAnchor(record, proof)`
+    // (§7.6.6, the §9.1 convergence).
+    const result = await getSettlementProof(db, settlementId);
+    if (!result) {
       throw new HTTPException(404, { message: "Settlement not found or not batched" });
     }
 
-    return c.json(proof);
+    return c.json(result);
   });
 }

@@ -25,6 +25,7 @@ import {
   hexPublicKeyToDidKey,
   issueReputationCredential,
   sign,
+  signFederationSettlement,
   canonicalJson,
   bytesToHex,
   hexToBytes,
@@ -304,10 +305,38 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           const netAmount = grossAmount - feeAmount;
           const receiptHash = verified.receipt.result_hash ?? verified.receipt.signature ?? "";
           const settlementId = crypto.randomUUID();
+          const settledAt = Date.now();
+
+          // Mint + sign the canonical FederationSettlementRecord (§9.1
+          // verbatim-leaf convergence): the relay signs its own copy of this
+          // settlement; the persisted `record_json` is the exact bytes the
+          // anchor leaf hashes, so a peer holding the record reproduces the leaf
+          // with `verifyFederationSettlementAnchor`. The `settledAt` value here
+          // is the SAME one written to the row's `settled_at` column, so the
+          // anchor's reconstruction order and the record agree.
+          const signedRecord = await signFederationSettlement(
+            {
+              settlement_id: settlementId,
+              task_id: verified.taskId,
+              upstream_relay_id: relayIdentity.relayMotebitId,
+              downstream_relay_id: verified.originRelay,
+              agent_id: null,
+              gross_amount: grossAmount,
+              fee_amount: feeAmount,
+              net_amount: netAmount,
+              fee_rate: platformFeeRate,
+              receipt_hash: receiptHash,
+              settled_at: settledAt,
+              ...(entry.x402_tx_hash != null ? { x402_tx_hash: entry.x402_tx_hash } : {}),
+              ...(entry.x402_network != null ? { x402_network: entry.x402_network } : {}),
+              issuer_relay_id: relayIdentity.relayMotebitId,
+            },
+            relayIdentity.privateKey,
+          );
 
           moteDb.db
             .prepare(
-              `INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              `INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network, record_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               settlementId,
@@ -319,10 +348,13 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               feeAmount,
               netAmount,
               platformFeeRate,
-              Date.now(),
+              settledAt,
               receiptHash,
               entry.x402_tx_hash ?? null,
               entry.x402_network ?? null,
+              // Rule 11 analogue: store the exact canonical signed bytes. The
+              // anchor leaf is SHA-256 of THIS, so it equals the peer's bytes.
+              canonicalJson(signedRecord),
             );
 
           const peerInfo = moteDb.db
@@ -381,12 +413,38 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       }
     },
 
-    onSettlementReceived(verified: VerifiedSettlement) {
+    async onSettlementReceived(verified: VerifiedSettlement) {
       const feeAmount = Math.round(verified.grossAmount * platformFeeRate);
       const netAmount = verified.grossAmount - feeAmount;
+      const settledAt = Date.now();
+
+      // This relay signs its OWN copy of the received settlement (issuer = this
+      // relay), persisting the verbatim signed record for the §9.1 anchor leaf —
+      // symmetric with the sent path. `settledAt` is shared with the row's
+      // `settled_at` column so anchor reconstruction and the record agree.
+      const signedRecord = await signFederationSettlement(
+        {
+          settlement_id: verified.settlementId,
+          task_id: verified.taskId,
+          upstream_relay_id: verified.originRelay,
+          downstream_relay_id: null,
+          agent_id: null,
+          gross_amount: verified.grossAmount,
+          fee_amount: feeAmount,
+          net_amount: netAmount,
+          fee_rate: platformFeeRate,
+          receipt_hash: verified.receiptHash,
+          settled_at: settledAt,
+          ...(verified.x402TxHash != null ? { x402_tx_hash: verified.x402TxHash } : {}),
+          ...(verified.x402Network != null ? { x402_network: verified.x402Network } : {}),
+          issuer_relay_id: relayIdentity.relayMotebitId,
+        },
+        relayIdentity.privateKey,
+      );
+
       moteDb.db
         .prepare(
-          `INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network, record_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           verified.settlementId,
@@ -398,10 +456,11 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           feeAmount,
           netAmount,
           platformFeeRate,
-          Date.now(),
+          settledAt,
           verified.receiptHash,
           verified.x402TxHash ?? null,
           verified.x402Network ?? null,
+          canonicalJson(signedRecord),
         );
       return { feeAmount, netAmount };
     },

@@ -19,12 +19,13 @@ import type {
   AgentSettlementAnchorBatch,
   AgentSettlementAnchorProof,
   AgentSettlementChainAnchor,
+  FederationSettlementAnchorProof,
+  FederationSettlementRecord,
   MerkleTreeVersion,
 } from "@motebit/protocol";
 import {
   buildMerkleTree,
   getMerkleProof,
-  computeSettlementLeaf,
   canonicalJson,
   hashLeaf,
   sign,
@@ -38,6 +39,13 @@ import { createLogger } from "./logger.js";
  *  Ed25519 primitive, hex signature encoding, hex public-key encoding. */
 const AGENT_SETTLEMENT_ANCHOR_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
 
+/** Cryptosuite for the federation settlement anchor batch + proof artifacts.
+ *  Matches `@motebit/crypto`'s `FEDERATION_SETTLEMENT_ANCHOR_SUITE` — JCS
+ *  canonicalization, Ed25519 primitive, hex signature + hex public-key encoding.
+ *  Suite-bound into the signed batch payload (cryptosuite-agility) as of the
+ *  RFC 6962 §9.1 convergence; the per-agent batch already binds the same suite. */
+const FEDERATION_SETTLEMENT_ANCHOR_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+
 /**
  * The tree-hash version NEW per-agent settlement batches are minted under.
  * PR2 of the RFC 6962 domain-separation migration flips the agent-settlement
@@ -49,6 +57,19 @@ const AGENT_SETTLEMENT_ANCHOR_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
  * `docs/doctrine/merkle-tree-hash-versioning.md` (§8 PR2, §4 threat model).
  */
 const AGENT_SETTLEMENT_TREE_HASH_VERSION: MerkleTreeVersion = "merkle-sha256-rfc6962-v2";
+
+/**
+ * The tree-hash version NEW federation settlement batches are minted under.
+ * PR6 (the arc-closer) of the RFC 6962 domain-separation migration flips the
+ * federation producer to `merkle-sha256-rfc6962-v2` in the SAME pass it adopts
+ * the verbatim-artifact leaf (agent-settlement-anchor-v1.md §9.1). The portable
+ * verifier (`@motebit/crypto`'s `verifyFederationSettlementAnchor`) ships with
+ * this PR, so the v2-accept surface and the v2-emit producer land together — a
+ * fresh-stream deploy, not deploy-verifier-first lag. Persisted per batch
+ * (`relay_anchor_batches.tree_hash_version`); any pre-PR6 batch reads NULL ⇒ v1.
+ * Doctrine: `docs/doctrine/merkle-tree-hash-versioning.md` (§8 PR6).
+ */
+const FEDERATION_TREE_HASH_VERSION: MerkleTreeVersion = "merkle-sha256-rfc6962-v2";
 
 const logger = createLogger({ service: "relay", module: "anchoring" });
 
@@ -83,7 +104,12 @@ export function createAnchoringTables(db: DatabaseDriver): void {
       network          TEXT,
       anchored_at      INTEGER,
       status           TEXT NOT NULL DEFAULT 'signed',
-      created_at       INTEGER NOT NULL
+      created_at       INTEGER NOT NULL,
+      -- Per-batch tree-hash version (RFC 6962 §2.1 domain separation, PR6).
+      -- NULL ⇒ merkle-sha256-plain-v1 (legacy); the v2 string for new batches.
+      -- Mirrors relay_agent_anchor_batches.tree_hash_version. Migration v29
+      -- adds this to existing prod DBs; a fresh DB gets it here.
+      tree_hash_version TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_anchor_batches_status
       ON relay_anchor_batches(status) WHERE status != 'confirmed';
@@ -101,14 +127,15 @@ export function createAnchoringTables(db: DatabaseDriver): void {
 
 interface FederationSettlement {
   settlement_id: string;
-  task_id: string;
-  upstream_relay_id: string;
-  downstream_relay_id: string | null;
-  gross_amount: number;
-  fee_amount: number;
-  net_amount: number;
-  receipt_hash: string;
   settled_at: number;
+  // The EXACT canonical signed bytes of the FederationSettlementRecord
+  // (relay_federation_settlements.record_json), written verbatim at settlement
+  // time by `federation-callbacks.ts`. The leaf is SHA-256 of THESE bytes
+  // (RFC 6962 §2.1-tagged under v2) — never a column re-projection — so it
+  // equals what a peer computes over the record they hold. This is the §9.1
+  // convergence: the old leaf hashed a hand-typed 9-field subset of the row
+  // that a holder could not reproduce; the fix is to hash the signed object.
+  record_json: string;
 }
 
 export interface AnchorRecord {
@@ -125,6 +152,35 @@ export interface AnchorRecord {
 }
 
 /**
+ * Federation settlement leaf = SHA-256 of the exact canonical signed bytes the
+ * relay persisted (`record_json`) and a peer holds. A third party derives the
+ * identical value via `@motebit/crypto`'s
+ * `computeFederationSettlementLeaf(record)` over their own
+ * `FederationSettlementRecord`, because `record_json === canonicalJson(record)`
+ * by construction (written with the same JCS canonicalizer at settlement time
+ * by `federation-callbacks.ts`). This is the §9.1 convergence — anchor the exact
+ * signed object; reproduce the leaf from the holder's bytes, no re-projection.
+ *
+ * Routes through the canonical `hashLeaf` primitive so the RFC 6962 §2.1 `0x00`
+ * leaf tag (under v2) is applied in exactly one place — never inlined here (the
+ * dispatch gate `check-merkle-tree-hash-canonical` enforces this). Identical
+ * shape to the per-agent `agentSettlementLeaf`.
+ *
+ * Invariant the convergence relies on: `record_json === canonicalJson(parse(record_json))`.
+ * The producer hashes the stored bytes; the crypto verifier re-canonicalizes the
+ * parsed object. Both reproduce the same leaf only because JCS (RFC 8785) is
+ * parse-stable for the record's field types (strings, integers, the `fee_rate`
+ * float). Holds for every field today; a future field whose number serialization
+ * isn't parse-stable would silently diverge the two.
+ */
+async function federationSettlementLeaf(
+  recordJson: string,
+  treeHashVersion: MerkleTreeVersion = "merkle-sha256-plain-v1",
+): Promise<string> {
+  return hashLeaf(new TextEncoder().encode(recordJson), treeHashVersion);
+}
+
+/**
  * Cut a batch from unanchored federation settlements.
  * Returns null if no settlements are pending.
  */
@@ -132,14 +188,19 @@ export async function cutBatch(
   db: DatabaseDriver,
   relayIdentity: RelayIdentity,
   maxSize: number = DEFAULT_BATCH_MAX_SIZE,
+  treeHashVersion: MerkleTreeVersion = FEDERATION_TREE_HASH_VERSION,
 ): Promise<AnchorRecord | null> {
-  // Fetch unanchored settlements, sorted by settled_at then settlement_id (§7.6.2)
+  // Fetch unanchored settlements, sorted by settled_at then settlement_id
+  // (§7.6.2). Only rows carrying the verbatim signed record can be anchored —
+  // the leaf is SHA-256 of `record_json`, so a pre-PR6 row (NULL record_json)
+  // has nothing reproducible to hash and is skipped (it never participated in
+  // a real anchored batch; the clean window holds). Mirrors the per-agent
+  // `signature IS NOT NULL AND record_json IS NOT NULL` filter.
   const rows = db
     .prepare(
-      `SELECT settlement_id, task_id, upstream_relay_id, downstream_relay_id,
-              gross_amount, fee_amount, net_amount, receipt_hash, settled_at
+      `SELECT settlement_id, settled_at, record_json
        FROM relay_federation_settlements
-       WHERE anchor_batch_id IS NULL
+       WHERE anchor_batch_id IS NULL AND record_json IS NOT NULL
        ORDER BY settled_at ASC, settlement_id ASC
        LIMIT ?`,
     )
@@ -147,25 +208,15 @@ export async function cutBatch(
 
   if (rows.length === 0) return null;
 
-  // Compute leaf hashes
+  // Both halves of the tree hash dispatch on the same version: the leaf tag in
+  // `federationSettlementLeaf` (→ `hashLeaf`) and the node tag in `buildMerkleTree`.
   const leaves: string[] = [];
   for (const row of rows) {
-    const leaf = await computeSettlementLeaf({
-      settlement_id: row.settlement_id,
-      task_id: row.task_id,
-      upstream_relay_id: row.upstream_relay_id,
-      downstream_relay_id: row.downstream_relay_id,
-      gross_amount: row.gross_amount,
-      fee_amount: row.fee_amount,
-      net_amount: row.net_amount,
-      receipt_hash: row.receipt_hash,
-      settled_at: row.settled_at,
-    });
-    leaves.push(leaf);
+    leaves.push(await federationSettlementLeaf(row.record_json, treeHashVersion));
   }
 
   // Build tree
-  const tree = await buildMerkleTree(leaves);
+  const tree = await buildMerkleTree(leaves, treeHashVersion);
 
   // Sign the anchor record
   const batchId = crypto.randomUUID();
@@ -179,18 +230,33 @@ export async function cutBatch(
     first_settled_at: firstSettledAt,
     last_settled_at: lastSettledAt,
     relay_id: relayIdentity.relayMotebitId,
+    // Suite is signature-bound (cryptosuite-agility): part of the signed batch
+    // payload so a cross-suite confusion cannot pass verification. The §9.1
+    // convergence — the per-agent and credential batch payloads already bind it;
+    // `verifyFederationSettlementAnchor` reconstructs this exact field set (key
+    // order irrelevant — JCS sorts). tree_hash_version is NOT in the payload:
+    // it is bound transitively through `merkle_root` (a leaf set under a version
+    // produces exactly one root, and the relay signs that root) and persisted
+    // as a column instead — same as the per-agent stream (spec §5.1).
+    suite: FEDERATION_SETTLEMENT_ANCHOR_SUITE,
   };
   const sigBytes = new TextEncoder().encode(canonicalJson(anchorPayload));
   const sig = await sign(sigBytes, relayIdentity.privateKey);
   const signature = bytesToHex(sig);
+
+  // Persist the version this batch was hashed under. v2 ⇒ the explicit string;
+  // v1 ⇒ NULL (legacy/migration convention — absent ⇒ v1), so a v1 batch is
+  // column-indistinguishable from a pre-PR6 batch.
+  const treeHashVersionColumn =
+    treeHashVersion === "merkle-sha256-rfc6962-v2" ? treeHashVersion : null;
 
   // Persist atomically: create batch + assign all settlements
   const now = Date.now();
   db.prepare(
     `INSERT INTO relay_anchor_batches
        (batch_id, relay_id, merkle_root, leaf_count, first_settled_at, last_settled_at,
-        signature, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?)`,
+        signature, status, created_at, tree_hash_version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?, ?)`,
   ).run(
     batchId,
     relayIdentity.relayMotebitId,
@@ -200,6 +266,7 @@ export async function cutBatch(
     lastSettledAt,
     signature,
     now,
+    treeHashVersionColumn,
   );
 
   const assignStmt = db.prepare(
@@ -300,10 +367,15 @@ export function startBatchAnchorLoop(
 
     void (async () => {
       try {
-        // Count unanchored settlements
+        // Count unanchored settlements. The `record_json IS NOT NULL` filter
+        // MUST match `cutBatch`'s selection predicate: only rows carrying the
+        // verbatim signed record can be anchored (§9.1 convergence), so a
+        // legacy/NULL row must not count toward a trigger that `cutBatch` would
+        // then skip — else the loop spins (count never clears). Mirrors the
+        // per-agent loop's `signature IS NOT NULL` trigger filter.
         const countRow = db
           .prepare(
-            "SELECT COUNT(*) as cnt FROM relay_federation_settlements WHERE anchor_batch_id IS NULL",
+            "SELECT COUNT(*) as cnt FROM relay_federation_settlements WHERE anchor_batch_id IS NULL AND record_json IS NOT NULL",
           )
           .get() as { cnt: number };
 
@@ -317,7 +389,7 @@ export function startBatchAnchorLoop(
           // Trigger 2: time threshold — check oldest unanchored settlement
           const oldest = db
             .prepare(
-              "SELECT MIN(settled_at) as oldest FROM relay_federation_settlements WHERE anchor_batch_id IS NULL",
+              "SELECT MIN(settled_at) as oldest FROM relay_federation_settlements WHERE anchor_batch_id IS NULL AND record_json IS NOT NULL",
             )
             .get() as { oldest: number | null };
 
@@ -354,33 +426,31 @@ export function startBatchAnchorLoop(
 // === Proof Serving ===
 
 /**
- * Generate a Merkle inclusion proof for a specific settlement.
- * Returns null if the settlement is not yet batched, or the batch/settlement doesn't exist.
+ * Generate a self-verifiable Merkle inclusion proof for a federation settlement.
+ * Returns the typed `FederationSettlementAnchorProof` together with the signed
+ * `FederationSettlementRecord` the leaf commits, so a peer can verify offline
+ * with `@motebit/crypto`'s `verifyFederationSettlementAnchor(record, proof)`
+ * (the §9.1 convergence — the federation analogue of `getAgentSettlementProof`).
+ * Returns null if the settlement is not yet batched, or the batch/settlement
+ * doesn't exist (or predates record_json — a pre-PR6 row cannot be proved).
  */
 export async function getSettlementProof(
   db: DatabaseDriver,
   settlementId: string,
 ): Promise<{
-  settlement_id: string;
-  leaf_hash: string;
-  proof: string[];
-  leaf_index: number;
-  merkle_root: string;
-  batch_id: string;
-  anchor: AnchorRecord;
+  proof: FederationSettlementAnchorProof;
+  record: FederationSettlementRecord;
 } | null> {
   // Find the settlement and its batch
   const settlement = db
     .prepare(
-      `SELECT settlement_id, task_id, upstream_relay_id, downstream_relay_id,
-              gross_amount, fee_amount, net_amount, receipt_hash, settled_at,
-              anchor_batch_id
+      `SELECT settlement_id, settled_at, record_json, anchor_batch_id
        FROM relay_federation_settlements
        WHERE settlement_id = ?`,
     )
     .get(settlementId) as (FederationSettlement & { anchor_batch_id: string | null }) | undefined;
 
-  if (!settlement || !settlement.anchor_batch_id) return null;
+  if (!settlement || !settlement.anchor_batch_id || settlement.record_json == null) return null;
 
   const batchId = settlement.anchor_batch_id;
 
@@ -400,39 +470,37 @@ export async function getSettlementProof(
         network: string | null;
         anchored_at: number | null;
         status: string;
+        tree_hash_version: string | null;
       }
     | undefined;
 
   if (!anchor) return null;
 
-  // Reconstruct the tree from all settlements in this batch (same sort order as §7.6.2)
+  // Resolve the version THIS batch was hashed under (NULL ⇒ legacy v1) and
+  // reconstruct under it — a v1 batch's already-anchored root must reproduce
+  // under v1, never v2. Only `merkle-sha256-rfc6962-v2` flips to v2; the column
+  // is producer-controlled (not untrusted wire), so no fail-closed branch here.
+  const treeHashVersion: MerkleTreeVersion =
+    anchor.tree_hash_version === "merkle-sha256-rfc6962-v2"
+      ? "merkle-sha256-rfc6962-v2"
+      : "merkle-sha256-plain-v1";
+
+  // Reconstruct the tree from all settlements in this batch (same sort order as
+  // §7.6.2), hashing each `record_json` under the batch's stored version.
   const batchSettlements = db
     .prepare(
-      `SELECT settlement_id, task_id, upstream_relay_id, downstream_relay_id,
-              gross_amount, fee_amount, net_amount, receipt_hash, settled_at
+      `SELECT settlement_id, settled_at, record_json
        FROM relay_federation_settlements
-       WHERE anchor_batch_id = ?
+       WHERE anchor_batch_id = ? AND record_json IS NOT NULL
        ORDER BY settled_at ASC, settlement_id ASC`,
     )
     .all(batchId) as FederationSettlement[];
 
-  // Compute all leaves
   const leaves: string[] = [];
   let targetIndex = -1;
   for (let i = 0; i < batchSettlements.length; i++) {
     const row = batchSettlements[i]!;
-    const leaf = await computeSettlementLeaf({
-      settlement_id: row.settlement_id,
-      task_id: row.task_id,
-      upstream_relay_id: row.upstream_relay_id,
-      downstream_relay_id: row.downstream_relay_id,
-      gross_amount: row.gross_amount,
-      fee_amount: row.fee_amount,
-      net_amount: row.net_amount,
-      receipt_hash: row.receipt_hash,
-      settled_at: row.settled_at,
-    });
-    leaves.push(leaf);
+    leaves.push(await federationSettlementLeaf(row.record_json, treeHashVersion));
     if (row.settlement_id === settlementId) {
       targetIndex = i;
     }
@@ -440,28 +508,35 @@ export async function getSettlementProof(
 
   if (targetIndex === -1) return null;
 
-  const tree = await buildMerkleTree(leaves);
+  const tree = await buildMerkleTree(leaves, treeHashVersion);
   const proof = getMerkleProof(tree, targetIndex);
 
-  return {
+  const anchorProof: FederationSettlementAnchorProof = {
     settlement_id: settlementId,
-    leaf_hash: proof.leaf,
-    proof: proof.siblings,
-    leaf_index: proof.index,
-    merkle_root: tree.root,
+    settlement_hash: proof.leaf,
     batch_id: batchId,
-    anchor: {
-      batch_id: anchor.batch_id,
-      merkle_root: anchor.merkle_root,
-      leaf_count: anchor.leaf_count,
-      first_settled_at: anchor.first_settled_at,
-      last_settled_at: anchor.last_settled_at,
-      relay_id: anchor.relay_id,
-      signature: anchor.signature,
-      tx_hash: anchor.tx_hash,
-      network: anchor.network,
-      anchored_at: anchor.anchored_at,
-    },
+    merkle_root: tree.root,
+    leaf_count: anchor.leaf_count,
+    first_settled_at: anchor.first_settled_at,
+    last_settled_at: anchor.last_settled_at,
+    leaf_index: proof.index,
+    siblings: proof.siblings,
+    layer_sizes: proof.layerSizes,
+    relay_id: anchor.relay_id,
+    relay_public_key: getRelayPublicKeyHex(db, anchor.relay_id),
+    suite: FEDERATION_SETTLEMENT_ANCHOR_SUITE,
+    batch_signature: anchor.signature,
+    anchor: chainAnchorFromRow(anchor),
+    // Threat-model rule (c): a v2 producer MUST emit the field. Legacy v1
+    // batches omit it (absent ⇒ v1; the legacy id is never re-emitted).
+    ...(treeHashVersion === "merkle-sha256-rfc6962-v2"
+      ? { tree_hash_version: treeHashVersion }
+      : {}),
+  };
+
+  return {
+    proof: anchorProof,
+    record: JSON.parse(settlement.record_json) as FederationSettlementRecord,
   };
 }
 
@@ -589,9 +664,8 @@ export async function cutAgentSettlementBatch(
     // batch payload so a cross-suite confusion cannot pass verification.
     // `verifyAgentSettlementAnchor` reconstructs this exact field set (key
     // order irrelevant — JCS sorts). The sibling federation batch payload
-    // (cutBatch above) still omits suite — a pre-existing inconsistency
-    // tracked in spec/agent-settlement-anchor-v1.md §9.1 (federation-anchor
-    // convergence), not introduced here.
+    // (cutBatch above) now binds suite the same way — the §9.1 convergence
+    // closed in PR6, so the two streams are consistent.
     suite: AGENT_SETTLEMENT_ANCHOR_SUITE,
   };
   const sigBytes = new TextEncoder().encode(canonicalJson(anchorPayload));

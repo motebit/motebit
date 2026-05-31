@@ -41,6 +41,8 @@ import {
   hashToolPayload,
   signSettlement,
   verifySettlement,
+  signFederationSettlement,
+  verifyFederationSettlement,
   signBalanceWaiver,
   verifyBalanceWaiver,
   signConsolidationReceipt,
@@ -593,6 +595,80 @@ describe("signSettlement / verifySettlement", () => {
     const tampered = { ...relayRecord, settlement_mode: "p2p" as const };
     const valid = await verifySettlement(tampered, kp.publicKey);
     expect(valid).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signFederationSettlement / verifyFederationSettlement
+// ---------------------------------------------------------------------------
+//
+// The signed inter-relay settlement record — the verbatim-leaf artifact the
+// §9.1 federation-anchor convergence introduced. Each relay signs its own copy;
+// the signature commits the (gross, fee, net, rate) tuple so a relay cannot
+// issue inconsistent records to different peers.
+
+describe("signFederationSettlement / verifyFederationSettlement", () => {
+  function makeRecord() {
+    return {
+      settlement_id: "fed-settle-001",
+      task_id: "task-001",
+      upstream_relay_id: "relay-up",
+      downstream_relay_id: "relay-down" as string | null,
+      agent_id: "agent-1" as string | null,
+      gross_amount: 1_000_000,
+      fee_amount: 50_000,
+      net_amount: 950_000,
+      fee_rate: 0.05,
+      receipt_hash: "a".repeat(64),
+      settled_at: 1_700_000_000_000,
+      issuer_relay_id: "relay-up",
+    };
+  }
+
+  it("round-trips correctly (sign -> verify = true) and stamps suite", async () => {
+    const kp = await generateKeypair();
+    const signed = await signFederationSettlement(makeRecord(), kp.privateKey);
+    expect(signed.signature).toBeTruthy();
+    expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(await verifyFederationSettlement(signed, kp.publicKey)).toBe(true);
+  });
+
+  it("detects amount tampering — a relay cannot rewrite settlement amounts", async () => {
+    const kp = await generateKeypair();
+    const signed = await signFederationSettlement(makeRecord(), kp.privateKey);
+    const tampered = { ...signed, net_amount: 9_999_999 };
+    expect(await verifyFederationSettlement(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("rejects the wrong key", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const signed = await signFederationSettlement(makeRecord(), kpA.privateKey);
+    expect(await verifyFederationSettlement(signed, kpB.publicKey)).toBe(false);
+  });
+
+  it("rejects an unknown suite (no legacy-no-suite path)", async () => {
+    const kp = await generateKeypair();
+    const signed = await signFederationSettlement(makeRecord(), kp.privateKey);
+    const wrongSuite = { ...signed, suite: "motebit-future-pqc-v7" as never };
+    expect(await verifyFederationSettlement(wrongSuite, kp.publicKey)).toBe(false);
+  });
+
+  it("is deterministic (same record -> same signature)", async () => {
+    const kp = await generateKeypair();
+    const r = makeRecord();
+    const a = await signFederationSettlement(r, kp.privateKey);
+    const b = await signFederationSettlement(r, kp.privateKey);
+    expect(a.signature).toBe(b.signature);
+  });
+
+  it("round-trips with a null downstream_relay_id (origin relay) and no x402 fields", async () => {
+    const kp = await generateKeypair();
+    const signed = await signFederationSettlement(
+      { ...makeRecord(), downstream_relay_id: null, agent_id: null },
+      kp.privateKey,
+    );
+    expect(await verifyFederationSettlement(signed, kp.publicKey)).toBe(true);
   });
 });
 

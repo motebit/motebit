@@ -17,8 +17,12 @@ import {
   isSettlementPendingBatch,
 } from "../anchoring.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct sign access
-import { signSettlement, canonicalJson } from "@motebit/encryption";
-import { verifyAgentSettlementAnchor, computeAgentSettlementLeaf } from "@motebit/crypto";
+import { signSettlement, signFederationSettlement, canonicalJson } from "@motebit/encryption";
+import {
+  verifyAgentSettlementAnchor,
+  computeAgentSettlementLeaf,
+  verifyFederationSettlementAnchor,
+} from "@motebit/crypto";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
@@ -39,7 +43,11 @@ async function makeRelayIdentity(): Promise<RelayIdentity> {
   };
 }
 
-function insertSettlement(
+// Insert a federation settlement carrying the verbatim signed record_json the
+// §9.1 convergence requires (the relay signs its own copy; the anchor leaf is
+// SHA-256 of canonicalJson(record)). Mirrors federation-callbacks.ts. Returns
+// the settlement id (callers must `await` — signing is async).
+async function insertSettlement(
   db: DatabaseDriver,
   opts: {
     settlementId?: string;
@@ -47,25 +55,47 @@ function insertSettlement(
     settledAt?: number;
     grossAmount?: number;
   } = {},
-): string {
+): Promise<string> {
   const id = opts.settlementId ?? crypto.randomUUID();
+  const taskId = opts.taskId ?? `task-${crypto.randomUUID()}`;
+  const settledAt = opts.settledAt ?? Date.now();
+  const grossAmount = opts.grossAmount ?? 1.0;
+  const receiptHash = `receipt-${crypto.randomUUID()}`;
+  const signedRecord = await signFederationSettlement(
+    {
+      settlement_id: id,
+      task_id: taskId,
+      upstream_relay_id: "relay-upstream",
+      downstream_relay_id: "relay-downstream",
+      agent_id: "agent-1",
+      gross_amount: grossAmount,
+      fee_amount: 0.05,
+      net_amount: 0.95,
+      fee_rate: 0.05,
+      receipt_hash: receiptHash,
+      settled_at: settledAt,
+      issuer_relay_id: relayIdentity.relayMotebitId,
+    },
+    relayIdentity.privateKey,
+  );
   db.prepare(
     `INSERT INTO relay_federation_settlements
        (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id,
-        gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, record_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
-    opts.taskId ?? `task-${crypto.randomUUID()}`,
+    taskId,
     "relay-upstream",
     "relay-downstream",
     "agent-1",
-    opts.grossAmount ?? 1.0,
+    grossAmount,
     0.05,
     0.95,
     0.05,
-    opts.settledAt ?? Date.now(),
-    `receipt-${crypto.randomUUID()}`,
+    settledAt,
+    receiptHash,
+    canonicalJson(signedRecord),
   );
   return id;
 }
@@ -75,6 +105,19 @@ beforeEach(async () => {
   db = moteDb.db;
   createFederationTables(db);
   relayIdentity = await makeRelayIdentity();
+  // The proof-serve path resolves the relay's public key from relay_identity
+  // (so a peer's `verifyFederationSettlementAnchor` can check the batch
+  // signature). Seed it with the test identity's real key.
+  db.prepare(
+    `INSERT INTO relay_identity (relay_motebit_id, public_key, private_key_hex, did, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(
+    relayIdentity.relayMotebitId,
+    relayIdentity.publicKeyHex,
+    bytesToHex(relayIdentity.privateKey),
+    relayIdentity.did,
+    Date.now(),
+  );
 });
 
 // === cutBatch ===
@@ -86,9 +129,9 @@ describe("cutBatch", () => {
   });
 
   it("cuts a batch from unanchored settlements", async () => {
-    insertSettlement(db);
-    insertSettlement(db);
-    insertSettlement(db);
+    await insertSettlement(db);
+    await insertSettlement(db);
+    await insertSettlement(db);
 
     const batch = await cutBatch(db, relayIdentity);
     expect(batch).not.toBeNull();
@@ -101,8 +144,8 @@ describe("cutBatch", () => {
   });
 
   it("assigns anchor_batch_id to all settlements in the batch", async () => {
-    const id1 = insertSettlement(db);
-    const id2 = insertSettlement(db);
+    const id1 = await insertSettlement(db);
+    const id2 = await insertSettlement(db);
 
     const batch = await cutBatch(db, relayIdentity);
     expect(batch).not.toBeNull();
@@ -119,8 +162,8 @@ describe("cutBatch", () => {
   });
 
   it("does not re-batch already batched settlements", async () => {
-    insertSettlement(db);
-    insertSettlement(db);
+    await insertSettlement(db);
+    await insertSettlement(db);
 
     const batch1 = await cutBatch(db, relayIdentity);
     expect(batch1).not.toBeNull();
@@ -131,7 +174,7 @@ describe("cutBatch", () => {
   });
 
   it("respects maxSize limit", async () => {
-    for (let i = 0; i < 5; i++) insertSettlement(db);
+    for (let i = 0; i < 5; i++) await insertSettlement(db);
 
     const batch = await cutBatch(db, relayIdentity, 3);
     expect(batch!.leaf_count).toBe(3);
@@ -146,7 +189,7 @@ describe("cutBatch", () => {
   });
 
   it("creates anchor_batches table record", async () => {
-    insertSettlement(db);
+    await insertSettlement(db);
     const batch = await cutBatch(db, relayIdentity);
 
     const row = db
@@ -164,13 +207,32 @@ describe("cutBatch", () => {
     createFederationTables(moteDb2.db);
 
     const now = 1711000000000;
-    // Same settlement_id in both DBs
-    db.prepare(
-      `INSERT INTO relay_federation_settlements
+    // Same signed record_json in both DBs — the leaf is SHA-256 of these exact
+    // bytes, and signing is deterministic for a fixed key + input, so the two
+    // roots must match. (Insert the identical canonical bytes into both.)
+    const signedRecord = await signFederationSettlement(
+      {
+        settlement_id: "s1",
+        task_id: "task-1",
+        upstream_relay_id: "relay-up",
+        downstream_relay_id: "relay-down",
+        agent_id: "agent",
+        gross_amount: 1.0,
+        fee_amount: 0.05,
+        net_amount: 0.95,
+        fee_rate: 0.05,
+        receipt_hash: "receipt-1",
+        settled_at: now,
+        issuer_relay_id: relayIdentity.relayMotebitId,
+      },
+      relayIdentity.privateKey,
+    );
+    const recordJson = canonicalJson(signedRecord);
+    const insertSql = `INSERT INTO relay_federation_settlements
          (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id,
-          gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
+          gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, record_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    const args = [
       "s1",
       "task-1",
       "relay-up",
@@ -182,28 +244,10 @@ describe("cutBatch", () => {
       0.05,
       now,
       "receipt-1",
-    );
-
-    moteDb2.db
-      .prepare(
-        `INSERT INTO relay_federation_settlements
-         (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id,
-          gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        "s1",
-        "task-1",
-        "relay-up",
-        "relay-down",
-        "agent",
-        1.0,
-        0.05,
-        0.95,
-        0.05,
-        now,
-        "receipt-1",
-      );
+      recordJson,
+    ] as const;
+    db.prepare(insertSql).run(...args);
+    moteDb2.db.prepare(insertSql).run(...args);
 
     const batch1 = await cutBatch(db, relayIdentity);
     const batch2 = await cutBatch(moteDb2.db, relayIdentity);
@@ -222,25 +266,31 @@ describe("getSettlementProof", () => {
   });
 
   it("returns null for unbatched settlement", async () => {
-    const id = insertSettlement(db);
+    const id = await insertSettlement(db);
     const proof = await getSettlementProof(db, id);
     expect(proof).toBeNull();
   });
 
   it("returns valid proof for batched settlement", async () => {
-    const id = insertSettlement(db);
+    const id = await insertSettlement(db);
     await cutBatch(db, relayIdentity);
 
-    const proof = await getSettlementProof(db, id);
-    expect(proof).not.toBeNull();
-    expect(proof!.settlement_id).toBe(id);
-    expect(proof!.leaf_hash).toMatch(/^[0-9a-f]{64}$/);
-    expect(proof!.merkle_root).toMatch(/^[0-9a-f]{64}$/);
-    expect(proof!.anchor.relay_id).toBe(relayIdentity.relayMotebitId);
+    const result = await getSettlementProof(db, id);
+    expect(result).not.toBeNull();
+    const { proof, record } = result!;
+    expect(proof.settlement_id).toBe(id);
+    expect(proof.settlement_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(proof.merkle_root).toMatch(/^[0-9a-f]{64}$/);
+    expect(proof.relay_id).toBe(relayIdentity.relayMotebitId);
+    // The producer emits v2 (the §9.1 convergence flips federation to RFC 6962).
+    expect(proof.tree_hash_version).toBe("merkle-sha256-rfc6962-v2");
+    // The served record is the exact artifact the leaf commits.
+    expect(record.settlement_id).toBe(id);
+    expect(record.issuer_relay_id).toBe(relayIdentity.relayMotebitId);
   });
 
-  it("proof verifies against merkle root", async () => {
-    for (let i = 0; i < 7; i++) insertSettlement(db, { settledAt: 1711000000000 + i * 1000 });
+  it("proof self-verifies offline via verifyFederationSettlementAnchor", async () => {
+    for (let i = 0; i < 7; i++) await insertSettlement(db, { settledAt: 1711000000000 + i * 1000 });
 
     const settlements = db
       .prepare("SELECT settlement_id FROM relay_federation_settlements ORDER BY settled_at ASC")
@@ -248,24 +298,48 @@ describe("getSettlementProof", () => {
 
     await cutBatch(db, relayIdentity);
 
-    // Verify proof for each settlement
+    // Each peer reconstructs the leaf from the held record and walks the Merkle
+    // path to the relay-signed root — fully offline, with only @motebit/crypto.
     for (const s of settlements) {
       const result = await getSettlementProof(db, s.settlement_id);
       expect(result).not.toBeNull();
-
-      // Verify the proof root matches the anchor record's signed root
-      expect(result!.merkle_root).toBe(result!.anchor.merkle_root);
+      const { proof, record } = result!;
+      const verdict = await verifyFederationSettlementAnchor(
+        record as unknown as Record<string, unknown>,
+        proof,
+      );
+      expect(verdict.valid).toBe(true);
+      expect(verdict.steps.hash_valid).toBe(true);
+      expect(verdict.steps.merkle_valid).toBe(true);
+      expect(verdict.steps.relay_signature_valid).toBe(true);
     }
   });
 
+  it("rejects a tampered record (leaf no longer reproduces)", async () => {
+    const id = await insertSettlement(db);
+    await cutBatch(db, relayIdentity);
+
+    const result = await getSettlementProof(db, id);
+    expect(result).not.toBeNull();
+    const { proof, record } = result!;
+    // Mutate the held record — the recomputed leaf diverges from the anchored one.
+    const tampered = { ...record, gross_amount: record.gross_amount + 1 };
+    const verdict = await verifyFederationSettlementAnchor(
+      tampered as unknown as Record<string, unknown>,
+      proof,
+    );
+    expect(verdict.valid).toBe(false);
+    expect(verdict.steps.hash_valid).toBe(false);
+  });
+
   it("proof for multi-batch: each settlement links to correct batch", async () => {
-    const id1 = insertSettlement(db, { settledAt: 1711000000000 });
-    const id2 = insertSettlement(db, { settledAt: 1711000001000 });
+    const id1 = await insertSettlement(db, { settledAt: 1711000000000 });
+    const id2 = await insertSettlement(db, { settledAt: 1711000001000 });
 
     // Cut first batch with maxSize=1
     await cutBatch(db, relayIdentity, 1);
 
-    const id3 = insertSettlement(db, { settledAt: 1711000002000 });
+    const id3 = await insertSettlement(db, { settledAt: 1711000002000 });
 
     // Cut second batch
     await cutBatch(db, relayIdentity, 10);
@@ -275,8 +349,8 @@ describe("getSettlementProof", () => {
     const proof3 = await getSettlementProof(db, id3);
 
     // id1 and id2+id3 should be in different batches (id1 alone, id2+id3 together)
-    expect(proof1!.batch_id).not.toBe(proof2!.batch_id);
-    expect(proof2!.batch_id).toBe(proof3!.batch_id);
+    expect(proof1!.proof.batch_id).not.toBe(proof2!.proof.batch_id);
+    expect(proof2!.proof.batch_id).toBe(proof3!.proof.batch_id);
   });
 });
 
@@ -287,13 +361,13 @@ describe("isSettlementPendingBatch", () => {
     expect(isSettlementPendingBatch(db, "nonexistent")).toBe(false);
   });
 
-  it("returns true for unbatched settlement", () => {
-    const id = insertSettlement(db);
+  it("returns true for unbatched settlement", async () => {
+    const id = await insertSettlement(db);
     expect(isSettlementPendingBatch(db, id)).toBe(true);
   });
 
   it("returns false after settlement is batched", async () => {
-    const id = insertSettlement(db);
+    const id = await insertSettlement(db);
     await cutBatch(db, relayIdentity);
     expect(isSettlementPendingBatch(db, id)).toBe(false);
   });

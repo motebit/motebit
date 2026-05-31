@@ -1,10 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  buildMerkleTree,
-  getMerkleProof,
-  verifyMerkleProof,
-  computeSettlementLeaf,
-} from "../merkle";
+import { buildMerkleTree, getMerkleProof, verifyMerkleProof } from "../merkle";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -174,53 +169,16 @@ describe("Merkle proofs", () => {
 });
 
 // ---------------------------------------------------------------------------
-// computeSettlementLeaf
+// Merkle proof rejection (negative)
 // ---------------------------------------------------------------------------
+//
+// The federation settlement leaf moved to `@motebit/crypto`'s
+// `computeFederationSettlementLeaf` (verbatim hash of the whole signed
+// `FederationSettlementRecord`) under the RFC 6962 §9.1 convergence; the old
+// projection `computeSettlementLeaf` is gone. This negative test stays here as
+// pure-Merkle coverage.
 
-describe("computeSettlementLeaf", () => {
-  const settlement = {
-    settlement_id: "settle-001",
-    task_id: "task-001",
-    upstream_relay_id: "relay-a",
-    downstream_relay_id: "relay-b",
-    gross_amount: 1.0,
-    fee_amount: 0.05,
-    net_amount: 0.95,
-    receipt_hash: "abc123",
-    settled_at: 1711000000000,
-  };
-
-  it("produces a 64-char hex hash", async () => {
-    const leaf = await computeSettlementLeaf(settlement);
-    expect(leaf).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it("deterministic: same input → same hash", async () => {
-    const a = await computeSettlementLeaf(settlement);
-    const b = await computeSettlementLeaf(settlement);
-    expect(a).toBe(b);
-  });
-
-  it("different settlement_id → different hash", async () => {
-    const a = await computeSettlementLeaf(settlement);
-    const b = await computeSettlementLeaf({ ...settlement, settlement_id: "settle-002" });
-    expect(a).not.toBe(b);
-  });
-
-  it("different amount → different hash", async () => {
-    const a = await computeSettlementLeaf(settlement);
-    const b = await computeSettlementLeaf({ ...settlement, gross_amount: 2.0 });
-    expect(a).not.toBe(b);
-  });
-
-  it("null downstream_relay_id produces valid hash", async () => {
-    const leaf = await computeSettlementLeaf({
-      ...settlement,
-      downstream_relay_id: null,
-    });
-    expect(leaf).toMatch(/^[0-9a-f]{64}$/);
-  });
-
+describe("Merkle proof rejection", () => {
   it("verifyMerkleProof rejects proof with truncated siblings", async () => {
     const leaves = ["a".repeat(64), "b".repeat(64), "c".repeat(64)];
     const tree = await buildMerkleTree(leaves);
@@ -228,21 +186,5 @@ describe("computeSettlementLeaf", () => {
     // Truncate siblings to corrupt the proof
     const truncated = { ...proof, siblings: [] };
     expect(await verifyMerkleProof(truncated, tree.root)).toBe(false);
-  });
-
-  it("integrates with Merkle tree: settlement leaves produce valid proofs", async () => {
-    const settlements = Array.from({ length: 5 }, (_, i) => ({
-      ...settlement,
-      settlement_id: `settle-${i}`,
-      settled_at: 1711000000000 + i * 1000,
-    }));
-
-    const leaves = await Promise.all(settlements.map(computeSettlementLeaf));
-    const tree = await buildMerkleTree(leaves);
-
-    for (let i = 0; i < leaves.length; i++) {
-      const proof = getMerkleProof(tree, i);
-      expect(await verifyMerkleProof(proof, tree.root)).toBe(true);
-    }
   });
 });

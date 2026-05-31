@@ -1296,4 +1296,46 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 29,
+    name: "federation_settlement_verbatim_leaf_and_tree_hash_version",
+    up: (db) => {
+      // PR6 (the arc-closer) of the RFC 6962 §2.1 domain-separation migration —
+      // the federation-settlement-anchor convergence (agent-settlement-anchor-v1.md
+      // §9.1). Two columns, both PRAGMA-guarded:
+      //
+      //   1. relay_federation_settlements.record_json — the verbatim canonical
+      //      bytes of the signed FederationSettlementRecord this relay booked.
+      //      The Merkle anchor leaf becomes SHA-256 of THESE bytes (the
+      //      verbatim-artifact hash), replacing the hand-typed 9-field column
+      //      projection a holder could not reproduce. New rows get it from
+      //      federation-callbacks.ts; the anchor loop skips legacy NULL rows.
+      //   2. relay_anchor_batches.tree_hash_version — per-batch tree-hash version
+      //      (sibling of v26/v27/v28's per-batch column). NULL ⇒
+      //      merkle-sha256-plain-v1 (legacy); the v2 string for new batches, so
+      //      any already-anchored batch's committed root still verifies.
+      //
+      // Ordering (same as v27 credential): both tables are created by
+      // createFederationTables at startup BEFORE migrations run (index.ts:
+      // createFederationTables precedes createRelaySchema). A FRESH DB therefore
+      // already has both columns from the CREATE TABLEs and these PRAGMA-guarded
+      // ALTERs are no-ops; an EXISTING prod DB (tables created before the columns
+      // existed) gets them added here. The `cols.length > 0` guard skips a
+      // bare-DB run where the table does not exist yet (PRAGMA returns no rows) —
+      // ALTERing a missing table would throw "no such table".
+      const settlementCols = (
+        db.prepare("PRAGMA table_info(relay_federation_settlements)").all() as { name: string }[]
+      ).map((c) => c.name);
+      if (settlementCols.length > 0 && !settlementCols.includes("record_json")) {
+        db.exec("ALTER TABLE relay_federation_settlements ADD COLUMN record_json TEXT;");
+      }
+
+      const batchCols = (
+        db.prepare("PRAGMA table_info(relay_anchor_batches)").all() as { name: string }[]
+      ).map((c) => c.name);
+      if (batchCols.length > 0 && !batchCols.includes("tree_hash_version")) {
+        db.exec("ALTER TABLE relay_anchor_batches ADD COLUMN tree_hash_version TEXT;");
+      }
+    },
+  },
 ];

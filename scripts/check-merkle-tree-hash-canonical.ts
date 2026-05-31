@@ -110,18 +110,50 @@ const LEAF_BUILDERS: ReadonlyArray<{ file: string; symbol: string }> = [
     file: "packages/runtime/src/motebit-runtime.ts",
     symbol: "anchorPendingConsolidationReceipts",
   },
+  // The crypto federation-settlement verifier (PR6, the arc-closer) — the
+  // portable peer-audit verifier. Reconstructs the leaf via `canonicalLeaf`
+  // over the whole signed FederationSettlementRecord, exactly as the per-agent
+  // and credential verifiers do.
+  {
+    file: "packages/crypto/src/federation-settlement-anchor.ts",
+    symbol: "computeFederationSettlementLeaf",
+  },
+  // The relay's federation-settlement producer (PR6) — the verbatim-leaf
+  // convergence. Hashes record_json directly; MUST route through hashLeaf so
+  // the leaf tag is applied by the primitive, never inlined. This entry is what
+  // removed `computeSettlementLeaf` (the old projection) from the exclusions:
+  // the deleted projection is replaced by this version-dispatched producer.
+  {
+    file: "services/relay/src/anchoring.ts",
+    symbol: "federationSettlementLeaf",
+  },
 ];
 
 /**
  * Documented exclusions — leaf-shaped hashers that legitimately do NOT route
  * through the version-dispatched primitive yet, each with the reason. The §6
  * "or appears on a documented exclusion list with a reason" arm.
+ *
+ * As of PR6 (the arc-closer), the lone *MerkleTreeVersion-axis* exclusion —
+ * `computeSettlementLeaf` (the federation-settlement column projection) — was
+ * REMOVED when the federation leaf converged to the verbatim-artifact hash
+ * (`computeFederationSettlementLeaf` / `federationSettlementLeaf` above, both in
+ * `LEAF_BUILDERS`) and the projection function was deleted. Every leaf builder
+ * ON THE `MerkleTreeVersion` AXIS now routes through the version-dispatched
+ * primitive — that axis's arc is closed.
+ *
+ * The sole remaining entry is a leaf-shaped builder on a DIFFERENT, deliberately
+ * separate versioning axis (its own `algo` field), enumerated here so the gate
+ * structurally tracks it rather than leaving it invisible: a future edit that
+ * made it claim RFC 6962 without routing through the primitive would otherwise
+ * ship silently (assertion 1's tag-byte scan can't catch a builder that simply
+ * OMITS the tags). This is the "route-through OR documented exclusion" §6 arm.
  */
 const LEAF_EXCLUSIONS: ReadonlyArray<{ symbol: string; reason: string }> = [
   {
-    symbol: "computeSettlementLeaf",
+    symbol: "computeFederationGraphAnchor",
     reason:
-      "federation-settlement leaf (packages/encryption/src/merkle.ts) — v1-only, deferred to PR6+ per merkle-tree-hash-versioning.md §2 (folds into the item-4 convergence; PR5 is consolidation). Lives inside an allowlisted primitive file; carries no domain tag.",
+      'federation graph anchor (services/relay/src/horizon.ts) — a SEPARATE Merkle structure over raw lowercased hex peer-pubkey leaves with its OWN versioning field (`algo: "merkle-sha256-v1"`), verified by witness-omission-dispute.ts against `federation_graph_anchor.merkle_root`. NOT on the `MerkleTreeVersion` axis and NOT a canonicalLeaf-hashed leaf — deliberately excluded (not a deferral). If it ever needs domain separation it gets its own `algo` registry entry, not a `MerkleTreeVersion` bump. See merkle-tree-hash-versioning.md §8 PR6.',
   },
 ];
 
@@ -313,10 +345,14 @@ function main(): void {
       console.log(`  ${w.file}:${w.line}${w.reason ? ` — ${w.reason}` : ""}`);
     }
   }
+  const exclusionNote =
+    LEAF_EXCLUSIONS.length === 0
+      ? "no documented exclusions"
+      : `${LEAF_EXCLUSIONS.length} documented exclusion(s) — every MerkleTreeVersion-axis leaf builder routes through (RFC 6962 arc closed); the exclusion(s) are separate-axis builders`;
   console.log(
     `✓ check-merkle-tree-hash-canonical: domain-tag bytes localized to ${ALLOWLISTED_PRIMITIVES.size} ` +
       `primitive(s); ${LEAF_BUILDERS.length} leaf builder(s) route through the version-dispatched ` +
-      `primitive (${LEAF_EXCLUSIONS.length} documented exclusion); registry ↔ dispatch arms in sync; ` +
+      `primitive (${exclusionNote}); registry ↔ dispatch arms in sync; ` +
       `Option A spec-claim arm ${specDeclarations.length === 0 ? "dormant (0 spec declarations — first v2 producer is PR2)" : `checked ${specDeclarations.length} declaration(s)`}.`,
   );
 }

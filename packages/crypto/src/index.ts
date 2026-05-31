@@ -2055,6 +2055,13 @@ export {
   type AgentSettlementAnchorProofFields,
 } from "./agent-settlement-anchor.js";
 export {
+  FEDERATION_SETTLEMENT_ANCHOR_SUITE,
+  computeFederationSettlementLeaf,
+  verifyFederationSettlementAnchor,
+  type FederationSettlementAnchorVerifyResult,
+  type FederationSettlementAnchorProofFields,
+} from "./federation-settlement-anchor.js";
+export {
   SKILL_SIGNATURE_SUITE,
   canonicalizeSkillManifestBytes,
   canonicalizeSkillEnvelopeBytes,

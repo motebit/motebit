@@ -124,6 +124,8 @@ const vc = await issueReputationCredential(
 
 - **`verifyAgentSettlementAnchor(record, proof, chainVerifier?)`** — Worker-side self-verification of a per-agent settlement Merkle inclusion proof (`spec/agent-settlement-anchor-v1.md`): the held `SettlementRecord` hashes to the anchored leaf, the Merkle path reconstructs to the root, and the relay's batch signature (suite `AGENT_SETTLEMENT_ANCHOR_SUITE`) checks out — all offline, with only the record, the proof, and the relay's public key. SCITT / RFC 6962 shape. The optional `chainVerifier` adds the onchain non-repudiation cross-check.
 - **`computeAgentSettlementLeaf(record)`** — The leaf hash for a `SettlementRecord`: `SHA-256(canonicalJson(record))` over the whole signed object (never a field projection), so producer and holder derive the identical leaf from the bytes they each hold.
+- **`verifyFederationSettlementAnchor(record, proof, chainVerifier?)`** — Peer-side self-verification of an inter-relay settlement Merkle inclusion proof (`spec/relay-federation-v1.md` §7.6): the held `FederationSettlementRecord` hashes to the anchored leaf, the Merkle path reconstructs to the root, and the relay's batch signature (suite `FEDERATION_SETTLEMENT_ANCHOR_SUITE`) checks out — all offline, with only the record, the proof, and the relay's public key. The federation analogue of `verifyAgentSettlementAnchor`; same SCITT / RFC 6962 shape. The optional `chainVerifier` adds the onchain non-repudiation cross-check.
+- **`computeFederationSettlementLeaf(record)`** — The leaf hash for a `FederationSettlementRecord`: `SHA-256(canonicalJson(record))` over the whole signed object (never a field projection), so producer and holder derive the identical leaf from the bytes they each hold.
 
 ### Primitives
 

@@ -7,7 +7,6 @@
  */
 
 import type { MerkleTreeVersion } from "@motebit/protocol";
-import { canonicalJson } from "./canonical.js";
 
 /**
  * RFC 6962 §2.1 interior-node domain-separation tag (`node = SHA-256(0x01 ‖ l ‖
@@ -214,35 +213,4 @@ export async function verifyMerkleProof(
   }
 
   return toHex(current) === expectedRoot;
-}
-
-/**
- * Compute a settlement leaf hash from settlement fields.
- * Matches relay-federation-v1.md §7.6.1 — canonicalJson → SHA-256.
- */
-export async function computeSettlementLeaf(settlement: {
-  settlement_id: string;
-  task_id: string;
-  upstream_relay_id: string;
-  downstream_relay_id: string | null;
-  gross_amount: number;
-  fee_amount: number;
-  net_amount: number;
-  receipt_hash: string;
-  settled_at: number;
-}): Promise<string> {
-  const canonical = canonicalJson({
-    settlement_id: settlement.settlement_id,
-    task_id: settlement.task_id,
-    upstream_relay_id: settlement.upstream_relay_id,
-    downstream_relay_id: settlement.downstream_relay_id,
-    gross_amount: settlement.gross_amount,
-    fee_amount: settlement.fee_amount,
-    net_amount: settlement.net_amount,
-    receipt_hash: settlement.receipt_hash,
-    settled_at: settlement.settled_at,
-  });
-
-  const h = await sha256(new TextEncoder().encode(canonical));
-  return toHex(h);
 }

@@ -2532,6 +2532,20 @@ export type {
   AgentSettlementAnchorProof,
 } from "./agent-settlement-anchor.js";
 
+// ── Federation Settlement Anchoring (protocol-level) ────────────────────────────
+// Inter-relay settlement anchoring — peer audit between federated relays. The
+// signed `FederationSettlementRecord` is the verbatim-artifact leaf; the
+// `FederationSettlementAnchorProof` is the self-verifiable Merkle inclusion
+// proof (`@motebit/crypto`'s `verifyFederationSettlementAnchor`). The arc-closer
+// of the RFC 6962 tree-hash migration — see agent-settlement-anchor-v1.md §9.1.
+// motebit/relay-federation@1.2 §7.6.
+
+export type {
+  FederationSettlementRecord,
+  FederationSettlementChainAnchor,
+  FederationSettlementAnchorProof,
+} from "./federation-settlement-anchor.js";
+
 // ── Discovery (protocol-level) ────────────────────────────
 // Relay metadata, DNS discovery, and agent resolution.
 // motebit/discovery@1.0.

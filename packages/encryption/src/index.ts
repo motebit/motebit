@@ -71,6 +71,9 @@ export {
   signSettlement,
   verifySettlement,
   SETTLEMENT_RECORD_SUITE,
+  signFederationSettlement,
+  verifyFederationSettlement,
+  FEDERATION_SETTLEMENT_RECORD_SUITE,
   signBalanceWaiver,
   verifyBalanceWaiver,
   BALANCE_WAIVER_SUITE,
@@ -395,12 +398,7 @@ export function secureErase(data: Uint8Array): void {
 
 // ── Merkle tree (federation settlement anchoring) ───────────────────
 
-export {
-  buildMerkleTree,
-  getMerkleProof,
-  verifyMerkleProof,
-  computeSettlementLeaf,
-} from "./merkle.js";
+export { buildMerkleTree, getMerkleProof, verifyMerkleProof } from "./merkle.js";
 export type { MerkleTree, MerkleProof } from "./merkle.js";
 
 // ── Consolidation anchor verification (proactive interior) ──────────
