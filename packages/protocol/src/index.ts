@@ -1,3 +1,8 @@
+// Type-only import for the Merkle tree-hash axis used by `ConsolidationAnchor`
+// below. Re-exported (with the rest of the registry surface) near the bottom of
+// this barrel; the local binding here is what lets the anchor type reference it.
+import type { MerkleTreeVersion } from "./merkle-tree-hash.js";
+
 // === Branded ID Types ===
 //
 // Compile-time safety against accidental ID swaps. Optional brand pattern:
@@ -1102,6 +1107,16 @@ export interface ConsolidationAnchor {
    *  `"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"` for mainnet). Paired
    *  with `tx_hash` — absent when `tx_hash` is absent. */
   network?: string;
+  /**
+   * Tree-hash recipe for the receipts' Merkle root (leaf-domain / node-domain
+   * tags + hash). A `MerkleTreeVersion`. **Absent ⇒ `merkle-sha256-plain-v1`** —
+   * every anchor produced before this axis existed still recomputes offline.
+   * Verifiers resolve absent to the default and reject an unknown value
+   * fail-closed (never silently downgrade); a v2 producer MUST emit it rather
+   * than rely on the default. See
+   * `docs/doctrine/merkle-tree-hash-versioning.md`.
+   */
+  tree_hash_version?: MerkleTreeVersion;
 }
 
 /**

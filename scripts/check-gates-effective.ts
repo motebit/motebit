@@ -1863,6 +1863,19 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-merkle-tree-hash-canonical",
+    proves:
+      "flags an inline RFC 6962 domain-separation tag byte outside the two allowlisted Merkle primitives — the LOAD-BEARING assertion (`check-suite-dispatch` shape, NOT vacuous registry self-consistency): the `0x00` leaf / `0x01` node tag may live ONLY in `packages/crypto/src/merkle.ts` + `packages/encryption/src/merkle.ts`, so a second hand-rolled Merkle combine/leaf that silently ships RFC-6962-minus-§2.1 hashing is caught. Drift class: a new anchor consumer copy-pastes the tag-prepend idiom instead of routing through `canonicalLeaf`/`verifyMerkleInclusion`. Probe appends a `new Uint8Array([0x01])` line to a non-allowlisted source file; the gate's tag-localization scan must surface it. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      // Append a stray domain-tag byte to a non-allowlisted leaf-builder file.
+      // The gate scans every `packages/**/src` `.ts` (minus the two primitives)
+      // for `new Uint8Array([0x0{0,1}])` and must flag this line.
+      mutateFile(
+        "packages/crypto/src/credential-anchor.ts",
+        (src) => `${src}\nconst __probe_domain_tag = new Uint8Array([0x01]);\n`,
+      ),
+  },
+  {
     script: "check-goal-artifact-signing",
     proves:
       "flags a per-surface goal-runner that has stopped calling `runtime.signGoalArtifact` — the silent regression that would let goal-fire artifacts persist without a signed `ContentArtifactManifest` envelope. The drift class: a refactor that renames or removes the signing call on one surface (`apps/web/src/goals-runner.ts`, `apps/desktop/src/goal-scheduler.ts`, or `apps/mobile/src/goal-scheduler.ts`) passes typecheck because `signGoalArtifact` is optional from the runtime's perspective; the gate is the only catch. Probe rewrites `signGoalArtifact(` to `signGoalArtifactDisabled(` on the web surface; the gate's identifier scan must surface the missing-call violation.",

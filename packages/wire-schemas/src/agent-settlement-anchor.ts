@@ -106,6 +106,20 @@ const chainAnchorField = (location: string) =>
       `Onchain anchor metadata, or \`null\` if the ${location} was signed but not yet submitted to a chain. Self-verifiable inclusion still works without an onchain anchor (Ed25519 over the Merkle root is sufficient); the chain anchor adds external timestamping that the relay cannot retroactively rewrite.`,
     );
 
+/**
+ * Optional `tree_hash_version` — the tree-hash recipe (RFC 6962 §2.1 leaf/node
+ * domain-separation tags + hash). Closed `MerkleTreeVersion` enum; the
+ * `z.infer extends MerkleTreeVersion` parity check locks this literal set to the
+ * protocol union, so a registry addition that misses this file fails type-parity.
+ */
+const treeHashVersionField = () =>
+  z
+    .enum(["merkle-sha256-plain-v1", "merkle-sha256-rfc6962-v2"])
+    .optional()
+    .describe(
+      "Tree-hash recipe for the Merkle path: which RFC 6962 §2.1 leaf-domain / node-domain tags and hash function built the root. **Absent ⇒ `merkle-sha256-plain-v1`** — no domain tags, the original behavior; every proof minted before this axis existed still verifies. `merkle-sha256-rfc6962-v2` applies the `0x00` leaf / `0x01` node tags. Separate axis from `suite` (which names the batch-SIGNATURE recipe, not the tree-hash). Verifiers resolve absent to the default and REJECT an unknown value fail-closed — never silently downgrade. See docs/doctrine/merkle-tree-hash-versioning.md.",
+    );
+
 // ---------------------------------------------------------------------------
 // AgentSettlementAnchorBatch — relay's signed batch envelope
 // ---------------------------------------------------------------------------
@@ -252,6 +266,7 @@ export const AgentSettlementAnchorProofSchema = z
       "Signed by the relay over the canonical batch payload (NOT this proof — this proof is self-verifiable but unsigned). Carried here so a verifier can confirm the batch is the relay's claimed batch.",
     ),
     anchor: chainAnchorField("proof's underlying batch"),
+    tree_hash_version: treeHashVersionField(),
   })
   // Unsigned envelope — the proof itself isn't signed; it carries the
   // batch's signature for verification. Forward-compat per "unknown fields

@@ -222,6 +222,25 @@ const REGISTERED_REGISTRIES: ReadonlyArray<RegisteredRegistry> = [
     gateName: "check-settlement-mode-canonical",
     doctrinePaths: ["docs/doctrine/registry-pattern-canonical.md"],
   },
+  {
+    name: "MerkleTreeVersion",
+    // Eighth registered registry — the RFC 6962 §2.1 leaf/node
+    // domain-separation agility axis. Single-file source = tooling
+    // (`merkle-tree-hash.ts`), same one-file shape as `SettlementMode`.
+    // Its coverage gate is NOT a pure three-way lock: its primary
+    // assertion is the `check-suite-dispatch`-shaped no-inline-domain-tag
+    // invariant (`merkle-tree-hash-versioning.md` §6 assertion 1), so a
+    // second hand-rolled Merkle implementation can't ship
+    // RFC-6962-minus-§2.1 hashing while the registry looks healthy.
+    sourceFile: "packages/protocol/src/merkle-tree-hash.ts",
+    toolingFile: "packages/protocol/src/merkle-tree-hash.ts",
+    typeName: "MerkleTreeVersion",
+    arrayName: "ALL_MERKLE_TREE_VERSIONS",
+    guardName: "isMerkleTreeVersion",
+    gatePath: "scripts/check-merkle-tree-hash-canonical.ts",
+    gateName: "check-merkle-tree-hash-canonical",
+    doctrinePaths: ["docs/doctrine/merkle-tree-hash-versioning.md"],
+  },
 ];
 
 function readFile(path: string): string | null {

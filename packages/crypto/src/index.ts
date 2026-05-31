@@ -22,8 +22,9 @@
  *   const vc = await issueReputationCredential(snapshot, privateKey, publicKey, did);
  */
 
+import type { MerkleTreeVersion } from "@motebit/protocol";
 import { verifyBySuite } from "./suite-dispatch.js";
-import { verifyMerkleInclusion } from "./merkle.js";
+import { verifyMerkleInclusion, canonicalLeaf, resolveTreeHashVersion } from "./merkle.js";
 // The @noble/ed25519 SHA-512 binding is performed in suite-dispatch.ts
 // as a side effect of module load. Importing verifyBySuite here is
 // enough to guarantee that the primitive is ready before any verify
@@ -1205,16 +1206,22 @@ export async function verifyMigratingKeyBinding(
  * produces the log and the verifier that checks inclusion MUST agree on this
  * convention. See `docs/doctrine/identity-binding-verification.md`.
  */
-export async function identityLogLeaf(motebitId: string, currentKeyHex: string): Promise<string> {
-  const canonical = canonicalJson({
-    type: "motebit-identity-binding",
-    motebit_id: motebitId,
-    public_key: currentKeyHex,
-  });
-  const hash = await sha256(new TextEncoder().encode(canonical));
-  return Array.from(hash)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+export async function identityLogLeaf(
+  motebitId: string,
+  currentKeyHex: string,
+  treeHashVersion: MerkleTreeVersion = "merkle-sha256-plain-v1",
+): Promise<string> {
+  // Routes through the canonical leaf primitive so the RFC 6962 §2.1 leaf tag
+  // (under v2) is applied in exactly one place. v1 (default) is byte-identical
+  // to the previous `sha256(canonicalJson(...))`.
+  return canonicalLeaf(
+    {
+      type: "motebit-identity-binding",
+      motebit_id: motebitId,
+      public_key: currentKeyHex,
+    },
+    treeHashVersion,
+  );
 }
 
 /** Merkle inclusion proof of an identity-log leaf under an anchored root. */
@@ -1232,6 +1239,13 @@ export interface IdentityLogInclusionProof {
    * non-zero-network and defeats split-view equivocation.
    */
   readonly anchoredRoot: string;
+  /**
+   * Tree-hash recipe for the leaf + Merkle path. **Absent ⇒
+   * `merkle-sha256-plain-v1`** — proofs minted before this axis existed verify
+   * unchanged. Resolved fail-closed: an unknown value rejects the binding
+   * (never silently downgrades). A v2 identity-log producer emits it.
+   */
+  readonly tree_hash_version?: MerkleTreeVersion;
 }
 
 /**
@@ -1262,13 +1276,30 @@ export async function verifyIdentityBindingAnchored(
   );
   if (!sovereign.bound) return sovereign;
 
-  const leaf = await identityLogLeaf(identity.motebit_id, identity.identity.public_key);
+  // Resolve the tree-hash version at the boundary: absent ⇒ v1, unknown ⇒
+  // reject fail-closed (never silently downgrade). Both the leaf builder and the
+  // inclusion check then receive a narrow, supported version.
+  const treeHashVersion = resolveTreeHashVersion(proof.tree_hash_version);
+  if (treeHashVersion === null) {
+    return {
+      bound: false,
+      ...(sovereign.genesisPublicKey ? { genesisPublicKey: sovereign.genesisPublicKey } : {}),
+      reason: `unknown tree_hash_version "${String(proof.tree_hash_version)}" on identity-log proof`,
+    };
+  }
+
+  const leaf = await identityLogLeaf(
+    identity.motebit_id,
+    identity.identity.public_key,
+    treeHashVersion,
+  );
   const included = await verifyMerkleInclusion(
     leaf,
     proof.index,
     proof.siblings,
     proof.layerSizes,
     proof.anchoredRoot,
+    treeHashVersion,
   );
   if (!included) {
     return {
@@ -2065,4 +2096,9 @@ export {
   type WitnessOmissionDisputeVerifyResult,
   type WitnessOmissionDisputeVerifyContext,
 } from "./witness-omission-dispute.js";
-export { verifyMerkleInclusion } from "./merkle.js";
+export {
+  verifyMerkleInclusion,
+  hashLeaf,
+  canonicalLeaf,
+  resolveTreeHashVersion,
+} from "./merkle.js";

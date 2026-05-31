@@ -79,6 +79,7 @@ export interface AgentSettlementAnchorProofFields {
     // (undocumented)
     siblings: string[];
     suite: typeof AGENT_SETTLEMENT_ANCHOR_SUITE;
+    tree_hash_version?: MerkleTreeVersion;
 }
 
 // @public
@@ -144,6 +145,9 @@ export function canonicalizeWitnessOmissionDispute(dispute: WitnessOmissionDispu
 export function canonicalJson(obj: unknown): string;
 
 // @public
+export function canonicalLeaf(value: unknown, treeHashVersion?: MerkleTreeVersion): Promise<string>;
+
+// @public
 export function canonicalSecureEnclaveBodyForTest(body: {
     readonly motebit_id: string;
     readonly device_id: string;
@@ -168,10 +172,10 @@ export type ChainAnchorVerifier = (anchor: {
 export const COLLABORATIVE_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
-export function computeAgentSettlementLeaf(settlement: Record<string, unknown>): Promise<string>;
+export function computeAgentSettlementLeaf(settlement: Record<string, unknown>, treeHashVersion?: MerkleTreeVersion): Promise<string>;
 
 // @public
-export function computeCredentialLeaf(credential: Record<string, unknown>): Promise<string>;
+export function computeCredentialLeaf(credential: Record<string, unknown>, treeHashVersion?: MerkleTreeVersion): Promise<string>;
 
 // @public
 export function computeExecutionTimelineHash(timeline: ExecutionTimelineEntry[]): Promise<string>;
@@ -244,6 +248,7 @@ export interface CredentialAnchorProofFields {
     siblings: string[];
     // Warning: (ae-forgotten-export) The symbol "CREDENTIAL_ANCHOR_SUITE" needs to be exported by the entry point index.d.ts
     suite: typeof CREDENTIAL_ANCHOR_SUITE;
+    tree_hash_version?: MerkleTreeVersion;
 }
 
 // @public
@@ -565,6 +570,9 @@ export function hash(data: Uint8Array): Promise<string>;
 export function hashComputerSessionActions(actions: ReadonlyArray<ComputerSessionActionRecord>): Promise<string>;
 
 // @public
+export function hashLeaf(entry: Uint8Array, treeHashVersion?: MerkleTreeVersion): Promise<string>;
+
+// @public
 export function hashToolPayload(value: unknown): Promise<string>;
 
 // @public (undocumented)
@@ -579,10 +587,11 @@ export interface IdentityLogInclusionProof {
     readonly index: number;
     readonly layerSizes: number[];
     readonly siblings: string[];
+    readonly tree_hash_version?: MerkleTreeVersion;
 }
 
 // @public
-export function identityLogLeaf(motebitId: string, currentKeyHex: string): Promise<string>;
+export function identityLogLeaf(motebitId: string, currentKeyHex: string, treeHashVersion?: MerkleTreeVersion): Promise<string>;
 
 // @public (undocumented)
 export interface IdentityVerifyResult extends BaseResult {
@@ -714,7 +723,7 @@ export function mintSecureEnclaveReceiptForTest(input: {
     sePublicKeyHex: string;
 }>;
 
-// @public
+// @public (undocumented)
 export interface MotebitIdentityFile {
     // (undocumented)
     capabilities?: string[];
@@ -868,6 +877,9 @@ export interface ReputationCredentialSubject {
     // (undocumented)
     trust_score: number;
 }
+
+// @public
+export function resolveTreeHashVersion(raw: string | undefined): MerkleTreeVersion | null;
 
 // @public
 export interface RetentionManifestVerifyResult {

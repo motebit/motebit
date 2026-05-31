@@ -6,6 +6,8 @@
  * proofs using these types.
  */
 
+import type { MerkleTreeVersion } from "./merkle-tree-hash.js";
+
 // === Credential Anchor Batch ===
 
 /** A batch of credential hashes anchored as a Merkle tree. */
@@ -86,6 +88,17 @@ export interface CredentialAnchorProof {
   batch_signature: string;
   /** Onchain anchor metadata, or null if not yet submitted. */
   anchor: CredentialChainAnchor | null;
+  /**
+   * Tree-hash recipe for the Merkle path (leaf-domain / node-domain tags +
+   * hash). A `MerkleTreeVersion` from `merkle-tree-hash.ts`. **Absent ⇒
+   * `merkle-sha256-plain-v1`** — every proof minted before this axis existed
+   * still verifies offline. Verifiers resolve absent to the default and reject
+   * an unknown value fail-closed (never silently downgrade); a v2 producer MUST
+   * emit it rather than rely on the default. Separate axis from `suite` (the
+   * batch-signature recipe). See
+   * `docs/doctrine/merkle-tree-hash-versioning.md`.
+   */
+  tree_hash_version?: MerkleTreeVersion;
 }
 
 // === Anchor Submitter Interface ===

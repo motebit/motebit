@@ -15,7 +15,7 @@
  */
 
 import type { MerkleTreeVersion } from "@motebit/protocol";
-import { sha256 } from "./signing.js";
+import { canonicalJson, sha256 } from "./signing.js";
 
 /**
  * RFC 6962 §2.1 interior-node domain-separation tag. Prepended to
@@ -28,6 +28,87 @@ import { sha256 } from "./signing.js";
  * the algorithm is canonical here, the registry value is documentation.
  */
 const NODE_TAG_V2 = new Uint8Array([0x01]);
+
+/**
+ * RFC 6962 §2.1 leaf-domain separation tag. Prepended to the leaf entry bytes
+ * before hashing under `merkle-sha256-rfc6962-v2` so an interior node's value
+ * can never be presented as a leaf (the second-preimage gap §2.1 closes). v1
+ * applies no tag. Module-level so it is allocated once, not per leaf. Mirrors
+ * `MERKLE_TREE_VERSION_REGISTRY["merkle-sha256-rfc6962-v2"].leafTag` in
+ * `@motebit/protocol` (kept in sync by `merkle-domain-separation.test.ts`); the
+ * algorithm is canonical here, the registry value is documentation.
+ */
+const LEAF_TAG_V2 = new Uint8Array([0x00]);
+
+/**
+ * Hash a Merkle leaf under a tree-hash version — the single dispatch point for
+ * the RFC 6962 §2.1 leaf-domain `0x00` tag, the leaf-side mirror of the
+ * interior-node `0x01` tag applied in {@link verifyMerkleInclusion}'s combine
+ * step. v1 = `SHA-256(entry)`; v2 = `SHA-256(0x00 ‖ entry)`. Every leaf builder
+ * (settlement, credential, identity-log, consolidation) routes its leaf hash
+ * through here, so the leaf tag lives in exactly one place — the
+ * `check-suite-dispatch` shape applied to the Merkle axis (locked by
+ * `check-merkle-tree-hash-canonical`).
+ *
+ * Producer-side contract: THROWS on a version this primitive does not implement
+ * (a builder asking for an unregistered version is a programming error, not
+ * untrusted input — unlike the verifier path, which returns `false`). The
+ * high-level verifiers validate the proof's `tree_hash_version` at their own
+ * boundary before threading it down, so an unhandled value never reaches here
+ * from untrusted input.
+ *
+ * @param entry - the leaf's entry bytes (e.g. encoded `canonicalJson(record)`)
+ * @param treeHashVersion - tree-hash recipe; default `merkle-sha256-plain-v1`
+ * @returns hex-encoded SHA-256 leaf hash
+ */
+export async function hashLeaf(
+  entry: Uint8Array,
+  treeHashVersion: MerkleTreeVersion = "merkle-sha256-plain-v1",
+): Promise<string> {
+  if (treeHashVersion === "merkle-sha256-plain-v1") {
+    return toHex(await sha256(entry));
+  }
+  if (treeHashVersion === "merkle-sha256-rfc6962-v2") {
+    return toHex(await sha256(concat(LEAF_TAG_V2, entry)));
+  }
+  throw new Error(`Unsupported MerkleTreeVersion: ${String(treeHashVersion)}`);
+}
+
+/**
+ * JCS-canonicalize a value, then leaf-hash it via {@link hashLeaf}.
+ * `canonicalLeaf(x)` (v1 default) is byte-identical to `canonicalSha256(x)` —
+ * the leaf builders that used the latter keep their v1 output unchanged while
+ * gaining the v2 path for free. The shared canonicalization means a producer
+ * and a holder who hold the same object derive the identical leaf.
+ *
+ * @param value - the object the leaf commits to (signature included for signed artifacts)
+ * @param treeHashVersion - tree-hash recipe; default `merkle-sha256-plain-v1`
+ * @returns hex-encoded SHA-256 leaf hash
+ */
+export async function canonicalLeaf(
+  value: unknown,
+  treeHashVersion: MerkleTreeVersion = "merkle-sha256-plain-v1",
+): Promise<string> {
+  return hashLeaf(new TextEncoder().encode(canonicalJson(value)), treeHashVersion);
+}
+
+/**
+ * Resolve a proof's wire `tree_hash_version` string to a `MerkleTreeVersion` at
+ * a verifier boundary. **Absent ⇒ `merkle-sha256-plain-v1`** (never silently
+ * upgraded — threat-model rule a); a known value passes through; an UNKNOWN
+ * string returns `null` so the caller fails closed and REJECTS (never downgrades
+ * to v1 — threat-model rule b). The leaf-builder + Merkle-inclusion calls
+ * downstream then receive a narrow, supported version. Mirrors the
+ * `verifyBySuite` suite-resolution contract, one axis over. The two string
+ * literals here are the verifier-side dispatch arms the closed-registry gate
+ * (`check-merkle-tree-hash-canonical`) keeps aligned with
+ * `ALL_MERKLE_TREE_VERSIONS`.
+ */
+export function resolveTreeHashVersion(raw: string | undefined): MerkleTreeVersion | null {
+  if (raw === undefined) return "merkle-sha256-plain-v1";
+  if (raw === "merkle-sha256-plain-v1" || raw === "merkle-sha256-rfc6962-v2") return raw;
+  return null;
+}
 
 function fromHex(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);

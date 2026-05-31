@@ -18,8 +18,9 @@
  * canonical `merkle.ts` primitive (see `crypto/CLAUDE.md` rule 6).
  */
 
-import { canonicalJson, sha256, hexToBytes, bytesToHex, verifyBySuite } from "./signing.js";
-import { verifyMerkleInclusion } from "./merkle.js";
+import type { MerkleTreeVersion } from "@motebit/protocol";
+import { canonicalJson, hexToBytes, verifyBySuite } from "./signing.js";
+import { verifyMerkleInclusion, canonicalLeaf, resolveTreeHashVersion } from "./merkle.js";
 // Reuse the sibling's onchain-verification callback shape (identical) rather
 // than redefining it — one `ChainAnchorVerifier` name across the anchor family.
 import type { ChainAnchorVerifier } from "./credential-anchor.js";
@@ -54,10 +55,12 @@ export const AGENT_SETTLEMENT_ANCHOR_SUITE = "motebit-jcs-ed25519-hex-v1" as con
  */
 export async function computeAgentSettlementLeaf(
   settlement: Record<string, unknown>,
+  treeHashVersion: MerkleTreeVersion = "merkle-sha256-plain-v1",
 ): Promise<string> {
-  const canonical = canonicalJson(settlement);
-  const hash = await sha256(new TextEncoder().encode(canonical));
-  return bytesToHex(hash);
+  // Routes through the canonical leaf primitive so the RFC 6962 §2.1 leaf tag
+  // (under v2) is applied in one place. v1 (default) is byte-identical to the
+  // previous `bytesToHex(sha256(canonicalJson(settlement)))`.
+  return canonicalLeaf(settlement, treeHashVersion);
 }
 
 // === Anchor Verification ===
@@ -109,6 +112,12 @@ export interface AgentSettlementAnchorProofFields {
     tx_hash: string;
     anchored_at: number;
   } | null;
+  /**
+   * Tree-hash recipe for the Merkle path. **Absent ⇒ `merkle-sha256-plain-v1`**.
+   * Resolved fail-closed (unknown ⇒ reject, never silent-downgrade); threaded to
+   * the leaf builder (step 1) and `verifyMerkleInclusion` (step 2).
+   */
+  tree_hash_version?: MerkleTreeVersion;
 }
 
 /**
@@ -138,8 +147,25 @@ export async function verifyAgentSettlementAnchor(
 ): Promise<AgentSettlementAnchorVerifyResult> {
   const errors: string[] = [];
 
+  // Resolve the tree-hash version at the boundary: absent ⇒ v1, unknown ⇒
+  // reject fail-closed (every step false, never silent-downgrade). Both the leaf
+  // builder and the inclusion check then receive a narrow, supported version.
+  const treeHashVersion = resolveTreeHashVersion(proof.tree_hash_version);
+  if (treeHashVersion === null) {
+    return {
+      valid: false,
+      steps: {
+        hash_valid: false,
+        merkle_valid: false,
+        relay_signature_valid: false,
+        chain_verified: null,
+      },
+      errors: [`Unknown tree_hash_version "${String(proof.tree_hash_version)}" — rejected`],
+    };
+  }
+
   // Step 1: Hash verification — the held record maps to the claimed leaf.
-  const computedHash = await computeAgentSettlementLeaf(settlement);
+  const computedHash = await computeAgentSettlementLeaf(settlement, treeHashVersion);
   const hashValid = computedHash === proof.settlement_hash;
   if (!hashValid) {
     errors.push(
@@ -155,6 +181,7 @@ export async function verifyAgentSettlementAnchor(
     proof.siblings,
     proof.layer_sizes,
     proof.merkle_root,
+    treeHashVersion,
   );
   if (!merkleValid) {
     errors.push("Merkle proof does not reconstruct to the claimed root");

@@ -3,7 +3,12 @@
  * ConsolidationAnchor end-to-end against the motebit's public key.
  */
 import { describe, it, expect } from "vitest";
-import { canonicalSha256, generateKeypair, signConsolidationReceipt } from "@motebit/crypto";
+import {
+  canonicalLeaf,
+  canonicalSha256,
+  generateKeypair,
+  signConsolidationReceipt,
+} from "@motebit/crypto";
 import type { ConsolidationAnchor, ConsolidationReceipt } from "@motebit/protocol";
 import { buildMerkleTree } from "../merkle.js";
 import { verifyConsolidationAnchor } from "../consolidation-anchor.js";
@@ -167,5 +172,86 @@ describe("verifyConsolidationAnchor", () => {
     expect(anchor.receipt_ids[1]).toBe("receipt-0002");
     const result = await verifyConsolidationAnchor(anchor, receipts, kp.publicKey);
     expect(result.ok).toBe(true);
+  });
+});
+
+/**
+ * Build a v2 anchor through the REAL producer path: leaves carry the RFC 6962
+ * §2.1 `0x00` leaf tag (`canonicalLeaf(r, v2)`) and the tree's interior nodes
+ * carry the `0x01` node tag (`buildMerkleTree(leaves, v2)`). This is the
+ * producer/verifier symmetry the deploy-verifier-first ordering rests on — no v2
+ * producer ships in 2b, so the test stands one up by hand to prove the dormant
+ * plumbing recomputes the same root the verifier expects.
+ */
+async function buildV2Anchor(
+  receipts: ReadonlyArray<ConsolidationReceipt>,
+  motebitId: string,
+): Promise<ConsolidationAnchor> {
+  const V2 = "merkle-sha256-rfc6962-v2" as const;
+  const sorted = [...receipts].sort((a, b) => {
+    if (a.finished_at !== b.finished_at) return a.finished_at - b.finished_at;
+    return a.receipt_id.localeCompare(b.receipt_id);
+  });
+  const leaves: string[] = [];
+  for (const r of sorted) leaves.push(await canonicalLeaf(r, V2));
+  const tree = await buildMerkleTree(leaves, V2);
+  return {
+    batch_id: "batch-00000000-0000-4000-8000-0000000000v2",
+    motebit_id: motebitId,
+    merkle_root: tree.root,
+    receipt_ids: sorted.map((r) => r.receipt_id),
+    leaf_count: sorted.length,
+    anchored_at: 1_700_000_010_000,
+    tree_hash_version: V2,
+  };
+}
+
+describe("verifyConsolidationAnchor — tree-hash v2 (RFC 6962 §2.1)", () => {
+  it("verifies a v2 anchor end-to-end (real producer leaf+node tags, verifier symmetry)", async () => {
+    const kp = await generateKeypair();
+    const receipts = [
+      await signReceipt(1, 1_700_000_000_000, "mote-ivan", kp),
+      await signReceipt(2, 1_700_000_001_000, "mote-ivan", kp),
+      await signReceipt(3, 1_700_000_002_000, "mote-ivan", kp),
+    ];
+    const anchor = await buildV2Anchor(receipts, "mote-ivan");
+    const result = await verifyConsolidationAnchor(anchor, receipts, kp.publicKey);
+    expect(result.ok).toBe(true);
+    expect(result.recomputedMerkleRoot).toBe(anchor.merkle_root);
+    // The v2 root genuinely differs from the v1 root over the same receipts.
+    const v1Anchor = await buildAnchor(receipts, "mote-ivan");
+    expect(anchor.merkle_root).not.toBe(v1Anchor.merkle_root);
+  });
+
+  it("a v2 anchor with tree_hash_version STRIPPED fails on Merkle root mismatch (not silent-accepted)", async () => {
+    const kp = await generateKeypair();
+    const receipts = [
+      await signReceipt(1, 1_700_000_000_000, "mote-judy", kp),
+      await signReceipt(2, 1_700_000_001_000, "mote-judy", kp),
+    ];
+    const v2Anchor = await buildV2Anchor(receipts, "mote-judy");
+    const { tree_hash_version: _omit, ...stripped } = v2Anchor;
+    void _omit;
+    const result = await verifyConsolidationAnchor(stripped, receipts, kp.publicKey);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("Merkle root mismatch");
+    // Confirms the REAL failure mode: it recomputed a different (v1) root and
+    // rejected — it did not silently accept the v2 root under v1 semantics.
+    expect(result.recomputedMerkleRoot).not.toBeNull();
+    expect(result.recomputedMerkleRoot).not.toBe(v2Anchor.merkle_root);
+  });
+
+  it("an unknown tree_hash_version is rejected fail-closed before any recompute", async () => {
+    const kp = await generateKeypair();
+    const r = await signReceipt(1, 1_700_000_000_000, "mote-karl", kp);
+    const anchor = await buildV2Anchor([r], "mote-karl");
+    const result = await verifyConsolidationAnchor(
+      { ...anchor, tree_hash_version: "merkle-sha256-v3-unknown" as never },
+      [r],
+      kp.publicKey,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("unknown tree_hash_version");
+    expect(result.recomputedMerkleRoot).toBeNull();
   });
 });

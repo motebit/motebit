@@ -132,6 +132,9 @@ const vc = await issueReputationCredential(
 - **`ed25519Verify(signature, message, publicKey)`** — Raw Ed25519 verify.
 - **`canonicalJson(obj)`** — Deterministic JSON serialization (JCS/RFC 8785).
 - **`hash(data)`** — SHA-256 hex string.
+- **`hashLeaf(entry, treeHashVersion?)`** — Merkle leaf hash under a `MerkleTreeVersion`: `SHA-256(entry)` for `merkle-sha256-plain-v1` (default), `SHA-256(0x00 ‖ entry)` for the RFC 6962 §2.1 `merkle-sha256-rfc6962-v2` leaf tag. The single dispatch point every leaf builder routes through; throws on an unimplemented version.
+- **`canonicalLeaf(value, treeHashVersion?)`** — JCS-canonicalize `value` then `hashLeaf` it. `canonicalLeaf(x)` (v1 default) is byte-identical to `hash(canonicalJson(x))`.
+- **`resolveTreeHashVersion(raw)`** — Verifier-boundary resolver for a proof's wire `tree_hash_version`: `absent ⇒ merkle-sha256-plain-v1`, a known value to itself, an unknown string to `null` so the caller rejects fail-closed (never silent-downgrade). See `docs/doctrine/merkle-tree-hash-versioning.md`.
 - **`createSignedToken(payload, privateKey)`** — Create a signed auth token.
 - **`verifySignedToken(token, publicKey)`** — Verify a signed auth token.
 - **`publicKeyToDidKey(publicKey)`** / **`didKeyToPublicKey(did)`** — did:key conversion.

@@ -15,8 +15,13 @@
  */
 import { describe, it, expect } from "vitest";
 import { MERKLE_TREE_VERSION_REGISTRY, DEFAULT_MERKLE_TREE_VERSION } from "@motebit/protocol";
-import { verifyMerkleInclusion } from "../merkle.js";
-import { sha256, bytesToHex } from "../signing.js";
+import {
+  verifyMerkleInclusion,
+  hashLeaf,
+  canonicalLeaf,
+  resolveTreeHashVersion,
+} from "../merkle.js";
+import { sha256, bytesToHex, canonicalJson } from "../signing.js";
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 const concatBytes = (...parts: Uint8Array[]): Uint8Array => {
@@ -112,5 +117,60 @@ describe("verifyMerkleInclusion — v2 node tag pinned to HashChildren KAT", () 
     // The 5-arg call signature defaults to v1 — keeps existing callers
     // byte-identical and matches protocol's DEFAULT_MERKLE_TREE_VERSION.
     expect(DEFAULT_MERKLE_TREE_VERSION).toBe("merkle-sha256-plain-v1");
+  });
+});
+
+describe("hashLeaf — the leaf-tag dispatch primitive, pinned to the external KAT", () => {
+  it("v2: hashLeaf(enc('L123456')) == HashLeaf('L123456') (0x00 leaf tag through the primitive)", async () => {
+    // Not a hand-rolled repro — the PRIMITIVE every leaf builder routes through
+    // must itself reproduce the external RFC 6962 leaf-hash vector.
+    expect(await hashLeaf(enc("L123456"), "merkle-sha256-rfc6962-v2")).toBe(KAT_LEAF_L123456);
+  });
+
+  it("v1 (and default) applies NO leaf tag — SHA-256(entry), ≠ the tagged KAT", async () => {
+    const untagged = bytesToHex(await sha256(enc("L123456")));
+    expect(await hashLeaf(enc("L123456"), "merkle-sha256-plain-v1")).toBe(untagged);
+    expect(await hashLeaf(enc("L123456"))).toBe(untagged); // default ⇒ v1
+    expect(untagged).not.toBe(KAT_LEAF_L123456);
+  });
+
+  it("throws (producer-loud) on an unimplemented version", async () => {
+    await expect(hashLeaf(enc("x"), "merkle-sha256-v3-unknown" as never)).rejects.toThrow(
+      /Unsupported MerkleTreeVersion/,
+    );
+  });
+});
+
+describe("canonicalLeaf — JCS-canonicalize then leaf-hash", () => {
+  it("v1 is byte-identical to bytesToHex(sha256(encode(canonicalJson(x))))", async () => {
+    const obj = { b: 2, a: 1, nested: { z: [3, 2, 1] } };
+    const expected = bytesToHex(await sha256(enc(canonicalJson(obj))));
+    expect(await canonicalLeaf(obj, "merkle-sha256-plain-v1")).toBe(expected);
+    expect(await canonicalLeaf(obj)).toBe(expected); // default ⇒ v1
+  });
+
+  it("v2 prepends the 0x00 leaf tag to the canonical bytes", async () => {
+    const obj = { a: 1 };
+    const v2 = bytesToHex(
+      await sha256(concatBytes(new Uint8Array([0x00]), enc(canonicalJson(obj)))),
+    );
+    expect(await canonicalLeaf(obj, "merkle-sha256-rfc6962-v2")).toBe(v2);
+    expect(await canonicalLeaf(obj, "merkle-sha256-rfc6962-v2")).not.toBe(
+      await canonicalLeaf(obj, "merkle-sha256-plain-v1"),
+    );
+  });
+});
+
+describe("resolveTreeHashVersion — verifier-boundary dispatch", () => {
+  it("absent ⇒ v1 (never silently upgraded)", () => {
+    expect(resolveTreeHashVersion(undefined)).toBe("merkle-sha256-plain-v1");
+  });
+  it("known values pass through", () => {
+    expect(resolveTreeHashVersion("merkle-sha256-plain-v1")).toBe("merkle-sha256-plain-v1");
+    expect(resolveTreeHashVersion("merkle-sha256-rfc6962-v2")).toBe("merkle-sha256-rfc6962-v2");
+  });
+  it("unknown ⇒ null so the caller rejects fail-closed (never downgrades)", () => {
+    expect(resolveTreeHashVersion("merkle-sha256-v3")).toBeNull();
+    expect(resolveTreeHashVersion("")).toBeNull();
   });
 });

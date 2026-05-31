@@ -266,6 +266,12 @@ export const ConsolidationAnchorSchema = z
       .describe(
         "CAIP-2 network identifier the anchor was submitted to (e.g., `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` for Solana mainnet). Paired with `tx_hash` — absent when `tx_hash` is absent.",
       ),
+    tree_hash_version: z
+      .enum(["merkle-sha256-plain-v1", "merkle-sha256-rfc6962-v2"])
+      .optional()
+      .describe(
+        "Tree-hash recipe for the receipts' Merkle root: which RFC 6962 §2.1 leaf-domain / node-domain tags and hash function built it. **Absent ⇒ `merkle-sha256-plain-v1`** — no domain tags, the original behavior; every anchor produced before this axis existed still recomputes. `merkle-sha256-rfc6962-v2` applies the `0x00` leaf / `0x01` node tags. Verifiers resolve absent to the default and REJECT an unknown value fail-closed — never silently downgrade. See docs/doctrine/merkle-tree-hash-versioning.md.",
+      ),
   })
   // Forward-compat for future fields (e.g., a chain-agnostic `anchor`
   // nested object if we grow beyond Solana memos).

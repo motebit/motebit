@@ -8,8 +8,9 @@
  * motebit/credential-anchor@1.0 §3 (leaf hash) and §5.2 (verification).
  */
 
-import { canonicalJson, sha256, hexToBytes, bytesToHex, verifyBySuite } from "./signing.js";
-import { verifyMerkleInclusion } from "./merkle.js";
+import type { MerkleTreeVersion } from "@motebit/protocol";
+import { canonicalJson, hexToBytes, verifyBySuite } from "./signing.js";
+import { verifyMerkleInclusion, canonicalLeaf, resolveTreeHashVersion } from "./merkle.js";
 
 /** The one suite CredentialAnchorBatch records sign under today. */
 export const CREDENTIAL_ANCHOR_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
@@ -26,10 +27,14 @@ export const CREDENTIAL_ANCHOR_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
  * @param credential - Full verifiable credential object (with proof)
  * @returns Hex-encoded SHA-256 hash
  */
-export async function computeCredentialLeaf(credential: Record<string, unknown>): Promise<string> {
-  const canonical = canonicalJson(credential);
-  const hash = await sha256(new TextEncoder().encode(canonical));
-  return bytesToHex(hash);
+export async function computeCredentialLeaf(
+  credential: Record<string, unknown>,
+  treeHashVersion: MerkleTreeVersion = "merkle-sha256-plain-v1",
+): Promise<string> {
+  // Routes through the canonical leaf primitive so the RFC 6962 §2.1 leaf tag
+  // (under v2) is applied in one place. v1 (default) is byte-identical to the
+  // previous `bytesToHex(sha256(canonicalJson(credential)))`.
+  return canonicalLeaf(credential, treeHashVersion);
 }
 
 // === Anchor Verification ===
@@ -97,6 +102,12 @@ export interface CredentialAnchorProofFields {
     tx_hash: string;
     anchored_at: number;
   } | null;
+  /**
+   * Tree-hash recipe for the Merkle path. **Absent ⇒ `merkle-sha256-plain-v1`**.
+   * Resolved fail-closed (unknown ⇒ reject, never silent-downgrade); threaded to
+   * the leaf builder (step 1) and `verifyMerkleInclusion` (step 2).
+   */
+  tree_hash_version?: MerkleTreeVersion;
 }
 
 /**
@@ -127,8 +138,25 @@ export async function verifyCredentialAnchor(
 ): Promise<CredentialAnchorVerifyResult> {
   const errors: string[] = [];
 
+  // Resolve the tree-hash version at the boundary: absent ⇒ v1, unknown ⇒
+  // reject fail-closed (every step false, never silent-downgrade). Both the leaf
+  // builder and the inclusion check then receive a narrow, supported version.
+  const treeHashVersion = resolveTreeHashVersion(anchorProof.tree_hash_version);
+  if (treeHashVersion === null) {
+    return {
+      valid: false,
+      steps: {
+        hash_valid: false,
+        merkle_valid: false,
+        relay_signature_valid: false,
+        chain_verified: null,
+      },
+      errors: [`Unknown tree_hash_version "${String(anchorProof.tree_hash_version)}" — rejected`],
+    };
+  }
+
   // Step 1: Hash verification — credential maps to the claimed leaf
-  const computedHash = await computeCredentialLeaf(credential);
+  const computedHash = await computeCredentialLeaf(credential, treeHashVersion);
   const hashValid = computedHash === anchorProof.credential_hash;
   if (!hashValid) {
     errors.push(
@@ -143,6 +171,7 @@ export async function verifyCredentialAnchor(
     anchorProof.siblings,
     anchorProof.layer_sizes,
     anchorProof.merkle_root,
+    treeHashVersion,
   );
   if (!merkleValid) {
     errors.push("Merkle proof does not reconstruct to the claimed root");

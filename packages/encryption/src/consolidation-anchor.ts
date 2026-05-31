@@ -30,7 +30,7 @@
  * different bytes.
  */
 
-import { canonicalSha256, verifyConsolidationReceipt } from "@motebit/crypto";
+import { canonicalLeaf, resolveTreeHashVersion, verifyConsolidationReceipt } from "@motebit/crypto";
 import type { ConsolidationAnchor, ConsolidationReceipt } from "@motebit/protocol";
 import { buildMerkleTree } from "./merkle.js";
 
@@ -64,6 +64,18 @@ export async function verifyConsolidationAnchor(
   receipts: ReadonlyArray<ConsolidationReceipt>,
   publicKey: Uint8Array,
 ): Promise<ConsolidationAnchorVerifyResult> {
+  // Resolve the tree-hash version at the boundary: absent ⇒ v1, unknown ⇒
+  // reject fail-closed (never silent-downgrade). The leaf builder + Merkle tree
+  // both receive a narrow, supported version.
+  const treeHashVersion = resolveTreeHashVersion(anchor.tree_hash_version);
+  if (treeHashVersion === null) {
+    return {
+      ok: false,
+      reason: `unknown tree_hash_version "${String(anchor.tree_hash_version)}" — rejected`,
+      recomputedMerkleRoot: null,
+    };
+  }
+
   if (receipts.length !== anchor.receipt_ids.length) {
     return {
       ok: false,
@@ -97,9 +109,12 @@ export async function verifyConsolidationAnchor(
 
   const leaves: string[] = [];
   for (const r of receipts) {
-    leaves.push(await canonicalSha256(r));
+    // v1 (default) is byte-identical to the previous `canonicalSha256(r)`; v2
+    // applies the RFC 6962 §2.1 leaf tag. The node tag (under v2) is applied by
+    // `buildMerkleTree` below — both halves dispatch on the same version.
+    leaves.push(await canonicalLeaf(r, treeHashVersion));
   }
-  const tree = await buildMerkleTree(leaves);
+  const tree = await buildMerkleTree(leaves, treeHashVersion);
 
   if (tree.root !== anchor.merkle_root) {
     return {
