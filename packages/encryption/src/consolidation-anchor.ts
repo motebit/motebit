@@ -53,8 +53,10 @@ export interface ConsolidationAnchorVerifyResult {
  *   2. Each `receipts[i].receipt_id` equals `anchor.receipt_ids[i]`
  *      (caller preserves order).
  *   3. Each receipt's Ed25519 signature verifies against `publicKey`.
- *   4. The Merkle root over `canonicalSha256(receipt)` leaves equals
- *      `anchor.merkle_root`.
+ *   4. The Merkle root over `canonicalLeaf(receipt, version)` leaves equals
+ *      `anchor.merkle_root`, where `version` is resolved from
+ *      `anchor.tree_hash_version` (absent ⇒ `merkle-sha256-plain-v1`, whose
+ *      leaf is byte-identical to the legacy `canonicalSha256(receipt)`).
  *
  * Resolves with a structured result; never throws past the function
  * boundary (caller gets a clean true/false + reason).

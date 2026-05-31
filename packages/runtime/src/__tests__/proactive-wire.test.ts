@@ -315,16 +315,16 @@ describe("Runtime — proactive interior wire-in", () => {
     expect(result).toBeNull();
   });
 
-  it("anchorPendingConsolidationReceipts batches signed receipts into a Merkle root (local-only, no submitter)", async () => {
+  it("anchorPendingConsolidationReceipts batches signed receipts into a v2 (RFC 6962) Merkle root", async () => {
     const { generateKeypair } = await import("@motebit/crypto");
-    const { canonicalSha256, buildMerkleTree } = await import("@motebit/encryption");
+    const { canonicalLeaf, canonicalSha256, buildMerkleTree } = await import("@motebit/encryption");
     const kp = await generateKeypair();
     const rt = new MotebitRuntime(
       { motebitId: "anchor-test", tickRateHz: 0, signingKeys: kp },
       { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
     );
 
-    // Run two cycles → two signed receipts.
+    // Run two cycles → two signed receipts (≥2 so the node-tag path runs).
     await rt.consolidationCycle();
     await rt.consolidationCycle();
 
@@ -335,9 +335,12 @@ describe("Runtime — proactive interior wire-in", () => {
     expect(anchor!.receipt_ids).toHaveLength(2);
     expect(anchor!.tx_hash).toBeUndefined();
     expect(anchor!.network).toBeUndefined();
+    // PR5: the producer is a v2 (RFC 6962 §2.1) producer — the version rides
+    // the self-describing anchor object.
+    expect(anchor!.tree_hash_version).toBe("merkle-sha256-rfc6962-v2");
 
     // Independently recompute the Merkle root from the signed-receipt
-    // events — the anchor must match.
+    // events — the anchor must match under v2 (the 0x00 leaf + 0x01 node tags).
     const sevs = await rt.events.query({
       motebit_id: "anchor-test",
       event_types: [EventType.ConsolidationReceiptSigned],
@@ -350,9 +353,90 @@ describe("Runtime — proactive interior wire-in", () => {
           : a.receipt_id.localeCompare(b.receipt_id),
       );
     const leaves: string[] = [];
+    for (const r of receipts) leaves.push(await canonicalLeaf(r, "merkle-sha256-rfc6962-v2"));
+    const tree = await buildMerkleTree(leaves, "merkle-sha256-rfc6962-v2");
+    expect(anchor!.merkle_root).toBe(tree.root);
+
+    // The v2 leaf is NOT the v1 leaf — proves the 0x00 leaf tag was applied,
+    // not just that some root matched.
+    const v1Leaf = await canonicalSha256(receipts[0]!);
+    const v2Leaf = await canonicalLeaf(receipts[0]!, "merkle-sha256-rfc6962-v2");
+    expect(v2Leaf).not.toBe(v1Leaf);
+  });
+
+  it("anchorPendingConsolidationReceipts emits an anchor that verifyConsolidationAnchor accepts end-to-end (v2)", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const { verifyConsolidationAnchor } = await import("@motebit/encryption");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      { motebitId: "verify-test", tickRateHz: 0, signingKeys: kp },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    await rt.consolidationCycle();
+    await rt.consolidationCycle();
+    const anchor = await rt.anchorPendingConsolidationReceipts();
+    expect(anchor).not.toBeNull();
+    expect(anchor!.tree_hash_version).toBe("merkle-sha256-rfc6962-v2");
+
+    // Gather the signed receipts in the anchor's committed order.
+    const sevs = await rt.events.query({
+      motebit_id: "verify-test",
+      event_types: [EventType.ConsolidationReceiptSigned],
+    });
+    const byId = new Map(
+      sevs.map((e) => {
+        const r = (e.payload as { receipt: import("@motebit/sdk").ConsolidationReceipt }).receipt;
+        return [r.receipt_id, r] as const;
+      }),
+    );
+    const ordered = anchor!.receipt_ids.map((id) => byId.get(id)!);
+
+    const result = await verifyConsolidationAnchor(anchor!, ordered, kp.publicKey);
+    expect(result.ok).toBe(true);
+    expect(result.recomputedMerkleRoot).toBe(anchor!.merkle_root);
+  });
+
+  it("verifyConsolidationAnchor accepts a legacy anchor with tree_hash_version absent (absent ⇒ v1)", async () => {
+    const { generateKeypair } = await import("@motebit/crypto");
+    const { canonicalSha256, buildMerkleTree, verifyConsolidationAnchor } =
+      await import("@motebit/encryption");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      { motebitId: "legacy-test", tickRateHz: 0, signingKeys: kp },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    await rt.consolidationCycle();
+    await rt.consolidationCycle();
+
+    const sevs = await rt.events.query({
+      motebit_id: "legacy-test",
+      event_types: [EventType.ConsolidationReceiptSigned],
+    });
+    const receipts = sevs
+      .map((e) => (e.payload as { receipt: import("@motebit/sdk").ConsolidationReceipt }).receipt)
+      .sort((a, b) =>
+        a.finished_at !== b.finished_at
+          ? a.finished_at - b.finished_at
+          : a.receipt_id.localeCompare(b.receipt_id),
+      );
+
+    // Hand-build a pre-PR5 (v1) anchor: leaves under canonicalSha256, no
+    // tree_hash_version field. It must still verify (absent ⇒ v1).
+    const leaves: string[] = [];
     for (const r of receipts) leaves.push(await canonicalSha256(r));
     const tree = await buildMerkleTree(leaves);
-    expect(anchor!.merkle_root).toBe(tree.root);
+    const legacyAnchor: import("@motebit/sdk").ConsolidationAnchor = {
+      batch_id: "legacy-batch",
+      motebit_id: "legacy-test",
+      merkle_root: tree.root,
+      receipt_ids: receipts.map((r) => r.receipt_id),
+      leaf_count: receipts.length,
+      anchored_at: receipts[0]!.finished_at,
+    };
+    expect(legacyAnchor.tree_hash_version).toBeUndefined();
+
+    const result = await verifyConsolidationAnchor(legacyAnchor, receipts, kp.publicKey);
+    expect(result.ok).toBe(true);
   });
 
   it("anchorPendingConsolidationReceipts emits ConsolidationReceiptsAnchored event with the anchor", async () => {

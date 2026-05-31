@@ -93,6 +93,7 @@ ConsolidationAnchor {
   receipt_ids:     string[]      // ordered list — commits the leaf order
   leaf_count:      number        // === receipt_ids.length (parser convenience)
   anchored_at:     number        // ms timestamp when the anchor record was produced
+  tree_hash_version?: string     // MerkleTreeVersion (§4.6); absent ⇒ "merkle-sha256-plain-v1"
   tx_hash?:        string        // Solana signature (base58) if submitted onchain
   network?:        string        // CAIP-2 network id, e.g.
                                  //   "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
@@ -114,13 +115,15 @@ leaf[i] = hex(SHA-256(UTF-8 bytes of canonicalJson(receipts[i])))
 
 The leaf commits the entire SIGNED receipt body (including `signature`). "The motebit published exactly this signed artifact," not "the motebit published a receipt with these fields that could be re-signed."
 
+**Tree-hash domain separation.** Under the `merkle-sha256-rfc6962-v2` tree-hash version (§4.6) the leaf hash gains the RFC 6962 §2.1 leaf-domain tag: `leaf[i] = hex(SHA-256(0x00 ‖ canonicalJson(receipts[i])))`. The `canonicalJson(...)` entry bytes are identical to the `merkle-sha256-plain-v1` (untagged) form above — only the `0x00` prefix is added — so producer and verifier derive the same leaf as long as both dispatch on the anchor's declared version.
+
 ### 4.2 Leaf order
 
 Receipts sort by `(finished_at ASC, receipt_id ASC)` before leaf construction. The order is deterministic and reproducible — given the same set of receipts, any verifier computes the same Merkle root. `ConsolidationAnchor.receipt_ids` commits this order; verifiers MUST preserve it.
 
 ### 4.3 Merkle tree
 
-Binary tree with odd-leaf promotion (no duplication). Internal nodes are `SHA-256(left || right)` of raw bytes. Same algorithm as motebit/credential-anchor@1.0 and relay-federation-v1.md §7.6.2.
+Binary tree with odd-leaf promotion (no duplication). Under `merkle-sha256-plain-v1` (the default, absent ⇒ v1) internal nodes are `SHA-256(left || right)` of raw bytes; under `merkle-sha256-rfc6962-v2` (§4.6) they gain the RFC 6962 §2.1 node tag: `SHA-256(0x01 ‖ left ‖ right)`. Same algorithm as motebit/credential-anchor@1.0 and relay-federation-v1.md §7.6.2.
 
 ### 4.4 Onchain submission (optional)
 
@@ -141,8 +144,8 @@ A third party given `(anchor, receipts, publicKey)` verifies offline:
 1. `receipts.length === anchor.receipt_ids.length`
 2. For each `i`: `receipts[i].receipt_id === anchor.receipt_ids[i]` (caller preserves order)
 3. For each receipt: §3.2 passes
-4. `leaves = receipts.map(r => hex(SHA-256(canonicalJson(r))))`
-5. `recomputedRoot = merkleRoot(leaves)` equals `anchor.merkle_root`
+4. `leaves = receipts.map(r => leaf(r))`, where `leaf` dispatches on `anchor.tree_hash_version` (absent ⇒ `merkle-sha256-plain-v1`; an unknown value MUST be rejected fail-closed, never downgraded — §4.6)
+5. `recomputedRoot = merkleRoot(leaves)` equals `anchor.merkle_root`, the node combine dispatching the domain tag on the same resolved version
 
 When the verifier additionally has `anchor.tx_hash`:
 
@@ -152,6 +155,26 @@ When the verifier additionally has `anchor.tx_hash`:
 9. Verify the tx signer's pubkey matches `publicKey` (the motebit's identity = Solana address)
 
 Reference verifier: third-party implementations may match the behavior of `@motebit/encryption`'s verifier; the canonical definition is this spec.
+
+### 4.6 Tree-hash version (RFC 6962 §2.1 domain separation)
+
+The Merkle tree (§4.3) is built under a `MerkleTreeVersion` — the code-canonical closed registry in `@motebit/protocol` (`packages/protocol/src/merkle-tree-hash.ts`), the tree-hash agility axis (`docs/doctrine/merkle-tree-hash-versioning.md`). It governs exactly `(leaf-domain tag, node-domain tag, hash function)`; it is a **separate axis from `suite`** (which names the receipt-_signature_ recipe in §3). Two versions today:
+
+- `merkle-sha256-plain-v1` — `status: legacy`. SHA-256, no domain separation (`leaf = SHA-256(entry)`, `node = SHA-256(left ‖ right)`). The original behavior; verifiers accept it, producers MUST NOT emit it. **An anchor with no `tree_hash_version` is this version** (absent ⇒ v1).
+- `merkle-sha256-rfc6962-v2` — `status: preferred`. RFC 6962 §2.1 (`leaf = SHA-256(0x00 ‖ entry)`, `node = SHA-256(0x01 ‖ left ‖ right)`), giving the leaf-vs-node second-preimage resistance that makes a leaf indistinguishable from an interior node.
+
+**Dispatch (foundation law).** A verifier resolves `anchor.tree_hash_version`: absent ⇒ `merkle-sha256-plain-v1`; a known value ⇒ that version; an **unknown** value ⇒ REJECT fail-closed (never silently downgrade to v1). A `merkle-sha256-rfc6962-v2` producer MUST emit the field on every anchor it mints (no "v2 behavior, absent field").
+
+**Self-describing record — no per-row reconstruction.** Unlike the relay's batch anchors (agent-settlement, credential-anchor), the consolidation anchor is NOT reconstructed from a stored column at proof-serve time: the anchor _object_ is the persisted record (the reference runtime emits it into its event log as `ConsolidationReceiptsAnchored`), so it carries its own `tree_hash_version` and `verifyConsolidationAnchor` resolves each anchor's field standalone. Backward-compat is therefore automatic — an anchor emitted before this axis existed has no field ⇒ absent ⇒ v1, and still verifies.
+
+**Deploy-verifier-first.** Every verifier surface MUST accept v2 _before_ any producer emits it — otherwise v2 anchors strand at a lagging verifier. The portable verifier (`@motebit/encryption`'s `verifyConsolidationAnchor`) accepted v2 from PR1 part 2b; this spec's reference producer flips to v2 in PR5.
+
+Machine-readable declaration consumed by the `check-merkle-tree-hash-canonical` drift gate (Option A — the gate asserts the named producer emits the declared version):
+
+```
+tree_hash_version: merkle-sha256-rfc6962-v2
+tree_hash_producer: packages/runtime/src/motebit-runtime.ts
+```
 
 ## 5. Deferred
 

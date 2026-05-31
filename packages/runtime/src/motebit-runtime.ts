@@ -214,7 +214,11 @@ import type { DeviceCapability } from "@motebit/sdk";
 import { PolicyGate, MemoryGovernor, ChainedAuditSink } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { base58Encode } from "@motebit/protocol";
-import type { SovereignWalletRail, SovereignSendResult } from "@motebit/protocol";
+import type {
+  SovereignWalletRail,
+  SovereignSendResult,
+  MerkleTreeVersion,
+} from "@motebit/protocol";
 import {
   verifyExecutionReceipt,
   signSovereignPaymentReceipt,
@@ -272,7 +276,7 @@ import {
 // `GOAL_RESULT_ARTIFACT` is re-exported via `@motebit/sdk` per the sdk
 // CLAUDE.md re-export rule — every protocol type accessible through sdk.
 import { GOAL_RESULT_ARTIFACT } from "@motebit/sdk";
-import { buildMerkleTree, canonicalSha256 } from "@motebit/encryption";
+import { buildMerkleTree, canonicalLeaf } from "@motebit/encryption";
 import type { ConsolidationAnchor, ConsolidationReceipt, ChainAnchorSubmitter } from "@motebit/sdk";
 import type { AgentTrustDeps } from "./agent-trust.js";
 import { handleAgentTask as handleAgentTaskFn } from "./agent-task-handler.js";
@@ -296,6 +300,16 @@ import type {
   StreamChunk,
 } from "./runtime-config.js";
 import { SimpleToolRegistry } from "./simple-tool-registry.js";
+
+/** The tree-hash version the consolidation-anchor producer emits — RFC 6962
+ *  §2.1 leaf/node domain separation (`0x00` leaf tag, `0x01` node tag). Per
+ *  `docs/doctrine/merkle-tree-hash-versioning.md` (PR5), the consolidation
+ *  anchor is the fourth v2 producer. The version rides the emitted
+ *  `ConsolidationAnchor` object itself (the self-describing event-log record),
+ *  so backward-compat is automatic: anchors emitted before this flip carry no
+ *  field ⇒ absent ⇒ `merkle-sha256-plain-v1`, and `verifyConsolidationAnchor`
+ *  resolves each anchor's own version standalone. */
+const CONSOLIDATION_TREE_HASH_VERSION: MerkleTreeVersion = "merkle-sha256-rfc6962-v2";
 
 /** Tools the runtime allows during a tending cycle, regardless of user
  *  config. The proactive scope intersects user opt-in WITH this set, so a
@@ -2880,10 +2894,12 @@ export class MotebitRuntime {
       // Hash the canonical body of the SIGNED receipt — the signature is
       // part of the leaf so the anchor commits to "this exact signed
       // artifact existed," not just "a receipt with these fields could
-      // be reconstructed."
-      leaves.push(await canonicalSha256(r));
+      // be reconstructed." `canonicalLeaf` applies the RFC 6962 §2.1 leaf
+      // tag under v2; the node tag is applied by `buildMerkleTree` below —
+      // both halves dispatch on the same version.
+      leaves.push(await canonicalLeaf(r, CONSOLIDATION_TREE_HASH_VERSION));
     }
-    const tree = await buildMerkleTree(leaves);
+    const tree = await buildMerkleTree(leaves, CONSOLIDATION_TREE_HASH_VERSION);
 
     let txHash: string | undefined;
     let network: string | undefined;
@@ -2908,6 +2924,7 @@ export class MotebitRuntime {
       receipt_ids: pending.map((r) => r.receipt_id),
       leaf_count: pending.length,
       anchored_at: Date.now(),
+      tree_hash_version: CONSOLIDATION_TREE_HASH_VERSION,
       ...(txHash !== undefined ? { tx_hash: txHash } : {}),
       ...(network !== undefined ? { network } : {}),
     };

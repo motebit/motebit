@@ -101,6 +101,15 @@ const LEAF_BUILDERS: ReadonlyArray<{ file: string; symbol: string }> = [
     file: "services/relay/src/credential-anchoring.ts",
     symbol: "computeCredentialLeafFromJson",
   },
+  // The runtime's consolidation-anchor producer (PR5) — the fourth v2 producer
+  // and the first runtime-side one. Hashes each signed receipt via
+  // `canonicalLeaf` so the leaf tag is applied by the primitive, never inlined.
+  // (The encryption entry above is the consolidation VERIFIER; this is the
+  // separate producer that mints the anchor.)
+  {
+    file: "packages/runtime/src/motebit-runtime.ts",
+    symbol: "anchorPendingConsolidationReceipts",
+  },
 ];
 
 /**
@@ -112,7 +121,7 @@ const LEAF_EXCLUSIONS: ReadonlyArray<{ symbol: string; reason: string }> = [
   {
     symbol: "computeSettlementLeaf",
     reason:
-      "federation-settlement leaf (packages/encryption/src/merkle.ts) — v1-only, deferred to PR5+ per merkle-tree-hash-versioning.md §2 (folds into the item-4 convergence; PR4 is identity-log). Lives inside an allowlisted primitive file; carries no domain tag.",
+      "federation-settlement leaf (packages/encryption/src/merkle.ts) — v1-only, deferred to PR6+ per merkle-tree-hash-versioning.md §2 (folds into the item-4 convergence; PR5 is consolidation). Lives inside an allowlisted primitive file; carries no domain tag.",
   },
 ];
 
