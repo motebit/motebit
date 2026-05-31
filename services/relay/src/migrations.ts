@@ -1229,4 +1229,39 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 27,
+    name: "credential_anchor_tree_hash_version",
+    up: (db) => {
+      // Per-batch tree-hash version for CREDENTIAL anchors — PR3 of the RFC 6962
+      // §2.1 domain-separation migration (sibling of v26's agent-settlement
+      // column; MerkleTreeVersion in `@motebit/protocol`). The credential
+      // producer flips to `merkle-sha256-rfc6962-v2`
+      // (`docs/doctrine/merkle-tree-hash-versioning.md` §8 PR3), but ALREADY-
+      // anchored batches were hashed v1 and their root is committed onchain;
+      // recomputing them under v2 at proof time would break verification. So the
+      // version is persisted per batch: NULL ⇒ `merkle-sha256-plain-v1` (every
+      // pre-PR3 batch, legacy), the v2 string for new batches.
+      //
+      // Unlike v26's `relay_agent_anchor_batches` (created in a migration), this
+      // table is created by `createCredentialAnchoringTables` at startup BEFORE
+      // migrations run (index.ts: createFederationTables precedes
+      // createRelaySchema). A FRESH DB therefore already has the column from that
+      // CREATE TABLE and this PRAGMA-guarded ALTER is a no-op; an EXISTING prod DB
+      // (table created before the column existed) gets the column added here.
+      const cols = (
+        db.prepare("PRAGMA table_info(relay_credential_anchor_batches)").all() as {
+          name: string;
+        }[]
+      ).map((c) => c.name);
+      // `cols.length === 0` ⇒ the table does not exist yet (PRAGMA returns no
+      // rows). In production `createFederationTables` always creates it before
+      // migrations run, so this only guards a bare-DB migration run; the CREATE
+      // TABLE already carries the column there. Skip rather than ALTER a missing
+      // table (which would throw "no such table").
+      if (cols.length > 0 && !cols.includes("tree_hash_version")) {
+        db.exec("ALTER TABLE relay_credential_anchor_batches ADD COLUMN tree_hash_version TEXT;");
+      }
+    },
+  },
 ];

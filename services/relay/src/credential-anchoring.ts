@@ -15,10 +15,12 @@ import type {
   CredentialAnchorProof,
   ChainAnchorSubmitter,
 } from "@motebit/sdk";
+import type { MerkleTreeVersion } from "@motebit/protocol";
 import {
   buildMerkleTree,
   getMerkleProof,
   canonicalJson,
+  canonicalLeaf,
   sign,
   bytesToHex,
 } from "@motebit/encryption";
@@ -26,6 +28,19 @@ import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "relay", module: "credential-anchoring" });
+
+/**
+ * The tree-hash version NEW credential anchor batches are minted under.
+ * PR3 of the RFC 6962 domain-separation migration flips the credential
+ * producer to `merkle-sha256-rfc6962-v2` (the spec's `tree_hash_producer` per
+ * `spec/credential-anchor-v1.md` §5.4) — the portable verifier
+ * (`@motebit/crypto`'s `verifyCredentialAnchor`) accepted v2 from PR1 part 2b,
+ * so deploy-verifier-first ordering holds. Persisted per batch
+ * (`relay_credential_anchor_batches.tree_hash_version`); pre-PR3 batches stay
+ * NULL ⇒ v1 so their already-anchored roots still verify. Doctrine:
+ * `docs/doctrine/merkle-tree-hash-versioning.md` (§8 PR3, §4 threat model).
+ */
+const CREDENTIAL_TREE_HASH_VERSION: MerkleTreeVersion = "merkle-sha256-rfc6962-v2";
 
 // === Configuration ===
 
@@ -59,7 +74,16 @@ export function createCredentialAnchoringTables(db: DatabaseDriver): void {
       chain            TEXT,
       anchored_at      INTEGER,
       status           TEXT NOT NULL DEFAULT 'signed',
-      created_at       INTEGER NOT NULL
+      created_at       INTEGER NOT NULL,
+      -- Per-batch tree-hash version (RFC 6962 §2.1 domain-separation axis;
+      -- MerkleTreeVersion in @motebit/protocol). NULL ⇒ merkle-sha256-plain-v1
+      -- (legacy); the v2 string for batches cut by the PR3 v2 producer. The
+      -- proof endpoint reconstructs each batch under ITS stored version so an
+      -- already-anchored v1 root still reproduces. This table is created here
+      -- (startup, before migrations) for fresh DBs; migration v27 PRAGMA-ALTERs
+      -- the column onto existing prod DBs where this CREATE is a no-op. Doctrine:
+      -- docs/doctrine/merkle-tree-hash-versioning.md (§8 PR3).
+      tree_hash_version TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_cred_anchor_batches_status
       ON relay_credential_anchor_batches(status) WHERE status != 'confirmed';
@@ -75,28 +99,23 @@ export function createCredentialAnchoringTables(db: DatabaseDriver): void {
 
 // === Leaf Hash ===
 
-/** SHA-256 of raw bytes. */
-async function sha256Bytes(data: Uint8Array): Promise<Uint8Array> {
-  const buf = await crypto.subtle.digest("SHA-256", data as BufferSource);
-  return new Uint8Array(buf);
-}
-
-/** Hex-encode a Uint8Array. */
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 /**
  * Compute credential leaf hash from the full VC JSON string.
- * Re-parses and re-serializes via canonicalJson for determinism.
+ *
+ * Re-parses, then routes through the canonical `canonicalLeaf` primitive so the
+ * RFC 6962 §2.1 `0x00` leaf tag (under v2) is applied in exactly one place —
+ * never inlined here (the dispatch gate `check-merkle-tree-hash-canonical`
+ * enforces this). v1 (the default) is byte-identical to the previous
+ * `toHex(sha256(canonicalJson(vc)))`, and a worker's
+ * `computeCredentialLeaf(vc, v)` (`@motebit/crypto`) derives the identical value
+ * because both JCS-canonicalize the same object before tagging + hashing.
  */
-async function computeCredentialLeafFromJson(credentialJson: string): Promise<string> {
+async function computeCredentialLeafFromJson(
+  credentialJson: string,
+  treeHashVersion: MerkleTreeVersion = "merkle-sha256-plain-v1",
+): Promise<string> {
   const vc = JSON.parse(credentialJson) as Record<string, unknown>;
-  const canonical = canonicalJson(vc);
-  const hash = await sha256Bytes(new TextEncoder().encode(canonical));
-  return toHex(hash);
+  return canonicalLeaf(vc, treeHashVersion);
 }
 
 // === Batch Record ===
@@ -131,6 +150,7 @@ export async function cutCredentialBatch(
   db: DatabaseDriver,
   relayIdentity: RelayIdentity,
   maxSize: number = DEFAULT_BATCH_MAX_SIZE,
+  treeHashVersion: MerkleTreeVersion = CREDENTIAL_TREE_HASH_VERSION,
 ): Promise<CredentialAnchorRecord | null> {
   // Fetch unanchored credentials, sorted deterministically
   const rows = db
@@ -145,15 +165,17 @@ export async function cutCredentialBatch(
 
   if (rows.length === 0) return null;
 
-  // Compute leaf hashes
+  // Compute leaf hashes. Both halves of the tree hash dispatch on the same
+  // version: the leaf tag in `computeCredentialLeafFromJson` (→ `canonicalLeaf`)
+  // and the node tag in `buildMerkleTree`.
   const leaves: string[] = [];
   for (const row of rows) {
-    const leaf = await computeCredentialLeafFromJson(row.credential_json);
+    const leaf = await computeCredentialLeafFromJson(row.credential_json, treeHashVersion);
     leaves.push(leaf);
   }
 
   // Build Merkle tree
-  const tree = await buildMerkleTree(leaves);
+  const tree = await buildMerkleTree(leaves, treeHashVersion);
 
   // Sign the batch
   const batchId = crypto.randomUUID();
@@ -177,13 +199,19 @@ export async function cutCredentialBatch(
   const sig = await sign(sigBytes, relayIdentity.privateKey);
   const signature = bytesToHex(sig);
 
+  // Persist the version this batch was hashed under. v2 ⇒ the explicit string;
+  // v1 ⇒ NULL (the legacy/migration convention — absent ⇒ v1, never store the
+  // legacy id), so a v1 batch is column-indistinguishable from a pre-PR3 batch.
+  const treeHashVersionColumn =
+    treeHashVersion === "merkle-sha256-rfc6962-v2" ? treeHashVersion : null;
+
   // Persist atomically: create batch + assign all credentials
   const now = Date.now();
   db.prepare(
     `INSERT INTO relay_credential_anchor_batches
        (batch_id, relay_id, merkle_root, leaf_count, first_issued_at, last_issued_at,
-        signature, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?)`,
+        signature, status, created_at, tree_hash_version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?, ?)`,
   ).run(
     batchId,
     relayIdentity.relayMotebitId,
@@ -193,6 +221,7 @@ export async function cutCredentialBatch(
     lastIssuedAt,
     signature,
     now,
+    treeHashVersionColumn,
   );
 
   const assignStmt = db.prepare(
@@ -381,10 +410,21 @@ export async function getCredentialAnchorProof(
         network: string | null;
         chain: string | null;
         anchored_at: number | null;
+        tree_hash_version: string | null;
       }
     | undefined;
 
   if (!batch) return null;
+
+  // Resolve the version THIS batch was hashed under (NULL ⇒ legacy v1) and
+  // reconstruct under it — a v1 batch's already-anchored root must reproduce
+  // under v1, never v2. Only `merkle-sha256-rfc6962-v2` flips to v2; NULL, the
+  // legacy id, or any other value resolves to v1 (the column is producer-
+  // controlled, not untrusted wire — no fail-closed branch needed here).
+  const treeHashVersion: MerkleTreeVersion =
+    batch.tree_hash_version === "merkle-sha256-rfc6962-v2"
+      ? "merkle-sha256-rfc6962-v2"
+      : "merkle-sha256-plain-v1";
 
   // Reconstruct the tree from all credentials in this batch (same sort order as batch cutting)
   const batchCredentials = db
@@ -396,12 +436,12 @@ export async function getCredentialAnchorProof(
     )
     .all(batchId) as CredentialRow[];
 
-  // Compute all leaves
+  // Compute all leaves under the batch's stored version
   const leaves: string[] = [];
   let targetIndex = -1;
   for (let i = 0; i < batchCredentials.length; i++) {
     const row = batchCredentials[i]!;
-    const leaf = await computeCredentialLeafFromJson(row.credential_json);
+    const leaf = await computeCredentialLeafFromJson(row.credential_json, treeHashVersion);
     leaves.push(leaf);
     if (row.credential_id === credentialId) {
       targetIndex = i;
@@ -410,7 +450,7 @@ export async function getCredentialAnchorProof(
 
   if (targetIndex === -1) return null;
 
-  const tree = await buildMerkleTree(leaves);
+  const tree = await buildMerkleTree(leaves, treeHashVersion);
   const proof = getMerkleProof(tree, targetIndex);
 
   // Resolve relay public key for self-verification
@@ -439,6 +479,11 @@ export async function getCredentialAnchorProof(
           anchored_at: batch.anchored_at!,
         }
       : null,
+    // Threat-model rule (c): a v2 producer MUST emit the field. Legacy v1
+    // batches omit it (absent ⇒ v1; the legacy id is never re-emitted).
+    ...(treeHashVersion === "merkle-sha256-rfc6962-v2"
+      ? { tree_hash_version: treeHashVersion }
+      : {}),
   };
 }
 

@@ -14,6 +14,7 @@ import {
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, bytesToHex, issueReputationCredential } from "@motebit/encryption";
+import { computeCredentialLeaf, verifyCredentialAnchor } from "@motebit/crypto";
 
 // === Helpers ===
 
@@ -253,6 +254,70 @@ describe("getCredentialAnchorProof", () => {
 
     expect(proof1!.merkle_root).not.toBe(proof2!.merkle_root);
     expect(proof1!.batch_id).not.toBe(proof2!.batch_id);
+  });
+});
+
+// === PR3: credential-anchor is the second v2 producer ===================
+
+/** Re-read the stored VC object — what a third-party verifier holds. */
+function getCredentialObject(db: DatabaseDriver, credentialId: string): Record<string, unknown> {
+  const row = db
+    .prepare("SELECT credential_json FROM relay_credentials WHERE credential_id = ?")
+    .get(credentialId) as { credential_json: string };
+  return JSON.parse(row.credential_json) as Record<string, unknown>;
+}
+
+describe("credential anchor v2 producer (RFC 6962 domain separation)", () => {
+  it("stamps tree_hash_version = merkle-sha256-rfc6962-v2 and applies the v2 leaf tag (rule c)", async () => {
+    const id = await insertCredential(db, { issuedAt: 1000 });
+    await insertCredential(db, { issuedAt: 2000 });
+    await insertCredential(db, { issuedAt: 3000 });
+    await cutCredentialBatch(db, relayIdentity); // defaults to v2
+
+    const proof = await getCredentialAnchorProof(db, id);
+    expect(proof).not.toBeNull();
+
+    // A v2 producer MUST emit the field (no "v2 behavior, absent field").
+    expect(proof!.tree_hash_version).toBe("merkle-sha256-rfc6962-v2");
+
+    // The anchored leaf carries the RFC 6962 §2.1 `0x00` tag: it equals the
+    // holder's v2 leaf and differs from the v1 (untagged) leaf — proof the
+    // producer actually applied the tag, not just set a flag.
+    const vc = getCredentialObject(db, id);
+    const v2Leaf = await computeCredentialLeaf(vc, "merkle-sha256-rfc6962-v2");
+    const v1Leaf = await computeCredentialLeaf(vc, "merkle-sha256-plain-v1");
+    expect(proof!.credential_hash).toBe(v2Leaf);
+    expect(v2Leaf).not.toBe(v1Leaf);
+
+    // End-to-end producer/verifier symmetry under the v2 leaf + node tags.
+    const result = await verifyCredentialAnchor(vc, proof!);
+    expect(result.valid).toBe(true);
+    expect(result.steps.hash_valid).toBe(true);
+    expect(result.steps.merkle_valid).toBe(true);
+    expect(result.steps.relay_signature_valid).toBe(true);
+  });
+
+  it("a legacy v1 batch (NULL column) omits the field and still verifies (absent ⇒ v1)", async () => {
+    const id = await insertCredential(db, { issuedAt: 1000 });
+    await insertCredential(db, { issuedAt: 2000 });
+    // Cut explicitly under v1 — the column stores NULL, exactly the shape a
+    // pre-PR3 (migration-backfilled) batch has. Proves the proof endpoint
+    // reconstructs each batch under ITS stored version, not a global default.
+    await cutCredentialBatch(db, relayIdentity, 50, "merkle-sha256-plain-v1");
+    const batchRow = db
+      .prepare("SELECT tree_hash_version FROM relay_credential_anchor_batches LIMIT 1")
+      .get() as { tree_hash_version: string | null };
+    expect(batchRow.tree_hash_version).toBeNull();
+
+    const proof = await getCredentialAnchorProof(db, id);
+    expect(proof).not.toBeNull();
+    // Legacy never re-emits the v1 id — the field is absent (⇒ v1).
+    expect(proof!.tree_hash_version).toBeUndefined();
+
+    const vc = getCredentialObject(db, id);
+    const result = await verifyCredentialAnchor(vc, proof!);
+    expect(result.valid).toBe(true);
+    expect(result.steps.merkle_valid).toBe(true);
   });
 });
 

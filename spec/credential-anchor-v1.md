@@ -30,6 +30,8 @@ Where `canonicalJson` is JCS/RFC 8785 deterministic JSON serialization (same as 
 
 The proof field is included because it binds the credential to its issuer's signature. Without the proof, anyone could claim to have a credential with arbitrary content.
 
+**Tree-hash domain separation.** Under the `merkle-sha256-rfc6962-v2` tree-hash version (§5.4) the leaf hash gains the RFC 6962 §2.1 leaf-domain tag: `credential_leaf = SHA-256(0x00 ‖ canonicalJson(credential))`. The `canonicalJson(...)` entry bytes are identical to the `merkle-sha256-plain-v1` (untagged) form above — only the `0x00` prefix is added — so producer and verifier derive the same leaf as long as both dispatch on the proof's declared version.
+
 ### 3.1 Verification
 
 To verify a credential leaf:
@@ -131,17 +133,20 @@ CredentialAnchorProof {
     tx_hash:        string      // transaction hash on the target chain
     anchored_at:    number      // ms timestamp
   } | null
+  tree_hash_version?: string    // MerkleTreeVersion (§5.4); absent ⇒ "merkle-sha256-plain-v1"
 }
 ```
 
 The `leaf_count`, `first_issued_at`, and `last_issued_at` fields are required in the proof because they are part of the signed batch payload (§4.2). Without them, step 3 of the verification algorithm cannot reconstruct the payload for signature verification.
 
+`tree_hash_version` is OPTIONAL — **absent ⇒ `merkle-sha256-plain-v1`** (every proof minted before this axis existed still verifies). It is NOT part of the signed batch payload (§4.2): the version is bound transitively through `merkle_root` (a given leaf set under a given version produces exactly one root, and the relay signs that root), so a verifier that flips the version reconstructs a different root and fails step 2 (Merkle) or step 3 (signature). See §5.4.
+
 ### 5.2 Verification Algorithm
 
 Given a credential `vc` and its `CredentialAnchorProof`:
 
-1. **Hash verification:** `SHA-256(canonicalJson(vc)) === proof.credential_hash`
-2. **Merkle inclusion:** Verify `(leaf=credential_hash, index=leaf_index, siblings, layer_sizes)` reconstructs to `merkle_root`
+1. **Hash verification:** `credential_leaf(vc) === proof.credential_hash`, computing the leaf under `proof.tree_hash_version` (absent ⇒ `merkle-sha256-plain-v1`; an unknown value MUST be rejected fail-closed, never downgraded — §5.4)
+2. **Merkle inclusion:** Verify `(leaf=credential_hash, index=leaf_index, siblings, layer_sizes)` reconstructs to `merkle_root`, dispatching the leaf/node domain tags on the same resolved `proof.tree_hash_version`
 3. **Relay attestation:** `Ed25519.verify(batch_signature, canonicalJson({batch_id, merkle_root, leaf_count, first_issued_at, last_issued_at, relay_id}), relay_public_key)` — proves the relay signed this batch
 4. **Onchain anchor** (if `anchor` is non-null): Look up `anchor.tx_hash` on `anchor.chain` — the transaction's data field contains the Merkle root, proving the relay published it at `anchored_at`
 
@@ -152,7 +157,7 @@ Without step 4, the relay's signature still provides accountability — the rela
 
 #### Storage (reference convention — non-binding)
 
-The reference relay stores `merkle_root`, `leaf_count`, `first_issued_at`, `last_issued_at`, and `signature` on the `relay_credential_batches` row; `siblings` and `layer_sizes` are reconstructed from the ordered `credential_ids` at proof-serve time. Alternative implementations MAY precompute and persist every proof, or compute them lazily. The wire format above is what crosses the boundary.
+The reference relay stores `merkle_root`, `leaf_count`, `first_issued_at`, `last_issued_at`, `signature`, and `tree_hash_version` on the `relay_credential_anchor_batches` row; `siblings` and `layer_sizes` are reconstructed from the ordered `credential_ids` at proof-serve time, hashed under the row's stored `tree_hash_version` (NULL ⇒ `merkle-sha256-plain-v1`). Alternative implementations MAY precompute and persist every proof, or compute them lazily. The wire format above is what crosses the boundary.
 
 ### 5.3 Reference Implementation
 
@@ -168,6 +173,24 @@ if (result.valid) {
 ```
 
 The Merkle proof verification is inlined in `@motebit/crypto` (same algorithm as `@motebit/encryption/merkle.ts`) so the package maintains zero monorepo dependencies. Any implementation can verify anchor proofs using only `@motebit/crypto` and the relay's public key.
+
+### 5.4 Tree-hash version (RFC 6962 §2.1 domain separation)
+
+The Merkle path is built under a `MerkleTreeVersion` — the code-canonical closed registry in `@motebit/protocol` (`packages/protocol/src/merkle-tree-hash.ts`), the tree-hash agility axis (`docs/doctrine/merkle-tree-hash-versioning.md`). It governs exactly `(leaf-domain tag, node-domain tag, hash function)`; it is a **separate axis from `suite`** (which names the batch-_signature_ recipe). Two versions today:
+
+- `merkle-sha256-plain-v1` — `status: legacy`. SHA-256, no domain separation (`leaf = SHA-256(entry)`, `node = SHA-256(left ‖ right)`). The original behavior; verifiers accept it, producers MUST NOT emit it. **A proof with no `tree_hash_version` is this version** (absent ⇒ v1).
+- `merkle-sha256-rfc6962-v2` — `status: preferred`. RFC 6962 §2.1 (`leaf = SHA-256(0x00 ‖ entry)`, `node = SHA-256(0x01 ‖ left ‖ right)`), giving the leaf-vs-node second-preimage resistance the §3 leaf-hash construction needs to make a leaf indistinguishable from an interior node.
+
+**Dispatch (foundation law).** A verifier resolves `proof.tree_hash_version`: absent ⇒ `merkle-sha256-plain-v1`; a known value ⇒ that version; an **unknown** value ⇒ REJECT fail-closed (never silently downgrade to v1). A `merkle-sha256-rfc6962-v2` producer MUST emit the field on every proof it mints (no "v2 behavior, absent field").
+
+**Deploy-verifier-first.** Every verifier surface MUST accept v2 _before_ any producer emits it — otherwise v2 proofs strand at a lagging verifier. The portable verifier (`@motebit/crypto`'s `verifyCredentialAnchor`) accepted v2 from PR1 part 2b; this spec's reference producer flips to v2 in PR3. Already-anchored v1 batches keep their committed v1 root: the reference relay persists `tree_hash_version` per batch and reconstructs each under its own version (a pre-PR3 batch reads NULL ⇒ v1).
+
+Machine-readable declaration consumed by the `check-merkle-tree-hash-canonical` drift gate (Option A — the gate asserts the named producer emits the declared version):
+
+```
+tree_hash_version: merkle-sha256-rfc6962-v2
+tree_hash_producer: services/relay/src/credential-anchoring.ts
+```
 
 ## 6. Chain Submission
 

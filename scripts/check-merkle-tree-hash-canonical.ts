@@ -94,6 +94,13 @@ const LEAF_BUILDERS: ReadonlyArray<{ file: string; symbol: string }> = [
   // Hashes record_json directly; MUST route through hashLeaf so the leaf tag
   // is applied by the primitive, never inlined.
   { file: "services/relay/src/anchoring.ts", symbol: "agentSettlementLeaf" },
+  // The relay's credential anchor producer (PR3) — the second v2 producer.
+  // Re-parses the VC JSON then routes through `canonicalLeaf` so the leaf tag
+  // is applied by the primitive, never inlined.
+  {
+    file: "services/relay/src/credential-anchoring.ts",
+    symbol: "computeCredentialLeafFromJson",
+  },
 ];
 
 /**
