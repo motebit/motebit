@@ -187,4 +187,15 @@ describe("Merkle proof rejection", () => {
     const truncated = { ...proof, siblings: [] };
     expect(await verifyMerkleProof(truncated, tree.root)).toBe(false);
   });
+
+  it("verifyMerkleProof rejects an unknown tree-hash version fail-closed (never downgrades)", async () => {
+    const leaves = ["a".repeat(64), "b".repeat(64), "c".repeat(64)];
+    const tree = await buildMerkleTree(leaves);
+    const proof = getMerkleProof(tree, 0);
+    // An unsupported MerkleTreeVersion MUST reject, not silently fall back to v1
+    // (threat-model rule b). Covers the version-guard in verifyMerkleProof.
+    expect(await verifyMerkleProof(proof, tree.root, "merkle-sha256-bogus-v9" as never)).toBe(
+      false,
+    );
+  });
 });
