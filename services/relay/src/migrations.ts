@@ -1264,4 +1264,36 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 28,
+    name: "identity_log_anchor_tree_hash_version",
+    up: (db) => {
+      // Per-anchor tree-hash version for IDENTITY-LOG anchors — PR4 of the RFC
+      // 6962 §2.1 domain-separation migration (sibling of v26 agent-settlement /
+      // v27 credential; MerkleTreeVersion in `@motebit/protocol`). The identity-
+      // log producer flips to `merkle-sha256-rfc6962-v2`
+      // (`docs/doctrine/merkle-tree-hash-versioning.md` §8 PR4), but ALREADY-
+      // anchored snapshots were hashed v1 and their root is committed onchain;
+      // recomputing them under v2 at proof time would break verification. So the
+      // version is persisted per anchor: NULL ⇒ `merkle-sha256-plain-v1` (every
+      // pre-PR4 anchor, legacy), the v2 string for new anchors.
+      //
+      // Ordering nuance (the INVERSE of v27): `createIdentityLogAnchorTables` runs
+      // at index.ts AFTER createRelaySchema/runMigrations, not before. So on a
+      // FRESH DB this ALTER runs BEFORE the table exists — PRAGMA returns no rows,
+      // `cols.length === 0`, and we SKIP (the CREATE TABLE carries the column for
+      // fresh DBs). On an EXISTING prod DB the table was created in a prior boot
+      // without the column, so the table exists here and the ALTER adds it. The
+      // `cols.length > 0` guard is therefore load-bearing, not merely defensive:
+      // ALTERing a missing table would throw "no such table".
+      const cols = (
+        db.prepare("PRAGMA table_info(relay_identity_log_anchors)").all() as {
+          name: string;
+        }[]
+      ).map((c) => c.name);
+      if (cols.length > 0 && !cols.includes("tree_hash_version")) {
+        db.exec("ALTER TABLE relay_identity_log_anchors ADD COLUMN tree_hash_version TEXT;");
+      }
+    },
+  },
 ];

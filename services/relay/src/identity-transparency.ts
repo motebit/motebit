@@ -129,7 +129,11 @@ export async function buildIdentityBindingBundle(
   let anchored: AnchoredInclusion | null = null;
   const snapshot = getLatestAnchoredSnapshot(db);
   if (snapshot) {
-    const log = await buildIdentityLog(snapshot.bindings);
+    // Rebuild under the snapshot's stored tree-hash version (NULL ⇒ v1 legacy):
+    // the proof's leaf + path must match the root committed on-chain, so a v2
+    // snapshot reconstructs v2-tagged, a legacy v1 snapshot v1-tagged. The proof
+    // carries `tree_hash_version` for v2 (omitted for v1) — see buildIdentityLog.
+    const log = await buildIdentityLog(snapshot.bindings, snapshot.tree_hash_version);
     const proof = log.proofFor(motebitId);
     // Reproducing the snapshot must yield the anchored root; a mismatch means a
     // corrupted snapshot, which we refuse to serve as `anchored` (fail closed).

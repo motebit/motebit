@@ -14,6 +14,7 @@
  * separate pieces (the relay wiring, the anchor submitter, the `/identity` route).
  */
 
+import type { MerkleTreeVersion } from "@motebit/protocol";
 import { identityLogLeaf } from "@motebit/crypto";
 import { buildMerkleTree, getMerkleProof } from "@motebit/encryption";
 
@@ -31,6 +32,14 @@ export interface IdentityLogProof {
   readonly layerSizes: number[];
   /** The log's Merkle root (hex) — the value the relay anchors on-chain. */
   readonly anchoredRoot: string;
+  /**
+   * Tree-hash recipe for the leaf + Merkle path (RFC 6962 §2.1 domain
+   * separation — `MerkleTreeVersion` in `@motebit/protocol`). **Omitted ⇒
+   * `merkle-sha256-plain-v1`** so a proof built under v1 is byte-identical to
+   * one minted before this axis existed. A v2 log stamps the explicit string;
+   * the verifier (`verifyIdentityBindingAnchored`) resolves it fail-closed.
+   */
+  readonly tree_hash_version?: MerkleTreeVersion;
 }
 
 export interface IdentityLog {
@@ -47,7 +56,10 @@ export interface IdentityLog {
  * tracks each motebit's resulting index. An empty binding set yields an empty log
  * (no root, no proofs) rather than throwing — a relay with no registered agents.
  */
-export async function buildIdentityLog(bindings: IdentityBinding[]): Promise<IdentityLog> {
+export async function buildIdentityLog(
+  bindings: IdentityBinding[],
+  treeHashVersion: MerkleTreeVersion = "merkle-sha256-plain-v1",
+): Promise<IdentityLog> {
   if (bindings.length === 0) {
     return { root: "", motebitCount: 0, proofFor: () => null };
   }
@@ -55,14 +67,17 @@ export async function buildIdentityLog(bindings: IdentityBinding[]): Promise<Ide
   const entries = await Promise.all(
     bindings.map(async (b) => ({
       motebit_id: b.motebit_id,
-      leaf: await identityLogLeaf(b.motebit_id, b.public_key),
+      leaf: await identityLogLeaf(b.motebit_id, b.public_key, treeHashVersion),
     })),
   );
   // buildMerkleTree requires sorted leaves; sort by leaf hash and remember the
   // resulting index per motebit so proofs point at the right position.
   entries.sort((a, b) => (a.leaf < b.leaf ? -1 : a.leaf > b.leaf ? 1 : 0));
 
-  const tree = await buildMerkleTree(entries.map((e) => e.leaf));
+  const tree = await buildMerkleTree(
+    entries.map((e) => e.leaf),
+    treeHashVersion,
+  );
   const indexByMotebit = new Map<string, number>();
   entries.forEach((e, i) => indexByMotebit.set(e.motebit_id, i));
 
@@ -78,6 +93,11 @@ export async function buildIdentityLog(bindings: IdentityBinding[]): Promise<Ide
         siblings: proof.siblings,
         layerSizes: proof.layerSizes,
         anchoredRoot: tree.root,
+        // Omit for v1 (absent ⇒ v1, never re-emit the legacy id); stamp v2 so
+        // the verifier dispatches the leaf/node tags on it.
+        ...(treeHashVersion !== "merkle-sha256-plain-v1"
+          ? { tree_hash_version: treeHashVersion }
+          : {}),
       };
     },
   };

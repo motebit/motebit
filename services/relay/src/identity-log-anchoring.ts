@@ -17,6 +17,7 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
+import type { MerkleTreeVersion } from "@motebit/protocol";
 import type { ChainAnchorSubmitter } from "@motebit/sdk";
 import { canonicalJson, sign, bytesToHex } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
@@ -26,7 +27,26 @@ import { readIdentityBindings } from "./identity-transparency.js";
 
 const logger = createLogger({ service: "relay", module: "identity-log-anchoring" });
 
-/** Create the identity-log anchor table. Call from createFederationTables(). */
+/**
+ * The tree-hash version every NEW identity-log anchor is built under — RFC 6962
+ * §2.1 leaf/node domain separation (`MerkleTreeVersion` in `@motebit/protocol`).
+ * PR4 of the migration (`docs/doctrine/merkle-tree-hash-versioning.md`) flips the
+ * identity-log producer to v2. Already-anchored roots were hashed v1 and committed
+ * on-chain, so the version is persisted PER ANCHOR (`tree_hash_version` column,
+ * NULL ⇒ v1 legacy) and the `/identity` proof endpoint reconstructs each snapshot
+ * under ITS stored version — recomputing a legacy root under v2 would break the
+ * on-chain root match.
+ */
+const IDENTITY_LOG_TREE_HASH_VERSION: MerkleTreeVersion = "merkle-sha256-rfc6962-v2";
+
+/**
+ * Create the identity-log anchor table. Called standalone at relay startup
+ * (index.ts) AFTER createRelaySchema/runMigrations — the INVERSE of the
+ * credential anchor table's wiring. That ordering is load-bearing: on a fresh DB
+ * the `tree_hash_version` migration (v28) runs before this CREATE TABLE, so the
+ * column is carried HERE for fresh DBs and added by the (guarded) v28 ALTER only
+ * on existing prod DBs.
+ */
 export function createIdentityLogAnchorTables(db: DatabaseDriver): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS relay_identity_log_anchors (
@@ -40,7 +60,13 @@ export function createIdentityLogAnchorTables(db: DatabaseDriver): void {
       network      TEXT,
       anchored_at  INTEGER,
       status       TEXT NOT NULL DEFAULT 'signed',
-      created_at   INTEGER NOT NULL
+      created_at   INTEGER NOT NULL,
+      -- Per-anchor RFC 6962 §2.1 tree-hash version (MerkleTreeVersion in
+      -- @motebit/protocol). NULL ⇒ merkle-sha256-plain-v1 (every pre-PR4
+      -- anchor, legacy); the v2 string for new anchors. The /identity proof
+      -- endpoint reconstructs each snapshot under ITS stored version so an
+      -- already-anchored v1 root keeps matching its on-chain commitment.
+      tree_hash_version TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_identity_anchors_status
       ON relay_identity_log_anchors(status) WHERE status != 'confirmed';
@@ -78,7 +104,7 @@ export async function anchorIdentityLog(
   relayIdentity: RelayIdentity,
 ): Promise<IdentityLogAnchorRecord | null> {
   const bindings = readIdentityBindings(db);
-  const log = await buildIdentityLog(bindings);
+  const log = await buildIdentityLog(bindings, IDENTITY_LOG_TREE_HASH_VERSION);
   if (log.motebitCount === 0) return null;
 
   const anchorId = crypto.randomUUID();
@@ -92,13 +118,21 @@ export async function anchorIdentityLog(
     await sign(new TextEncoder().encode(canonicalJson(payload)), relayIdentity.privateKey),
   );
 
+  // Persist the version this snapshot was hashed under. v2 ⇒ the explicit
+  // string; v1 ⇒ NULL (absent ⇒ v1, never store the legacy id), so a v1 anchor
+  // is column-indistinguishable from a pre-PR4 one. The producer emits v2 today.
+  const treeHashVersionColumn =
+    IDENTITY_LOG_TREE_HASH_VERSION === "merkle-sha256-rfc6962-v2"
+      ? IDENTITY_LOG_TREE_HASH_VERSION
+      : null;
+
   // Persist the exact binding set this root was built over. The root alone is
   // unusable to a verifier — serving an inclusion proof against it requires
   // rebuilding the same tree from the same leaves (getLatestAnchoredSnapshot).
   db.prepare(
     `INSERT INTO relay_identity_log_anchors
-       (anchor_id, relay_id, merkle_root, leaf_count, signature, bindings_json, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'signed', ?)`,
+       (anchor_id, relay_id, merkle_root, leaf_count, signature, bindings_json, status, created_at, tree_hash_version)
+     VALUES (?, ?, ?, ?, ?, ?, 'signed', ?, ?)`,
   ).run(
     anchorId,
     relayIdentity.relayMotebitId,
@@ -107,6 +141,7 @@ export async function anchorIdentityLog(
     signature,
     JSON.stringify(bindings),
     Date.now(),
+    treeHashVersionColumn,
   );
 
   logger.info("identity_log.anchor_cut", {
@@ -192,6 +227,13 @@ export interface AnchoredSnapshot {
   readonly tx_hash: string;
   readonly network: string;
   readonly bindings: IdentityBinding[];
+  /**
+   * The tree-hash version this snapshot's root was built under. NULL column ⇒
+   * `merkle-sha256-plain-v1` (legacy/pre-PR4). The proof endpoint MUST rebuild
+   * the snapshot under exactly this version, else the recomputed root won't
+   * match the on-chain commitment.
+   */
+  readonly tree_hash_version: MerkleTreeVersion;
 }
 
 /**
@@ -204,10 +246,16 @@ export interface AnchoredSnapshot {
 export function getLatestAnchoredSnapshot(db: DatabaseDriver): AnchoredSnapshot | null {
   const row = db
     .prepare(
-      "SELECT merkle_root, tx_hash, network, bindings_json FROM relay_identity_log_anchors WHERE status = 'confirmed' AND tx_hash IS NOT NULL ORDER BY anchored_at DESC LIMIT 1",
+      "SELECT merkle_root, tx_hash, network, bindings_json, tree_hash_version FROM relay_identity_log_anchors WHERE status = 'confirmed' AND tx_hash IS NOT NULL ORDER BY anchored_at DESC LIMIT 1",
     )
     .get() as
-    | { merkle_root: string; tx_hash: string; network: string; bindings_json: string | null }
+    | {
+        merkle_root: string;
+        tx_hash: string;
+        network: string;
+        bindings_json: string | null;
+        tree_hash_version: string | null;
+      }
     | undefined;
   if (!row || row.bindings_json == null) return null;
 
@@ -217,11 +265,19 @@ export function getLatestAnchoredSnapshot(db: DatabaseDriver): AnchoredSnapshot 
   } catch {
     return null;
   }
+  // Resolve the stored version: only `merkle-sha256-rfc6962-v2` flips to v2;
+  // NULL (legacy/pre-PR4) and any unexpected value default to v1, the absent
+  // ⇒ v1 convention. The proof endpoint rebuilds the snapshot under this.
+  const tree_hash_version: MerkleTreeVersion =
+    row.tree_hash_version === "merkle-sha256-rfc6962-v2"
+      ? "merkle-sha256-rfc6962-v2"
+      : "merkle-sha256-plain-v1";
   return {
     merkle_root: row.merkle_root,
     tx_hash: row.tx_hash,
     network: row.network,
     bindings,
+    tree_hash_version,
   };
 }
 
@@ -283,7 +339,11 @@ export async function runIdentityLogAnchorTick(
     }
   }
 
-  const current = await buildIdentityLog(readIdentityBindings(db));
+  // Build under the producer's version so the root matches what `anchorIdentityLog`
+  // persists — otherwise the root-changed trigger would fire every tick after a v1
+  // anchor (a v1 stored root never equals a v2 recomputed one). A one-time re-anchor
+  // on the v1→v2 transition is intended; a perpetual re-anchor loop is not.
+  const current = await buildIdentityLog(readIdentityBindings(db), IDENTITY_LOG_TREE_HASH_VERSION);
   if (current.motebitCount === 0) return; // nothing registered yet
 
   const latest = db

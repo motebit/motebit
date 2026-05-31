@@ -19,6 +19,7 @@ import {
   readSuccessionChain,
   buildIdentityBindingBundle,
 } from "../identity-transparency.js";
+import { buildIdentityLog } from "../identity-log.js";
 import {
   createIdentityLogAnchorTables,
   anchorIdentityLog,
@@ -116,6 +117,55 @@ describe("identity-transparency bundle", () => {
     expect(bundle!.anchored).not.toBeNull();
     expect(bundle!.anchored!.tx_hash).toBe("tx-anchor");
     expect(bundle!.anchored!.network).toBe("mainnet-beta");
+
+    const r = await verifyIdentityBindingAnchored(
+      identityFrom(bundle!),
+      k,
+      Date.parse("2026-06-01T00:00:00Z"),
+      bundle!.anchored!.proof,
+    );
+    expect(r.bound).toBe(true);
+
+    // PR4: the v2 producer stamps the version on the served proof — a v2 verifier
+    // dispatches the leaf/node tags on it (absent ⇒ v1, which would mis-hash).
+    expect(bundle!.anchored!.proof.tree_hash_version).toBe("merkle-sha256-rfc6962-v2");
+  });
+
+  it("verifies a LEGACY v1 anchor (NULL version): proof omits the field, still binds", async () => {
+    // A pre-PR4 anchor: built under v1, no tree_hash_version column value. The
+    // /identity endpoint must rebuild it v1 (absent ⇒ v1), serve a proof with no
+    // tree_hash_version, and that proof must still verify — the backward-compat
+    // guarantee that already-anchored v1 roots keep matching on-chain.
+    const k = await key();
+    register("mote-a", k, Date.parse("2026-01-01T00:00:00Z"));
+    register("mote-b", await key(), Date.parse("2026-01-02T00:00:00Z")); // non-trivial tree
+
+    const bindings = readIdentityBindings(db);
+    const v1 = await buildIdentityLog(bindings, "merkle-sha256-plain-v1");
+    // Confirmed anchor with NULL tree_hash_version (legacy column state).
+    db.prepare(
+      `INSERT INTO relay_identity_log_anchors
+         (anchor_id, relay_id, merkle_root, leaf_count, signature, bindings_json,
+          tx_hash, network, anchored_at, status, created_at, tree_hash_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, NULL)`,
+    ).run(
+      "legacy-anchor",
+      relayIdentity.relayMotebitId,
+      v1.root,
+      bindings.length,
+      "deadbeef",
+      JSON.stringify(bindings),
+      "tx-legacy",
+      "mainnet-beta",
+      1000,
+      1000,
+    );
+
+    const bundle = await buildIdentityBindingBundle(db, "mote-a");
+    expect(bundle!.anchored).not.toBeNull();
+    expect(bundle!.anchored!.proof.anchoredRoot).toBe(v1.root);
+    // Absent on the wire ⇒ v1 (never re-emit the legacy id).
+    expect(bundle!.anchored!.proof.tree_hash_version).toBeUndefined();
 
     const r = await verifyIdentityBindingAnchored(
       identityFrom(bundle!),

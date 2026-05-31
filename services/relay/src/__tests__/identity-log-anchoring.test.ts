@@ -69,15 +69,27 @@ describe("identity-log anchoring", () => {
     expect(rec!.merkle_root).toMatch(/^[0-9a-f]{64}$/);
     expect(rec!.signature).toMatch(/^[0-9a-f]+$/);
 
-    // The anchored root equals a fresh build of the same bindings (snapshot fidelity).
-    const fresh = await buildIdentityLog(readIdentityBindings(db));
-    expect(rec!.merkle_root).toBe(fresh.root);
+    // The anchored root equals a fresh build of the same bindings under the
+    // producer's v2 version (snapshot fidelity). It must NOT equal a v1 build —
+    // that distinctness is the proof the RFC 6962 §2.1 leaf/node tags applied.
+    const freshV2 = await buildIdentityLog(readIdentityBindings(db), "merkle-sha256-rfc6962-v2");
+    expect(rec!.merkle_root).toBe(freshV2.root);
+    const freshV1 = await buildIdentityLog(readIdentityBindings(db), "merkle-sha256-plain-v1");
+    expect(rec!.merkle_root).not.toBe(freshV1.root);
 
     const row = db
-      .prepare("SELECT status, tx_hash FROM relay_identity_log_anchors WHERE anchor_id = ?")
-      .get(rec!.anchor_id) as { status: string; tx_hash: string | null };
+      .prepare(
+        "SELECT status, tx_hash, tree_hash_version FROM relay_identity_log_anchors WHERE anchor_id = ?",
+      )
+      .get(rec!.anchor_id) as {
+      status: string;
+      tx_hash: string | null;
+      tree_hash_version: string | null;
+    };
     expect(row.status).toBe("signed");
     expect(row.tx_hash).toBeNull();
+    // PR4: the producer persists the v2 version per anchor.
+    expect(row.tree_hash_version).toBe("merkle-sha256-rfc6962-v2");
   });
 
   it("returns null when there are no bindings", async () => {

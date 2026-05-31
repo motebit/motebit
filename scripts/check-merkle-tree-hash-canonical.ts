@@ -112,7 +112,7 @@ const LEAF_EXCLUSIONS: ReadonlyArray<{ symbol: string; reason: string }> = [
   {
     symbol: "computeSettlementLeaf",
     reason:
-      "federation-settlement leaf (packages/encryption/src/merkle.ts) — v1-only, deferred to PR3+ per merkle-tree-hash-versioning.md §2 (folds into the item-4 convergence). Lives inside an allowlisted primitive file; carries no domain tag.",
+      "federation-settlement leaf (packages/encryption/src/merkle.ts) — v1-only, deferred to PR5+ per merkle-tree-hash-versioning.md §2 (folds into the item-4 convergence; PR4 is identity-log). Lives inside an allowlisted primitive file; carries no domain tag.",
   },
 ];
 
