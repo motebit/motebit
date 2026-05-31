@@ -18,7 +18,7 @@ import {
 } from "../anchoring.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct sign access
 import { signSettlement, canonicalJson } from "@motebit/encryption";
-import { verifyAgentSettlementAnchor } from "@motebit/crypto";
+import { verifyAgentSettlementAnchor, computeAgentSettlementLeaf } from "@motebit/crypto";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
@@ -737,6 +737,61 @@ describe("verifyAgentSettlementAnchor — third-party round-trip", () => {
       proof!,
     );
     expect(result.valid).toBe(true);
+  });
+
+  // === PR2: agent-settlement is the first v2 producer ===================
+
+  it("stamps tree_hash_version = merkle-sha256-rfc6962-v2 and applies the v2 leaf tag (rule c)", async () => {
+    const { id, record } = await signAndInsert();
+    await insertSignedAgentSettlement({});
+    await insertSignedAgentSettlement({});
+    await cutAgentSettlementBatch(agentDb, agentRelayIdentity); // defaults to v2
+    const proof = await getAgentSettlementProof(agentDb, id);
+    expect(proof).not.toBeNull();
+
+    // A v2 producer MUST emit the field (no "v2 behavior, absent field").
+    expect(proof!.tree_hash_version).toBe("merkle-sha256-rfc6962-v2");
+
+    // The anchored leaf carries the RFC 6962 §2.1 `0x00` tag: it equals the
+    // worker's v2 leaf and differs from the v1 (untagged) leaf — proof the
+    // producer actually applied the tag, not just set a flag.
+    const rec = record as unknown as Record<string, unknown>;
+    const v2Leaf = await computeAgentSettlementLeaf(rec, "merkle-sha256-rfc6962-v2");
+    const v1Leaf = await computeAgentSettlementLeaf(rec, "merkle-sha256-plain-v1");
+    expect(proof!.settlement_hash).toBe(v2Leaf);
+    expect(v2Leaf).not.toBe(v1Leaf);
+
+    // End-to-end producer/verifier symmetry under the v2 leaf + node tags.
+    const result = await verifyAgentSettlementAnchor(rec, proof!);
+    expect(result.valid).toBe(true);
+    expect(result.steps.merkle_valid).toBe(true);
+    expect(result.steps.relay_signature_valid).toBe(true);
+  });
+
+  it("a legacy v1 batch (NULL column) omits the field and still verifies (absent ⇒ v1)", async () => {
+    const { id, record } = await signAndInsert();
+    await insertSignedAgentSettlement({});
+    await insertSignedAgentSettlement({});
+    // Cut explicitly under v1 — the column stores NULL, exactly the shape a
+    // pre-PR2 (migration-backfilled) batch has. Proves the proof endpoint
+    // reconstructs each batch under ITS stored version, not a global default.
+    await cutAgentSettlementBatch(agentDb, agentRelayIdentity, 100, "merkle-sha256-plain-v1");
+    const batchRow = agentDb
+      .prepare("SELECT tree_hash_version FROM relay_agent_anchor_batches LIMIT 1")
+      .get() as { tree_hash_version: string | null };
+    expect(batchRow.tree_hash_version).toBeNull();
+
+    const proof = await getAgentSettlementProof(agentDb, id);
+    expect(proof).not.toBeNull();
+    // Legacy never re-emits the v1 id — the field is absent (⇒ v1).
+    expect(proof!.tree_hash_version).toBeUndefined();
+
+    const result = await verifyAgentSettlementAnchor(
+      record as unknown as Record<string, unknown>,
+      proof!,
+    );
+    expect(result.valid).toBe(true);
+    expect(result.steps.merkle_valid).toBe(true);
   });
 });
 

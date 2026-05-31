@@ -90,6 +90,10 @@ const LEAF_BUILDERS: ReadonlyArray<{ file: string; symbol: string }> = [
   { file: "packages/crypto/src/credential-anchor.ts", symbol: "computeCredentialLeaf" },
   { file: "packages/crypto/src/index.ts", symbol: "identityLogLeaf" },
   { file: "packages/encryption/src/consolidation-anchor.ts", symbol: "verifyConsolidationAnchor" },
+  // The relay's per-agent settlement producer (PR2) — the first v2 producer.
+  // Hashes record_json directly; MUST route through hashLeaf so the leaf tag
+  // is applied by the primitive, never inlined.
+  { file: "services/relay/src/anchoring.ts", symbol: "agentSettlementLeaf" },
 ];
 
 /**

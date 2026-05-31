@@ -1203,4 +1203,30 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 26,
+    name: "agent_anchor_tree_hash_version",
+    up: (db) => {
+      // Per-batch tree-hash version for per-agent settlement anchors — the
+      // RFC 6962 §2.1 leaf/node domain-separation axis (MerkleTreeVersion in
+      // `@motebit/protocol`). The agent-settlement producer flips to
+      // `merkle-sha256-rfc6962-v2` (PR2 of the migration —
+      // `docs/doctrine/merkle-tree-hash-versioning.md`), but ALREADY-anchored
+      // batches were hashed v1 and their root is committed onchain; recomputing
+      // them under v2 at proof time would produce a different root and break
+      // verification. So the version is persisted per batch: NULL ⇒
+      // `merkle-sha256-plain-v1` (every pre-PR2 batch, legacy), the v2 string
+      // for new batches. The proof endpoint reconstructs each batch under ITS
+      // stored version and stamps the proof's `tree_hash_version` accordingly
+      // (omitted for legacy v1 — absent ⇒ v1; legacy is never re-emitted).
+      //
+      // PRAGMA-guarded — same idempotency rationale as the v13/v14/v25 ALTERs.
+      const cols = (
+        db.prepare("PRAGMA table_info(relay_agent_anchor_batches)").all() as { name: string }[]
+      ).map((c) => c.name);
+      if (!cols.includes("tree_hash_version")) {
+        db.exec("ALTER TABLE relay_agent_anchor_batches ADD COLUMN tree_hash_version TEXT;");
+      }
+    },
+  },
 ];

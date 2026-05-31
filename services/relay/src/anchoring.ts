@@ -19,13 +19,14 @@ import type {
   AgentSettlementAnchorBatch,
   AgentSettlementAnchorProof,
   AgentSettlementChainAnchor,
+  MerkleTreeVersion,
 } from "@motebit/protocol";
 import {
   buildMerkleTree,
   getMerkleProof,
   computeSettlementLeaf,
   canonicalJson,
-  sha256,
+  hashLeaf,
   sign,
   bytesToHex,
 } from "@motebit/encryption";
@@ -36,6 +37,18 @@ import { createLogger } from "./logger.js";
  *  Matches spec/agent-settlement-anchor-v1.md §4.1 / §5.1 — JCS canonicalization,
  *  Ed25519 primitive, hex signature encoding, hex public-key encoding. */
 const AGENT_SETTLEMENT_ANCHOR_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+
+/**
+ * The tree-hash version NEW per-agent settlement batches are minted under.
+ * PR2 of the RFC 6962 domain-separation migration flips the agent-settlement
+ * producer to `merkle-sha256-rfc6962-v2` (the spec's `tree_hash_producer` per
+ * `spec/agent-settlement-anchor-v1.md` §5.3) — the verifier surface accepted v2
+ * from PR1 part 2b, so deploy-verifier-first ordering holds. Persisted per batch
+ * (`relay_agent_anchor_batches.tree_hash_version`); pre-PR2 batches stay NULL ⇒
+ * v1 so their already-anchored roots still verify. Doctrine:
+ * `docs/doctrine/merkle-tree-hash-versioning.md` (§8 PR2, §4 threat model).
+ */
+const AGENT_SETTLEMENT_TREE_HASH_VERSION: MerkleTreeVersion = "merkle-sha256-rfc6962-v2";
 
 const logger = createLogger({ service: "relay", module: "anchoring" });
 
@@ -510,10 +523,19 @@ interface AgentSettlementRow {
  * with the same JCS canonicalizer at settlement time). This is the SCITT /
  * RFC 6962 invariant: anchor the exact signed object; reproduce the leaf
  * from the holder's bytes — no re-projection.
+ *
+ * Routes through the canonical `hashLeaf` primitive so the RFC 6962 §2.1 `0x00`
+ * leaf tag (under v2) is applied in exactly one place — never inlined here (the
+ * dispatch gate `check-merkle-tree-hash-canonical` enforces this). v1 (the
+ * default) is byte-identical to the previous `bytesToHex(sha256(recordJson))`,
+ * and the worker's `computeAgentSettlementLeaf(record, v)` derives the identical
+ * value because `record_json === canonicalJson(record)`.
  */
-async function agentSettlementLeaf(recordJson: string): Promise<string> {
-  const h = await sha256(new TextEncoder().encode(recordJson));
-  return bytesToHex(h);
+async function agentSettlementLeaf(
+  recordJson: string,
+  treeHashVersion: MerkleTreeVersion = "merkle-sha256-plain-v1",
+): Promise<string> {
+  return hashLeaf(new TextEncoder().encode(recordJson), treeHashVersion);
 }
 
 /**
@@ -529,6 +551,7 @@ export async function cutAgentSettlementBatch(
   db: DatabaseDriver,
   relayIdentity: RelayIdentity,
   maxSize: number = DEFAULT_BATCH_MAX_SIZE,
+  treeHashVersion: MerkleTreeVersion = AGENT_SETTLEMENT_TREE_HASH_VERSION,
 ): Promise<AnchorRecord | null> {
   const rows = db
     .prepare(
@@ -542,12 +565,14 @@ export async function cutAgentSettlementBatch(
 
   if (rows.length === 0) return null;
 
+  // Both halves of the tree hash dispatch on the same version: the leaf tag in
+  // `agentSettlementLeaf` (→ `hashLeaf`) and the node tag in `buildMerkleTree`.
   const leaves: string[] = [];
   for (const row of rows) {
-    leaves.push(await agentSettlementLeaf(row.record_json));
+    leaves.push(await agentSettlementLeaf(row.record_json, treeHashVersion));
   }
 
-  const tree = await buildMerkleTree(leaves);
+  const tree = await buildMerkleTree(leaves, treeHashVersion);
 
   const batchId = crypto.randomUUID();
   const firstSettledAt = rows[0]!.settled_at;
@@ -573,12 +598,18 @@ export async function cutAgentSettlementBatch(
   const sig = await sign(sigBytes, relayIdentity.privateKey);
   const signature = bytesToHex(sig);
 
+  // Persist the version this batch was hashed under. v2 ⇒ the explicit string;
+  // v1 ⇒ NULL (the legacy/migration convention — absent ⇒ v1, never store the
+  // legacy id), so a v1 batch is column-indistinguishable from a pre-PR2 batch.
+  const treeHashVersionColumn =
+    treeHashVersion === "merkle-sha256-rfc6962-v2" ? treeHashVersion : null;
+
   const now = Date.now();
   db.prepare(
     `INSERT INTO relay_agent_anchor_batches
        (batch_id, relay_id, merkle_root, leaf_count, first_settled_at, last_settled_at,
-        signature, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?)`,
+        signature, status, created_at, tree_hash_version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?, ?)`,
   ).run(
     batchId,
     relayIdentity.relayMotebitId,
@@ -588,6 +619,7 @@ export async function cutAgentSettlementBatch(
     lastSettledAt,
     signature,
     now,
+    treeHashVersionColumn,
   );
 
   const assignStmt = db.prepare(
@@ -887,10 +919,21 @@ export async function getAgentSettlementProof(
         network: string | null;
         anchored_at: number | null;
         status: string;
+        tree_hash_version: string | null;
       }
     | undefined;
 
   if (!anchor) return null;
+
+  // Resolve the version THIS batch was hashed under (NULL ⇒ legacy v1) and
+  // reconstruct under it — a v1 batch's already-anchored root must reproduce
+  // under v1, never v2. Only `merkle-sha256-rfc6962-v2` flips to v2; NULL, the
+  // legacy id, or any other value resolves to v1 (the column is producer-
+  // controlled, not untrusted wire — no fail-closed branch needed here).
+  const treeHashVersion: MerkleTreeVersion =
+    anchor.tree_hash_version === "merkle-sha256-rfc6962-v2"
+      ? "merkle-sha256-rfc6962-v2"
+      : "merkle-sha256-plain-v1";
 
   // Reconstruct tree in the same sort order cutAgentSettlementBatch used.
   const batchSettlements = db
@@ -906,7 +949,7 @@ export async function getAgentSettlementProof(
   let targetIndex = -1;
   for (let i = 0; i < batchSettlements.length; i++) {
     const row = batchSettlements[i]!;
-    leaves.push(await agentSettlementLeaf(row.record_json));
+    leaves.push(await agentSettlementLeaf(row.record_json, treeHashVersion));
     if (row.settlement_id === settlementId) {
       targetIndex = i;
     }
@@ -914,7 +957,7 @@ export async function getAgentSettlementProof(
 
   if (targetIndex === -1) return null;
 
-  const tree = await buildMerkleTree(leaves);
+  const tree = await buildMerkleTree(leaves, treeHashVersion);
   const proof = getMerkleProof(tree, targetIndex);
 
   return {
@@ -933,5 +976,10 @@ export async function getAgentSettlementProof(
     suite: AGENT_SETTLEMENT_ANCHOR_SUITE,
     batch_signature: anchor.signature,
     anchor: chainAnchorFromRow(anchor),
+    // Threat-model rule (c): a v2 producer MUST emit the field. Legacy v1
+    // batches omit it (absent ⇒ v1; the legacy id is never re-emitted).
+    ...(treeHashVersion === "merkle-sha256-rfc6962-v2"
+      ? { tree_hash_version: treeHashVersion }
+      : {}),
   };
 }

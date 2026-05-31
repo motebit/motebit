@@ -27,6 +27,14 @@ export {
   hexPublicKeyToDidKey,
   hash,
   sha256,
+  // Merkle tree-hash agility (RFC 6962 §2.1 leaf/node domain separation).
+  // Re-exported so relay consumers (anchoring.ts) thread the leaf tag through
+  // the canonical primitive rather than inlining it — same backward-compat
+  // re-export convention as the rest of this block. The node-tag side lives in
+  // this package's own `merkle.ts` (`buildMerkleTree`).
+  hashLeaf,
+  canonicalLeaf,
+  resolveTreeHashVersion,
   generateKeypair,
   // Suite-dispatched public-key derivation. The product-vocabulary
   // pair to `generateKeypair` for "I have a private seed, give me the
