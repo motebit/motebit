@@ -110,14 +110,11 @@ export const RouteScoreSchema = z
 
 type InferredRouteScore = z.infer<typeof RouteScoreSchema>;
 
-// RouteScore uses branded MotebitId; relax to string for structural
-// parity (the wire is just a string, brand is a TS-only guard).
-type BrandedToString<T> = {
-  [K in keyof T]: T[K] extends string & { readonly __brand: unknown } ? string : T[K];
-};
-
-type _ForwardCheck = ParityForward<BrandedToString<RouteScore>, InferredRouteScore>;
-type _ReverseCheck = ParityReverse<BrandedToString<RouteScore>, InferredRouteScore>;
+// RouteScore's branded MotebitId is normalized by the shared `Relax`
+// (see ./__parity/check.ts) — the wire is just a string, the brand a
+// TS-only guard.
+type _ForwardCheck = ParityForward<RouteScore, InferredRouteScore>;
+type _ReverseCheck = ParityReverse<RouteScore, InferredRouteScore>;
 
 export const _ROUTE_SCORE_TYPE_PARITY: {
   forward: _ForwardCheck;

@@ -139,14 +139,10 @@ export const AgentServiceListingSchema = z
 type InferredListing = z.infer<typeof AgentServiceListingSchema>;
 
 // The TS declaration uses branded ID types (ListingId, MotebitId); the
-// wire is just a string. Relax the branded fields to their structural
-// equivalents for parity checking.
-type BrandedToString<T> = {
-  [K in keyof T]: T[K] extends string & { readonly __brand: unknown } ? string : T[K];
-};
-
-type _ForwardCheck = ParityForward<BrandedToString<AgentServiceListing>, InferredListing>;
-type _ReverseCheck = ParityReverse<BrandedToString<AgentServiceListing>, InferredListing>;
+// wire is just a string. The shared `Relax` (see ./__parity/check.ts)
+// normalizes the branded fields for parity checking.
+type _ForwardCheck = ParityForward<AgentServiceListing, InferredListing>;
+type _ReverseCheck = ParityReverse<AgentServiceListing, InferredListing>;
 
 export const _AGENT_SERVICE_LISTING_TYPE_PARITY: {
   forward: _ForwardCheck;

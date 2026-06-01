@@ -8,8 +8,9 @@
  * `pnpm --filter @motebit/wire-schemas typecheck` goes red. That is the
  * real regression defense for the relaxation itself.
  *
- * Excluded from the npm tarball (the package `files` allowlist ships only
- * `dist/`; this dev-only file is dropped — see step 5 / `pnpm pack --dry-run`).
+ * Dev-only: `@motebit/wire-schemas` is `private` / `0.0.0-private` and never
+ * publishes. This file compiles to an inert `export {}` in `dist/__parity/`;
+ * it carries no runtime surface.
  */
 import type { MotebitId, GoalId, SettlementId, SuiteId, AgentTaskStatus } from "@motebit/protocol";
 

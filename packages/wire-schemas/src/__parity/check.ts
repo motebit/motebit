@@ -34,8 +34,18 @@
  *         `extends`-based check); no functional change, count unchanged.
  *         Locked by the `_DiscUnionPerArm` assertion in check.test-types.ts.
  *
- * NOT shipped to consumers — excluded from the npm tarball (the package
- * `files` allowlist). Pure compile-time types; zero runtime surface.
+ * Dev-only checker, not part of the public surface: `@motebit/wire-schemas`
+ * is `private` / `0.0.0-private` and never publishes, and these consts are
+ * not re-exported from `index.ts`. The types are pure compile-time (the
+ * emitted JS is `export {}` — zero runtime surface); they do compile into
+ * `dist/__parity/` but that is inert on a never-published package.
+ *
+ * `Relax` is applied to the PROTOCOL side only (`ParityForward` /
+ * `ParityReverse`). That is sound because zod never infers branded,
+ * `readonly`, or nominal-enum forms — so the schema side needs no
+ * normalization. The premise is load-bearing: if a schema author ever
+ * introduces `.brand(...)` or `z.readonly(...)`, this one-sided relaxation
+ * would go asymmetric and must be revisited.
  */
 
 /**
@@ -65,6 +75,12 @@ type IsStringWide<X> = [X] extends [string] ? ([string] extends [X] ? true : fal
  * via `-readonly`. Optional modifiers are preserved (homomorphic map).
  * Discriminated unions fall out of `Relax`'s distribution (3d). Nominal TS
  * enums are handled in `RelaxOne` (3b), not here.
+ *
+ * Known gap: the array arm matches fixed-length TUPLES too and flattens
+ * `[A, B]` → `(A | B)[]`, which would mask a positional divergence. No wire
+ * schema uses `z.tuple` and no wire protocol type is a fixed-length tuple
+ * today, so the blast radius is nil; add a `T extends readonly [unknown,
+ * ...unknown[]]` guard here if a tuple wire type is ever introduced.
  */
 type RelaxStructural<T> = T extends readonly (infer U)[]
   ? Relax<U>[]
