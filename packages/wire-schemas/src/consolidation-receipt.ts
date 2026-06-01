@@ -54,9 +54,9 @@ export const CONSOLIDATION_ANCHOR_SCHEMA_ID =
 
 const phaseField = () =>
   z
-    .enum(["orient", "gather", "consolidate", "prune"])
+    .enum(["orient", "gather", "consolidate", "prune", "flush"])
     .describe(
-      "One of the four consolidation-cycle phases. Closed union: adding a phase is a protocol-coordinated change (new enum value + new wire version).",
+      "One of the five consolidation-cycle phases. Closed union: adding a phase is a protocol-coordinated change (new enum value + new wire version). `flush` is the `consolidation_flush` retention shape (conversation/tool-audit erasure) that runs after `prune`; the runtime's `PHASES` const (packages/runtime/src/consolidation-cycle.ts) emits it into `phases_run`.",
     );
 
 const suiteField = () =>
@@ -108,7 +108,7 @@ export const ConsolidationReceiptSchema = z
     phases_run: z
       .array(phaseField())
       .describe(
-        "Ordered list of phases that ran to completion (or yielded with partial work). Lets verifiers scope a receipt to specific work (e.g., a prune-only cycle vs. a full orient → gather → consolidate → prune).",
+        "Ordered list of phases that ran to completion (or yielded with partial work). Lets verifiers scope a receipt to specific work (e.g., a prune-only cycle vs. a full orient → gather → consolidate → prune → flush).",
       ),
     phases_yielded: z
       .array(phaseField())

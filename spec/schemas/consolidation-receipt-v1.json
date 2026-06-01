@@ -38,17 +38,17 @@
       "type": "array",
       "items": {
         "type": "string",
-        "enum": ["orient", "gather", "consolidate", "prune"],
-        "description": "One of the four consolidation-cycle phases. Closed union: adding a phase is a protocol-coordinated change (new enum value + new wire version)."
+        "enum": ["orient", "gather", "consolidate", "prune", "flush"],
+        "description": "One of the five consolidation-cycle phases. Closed union: adding a phase is a protocol-coordinated change (new enum value + new wire version). `flush` is the `consolidation_flush` retention shape (conversation/tool-audit erasure) that runs after `prune`; the runtime's `PHASES` const (packages/runtime/src/consolidation-cycle.ts) emits it into `phases_run`."
       },
-      "description": "Ordered list of phases that ran to completion (or yielded with partial work). Lets verifiers scope a receipt to specific work (e.g., a prune-only cycle vs. a full orient → gather → consolidate → prune)."
+      "description": "Ordered list of phases that ran to completion (or yielded with partial work). Lets verifiers scope a receipt to specific work (e.g., a prune-only cycle vs. a full orient → gather → consolidate → prune → flush)."
     },
     "phases_yielded": {
       "type": "array",
       "items": {
         "type": "string",
-        "enum": ["orient", "gather", "consolidate", "prune"],
-        "description": "One of the four consolidation-cycle phases. Closed union: adding a phase is a protocol-coordinated change (new enum value + new wire version)."
+        "enum": ["orient", "gather", "consolidate", "prune", "flush"],
+        "description": "One of the five consolidation-cycle phases. Closed union: adding a phase is a protocol-coordinated change (new enum value + new wire version). `flush` is the `consolidation_flush` retention shape (conversation/tool-audit erasure) that runs after `prune`; the runtime's `PHASES` const (packages/runtime/src/consolidation-cycle.ts) emits it into `phases_run`."
       },
       "description": "Subset of `phases_run` — phases whose AbortSignal fired mid-execution (budget exhausted or parent signal aborted). Lets verifiers distinguish fully-completed cycles from budget-clipped ones."
     },
@@ -154,17 +154,17 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["orient", "gather", "consolidate", "prune"],
-            "description": "One of the four consolidation-cycle phases. Closed union: adding a phase is a protocol-coordinated change (new enum value + new wire version)."
+            "enum": ["orient", "gather", "consolidate", "prune", "flush"],
+            "description": "One of the five consolidation-cycle phases. Closed union: adding a phase is a protocol-coordinated change (new enum value + new wire version). `flush` is the `consolidation_flush` retention shape (conversation/tool-audit erasure) that runs after `prune`; the runtime's `PHASES` const (packages/runtime/src/consolidation-cycle.ts) emits it into `phases_run`."
           },
-          "description": "Ordered list of phases that ran to completion (or yielded with partial work). Lets verifiers scope a receipt to specific work (e.g., a prune-only cycle vs. a full orient → gather → consolidate → prune)."
+          "description": "Ordered list of phases that ran to completion (or yielded with partial work). Lets verifiers scope a receipt to specific work (e.g., a prune-only cycle vs. a full orient → gather → consolidate → prune → flush)."
         },
         "phases_yielded": {
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["orient", "gather", "consolidate", "prune"],
-            "description": "One of the four consolidation-cycle phases. Closed union: adding a phase is a protocol-coordinated change (new enum value + new wire version)."
+            "enum": ["orient", "gather", "consolidate", "prune", "flush"],
+            "description": "One of the five consolidation-cycle phases. Closed union: adding a phase is a protocol-coordinated change (new enum value + new wire version). `flush` is the `consolidation_flush` retention shape (conversation/tool-audit erasure) that runs after `prune`; the runtime's `PHASES` const (packages/runtime/src/consolidation-cycle.ts) emits it into `phases_run`."
           },
           "description": "Subset of `phases_run` — phases whose AbortSignal fired mid-execution (budget exhausted or parent signal aborted). Lets verifiers distinguish fully-completed cycles from budget-clipped ones."
         },
