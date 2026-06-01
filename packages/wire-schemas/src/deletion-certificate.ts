@@ -26,6 +26,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { DeletionCertificate } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
 // Stable $id URL
@@ -342,10 +343,8 @@ export const DeletionCertificateSchema = z
   );
 
 // Type-parity check — fails compile if zod shape drifts from protocol type.
-type _Forward =
-  DeletionCertificate extends z.infer<typeof DeletionCertificateSchema> ? true : never;
-type _Reverse =
-  z.infer<typeof DeletionCertificateSchema> extends DeletionCertificate ? true : never;
+type _Forward = ParityForward<DeletionCertificate, z.infer<typeof DeletionCertificateSchema>>;
+type _Reverse = ParityReverse<DeletionCertificate, z.infer<typeof DeletionCertificateSchema>>;
 export const _DELETION_CERTIFICATE_TYPE_PARITY: { forward: _Forward; reverse: _Reverse } = {
   forward: true as _Forward,
   reverse: true as _Reverse,

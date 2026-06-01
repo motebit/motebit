@@ -52,6 +52,7 @@ import type {
 } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
 // Stable $id URLs
@@ -214,14 +215,14 @@ export const WitnessSolicitationRequestSchema = z
   })
   .strict();
 
-type _WitnessSolicitationRequestForward =
-  WitnessSolicitationRequest extends z.infer<typeof WitnessSolicitationRequestSchema>
-    ? true
-    : never;
-type _WitnessSolicitationRequestReverse =
-  z.infer<typeof WitnessSolicitationRequestSchema> extends WitnessSolicitationRequest
-    ? true
-    : never;
+type _WitnessSolicitationRequestForward = ParityForward<
+  WitnessSolicitationRequest,
+  z.infer<typeof WitnessSolicitationRequestSchema>
+>;
+type _WitnessSolicitationRequestReverse = ParityReverse<
+  WitnessSolicitationRequest,
+  z.infer<typeof WitnessSolicitationRequestSchema>
+>;
 
 export const _WITNESS_SOLICITATION_REQUEST_TYPE_PARITY: {
   forward: _WitnessSolicitationRequestForward;
@@ -271,14 +272,14 @@ export const WitnessSolicitationResponseSchema = z
   })
   .strict();
 
-type _WitnessSolicitationResponseForward =
-  WitnessSolicitationResponse extends z.infer<typeof WitnessSolicitationResponseSchema>
-    ? true
-    : never;
-type _WitnessSolicitationResponseReverse =
-  z.infer<typeof WitnessSolicitationResponseSchema> extends WitnessSolicitationResponse
-    ? true
-    : never;
+type _WitnessSolicitationResponseForward = ParityForward<
+  WitnessSolicitationResponse,
+  z.infer<typeof WitnessSolicitationResponseSchema>
+>;
+type _WitnessSolicitationResponseReverse = ParityReverse<
+  WitnessSolicitationResponse,
+  z.infer<typeof WitnessSolicitationResponseSchema>
+>;
 
 export const _WITNESS_SOLICITATION_RESPONSE_TYPE_PARITY: {
   forward: _WitnessSolicitationResponseForward;
@@ -395,10 +396,14 @@ export const WitnessOmissionDisputeSchema = z
   })
   .strict();
 
-type _WitnessOmissionDisputeForward =
-  WitnessOmissionDispute extends z.infer<typeof WitnessOmissionDisputeSchema> ? true : never;
-type _WitnessOmissionDisputeReverse =
-  z.infer<typeof WitnessOmissionDisputeSchema> extends WitnessOmissionDispute ? true : never;
+type _WitnessOmissionDisputeForward = ParityForward<
+  WitnessOmissionDispute,
+  z.infer<typeof WitnessOmissionDisputeSchema>
+>;
+type _WitnessOmissionDisputeReverse = ParityReverse<
+  WitnessOmissionDispute,
+  z.infer<typeof WitnessOmissionDisputeSchema>
+>;
 
 export const _WITNESS_OMISSION_DISPUTE_TYPE_PARITY: {
   forward: _WitnessOmissionDisputeForward;

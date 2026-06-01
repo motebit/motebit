@@ -22,6 +22,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { SkillEnvelope } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 import { SkillManifestSchema } from "./skill-manifest.js";
 
 /** Stable `$id` for the skill-envelope v1 wire format. External tools pin to this. */
@@ -115,8 +116,8 @@ export const SkillEnvelopeSchema = z
 
 type InferredSkillEnvelope = z.infer<typeof SkillEnvelopeSchema>;
 
-type _ForwardCheck = SkillEnvelope extends InferredSkillEnvelope ? true : never;
-type _ReverseCheck = InferredSkillEnvelope extends SkillEnvelope ? true : never;
+type _ForwardCheck = ParityForward<SkillEnvelope, InferredSkillEnvelope>;
+type _ReverseCheck = ParityReverse<SkillEnvelope, InferredSkillEnvelope>;
 
 export const _SKILL_ENVELOPE_TYPE_PARITY: {
   forward: _ForwardCheck;

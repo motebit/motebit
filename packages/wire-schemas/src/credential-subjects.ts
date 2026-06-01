@@ -45,6 +45,7 @@ import type {
 } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 import { HardwareAttestationClaimSchema } from "./hardware-attestation-claim.js";
 
 // ---------------------------------------------------------------------------
@@ -128,14 +129,14 @@ export const ReputationCredentialSubjectSchema = z
   })
   .strict();
 
-type _ReputationForward =
-  ReputationCredentialSubject extends z.infer<typeof ReputationCredentialSubjectSchema>
-    ? true
-    : never;
-type _ReputationReverse =
-  z.infer<typeof ReputationCredentialSubjectSchema> extends ReputationCredentialSubject
-    ? true
-    : never;
+type _ReputationForward = ParityForward<
+  ReputationCredentialSubject,
+  z.infer<typeof ReputationCredentialSubjectSchema>
+>;
+type _ReputationReverse = ParityReverse<
+  ReputationCredentialSubject,
+  z.infer<typeof ReputationCredentialSubjectSchema>
+>;
 
 export const _REPUTATION_CREDENTIAL_SUBJECT_TYPE_PARITY: {
   forward: _ReputationForward;
@@ -207,10 +208,14 @@ export const TrustCredentialSubjectSchema = z
   })
   .strict();
 
-type _TrustForward =
-  TrustCredentialSubject extends z.infer<typeof TrustCredentialSubjectSchema> ? true : never;
-type _TrustReverse =
-  z.infer<typeof TrustCredentialSubjectSchema> extends TrustCredentialSubject ? true : never;
+type _TrustForward = ParityForward<
+  TrustCredentialSubject,
+  z.infer<typeof TrustCredentialSubjectSchema>
+>;
+type _TrustReverse = ParityReverse<
+  TrustCredentialSubject,
+  z.infer<typeof TrustCredentialSubjectSchema>
+>;
 
 export const _TRUST_CREDENTIAL_SUBJECT_TYPE_PARITY: {
   forward: _TrustForward;
@@ -294,10 +299,14 @@ export const GradientCredentialSubjectSchema = z
   })
   .strict();
 
-type _GradientForward =
-  GradientCredentialSubject extends z.infer<typeof GradientCredentialSubjectSchema> ? true : never;
-type _GradientReverse =
-  z.infer<typeof GradientCredentialSubjectSchema> extends GradientCredentialSubject ? true : never;
+type _GradientForward = ParityForward<
+  GradientCredentialSubject,
+  z.infer<typeof GradientCredentialSubjectSchema>
+>;
+type _GradientReverse = ParityReverse<
+  GradientCredentialSubject,
+  z.infer<typeof GradientCredentialSubjectSchema>
+>;
 
 export const _GRADIENT_CREDENTIAL_SUBJECT_TYPE_PARITY: {
   forward: _GradientForward;

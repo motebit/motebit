@@ -37,6 +37,7 @@ import type {
 } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 const SCHEMA_BASE = "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas";
 
@@ -90,8 +91,8 @@ export const MemoryFormedPayloadSchema = z
   .passthrough();
 
 type InferredMemoryFormed = z.infer<typeof MemoryFormedPayloadSchema>;
-type _MemoryFormedForward = MemoryFormedPayload extends InferredMemoryFormed ? true : never;
-type _MemoryFormedReverse = InferredMemoryFormed extends MemoryFormedPayload ? true : never;
+type _MemoryFormedForward = ParityForward<MemoryFormedPayload, InferredMemoryFormed>;
+type _MemoryFormedReverse = ParityReverse<MemoryFormedPayload, InferredMemoryFormed>;
 export const _MEMORY_FORMED_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryFormedForward;
   reverse: _MemoryFormedReverse;
@@ -125,8 +126,8 @@ export const MemoryAccessedPayloadSchema = z
   .passthrough();
 
 type InferredMemoryAccessed = z.infer<typeof MemoryAccessedPayloadSchema>;
-type _MemoryAccessedForward = MemoryAccessedPayload extends InferredMemoryAccessed ? true : never;
-type _MemoryAccessedReverse = InferredMemoryAccessed extends MemoryAccessedPayload ? true : never;
+type _MemoryAccessedForward = ParityForward<MemoryAccessedPayload, InferredMemoryAccessed>;
+type _MemoryAccessedReverse = ParityReverse<MemoryAccessedPayload, InferredMemoryAccessed>;
 export const _MEMORY_ACCESSED_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryAccessedForward;
   reverse: _MemoryAccessedReverse;
@@ -163,8 +164,8 @@ export const MemoryPinnedPayloadSchema = z
   .passthrough();
 
 type InferredMemoryPinned = z.infer<typeof MemoryPinnedPayloadSchema>;
-type _MemoryPinnedForward = MemoryPinnedPayload extends InferredMemoryPinned ? true : never;
-type _MemoryPinnedReverse = InferredMemoryPinned extends MemoryPinnedPayload ? true : never;
+type _MemoryPinnedForward = ParityForward<MemoryPinnedPayload, InferredMemoryPinned>;
+type _MemoryPinnedReverse = ParityReverse<MemoryPinnedPayload, InferredMemoryPinned>;
 export const _MEMORY_PINNED_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryPinnedForward;
   reverse: _MemoryPinnedReverse;
@@ -198,8 +199,8 @@ export const MemoryDeletedPayloadSchema = z
   .passthrough();
 
 type InferredMemoryDeleted = z.infer<typeof MemoryDeletedPayloadSchema>;
-type _MemoryDeletedForward = MemoryDeletedPayload extends InferredMemoryDeleted ? true : never;
-type _MemoryDeletedReverse = InferredMemoryDeleted extends MemoryDeletedPayload ? true : never;
+type _MemoryDeletedForward = ParityForward<MemoryDeletedPayload, InferredMemoryDeleted>;
+type _MemoryDeletedReverse = ParityReverse<MemoryDeletedPayload, InferredMemoryDeleted>;
 export const _MEMORY_DELETED_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryDeletedForward;
   reverse: _MemoryDeletedReverse;
@@ -265,12 +266,14 @@ export const MemoryConsolidatedPayloadSchema = z
   .passthrough();
 
 type InferredMemoryConsolidated = z.infer<typeof MemoryConsolidatedPayloadSchema>;
-type _MemoryConsolidatedForward = MemoryConsolidatedPayload extends InferredMemoryConsolidated
-  ? true
-  : never;
-type _MemoryConsolidatedReverse = InferredMemoryConsolidated extends MemoryConsolidatedPayload
-  ? true
-  : never;
+type _MemoryConsolidatedForward = ParityForward<
+  MemoryConsolidatedPayload,
+  InferredMemoryConsolidated
+>;
+type _MemoryConsolidatedReverse = ParityReverse<
+  MemoryConsolidatedPayload,
+  InferredMemoryConsolidated
+>;
 export const _MEMORY_CONSOLIDATED_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryConsolidatedForward;
   reverse: _MemoryConsolidatedReverse;
@@ -314,8 +317,8 @@ export const MemoryAuditPayloadSchema = z
   .passthrough();
 
 type InferredMemoryAudit = z.infer<typeof MemoryAuditPayloadSchema>;
-type _MemoryAuditForward = MemoryAuditPayload extends InferredMemoryAudit ? true : never;
-type _MemoryAuditReverse = InferredMemoryAudit extends MemoryAuditPayload ? true : never;
+type _MemoryAuditForward = ParityForward<MemoryAuditPayload, InferredMemoryAudit>;
+type _MemoryAuditReverse = ParityReverse<MemoryAuditPayload, InferredMemoryAudit>;
 export const _MEMORY_AUDIT_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryAuditForward;
   reverse: _MemoryAuditReverse;
@@ -345,7 +348,7 @@ export const MEMORY_DECAYED_PAYLOAD_SCHEMA_ID = `${SCHEMA_BASE}/memory-decayed-p
 export const MemoryDecayedPayloadSchema = z.object({}).passthrough();
 
 type InferredMemoryDecayed = z.infer<typeof MemoryDecayedPayloadSchema>;
-type _MemoryDecayedForward = MemoryDecayedPayload extends InferredMemoryDecayed ? true : never;
+type _MemoryDecayedForward = ParityForward<MemoryDecayedPayload, InferredMemoryDecayed>;
 // Reserved / empty record has no reverse parity obligation beyond
 // structural match; the forward check is sufficient.
 
@@ -396,8 +399,8 @@ export const MemoryPromotedPayloadSchema = z
   .passthrough();
 
 type InferredMemoryPromoted = z.infer<typeof MemoryPromotedPayloadSchema>;
-type _MemoryPromotedForward = MemoryPromotedPayload extends InferredMemoryPromoted ? true : never;
-type _MemoryPromotedReverse = InferredMemoryPromoted extends MemoryPromotedPayload ? true : never;
+type _MemoryPromotedForward = ParityForward<MemoryPromotedPayload, InferredMemoryPromoted>;
+type _MemoryPromotedReverse = ParityReverse<MemoryPromotedPayload, InferredMemoryPromoted>;
 export const _MEMORY_PROMOTED_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryPromotedForward;
   reverse: _MemoryPromotedReverse;

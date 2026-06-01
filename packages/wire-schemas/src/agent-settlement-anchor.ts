@@ -41,6 +41,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { AgentSettlementAnchorBatch, AgentSettlementAnchorProof } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
 // Stable $id URLs
@@ -163,14 +164,14 @@ export const AgentSettlementAnchorBatchSchema = z
   })
   .strict();
 
-type _BatchForward =
-  AgentSettlementAnchorBatch extends z.infer<typeof AgentSettlementAnchorBatchSchema>
-    ? true
-    : never;
-type _BatchReverse =
-  z.infer<typeof AgentSettlementAnchorBatchSchema> extends AgentSettlementAnchorBatch
-    ? true
-    : never;
+type _BatchForward = ParityForward<
+  AgentSettlementAnchorBatch,
+  z.infer<typeof AgentSettlementAnchorBatchSchema>
+>;
+type _BatchReverse = ParityReverse<
+  AgentSettlementAnchorBatch,
+  z.infer<typeof AgentSettlementAnchorBatchSchema>
+>;
 
 export const _AGENT_SETTLEMENT_ANCHOR_BATCH_TYPE_PARITY: {
   forward: _BatchForward;
@@ -275,14 +276,14 @@ export const AgentSettlementAnchorProofSchema = z
   // strict — those are tight.
   .passthrough();
 
-type _ProofForward =
-  AgentSettlementAnchorProof extends z.infer<typeof AgentSettlementAnchorProofSchema>
-    ? true
-    : never;
-type _ProofReverse =
-  z.infer<typeof AgentSettlementAnchorProofSchema> extends AgentSettlementAnchorProof
-    ? true
-    : never;
+type _ProofForward = ParityForward<
+  AgentSettlementAnchorProof,
+  z.infer<typeof AgentSettlementAnchorProofSchema>
+>;
+type _ProofReverse = ParityReverse<
+  AgentSettlementAnchorProof,
+  z.infer<typeof AgentSettlementAnchorProofSchema>
+>;
 
 export const _AGENT_SETTLEMENT_ANCHOR_PROOF_TYPE_PARITY: {
   forward: _ProofForward;

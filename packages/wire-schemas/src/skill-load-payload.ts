@@ -20,6 +20,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { SkillLoadPayload } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the skill-load-payload v1 wire format. */
 export const SKILL_LOAD_PAYLOAD_SCHEMA_ID =
@@ -68,8 +69,8 @@ export const SkillLoadPayloadSchema = z
 // Type parity — drift defense
 type InferredSkillLoadPayload = z.infer<typeof SkillLoadPayloadSchema>;
 
-type _ForwardCheck = SkillLoadPayload extends InferredSkillLoadPayload ? true : never;
-type _ReverseCheck = InferredSkillLoadPayload extends SkillLoadPayload ? true : never;
+type _ForwardCheck = ParityForward<SkillLoadPayload, InferredSkillLoadPayload>;
+type _ReverseCheck = ParityReverse<SkillLoadPayload, InferredSkillLoadPayload>;
 
 export const _SKILL_LOAD_PAYLOAD_TYPE_PARITY: {
   forward: _ForwardCheck;

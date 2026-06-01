@@ -37,6 +37,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { CredentialBundle } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the credential-bundle v1 wire format. */
 export const CREDENTIAL_BUNDLE_SCHEMA_ID =
@@ -110,8 +111,8 @@ export const CredentialBundleSchema = z
 
 type InferredBundle = z.infer<typeof CredentialBundleSchema>;
 
-type _ForwardCheck = CredentialBundle extends InferredBundle ? true : never;
-type _ReverseCheck = InferredBundle extends CredentialBundle ? true : never;
+type _ForwardCheck = ParityForward<CredentialBundle, InferredBundle>;
+type _ReverseCheck = ParityReverse<CredentialBundle, InferredBundle>;
 
 export const _CREDENTIAL_BUNDLE_TYPE_PARITY: {
   forward: _ForwardCheck;

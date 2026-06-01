@@ -41,6 +41,7 @@ import type {
 } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 import { CredentialBundleSchema } from "./credential-bundle.js";
 
 // ---------------------------------------------------------------------------
@@ -118,10 +119,14 @@ export const MigrationRequestSchema = z
   })
   .strict();
 
-type _MigrationRequestForward =
-  MigrationRequest extends z.infer<typeof MigrationRequestSchema> ? true : never;
-type _MigrationRequestReverse =
-  z.infer<typeof MigrationRequestSchema> extends MigrationRequest ? true : never;
+type _MigrationRequestForward = ParityForward<
+  MigrationRequest,
+  z.infer<typeof MigrationRequestSchema>
+>;
+type _MigrationRequestReverse = ParityReverse<
+  MigrationRequest,
+  z.infer<typeof MigrationRequestSchema>
+>;
 
 export const _MIGRATION_REQUEST_TYPE_PARITY: {
   forward: _MigrationRequestForward;
@@ -179,10 +184,8 @@ export const MigrationTokenSchema = z
   })
   .strict();
 
-type _MigrationTokenForward =
-  MigrationToken extends z.infer<typeof MigrationTokenSchema> ? true : never;
-type _MigrationTokenReverse =
-  z.infer<typeof MigrationTokenSchema> extends MigrationToken ? true : never;
+type _MigrationTokenForward = ParityForward<MigrationToken, z.infer<typeof MigrationTokenSchema>>;
+type _MigrationTokenReverse = ParityReverse<MigrationToken, z.infer<typeof MigrationTokenSchema>>;
 
 export const _MIGRATION_TOKEN_TYPE_PARITY: {
   forward: _MigrationTokenForward;
@@ -258,10 +261,14 @@ export const DepartureAttestationSchema = z
   })
   .strict();
 
-type _DepartureAttestationForward =
-  DepartureAttestation extends z.infer<typeof DepartureAttestationSchema> ? true : never;
-type _DepartureAttestationReverse =
-  z.infer<typeof DepartureAttestationSchema> extends DepartureAttestation ? true : never;
+type _DepartureAttestationForward = ParityForward<
+  DepartureAttestation,
+  z.infer<typeof DepartureAttestationSchema>
+>;
+type _DepartureAttestationReverse = ParityReverse<
+  DepartureAttestation,
+  z.infer<typeof DepartureAttestationSchema>
+>;
 
 export const _DEPARTURE_ATTESTATION_TYPE_PARITY: {
   forward: _DepartureAttestationForward;
@@ -313,10 +320,8 @@ export const BalanceWaiverSchema = z
   })
   .strict();
 
-type _BalanceWaiverForward =
-  BalanceWaiver extends z.infer<typeof BalanceWaiverSchema> ? true : never;
-type _BalanceWaiverReverse =
-  z.infer<typeof BalanceWaiverSchema> extends BalanceWaiver ? true : never;
+type _BalanceWaiverForward = ParityForward<BalanceWaiver, z.infer<typeof BalanceWaiverSchema>>;
+type _BalanceWaiverReverse = ParityReverse<BalanceWaiver, z.infer<typeof BalanceWaiverSchema>>;
 
 export const _BALANCE_WAIVER_TYPE_PARITY: {
   forward: _BalanceWaiverForward;
@@ -372,10 +377,14 @@ export const MigrationPresentationSchema = z
   })
   .strict();
 
-type _MigrationPresentationForward =
-  MigrationPresentation extends z.infer<typeof MigrationPresentationSchema> ? true : never;
-type _MigrationPresentationReverse =
-  z.infer<typeof MigrationPresentationSchema> extends MigrationPresentation ? true : never;
+type _MigrationPresentationForward = ParityForward<
+  MigrationPresentation,
+  z.infer<typeof MigrationPresentationSchema>
+>;
+type _MigrationPresentationReverse = ParityReverse<
+  MigrationPresentation,
+  z.infer<typeof MigrationPresentationSchema>
+>;
 
 export const _MIGRATION_PRESENTATION_TYPE_PARITY: {
   forward: _MigrationPresentationForward;

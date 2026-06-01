@@ -35,6 +35,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { RouteScore } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the route-score v1 wire format. */
 export const ROUTE_SCORE_SCHEMA_ID =
@@ -115,8 +116,8 @@ type BrandedToString<T> = {
   [K in keyof T]: T[K] extends string & { readonly __brand: unknown } ? string : T[K];
 };
 
-type _ForwardCheck = BrandedToString<RouteScore> extends InferredRouteScore ? true : never;
-type _ReverseCheck = InferredRouteScore extends BrandedToString<RouteScore> ? true : never;
+type _ForwardCheck = ParityForward<BrandedToString<RouteScore>, InferredRouteScore>;
+type _ReverseCheck = ParityReverse<BrandedToString<RouteScore>, InferredRouteScore>;
 
 export const _ROUTE_SCORE_TYPE_PARITY: {
   forward: _ForwardCheck;

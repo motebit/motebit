@@ -28,6 +28,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { AgentServiceListing } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the agent-service-listing v1 wire format. */
 export const AGENT_SERVICE_LISTING_SCHEMA_ID =
@@ -144,8 +145,8 @@ type BrandedToString<T> = {
   [K in keyof T]: T[K] extends string & { readonly __brand: unknown } ? string : T[K];
 };
 
-type _ForwardCheck = BrandedToString<AgentServiceListing> extends InferredListing ? true : never;
-type _ReverseCheck = InferredListing extends BrandedToString<AgentServiceListing> ? true : never;
+type _ForwardCheck = ParityForward<BrandedToString<AgentServiceListing>, InferredListing>;
+type _ReverseCheck = ParityReverse<BrandedToString<AgentServiceListing>, InferredListing>;
 
 export const _AGENT_SERVICE_LISTING_TYPE_PARITY: {
   forward: _ForwardCheck;

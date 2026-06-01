@@ -44,6 +44,7 @@ import type {
 } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
 // Stable $id URLs
@@ -181,10 +182,8 @@ export const DisputeRequestSchema = z
   })
   .strict();
 
-type _DisputeRequestForward =
-  DisputeRequest extends z.infer<typeof DisputeRequestSchema> ? true : never;
-type _DisputeRequestReverse =
-  z.infer<typeof DisputeRequestSchema> extends DisputeRequest ? true : never;
+type _DisputeRequestForward = ParityForward<DisputeRequest, z.infer<typeof DisputeRequestSchema>>;
+type _DisputeRequestReverse = ParityReverse<DisputeRequest, z.infer<typeof DisputeRequestSchema>>;
 
 export const _DISPUTE_REQUEST_TYPE_PARITY: {
   forward: _DisputeRequestForward;
@@ -245,10 +244,14 @@ export const DisputeEvidenceSchema = z
   })
   .strict();
 
-type _DisputeEvidenceForward =
-  DisputeEvidence extends z.infer<typeof DisputeEvidenceSchema> ? true : never;
-type _DisputeEvidenceReverse =
-  z.infer<typeof DisputeEvidenceSchema> extends DisputeEvidence ? true : never;
+type _DisputeEvidenceForward = ParityForward<
+  DisputeEvidence,
+  z.infer<typeof DisputeEvidenceSchema>
+>;
+type _DisputeEvidenceReverse = ParityReverse<
+  DisputeEvidence,
+  z.infer<typeof DisputeEvidenceSchema>
+>;
 
 export const _DISPUTE_EVIDENCE_TYPE_PARITY: {
   forward: _DisputeEvidenceForward;
@@ -308,10 +311,14 @@ export const AdjudicatorVoteSchema = z
   })
   .strict();
 
-type _AdjudicatorVoteForward =
-  AdjudicatorVote extends z.infer<typeof AdjudicatorVoteSchema> ? true : never;
-type _AdjudicatorVoteReverse =
-  z.infer<typeof AdjudicatorVoteSchema> extends AdjudicatorVote ? true : never;
+type _AdjudicatorVoteForward = ParityForward<
+  AdjudicatorVote,
+  z.infer<typeof AdjudicatorVoteSchema>
+>;
+type _AdjudicatorVoteReverse = ParityReverse<
+  AdjudicatorVote,
+  z.infer<typeof AdjudicatorVoteSchema>
+>;
 
 export const _ADJUDICATOR_VOTE_TYPE_PARITY: {
   forward: _AdjudicatorVoteForward;
@@ -381,8 +388,8 @@ export const VoteRequestSchema = z
   })
   .strict();
 
-type _VoteRequestForward = VoteRequest extends z.infer<typeof VoteRequestSchema> ? true : never;
-type _VoteRequestReverse = z.infer<typeof VoteRequestSchema> extends VoteRequest ? true : never;
+type _VoteRequestForward = ParityForward<VoteRequest, z.infer<typeof VoteRequestSchema>>;
+type _VoteRequestReverse = ParityReverse<VoteRequest, z.infer<typeof VoteRequestSchema>>;
 
 export const _VOTE_REQUEST_TYPE_PARITY: {
   forward: _VoteRequestForward;
@@ -446,10 +453,14 @@ export const DisputeResolutionSchema = z
   })
   .strict();
 
-type _DisputeResolutionForward =
-  DisputeResolution extends z.infer<typeof DisputeResolutionSchema> ? true : never;
-type _DisputeResolutionReverse =
-  z.infer<typeof DisputeResolutionSchema> extends DisputeResolution ? true : never;
+type _DisputeResolutionForward = ParityForward<
+  DisputeResolution,
+  z.infer<typeof DisputeResolutionSchema>
+>;
+type _DisputeResolutionReverse = ParityReverse<
+  DisputeResolution,
+  z.infer<typeof DisputeResolutionSchema>
+>;
 
 export const _DISPUTE_RESOLUTION_TYPE_PARITY: {
   forward: _DisputeResolutionForward;
@@ -505,10 +516,8 @@ export const DisputeAppealSchema = z
   })
   .strict();
 
-type _DisputeAppealForward =
-  DisputeAppeal extends z.infer<typeof DisputeAppealSchema> ? true : never;
-type _DisputeAppealReverse =
-  z.infer<typeof DisputeAppealSchema> extends DisputeAppeal ? true : never;
+type _DisputeAppealForward = ParityForward<DisputeAppeal, z.infer<typeof DisputeAppealSchema>>;
+type _DisputeAppealReverse = ParityReverse<DisputeAppeal, z.infer<typeof DisputeAppealSchema>>;
 
 export const _DISPUTE_APPEAL_TYPE_PARITY: {
   forward: _DisputeAppealForward;

@@ -36,6 +36,7 @@ import type {
 } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 const SCHEMA_BASE = "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas";
 
@@ -183,8 +184,8 @@ export const ComputerActionRequestSchema = z
   .passthrough();
 
 type InferredAction = z.infer<typeof ComputerActionRequestSchema>;
-type _ActionForward = ComputerActionRequest extends InferredAction ? true : never;
-type _ActionReverse = InferredAction extends ComputerActionRequest ? true : never;
+type _ActionForward = ParityForward<ComputerActionRequest, InferredAction>;
+type _ActionReverse = ParityReverse<ComputerActionRequest, InferredAction>;
 export const _COMPUTER_ACTION_REQUEST_TYPE_PARITY: {
   forward: _ActionForward;
   reverse: _ActionReverse;
@@ -269,8 +270,8 @@ export const ComputerObservationResultSchema = z.discriminatedUnion("kind", [
 ]);
 
 type InferredObservation = z.infer<typeof ComputerObservationResultSchema>;
-type _ObservationForward = ComputerObservationResult extends InferredObservation ? true : never;
-type _ObservationReverse = InferredObservation extends ComputerObservationResult ? true : never;
+type _ObservationForward = ParityForward<ComputerObservationResult, InferredObservation>;
+type _ObservationReverse = ParityReverse<ComputerObservationResult, InferredObservation>;
 export const _COMPUTER_OBSERVATION_RESULT_TYPE_PARITY: {
   forward: _ObservationForward;
   reverse: _ObservationReverse;
@@ -313,8 +314,8 @@ export const ComputerSessionOpenedSchema = z
   .passthrough();
 
 type InferredOpened = z.infer<typeof ComputerSessionOpenedSchema>;
-type _OpenedForward = ComputerSessionOpened extends InferredOpened ? true : never;
-type _OpenedReverse = InferredOpened extends ComputerSessionOpened ? true : never;
+type _OpenedForward = ParityForward<ComputerSessionOpened, InferredOpened>;
+type _OpenedReverse = ParityReverse<ComputerSessionOpened, InferredOpened>;
 export const _COMPUTER_SESSION_OPENED_TYPE_PARITY: {
   forward: _OpenedForward;
   reverse: _OpenedReverse;
@@ -355,8 +356,8 @@ export const ComputerSessionClosedSchema = z
   .passthrough();
 
 type InferredClosed = z.infer<typeof ComputerSessionClosedSchema>;
-type _ClosedForward = ComputerSessionClosed extends InferredClosed ? true : never;
-type _ClosedReverse = InferredClosed extends ComputerSessionClosed ? true : never;
+type _ClosedForward = ParityForward<ComputerSessionClosed, InferredClosed>;
+type _ClosedReverse = ParityReverse<ComputerSessionClosed, InferredClosed>;
 export const _COMPUTER_SESSION_CLOSED_TYPE_PARITY: {
   forward: _ClosedForward;
   reverse: _ClosedReverse;

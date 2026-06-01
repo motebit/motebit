@@ -44,6 +44,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { CredentialAnchorBatch, CredentialAnchorProof } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
 // Stable $id URLs
@@ -167,10 +168,14 @@ export const CredentialAnchorBatchSchema = z
   })
   .strict();
 
-type _BatchForward =
-  CredentialAnchorBatch extends z.infer<typeof CredentialAnchorBatchSchema> ? true : never;
-type _BatchReverse =
-  z.infer<typeof CredentialAnchorBatchSchema> extends CredentialAnchorBatch ? true : never;
+type _BatchForward = ParityForward<
+  CredentialAnchorBatch,
+  z.infer<typeof CredentialAnchorBatchSchema>
+>;
+type _BatchReverse = ParityReverse<
+  CredentialAnchorBatch,
+  z.infer<typeof CredentialAnchorBatchSchema>
+>;
 
 export const _CREDENTIAL_ANCHOR_BATCH_TYPE_PARITY: {
   forward: _BatchForward;
@@ -275,10 +280,14 @@ export const CredentialAnchorProofSchema = z
   // and the inner Merkle-path fields stay strict — those are tight.
   .passthrough();
 
-type _ProofForward =
-  CredentialAnchorProof extends z.infer<typeof CredentialAnchorProofSchema> ? true : never;
-type _ProofReverse =
-  z.infer<typeof CredentialAnchorProofSchema> extends CredentialAnchorProof ? true : never;
+type _ProofForward = ParityForward<
+  CredentialAnchorProof,
+  z.infer<typeof CredentialAnchorProofSchema>
+>;
+type _ProofReverse = ParityReverse<
+  CredentialAnchorProof,
+  z.infer<typeof CredentialAnchorProofSchema>
+>;
 
 export const _CREDENTIAL_ANCHOR_PROOF_TYPE_PARITY: {
   forward: _ProofForward;

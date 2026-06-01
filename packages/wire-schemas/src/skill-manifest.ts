@@ -26,6 +26,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { SkillManifest } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the skill-manifest v1 wire format. External tools pin to this. */
 export const SKILL_MANIFEST_SCHEMA_ID =
@@ -152,8 +153,8 @@ export const SkillManifestSchema = z
 
 type InferredSkillManifest = z.infer<typeof SkillManifestSchema>;
 
-type _ForwardCheck = SkillManifest extends InferredSkillManifest ? true : never;
-type _ReverseCheck = InferredSkillManifest extends SkillManifest ? true : never;
+type _ForwardCheck = ParityForward<SkillManifest, InferredSkillManifest>;
+type _ReverseCheck = ParityReverse<SkillManifest, InferredSkillManifest>;
 
 export const _SKILL_MANIFEST_TYPE_PARITY: {
   forward: _ForwardCheck;

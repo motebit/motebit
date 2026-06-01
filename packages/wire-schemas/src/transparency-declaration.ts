@@ -30,6 +30,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { SignedTransparencyDeclaration } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
 // Stable $id URL
@@ -95,14 +96,14 @@ export const SignedTransparencyDeclarationSchema = z
   })
   .strict();
 
-type _Forward =
-  SignedTransparencyDeclaration extends z.infer<typeof SignedTransparencyDeclarationSchema>
-    ? true
-    : never;
-type _Reverse =
-  z.infer<typeof SignedTransparencyDeclarationSchema> extends SignedTransparencyDeclaration
-    ? true
-    : never;
+type _Forward = ParityForward<
+  SignedTransparencyDeclaration,
+  z.infer<typeof SignedTransparencyDeclarationSchema>
+>;
+type _Reverse = ParityReverse<
+  SignedTransparencyDeclaration,
+  z.infer<typeof SignedTransparencyDeclarationSchema>
+>;
 
 export const _SIGNED_TRANSPARENCY_DECLARATION_TYPE_PARITY: {
   forward: _Forward;

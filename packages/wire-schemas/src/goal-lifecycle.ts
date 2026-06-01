@@ -23,6 +23,7 @@ import type {
 } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 const SCHEMA_BASE = "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas";
 
@@ -81,8 +82,8 @@ export const GoalCreatedPayloadSchema = z
   .passthrough();
 
 type InferredGoalCreated = z.infer<typeof GoalCreatedPayloadSchema>;
-type _GoalCreatedForward = GoalCreatedPayload extends InferredGoalCreated ? true : never;
-type _GoalCreatedReverse = InferredGoalCreated extends GoalCreatedPayload ? true : never;
+type _GoalCreatedForward = ParityForward<GoalCreatedPayload, InferredGoalCreated>;
+type _GoalCreatedReverse = ParityReverse<GoalCreatedPayload, InferredGoalCreated>;
 export const _GOAL_CREATED_PAYLOAD_TYPE_PARITY: {
   forward: _GoalCreatedForward;
   reverse: _GoalCreatedReverse;
@@ -138,8 +139,8 @@ export const GoalExecutedPayloadSchema = z
   .passthrough();
 
 type InferredGoalExecuted = z.infer<typeof GoalExecutedPayloadSchema>;
-type _GoalExecutedForward = GoalExecutedPayload extends InferredGoalExecuted ? true : never;
-type _GoalExecutedReverse = InferredGoalExecuted extends GoalExecutedPayload ? true : never;
+type _GoalExecutedForward = ParityForward<GoalExecutedPayload, InferredGoalExecuted>;
+type _GoalExecutedReverse = ParityReverse<GoalExecutedPayload, InferredGoalExecuted>;
 export const _GOAL_EXECUTED_PAYLOAD_TYPE_PARITY: {
   forward: _GoalExecutedForward;
   reverse: _GoalExecutedReverse;
@@ -178,8 +179,8 @@ export const GoalProgressPayloadSchema = z
   .passthrough();
 
 type InferredGoalProgress = z.infer<typeof GoalProgressPayloadSchema>;
-type _GoalProgressForward = GoalProgressPayload extends InferredGoalProgress ? true : never;
-type _GoalProgressReverse = InferredGoalProgress extends GoalProgressPayload ? true : never;
+type _GoalProgressForward = ParityForward<GoalProgressPayload, InferredGoalProgress>;
+type _GoalProgressReverse = ParityReverse<GoalProgressPayload, InferredGoalProgress>;
 export const _GOAL_PROGRESS_PAYLOAD_TYPE_PARITY: {
   forward: _GoalProgressForward;
   reverse: _GoalProgressReverse;
@@ -217,8 +218,8 @@ export const GoalCompletedPayloadSchema = z
   .passthrough();
 
 type InferredGoalCompleted = z.infer<typeof GoalCompletedPayloadSchema>;
-type _GoalCompletedForward = GoalCompletedPayload extends InferredGoalCompleted ? true : never;
-type _GoalCompletedReverse = InferredGoalCompleted extends GoalCompletedPayload ? true : never;
+type _GoalCompletedForward = ParityForward<GoalCompletedPayload, InferredGoalCompleted>;
+type _GoalCompletedReverse = ParityReverse<GoalCompletedPayload, InferredGoalCompleted>;
 export const _GOAL_COMPLETED_PAYLOAD_TYPE_PARITY: {
   forward: _GoalCompletedForward;
   reverse: _GoalCompletedReverse;
@@ -260,8 +261,8 @@ export const GoalRemovedPayloadSchema = z
   .passthrough();
 
 type InferredGoalRemoved = z.infer<typeof GoalRemovedPayloadSchema>;
-type _GoalRemovedForward = GoalRemovedPayload extends InferredGoalRemoved ? true : never;
-type _GoalRemovedReverse = InferredGoalRemoved extends GoalRemovedPayload ? true : never;
+type _GoalRemovedForward = ParityForward<GoalRemovedPayload, InferredGoalRemoved>;
+type _GoalRemovedReverse = ParityReverse<GoalRemovedPayload, InferredGoalRemoved>;
 export const _GOAL_REMOVED_PAYLOAD_TYPE_PARITY: {
   forward: _GoalRemovedForward;
   reverse: _GoalRemovedReverse;

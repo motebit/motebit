@@ -23,6 +23,7 @@ import type {
 } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 const SCHEMA_BASE = "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas";
 
@@ -47,8 +48,8 @@ export const PlanCreatedPayloadSchema = z
   .passthrough();
 
 type InferredPlanCreated = z.infer<typeof PlanCreatedPayloadSchema>;
-type _PlanCreatedForward = PlanCreatedPayload extends InferredPlanCreated ? true : never;
-type _PlanCreatedReverse = InferredPlanCreated extends PlanCreatedPayload ? true : never;
+type _PlanCreatedForward = ParityForward<PlanCreatedPayload, InferredPlanCreated>;
+type _PlanCreatedReverse = ParityReverse<PlanCreatedPayload, InferredPlanCreated>;
 export const _PLAN_CREATED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanCreatedForward;
   reverse: _PlanCreatedReverse;
@@ -93,12 +94,8 @@ export const PlanStepStartedPayloadSchema = z
   .passthrough();
 
 type InferredPlanStepStarted = z.infer<typeof PlanStepStartedPayloadSchema>;
-type _PlanStepStartedForward = PlanStepStartedPayload extends InferredPlanStepStarted
-  ? true
-  : never;
-type _PlanStepStartedReverse = InferredPlanStepStarted extends PlanStepStartedPayload
-  ? true
-  : never;
+type _PlanStepStartedForward = ParityForward<PlanStepStartedPayload, InferredPlanStepStarted>;
+type _PlanStepStartedReverse = ParityReverse<PlanStepStartedPayload, InferredPlanStepStarted>;
 export const _PLAN_STEP_STARTED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanStepStartedForward;
   reverse: _PlanStepStartedReverse;
@@ -148,12 +145,8 @@ export const PlanStepCompletedPayloadSchema = z
   .passthrough();
 
 type InferredPlanStepCompleted = z.infer<typeof PlanStepCompletedPayloadSchema>;
-type _PlanStepCompletedForward = PlanStepCompletedPayload extends InferredPlanStepCompleted
-  ? true
-  : never;
-type _PlanStepCompletedReverse = InferredPlanStepCompleted extends PlanStepCompletedPayload
-  ? true
-  : never;
+type _PlanStepCompletedForward = ParityForward<PlanStepCompletedPayload, InferredPlanStepCompleted>;
+type _PlanStepCompletedReverse = ParityReverse<PlanStepCompletedPayload, InferredPlanStepCompleted>;
 export const _PLAN_STEP_COMPLETED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanStepCompletedForward;
   reverse: _PlanStepCompletedReverse;
@@ -201,8 +194,8 @@ export const PlanStepFailedPayloadSchema = z
   .passthrough();
 
 type InferredPlanStepFailed = z.infer<typeof PlanStepFailedPayloadSchema>;
-type _PlanStepFailedForward = PlanStepFailedPayload extends InferredPlanStepFailed ? true : never;
-type _PlanStepFailedReverse = InferredPlanStepFailed extends PlanStepFailedPayload ? true : never;
+type _PlanStepFailedForward = ParityForward<PlanStepFailedPayload, InferredPlanStepFailed>;
+type _PlanStepFailedReverse = ParityReverse<PlanStepFailedPayload, InferredPlanStepFailed>;
 export const _PLAN_STEP_FAILED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanStepFailedForward;
   reverse: _PlanStepFailedReverse;
@@ -253,12 +246,8 @@ export const PlanStepDelegatedPayloadSchema = z
   .passthrough();
 
 type InferredPlanStepDelegated = z.infer<typeof PlanStepDelegatedPayloadSchema>;
-type _PlanStepDelegatedForward = PlanStepDelegatedPayload extends InferredPlanStepDelegated
-  ? true
-  : never;
-type _PlanStepDelegatedReverse = InferredPlanStepDelegated extends PlanStepDelegatedPayload
-  ? true
-  : never;
+type _PlanStepDelegatedForward = ParityForward<PlanStepDelegatedPayload, InferredPlanStepDelegated>;
+type _PlanStepDelegatedReverse = ParityReverse<PlanStepDelegatedPayload, InferredPlanStepDelegated>;
 export const _PLAN_STEP_DELEGATED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanStepDelegatedForward;
   reverse: _PlanStepDelegatedReverse;
@@ -293,8 +282,8 @@ export const PlanCompletedPayloadSchema = z
   .passthrough();
 
 type InferredPlanCompleted = z.infer<typeof PlanCompletedPayloadSchema>;
-type _PlanCompletedForward = PlanCompletedPayload extends InferredPlanCompleted ? true : never;
-type _PlanCompletedReverse = InferredPlanCompleted extends PlanCompletedPayload ? true : never;
+type _PlanCompletedForward = ParityForward<PlanCompletedPayload, InferredPlanCompleted>;
+type _PlanCompletedReverse = ParityReverse<PlanCompletedPayload, InferredPlanCompleted>;
 export const _PLAN_COMPLETED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanCompletedForward;
   reverse: _PlanCompletedReverse;
@@ -332,8 +321,8 @@ export const PlanFailedPayloadSchema = z
   .passthrough();
 
 type InferredPlanFailed = z.infer<typeof PlanFailedPayloadSchema>;
-type _PlanFailedForward = PlanFailedPayload extends InferredPlanFailed ? true : never;
-type _PlanFailedReverse = InferredPlanFailed extends PlanFailedPayload ? true : never;
+type _PlanFailedForward = ParityForward<PlanFailedPayload, InferredPlanFailed>;
+type _PlanFailedReverse = ParityReverse<PlanFailedPayload, InferredPlanFailed>;
 export const _PLAN_FAILED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanFailedForward;
   reverse: _PlanFailedReverse;

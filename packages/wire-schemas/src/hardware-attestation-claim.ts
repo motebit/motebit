@@ -38,6 +38,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { HardwareAttestationClaim } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
 // Stable $id URL — external tools pin to this for schema fetching.
@@ -85,10 +86,14 @@ export const HardwareAttestationClaimSchema = z
 // @motebit/protocol type. If either drifts, `tsc` fails here.
 // ---------------------------------------------------------------------------
 
-type _HardwareAttestationClaimForward =
-  HardwareAttestationClaim extends z.infer<typeof HardwareAttestationClaimSchema> ? true : never;
-type _HardwareAttestationClaimReverse =
-  z.infer<typeof HardwareAttestationClaimSchema> extends HardwareAttestationClaim ? true : never;
+type _HardwareAttestationClaimForward = ParityForward<
+  HardwareAttestationClaim,
+  z.infer<typeof HardwareAttestationClaimSchema>
+>;
+type _HardwareAttestationClaimReverse = ParityReverse<
+  HardwareAttestationClaim,
+  z.infer<typeof HardwareAttestationClaimSchema>
+>;
 
 export const _HARDWARE_ATTESTATION_CLAIM_TYPE_PARITY: {
   forward: _HardwareAttestationClaimForward;

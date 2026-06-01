@@ -27,6 +27,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { AgentResolutionResult } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the agent-resolution-result v1 wire format. */
 export const AGENT_RESOLUTION_RESULT_SCHEMA_ID =
@@ -111,8 +112,8 @@ export const AgentResolutionResultSchema = z
 
 type InferredResult = z.infer<typeof AgentResolutionResultSchema>;
 
-type _ForwardCheck = AgentResolutionResult extends InferredResult ? true : never;
-type _ReverseCheck = InferredResult extends AgentResolutionResult ? true : never;
+type _ForwardCheck = ParityForward<AgentResolutionResult, InferredResult>;
+type _ReverseCheck = ParityReverse<AgentResolutionResult, InferredResult>;
 
 export const _AGENT_RESOLUTION_RESULT_TYPE_PARITY: {
   forward: _ForwardCheck;

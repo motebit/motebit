@@ -29,6 +29,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { DelegationToken } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the delegation-token v1 wire format. External tools pin to this. */
 export const DELEGATION_TOKEN_SCHEMA_ID =
@@ -94,8 +95,8 @@ export const DelegationTokenSchema = z
 
 type InferredToken = z.infer<typeof DelegationTokenSchema>;
 
-type _ForwardCheck = DelegationToken extends InferredToken ? true : never;
-type _ReverseCheck = InferredToken extends DelegationToken ? true : never;
+type _ForwardCheck = ParityForward<DelegationToken, InferredToken>;
+type _ReverseCheck = ParityReverse<DelegationToken, InferredToken>;
 
 export const _DELEGATION_TOKEN_TYPE_PARITY: {
   forward: _ForwardCheck;

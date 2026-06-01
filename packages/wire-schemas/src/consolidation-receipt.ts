@@ -36,6 +36,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { ConsolidationAnchor, ConsolidationReceipt } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
 // Stable $id URLs
@@ -186,10 +187,14 @@ export const ConsolidationReceiptSchema = z
   // memory-events and agent-settlement-anchor.
   .passthrough();
 
-type _ReceiptForward =
-  ConsolidationReceipt extends z.infer<typeof ConsolidationReceiptSchema> ? true : never;
-type _ReceiptReverse =
-  z.infer<typeof ConsolidationReceiptSchema> extends ConsolidationReceipt ? true : never;
+type _ReceiptForward = ParityForward<
+  ConsolidationReceipt,
+  z.infer<typeof ConsolidationReceiptSchema>
+>;
+type _ReceiptReverse = ParityReverse<
+  ConsolidationReceipt,
+  z.infer<typeof ConsolidationReceiptSchema>
+>;
 
 export const _CONSOLIDATION_RECEIPT_TYPE_PARITY: {
   forward: _ReceiptForward;
@@ -277,10 +282,8 @@ export const ConsolidationAnchorSchema = z
   // nested object if we grow beyond Solana memos).
   .passthrough();
 
-type _AnchorForward =
-  ConsolidationAnchor extends z.infer<typeof ConsolidationAnchorSchema> ? true : never;
-type _AnchorReverse =
-  z.infer<typeof ConsolidationAnchorSchema> extends ConsolidationAnchor ? true : never;
+type _AnchorForward = ParityForward<ConsolidationAnchor, z.infer<typeof ConsolidationAnchorSchema>>;
+type _AnchorReverse = ParityReverse<ConsolidationAnchor, z.infer<typeof ConsolidationAnchorSchema>>;
 
 export const _CONSOLIDATION_ANCHOR_TYPE_PARITY: {
   forward: _AnchorForward;

@@ -21,6 +21,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { RetentionManifest } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
 // Stable $id URL
@@ -145,10 +146,8 @@ export const RetentionManifestSchema = z
     "Operator-published retention manifest. Signed; browser-side re-verifiable through the same primitive pattern as verifySkillBundle (commit 87e2f174).",
   );
 
-type _ManifestForward =
-  RetentionManifest extends z.infer<typeof RetentionManifestSchema> ? true : never;
-type _ManifestReverse =
-  z.infer<typeof RetentionManifestSchema> extends RetentionManifest ? true : never;
+type _ManifestForward = ParityForward<RetentionManifest, z.infer<typeof RetentionManifestSchema>>;
+type _ManifestReverse = ParityReverse<RetentionManifest, z.infer<typeof RetentionManifestSchema>>;
 export const _RETENTION_MANIFEST_TYPE_PARITY: {
   forward: _ManifestForward;
   reverse: _ManifestReverse;

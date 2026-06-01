@@ -26,6 +26,7 @@ import type {
 } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 import { SkillEnvelopeSchema } from "./skill-envelope.js";
 
 // ---------------------------------------------------------------------------
@@ -203,34 +204,34 @@ export const SkillRegistryBundleSchema = z
 // Type parity — drift defense
 // ---------------------------------------------------------------------------
 
-type _EntryForward =
-  SkillRegistryEntry extends z.infer<typeof SkillRegistryEntrySchema> ? true : never;
-type _EntryReverse =
-  z.infer<typeof SkillRegistryEntrySchema> extends SkillRegistryEntry ? true : never;
-type _SubmitReqForward =
-  SkillRegistrySubmitRequest extends z.infer<typeof SkillRegistrySubmitRequestSchema>
-    ? true
-    : never;
-type _SubmitReqReverse =
-  z.infer<typeof SkillRegistrySubmitRequestSchema> extends SkillRegistrySubmitRequest
-    ? true
-    : never;
-type _SubmitRespForward =
-  SkillRegistrySubmitResponse extends z.infer<typeof SkillRegistrySubmitResponseSchema>
-    ? true
-    : never;
-type _SubmitRespReverse =
-  z.infer<typeof SkillRegistrySubmitResponseSchema> extends SkillRegistrySubmitResponse
-    ? true
-    : never;
-type _ListingForward =
-  SkillRegistryListing extends z.infer<typeof SkillRegistryListingSchema> ? true : never;
-type _ListingReverse =
-  z.infer<typeof SkillRegistryListingSchema> extends SkillRegistryListing ? true : never;
-type _BundleForward =
-  SkillRegistryBundle extends z.infer<typeof SkillRegistryBundleSchema> ? true : never;
-type _BundleReverse =
-  z.infer<typeof SkillRegistryBundleSchema> extends SkillRegistryBundle ? true : never;
+type _EntryForward = ParityForward<SkillRegistryEntry, z.infer<typeof SkillRegistryEntrySchema>>;
+type _EntryReverse = ParityReverse<SkillRegistryEntry, z.infer<typeof SkillRegistryEntrySchema>>;
+type _SubmitReqForward = ParityForward<
+  SkillRegistrySubmitRequest,
+  z.infer<typeof SkillRegistrySubmitRequestSchema>
+>;
+type _SubmitReqReverse = ParityReverse<
+  SkillRegistrySubmitRequest,
+  z.infer<typeof SkillRegistrySubmitRequestSchema>
+>;
+type _SubmitRespForward = ParityForward<
+  SkillRegistrySubmitResponse,
+  z.infer<typeof SkillRegistrySubmitResponseSchema>
+>;
+type _SubmitRespReverse = ParityReverse<
+  SkillRegistrySubmitResponse,
+  z.infer<typeof SkillRegistrySubmitResponseSchema>
+>;
+type _ListingForward = ParityForward<
+  SkillRegistryListing,
+  z.infer<typeof SkillRegistryListingSchema>
+>;
+type _ListingReverse = ParityReverse<
+  SkillRegistryListing,
+  z.infer<typeof SkillRegistryListingSchema>
+>;
+type _BundleForward = ParityForward<SkillRegistryBundle, z.infer<typeof SkillRegistryBundleSchema>>;
+type _BundleReverse = ParityReverse<SkillRegistryBundle, z.infer<typeof SkillRegistryBundleSchema>>;
 
 export const _SKILL_REGISTRY_TYPE_PARITY: {
   entry: { forward: _EntryForward; reverse: _EntryReverse };
