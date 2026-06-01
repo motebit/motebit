@@ -116,8 +116,11 @@ export interface MemoryConsolidatedPayload {
  *  phantom/conflict/near-death categorization — that is a compute,
  *  not an event. */
 export interface MemoryAuditPayload {
-  /** Sensitivity tags the ai-core heuristic believes are missing
-   *  from the memory that would be formed for this turn. */
+  /** Memory-worthy pattern labels the ai-core heuristic detected in the
+   *  turn but the model didn't tag — each is a `<label>: "<excerpt>"`
+   *  string (label ∈ preference / personal_fact / goal / correction),
+   *  produced by `detectUntaggedMemoryPatterns`. Free-form strings, NOT
+   *  sensitivity levels — the type is `string`, not `SensitivityLevel`. */
   readonly missed_patterns: ReadonlyArray<string>;
   /** Up to 200 characters of the triggering user message. The cap
    *  keeps this event within sync-safe bounds even when the turn

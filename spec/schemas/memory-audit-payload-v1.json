@@ -9,11 +9,9 @@
     "missed_patterns": {
       "type": "array",
       "items": {
-        "type": "string",
-        "enum": ["none", "personal", "medical", "financial", "secret"],
-        "description": "Sensitivity classification used by sync forwarders to decide whether to redact memory content before crossing a device boundary. Emitter-authored; not forwarder-mutable."
+        "type": "string"
       },
-      "description": "Sensitivity classifications the ai-core heuristic believes apply to the current turn but weren't tagged on the resulting memory."
+      "description": "Memory-worthy pattern labels the ai-core heuristic detected in the turn but the model didn't tag — each entry is a `<label>: \"<excerpt>\"` string (label ∈ preference / personal_fact / goal / correction), produced by `detectUntaggedMemoryPatterns` in @motebit/ai-core. Free-form strings, NOT sensitivity levels (the field name is patterns, not classifications)."
     },
     "turn_message": {
       "type": "string",
@@ -30,11 +28,9 @@
         "missed_patterns": {
           "type": "array",
           "items": {
-            "type": "string",
-            "enum": ["none", "personal", "medical", "financial", "secret"],
-            "description": "Sensitivity classification used by sync forwarders to decide whether to redact memory content before crossing a device boundary. Emitter-authored; not forwarder-mutable."
+            "type": "string"
           },
-          "description": "Sensitivity classifications the ai-core heuristic believes apply to the current turn but weren't tagged on the resulting memory."
+          "description": "Memory-worthy pattern labels the ai-core heuristic detected in the turn but the model didn't tag — each entry is a `<label>: \"<excerpt>\"` string (label ∈ preference / personal_fact / goal / correction), produced by `detectUntaggedMemoryPatterns` in @motebit/ai-core. Free-form strings, NOT sensitivity levels (the field name is patterns, not classifications)."
         },
         "turn_message": {
           "type": "string",

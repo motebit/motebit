@@ -303,9 +303,9 @@ export const MEMORY_AUDIT_PAYLOAD_SCHEMA_ID = `${SCHEMA_BASE}/memory-audit-paylo
 export const MemoryAuditPayloadSchema = z
   .object({
     missed_patterns: z
-      .array(SensitivityLevelSchema)
+      .array(z.string())
       .describe(
-        "Sensitivity classifications the ai-core heuristic believes apply to the current turn but weren't tagged on the resulting memory.",
+        'Memory-worthy pattern labels the ai-core heuristic detected in the turn but the model didn\'t tag — each entry is a `<label>: "<excerpt>"` string (label ∈ preference / personal_fact / goal / correction), produced by `detectUntaggedMemoryPatterns` in @motebit/ai-core. Free-form strings, NOT sensitivity levels (the field name is patterns, not classifications).',
       ),
     turn_message: z
       .string()
