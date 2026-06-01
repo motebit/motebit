@@ -1259,10 +1259,21 @@ export async function handleReceiptIngestion(
         .prepare("SELECT endpoint_url, public_key FROM relay_peers WHERE peer_relay_id = ?")
         .get(entry.origin_relay) as { endpoint_url: string } | undefined;
       if (originPeer) {
+        // Propagate the executing worker's public key to the origin relay. The
+        // worker is registered HERE (the executor relay), not on the origin, so
+        // without this the origin can't verify the worker's inner receipt
+        // signature and falls back to trusting only our peer-envelope sig
+        // (federation.receipt_key_missing). Carrying the key lets the origin
+        // verify the receipt — and, for sovereign motebit_ids, verify the
+        // key→motebit_id binding offline (no trust in us required).
+        const workerReg = moteDb.db
+          .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+          .get(receipt.motebit_id) as { public_key: string | null } | undefined;
         const resultBody = {
           task_id: taskId,
           origin_relay: relayIdentity.relayMotebitId,
           receipt,
+          ...(workerReg?.public_key ? { agent_public_key: workerReg.public_key } : {}),
           timestamp: Date.now(),
         };
         const resultBytes = new TextEncoder().encode(canonicalJson(resultBody));

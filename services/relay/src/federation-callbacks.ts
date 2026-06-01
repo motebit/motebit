@@ -31,6 +31,7 @@ import {
   hexToBytes,
 } from "@motebit/encryption";
 /* eslint-enable no-restricted-imports */
+import { verifySovereignBinding } from "@motebit/crypto";
 import { getRelayKeypair } from "./credentials.js";
 import { creditAccount } from "./accounts.js";
 import type { RelayIdentity, VerifiedSettlement } from "./federation.js";
@@ -151,6 +152,8 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       taskId: string;
       originRelay: string;
       receipt: import("@motebit/sdk").ExecutionReceipt;
+      /** Executor relay's copy of the worker's public key (hex). See VerifiedTaskResult. */
+      agentPublicKey?: string;
     }) {
       const entry = taskQueue.get(verified.taskId);
       if (!entry) throw new HTTPException(404, { message: "Task not found or expired" });
@@ -159,17 +162,30 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       // Without this, a malicious peer relay could forge or tamper with receipts.
       if (verified.receipt.signature) {
         let pubKeyHex: string | undefined;
+        let keySource: "local_registry" | "local_device" | "peer_forwarded" | undefined;
         const regRow = moteDb.db
           .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
           .get(verified.receipt.motebit_id) as { public_key: string } | undefined;
         if (regRow?.public_key) {
           pubKeyHex = regRow.public_key;
+          keySource = "local_registry";
         } else {
           const devices = await identityManager.listDevices(
             asMotebitId(verified.receipt.motebit_id),
           );
           const device = devices.find((d) => d.public_key);
-          if (device?.public_key) pubKeyHex = device.public_key;
+          if (device?.public_key) {
+            pubKeyHex = device.public_key;
+            keySource = "local_device";
+          }
+        }
+        // Fallback: the executor relay forwards the worker's key (the worker is
+        // registered THERE, not here). This closes federation.receipt_key_missing
+        // for cross-relay results — the origin can now verify the worker's inner
+        // receipt instead of trusting only the peer-envelope signature.
+        if (!pubKeyHex && verified.agentPublicKey) {
+          pubKeyHex = verified.agentPublicKey;
+          keySource = "peer_forwarded";
         }
         if (pubKeyHex) {
           const sigValid = await verifyExecutionReceipt(verified.receipt, hexToBytes(pubKeyHex));
@@ -178,11 +194,27 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               correlationId: verified.taskId,
               executingAgent: verified.receipt.motebit_id,
               originRelay: verified.originRelay,
+              keySource,
             });
             throw new HTTPException(403, {
               message: "Federated receipt signature verification failed",
             });
           }
+          // Binding strength (identity-binding-verification.md ladder): for a
+          // sovereign motebit_id the presented key MUST derive the id — proven
+          // offline, no trust in the peer. Legacy/random ids can't be checked
+          // this way; the signature is verified and we trust the peer envelope
+          // for the key. Recorded for observability, never a gate (additive).
+          const sovereignlyBound = await verifySovereignBinding(
+            verified.receipt.motebit_id,
+            pubKeyHex,
+          );
+          logger.info("federation.receipt_verified", {
+            correlationId: verified.taskId,
+            executingAgent: verified.receipt.motebit_id,
+            keySource,
+            bindingStrength: sovereignlyBound ? "sovereign" : "peer_attested",
+          });
         } else {
           logger.warn("federation.receipt_key_missing", {
             correlationId: verified.taskId,

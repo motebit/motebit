@@ -15,7 +15,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair, signExecutionReceipt, bytesToHex } from "@motebit/encryption";
+import {
+  generateKeypair,
+  signExecutionReceipt,
+  bytesToHex,
+  hexToBytes,
+  sign,
+  canonicalJson,
+} from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import { AUTH_HEADER, jsonAuthWithIdempotency, createTestRelay } from "./test-helpers.js";
 import { reconcileTreasury } from "@motebit/treasury-reconciliation";
@@ -1254,6 +1261,103 @@ describe("Federation E2E", () => {
       const aLeak = await reconcileOperator(aFee, aFee - 1n);
       expect(aLeak.consistent).toBe(false);
       expect(aLeak.driftMicro).toBe(-1n);
+    });
+
+    it("PHASE 2: origin relay rejects a forwarded result whose worker receipt signature is invalid", async () => {
+      // The receipt-verification gap is closed: the origin relay now resolves the
+      // worker's key from the executor relay's forwarded `agent_public_key` and
+      // VERIFIES the worker's inner receipt — it no longer settles on the strength
+      // of the peer envelope alone (federation.receipt_key_missing). A tampered
+      // receipt must be rejected before any settlement fires. The happy-path
+      // counterpart (valid forwarded receipt → receipt_verified → settles) is the
+      // PHASE 2 settlement test directly above.
+      const bob = await registerAgent(
+        relayB,
+        "bob-tamper",
+        ["tamper-cap"],
+        [{ capability: "tamper-cap", unit_cost: 1.0, currency: "USD", per: "task" }],
+      );
+      const bobWs = { send: vi.fn(), close: vi.fn() };
+      relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
+
+      await establishPeering(relayA, relayB);
+      const alice = await registerAgent(relayA, "alice-tamper", ["web-search"]);
+
+      // Paid task on A → forwarded to B. This gives A a queue entry for the task
+      // id (onTaskResultReceived 404s without one) and mirrors origin→executor.
+      const taskRes = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify({ prompt: "tamper probe", required_capabilities: ["tamper-cap"] }),
+      });
+      expect(taskRes.status).toBe(201);
+
+      const fwdTaskId = bobWs.send.mock.calls
+        .map(
+          (c: unknown[]) =>
+            JSON.parse(c[0] as string) as { type: string; task?: { task_id: string } },
+        )
+        .find((m) => m.type === "task_request")!.task!.task_id;
+
+      // Bob signs a valid receipt; it is then TAMPERED in transit (result mutated
+      // after signing → the worker signature no longer matches the body).
+      const validReceipt = await signExecutionReceipt(
+        {
+          task_id: fwdTaskId,
+          relay_task_id: fwdTaskId,
+          motebit_id: bob.motebitId as unknown as MotebitId,
+          device_id: "bob-device" as unknown as DeviceId,
+          submitted_at: Date.now(),
+          completed_at: Date.now(),
+          status: "completed" as const,
+          result: "honest result",
+          tools_used: [],
+          memories_formed: 0,
+          prompt_hash: "ph",
+          result_hash: "rh",
+        },
+        bob.privateKey,
+      );
+      const tamperedReceipt = { ...validReceipt, result: "FORGED — not what bob signed" };
+
+      // Forward to A's federation result endpoint with a VALID peer envelope
+      // (signed by B's relay key) carrying bob's real public key. Peer-auth +
+      // schema pass; only the inner worker signature is bad.
+      const resultBody = {
+        task_id: fwdTaskId,
+        origin_relay: relayB.relayIdentity.relayMotebitId,
+        receipt: tamperedReceipt,
+        agent_public_key: bob.publicKeyHex,
+        timestamp: Date.now(),
+      };
+      // B's relay private key (plaintext at rest in tests — no passphrase) signs
+      // the peer envelope, exactly as the real result-forward path does.
+      const bRelayKey = relayB.moteDb.db
+        .prepare("SELECT private_key_hex FROM relay_identity LIMIT 1")
+        .get() as { private_key_hex: string };
+      const envelopeSig = await sign(
+        new TextEncoder().encode(canonicalJson(resultBody)),
+        hexToBytes(bRelayKey.private_key_hex),
+      );
+      const res = await relayA.app.request("/federation/v1/task/result", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...resultBody, signature: bytesToHex(envelopeSig) }),
+      });
+
+      // Rejected at inner-receipt verification — the forwarded key let A check the
+      // worker's signature, and it failed (pre-fix this returned 200 with a warn).
+      expect(res.status, await res.clone().text()).toBe(403);
+
+      // And the chain never fired: no federation settlement booked on either relay.
+      const aRow = relayA.moteDb.db
+        .prepare("SELECT 1 FROM relay_federation_settlements WHERE task_id = ?")
+        .get(fwdTaskId);
+      const bRow = relayB.moteDb.db
+        .prepare("SELECT 1 FROM relay_federation_settlements WHERE task_id = ?")
+        .get(fwdTaskId);
+      expect(aRow).toBeUndefined();
+      expect(bRow).toBeUndefined();
     });
 
     it("federation forward timeout does not fall through to local broadcast", async () => {

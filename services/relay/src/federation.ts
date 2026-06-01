@@ -140,6 +140,14 @@ export interface VerifiedTaskResult {
   taskId: string;
   originRelay: string;
   receipt: ExecutionReceipt;
+  /**
+   * The executing worker's public key (hex), as held by the executor relay's
+   * agent_registry. The worker is registered on the executor relay, not the
+   * origin — so the origin needs this to verify the worker's inner receipt
+   * signature (and, for sovereign ids, the key→motebit_id binding). Absent when
+   * the executor relay had no key on file.
+   */
+  agentPublicKey?: string;
 }
 
 /** Revocation event propagated via federation heartbeat. */
@@ -2054,6 +2062,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       task_id: string;
       origin_relay: string;
       receipt: ExecutionReceipt;
+      agent_public_key?: string;
       timestamp?: number;
       signature: string;
     }>();
@@ -2087,6 +2096,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       taskId: body.task_id,
       originRelay: body.origin_relay,
       receipt: body.receipt,
+      agentPublicKey: body.agent_public_key,
     });
 
     return c.json({ status: "accepted" });
