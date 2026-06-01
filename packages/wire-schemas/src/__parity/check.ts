@@ -20,11 +20,11 @@
  * amount per capability (the proof the relaxation is sound and not a
  * blanket mute):
  *
- *   - milestone 1 (here): identity — behaviour-preserving extraction.
- *   - 3a: brand relaxation keyed on MUTUAL assignability with a branded
- *         ID (so `MotebitId`/string-wide collapse to string, but narrow
- *         literals like `"completed"` do not — fixes the optional-brand
- *         over-match, inventory § C3).
+ *   - milestone 1: identity — behaviour-preserving extraction.
+ *   - 3a (current): string-wide collapse keyed on MUTUAL assignability with
+ *         `string` (so every `Brand<string, _>` id collapses to string, but
+ *         narrow literals like `"completed"` do not — fixes the
+ *         optional-brand over-match, inventory § C3) + structural recursion.
  *   - 3b: nominal-enum → value-literal-union equivalence (inventory § C1).
  *   - 3c: `readonly` array/property relaxation (inventory § C2).
  *   - 3d: per-arm discriminated-union handling (inventory § C4).
@@ -33,8 +33,53 @@
  * `files` allowlist). Pure compile-time types; zero runtime surface.
  */
 
-// milestone 1: identity. Grown in 3a–3d.
-export type Relax<T> = T;
+/**
+ * A field is "string-wide" when it is mutually assignable with `string`:
+ * true for plain `string` and for every `Brand<string, _>` id (the brand
+ * property is optional, so a branded id and `string` are mutually
+ * assignable — see `docs/parity-inventory.md` § C3 / § D), false for narrow
+ * string-literal unions (`"completed"`, `SuiteId`, `"relay" | "p2p"`).
+ *
+ * This is the generalization of brand relaxation: it collapses ALL branded
+ * ids (`MotebitId`, `DeviceId`, `NodeId`, `GoalId`, `SettlementId`, … — 11
+ * today, and any future `Brand<string, _>`) to `string` WITHOUT enumerating
+ * them, while preserving the literal unions a schema legitimately pins. The
+ * mutual check is what excludes narrow literals: `[string] extends
+ * ["completed"]` is false, so `"completed"` is kept.
+ */
+type IsStringWide<X> = [X] extends [string] ? ([string] extends [X] ? true : false) : false;
+
+/**
+ * Structural relaxation, applied after the string-wide collapse. Arrays
+ * recurse element-wise and PRESERVE their read/write variance (3c flips the
+ * readonly arm to mutable — a one-line change); objects recurse
+ * homomorphically, preserving optional/readonly modifiers (3c adds
+ * `-readonly`). Discriminated unions fall out of `Relax`'s distribution
+ * (3d). Nominal TS enums are left intact here — they are 3b's job, and
+ * their continued failure after 3a is the metric that 3a did not over-reach.
+ */
+type RelaxStructural<T> = T extends (infer U)[]
+  ? Relax<U>[]
+  : T extends readonly (infer U)[]
+    ? readonly Relax<U>[]
+    : T extends object
+      ? { [K in keyof T]: Relax<T[K]> }
+      : T;
+
+type RelaxOne<T> = IsStringWide<T> extends true ? string : RelaxStructural<T>;
+
+/**
+ * Normalize a protocol type to its on-the-wire-equivalent shape before
+ * comparison. Distributive over unions, so `Relax<MotebitId | undefined>`
+ * is `string | undefined` (the brand collapses, `undefined` is preserved).
+ *
+ * Capability ladder (one commit each; see module header):
+ *   3a (here): string-wide collapse + structural recursion.
+ *   3b: nominal-enum → value-literal equivalence.
+ *   3c: readonly-array/property → mutable.
+ *   3d: explicit per-arm discriminated-union handling (today via distribution).
+ */
+export type Relax<T> = T extends unknown ? RelaxOne<T> : never;
 
 /** Forward: every protocol value is a valid schema value. */
 export type ParityForward<Protocol, Schema> = Relax<Protocol> extends Schema ? true : never;

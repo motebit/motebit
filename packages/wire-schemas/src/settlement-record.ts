@@ -31,6 +31,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { ALL_SETTLEMENT_MODES, type SettlementRecord } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the settlement-record v1 wire format. */
 export const SETTLEMENT_RECORD_SCHEMA_ID =
@@ -142,15 +143,11 @@ export const SettlementRecordSchema = z
 
 type InferredSettlement = z.infer<typeof SettlementRecordSchema>;
 
-// SettlementRecord uses branded SettlementId + AllocationId; relax to
-// strings for structural parity (the wire is just a string, brands are
-// TS-only guards).
-type BrandedToString<T> = {
-  [K in keyof T]: T[K] extends string & { readonly __brand: unknown } ? string : T[K];
-};
-
-type _ForwardCheck = BrandedToString<SettlementRecord> extends InferredSettlement ? true : never;
-type _ReverseCheck = InferredSettlement extends BrandedToString<SettlementRecord> ? true : never;
+// SettlementRecord's branded ids (SettlementId, AllocationId, …) are
+// normalized by the shared `Relax` (see ./__parity/check.ts) — the wire is
+// just a string, brands are TS-only guards.
+type _ForwardCheck = ParityForward<SettlementRecord, InferredSettlement>;
+type _ReverseCheck = ParityReverse<SettlementRecord, InferredSettlement>;
 
 export const _SETTLEMENT_RECORD_TYPE_PARITY: {
   forward: _ForwardCheck;

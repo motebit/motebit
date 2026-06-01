@@ -22,9 +22,10 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
-import type { DeviceId, ExecutionReceipt, IntentOrigin, MotebitId } from "@motebit/protocol";
+import type { ExecutionReceipt } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the execution-receipt v1 wire format. External tools pin to this. */
 export const EXECUTION_RECEIPT_SCHEMA_ID =
@@ -203,23 +204,11 @@ export const ExecutionReceiptSchema: z.ZodType<ExecutionReceiptShape> = z.lazy((
 
 type InferredReceipt = z.infer<typeof ExecutionReceiptSchema>;
 
-// Forward check: every field of ExecutionReceipt (with branded IDs
-// relaxed to strings for structural comparison) exists in the inferred
-// type with a compatible value type.
-type BrandedToString<T> = {
-  [K in keyof T]: T[K] extends MotebitId
-    ? string
-    : T[K] extends DeviceId
-      ? string
-      : T[K] extends IntentOrigin | undefined
-        ? "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent" | undefined
-        : T[K] extends ExecutionReceipt[] | undefined
-          ? InferredReceipt[] | undefined
-          : T[K];
-};
-
-type _ForwardCheck = BrandedToString<ExecutionReceipt> extends InferredReceipt ? true : never;
-type _ReverseCheck = InferredReceipt extends BrandedToString<ExecutionReceipt> ? true : never;
+// Branded ids, the nested recursive `delegation_receipts`, and the
+// `intent_origin` literal union are all normalized by the shared `Relax`
+// (see ./__parity/check.ts) — no bespoke per-file relaxation needed.
+type _ForwardCheck = ParityForward<ExecutionReceipt, InferredReceipt>;
+type _ReverseCheck = ParityReverse<ExecutionReceipt, InferredReceipt>;
 
 // Used to surface the type-assertion result: if the zod schema diverges
 // from the TypeScript declaration, these aliases resolve to `never` and

@@ -33,6 +33,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { AgentTask } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
+import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the agent-task v1 wire format. */
 export const AGENT_TASK_SCHEMA_ID =
@@ -135,15 +136,11 @@ export const AgentTaskSchema = z
 
 type InferredTask = z.infer<typeof AgentTaskSchema>;
 
-// AgentTask in @motebit/protocol uses branded MotebitId; relax for
-// structural parity (the wire is just a string, the brand is a TS-only
-// guard).
-type BrandedToString<T> = {
-  [K in keyof T]: T[K] extends string & { readonly __brand: unknown } ? string : T[K];
-};
-
-type _ForwardCheck = BrandedToString<AgentTask> extends InferredTask ? true : never;
-type _ReverseCheck = InferredTask extends BrandedToString<AgentTask> ? true : never;
+// Branded ids on AgentTask are normalized by the shared `Relax`
+// (see ./__parity/check.ts) — the wire is just a string, the brand a
+// TS-only guard.
+type _ForwardCheck = ParityForward<AgentTask, InferredTask>;
+type _ReverseCheck = ParityReverse<AgentTask, InferredTask>;
 
 export const _AGENT_TASK_TYPE_PARITY: { forward: _ForwardCheck; reverse: _ReverseCheck } = {
   forward: true as _ForwardCheck,
