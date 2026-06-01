@@ -577,6 +577,31 @@ describe("Federation E2E", () => {
       expect(found!.hop_distance).toBe(1);
     });
 
+    it("PHASE 3 P-A: federated discovery exposes the remote worker's settlement_address", async () => {
+      // The delegator's client must learn a cross-relay worker's onchain
+      // settlement address to build the direct-P2P payment leg (cross-operator
+      // P2P funding — the relay never transmits). It flows the same way pricing
+      // does: queryLocalAgents → /federation/v1/discover (spreads ...a) → merge.
+      const workerAddress = "So11111111111111111111111111111111111111112";
+      const agent = await registerAgent(relayB, "bob-addr", ["addr-cap"]);
+      relayB.moteDb.db
+        .prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?")
+        .run(workerAddress, agent.motebitId);
+
+      await establishPeering(relayA, relayB);
+
+      const discoverRes = await relayA.app.request("/api/v1/agents/discover?capability=addr-cap", {
+        headers: AUTH_HEADER,
+      });
+      expect(discoverRes.status).toBe(200);
+      const body = (await discoverRes.json()) as {
+        agents: Array<{ motebit_id: string; settlement_address?: string | null }>;
+      };
+      const found = body.agents.find((a) => a.motebit_id === agent.motebitId);
+      expect(found, "remote worker must be discoverable from A").toBeDefined();
+      expect(found!.settlement_address).toBe(workerAddress);
+    });
+
     it("returns local agents with hop_distance 0", async () => {
       const agent = await registerAgent(relayA, "alice", ["web-search"]);
 

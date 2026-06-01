@@ -74,7 +74,17 @@ export interface TaskRouter {
     requiredCaps: string[],
     callerMotebitId?: string,
   ): Promise<{
-    candidates: { profile: CandidateProfile; _source_relay_endpoint: string }[];
+    candidates: {
+      profile: CandidateProfile;
+      _source_relay_endpoint: string;
+      /**
+       * Remote worker's onchain settlement address (Solana base58), null if
+       * undeclared. Carried from federated discovery so the origin relay can
+       * validate the delegator's direct-P2P payment leg to a cross-relay worker
+       * (cross-operator P2P funding — the relay never transmits).
+       */
+      _settlement_address: string | null;
+    }[];
     federationEdges: Array<{
       from: string;
       to: string;
@@ -413,7 +423,17 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     requiredCaps: string[],
     _callerMotebitId?: string,
   ): Promise<{
-    candidates: { profile: CandidateProfile; _source_relay_endpoint: string }[];
+    candidates: {
+      profile: CandidateProfile;
+      _source_relay_endpoint: string;
+      /**
+       * Remote worker's onchain settlement address (Solana base58), null if
+       * undeclared. Carried from federated discovery so the origin relay can
+       * validate the delegator's direct-P2P payment leg to a cross-relay worker
+       * (cross-operator P2P funding — the relay never transmits).
+       */
+      _settlement_address: string | null;
+    }[];
     federationEdges: Array<{
       from: string;
       to: string;
@@ -505,6 +525,11 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
               currency: string;
               per: "task" | "tool_call" | "token";
             }> | null;
+            // Worker's onchain settlement address (the peer's discover handler
+            // spreads it from queryLocalAgents). Carried here so the origin relay
+            // can validate the delegator's direct-P2P payment leg to this remote
+            // worker — the cross-operator P2P funding model (relay never transmits).
+            settlement_address?: string | null;
           }>;
         };
         if (data.agents == null || data.agents.length === 0) return [];
@@ -522,7 +547,11 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           reliability: 0.99,
         });
 
-        const results: { profile: CandidateProfile; _source_relay_endpoint: string }[] = [];
+        const results: {
+          profile: CandidateProfile;
+          _source_relay_endpoint: string;
+          _settlement_address: string | null;
+        }[] = [];
 
         for (const agent of agents) {
           // Filter to agents matching ALL required capabilities
@@ -569,6 +598,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
               chain_trust: undefined, // Let the semiring graph compose trust along paths
             },
             _source_relay_endpoint: peer.endpoint_url,
+            _settlement_address: agent.settlement_address ?? null,
           });
         }
         return results;
@@ -586,7 +616,11 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         (
           r,
         ): r is PromiseFulfilledResult<
-          { profile: CandidateProfile; _source_relay_endpoint: string }[]
+          {
+            profile: CandidateProfile;
+            _source_relay_endpoint: string;
+            _settlement_address: string | null;
+          }[]
         > => r.status === "fulfilled",
       )
       .flatMap((r) => r.value)
@@ -616,6 +650,13 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     metadata: Record<string, unknown> | null;
     /** Per-capability pricing (from relay_service_listings), null if no listing exists. */
     pricing: Array<{ capability: string; unit_cost: number; currency: string; per: string }> | null;
+    /**
+     * Worker's onchain settlement address (Solana base58), null if undeclared.
+     * Exposed so a delegator's client can build the direct P2P payment leg to a
+     * worker discovered cross-relay (the cross-operator P2P funding model — the
+     * relay never transmits; the delegator pays the worker directly).
+     */
+    settlement_address: string | null;
     /** Last heartbeat timestamp from agent_registry. */
     last_seen_at: number;
     /**
@@ -726,6 +767,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- DB row field is untyped
         metadata: r.metadata ? (JSON.parse(r.metadata as string) as Record<string, unknown>) : null,
         pricing: listingByAgent.get(id) ?? null,
+        settlement_address: (r.settlement_address as string | null) ?? null,
         last_seen_at: lastSeen,
         freshness: computeFreshness(lastSeen, now),
       };
