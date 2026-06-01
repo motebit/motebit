@@ -1811,6 +1811,28 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         throw new TaskError("TASK_INVALID_INPUT", "Invalid transaction signature format", 400);
       }
 
+      // Proof-replay guard: one onchain payment funds exactly one task. Reject a
+      // tx_hash that has ALREADY settled a task on this relay — otherwise a
+      // delegator could reuse one payment across many tasks (each a fresh
+      // task_id, which the (task_id, *) unique indexes don't catch), getting N
+      // workers to execute for ONE payment. Rejecting at SUBMISSION means the
+      // worker never does replayed work; the partial UNIQUE index on
+      // relay_settlements(p2p_tx_hash) (migration v30) is the structural
+      // backstop that also closes the concurrent-submission race. A paid task
+      // that was NOT settled (e.g. a federated forward that failed) has no
+      // settlement row, so resubmitting the same proof to retry is still
+      // allowed — only a SETTLED proof counts as replay.
+      const alreadySettled = moteDb.db
+        .prepare("SELECT 1 FROM relay_settlements WHERE p2p_tx_hash = ? LIMIT 1")
+        .get(proof.tx_hash);
+      if (alreadySettled) {
+        throw new TaskError(
+          "TASK_P2P_PROOF_REPLAYED",
+          "This payment proof (tx_hash) has already settled a task — each onchain payment funds exactly one task",
+          409,
+        );
+      }
+
       // Is the target worker LOCAL to this relay? A local worker has a
       // settlement_address in our agent_registry. A REMOTE worker (hosted
       // on a peer operator, discovered via federation) does not — that is
@@ -2349,8 +2371,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               });
             } else {
               taskRouter.recordPeerForwardResult(peerEndpoint, false);
+              // The task did not settle (no result came back), so no settlement
+              // row exists for this proof — the delegator may resubmit the SAME
+              // payment_proof to retry without re-paying (the replay guard keys
+              // on settled proofs, not attempted ones).
               throw new HTTPException(502, {
-                message: `Executor relay rejected the forwarded task (HTTP ${resp.status})`,
+                message: `Executor relay rejected the forwarded task (HTTP ${resp.status}) — retryable: resubmit the same payment_proof`,
               });
             }
           } catch (fwdErr) {
@@ -2363,7 +2389,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
             });
             throw new HTTPException(502, {
-              message: "Failed to forward federated P2P task to the executor relay",
+              message:
+                "Failed to forward federated P2P task to the executor relay — retryable: resubmit the same payment_proof",
             });
           }
         } else if (allProfiles.length > 0) {

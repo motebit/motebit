@@ -1341,6 +1341,122 @@ describe("Federation E2E", () => {
       expect(bRecon.consistent).toBe(true);
     });
 
+    it("PHASE 3 P2P: proof replay is rejected after settle, but resubmittable before settle (retry-safe)", async () => {
+      // One onchain payment funds EXACTLY ONE task. A delegator must not be able
+      // to reuse one tx_hash across many tasks (getting N workers to execute for
+      // one payment). But a paid task that did NOT settle — e.g. a federated
+      // forward that failed — must remain resubmittable with the same proof, or
+      // the delegator's only recovery would be to pay again. The guard keys on
+      // SETTLED proofs: unsettled tx → allowed; settled tx → 409.
+      const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
+      const FAKE_TX_HASH =
+        "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk";
+
+      const bob = await registerAgent(
+        relayB,
+        "bob-replay",
+        ["replay-cap"],
+        [{ capability: "replay-cap", unit_cost: 1.0, currency: "USD", per: "task" }],
+      );
+      relayB.moteDb.db
+        .prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?")
+        .run(WORKER_ADDR, bob.motebitId);
+      const bobWs = { send: vi.fn(), close: vi.fn() };
+      relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
+      await establishPeering(relayA, relayB);
+
+      const idA = (await (await relayA.app.request("/federation/v1/identity")).json()) as {
+        public_key: string;
+      };
+      const idB = (await (await relayB.app.request("/federation/v1/identity")).json()) as {
+        public_key: string;
+      };
+      const alice = await registerAgent(relayA, "alice-replay", ["web-search"]);
+
+      const proofBody = () => ({
+        prompt: "replay probe",
+        required_capabilities: ["replay-cap"],
+        submitted_by: alice.motebitId,
+        target_agent: bob.motebitId,
+        payment_proof: {
+          tx_hash: FAKE_TX_HASH,
+          chain: "solana",
+          network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+          to_address: WORKER_ADDR,
+          amount_micro: 902_500,
+          fee_to_address: deriveSolanaAddress(hexToBytes(idA.public_key)),
+          fee_amount_micro: 50_000,
+          b_fee_to_address: deriveSolanaAddress(hexToBytes(idB.public_key)),
+          b_fee_amount_micro: 47_500,
+        },
+      });
+
+      // (1) First submission forwards to B (not yet settled).
+      const res1 = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify(proofBody()),
+      });
+      expect(res1.status, await res1.clone().text()).toBe(201);
+      const fwdTaskId = bobWs.send.mock.calls
+        .map(
+          (c: unknown[]) =>
+            JSON.parse(c[0] as string) as { type: string; task?: { task_id: string } },
+        )
+        .find((m) => m.type === "task_request")!.task!.task_id;
+
+      // (2) RESUBMIT the same proof BEFORE settlement → allowed (retry-safe).
+      const res2 = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify(proofBody()),
+      });
+      expect(res2.status, await res2.clone().text()).toBe(201);
+
+      // (3) Settle task1: Bob posts his result to B → A + B record p2p audit rows.
+      const signedReceipt = await signExecutionReceipt(
+        {
+          task_id: fwdTaskId,
+          relay_task_id: fwdTaskId,
+          motebit_id: bob.motebitId as unknown as MotebitId,
+          device_id: "bob-device" as unknown as DeviceId,
+          submitted_at: Date.now(),
+          completed_at: Date.now(),
+          status: "completed" as const,
+          result: "replay result",
+          tools_used: [],
+          memories_formed: 0,
+          prompt_hash: "ph",
+          result_hash: "rh",
+        },
+        bob.privateKey,
+      );
+      const settleRes = await relayB.app.request(
+        `/agent/${bob.motebitId}/task/${fwdTaskId}/result`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+          body: JSON.stringify(signedReceipt),
+        },
+      );
+      expect(settleRes.status, await settleRes.clone().text()).toBeLessThan(300);
+      // A recorded a settlement for this tx_hash.
+      const aSettled = relayA.moteDb.db
+        .prepare("SELECT 1 FROM relay_settlements WHERE p2p_tx_hash = ? LIMIT 1")
+        .get(FAKE_TX_HASH);
+      expect(aSettled, "A must have a settlement for the tx after settle").toBeDefined();
+
+      // (4) RESUBMIT the same proof AFTER settlement → 409 replay.
+      const res3 = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify(proofBody()),
+      });
+      expect(res3.status, await res3.clone().text()).toBe(409);
+      const err = (await res3.json()) as { error?: string; code?: string };
+      expect(JSON.stringify(err)).toMatch(/already settled|REPLAYED/i);
+    });
+
     it("PHASE 2: origin relay rejects a forwarded result whose worker receipt signature is invalid", async () => {
       // The receipt-verification gap is closed: the origin relay now resolves the
       // worker's key from the executor relay's forwarded `agent_public_key` and

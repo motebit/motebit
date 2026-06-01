@@ -1338,4 +1338,39 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 30,
+    name: "p2p_tx_hash_replay_guard",
+    up: (db) => {
+      // Proof-replay guard: each onchain P2P payment funds EXACTLY ONE
+      // settlement on this relay. Without it a delegator could reuse one
+      // `p2p_tx_hash` across many tasks (new task_id each time → the existing
+      // (task_id, *) unique indexes don't catch it), getting N workers to
+      // execute for ONE payment and inflating the recorded fee sum vs. the
+      // single onchain leg. The submission-time pre-check (tasks.ts) rejects
+      // reuse of an already-settled proof; this partial UNIQUE index is the
+      // structural backstop that also closes the concurrent-submission race.
+      //
+      // The federated case records ONE row per relay (origin: the origin-fee
+      // leg; executor: the worker + executor-fee leg) — A and B are separate
+      // databases, so "one row per tx per relay" holds on each side.
+      //
+      // Dedup first (keep the earliest row per tx_hash). This is a no-op on
+      // clean data; on any historical double-count it corrects invalid rows
+      // BEFORE the unique index is built, so the migration can never throw on
+      // existing data and abort boot.
+      db.exec(
+        `DELETE FROM relay_settlements
+         WHERE p2p_tx_hash IS NOT NULL
+           AND rowid NOT IN (
+             SELECT MIN(rowid) FROM relay_settlements
+             WHERE p2p_tx_hash IS NOT NULL
+             GROUP BY p2p_tx_hash
+           )`,
+      );
+      db.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_settlements_p2p_tx ON relay_settlements(p2p_tx_hash) WHERE p2p_tx_hash IS NOT NULL",
+      );
+    },
+  },
 ];
