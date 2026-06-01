@@ -27,8 +27,12 @@
  *         over-match, inventory § C3) + structural recursion.
  *   - 3b: nominal-enum → value-literal-union equivalence via `` `${T}` ``
  *         (inventory § C1).
- *   - 3c (current): `readonly` array/property relaxation (inventory § C2).
- *   - 3d: per-arm discriminated-union handling (inventory § C4).
+ *   - 3c: `readonly` array/property relaxation (inventory § C2).
+ *   - 3d: per-arm discriminated-union handling (inventory § C4) — already
+ *         provided by 3a's distributive wrapper (the `keyof`-on-union
+ *         collapse was a probe artifact, never present in this
+ *         `extends`-based check); no functional change, count unchanged.
+ *         Locked by the `_DiscUnionPerArm` assertion in check.test-types.ts.
  *
  * NOT shipped to consumers — excluded from the npm tarball (the package
  * `files` allowlist). Pure compile-time types; zero runtime surface.
@@ -89,8 +93,9 @@ type RelaxOne<T> =
  * Capability ladder (one commit each; see module header):
  *   3a: string-wide collapse + structural recursion.
  *   3b: nominal-enum → value-literal equivalence.
- *   3c (here): readonly-array/property → mutable.
- *   3d: explicit per-arm discriminated-union handling (today via distribution).
+ *   3c: readonly-array/property → mutable.
+ *   3d: per-arm discriminated-union handling — already provided here by the
+ *       distributive `T extends unknown ? … : never` wrapper.
  */
 export type Relax<T> = T extends unknown ? RelaxOne<T> : never;
 

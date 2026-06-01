@@ -54,6 +54,19 @@ export type _NestedObject = Assert<
 >;
 export type _ArrayElements = Assert<Eq<Relax<MotebitId[]>, string[]>>;
 
+// ── 3d: discriminated unions relax PER ARM (Relax distributes via its
+//        `T extends unknown ? … : never` wrapper), so each arm's branded
+//        fields collapse independently and a per-arm divergence is still
+//        caught — never masked by a union-level `keyof` (the keyof collapse
+//        was a probe artifact, never present in this `extends`-based check).
+//        Bites if the distributive wrapper is removed.
+export type _DiscUnionPerArm = Assert<
+  Eq<
+    Relax<{ kind: "a"; id: MotebitId } | { kind: "b"; ref: SettlementId }>,
+    { kind: "a"; id: string } | { kind: "b"; ref: string }
+  >
+>;
+
 // ── 3c: readonly arrays and readonly properties relax to mutable (wire-
 //        equivalent; `readonly T[]` is not assignable to the mutable `T[]`
 //        zod infers). Bites if the readonly normalization regresses.
