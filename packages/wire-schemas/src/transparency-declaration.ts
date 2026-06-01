@@ -96,14 +96,21 @@ export const SignedTransparencyDeclarationSchema = z
   })
   .strict();
 
-type _Forward = ParityForward<
-  SignedTransparencyDeclaration,
-  z.infer<typeof SignedTransparencyDeclarationSchema>
->;
-type _Reverse = ParityReverse<
-  SignedTransparencyDeclaration,
-  z.infer<typeof SignedTransparencyDeclarationSchema>
->;
+type _InferredDecl = z.infer<typeof SignedTransparencyDeclarationSchema>;
+
+// parity-divergence: zod infers `content?: unknown` because `z.unknown()`
+// keys are always optional in inference, but the protocol requires `content`
+// — it is part of the signed hash payload `{spec, declared_at, relay_id,
+// relay_public_key, content}` and the relay always emits it
+// (services/relay/src/transparency.ts:121,341). Re-require the key for the
+// parity comparison only; runtime validation is unchanged (a content-less
+// declaration would fail signature verification regardless). This corrects a
+// zod representational limit on `unknown` keys — not wire drift, not a
+// blanket `as` cast.
+type _InferredDeclWireExact = Omit<_InferredDecl, "content"> & { content: unknown };
+
+type _Forward = ParityForward<SignedTransparencyDeclaration, _InferredDeclWireExact>;
+type _Reverse = ParityReverse<SignedTransparencyDeclaration, _InferredDeclWireExact>;
 
 export const _SIGNED_TRANSPARENCY_DECLARATION_TYPE_PARITY: {
   forward: _Forward;
