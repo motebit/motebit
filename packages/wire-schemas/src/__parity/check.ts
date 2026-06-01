@@ -21,11 +21,12 @@
  * blanket mute):
  *
  *   - milestone 1: identity — behaviour-preserving extraction.
- *   - 3a (current): string-wide collapse keyed on MUTUAL assignability with
- *         `string` (so every `Brand<string, _>` id collapses to string, but
- *         narrow literals like `"completed"` do not — fixes the
- *         optional-brand over-match, inventory § C3) + structural recursion.
- *   - 3b: nominal-enum → value-literal-union equivalence (inventory § C1).
+ *   - 3a: string-wide collapse keyed on MUTUAL assignability with `string`
+ *         (so every `Brand<string, _>` id collapses to string, but narrow
+ *         literals like `"completed"` do not — fixes the optional-brand
+ *         over-match, inventory § C3) + structural recursion.
+ *   - 3b (current): nominal-enum → value-literal-union equivalence via
+ *         `` `${T}` `` (inventory § C1).
  *   - 3c: `readonly` array/property relaxation (inventory § C2).
  *   - 3d: per-arm discriminated-union handling (inventory § C4).
  *
@@ -66,7 +67,18 @@ type RelaxStructural<T> = T extends (infer U)[]
       ? { [K in keyof T]: Relax<T[K]> }
       : T;
 
-type RelaxOne<T> = IsStringWide<T> extends true ? string : RelaxStructural<T>;
+/**
+ * A nominal TS `enum` type is a union of its members, each nominally
+ * distinct from the bare string-literal a `z.enum([...])` infers — so
+ * `DeviceCapability` reads as drift against `"stdio_mcp" | ...` even though
+ * the serialized values are identical (inventory § C1). `` `${T}` ``
+ * re-projects each member to its string value, erasing the nominal tag. It
+ * is a no-op for plain literal unions (`` `${"a" | "b"}` `` is `"a" | "b"`),
+ * so `SuiteId` / `"relay" | "p2p"` and other schema-pinned unions are
+ * untouched — the real divergences they carry stay visible.
+ */
+type RelaxOne<T> =
+  IsStringWide<T> extends true ? string : [T] extends [string] ? `${T}` : RelaxStructural<T>;
 
 /**
  * Normalize a protocol type to its on-the-wire-equivalent shape before
@@ -74,8 +86,8 @@ type RelaxOne<T> = IsStringWide<T> extends true ? string : RelaxStructural<T>;
  * is `string | undefined` (the brand collapses, `undefined` is preserved).
  *
  * Capability ladder (one commit each; see module header):
- *   3a (here): string-wide collapse + structural recursion.
- *   3b: nominal-enum → value-literal equivalence.
+ *   3a: string-wide collapse + structural recursion.
+ *   3b (here): nominal-enum → value-literal equivalence.
  *   3c: readonly-array/property → mutable.
  *   3d: explicit per-arm discriminated-union handling (today via distribution).
  */

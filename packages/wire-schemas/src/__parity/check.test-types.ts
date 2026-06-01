@@ -11,7 +11,7 @@
  * Excluded from the npm tarball (the package `files` allowlist ships only
  * `dist/`; this dev-only file is dropped — see step 5 / `pnpm pack --dry-run`).
  */
-import type { MotebitId, GoalId, SettlementId, SuiteId } from "@motebit/protocol";
+import type { MotebitId, GoalId, SettlementId, SuiteId, AgentTaskStatus } from "@motebit/protocol";
 
 import type { Relax } from "./check.js";
 
@@ -36,6 +36,16 @@ export type _LiteralKept = Assert<
   Eq<Relax<"completed" | "failed" | "denied">, "completed" | "failed" | "denied">
 >;
 export type _SuiteIdKept = Assert<Eq<Relax<SuiteId>, SuiteId>>;
+
+// ── 3b: a nominal TS enum relaxes to its string-value union, so it matches
+//        the `z.enum([...])` a schema infers. Bites if `${T}` projection is
+//        removed.
+export type _EnumToLiterals = Assert<
+  Eq<
+    Relax<AgentTaskStatus>,
+    "pending" | "claimed" | "running" | "completed" | "failed" | "denied" | "expired"
+  >
+>;
 
 // ── 3a: structural recursion — branded ids collapse at depth, in arrays and
 //        nested objects.
