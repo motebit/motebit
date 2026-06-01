@@ -116,8 +116,8 @@ export const _SIGNED_TRANSPARENCY_DECLARATION_TYPE_PARITY: {
   forward: _Forward;
   reverse: _Reverse;
 } = {
-  forward: true as _Forward,
-  reverse: true as _Reverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildSignedTransparencyDeclarationJsonSchema(): Record<string, unknown> {

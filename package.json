@@ -43,6 +43,7 @@
     "check-spec-routes": "npx tsx scripts/check-spec-routes.ts",
     "check-spec-wire-schemas": "npx tsx scripts/check-spec-wire-schemas.ts",
     "check-wire-schema-usage": "npx tsx scripts/check-wire-schema-usage.ts",
+    "check-wire-schema-parity-bites": "npx tsx scripts/check-wire-schema-parity-bites.ts",
     "check-suite-declared": "npx tsx scripts/check-suite-declared.ts",
     "check-suite-dispatch": "npx tsx scripts/check-suite-dispatch.ts",
     "check-dist-smoke": "npx tsx scripts/check-dist-smoke.ts",

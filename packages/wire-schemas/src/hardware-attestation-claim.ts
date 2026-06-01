@@ -99,8 +99,8 @@ export const _HARDWARE_ATTESTATION_CLAIM_TYPE_PARITY: {
   forward: _HardwareAttestationClaimForward;
   reverse: _HardwareAttestationClaimReverse;
 } = {
-  forward: true as _HardwareAttestationClaimForward,
-  reverse: true as _HardwareAttestationClaimReverse,
+  forward: true,
+  reverse: true,
 };
 
 // ---------------------------------------------------------------------------

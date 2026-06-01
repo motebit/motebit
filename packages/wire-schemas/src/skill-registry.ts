@@ -240,17 +240,17 @@ export const _SKILL_REGISTRY_TYPE_PARITY: {
   listing: { forward: _ListingForward; reverse: _ListingReverse };
   bundle: { forward: _BundleForward; reverse: _BundleReverse };
 } = {
-  entry: { forward: true as _EntryForward, reverse: true as _EntryReverse },
+  entry: { forward: true, reverse: true },
   submitRequest: {
-    forward: true as _SubmitReqForward,
-    reverse: true as _SubmitReqReverse,
+    forward: true,
+    reverse: true,
   },
   submitResponse: {
-    forward: true as _SubmitRespForward,
-    reverse: true as _SubmitRespReverse,
+    forward: true,
+    reverse: true,
   },
-  listing: { forward: true as _ListingForward, reverse: true as _ListingReverse },
-  bundle: { forward: true as _BundleForward, reverse: true as _BundleReverse },
+  listing: { forward: true, reverse: true },
+  bundle: { forward: true, reverse: true },
 };
 
 // ---------------------------------------------------------------------------

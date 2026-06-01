@@ -123,8 +123,8 @@ export const _SKILL_ENVELOPE_TYPE_PARITY: {
   forward: _ForwardCheck;
   reverse: _ReverseCheck;
 } = {
-  forward: true as _ForwardCheck,
-  reverse: true as _ReverseCheck,
+  forward: true,
+  reverse: true,
 };
 
 // ---------------------------------------------------------------------------

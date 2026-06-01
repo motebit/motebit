@@ -142,8 +142,8 @@ export const _REPUTATION_CREDENTIAL_SUBJECT_TYPE_PARITY: {
   forward: _ReputationForward;
   reverse: _ReputationReverse;
 } = {
-  forward: true as _ReputationForward,
-  reverse: true as _ReputationReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildReputationCredentialSubjectJsonSchema(): Record<string, unknown> {
@@ -221,8 +221,8 @@ export const _TRUST_CREDENTIAL_SUBJECT_TYPE_PARITY: {
   forward: _TrustForward;
   reverse: _TrustReverse;
 } = {
-  forward: true as _TrustForward,
-  reverse: true as _TrustReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildTrustCredentialSubjectJsonSchema(): Record<string, unknown> {
@@ -312,8 +312,8 @@ export const _GRADIENT_CREDENTIAL_SUBJECT_TYPE_PARITY: {
   forward: _GradientForward;
   reverse: _GradientReverse;
 } = {
-  forward: true as _GradientForward,
-  reverse: true as _GradientReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildGradientCredentialSubjectJsonSchema(): Record<string, unknown> {

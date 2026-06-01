@@ -132,8 +132,8 @@ export const _MIGRATION_REQUEST_TYPE_PARITY: {
   forward: _MigrationRequestForward;
   reverse: _MigrationRequestReverse;
 } = {
-  forward: true as _MigrationRequestForward,
-  reverse: true as _MigrationRequestReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildMigrationRequestJsonSchema(): Record<string, unknown> {
@@ -191,8 +191,8 @@ export const _MIGRATION_TOKEN_TYPE_PARITY: {
   forward: _MigrationTokenForward;
   reverse: _MigrationTokenReverse;
 } = {
-  forward: true as _MigrationTokenForward,
-  reverse: true as _MigrationTokenReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildMigrationTokenJsonSchema(): Record<string, unknown> {
@@ -274,8 +274,8 @@ export const _DEPARTURE_ATTESTATION_TYPE_PARITY: {
   forward: _DepartureAttestationForward;
   reverse: _DepartureAttestationReverse;
 } = {
-  forward: true as _DepartureAttestationForward,
-  reverse: true as _DepartureAttestationReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildDepartureAttestationJsonSchema(): Record<string, unknown> {
@@ -327,8 +327,8 @@ export const _BALANCE_WAIVER_TYPE_PARITY: {
   forward: _BalanceWaiverForward;
   reverse: _BalanceWaiverReverse;
 } = {
-  forward: true as _BalanceWaiverForward,
-  reverse: true as _BalanceWaiverReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildBalanceWaiverJsonSchema(): Record<string, unknown> {
@@ -390,8 +390,8 @@ export const _MIGRATION_PRESENTATION_TYPE_PARITY: {
   forward: _MigrationPresentationForward;
   reverse: _MigrationPresentationReverse;
 } = {
-  forward: true as _MigrationPresentationForward,
-  reverse: true as _MigrationPresentationReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildMigrationPresentationJsonSchema(): Record<string, unknown> {

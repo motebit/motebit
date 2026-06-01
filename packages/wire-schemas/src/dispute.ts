@@ -189,8 +189,8 @@ export const _DISPUTE_REQUEST_TYPE_PARITY: {
   forward: _DisputeRequestForward;
   reverse: _DisputeRequestReverse;
 } = {
-  forward: true as _DisputeRequestForward,
-  reverse: true as _DisputeRequestReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildDisputeRequestJsonSchema(): Record<string, unknown> {
@@ -257,8 +257,8 @@ export const _DISPUTE_EVIDENCE_TYPE_PARITY: {
   forward: _DisputeEvidenceForward;
   reverse: _DisputeEvidenceReverse;
 } = {
-  forward: true as _DisputeEvidenceForward,
-  reverse: true as _DisputeEvidenceReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildDisputeEvidenceJsonSchema(): Record<string, unknown> {
@@ -324,8 +324,8 @@ export const _ADJUDICATOR_VOTE_TYPE_PARITY: {
   forward: _AdjudicatorVoteForward;
   reverse: _AdjudicatorVoteReverse;
 } = {
-  forward: true as _AdjudicatorVoteForward,
-  reverse: true as _AdjudicatorVoteReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildAdjudicatorVoteJsonSchema(): Record<string, unknown> {
@@ -395,8 +395,8 @@ export const _VOTE_REQUEST_TYPE_PARITY: {
   forward: _VoteRequestForward;
   reverse: _VoteRequestReverse;
 } = {
-  forward: true as _VoteRequestForward,
-  reverse: true as _VoteRequestReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildVoteRequestJsonSchema(): Record<string, unknown> {
@@ -466,8 +466,8 @@ export const _DISPUTE_RESOLUTION_TYPE_PARITY: {
   forward: _DisputeResolutionForward;
   reverse: _DisputeResolutionReverse;
 } = {
-  forward: true as _DisputeResolutionForward,
-  reverse: true as _DisputeResolutionReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildDisputeResolutionJsonSchema(): Record<string, unknown> {
@@ -523,8 +523,8 @@ export const _DISPUTE_APPEAL_TYPE_PARITY: {
   forward: _DisputeAppealForward;
   reverse: _DisputeAppealReverse;
 } = {
-  forward: true as _DisputeAppealForward,
-  reverse: true as _DisputeAppealReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildDisputeAppealJsonSchema(): Record<string, unknown> {

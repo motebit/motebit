@@ -97,8 +97,8 @@ export const _MEMORY_FORMED_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryFormedForward;
   reverse: _MemoryFormedReverse;
 } = {
-  forward: true as _MemoryFormedForward,
-  reverse: true as _MemoryFormedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildMemoryFormedPayloadJsonSchema(): Record<string, unknown> {
@@ -132,8 +132,8 @@ export const _MEMORY_ACCESSED_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryAccessedForward;
   reverse: _MemoryAccessedReverse;
 } = {
-  forward: true as _MemoryAccessedForward,
-  reverse: true as _MemoryAccessedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildMemoryAccessedPayloadJsonSchema(): Record<string, unknown> {
@@ -170,8 +170,8 @@ export const _MEMORY_PINNED_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryPinnedForward;
   reverse: _MemoryPinnedReverse;
 } = {
-  forward: true as _MemoryPinnedForward,
-  reverse: true as _MemoryPinnedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildMemoryPinnedPayloadJsonSchema(): Record<string, unknown> {
@@ -205,8 +205,8 @@ export const _MEMORY_DELETED_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryDeletedForward;
   reverse: _MemoryDeletedReverse;
 } = {
-  forward: true as _MemoryDeletedForward,
-  reverse: true as _MemoryDeletedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildMemoryDeletedPayloadJsonSchema(): Record<string, unknown> {
@@ -278,8 +278,8 @@ export const _MEMORY_CONSOLIDATED_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryConsolidatedForward;
   reverse: _MemoryConsolidatedReverse;
 } = {
-  forward: true as _MemoryConsolidatedForward,
-  reverse: true as _MemoryConsolidatedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildMemoryConsolidatedPayloadJsonSchema(): Record<string, unknown> {
@@ -323,8 +323,8 @@ export const _MEMORY_AUDIT_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryAuditForward;
   reverse: _MemoryAuditReverse;
 } = {
-  forward: true as _MemoryAuditForward,
-  reverse: true as _MemoryAuditReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildMemoryAuditPayloadJsonSchema(): Record<string, unknown> {
@@ -355,7 +355,7 @@ type _MemoryDecayedForward = ParityForward<MemoryDecayedPayload, InferredMemoryD
 export const _MEMORY_DECAYED_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryDecayedForward;
 } = {
-  forward: true as _MemoryDecayedForward,
+  forward: true,
 };
 
 export function buildMemoryDecayedPayloadJsonSchema(): Record<string, unknown> {
@@ -405,8 +405,8 @@ export const _MEMORY_PROMOTED_PAYLOAD_TYPE_PARITY: {
   forward: _MemoryPromotedForward;
   reverse: _MemoryPromotedReverse;
 } = {
-  forward: true as _MemoryPromotedForward,
-  reverse: true as _MemoryPromotedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildMemoryPromotedPayloadJsonSchema(): Record<string, unknown> {

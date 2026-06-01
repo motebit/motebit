@@ -157,6 +157,18 @@ const PROBES: ReadonlyArray<Probe> = [
       }),
   },
   {
+    script: "check-wire-schema-parity-bites",
+    proves:
+      "flags a re-introduced `true as _Alias` cast in a wire-schema parity block — the idiom that swallows the `never` a drifted parity check resolves to, re-inerting drift invariant #22",
+    perturb: () =>
+      // Re-add the forbidden cast to a parity value line. The gate scans
+      // textually for `true as _\\w+`, so no typecheck is needed; cleanup
+      // restores the original verbatim.
+      mutateFile("packages/wire-schemas/src/route-score.ts", (src) =>
+        src.replace("forward: true,", "forward: true as _ForwardCheck,"),
+      ),
+  },
+  {
     script: "check-service-primitives",
     proves: "flags a forbidden @motebit/encryption import inside a service",
     perturb: () =>

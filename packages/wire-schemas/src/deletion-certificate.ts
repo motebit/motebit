@@ -346,8 +346,8 @@ export const DeletionCertificateSchema = z
 type _Forward = ParityForward<DeletionCertificate, z.infer<typeof DeletionCertificateSchema>>;
 type _Reverse = ParityReverse<DeletionCertificate, z.infer<typeof DeletionCertificateSchema>>;
 export const _DELETION_CERTIFICATE_TYPE_PARITY: { forward: _Forward; reverse: _Reverse } = {
-  forward: true as _Forward,
-  reverse: true as _Reverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildDeletionCertificateJsonSchema(): Record<string, unknown> {

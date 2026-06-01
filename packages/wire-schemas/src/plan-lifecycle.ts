@@ -54,8 +54,8 @@ export const _PLAN_CREATED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanCreatedForward;
   reverse: _PlanCreatedReverse;
 } = {
-  forward: true as _PlanCreatedForward,
-  reverse: true as _PlanCreatedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildPlanCreatedPayloadJsonSchema(): Record<string, unknown> {
@@ -100,8 +100,8 @@ export const _PLAN_STEP_STARTED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanStepStartedForward;
   reverse: _PlanStepStartedReverse;
 } = {
-  forward: true as _PlanStepStartedForward,
-  reverse: true as _PlanStepStartedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildPlanStepStartedPayloadJsonSchema(): Record<string, unknown> {
@@ -151,8 +151,8 @@ export const _PLAN_STEP_COMPLETED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanStepCompletedForward;
   reverse: _PlanStepCompletedReverse;
 } = {
-  forward: true as _PlanStepCompletedForward,
-  reverse: true as _PlanStepCompletedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildPlanStepCompletedPayloadJsonSchema(): Record<string, unknown> {
@@ -200,8 +200,8 @@ export const _PLAN_STEP_FAILED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanStepFailedForward;
   reverse: _PlanStepFailedReverse;
 } = {
-  forward: true as _PlanStepFailedForward,
-  reverse: true as _PlanStepFailedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildPlanStepFailedPayloadJsonSchema(): Record<string, unknown> {
@@ -252,8 +252,8 @@ export const _PLAN_STEP_DELEGATED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanStepDelegatedForward;
   reverse: _PlanStepDelegatedReverse;
 } = {
-  forward: true as _PlanStepDelegatedForward,
-  reverse: true as _PlanStepDelegatedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildPlanStepDelegatedPayloadJsonSchema(): Record<string, unknown> {
@@ -288,8 +288,8 @@ export const _PLAN_COMPLETED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanCompletedForward;
   reverse: _PlanCompletedReverse;
 } = {
-  forward: true as _PlanCompletedForward,
-  reverse: true as _PlanCompletedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildPlanCompletedPayloadJsonSchema(): Record<string, unknown> {
@@ -327,8 +327,8 @@ export const _PLAN_FAILED_PAYLOAD_TYPE_PARITY: {
   forward: _PlanFailedForward;
   reverse: _PlanFailedReverse;
 } = {
-  forward: true as _PlanFailedForward,
-  reverse: true as _PlanFailedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildPlanFailedPayloadJsonSchema(): Record<string, unknown> {

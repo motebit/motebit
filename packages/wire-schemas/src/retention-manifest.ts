@@ -152,8 +152,8 @@ export const _RETENTION_MANIFEST_TYPE_PARITY: {
   forward: _ManifestForward;
   reverse: _ManifestReverse;
 } = {
-  forward: true as _ManifestForward,
-  reverse: true as _ManifestReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildRetentionManifestJsonSchema(): Record<string, unknown> {

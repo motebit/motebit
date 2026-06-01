@@ -88,8 +88,8 @@ export const _GOAL_CREATED_PAYLOAD_TYPE_PARITY: {
   forward: _GoalCreatedForward;
   reverse: _GoalCreatedReverse;
 } = {
-  forward: true as _GoalCreatedForward,
-  reverse: true as _GoalCreatedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildGoalCreatedPayloadJsonSchema(): Record<string, unknown> {
@@ -145,8 +145,8 @@ export const _GOAL_EXECUTED_PAYLOAD_TYPE_PARITY: {
   forward: _GoalExecutedForward;
   reverse: _GoalExecutedReverse;
 } = {
-  forward: true as _GoalExecutedForward,
-  reverse: true as _GoalExecutedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildGoalExecutedPayloadJsonSchema(): Record<string, unknown> {
@@ -185,8 +185,8 @@ export const _GOAL_PROGRESS_PAYLOAD_TYPE_PARITY: {
   forward: _GoalProgressForward;
   reverse: _GoalProgressReverse;
 } = {
-  forward: true as _GoalProgressForward,
-  reverse: true as _GoalProgressReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildGoalProgressPayloadJsonSchema(): Record<string, unknown> {
@@ -224,8 +224,8 @@ export const _GOAL_COMPLETED_PAYLOAD_TYPE_PARITY: {
   forward: _GoalCompletedForward;
   reverse: _GoalCompletedReverse;
 } = {
-  forward: true as _GoalCompletedForward,
-  reverse: true as _GoalCompletedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildGoalCompletedPayloadJsonSchema(): Record<string, unknown> {
@@ -267,8 +267,8 @@ export const _GOAL_REMOVED_PAYLOAD_TYPE_PARITY: {
   forward: _GoalRemovedForward;
   reverse: _GoalRemovedReverse;
 } = {
-  forward: true as _GoalRemovedForward,
-  reverse: true as _GoalRemovedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildGoalRemovedPayloadJsonSchema(): Record<string, unknown> {

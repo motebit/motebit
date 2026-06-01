@@ -214,8 +214,8 @@ type _ReverseCheck = ParityReverse<ExecutionReceipt, InferredReceipt>;
 // from the TypeScript declaration, these aliases resolve to `never` and
 // `tsc --noEmit` fails with a concrete error at this line.
 export const _WIRE_SCHEMA_TYPE_PARITY: { forward: _ForwardCheck; reverse: _ReverseCheck } = {
-  forward: true as _ForwardCheck,
-  reverse: true as _ReverseCheck,
+  forward: true,
+  reverse: true,
 };
 
 // ---------------------------------------------------------------------------

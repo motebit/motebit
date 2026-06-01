@@ -170,6 +170,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-wire-schema-usage",
   },
   {
+    name: "check-wire-schema-parity-bites",
+    defends:
+      "the wire-schema type-parity check (invariant #22) must BITE, not merely exist. Each packages/wire-schemas/src/*.ts asserts its zod schema and @motebit/protocol type agree via a `_*_TYPE_PARITY` const whose value lines are bare `forward: true` — live, since the alias resolves to `true` only when parity holds, else `never` (and `true` is not assignable to `never`, so tsc fails). The original `forward: true as _ForwardCheck` cast swallowed that `never` (a legal `true as never` assertion), silently re-inerting #22 for the drifted schema — the defect the parity arc closed (docs/parity-inventory.md). This gate forbids re-introducing `true as _Alias` anywhere under packages/wire-schemas/src, making the regression unrepresentable rather than reviewer-dependent (added 2026-06-01).",
+    script: "check-wire-schema-parity-bites",
+  },
+  {
     name: "check-suite-declared",
     defends:
       "every signed wire-format artifact declares a `suite` field naming a @motebit/protocol-registered SuiteId (invariant #10)",

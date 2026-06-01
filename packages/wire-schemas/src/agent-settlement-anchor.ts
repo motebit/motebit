@@ -177,8 +177,8 @@ export const _AGENT_SETTLEMENT_ANCHOR_BATCH_TYPE_PARITY: {
   forward: _BatchForward;
   reverse: _BatchReverse;
 } = {
-  forward: true as _BatchForward,
-  reverse: true as _BatchReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildAgentSettlementAnchorBatchJsonSchema(): Record<string, unknown> {
@@ -289,8 +289,8 @@ export const _AGENT_SETTLEMENT_ANCHOR_PROOF_TYPE_PARITY: {
   forward: _ProofForward;
   reverse: _ProofReverse;
 } = {
-  forward: true as _ProofForward,
-  reverse: true as _ProofReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildAgentSettlementAnchorProofJsonSchema(): Record<string, unknown> {

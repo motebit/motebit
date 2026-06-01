@@ -239,8 +239,8 @@ export const _COMPUTER_ACTION_REQUEST_TYPE_PARITY: {
   forward: _ActionForward;
   reverse: _ActionReverse;
 } = {
-  forward: true as _ActionForward,
-  reverse: true as _ActionReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildComputerActionRequestJsonSchema(): Record<string, unknown> {
@@ -325,8 +325,8 @@ export const _COMPUTER_OBSERVATION_RESULT_TYPE_PARITY: {
   forward: _ObservationForward;
   reverse: _ObservationReverse;
 } = {
-  forward: true as _ObservationForward,
-  reverse: true as _ObservationReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildComputerObservationResultJsonSchema(): Record<string, unknown> {
@@ -369,8 +369,8 @@ export const _COMPUTER_SESSION_OPENED_TYPE_PARITY: {
   forward: _OpenedForward;
   reverse: _OpenedReverse;
 } = {
-  forward: true as _OpenedForward,
-  reverse: true as _OpenedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildComputerSessionOpenedJsonSchema(): Record<string, unknown> {
@@ -411,8 +411,8 @@ export const _COMPUTER_SESSION_CLOSED_TYPE_PARITY: {
   forward: _ClosedForward;
   reverse: _ClosedReverse;
 } = {
-  forward: true as _ClosedForward,
-  reverse: true as _ClosedReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildComputerSessionClosedJsonSchema(): Record<string, unknown> {

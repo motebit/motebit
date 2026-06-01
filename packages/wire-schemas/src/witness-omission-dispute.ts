@@ -228,8 +228,8 @@ export const _WITNESS_SOLICITATION_REQUEST_TYPE_PARITY: {
   forward: _WitnessSolicitationRequestForward;
   reverse: _WitnessSolicitationRequestReverse;
 } = {
-  forward: true as _WitnessSolicitationRequestForward,
-  reverse: true as _WitnessSolicitationRequestReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildWitnessSolicitationRequestJsonSchema(): Record<string, unknown> {
@@ -285,8 +285,8 @@ export const _WITNESS_SOLICITATION_RESPONSE_TYPE_PARITY: {
   forward: _WitnessSolicitationResponseForward;
   reverse: _WitnessSolicitationResponseReverse;
 } = {
-  forward: true as _WitnessSolicitationResponseForward,
-  reverse: true as _WitnessSolicitationResponseReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildWitnessSolicitationResponseJsonSchema(): Record<string, unknown> {
@@ -409,8 +409,8 @@ export const _WITNESS_OMISSION_DISPUTE_TYPE_PARITY: {
   forward: _WitnessOmissionDisputeForward;
   reverse: _WitnessOmissionDisputeReverse;
 } = {
-  forward: true as _WitnessOmissionDisputeForward,
-  reverse: true as _WitnessOmissionDisputeReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildWitnessOmissionDisputeJsonSchema(): Record<string, unknown> {

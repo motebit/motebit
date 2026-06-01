@@ -200,8 +200,8 @@ export const _CONSOLIDATION_RECEIPT_TYPE_PARITY: {
   forward: _ReceiptForward;
   reverse: _ReceiptReverse;
 } = {
-  forward: true as _ReceiptForward,
-  reverse: true as _ReceiptReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildConsolidationReceiptJsonSchema(): Record<string, unknown> {
@@ -289,8 +289,8 @@ export const _CONSOLIDATION_ANCHOR_TYPE_PARITY: {
   forward: _AnchorForward;
   reverse: _AnchorReverse;
 } = {
-  forward: true as _AnchorForward,
-  reverse: true as _AnchorReverse,
+  forward: true,
+  reverse: true,
 };
 
 export function buildConsolidationAnchorJsonSchema(): Record<string, unknown> {
