@@ -2224,11 +2224,21 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               }
             };
 
+            // A task forwards to at most ONE federated relay. Two reasons:
+            // (1) money — the delegator is charged once (the hold below would
+            // otherwise debit per federated candidate while a single
+            // `fed-<taskId>` allocation deduped the row); (2) correctness —
+            // fanning one task out to multiple relays means multiple workers
+            // execute it. Local fan-out below is unaffected. (The single
+            // price_snapshot already assumed one federated target.)
+            let federatedForwarded = false;
+
             // Route to selected agents — local via WebSocket, remote via federation forward
             for (const sel of selected) {
               const selId = sel.motebit_id;
               if (remoteAgentRelay.has(selId)) {
                 // Remote agent: forward task to peer relay
+                if (federatedForwarded) continue;
                 const peerEndpoint = remoteAgentRelay.get(selId)!;
 
                 // Circuit breaker: skip forwarding if the peer's circuit is open
@@ -2242,6 +2252,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                 }
 
                 federationAttempted = true;
+                federatedForwarded = true;
 
                 // PR1 funding state for this federated forward — the delegator
                 // and the amount actually held, tracked across the charge and
