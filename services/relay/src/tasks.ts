@@ -2194,6 +2194,36 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               alternatives_considered: topScore.alternatives_considered,
             };
 
+            // PR1: refund a federated budget hold when the forward never reaches
+            // the executor relay — the delegator must not be charged for work that
+            // did not leave this relay. No-op when nothing was held.
+            const refundFederatedHold = (delegator: string, tId: string, amountMicro: number) => {
+              if (amountMicro <= 0) return;
+              moteDb.db.exec("BEGIN");
+              try {
+                creditAccount(
+                  moteDb.db,
+                  delegator,
+                  amountMicro,
+                  "allocation_release",
+                  `fed-${tId}`,
+                  `Refund: federated forward failed for task ${tId}`,
+                );
+                moteDb.db
+                  .prepare(
+                    "UPDATE relay_allocations SET status = 'released' WHERE allocation_id = ?",
+                  )
+                  .run(`fed-${tId}`);
+                moteDb.db.exec("COMMIT");
+              } catch {
+                try {
+                  moteDb.db.exec("ROLLBACK");
+                } catch {
+                  /* txn already closed */
+                }
+              }
+            };
+
             // Route to selected agents — local via WebSocket, remote via federation forward
             for (const sel of selected) {
               const selId = sel.motebit_id;
@@ -2212,6 +2242,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                 }
 
                 federationAttempted = true;
+
+                // PR1 funding state for this federated forward — the delegator
+                // and the amount actually held, tracked across the charge and
+                // the forward attempt so a failed forward refunds the hold.
+                const delegatorId = submittedBy ?? motebitId;
+                let fedHeldMicro = 0;
 
                 // §7 settlement-chain arming: stamp this relay's (A's)
                 // price_snapshot from the SELECTED federated candidate's price.
@@ -2235,6 +2271,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                   (requiredCaps as readonly string[]).includes(p.capability),
                 );
                 if (fedPrice != null && fedPrice.unit_cost > 0) {
+                  const fedBudgetMicro = toMicro(fedPrice.unit_cost);
                   // taskQueue is SQLite-backed: get() reconstructs a fresh entry
                   // from the row, so the snapshot must be written back with set()
                   // (the mutate-then-set idiom used elsewhere in this handler) —
@@ -2242,9 +2279,55 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                   // onTaskResultReceived would read the old undefined snapshot.
                   const fedEntry = taskQueue.get(taskId);
                   if (fedEntry) {
-                    fedEntry.price_snapshot = toMicro(fedPrice.unit_cost);
+                    fedEntry.price_snapshot = fedBudgetMicro;
                     taskQueue.set(taskId, fedEntry);
                   }
+
+                  // PR1: charge the delegator. Hold the budget from the
+                  // delegator's virtual account on THIS (origin) relay so the
+                  // cross-operator settlement is funded — PHASE 2 credited the
+                  // worker on the executor relay with nothing behind it. The hold
+                  // is consumed at settlement (PR2 forwards the net to the
+                  // executor relay's treasury) and refunded below if the forward
+                  // fails. Mirrors the local allocation_hold (see the submission
+                  // allocation block); the txn wraps debit + allocation insert.
+                  let held = false;
+                  moteDb.db.exec("BEGIN");
+                  try {
+                    const newBalance = debitAccount(
+                      moteDb.db,
+                      delegatorId,
+                      fedBudgetMicro,
+                      "allocation_hold",
+                      `fed-${taskId}`,
+                      `Hold for federated task ${taskId} to ${selId}`,
+                    );
+                    if (newBalance == null) {
+                      // Insufficient funds — debitAccount wrote nothing; close the txn.
+                      moteDb.db.exec("ROLLBACK");
+                    } else {
+                      moteDb.db
+                        .prepare(
+                          "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
+                        )
+                        .run(`fed-${taskId}`, taskId, selId, fedBudgetMicro, now);
+                      moteDb.db.exec("COMMIT");
+                      held = true;
+                    }
+                  } catch (chargeErr) {
+                    moteDb.db.exec("ROLLBACK");
+                    throw chargeErr;
+                  }
+                  // Do not forward unfunded work. The routing catch rethrows
+                  // HTTPException (see "Re-throw intentional HTTP errors" below),
+                  // so this surfaces as a 402 to the submitter.
+                  if (!held) {
+                    throw new HTTPException(402, {
+                      message:
+                        "Insufficient funds for federated task — deposit to your virtual account on this relay",
+                    });
+                  }
+                  fedHeldMicro = fedBudgetMicro;
                 }
 
                 try {
@@ -2284,9 +2367,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                     });
                   } else {
                     taskRouter.recordPeerForwardResult(peerEndpoint, false);
+                    refundFederatedHold(delegatorId, taskId, fedHeldMicro);
+                    fedHeldMicro = 0;
                   }
                 } catch (fwdErr) {
                   taskRouter.recordPeerForwardResult(peerEndpoint, false);
+                  refundFederatedHold(delegatorId, taskId, fedHeldMicro);
+                  fedHeldMicro = 0;
                   logger.warn("task.forward_failed", {
                     correlationId: taskId,
                     peerRelay: peerEndpoint,

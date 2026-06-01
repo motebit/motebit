@@ -1107,8 +1107,17 @@ describe("Federation E2E", () => {
 
       await establishPeering(relayA, relayB);
 
-      // Submitter Alice on A.
+      // Submitter Alice on A — funded (PR1: federated paid tasks now require the
+      // delegator to hold the budget on the origin relay before forwarding).
       const alice = await registerAgent(relayA, "alice-paid", ["web-search"]);
+      {
+        const t = Date.now();
+        relayA.moteDb.db
+          .prepare(
+            "INSERT INTO relay_accounts (motebit_id, balance, currency, created_at, updated_at) VALUES (?, ?, 'USD', ?, ?)",
+          )
+          .run(alice.motebitId, 5_000_000, t, t);
+      }
 
       // Submit a PAID task on A requiring Bob's capability → A discovers Bob on
       // B and forwards via /federation/v1/task/forward.
@@ -1281,7 +1290,16 @@ describe("Federation E2E", () => {
       relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
 
       await establishPeering(relayA, relayB);
+      // Funded (PR1: federated paid tasks require the delegator's budget held on A).
       const alice = await registerAgent(relayA, "alice-tamper", ["web-search"]);
+      {
+        const t = Date.now();
+        relayA.moteDb.db
+          .prepare(
+            "INSERT INTO relay_accounts (motebit_id, balance, currency, created_at, updated_at) VALUES (?, ?, 'USD', ?, ?)",
+          )
+          .run(alice.motebitId, 5_000_000, t, t);
+      }
 
       // Paid task on A → forwarded to B. This gives A a queue entry for the task
       // id (onTaskResultReceived 404s without one) and mirrors origin→executor.
@@ -1358,6 +1376,70 @@ describe("Federation E2E", () => {
         .get(fwdTaskId);
       expect(aRow).toBeUndefined();
       expect(bRow).toBeUndefined();
+    });
+
+    it("PHASE 3 PR1: origin relay charges the delegator for a federated task (and rejects the unfunded)", async () => {
+      // PHASE 2 settled the chain in bookkeeping but never charged a funding
+      // source: the submitter has no local listing, so the submission-time
+      // allocation block is skipped and the federated task forwards for free.
+      // PR1 closes that — A holds the budget from the delegator's virtual account
+      // at forward time (when the federated price is known), so B's eventual
+      // worker credit is backed by funds A actually committed.
+      const bob = await registerAgent(
+        relayB,
+        "bob-fund",
+        ["fund-cap"],
+        [{ capability: "fund-cap", unit_cost: 1.0, currency: "USD", per: "task" }],
+      );
+      const bobWs = { send: vi.fn(), close: vi.fn() };
+      relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
+      await establishPeering(relayA, relayB);
+
+      // Funded delegator: $5 in her virtual account on A.
+      const alice = await registerAgent(relayA, "alice-funded", ["web-search"]);
+      const now = Date.now();
+      relayA.moteDb.db
+        .prepare(
+          "INSERT INTO relay_accounts (motebit_id, balance, currency, created_at, updated_at) VALUES (?, ?, 'USD', ?, ?)",
+        )
+        .run(alice.motebitId, 5_000_000, now, now);
+
+      const taskRes = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify({
+          prompt: "funded federated task",
+          required_capabilities: ["fund-cap"],
+        }),
+      });
+      expect(taskRes.status).toBe(201);
+      const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
+
+      // A held the $1.00 budget: balance debited, allocation row locked.
+      const aliceBal = relayA.moteDb.db
+        .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+        .get(alice.motebitId) as { balance: number };
+      expect(aliceBal.balance).toBe(4_000_000);
+      const alloc = relayA.moteDb.db
+        .prepare(
+          "SELECT amount_locked, status FROM relay_allocations WHERE task_id = ? AND status = 'locked'",
+        )
+        .get(taskId) as { amount_locked: number; status: string } | undefined;
+      expect(alloc, "A must hold a locked allocation for the federated task").toBeDefined();
+      expect(alloc!.amount_locked).toBe(1_000_000);
+
+      // Unfunded delegator: same federated task, no balance → rejected 402, not
+      // forwarded for free.
+      const poor = await registerAgent(relayA, "alice-broke", ["web-search"]);
+      const poorRes = await relayA.app.request(`/agent/${poor.motebitId}/task`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify({
+          prompt: "unfunded federated task",
+          required_capabilities: ["fund-cap"],
+        }),
+      });
+      expect(poorRes.status, await poorRes.clone().text()).toBe(402);
     });
 
     it("federation forward timeout does not fall through to local broadcast", async () => {
