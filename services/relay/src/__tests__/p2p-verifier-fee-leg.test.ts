@@ -272,4 +272,77 @@ describe("p2p-verifier fee-leg validation (Arc 2)", () => {
       .get("stl-5") as { payment_verification_status: string };
     expect(row.payment_verification_status).toBe("verified");
   });
+
+  it("origin-relay audit (remote worker, no local settlement_address) verifies on the fee leg alone", async () => {
+    // Cross-operator federated P2P: the ORIGIN relay records a p2p audit row
+    // for the origin-fee leg, but does NOT host the worker — so the JOIN finds
+    // no settlement_address and the worker leg is "not applicable" here (the
+    // executor relay verifies it). The fee leg → this relay's treasury still
+    // verifies. Worker id deliberately NOT registered.
+    insertP2pSettlement(
+      relay.moteDb.db,
+      "stl-origin-1",
+      "task-origin-1",
+      "remote-worker-not-here",
+      DELEGATOR,
+      TX_HASH,
+      902_500,
+      50_000,
+    );
+
+    const adapter = makeStubAdapter({
+      status: "confirmed",
+      from: DELEGATOR,
+      // The atomic tx physically carries all three legs; this origin relay only
+      // validates the leg landing in ITS treasury.
+      transfers: [
+        { to: WORKER_ADDR, amountMicro: 902_500n },
+        { to: TREASURY, amountMicro: 50_000n },
+      ],
+      slot: 100,
+      asset: "USDC",
+    });
+
+    await tickVerifierOnce(relay, adapter);
+
+    const row = relay.moteDb.db
+      .prepare("SELECT payment_verification_status FROM relay_settlements WHERE settlement_id = ?")
+      .get("stl-origin-1") as { payment_verification_status: string };
+    expect(row.payment_verification_status).toBe("verified");
+  });
+
+  it("origin-relay audit fails when its fee leg is missing (no local worker to fall back on)", async () => {
+    insertP2pSettlement(
+      relay.moteDb.db,
+      "stl-origin-2",
+      "task-origin-2",
+      "remote-worker-not-here",
+      DELEGATOR,
+      TX_HASH,
+      902_500,
+      50_000,
+    );
+
+    // Fee leg absent — and there is no local worker leg to verify either.
+    const adapter = makeStubAdapter({
+      status: "confirmed",
+      from: DELEGATOR,
+      transfers: [{ to: WORKER_ADDR, amountMicro: 902_500n }],
+      slot: 100,
+      asset: "USDC",
+    });
+
+    await tickVerifierOnce(relay, adapter);
+
+    const row = relay.moteDb.db
+      .prepare(
+        "SELECT payment_verification_status, payment_verification_error FROM relay_settlements WHERE settlement_id = ?",
+      )
+      .get("stl-origin-2") as {
+      payment_verification_status: string;
+      payment_verification_error: string;
+    };
+    expect(row.payment_verification_status).toBe("failed");
+    expect(row.payment_verification_error).toMatch(/Fee leg not found/);
+  });
 });

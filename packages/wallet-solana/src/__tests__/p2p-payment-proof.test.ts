@@ -15,6 +15,7 @@ import type { SolanaRpcAdapter, SendUsdcArgs, SendUsdcBatchItemResult } from "..
 
 const WORKER = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
 const TREASURY = "GsbwXfJraMomNxBcjsLBdbtZ4qZqL1HNbDmFqxK4y8Vh";
+const EXECUTOR_TREASURY = "GJmrQzyZumWWkdBuVH3Z1hnGvjrcDMbx7ptF5t5UTREASURY";
 const SIG = "5".repeat(88);
 
 interface RecordingAdapter extends SolanaRpcAdapter {
@@ -90,6 +91,48 @@ describe("buildP2pPaymentProof", () => {
       { toAddress: WORKER, microAmount: 2_000_000n },
       { toAddress: TREASURY, microAmount: 105_263n },
     ]);
+  });
+
+  it("federated: broadcasts three legs and emits the b_fee executor-relay leg", async () => {
+    const threeOk = (): SendUsdcBatchItemResult[] => [
+      { ok: true, signature: SIG, slot: 42, reason: null },
+      { ok: true, signature: SIG, slot: 42, reason: null },
+      { ok: true, signature: SIG, slot: 42, reason: null },
+    ];
+    const adapter = fakeAdapter(threeOk);
+    // $1.00 budget fee-from-budget split: worker 902_500, A 50_000, B 47_500.
+    const proof = await buildP2pPaymentProof(adapter, {
+      workerAddress: WORKER,
+      treasuryAddress: TREASURY,
+      amountMicro: 902_500,
+      feeAmountMicro: 50_000,
+      executorTreasuryAddress: EXECUTOR_TREASURY,
+      executorFeeAmountMicro: 47_500,
+    });
+
+    expect(adapter.lastBatch).toEqual([
+      { toAddress: WORKER, microAmount: 902_500n },
+      { toAddress: TREASURY, microAmount: 50_000n },
+      { toAddress: EXECUTOR_TREASURY, microAmount: 47_500n },
+    ]);
+    expect(proof.b_fee_to_address).toBe(EXECUTOR_TREASURY);
+    expect(proof.b_fee_amount_micro).toBe(47_500);
+    expect(proof.amount_micro).toBe(902_500);
+    expect(proof.fee_amount_micro).toBe(50_000);
+  });
+
+  it("federated: rejects a half-specified executor leg", async () => {
+    const adapter = fakeAdapter(bothOk);
+    await expect(
+      buildP2pPaymentProof(adapter, {
+        workerAddress: WORKER,
+        treasuryAddress: TREASURY,
+        amountMicro: 902_500,
+        feeAmountMicro: 50_000,
+        executorTreasuryAddress: EXECUTOR_TREASURY,
+        // executorFeeAmountMicro omitted
+      }),
+    ).rejects.toThrow(/BOTH executorTreasuryAddress and executorFeeAmountMicro/);
   });
 
   it("honors a network override (e.g. devnet)", async () => {

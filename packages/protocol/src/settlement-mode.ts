@@ -146,8 +146,42 @@ export interface P2pPaymentProof {
    * `gross - amount_micro` where `gross = amount_micro / (1 - platformFeeRate)`.
    * The verifier validates this matches the relay's recorded
    * `platform_fee_rate` against the declared `amount_micro`.
+   *
+   * For a cross-operator **federated** P2P task this is the ORIGIN relay's
+   * fee leg (relay A's 5% of the budget); the executor relay's fee is the
+   * separate `b_fee_*` leg below.
    */
   fee_amount_micro: number;
+  /**
+   * Executor-relay (B) treasury Solana address (base58). Present ONLY for
+   * cross-operator **federated** P2P, where the task is delegated to a
+   * worker hosted on a different operator (relay B). Absent for
+   * single-operator P2P (where there is exactly one relay and one fee leg).
+   *
+   * Federation settles per `spec/relay-federation-v1.md` §7.1 fee-from-budget:
+   * the delegator's single atomic Solana tx composes THREE SPL Transfer
+   * instructions —
+   *
+   *   1. **Worker leg** — delegator → worker, `amount_micro` (the worker's
+   *      net after both operators' fees: `budget·(1−rate)²`).
+   *   2. **Origin-fee leg** — delegator → relay A treasury, `fee_amount_micro`
+   *      (`round(budget·rate)`).
+   *   3. **Executor-fee leg** — delegator → relay B treasury,
+   *      `b_fee_amount_micro` (`round((budget − origin_fee)·rate)`).
+   *
+   * Each relay verifies only the leg(s) funding its OWN treasury (custody
+   * split): A verifies the origin-fee leg, B verifies the worker leg + the
+   * executor-fee leg. The relay never transmits funds cross-operator — the
+   * delegator pays all three legs directly onchain. Doctrine:
+   * `docs/doctrine/off-ramp-as-user-action.md` § federated P2P.
+   */
+  b_fee_to_address?: string;
+  /**
+   * Executor-relay (B) fee leg amount in micro-units. Present ONLY for
+   * cross-operator federated P2P. Computed fee-from-budget:
+   * `round((budget − fee_amount_micro)·platform_fee_rate)`.
+   */
+  b_fee_amount_micro?: number;
 }
 
 // === Payment Verification ===

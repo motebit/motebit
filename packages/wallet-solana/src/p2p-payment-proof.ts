@@ -37,51 +37,98 @@ export interface BuildP2pPaymentProofArgs {
   amountMicro: number;
   /** Fee leg amount in micro-units — `gross - net`, computed by the caller via `computeGrossAmount`. */
   feeAmountMicro: number;
+  /**
+   * Executor-relay (B) treasury address — `deriveSolanaAddress(peerRelayPublicKey)`.
+   * Present ONLY for cross-operator FEDERATED P2P (delegation to a worker hosted
+   * on a different operator). Adds a THIRD leg to the atomic tx (the executor
+   * relay's fee). When set, `executorFeeAmountMicro` MUST also be set. The
+   * caller sources the peer relay's public key from the discovery response / the
+   * peer's transparency declaration. See `docs/doctrine/off-ramp-as-user-action.md`
+   * § federated P2P.
+   */
+  executorTreasuryAddress?: string;
+  /** Executor-relay fee leg amount in micro-units (federated P2P only). */
+  executorFeeAmountMicro?: number;
   /** CAIP-2 network identifier. Defaults to Solana mainnet. */
   network?: string;
 }
 
 /**
- * Broadcast the delegator's atomic worker + treasury legs and return a
- * `P2pPaymentProof` carrying the confirmed signature.
+ * Broadcast the delegator's atomic legs and return a `P2pPaymentProof` carrying
+ * the confirmed signature. Two legs for single-operator P2P (worker + relay
+ * treasury); THREE for cross-operator federated P2P (worker + origin-relay fee +
+ * executor-relay fee, when `executorTreasuryAddress`/`executorFeeAmountMicro`
+ * are supplied).
  *
- * Both legs MUST land in a single transaction — the relay's verifier walks one
- * `tx_hash` for both legs. `sendUsdcBatch` packs up to 8 transfer instructions
- * per transaction, so two legs are always one transaction; we still assert both
- * legs succeeded under one shared signature and throw otherwise, rather than
- * emit a proof the verifier will reject (or, worse, a non-atomic payment where
- * one leg landed and the other did not).
+ * All legs MUST land in a single transaction — the relay verifiers walk one
+ * `tx_hash` for the legs they own. `sendUsdcBatch` packs up to 8 transfer
+ * instructions per transaction, so two or three legs are always one
+ * transaction; we still assert every leg succeeded under one shared signature
+ * and throw otherwise, rather than emit a proof the verifier will reject (or,
+ * worse, a non-atomic payment where one leg landed and the others did not).
  *
- * @throws if either leg failed to confirm, or the two legs did not share one signature.
+ * @throws if any leg failed to confirm, or the legs did not share one signature.
  */
 export async function buildP2pPaymentProof(
   adapter: SolanaRpcAdapter,
   args: BuildP2pPaymentProofArgs,
 ): Promise<P2pPaymentProof> {
-  const results = await adapter.sendUsdcBatch([
-    { toAddress: args.workerAddress, microAmount: BigInt(args.amountMicro) },
-    { toAddress: args.treasuryAddress, microAmount: BigInt(args.feeAmountMicro) },
-  ]);
-
-  const [workerLeg, feeLeg] = results;
-  if (!workerLeg?.ok || !feeLeg?.ok) {
+  // Federated (cross-operator) P2P adds a third leg — the executor relay's fee.
+  // Both executor fields travel together; reject a half-specified executor leg
+  // so a caller can't silently drop the leg the executor relay will require.
+  const isFederated = args.executorTreasuryAddress != null || args.executorFeeAmountMicro != null;
+  if (
+    isFederated &&
+    (args.executorTreasuryAddress == null || args.executorFeeAmountMicro == null)
+  ) {
     throw new Error(
-      `P2P payment broadcast failed (worker leg: ${workerLeg?.reason ?? "ok"}; fee leg: ${feeLeg?.reason ?? "ok"})`,
+      "Federated P2P proof requires BOTH executorTreasuryAddress and executorFeeAmountMicro",
     );
   }
-  if (!workerLeg.signature || workerLeg.signature !== feeLeg.signature) {
+
+  const legs = [
+    { toAddress: args.workerAddress, microAmount: BigInt(args.amountMicro) },
+    { toAddress: args.treasuryAddress, microAmount: BigInt(args.feeAmountMicro) },
+    ...(isFederated
+      ? [
+          {
+            toAddress: args.executorTreasuryAddress!,
+            microAmount: BigInt(args.executorFeeAmountMicro!),
+          },
+        ]
+      : []),
+  ];
+  const results = await adapter.sendUsdcBatch(legs);
+
+  const workerLeg = results[0];
+  // Every leg must confirm under ONE shared signature — the relay verifiers walk
+  // a single tx_hash for the legs they own. A partial/non-atomic broadcast must
+  // never become a proof.
+  if (results.length !== legs.length || results.some((r) => !r?.ok)) {
+    throw new Error(
+      `P2P payment broadcast failed (legs: ${results.map((r) => r?.reason ?? "ok").join(", ")})`,
+    );
+  }
+  const sig = workerLeg!.signature;
+  if (!sig || results.some((r) => r.signature !== sig)) {
     throw new Error(
       "P2P payment legs did not settle in a single atomic transaction — proof would fail verification",
     );
   }
 
   return {
-    tx_hash: workerLeg.signature,
+    tx_hash: sig,
     chain: "solana",
     network: args.network ?? SOLANA_MAINNET_CAIP2,
     to_address: args.workerAddress,
     amount_micro: args.amountMicro,
     fee_to_address: args.treasuryAddress,
     fee_amount_micro: args.feeAmountMicro,
+    ...(isFederated
+      ? {
+          b_fee_to_address: args.executorTreasuryAddress,
+          b_fee_amount_micro: args.executorFeeAmountMicro,
+        }
+      : {}),
   };
 }

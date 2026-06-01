@@ -26,6 +26,7 @@ import {
   issueReputationCredential,
   sign,
   signFederationSettlement,
+  signSettlement,
   canonicalJson,
   bytesToHex,
   hexToBytes,
@@ -92,6 +93,17 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
         submitted_by?: string;
         wall_clock_ms?: number;
       };
+      paymentProof?: {
+        tx_hash: string;
+        chain: string;
+        network: string;
+        to_address: string;
+        amount_micro: number;
+        fee_to_address: string;
+        fee_amount_micro: number;
+        b_fee_to_address?: string;
+        b_fee_amount_micro?: number;
+      };
     }) {
       // Idempotency: reject duplicate task_id to prevent double-execution
       // when the origin relay retries after a timeout.
@@ -137,6 +149,17 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
         expiresAt: Date.now() + taskTtlMs,
         submitted_by: task.submitted_by,
         origin_relay: verified.originRelay,
+        // Cross-operator federated P2P: the origin relay forwarded the
+        // delegator's 3-leg proof. The executor relay settles
+        // `settlement_mode='p2p'` (worker leg + its own executor-fee leg) and
+        // NEVER credits the worker on a virtual account — money already moved
+        // onchain. Absent for free/relay-coordinated federated tasks.
+        ...(verified.paymentProof
+          ? {
+              settlement_mode: "p2p" as const,
+              p2p_payment_proof: verified.paymentProof,
+            }
+          : {}),
       });
 
       const agentPeers = connections.get(verified.targetAgent);
@@ -328,6 +351,87 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
         }
       } catch {
         /* best-effort trust update */
+      }
+
+      // Cross-operator federated P2P: the delegator paid all three legs
+      // onchain (worker net + origin-fee + executor-fee) in one atomic tx. The
+      // ORIGIN relay records its OWN p2p audit row — the origin-fee leg landing
+      // in A's treasury — and does NOT run the §7 relay-custody settlement
+      // chain (no relay_federation_settlements row, no settlement forward, no
+      // worker credit). The executor relay records the mirror p2p row (worker +
+      // executor-fee leg) in handleReceiptIngestion. Across both, all three legs
+      // are recorded + verified, and the relay's transmitter surface stays zero.
+      // See docs/doctrine/off-ramp-as-user-action.md § federated P2P.
+      if (entry.settlement_mode === "p2p" && entry.p2p_payment_proof) {
+        try {
+          const proof = entry.p2p_payment_proof;
+          const workerId = verified.receipt.motebit_id;
+          const settlementId = crypto.randomUUID();
+          const settledAt = Date.now();
+          // This relay's recorded fee = the origin-fee leg (→ A's treasury). The
+          // gross at A's hop is the full budget (worker net + both fee legs);
+          // platform_fee_rate is the relay's configured rate.
+          const originFee = proof.fee_amount_micro;
+          const signed = await signSettlement(
+            {
+              settlement_id: settlementId as never,
+              allocation_id: `p2p-${verified.taskId}` as never,
+              motebit_id: workerId,
+              receipt_hash: verified.receipt.result_hash ?? "",
+              ledger_hash: null,
+              amount_settled: proof.amount_micro,
+              platform_fee: originFee,
+              platform_fee_rate: platformFeeRate,
+              settlement_mode: "p2p",
+              status: "completed",
+              settled_at: settledAt,
+              issuer_relay_id: relayIdentity.relayMotebitId,
+            },
+            relayIdentity.privateKey,
+          );
+          moteDb.db
+            .prepare(
+              `INSERT OR IGNORE INTO relay_settlements
+               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
+                amount_settled, platform_fee, platform_fee_rate, status, settled_at,
+                settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
+                issuer_relay_id, suite, signature, record_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              settlementId,
+              `p2p-${verified.taskId}`,
+              verified.taskId,
+              workerId,
+              verified.receipt.result_hash ?? "",
+              proof.amount_micro,
+              originFee,
+              platformFeeRate,
+              "completed",
+              settledAt,
+              "p2p",
+              proof.tx_hash,
+              "pending",
+              entry.submitted_by ?? null,
+              signed.issuer_relay_id,
+              signed.suite,
+              signed.signature,
+              canonicalJson(signed),
+            );
+          logger.info("settlement.federated_p2p_origin_audit", {
+            correlationId: verified.taskId,
+            worker: workerId,
+            originFee,
+            workerNet: proof.amount_micro,
+            txHash: proof.tx_hash,
+          });
+        } catch (auditErr) {
+          logger.error("settlement.federated_p2p_origin_audit_failed", {
+            correlationId: verified.taskId,
+            error: auditErr instanceof Error ? auditErr.message : String(auditErr),
+          });
+        }
+        return;
       }
 
       // Settlement forwarding

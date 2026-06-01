@@ -120,6 +120,9 @@ export type TaskQueueEntry = {
     amount_micro: number;
     fee_to_address: string;
     fee_amount_micro: number;
+    /** Executor-relay (B) fee leg — cross-operator federated P2P only. */
+    b_fee_to_address?: string;
+    b_fee_amount_micro?: number;
   };
   /** Target agent for p2p tasks (pinned routing). */
   target_agent?: string;
@@ -867,7 +870,19 @@ export async function handleReceiptIngestion(
         // same arc commit.
         const p2pProof = entry.p2p_payment_proof;
         const p2pWorkerAmount = p2pProof?.amount_micro ?? 0;
-        const p2pFeeAmount = p2pProof?.fee_amount_micro ?? 0;
+        // Which fee leg funds THIS relay's treasury? For a single-operator P2P
+        // task it is the only fee leg (`fee_amount_micro`). For a cross-operator
+        // FEDERATED task this relay is the EXECUTOR (origin_relay set) — its
+        // treasury is funded by the executor-fee leg (`b_fee_amount_micro`); the
+        // origin relay records the origin-fee leg separately in
+        // onTaskResultReceived. This keeps each relay's recorded fee equal to the
+        // onchain leg landing in its OWN treasury (the verifier + reconciler both
+        // key on `platform_fee` → treasury).
+        const isFederatedExecutorP2p = entry.origin_relay != null;
+        const p2pFeeAmount = isFederatedExecutorP2p
+          ? (p2pProof?.b_fee_amount_micro ?? 0)
+          : (p2pProof?.fee_amount_micro ?? 0);
+        // Gross at this relay's hop = worker net + this relay's fee.
         const p2pGrossAmount = p2pWorkerAmount + p2pFeeAmount;
         const p2pFeeRate =
           p2pGrossAmount > 0 ? Math.round((p2pFeeAmount / p2pGrossAmount) * 10000) / 10000 : 0;
@@ -1653,8 +1668,18 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         /**
          * Fee leg amount in micro-units. Computed as
          * `gross - amount_micro` where `gross = amount_micro / (1 - feeRate)`.
+         * For federated P2P this is the ORIGIN relay's (A's) fee leg.
          */
         fee_amount_micro: number;
+        /**
+         * Executor-relay (B) treasury address + fee leg. Present ONLY for
+         * cross-operator federated P2P (delegation to a remote worker). The
+         * delegator's atomic tx carries a THIRD leg → relay B's treasury.
+         * See `P2pPaymentProof` in `@motebit/protocol` and
+         * `docs/doctrine/off-ramp-as-user-action.md` § federated P2P.
+         */
+        b_fee_to_address?: string;
+        b_fee_amount_micro?: number;
       };
     }>();
 
@@ -1754,6 +1779,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // === P2P settlement path ===
     let settlementMode: "relay" | "p2p" = "relay";
     let p2pPaymentProof: TaskQueueEntry["p2p_payment_proof"];
+    // True when the proof targets a REMOTE worker (cross-operator federated
+    // P2P): routing forwards directly to the worker's operator with the proof
+    // rather than ranking. Set in the remote branch below.
+    let federatedP2pIntent = false;
 
     if (body.payment_proof && body.target_agent && submittedBy) {
       const proof = body.payment_proof;
@@ -1782,94 +1811,136 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         throw new TaskError("TASK_INVALID_INPUT", "Invalid transaction signature format", 400);
       }
 
-      // Policy-based eligibility check
-      // Arc 3: pass the delegator's cold-start acknowledgment through to
-      // the eligibility gate. Established pairs ignore it; new pairs
-      // require it set true to unlock the bootstrap branch.
-      const eligibility = await evaluateSettlementEligibility(
-        moteDb.db,
-        submittedBy,
-        body.target_agent,
-        body.delegator_acknowledges_no_history_risk === true,
-      );
-      if (!eligibility.allowed) {
-        throw new TaskError("TASK_P2P_INELIGIBLE", eligibility.reason, 403);
-      }
-
-      // Verify worker's settlement address matches payment proof
+      // Is the target worker LOCAL to this relay? A local worker has a
+      // settlement_address in our agent_registry. A REMOTE worker (hosted
+      // on a peer operator, discovered via federation) does not — that is
+      // the cross-operator federated P2P path, which carries a third
+      // (executor-relay) fee leg and is validated at the forward site
+      // (where the worker's address + the peer relay's treasury resolve
+      // via discovery). See docs/doctrine/off-ramp-as-user-action.md
+      // § federated P2P.
       const workerReg = moteDb.db
         .prepare("SELECT settlement_address FROM agent_registry WHERE motebit_id = ?")
         .get(body.target_agent) as { settlement_address: string | null } | undefined;
 
-      if (!workerReg?.settlement_address) {
-        throw new TaskError(
-          "TASK_P2P_NO_ADDRESS",
-          "Worker has no declared settlement address",
-          400,
+      if (workerReg?.settlement_address) {
+        // ── Single-operator P2P (local worker): the existing 2-leg path. ──
+        // Policy-based eligibility check
+        // Arc 3: pass the delegator's cold-start acknowledgment through to
+        // the eligibility gate. Established pairs ignore it; new pairs
+        // require it set true to unlock the bootstrap branch.
+        const eligibility = await evaluateSettlementEligibility(
+          moteDb.db,
+          submittedBy,
+          body.target_agent,
+          body.delegator_acknowledges_no_history_risk === true,
         );
-      }
-      if (proof.to_address !== workerReg.settlement_address) {
-        throw new TaskError(
-          "TASK_P2P_ADDRESS_MISMATCH",
-          "Payment proof to_address does not match worker's settlement address",
-          400,
-        );
-      }
+        if (!eligibility.allowed) {
+          throw new TaskError("TASK_P2P_INELIGIBLE", eligibility.reason, 403);
+        }
 
-      // Verify fee leg's treasury address matches the relay's
-      // identity-derived Solana address. The relay treasury IS the
-      // relay's identity key — same address that funds
-      // OperatorSolanaTransfer and SolanaMemoSubmitter. Mismatch means
-      // the delegator sent the fee leg to a non-relay address — reject.
-      const { deriveSolanaAddress } = await import("@motebit/wallet-solana");
-      const relayTreasuryAddress = deriveSolanaAddress(relayIdentity.publicKey);
-      if (proof.fee_to_address !== relayTreasuryAddress) {
-        throw new TaskError(
-          "TASK_P2P_FEE_ADDRESS_MISMATCH",
-          `Payment proof fee_to_address does not match relay treasury address`,
-          400,
-        );
-      }
-
-      // Exact amount match against the worker's unit cost. The worker
-      // earns net = unit_cost; the fee = gross - unit_cost where
-      // gross = unit_cost / (1 - platformFeeRate). The delegator's
-      // atomic tx pays both.
-      const unitCostMicro = unitCostAtSubmission > 0 ? toMicro(unitCostAtSubmission) : undefined;
-      if (unitCostMicro != null && proof.amount_micro !== unitCostMicro) {
-        throw new TaskError(
-          "TASK_P2P_AMOUNT_MISMATCH",
-          `Payment amount ${proof.amount_micro} does not match expected ${priceSnapshot}`,
-          400,
-        );
-      }
-
-      // Fee amount must match the expected platform_fee given the
-      // worker's unit_cost and the current platform_fee_rate. Computed
-      // as `gross - net` where `gross = round(net / (1 - feeRate))`.
-      if (unitCostMicro != null && platformFeeRate > 0) {
-        const grossMicro = Math.round(unitCostMicro / (1 - platformFeeRate));
-        const expectedFeeMicro = grossMicro - unitCostMicro;
-        if (proof.fee_amount_micro !== expectedFeeMicro) {
+        // Verify worker's settlement address matches payment proof
+        if (proof.to_address !== workerReg.settlement_address) {
           throw new TaskError(
-            "TASK_P2P_FEE_AMOUNT_MISMATCH",
-            `Payment fee_amount_micro ${proof.fee_amount_micro} does not match expected ${expectedFeeMicro} (gross ${grossMicro} - net ${unitCostMicro})`,
+            "TASK_P2P_ADDRESS_MISMATCH",
+            "Payment proof to_address does not match worker's settlement address",
             400,
           );
         }
+
+        // Verify fee leg's treasury address matches the relay's
+        // identity-derived Solana address. The relay treasury IS the
+        // relay's identity key — same address that funds
+        // OperatorSolanaTransfer and SolanaMemoSubmitter. Mismatch means
+        // the delegator sent the fee leg to a non-relay address — reject.
+        const { deriveSolanaAddress } = await import("@motebit/wallet-solana");
+        const relayTreasuryAddress = deriveSolanaAddress(relayIdentity.publicKey);
+        if (proof.fee_to_address !== relayTreasuryAddress) {
+          throw new TaskError(
+            "TASK_P2P_FEE_ADDRESS_MISMATCH",
+            `Payment proof fee_to_address does not match relay treasury address`,
+            400,
+          );
+        }
+
+        // Exact amount match against the worker's unit cost. The worker
+        // earns net = unit_cost; the fee = gross - unit_cost where
+        // gross = unit_cost / (1 - platformFeeRate). The delegator's
+        // atomic tx pays both.
+        const unitCostMicro = unitCostAtSubmission > 0 ? toMicro(unitCostAtSubmission) : undefined;
+        if (unitCostMicro != null && proof.amount_micro !== unitCostMicro) {
+          throw new TaskError(
+            "TASK_P2P_AMOUNT_MISMATCH",
+            `Payment amount ${proof.amount_micro} does not match expected ${priceSnapshot}`,
+            400,
+          );
+        }
+
+        // Fee amount must match the expected platform_fee given the
+        // worker's unit_cost and the current platform_fee_rate. Computed
+        // as `gross - net` where `gross = round(net / (1 - feeRate))`.
+        if (unitCostMicro != null && platformFeeRate > 0) {
+          const grossMicro = Math.round(unitCostMicro / (1 - platformFeeRate));
+          const expectedFeeMicro = grossMicro - unitCostMicro;
+          if (proof.fee_amount_micro !== expectedFeeMicro) {
+            throw new TaskError(
+              "TASK_P2P_FEE_AMOUNT_MISMATCH",
+              `Payment fee_amount_micro ${proof.fee_amount_micro} does not match expected ${expectedFeeMicro} (gross ${grossMicro} - net ${unitCostMicro})`,
+              400,
+            );
+          }
+        }
+
+        settlementMode = "p2p";
+        p2pPaymentProof = proof;
+
+        logger.info("task.p2p_settlement", {
+          correlationId: taskId,
+          delegator: submittedBy,
+          worker: body.target_agent,
+          txHash: proof.tx_hash,
+          amount: proof.amount_micro,
+          reason: eligibility.reason,
+        });
+      } else {
+        // ── Cross-operator federated P2P (remote worker): the 3-leg path. ──
+        // The delegator client did federated discovery (P-A surfaces the
+        // remote worker's settlement_address), built a single atomic Solana
+        // tx with three legs — worker net, origin-relay (A) fee, executor-
+        // relay (B) fee — and pinned the worker via `target_agent`. The
+        // relay NEVER transmits funds cross-operator: the delegator pays
+        // all three legs directly, both relays coordinate + verify only.
+        //
+        // Full leg validation (addresses + amounts vs the discovered
+        // candidate + the peer relay's treasury) happens at the forward
+        // site, where discovery has resolved the worker and the hosting
+        // peer. Here we require the inputs that path needs.
+        if ((task.required_capabilities ?? []).length === 0) {
+          throw new TaskError(
+            "TASK_P2P_NO_ADDRESS",
+            "Federated P2P delegation to a remote worker requires required_capabilities (to locate the worker on its operator)",
+            400,
+          );
+        }
+        if (!proof.b_fee_to_address || proof.b_fee_amount_micro == null) {
+          throw new TaskError(
+            "TASK_INVALID_INPUT",
+            "Federated P2P payment_proof requires the executor-relay fee leg (b_fee_to_address, b_fee_amount_micro)",
+            400,
+          );
+        }
+
+        settlementMode = "p2p";
+        p2pPaymentProof = proof;
+        federatedP2pIntent = true;
+
+        logger.info("task.federated_p2p_pending", {
+          correlationId: taskId,
+          delegator: submittedBy,
+          worker: body.target_agent,
+          txHash: proof.tx_hash,
+        });
       }
-
-      settlementMode = "p2p";
-      p2pPaymentProof = proof;
-
-      logger.info("task.p2p_settlement", {
-        correlationId: taskId,
-        delegator: submittedBy,
-        worker: body.target_agent,
-        txHash: proof.tx_hash,
-        amount: proof.amount_micro,
-        reason: eligibility.reason,
-      });
     }
 
     // === Arc 3.5: P2P-by-default submission gate ===
@@ -2081,8 +2152,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             : multiCapProfiles;
 
         // Phase 4: Fetch federated candidates from active peer relays (best-effort, non-blocking)
-        let federatedCandidates: { profile: CandidateProfile; _source_relay_endpoint: string }[] =
-          [];
+        let federatedCandidates: {
+          profile: CandidateProfile;
+          _source_relay_endpoint: string;
+          _settlement_address: string | null;
+        }[] = [];
         let federationEdges: Array<{
           from: string;
           to: string;
@@ -2125,7 +2199,174 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           .map((fc) => fc.profile);
         const allProfiles = [...eligibleProfiles, ...federatedProfiles];
 
-        if (allProfiles.length > 0) {
+        if (federatedP2pIntent) {
+          // ── Cross-operator federated P2P: forward directly to the pinned
+          // remote worker WITH the delegator's 3-leg proof. No ranking — the
+          // delegator already discovered + paid this worker onchain. The relay
+          // validates the three legs against the discovered worker address +
+          // both operator treasuries, then forwards. It NEVER transmits funds
+          // cross-operator; the delegator paid all legs in one atomic tx.
+          // Doctrine: docs/doctrine/off-ramp-as-user-action.md § federated P2P.
+          const proof = p2pPaymentProof!;
+          const targetId = body.target_agent!;
+          const fc = federatedCandidates.find((c) => c.profile.motebit_id === targetId);
+          if (fc == null || !remoteAgentRelay.has(targetId)) {
+            throw new HTTPException(404, {
+              message:
+                "Pinned remote worker not discoverable on any active peer — cannot place the paid federated task",
+            });
+          }
+          const peerEndpoint = remoteAgentRelay.get(targetId)!;
+          const workerAddr = fc._settlement_address;
+          const fedPrice = fc.profile.listing?.pricing.find((p) =>
+            (requiredCaps as readonly string[]).includes(p.capability),
+          );
+          if (!workerAddr) {
+            throw new HTTPException(400, {
+              message: "Discovered remote worker has no settlement_address",
+            });
+          }
+          if (fedPrice == null || fedPrice.unit_cost <= 0) {
+            throw new HTTPException(400, {
+              message: "Remote worker has no priced listing for the requested capability",
+            });
+          }
+
+          // Fee-from-budget split (spec relay-federation-v1 §7.1): the listed
+          // unit_cost IS the chain budget. A takes 5% of the budget, forwards
+          // the remainder; B takes 5% of that; the worker nets the rest.
+          // $1.00 → A $0.05 / B $0.0475 / worker $0.9025.
+          const budgetMicro = toMicro(fedPrice.unit_cost);
+          const aFeeMicro = Math.round(budgetMicro * platformFeeRate);
+          const forwardedMicro = budgetMicro - aFeeMicro;
+          const bFeeMicro = Math.round(forwardedMicro * platformFeeRate);
+          const workerNetMicro = forwardedMicro - bFeeMicro;
+
+          // Resolve treasuries: A = our identity-derived Solana address; B = the
+          // hosting peer's relay-identity-derived address (relay_peers.public_key).
+          const { deriveSolanaAddress } = await import("@motebit/wallet-solana");
+          const aTreasury = deriveSolanaAddress(relayIdentity.publicKey);
+          const peerRow = moteDb.db
+            .prepare(
+              "SELECT public_key FROM relay_peers WHERE endpoint_url = ? AND state = 'active'",
+            )
+            .get(peerEndpoint) as { public_key: string } | undefined;
+          if (!peerRow?.public_key) {
+            throw new HTTPException(400, {
+              message: "Cannot resolve executor relay treasury (peer public key missing)",
+            });
+          }
+          const bTreasury = deriveSolanaAddress(hexToBytes(peerRow.public_key));
+
+          // Validate all three legs of the delegator's atomic tx against the
+          // resolved addresses + the deterministic fee split. Any mismatch is
+          // a fail-closed reject — the relay forwards only a proof it can stand
+          // behind (and that the executor relay will independently re-verify).
+          const legErr =
+            proof.to_address !== workerAddr
+              ? "worker leg address"
+              : proof.amount_micro !== workerNetMicro
+                ? `worker leg amount (${proof.amount_micro} ≠ ${workerNetMicro})`
+                : proof.fee_to_address !== aTreasury
+                  ? "origin-fee leg address"
+                  : proof.fee_amount_micro !== aFeeMicro
+                    ? `origin-fee leg amount (${proof.fee_amount_micro} ≠ ${aFeeMicro})`
+                    : proof.b_fee_to_address !== bTreasury
+                      ? "executor-fee leg address"
+                      : proof.b_fee_amount_micro !== bFeeMicro
+                        ? `executor-fee leg amount (${proof.b_fee_amount_micro} ≠ ${bFeeMicro})`
+                        : null;
+          if (legErr) {
+            throw new HTTPException(400, {
+              message: `Federated P2P payment_proof leg mismatch: ${legErr}`,
+            });
+          }
+          // Conservation: the three legs sum to the budget exactly.
+          if (workerNetMicro + aFeeMicro + bFeeMicro !== budgetMicro) {
+            throw new HTTPException(500, { message: "Fee split does not conserve budget" });
+          }
+
+          // Stamp A's price_snapshot (the budget) so onTaskResultReceived has
+          // the amounts for A's p2p audit row. taskQueue is SQLite-backed —
+          // mutate then set() (a get() result alone does not persist).
+          const p2pEntry = taskQueue.get(taskId);
+          if (p2pEntry) {
+            p2pEntry.price_snapshot = budgetMicro;
+            taskQueue.set(taskId, p2pEntry);
+          }
+
+          if (!taskRouter.canForward(peerEndpoint)) {
+            throw new HTTPException(503, {
+              message: "Executor relay temporarily unavailable (circuit open) — retry shortly",
+            });
+          }
+
+          federationAttempted = true;
+          routingChoice = {
+            selected_agent: targetId,
+            composite_score: 1,
+            sub_scores: {},
+            routing_paths: [],
+            alternatives_considered: 0,
+          };
+
+          const forwardBody = {
+            task_id: taskId,
+            origin_relay: relayIdentity.relayMotebitId,
+            target_agent: targetId,
+            task_payload: {
+              prompt: body.prompt,
+              required_capabilities: requiredCaps,
+              submitted_by: submittedBy,
+              wall_clock_ms: body.wall_clock_ms,
+            },
+            // The proof rides the SIGNED forward body — the executor relay
+            // verifies A's signature over canonicalJson(body), so the proof is
+            // integrity-protected peer-to-peer (no separate channel).
+            payment_proof: proof,
+            routing_choice: routingChoice,
+            timestamp: Date.now(),
+          };
+          const forwardBytes = new TextEncoder().encode(canonicalJson(forwardBody));
+          const forwardSig = await sign(forwardBytes, relayIdentity.privateKey);
+          try {
+            const resp = await fetch(`${peerEndpoint}/federation/v1/task/forward`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
+              body: JSON.stringify({ ...forwardBody, signature: bytesToHex(forwardSig) }),
+              signal: AbortSignal.timeout(10000),
+            });
+            if (resp.ok) {
+              routed = true;
+              taskRouter.recordPeerForwardResult(peerEndpoint, true);
+              logger.info("task.federated_p2p_forwarded", {
+                correlationId: taskId,
+                peerRelay: peerEndpoint,
+                targetAgent: targetId,
+                workerNetMicro,
+                aFeeMicro,
+                bFeeMicro,
+              });
+            } else {
+              taskRouter.recordPeerForwardResult(peerEndpoint, false);
+              throw new HTTPException(502, {
+                message: `Executor relay rejected the forwarded task (HTTP ${resp.status})`,
+              });
+            }
+          } catch (fwdErr) {
+            if (fwdErr instanceof HTTPException) throw fwdErr;
+            taskRouter.recordPeerForwardResult(peerEndpoint, false);
+            logger.warn("task.federated_p2p_forward_failed", {
+              correlationId: taskId,
+              peerRelay: peerEndpoint,
+              targetAgent: targetId,
+              error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
+            });
+            throw new HTTPException(502, {
+              message: "Failed to forward federated P2P task to the executor relay",
+            });
+          }
+        } else if (allProfiles.length > 0) {
           // Apply gradient-informed precision to routing weights when provided
           const explorationWeight =
             typeof body.exploration_drive === "number"
@@ -2194,43 +2435,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               alternatives_considered: topScore.alternatives_considered,
             };
 
-            // PR1: refund a federated budget hold when the forward never reaches
-            // the executor relay — the delegator must not be charged for work that
-            // did not leave this relay. No-op when nothing was held.
-            const refundFederatedHold = (delegator: string, tId: string, amountMicro: number) => {
-              if (amountMicro <= 0) return;
-              moteDb.db.exec("BEGIN");
-              try {
-                creditAccount(
-                  moteDb.db,
-                  delegator,
-                  amountMicro,
-                  "allocation_release",
-                  `fed-${tId}`,
-                  `Refund: federated forward failed for task ${tId}`,
-                );
-                moteDb.db
-                  .prepare(
-                    "UPDATE relay_allocations SET status = 'released' WHERE allocation_id = ?",
-                  )
-                  .run(`fed-${tId}`);
-                moteDb.db.exec("COMMIT");
-              } catch {
-                try {
-                  moteDb.db.exec("ROLLBACK");
-                } catch {
-                  /* txn already closed */
-                }
-              }
-            };
-
-            // A task forwards to at most ONE federated relay. Two reasons:
-            // (1) money — the delegator is charged once (the hold below would
-            // otherwise debit per federated candidate while a single
-            // `fed-<taskId>` allocation deduped the row); (2) correctness —
-            // fanning one task out to multiple relays means multiple workers
-            // execute it. Local fan-out below is unaffected. (The single
-            // price_snapshot already assumed one federated target.)
+            // A task forwards to at most ONE federated relay: fanning one task
+            // out to multiple relays means multiple workers execute it. Local
+            // fan-out below is unaffected.
             let federatedForwarded = false;
 
             // Route to selected agents — local via WebSocket, remote via federation forward
@@ -2254,27 +2461,17 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                 federationAttempted = true;
                 federatedForwarded = true;
 
-                // PR1 funding state for this federated forward — the delegator
-                // and the amount actually held, tracked across the charge and
-                // the forward attempt so a failed forward refunds the hold.
-                const delegatorId = submittedBy ?? motebitId;
-                let fedHeldMicro = 0;
-
-                // §7 settlement-chain arming: stamp this relay's (A's)
-                // price_snapshot from the SELECTED federated candidate's price.
-                // The candidate carries the peer's per-capability pricing,
-                // propagated through federated discovery (the keystone). Without
-                // this the snapshot is undefined (the submitter has no local
-                // listing) and A's settlement-forward block stays inert.
-                //
-                // Fee-from-budget model (spec relay-federation-v1 §7.1): the
-                // listed unit_cost IS the chain budget. Each relay extracts its
-                // 5% from what it receives and forwards the remainder, so the
-                // worker nets budget·(1−fee)^hops ($1.00 → A keeps $0.05 → B
-                // keeps $0.0475 → worker $0.9025). This is deliberately NOT the
-                // local fee-on-top model (computeGrossAmount, where the worker
-                // nets the full advertised price): grossing-up does not compose
-                // across hops, and §7.1's worked example is fee-from-budget.
+                // PAID federated delegation now requires a 3-leg P2P proof
+                // (delegator pays worker + both operator treasuries onchain in
+                // one atomic tx; the relay never custodies cross-operator
+                // funds). That path is the dedicated `federatedP2pIntent` branch
+                // above — it forwards directly to the pinned worker. Reaching
+                // THIS ranking-path branch with a priced federated candidate
+                // means the submitter did not supply target_agent + payment_proof
+                // → reject. This REPLACES PR1's relay-custody hold; the migration
+                // window is closed in the same change (no free-forward gap, no
+                // relay-custody charge). FREE federated tasks (no price) still
+                // forward here without proof or charge.
                 const fedProfile = federatedCandidates.find(
                   (fc) => fc.profile.motebit_id === selId,
                 )?.profile;
@@ -2282,63 +2479,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                   (requiredCaps as readonly string[]).includes(p.capability),
                 );
                 if (fedPrice != null && fedPrice.unit_cost > 0) {
-                  const fedBudgetMicro = toMicro(fedPrice.unit_cost);
-                  // taskQueue is SQLite-backed: get() reconstructs a fresh entry
-                  // from the row, so the snapshot must be written back with set()
-                  // (the mutate-then-set idiom used elsewhere in this handler) —
-                  // mutating the get() result alone would not persist, and A's
-                  // onTaskResultReceived would read the old undefined snapshot.
-                  const fedEntry = taskQueue.get(taskId);
-                  if (fedEntry) {
-                    fedEntry.price_snapshot = fedBudgetMicro;
-                    taskQueue.set(taskId, fedEntry);
-                  }
-
-                  // PR1: charge the delegator. Hold the budget from the
-                  // delegator's virtual account on THIS (origin) relay so the
-                  // cross-operator settlement is funded — PHASE 2 credited the
-                  // worker on the executor relay with nothing behind it. The hold
-                  // is consumed at settlement (PR2 forwards the net to the
-                  // executor relay's treasury) and refunded below if the forward
-                  // fails. Mirrors the local allocation_hold (see the submission
-                  // allocation block); the txn wraps debit + allocation insert.
-                  let held = false;
-                  moteDb.db.exec("BEGIN");
-                  try {
-                    const newBalance = debitAccount(
-                      moteDb.db,
-                      delegatorId,
-                      fedBudgetMicro,
-                      "allocation_hold",
-                      `fed-${taskId}`,
-                      `Hold for federated task ${taskId} to ${selId}`,
-                    );
-                    if (newBalance == null) {
-                      // Insufficient funds — debitAccount wrote nothing; close the txn.
-                      moteDb.db.exec("ROLLBACK");
-                    } else {
-                      moteDb.db
-                        .prepare(
-                          "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
-                        )
-                        .run(`fed-${taskId}`, taskId, selId, fedBudgetMicro, now);
-                      moteDb.db.exec("COMMIT");
-                      held = true;
-                    }
-                  } catch (chargeErr) {
-                    moteDb.db.exec("ROLLBACK");
-                    throw chargeErr;
-                  }
-                  // Do not forward unfunded work. The routing catch rethrows
-                  // HTTPException (see "Re-throw intentional HTTP errors" below),
-                  // so this surfaces as a 402 to the submitter.
-                  if (!held) {
-                    throw new HTTPException(402, {
-                      message:
-                        "Insufficient funds for federated task — deposit to your virtual account on this relay",
-                    });
-                  }
-                  fedHeldMicro = fedBudgetMicro;
+                  // The routing catch rethrows HTTPException (see "Re-throw
+                  // intentional HTTP errors" below) → surfaces as 402.
+                  throw new HTTPException(402, {
+                    message:
+                      "Paid federated delegation requires a 3-leg P2P payment_proof (submit with target_agent + payment_proof). Deposit-funded cross-operator settlement is closed. See off-ramp-as-user-action.md.",
+                  });
                 }
 
                 try {
@@ -2378,13 +2524,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                     });
                   } else {
                     taskRouter.recordPeerForwardResult(peerEndpoint, false);
-                    refundFederatedHold(delegatorId, taskId, fedHeldMicro);
-                    fedHeldMicro = 0;
                   }
                 } catch (fwdErr) {
                   taskRouter.recordPeerForwardResult(peerEndpoint, false);
-                  refundFederatedHold(delegatorId, taskId, fedHeldMicro);
-                  fedHeldMicro = 0;
                   logger.warn("task.forward_failed", {
                     correlationId: taskId,
                     peerRelay: peerEndpoint,

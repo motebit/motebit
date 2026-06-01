@@ -105,6 +105,22 @@ The gate retires deposit-funded relay-custody for paid cross-agent delegation, w
 
 The structural enforcement at the protocol type level (`WritableSettlementMode`) is now backed by the operational submission gate; both are live, and `arc-3.5-gate.test.ts` locks the gate's presence and carve-out matrix.
 
+## Cross-operator federated P2P — the federation funding arc
+
+Arc 2 collapsed the relay's in-flow transmitter surface to zero for **single-operator** worker earnings: the delegator pays the worker + the 5% fee in one atomic Solana multi-output tx; the relay records audit only (`settlement_mode='p2p'`). The federation funding arc extends that same move **across operators** — the load-bearing decision being that the relay NEVER transmits funds cross-operator either.
+
+When alice on relay A delegates a paid task to worker bob on independent relay B, the earlier (PHASE 2) design routed money through relay custody: A would charge alice's virtual account, forward the remainder to B's treasury, and B would credit bob's virtual account. That makes an A→B treasury transfer the **first relay→non-user outflow** — re-expanding the money-transmitter surface this doctrine collapses to zero, now across legal entities. It was rejected.
+
+**The shipped shape: client-pinned direct delegation with a 3-leg proof.** Federation is capability-routed (alice doesn't know bob until A discovers him on B), so the delegator's client does federated discovery first (P-A surfaces the remote worker's `settlement_address`), then builds a single atomic Solana tx with **three** legs and submits with `target_agent` = the remote worker + the proof:
+
+1. **Worker leg** — delegator → bob, his net (`budget·(1−rate)²`).
+2. **Origin-fee leg** — delegator → relay A treasury (`round(budget·rate)`).
+3. **Executor-fee leg** — delegator → relay B treasury (`round((budget − A_fee)·rate)`).
+
+Per spec `relay-federation-v1` §7.1 fee-from-budget: a $1.00 budget splits into worker $0.9025 / A $0.05 / B $0.0475. A validates all three legs against the discovered worker address + both operator treasuries (B's = `deriveSolanaAddress(relay_peers.public_key)`), then forwards the proof inside the **signed** `/federation/v1/task/forward` body (integrity-protected peer-to-peer). B re-verifies, dispatches to bob, and both relays record a `settlement_mode='p2p'` audit row — A the origin-fee leg, B the worker + executor-fee leg. **Neither relay credits the worker nor charges the delegator on a virtual account.** Each operator independently reconciles the fee leg landing in its OWN treasury (the custody split), the way Arc 2 reconciles single-operator fees — neither trusts the other's books. The async p2p-verifier verifies the worker leg only where the worker is local (so the origin relay verifies its fee leg alone; the executor relay verifies worker + its fee leg); together all three legs are verified across the two operators.
+
+This **replaces** the PHASE 2 `relay_federation_settlements` relay-custody chain (and its interim PR1 charge) for the funded path: a proofless paid federated forward is rejected (402) at the forward site; free federated tasks still forward without a proof. The agent-of-payee question dissolves cross-operator the same way it dissolves single-operator — the relay never custodies bob's earnings, so the category no longer applies. What stays open is **production delegator-client construction of the 3-leg federated proof** (no shipped client does cross-operator paid delegation yet; the gate makes any future client born-compliant) and the still-deferred **multi-hop-as-P2P arc**.
+
 ## Cross-references
 
 - [`settlement-rails.md`](./settlement-rails.md) — custody split (`GuestRail` vs `SovereignRail`), the "Lanes for external readers" section

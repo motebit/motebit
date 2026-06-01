@@ -1019,7 +1019,7 @@ export interface DelegateSignature {
     // (undocumented)
     readonly signature: string;
     // (undocumented)
-    readonly suite: SuiteId;
+    readonly suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public
@@ -1084,7 +1084,7 @@ export type DeletionCertificate = {
     readonly witnessed_by: HorizonWitness[];
     readonly federation_graph_anchor?: FederationGraphAnchor;
     readonly issued_at: number;
-    readonly suite: SuiteId;
+    readonly suite: "motebit-jcs-ed25519-b64-v1";
     readonly signature: string;
 } | {
     readonly kind: "consolidation_flush";
@@ -1816,7 +1816,7 @@ export interface GuardianSignature {
     // (undocumented)
     readonly signature: string;
     // (undocumented)
-    readonly suite: SuiteId;
+    readonly suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public
@@ -1869,7 +1869,7 @@ export interface HorizonWitnessRequestBody {
     // (undocumented)
     readonly subject: HorizonSubject;
     // (undocumented)
-    readonly suite: SuiteId;
+    readonly suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public
@@ -2312,7 +2312,7 @@ export interface OperatorSignature {
     // (undocumented)
     readonly signature: string;
     // (undocumented)
-    readonly suite: SuiteId;
+    readonly suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public
@@ -2330,6 +2330,8 @@ export function optimalPathTrace<T>(graph: WeightedDigraph<T>, source: string, t
 // @public
 export interface P2pPaymentProof {
     amount_micro: number;
+    b_fee_amount_micro?: number;
+    b_fee_to_address?: string;
     chain: string;
     fee_amount_micro: number;
     fee_to_address: string;
@@ -2832,7 +2834,7 @@ export interface RetentionManifest {
     readonly spec: "motebit/retention-manifest@1";
     readonly stores: RetentionStoreDeclaration[];
     // (undocumented)
-    readonly suite: SuiteId;
+    readonly suite: "motebit-jcs-ed25519-hex-v1";
 }
 
 // @public
@@ -3174,7 +3176,7 @@ export interface SignedTransparencyDeclaration {
     readonly relay_public_key: string;
     readonly signature: string;
     readonly spec: string;
-    readonly suite: SuiteId;
+    readonly suite: "motebit-jcs-ed25519-hex-v1";
 }
 
 // @public
@@ -3330,7 +3332,7 @@ export type SkillSensitivity = "none" | "personal" | "medical" | "financial" | "
 // @public
 export interface SkillSignature {
     public_key: string;
-    suite: SuiteId;
+    suite: "motebit-jcs-ed25519-b64-v1";
     value: string;
 }
 
@@ -3414,7 +3416,7 @@ export interface SubjectSignature {
     // (undocumented)
     readonly signature: string;
     // (undocumented)
-    readonly suite: SuiteId;
+    readonly suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public
@@ -3736,7 +3738,7 @@ export const TRANSPARENCY_ANCHOR_MEMO_PREFIX: "motebit:transparency:v1:";
 export const TRANSPARENCY_SPEC_ID: "motebit-transparency/draft-2026-04-14";
 
 // @public
-export const TRANSPARENCY_SUITE: SuiteId;
+export const TRANSPARENCY_SUITE: "motebit-jcs-ed25519-hex-v1";
 
 // @public
 export interface TransparencyAnchorRecord {

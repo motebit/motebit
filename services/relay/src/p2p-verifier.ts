@@ -200,14 +200,32 @@ function handleVerificationResult(
 ): void {
   switch (result.status) {
     case "confirmed": {
-      // Walk transfers[] for both legs.
-      const workerLeg =
-        row.settlement_address != null
-          ? result.transfers.find(
-              (t) =>
-                t.to === row.settlement_address && t.amountMicro === BigInt(row.amount_settled),
-            )
-          : undefined;
+      // Which legs does THIS relay verify? A relay verifies the leg(s) that
+      // land in its OWN treasury, matching the settlement custody split:
+      //
+      //   - **Worker leg** — verifiable only when the worker is LOCAL to this
+      //     relay (its settlement_address resolves via the agent_registry
+      //     join). For a cross-operator federated task the ORIGIN relay does
+      //     not host the worker → no local settlement_address → the worker leg
+      //     is "not applicable" here and is verified by the EXECUTOR relay
+      //     (which does host the worker). Single-operator P2P always has a
+      //     local worker (submission rejects a worker without a
+      //     settlement_address), so this fee-leg-only path is reached only for
+      //     federated-origin audit rows. (If a local worker deregisters within
+      //     the ~1min verify window, the worker leg degrades to not-applicable
+      //     — acceptable: the submission-time address check already validated
+      //     it; this async pass is defence-in-depth, and the fee leg still
+      //     protects the relay's revenue.)
+      //   - **Fee leg** — the platform fee landing in THIS relay's treasury.
+      //     For federated tasks each relay records ITS own fee leg as
+      //     `platform_fee` (origin-fee on A, executor-fee on B), so the same
+      //     treasuryAddress + amount check validates the correct leg on each.
+      const workerLegApplicable = row.settlement_address != null;
+      const workerLeg = workerLegApplicable
+        ? result.transfers.find(
+            (t) => t.to === row.settlement_address && t.amountMicro === BigInt(row.amount_settled),
+          )
+        : undefined;
 
       // Fee leg: skipped for legacy pre-Arc-2 zero-fee P2P rows.
       const expectFeeLeg = row.platform_fee > 0;
@@ -217,10 +235,13 @@ function handleVerificationResult(
           )
         : undefined;
 
-      const workerLegOk = workerLeg != null;
+      const workerLegOk = !workerLegApplicable || workerLeg != null;
       const feeLegOk = expectFeeLeg ? feeLeg != null : true;
+      // At least one leg must be applicable — a row with neither a local worker
+      // nor a fee leg is unverifiable (cannot happen for a well-formed p2p row).
+      const hasSomethingToVerify = workerLegApplicable || expectFeeLeg;
 
-      if (workerLegOk && feeLegOk) {
+      if (workerLegOk && feeLegOk && hasSomethingToVerify) {
         db.prepare(
           `UPDATE relay_settlements
            SET payment_verification_status = 'verified', payment_verified_at = ?
@@ -241,7 +262,9 @@ function handleVerificationResult(
       // chain). Fail + downgrade.
       const error = !workerLegOk
         ? "Worker leg not found in tx transfers (address or amount mismatch)"
-        : "Fee leg not found in tx transfers (address or amount mismatch)";
+        : !feeLegOk
+          ? "Fee leg not found in tx transfers (address or amount mismatch)"
+          : "No verifiable leg for this settlement row (no local worker and no fee leg)";
       db.prepare(
         `UPDATE relay_settlements
          SET payment_verification_status = 'failed',

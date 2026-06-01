@@ -133,6 +133,24 @@ export interface VerifiedForwardedTask {
     wall_clock_ms?: number;
   };
   routingChoice?: Record<string, unknown>;
+  /**
+   * Cross-operator federated P2P proof (off-ramp arc § federated P2P). When
+   * present, the delegator paid the worker + both operator fee legs onchain in
+   * one atomic tx; the executor relay settles `settlement_mode='p2p'` (no
+   * relay-custody credit) and verifies the worker + its own fee leg. Carried
+   * inside the SIGNED forward body, so it is integrity-protected peer-to-peer.
+   */
+  paymentProof?: {
+    tx_hash: string;
+    chain: string;
+    network: string;
+    to_address: string;
+    amount_micro: number;
+    fee_to_address: string;
+    fee_amount_micro: number;
+    b_fee_to_address?: string;
+    b_fee_amount_micro?: number;
+  };
 }
 
 /** Verified task result from a peer relay. Signature already checked. */
@@ -2001,6 +2019,17 @@ export function registerFederationRoutes(deps: FederationDeps): void {
         wall_clock_ms?: number;
       };
       routing_choice?: Record<string, unknown>;
+      payment_proof?: {
+        tx_hash: string;
+        chain: string;
+        network: string;
+        to_address: string;
+        amount_micro: number;
+        fee_to_address: string;
+        fee_amount_micro: number;
+        b_fee_to_address?: string;
+        b_fee_amount_micro?: number;
+      };
       timestamp?: number;
       signature: string;
     }>();
@@ -2041,6 +2070,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       targetAgent: body.target_agent,
       payload: body.task_payload,
       routingChoice: body.routing_choice,
+      ...(body.payment_proof ? { paymentProof: body.payment_proof } : {}),
     });
 
     if (result.status === "duplicate") {
