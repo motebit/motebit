@@ -159,13 +159,13 @@ const PROBES: ReadonlyArray<Probe> = [
   {
     script: "check-wire-schema-parity-bites",
     proves:
-      "flags a re-introduced `true as _Alias` cast in a wire-schema parity block — the idiom that swallows the `never` a drifted parity check resolves to, re-inerting drift invariant #22",
+      "flags a re-introduced cast on a parity value line that swallows the `never` a drifted parity check resolves to, re-inerting drift invariant #22 — here the LINE-SPLIT form (`true as\\n  _Alias`) that a naive single-line regex would miss",
     perturb: () =>
-      // Re-add the forbidden cast to a parity value line. The gate scans
-      // textually for `true as _\\w+`, so no typecheck is needed; cleanup
-      // restores the original verbatim.
+      // Re-add the forbidden cast in its line-split form — the variant a
+      // line-by-line scan misses. The gate normalizes whitespace, so it must
+      // still fire. No typecheck needed; cleanup restores verbatim.
       mutateFile("packages/wire-schemas/src/route-score.ts", (src) =>
-        src.replace("forward: true,", "forward: true as _ForwardCheck,"),
+        src.replace("forward: true,", "forward: true as\n    _ForwardCheck,"),
       ),
   },
   {

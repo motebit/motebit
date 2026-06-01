@@ -2,28 +2,34 @@
  * Drift defense — the wire-schema type-parity check (drift invariant #22)
  * must BITE, not just exist.
  *
- * Each `packages/wire-schemas/src/*.ts` carries a `_*_TYPE_PARITY` block that
- * asserts the zod schema and its `@motebit/protocol` type agree on the wire.
- * Each assertion has the form:
+ * Each `packages/wire-schemas/src/*.ts` schema carries a `_*_TYPE_PARITY`
+ * block that asserts the zod schema and its `@motebit/protocol` type agree on
+ * the wire (`ParityForward`/`ParityReverse` over the shared `Relax` normalizer
+ * in `src/__parity/check.ts`). The assertion is LIVE: the value lines are bare
  *
- *     type _ForwardCheck = ParityForward<Protocol, z.infer<typeof Schema>>;
- *     export const _X_TYPE_PARITY: { forward: _ForwardCheck; ... } = {
- *       forward: true,        // <- LIVE: `_ForwardCheck` resolves to `true`
- *       ...                   //    only when parity holds, else `never`, and
- *     };                      //    `true` is not assignable to `never` → tsc fails.
+ *     forward: true,
  *
- * The original blocks were written `forward: true as _ForwardCheck`. That cast
- * is the bug this gate forbids: `true as never` is a LEGAL assertion (never is
- * a subtype of true), so a check that resolves to `never` on drift is
- * swallowed and `tsc` passes through real drift. The whole parity defense was
- * inert for that reason (see `docs/parity-inventory.md`). The casts were
- * removed once the check was made artifact-free; this gate keeps them gone —
- * re-introducing the idiom anywhere under `packages/wire-schemas/src` silently
- * re-inerts #22 for that schema, exactly the regression class the parity work
- * was meant to close for good.
+ * which typechecks only when the parity alias resolves to `true`; on drift it
+ * resolves to `never`, and `true` is not assignable to `never`, so `tsc` fails.
  *
- * Mechanism, not vigilance: a reviewer cannot be relied on to notice a
- * re-added `as _Check` cast. This gate makes the regression unrepresentable.
+ * This gate forbids the moves that silently re-inert that check — the
+ * regression that left the whole defense dead for its entire prior life (the
+ * wire-schema-parity-cast-hole, mapped in `docs/parity-inventory.md`):
+ *
+ *   1. A CAST on the value: `forward: true as _ForwardCheck` (or `as never`,
+ *      `(true) as _X`, a line-split `true as\n  _X`, `true as unknown as _X`).
+ *      `true as never` is a legal assertion that swallows the drift `never`.
+ *   2. A TS SUPPRESSION on the value line: `@ts-expect-error` / `@ts-ignore`.
+ *   3. DELETING the block, or adding a new schema with no block — coverage
+ *      silently drops. So a schema-defining file MUST carry a parity block.
+ *
+ * It forbids the cast/suppression IDIOMS and requires a block per schema; it
+ * does not (cannot, textually) foreclose every conceivable false-pass (e.g.
+ * widening a `_*Check` alias to `boolean`, or an `any` smuggled into the
+ * parity type chain). Those remain reviewer-caught. The intentional escape
+ * hatch for a genuine zod representational limit is NOT a cast — it is a typed
+ * `// parity-divergence:` correction of the schema-inferred type (see the A6
+ * waiver at `transparency-declaration.ts`, and `wire-schemas/CLAUDE.md` rule 5).
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
@@ -32,25 +38,30 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WIRE_SCHEMA_SRC = resolve(REPO_ROOT, "packages/wire-schemas/src");
 
-// The forbidden idiom: `true as _<Alias>` (or any `<value> as _<Alias>` that
-// could swallow a parity `never`). Pinned to the leading-underscore alias
-// convention the parity blocks use, so ordinary `x as Foo` casts elsewhere are
-// unaffected.
-const FORBIDDEN = /\btrue\s+as\s+_\w+/;
+// `true` (optionally parenthesized) followed by `as` — any cast on the parity
+// literal. Tested against whitespace-normalized source so a line-split cast
+// (`true as\n  _ForwardCheck`) is caught, and against `(true) as`.
+const CAST = /\btrue\b\s*\)?\s+as\b/;
+const TS_SUPPRESS = /@ts-(expect-error|ignore)\b/;
+// A schema-DEFINING file (not the index barrel, which re-exports via
+// `export { …_SCHEMA_ID } from`).
+const DEFINES_SCHEMA = /export\s+const\s+\w*_SCHEMA_ID\b/;
+const HAS_PARITY = /\bParity(Forward|Reverse)\s*</;
 
 interface Violation {
   file: string;
-  line: number;
-  text: string;
+  kind: string;
+  detail: string;
 }
 
 function tsFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
+    if (entry === "__tests__") continue;
     const abs = resolve(dir, entry);
     if (statSync(abs).isDirectory()) {
       out.push(...tsFiles(abs));
-    } else if (entry.endsWith(".ts")) {
+    } else if (entry.endsWith(".ts") && !entry.endsWith(".test.ts")) {
       out.push(abs);
     }
   }
@@ -59,29 +70,51 @@ function tsFiles(dir: string): string[] {
 
 const violations: Violation[] = [];
 for (const abs of tsFiles(WIRE_SCHEMA_SRC)) {
-  const lines = readFileSync(abs, "utf-8").split("\n");
-  lines.forEach((text, i) => {
-    if (FORBIDDEN.test(text)) {
-      violations.push({ file: relative(REPO_ROOT, abs), line: i + 1, text: text.trim() });
-    }
-  });
+  const raw = readFileSync(abs, "utf-8");
+  const rel = relative(REPO_ROOT, abs);
+  const normalized = raw.replace(/\s+/g, " ");
+
+  if (CAST.test(normalized)) {
+    violations.push({
+      file: rel,
+      kind: "cast-on-parity-true",
+      detail:
+        "a `true as …` cast (incl. `as never`, parenthesized, or line-split) swallows the drift `never`",
+    });
+  }
+  if (TS_SUPPRESS.test(raw)) {
+    violations.push({
+      file: rel,
+      kind: "ts-suppression",
+      detail: "@ts-expect-error / @ts-ignore can suppress a drifted parity error",
+    });
+  }
+  if (DEFINES_SCHEMA.test(raw) && !HAS_PARITY.test(raw)) {
+    violations.push({
+      file: rel,
+      kind: "missing-parity-block",
+      detail:
+        "schema-defining file (exports a *_SCHEMA_ID) carries no ParityForward/ParityReverse block",
+    });
+  }
 }
 
 if (violations.length > 0) {
-  console.error(`Wire-schema parity cast violations (${violations.length}):\n`);
+  console.error(`Wire-schema parity-bite violations (${violations.length}):\n`);
   for (const v of violations) {
-    console.error(`  ${v.file}:${v.line}`);
-    console.error(`    ${v.text}`);
+    console.error(`  ${v.file}`);
+    console.error(`    ${v.kind}: ${v.detail}`);
   }
   console.error(
-    `\nThe \`true as _Alias\` cast swallows the \`never\` a drifted parity check resolves to,\n` +
-      `re-inerting drift invariant #22 for that schema. Drop the cast: a bare \`forward: true\`\n` +
-      `keeps the check live (it typechecks only when parity holds). See the gate header and\n` +
-      `docs/parity-inventory.md.`,
+    `\nDrift invariant #22 must BITE. A parity value line must be a bare \`forward: true\`\n` +
+      `(it typechecks only when parity holds); a cast or @ts- suppression swallows the drift\n` +
+      `\`never\`, and every schema-defining file must carry a parity block. For a genuine zod\n` +
+      `representational limit, use the typed \`// parity-divergence:\` waiver (not a cast) — see\n` +
+      `transparency-declaration.ts and docs/parity-inventory.md.`,
   );
   process.exit(1);
 }
 
 console.log(
-  `check-wire-schema-parity-bites: OK — no inert parity casts in packages/wire-schemas/src`,
+  `check-wire-schema-parity-bites: OK — all schema files carry a live parity block, no inert casts/suppressions`,
 );
