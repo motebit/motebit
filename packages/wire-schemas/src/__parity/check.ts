@@ -25,9 +25,9 @@
  *         (so every `Brand<string, _>` id collapses to string, but narrow
  *         literals like `"completed"` do not — fixes the optional-brand
  *         over-match, inventory § C3) + structural recursion.
- *   - 3b (current): nominal-enum → value-literal-union equivalence via
- *         `` `${T}` `` (inventory § C1).
- *   - 3c: `readonly` array/property relaxation (inventory § C2).
+ *   - 3b: nominal-enum → value-literal-union equivalence via `` `${T}` ``
+ *         (inventory § C1).
+ *   - 3c (current): `readonly` array/property relaxation (inventory § C2).
  *   - 3d: per-arm discriminated-union handling (inventory § C4).
  *
  * NOT shipped to consumers — excluded from the npm tarball (the package
@@ -52,20 +52,21 @@ type IsStringWide<X> = [X] extends [string] ? ([string] extends [X] ? true : fal
 
 /**
  * Structural relaxation, applied after the string-wide collapse. Arrays
- * recurse element-wise and PRESERVE their read/write variance (3c flips the
- * readonly arm to mutable — a one-line change); objects recurse
- * homomorphically, preserving optional/readonly modifiers (3c adds
- * `-readonly`). Discriminated unions fall out of `Relax`'s distribution
- * (3d). Nominal TS enums are left intact here — they are 3b's job, and
- * their continued failure after 3a is the metric that 3a did not over-reach.
+ * recurse element-wise; objects recurse homomorphically. Both NORMALIZE
+ * read/write variance to mutable (3c): protocol `ReadonlyArray<X>` and
+ * `readonly` properties are wire-equivalent to their mutable forms, but
+ * `readonly T[]` is not assignable to the mutable `T[]` zod infers (inventory
+ * § C2), so the single readonly-matching array arm (which also matches
+ * mutable arrays) emits `Relax<U>[]`, and the object map strips `readonly`
+ * via `-readonly`. Optional modifiers are preserved (homomorphic map).
+ * Discriminated unions fall out of `Relax`'s distribution (3d). Nominal TS
+ * enums are handled in `RelaxOne` (3b), not here.
  */
-type RelaxStructural<T> = T extends (infer U)[]
+type RelaxStructural<T> = T extends readonly (infer U)[]
   ? Relax<U>[]
-  : T extends readonly (infer U)[]
-    ? readonly Relax<U>[]
-    : T extends object
-      ? { [K in keyof T]: Relax<T[K]> }
-      : T;
+  : T extends object
+    ? { -readonly [K in keyof T]: Relax<T[K]> }
+    : T;
 
 /**
  * A nominal TS `enum` type is a union of its members, each nominally
@@ -87,8 +88,8 @@ type RelaxOne<T> =
  *
  * Capability ladder (one commit each; see module header):
  *   3a: string-wide collapse + structural recursion.
- *   3b (here): nominal-enum → value-literal equivalence.
- *   3c: readonly-array/property → mutable.
+ *   3b: nominal-enum → value-literal equivalence.
+ *   3c (here): readonly-array/property → mutable.
  *   3d: explicit per-arm discriminated-union handling (today via distribution).
  */
 export type Relax<T> = T extends unknown ? RelaxOne<T> : never;

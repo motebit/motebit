@@ -54,9 +54,8 @@ export type _NestedObject = Assert<
 >;
 export type _ArrayElements = Assert<Eq<Relax<MotebitId[]>, string[]>>;
 
-// ── 3a: readonly arrays are NOT yet stripped — that is 3c's one-line change.
-//        This asserts the *current* behaviour so 3c is a deliberate, visible
-//        edit (flip this to `Eq<…, string[]>` when 3c lands).
-export type _ReadonlyArrayPreserved = Assert<
-  Relax<readonly string[]> extends string[] ? false : true
->;
+// ── 3c: readonly arrays and readonly properties relax to mutable (wire-
+//        equivalent; `readonly T[]` is not assignable to the mutable `T[]`
+//        zod infers). Bites if the readonly normalization regresses.
+export type _ReadonlyArrayStripped = Assert<Eq<Relax<readonly string[]>, string[]>>;
+export type _ReadonlyPropStripped = Assert<Eq<Relax<{ readonly id: MotebitId }>, { id: string }>>;
