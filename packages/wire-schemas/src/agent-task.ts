@@ -46,9 +46,18 @@ const AgentTaskStatusSchema = z
   );
 
 const DeviceCapabilitySchema = z
-  .enum(["stdio_mcp", "http_mcp", "file_system", "keyring", "background", "local_llm", "push_wake"])
+  .enum([
+    "stdio_mcp",
+    "http_mcp",
+    "file_system",
+    "keyring",
+    "background",
+    "local_llm",
+    "push_wake",
+    "secure_enclave",
+  ])
   .describe(
-    "Device-side capability the executor must possess. Closed set defined in @motebit/protocol — `stdio_mcp`, `http_mcp` (transports); `file_system`, `keyring` (resources); `background`, `push_wake` (lifecycle); `local_llm` (sovereign mode). New capabilities are protocol additions, not free-form strings.",
+    "Device-side capability the executor must possess. Closed set defined in @motebit/protocol — `stdio_mcp`, `http_mcp` (transports); `file_system`, `keyring` (resources); `background`, `push_wake` (lifecycle); `local_llm` (sovereign mode); `secure_enclave` (hardware-held identity key). New capabilities are protocol additions, not free-form strings.",
   );
 
 const IntentOriginSchema = z

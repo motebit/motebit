@@ -55,9 +55,10 @@
           "keyring",
           "background",
           "local_llm",
-          "push_wake"
+          "push_wake",
+          "secure_enclave"
         ],
-        "description": "Device-side capability the executor must possess. Closed set defined in @motebit/protocol — `stdio_mcp`, `http_mcp` (transports); `file_system`, `keyring` (resources); `background`, `push_wake` (lifecycle); `local_llm` (sovereign mode). New capabilities are protocol additions, not free-form strings."
+        "description": "Device-side capability the executor must possess. Closed set defined in @motebit/protocol — `stdio_mcp`, `http_mcp` (transports); `file_system`, `keyring` (resources); `background`, `push_wake` (lifecycle); `local_llm` (sovereign mode); `secure_enclave` (hardware-held identity key). New capabilities are protocol additions, not free-form strings."
       },
       "description": "Optional capability filter for routing. The relay only dispatches to agents whose `AgentServiceListing.capabilities` (broader concept) implies these device-level capabilities."
     },
@@ -131,9 +132,10 @@
               "keyring",
               "background",
               "local_llm",
-              "push_wake"
+              "push_wake",
+              "secure_enclave"
             ],
-            "description": "Device-side capability the executor must possess. Closed set defined in @motebit/protocol — `stdio_mcp`, `http_mcp` (transports); `file_system`, `keyring` (resources); `background`, `push_wake` (lifecycle); `local_llm` (sovereign mode). New capabilities are protocol additions, not free-form strings."
+            "description": "Device-side capability the executor must possess. Closed set defined in @motebit/protocol — `stdio_mcp`, `http_mcp` (transports); `file_system`, `keyring` (resources); `background`, `push_wake` (lifecycle); `local_llm` (sovereign mode); `secure_enclave` (hardware-held identity key). New capabilities are protocol additions, not free-form strings."
           },
           "description": "Optional capability filter for routing. The relay only dispatches to agents whose `AgentServiceListing.capabilities` (broader concept) implies these device-level capabilities."
         },
