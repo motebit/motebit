@@ -232,6 +232,64 @@
           },
           "required": ["kind", "url"],
           "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "click_element"
+            },
+            "element_id": {
+              "type": "string",
+              "description": "Structural id of the element to click, from a prior AX read of the element space."
+            }
+          },
+          "required": ["kind", "element_id"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "focus_element"
+            },
+            "element_id": {
+              "type": "string",
+              "description": "Structural id of the element to focus without clicking — avoids click side-effects (dropdowns/dialogs) when setting up a type."
+            }
+          },
+          "required": ["kind", "element_id"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "type_into"
+            },
+            "element_id": {
+              "type": "string",
+              "description": "Structural id of the element to type into; the server focuses it first so keystrokes are not swallowed."
+            },
+            "text": {
+              "type": "string",
+              "description": "Text to type."
+            },
+            "per_char_delay_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Per-character delay in ms; same shape as the lower-level `type` action."
+            },
+            "clear_first": {
+              "type": "boolean",
+              "description": "If true (default), clear the field's current value before typing; false appends."
+            }
+          },
+          "required": ["kind", "element_id", "text"],
+          "additionalProperties": true
         }
       ],
       "description": "Discriminated action variant. The `kind` field selects the branch."
@@ -468,6 +526,64 @@
                 }
               },
               "required": ["kind", "url"],
+              "additionalProperties": true
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "click_element"
+                },
+                "element_id": {
+                  "type": "string",
+                  "description": "Structural id of the element to click, from a prior AX read of the element space."
+                }
+              },
+              "required": ["kind", "element_id"],
+              "additionalProperties": true
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "focus_element"
+                },
+                "element_id": {
+                  "type": "string",
+                  "description": "Structural id of the element to focus without clicking — avoids click side-effects (dropdowns/dialogs) when setting up a type."
+                }
+              },
+              "required": ["kind", "element_id"],
+              "additionalProperties": true
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "type_into"
+                },
+                "element_id": {
+                  "type": "string",
+                  "description": "Structural id of the element to type into; the server focuses it first so keystrokes are not swallowed."
+                },
+                "text": {
+                  "type": "string",
+                  "description": "Text to type."
+                },
+                "per_char_delay_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Per-character delay in ms; same shape as the lower-level `type` action."
+                },
+                "clear_first": {
+                  "type": "boolean",
+                  "description": "If true (default), clear the field's current value before typing; false appends."
+                }
+              },
+              "required": ["kind", "element_id", "text"],
               "additionalProperties": true
             }
           ],

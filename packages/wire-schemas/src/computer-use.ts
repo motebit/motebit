@@ -153,6 +153,52 @@ const NavigateActionSchema = z
   })
   .passthrough();
 
+// element-1 — structurally-addressed (AX-mode) actions. `element_id` is a
+// structural handle from a prior accessibility read, not a pixel coordinate.
+const ClickElementActionSchema = z
+  .object({
+    kind: z.literal("click_element"),
+    element_id: z
+      .string()
+      .describe(
+        "Structural id of the element to click, from a prior AX read of the element space.",
+      ),
+  })
+  .passthrough();
+
+const FocusElementActionSchema = z
+  .object({
+    kind: z.literal("focus_element"),
+    element_id: z
+      .string()
+      .describe(
+        "Structural id of the element to focus without clicking — avoids click side-effects (dropdowns/dialogs) when setting up a type.",
+      ),
+  })
+  .passthrough();
+
+const TypeIntoActionSchema = z
+  .object({
+    kind: z.literal("type_into"),
+    element_id: z
+      .string()
+      .describe(
+        "Structural id of the element to type into; the server focuses it first so keystrokes are not swallowed.",
+      ),
+    text: z.string().describe("Text to type."),
+    per_char_delay_ms: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe("Per-character delay in ms; same shape as the lower-level `type` action."),
+    clear_first: z
+      .boolean()
+      .optional()
+      .describe("If true (default), clear the field's current value before typing; false appends."),
+  })
+  .passthrough();
+
 /**
  * Discriminated union of all action variants. Exported so consumers can
  * validate an action value directly without wrapping in a request.
@@ -168,6 +214,9 @@ export const ComputerActionSchema = z.discriminatedUnion("kind", [
   KeyActionSchema,
   ScrollActionSchema,
   NavigateActionSchema,
+  ClickElementActionSchema,
+  FocusElementActionSchema,
+  TypeIntoActionSchema,
 ]);
 
 // ── 5.1 ComputerActionRequest ────────────────────────────────────────
