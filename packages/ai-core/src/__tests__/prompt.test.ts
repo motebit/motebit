@@ -212,6 +212,20 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("never as");
   });
 
+  // Self-state sibling of the browser-state rule. Witnessed 2026-05-31:
+  // asked "are you forming memories?", motebit answered "yes" while its
+  // store held 1 memory, 9 days old, 0 formed that session — reading
+  // the capability description, not the typed count. The [Now] block's
+  // Memory line now carries that count; this clause teaches the AI to
+  // ground the answer in it (distinguish capability from "N this
+  // session"), the prompt-clause leg of the typed-truth four-part shape.
+  it("teaches the AI to ground memory self-claims in the [Now] Memory line", () => {
+    const prompt = buildSystemPrompt(makeContextPack());
+    expect(prompt).toContain("Your own memory state is in the [Now] block");
+    expect(prompt).toContain("formed THIS session");
+    expect(prompt).toContain('"yes, I\'m forming memories"');
+  });
+
   // Vision-1 slice: when a tool result returns `bytes_omitted` with a
   // structured reason, the AI should surface the typed remediation
   // affordance verbatim — `/vision grant` for `consent_required`,
@@ -430,6 +444,72 @@ describe("formatSessionState — runtime session-state block", () => {
       pixelConsent: "session",
     });
     expect(out).not.toContain("Stale pixel-omission");
+  });
+
+  // ── Memory self-state line (typed-truth-perception) ──────────────
+  // The slip this closes (witnessed 2026-05-31): asked "are you
+  // forming memories?", motebit answered "yes" while its store held 1
+  // memory, 9 days old, 0 formed that session — confabulated from the
+  // capability description, not read from the typed count. The Memory
+  // line puts that count in front of the AI every turn.
+  it("emits the Memory line with total, newest age, and formed-this-session", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+      memory: { total: 1, newestAgeMs: 9 * 24 * 60 * 60 * 1000, formedThisSession: 0 },
+    });
+    expect(out).toContain("Memory: 1 stored, newest 9d old, 0 formed this session");
+  });
+
+  it("surfaces '0 formed this session' — the typed contradiction to 'yes, I'm forming memories'", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+      memory: { total: 42, newestAgeMs: 5 * 60 * 1000, formedThisSession: 0 },
+    });
+    expect(out).toContain("0 formed this session");
+  });
+
+  it("omits the newest-age clause when the store is empty (newestAgeMs null)", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+      memory: { total: 0, newestAgeMs: null, formedThisSession: 0 },
+    });
+    expect(out).toContain("Memory: 0 stored, 0 formed this session");
+    expect(out).not.toContain("newest");
+  });
+
+  it("formats newest age in the largest unit (s/m/h/d)", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const mk = (ms: number) =>
+      formatSessionState({
+        browser: { status: "closed" },
+        sensitivity: SensitivityLevel.None,
+        pixelConsent: "denied",
+        memory: { total: 1, newestAgeMs: ms, formedThisSession: 1 },
+      });
+    expect(mk(30 * 1000)).toContain("newest 30s old");
+    expect(mk(45 * 60 * 1000)).toContain("newest 45m old");
+    expect(mk(3 * 60 * 60 * 1000)).toContain("newest 3h old");
+    expect(mk(2 * 24 * 60 * 60 * 1000)).toContain("newest 2d old");
+  });
+
+  it("omits the Memory line entirely when no memory self-state is present (backward compat)", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+    });
+    expect(out).not.toContain("Memory:");
+    expect(out).toBe("[Now] Browser: closed");
   });
 });
 

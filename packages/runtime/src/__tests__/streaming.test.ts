@@ -2770,35 +2770,35 @@ describe("MotebitRuntime — [Now] block stale pixel-omission (typed-truth-perce
       reason;
   }
 
-  it("stale: prior consent_required + current consent granted → snapshot carries staleBytesOmissionReason", () => {
+  it("stale: prior consent_required + current consent granted → snapshot carries staleBytesOmissionReason", async () => {
     const rt = makeRuntime();
     setLastOmission(rt, "consent_required");
     rt.setPixelConsent("session");
-    const snap = rt.getSessionStateSnapshot();
+    const snap = await rt.getSessionStateSnapshot();
     expect(snap.staleBytesOmissionReason).toBe("consent_required");
     expect(snap.pixelConsent).toBe("session");
   });
 
-  it("not stale: prior consent_required + current consent still denied → no staleness signal", () => {
+  it("not stale: prior consent_required + current consent still denied → no staleness signal", async () => {
     const rt = makeRuntime();
     setLastOmission(rt, "consent_required");
     // pixelConsent stays "denied" (default). The same gate would still
     // fire, so the prior omission isn't stale — it's current.
-    const snap = rt.getSessionStateSnapshot();
+    const snap = await rt.getSessionStateSnapshot();
     expect(snap.staleBytesOmissionReason).toBeUndefined();
   });
 
-  it("not stale: no prior omission recorded → no staleness signal", () => {
+  it("not stale: no prior omission recorded → no staleness signal", async () => {
     const rt = makeRuntime();
     // Default _lastPixelOmissionReason = null. Even after granting
     // consent, the snapshot doesn't claim staleness because there's
     // no prior omission to be stale about.
     rt.setPixelConsent("session");
-    const snap = rt.getSessionStateSnapshot();
+    const snap = await rt.getSessionStateSnapshot();
     expect(snap.staleBytesOmissionReason).toBeUndefined();
   });
 
-  it("stale: prior consent_required + a different gate fires now (sensitivity_blocked) → still flagged as stale", () => {
+  it("stale: prior consent_required + a different gate fires now (sensitivity_blocked) → still flagged as stale", async () => {
     // Both gates produce omissions, but the AFFORDANCE differs
     // (/vision grant for consent vs /sensitivity none for tier).
     // The AI should re-take so it sees the CURRENT recovery
@@ -2806,20 +2806,60 @@ describe("MotebitRuntime — [Now] block stale pixel-omission (typed-truth-perce
     const rt = makeRuntime();
     setLastOmission(rt, "consent_required");
     rt.setSessionSensitivity(SensitivityLevel.Medical);
-    const snap = rt.getSessionStateSnapshot();
+    const snap = await rt.getSessionStateSnapshot();
     expect(snap.staleBytesOmissionReason).toBe("consent_required");
   });
 
-  it("resetConversation clears the tracker — new conversation doesn't inherit prior omission shadow", () => {
+  it("resetConversation clears the tracker — new conversation doesn't inherit prior omission shadow", async () => {
     const rt = makeRuntime();
     setLastOmission(rt, "consent_required");
     rt.setPixelConsent("session");
-    expect(rt.getSessionStateSnapshot().staleBytesOmissionReason).toBe("consent_required");
+    expect((await rt.getSessionStateSnapshot()).staleBytesOmissionReason).toBe("consent_required");
     rt.resetConversation();
     // New conversation; tracker cleared.
     expect(
       (rt as unknown as { _lastPixelOmissionReason: unknown })._lastPixelOmissionReason,
     ).toBeNull();
-    expect(rt.getSessionStateSnapshot().staleBytesOmissionReason).toBeUndefined();
+    expect((await rt.getSessionStateSnapshot()).staleBytesOmissionReason).toBeUndefined();
+  });
+
+  // ── Memory self-state in the [Now] block (the producer half) ──────
+  // Closes the self-state confabulation witnessed 2026-05-31: motebit
+  // answered "yes, I'm forming memories" with 0 formed that session.
+  // The snapshot now carries the typed count read from the store.
+  it("Memory self-state: snapshot reflects the store; a future session-start zeroes formedThisSession", async () => {
+    const rt = makeRuntime();
+    // Empty store → typed zero, not absent.
+    expect((await rt.getSessionStateSnapshot()).memory).toEqual({
+      total: 0,
+      newestAgeMs: null,
+      formedThisSession: 0,
+    });
+    // Form one memory in the current window.
+    await rt.memory.formMemory(
+      {
+        content: "the user prefers dark mode",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+      },
+      [1, 0],
+    );
+    const after = await rt.getSessionStateSnapshot();
+    expect(after.memory!.total).toBe(1);
+    expect(after.memory!.formedThisSession).toBe(1);
+    expect(after.memory!.newestAgeMs).not.toBeNull();
+    // Simulate a conversation reset landing strictly AFTER the memory
+    // formed: the memory is still held, but no longer "this session."
+    (rt as unknown as { _sessionStartedAt: number })._sessionStartedAt = Date.now() + 1000;
+    const later = await rt.getSessionStateSnapshot();
+    expect(later.memory!.total).toBe(1);
+    expect(later.memory!.formedThisSession).toBe(0);
+  });
+
+  it("resetConversation re-stamps the session window so 'formed this session' tracks the conversation", () => {
+    const rt = makeRuntime();
+    (rt as unknown as { _sessionStartedAt: number })._sessionStartedAt = 0;
+    rt.resetConversation();
+    expect((rt as unknown as { _sessionStartedAt: number })._sessionStartedAt).toBeGreaterThan(0);
   });
 });

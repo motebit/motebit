@@ -521,6 +521,13 @@ export interface MemoryQuery {
     sensitivity_filter?: SensitivityLevel[];
 }
 
+// @public
+export interface MemorySelfState {
+    readonly formedThisSession: number;
+    readonly newestAgeMs: number | null;
+    readonly total: number;
+}
+
 // @public (undocumented)
 export interface MemoryStorageAdapter {
     eraseNode(nodeId: string): Promise<void>;
@@ -719,6 +726,7 @@ export interface ServerVerifier {
 // @public
 export interface SessionStateSnapshot {
     readonly browser: BrowserSessionInfo;
+    readonly memory?: MemorySelfState;
     readonly pixelConsent: PixelConsentState;
     readonly sensitivity: SensitivityLevel;
     readonly staleBytesOmissionReason?: PixelOmittedReason;

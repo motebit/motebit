@@ -737,6 +737,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-typed-truth-perception",
   },
   {
+    name: "check-self-state-registry",
+    defends:
+      "every live-self-knowledge facet in the `[Now]` block (`packages/ai-core/src/prompt.ts` `SELF_STATE_RENDERERS`) travels with its full four-part structure: renderer + producer field (`getSessionStateSnapshot` in `packages/runtime/src/motebit-runtime.ts`) + prompt clause + test (`prompt.test.ts`). The `[Now]` block is the BOUNDARY of the motebit's live self-knowledge — the AI is taught to read it and treat anything outside it as unknown. For that discipline to be safe, the boundary must stay complete: a facet rendered with no producer field silently vanishes; a producer field with no prompt clause is ignored; a facet with no test removes silently. Closes the self-state confabulation class (AI claiming live state — 'the browser is open', 'yes, I'm forming memories' — from conversation/training/architecture instead of the typed [Now] truth) at the registry level, so the NEXT facet cannot ship un-grounded. Closed-registry shape with bidirectional drift (renderer-without-registry / registry-without-renderer), same idiom as `check-typed-truth-perception` (#80). Doctrine: `docs/doctrine/typed-truth-perception.md` + `docs/doctrine/runtime-invariants-over-prompt-rules.md` (the prompt teaches WHERE truth lives, not what's true) + `docs/doctrine/registry-pattern-canonical.md`; root principle `Typed truth on results, prompt for interpretation`.",
+    script: "check-self-state-registry",
+  },
+  {
     name: "check-prompt-density",
     defends:
       "the system prompt (`packages/ai-core/src/prompt.ts`) does not silently grow rule-shaped clauses beyond a measured baseline. Each `- ` bullet or `<digit>. ` numbered RULES line is a conformance ask; accumulation contaminates the §4 emergent-interior thesis (`THE_EMERGENT_INTERIOR.md` — pressuring the system prompt corrupts emergence) and turns the prompt into a configuration file disguised as teaching. Smoke-alarm shape (not a per-clause registry): coarse line-count against a baseline, fires on growth, requires intentional bump with doctrine-grade justification in the commit message. Doctrine: `docs/doctrine/runtime-invariants-over-prompt-rules.md` — the five-question audit + periodic prompt-prune discipline. Baseline 62 measured 2026-05-12 after the prompt-prune pass that landed alongside the doctrine memo; growth requires either runtime backing (A-grade) or named teaching justification (B-grade), pruning lowers the floor silently.",

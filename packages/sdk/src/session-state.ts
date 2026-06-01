@@ -58,6 +58,45 @@ export interface BrowserSessionInfo {
 }
 
 /**
+ * Memory self-state — the typed truth about the motebit's own
+ * memory store THIS turn, surfaced so the AI reads it instead of
+ * inferring continuity from its architecture description.
+ *
+ * The hallucination this closes is the self-state sibling of the
+ * browser-state one: asked "are you forming memories?", the AI
+ * reads the `[INTERNAL REFERENCE]` line ("Memory graph: semantic
+ * memory with decay, consolidation…") and confabulates "yes, I'm
+ * forming memories" — even when zero formed this session and the
+ * newest is days old. The capability description is true; the
+ * runtime claim was not. The fix is the same as `BrowserSessionInfo`:
+ * give the AI the typed runtime signal so the answer is grounded in
+ * what the store actually holds, not what the architecture can do.
+ *
+ * Doctrine: `typed-truth-perception.md` — same four-part shape as
+ * the browser line (wire field + runtime producer + prompt clause +
+ * dispatch/test). The `[Now]` block is where the AI reads it.
+ */
+export interface MemorySelfState {
+  /** Total non-tombstoned memory nodes this motebit currently holds. */
+  readonly total: number;
+  /**
+   * Age in ms of the most-recently-formed memory, or null when the
+   * store is empty. Lets the AI answer "how fresh is my memory?"
+   * from a number, not a guess ("9 days old", not "recently").
+   */
+  readonly newestAgeMs: number | null;
+  /**
+   * Memories formed since the current conversation began (the runtime
+   * stamps this at boot and re-stamps it on each `resetConversation`,
+   * so "this session" tracks what the user perceives when they ask
+   * "are you remembering this?" — not runtime uptime). The
+   * load-bearing field: a `0` here is the typed contradiction to
+   * "yes, I'm forming memories" when nothing has been written.
+   */
+  readonly formedThisSession: number;
+}
+
+/**
  * Full runtime session-state snapshot — composed by the runtime
  * from per-surface browser info plus its own sensitivity and
  * consent fields. Threaded through `MotebitLoopOptions` →
@@ -103,4 +142,13 @@ export interface SessionStateSnapshot {
    * staleness, the AI doesn't have to cross-reference history).
    */
   readonly staleBytesOmissionReason?: import("./pixel-consent.js").PixelOmittedReason;
+  /**
+   * Memory self-state — runtime-owned. Present when the runtime has
+   * a memory store wired (it always does in production; absent only
+   * on surfaces/tests that construct a snapshot without one). When
+   * present, the `[Now]` block emits a `Memory:` line the AI reads to
+   * ground self-claims about its own memory instead of inferring them
+   * from the architecture description. See {@link MemorySelfState}.
+   */
+  readonly memory?: MemorySelfState;
 }

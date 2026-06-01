@@ -369,6 +369,16 @@ export class MotebitRuntime {
   /** Unix ms timestamp of the last user-sent message, or null. */
   private _lastUserMessageAt: number | null = null;
   /**
+   * Unix ms marking the start of the current conversation window.
+   * Stamped at construction, re-stamped from the injected clock in
+   * `init()` (boot) and `resetConversation()` (new conversation), so
+   * it tracks the boundary the user perceives, not runtime uptime.
+   * Feeds the `[Now]` block's `Memory:` line — memories created
+   * at/after this mark are "formed this session," the typed
+   * contradiction to "yes, I'm forming memories" when nothing has.
+   */
+  private _sessionStartedAt: number = Date.now();
+  /**
    * Unix ms `finished_at` of the last consolidation cycle that ran, or null.
    * Governance bound on default-on consolidation: the cycle's unconditional
    * reflection LLM call is skipped when no new user message has landed since
@@ -1067,6 +1077,9 @@ export class MotebitRuntime {
   // === Lifecycle ===
 
   async init(target?: unknown): Promise<void> {
+    // Mark the start of this runtime session (when it woke up) so the
+    // `[Now]` block can report memories-formed-this-session honestly.
+    this._sessionStartedAt = this._clock?.() ?? Date.now();
     await this.renderer.init(target);
 
     // Connect to MCP servers and discover their tools.
@@ -1680,7 +1693,7 @@ export class MotebitRuntime {
         selectedSkills,
         // Prompt-1 — runtime session-state snapshot. Same shape as
         // the streaming path; non-streaming sendMessage parity.
-        sessionState: this.getSessionStateSnapshot(),
+        sessionState: await this.getSessionStateSnapshot(),
       });
       this.conversation.pushExchange(text, result.response);
       // First-conversation guidance fades after a few exchanges
@@ -2142,7 +2155,7 @@ export class MotebitRuntime {
         // prompt every turn. Closes the runtime-state-confabulation
         // hallucination class (witnessed 2026-05-08: AI claimed
         // browser was open after a refresh closed the session).
-        sessionState: this.getSessionStateSnapshot(),
+        sessionState: await this.getSessionStateSnapshot(),
       });
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();
@@ -2243,7 +2256,7 @@ export class MotebitRuntime {
         // snapshot so the AI's first system-triggered response
         // doesn't confabulate runtime state from training memory
         // either.
-        sessionState: this.getSessionStateSnapshot(),
+        sessionState: await this.getSessionStateSnapshot(),
       });
       const slabTurnId = `slab-activation-${runId ?? crypto.randomUUID()}`;
       const processed = this.streaming.processStream(stream, "", runId, { activationOnly: true });
@@ -2304,10 +2317,16 @@ export class MotebitRuntime {
       void this.reflectAndStore();
     }
     this.conversation.reset();
-    // Per-conversation tracker — clear so a fresh conversation
-    // doesn't carry the prior conversation's omission shadow into
-    // its [Now] block.
+    // Per-conversation trackers — clear so a fresh conversation
+    // doesn't carry the prior conversation's state into its [Now]
+    // block. The omission shadow is one; the session-start mark is
+    // the other — re-stamping it makes the Memory line's "formed this
+    // session" mean "since we started talking" (what the user
+    // perceives when asking "are you remembering this?"), not "since
+    // the runtime last booted" (which on a 24/7 companion would
+    // report a stale-high count and blunt the `0` signal).
     this._lastPixelOmissionReason = null;
+    this._sessionStartedAt = this._clock?.() ?? Date.now();
   }
 
   /**
@@ -3634,9 +3653,14 @@ export class MotebitRuntime {
    * `runTurnStreaming` options so the prompt builder can emit
    * `[Session]`.
    */
-  getSessionStateSnapshot(): import("@motebit/sdk").SessionStateSnapshot {
+  async getSessionStateSnapshot(): Promise<import("@motebit/sdk").SessionStateSnapshot> {
     const browser = this._browserSessionProvider?.() ?? { status: "closed" as const };
     const sensitivity = this.getEffectiveSessionSensitivity();
+    // Memory self-state — read from the store (not a counter) so the
+    // AI grounds claims about its own memory in what's actually held,
+    // not in its architecture description. Reads are async; the scan
+    // is negligible against the LLM turn this snapshot feeds.
+    const memory = await this.memory.getSelfStateSummary(this._sessionStartedAt);
     // Compute staleness — if a prior projection emitted an omission
     // reason, check whether the same gate would still fire under
     // current state. If not, the prior omission is stale and the
@@ -3672,6 +3696,7 @@ export class MotebitRuntime {
       browser,
       sensitivity,
       pixelConsent: this._pixelConsent,
+      memory,
       ...(staleBytesOmissionReason !== undefined ? { staleBytesOmissionReason } : {}),
     };
   }

@@ -99,8 +99,26 @@ const DOCTRINE_PATH = "docs/doctrine/runtime-invariants-over-prompt-rules.md";
  *     architecture (Episodic MemoryType, extractMemoryTags episodic
  *     parsing, confidence-decay) was already in place; this clause
  *     teaches the model to use it. Doctrine: memory-architecture.md.
+ *
+ *   - 65 → 67 (2026-06-01): the live-self-knowledge boundary (+2).
+ *     Both A-grade (runtime-backed by the `[Now]` block + gated by
+ *     check-self-state-registry). (1) The memory self-state clause —
+ *     teaches the AI to ground "are you forming memories?" in the
+ *     [Now] Memory line's typed count, not its architecture
+ *     description; backed by the `memory` field on
+ *     SessionStateSnapshot (runtime `getSessionStateSnapshot` reads
+ *     the store). (2) The umbrella boundary clause — "the [Now] block
+ *     is the boundary of your live self-knowledge; static design ≠
+ *     live state; if a self-fact isn't in [Now], say you'd need to
+ *     check rather than infer it." This is the GENERAL form that
+ *     dissolves the self-state confabulation class (it teaches WHERE
+ *     truth lives, not what's true) — the per-facet clauses are
+ *     examples under it. Backed by the whole [Now] mechanism +
+ *     `SELF_STATE_RENDERERS` registry, gated by
+ *     check-self-state-registry. Doctrine: typed-truth-perception.md +
+ *     runtime-invariants-over-prompt-rules.md.
  */
-const BASELINE = 65;
+const BASELINE = 67;
 
 function countRuleClauses(source: string): number {
   let count = 0;

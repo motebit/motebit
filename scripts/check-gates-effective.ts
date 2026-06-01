@@ -169,6 +169,20 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-self-state-registry",
+    proves:
+      "flags a SELF_STATE_RENDERERS key with no matching SELF_STATE_FACETS entry (renderer-without-registry) — the drift where a new [Now]-block self-state facet ships without its registry entry, so its producer field / prompt clause / test are never enforced and it can confabulate un-grounded",
+    perturb: () =>
+      // Rename the `memory` renderer key so it no longer matches its registry
+      // entry. Fires BOTH arms of the bidirectional check: `memory_..renamed`
+      // is renderer-without-registry, and the now-orphaned `memory` registry
+      // entry is registry-without-renderer. Textual scan only — no typecheck;
+      // cleanup restores prompt.ts verbatim.
+      mutateFile("packages/ai-core/src/prompt.ts", (src) =>
+        src.replace('key: "memory",', `key: "memory_${PROBE_PREFIX}renamed",`),
+      ),
+  },
+  {
     script: "check-service-primitives",
     proves: "flags a forbidden @motebit/encryption import inside a service",
     perturb: () =>

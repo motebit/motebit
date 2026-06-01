@@ -286,6 +286,45 @@ describe("MemoryGraph", () => {
     });
   });
 
+  describe("getSelfStateSummary (the [Now] block's Memory line)", () => {
+    const form = (content: string) =>
+      graph.formMemory({ content, confidence: 0.9, sensitivity: SensitivityLevel.None }, [1, 0]);
+
+    it("reports an empty store as total 0, newestAgeMs null, formedThisSession 0", async () => {
+      const s = await graph.getSelfStateSummary(0);
+      expect(s).toEqual({ total: 0, newestAgeMs: null, formedThisSession: 0 });
+    });
+
+    it("counts held memories and reports a non-negative newest age", async () => {
+      await form("a");
+      await form("b");
+      const s = await graph.getSelfStateSummary(0);
+      expect(s.total).toBe(2);
+      expect(s.newestAgeMs).not.toBeNull();
+      expect(s.newestAgeMs!).toBeGreaterThanOrEqual(0);
+    });
+
+    it("formedThisSession counts only nodes created at/after the session start", async () => {
+      await form("formed before the cutoff");
+      const cutoff = Date.now() + 1; // every existing node is strictly before this
+      // A session that started in the future sees nothing as "this session".
+      expect((await graph.getSelfStateSummary(cutoff)).formedThisSession).toBe(0);
+      // A session that started at epoch sees everything — the typed truth
+      // that distinguishes "0 formed this session" from "I have a memory graph".
+      const fromEpoch = await graph.getSelfStateSummary(0);
+      expect(fromEpoch.total).toBe(1);
+      expect(fromEpoch.formedThisSession).toBe(1);
+    });
+
+    it("excludes tombstoned nodes — a deleted memory is not held", async () => {
+      const node = await form("tombstoned one");
+      await storage.saveNode({ ...node, tombstoned: true });
+      await form("kept");
+      const s = await graph.getSelfStateSummary(0);
+      expect(s.total).toBe(1);
+    });
+  });
+
   describe("formMemory", () => {
     it("creates a memory node with correct fields", async () => {
       const candidate: MemoryCandidate = {

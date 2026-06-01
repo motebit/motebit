@@ -655,6 +655,43 @@ export class MemoryGraph {
     return result;
   }
 
+  /**
+   * Self-state summary — the typed truth the runtime surfaces in the
+   * AI's `[Now]` block so it grounds claims about its own memory
+   * instead of confabulating them from its architecture description.
+   *
+   * Reads the store directly (not a maintained counter) because
+   * formation happens through plural paths — the consolidation cycle
+   * AND the AI's memory-mutation tools — and a derived counter would
+   * be the exact "canonical truth invisible, sibling drifts" failure
+   * the synchronization-invariants doctrine forbids. The per-call
+   * scan is negligible against the LLM round-trip it feeds.
+   *
+   * Tombstoned nodes are excluded — a deleted memory is not held.
+   * `formedThisSession` counts nodes created at/after the runtime's
+   * session start (when it woke up); a `0` there is the typed
+   * contradiction to "yes, I'm forming memories."
+   */
+  async getSelfStateSummary(sessionStartedAt: number): Promise<{
+    total: number;
+    newestAgeMs: number | null;
+    formedThisSession: number;
+  }> {
+    const nodes = (await this.storage.getAllNodes(this.motebitId)).filter((n) => !n.tombstoned);
+    const now = Date.now();
+    let newestCreatedAt = Number.NEGATIVE_INFINITY;
+    let formedThisSession = 0;
+    for (const node of nodes) {
+      if (node.created_at > newestCreatedAt) newestCreatedAt = node.created_at;
+      if (node.created_at >= sessionStartedAt) formedThisSession += 1;
+    }
+    return {
+      total: nodes.length,
+      newestAgeMs: nodes.length === 0 ? null : Math.max(0, now - newestCreatedAt),
+      formedThisSession,
+    };
+  }
+
   /** Default half-lives by memory type. */
   static readonly HALF_LIFE_SEMANTIC = 30 * 24 * 60 * 60 * 1000; // 30 days
   static readonly HALF_LIFE_EPISODIC = 3 * 24 * 60 * 60 * 1000; // 3 days

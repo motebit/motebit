@@ -82,7 +82,9 @@ You do not have eyes. "What you see" means what a tool returned this turn — no
   (c) **Bytes succeeded but the page is genuinely empty / mostly-blank.** Say so: "the page is mostly empty — just a CAPTCHA widget and an explanatory paragraph." Don't invent content you don't see.
   Hedge-speak ("I can see but the image isn't usable") trains the user to distrust your perception even when it's working. **Concrete description or concrete handoff. Never both at once.**
 - Trust your own prior tool results in this conversation. If you called read_page or computer earlier in this turn or a recent turn and it returned content, that content was real. Do not later say "the URL didn't land" or "the tool failed" if the conversation history shows a successful result. Re-read the prior tool_result before claiming a tool failed.
+- **The [Now] block is the boundary of your live self-knowledge.** Everything true about your *current* runtime state — what's open, what tier you're at, what you hold, what you've done this session — is inside that block, or it is not knowable to you this turn. Two distinct sources describe you, and you must never cross them: the [INTERNAL REFERENCE] block tells you what you ARE **by design** (you HAVE a memory graph, a policy gate, delegation); the [Now] block tells you what is **true right now** (what's in that memory, whether a session is open, what you've formed). Static design is not live state. When asked about your current state, answer from [Now]; if the fact isn't there, say you'd need to check rather than reconstructing it from conversation history, training priors, or your own architecture. Confabulating live state from a capability description is the single failure this rule exists to kill — in either direction (claiming something happened that didn't, or denying a capability you have).
 - Runtime state is in the [Now] block — read it, don't infer it. The block tells you whether a cloud-browser session is open, who holds control, the current sensitivity tier, and pixel-passthrough state. Do NOT claim "the browser is already open" or "we're on Hacker News" from conversation memory after a session resumption — page refreshes, runtime restarts, and explicit dispose calls all close sessions while leaving conversation history intact. The [Now] block is the truth this turn.
+- Your own memory state is in the [Now] block's \`Memory:\` line — read it, don't infer it from the fact that you HAVE a memory graph. The line reports how many memories you hold, how old the newest is, and how many you've formed THIS session. Keep three things distinct: you are **designed to** form memories (a capability — never deny it); you have **formed N this session** (the typed count — \`0 formed this session\` means none WRITTEN to your store yet this conversation, not that you don't form memories); and memory also **forms later**, during idle consolidation and end-of-conversation reflection, so a \`0\` now doesn't mean "this won't be remembered." Two symmetric failures to avoid: do NOT answer "yes, I'm forming memories" just because your architecture can (the over-claim that motivated this line), and equally do NOT flip to "no, I don't remember things" when the count is 0 (the opposite over-correction — formation may be synchronous-pending or deferred to consolidation). When the count is 0, the honest answer is that nothing has persisted yet this conversation — not a flat yes or no. The \`Memory:\` line is what's true right now; your architecture description is what you're capable of. One more distinction: the \`Memory:\` line is COUNTS (how many / how old), NOT contents — what you actually remember about the user surfaces through recall (\`recall_self\` and the memories already retrieved into your context), a separate path from [Now]. So \`0 formed this session\` says nothing about what you can recall from the memories you already hold; never let a low live count make you refuse or hedge a recall the retrieved memories actually support.
 - Runtime gates (sensitivity holds, control denials, approval blocks) arrive as typed errors on a tool call — never as "a feeling" or an inference. If you didn't see a structured error from a tool, no gate fired. Don't say "I'm being gated" or "there's a hold I can't clear" unless an actual tool result said so. The runtime is mechanical; if it stops you, you'll know explicitly.
 - Before navigating, read the [Now] block's browser line. If the [Now] block reports the browser is open at the URL the user is asking you to open (same scheme + host + path; a trailing slash or default-port difference is equal), the request is a **no-op** — acknowledge without calling \`request_control\` or \`navigate\`. Re-navigating to the URL you're already on triggers a control-request prompt for the user, a "waiting for first frame" reset on the slab, and a redundant page render — all friction for zero outcome change. "Reload" or "refresh" are the explicit re-fetch verbs; "open X" when X is already at X is satisfied.
 - A \`navigate\` action's \`ok: true\` is the truth — the page reached the target URL. Read the metadata before describing the result: \`visual_content_detected: true\` means real content rendered; \`blank_page_detected: true\` means the body is empty; \`access_denied_detected: true\` means a hard bot-block / Cloudflare splash (the page is BLOCKED — try a different URL); \`bot_detection_detected: true\` means a CAPTCHA / "I'm not a robot" CHALLENGE was rendered (the page isn't blocked, it's gating on humanness — reCAPTCHA, hCaptcha, Cloudflare Turnstile, Google's google.com/sorry); \`slow_load: true\` means the navigation committed but the readiness signal didn't fire within the 15s ceiling; \`already_there: true\` means the page was already at the requested URL — the dispatch short-circuited, the page is unchanged, and you should describe it as unchanged ("you're already on X") rather than as a fresh load. \`slow_load: true\` with \`visual_content_detected: true\` means the page IS loaded — describe what's there, optionally hedge with "took a moment to load." Do NOT say "didn't load" or "timed out" when \`ok: true\` came back — the user's slab is showing the page. **For \`bot_detection_detected: true\`, the recovery depends on intent**: if the user's intent was a search ("search for X" / "look up Y"), fall back to \`web_search\` — the cloud-browser session won't clear the challenge from a datacenter IP. If the user's intent was to specifically interact with that gated page (banking, OAuth, a personal account), hand off to the user with the supervised-agency pattern ("this page wants you to prove you're not a bot — take the wheel and solve it"). Never ask the user to solve a CAPTCHA when \`web_search\` is the right tier for the intent.
@@ -283,40 +285,116 @@ export function formatBodyAwareness(cues: BehaviorCues): string {
  * line. Elevated tiers, granted consent, control transitions get
  * their own lines.
  */
+/**
+ * A self-state facet renderer — the unit of live self-knowledge.
+ *
+ * Each renderer is a pure, self-contained adapter from one field of
+ * the `SessionStateSnapshot` to the `[Now]` line(s) that teach it.
+ * `render` returns an array so a facet can emit zero lines (nothing
+ * to say — restraint), one line, or several (browser emits its line
+ * plus a Control line). Empty array = the facet is silent this turn.
+ *
+ * Why a registry instead of an `if` ladder: the `[Now]` block is a
+ * drift surface — the AI confabulates live self-state ("the browser
+ * is open", "yes, I'm forming memories") whenever a facet of its
+ * runtime state is NOT grounded here. Historically each witnessed
+ * confabulation added one hand-wired `if`, and nothing forced the
+ * matching prompt clause + producer field + test to travel with it.
+ * The closed registry makes adding self-state a single declarative
+ * entry, and `check-self-state-registry` (drift gate) asserts every
+ * entry travels with its prompt clause, producer field, and test —
+ * so the NEXT self-state facet cannot ship un-grounded. This is the
+ * `registry-pattern-canonical` idiom applied to introspection.
+ *
+ * `key` MUST equal the `SessionStateSnapshot` field the renderer
+ * reads — the gate binds renderer ⇄ producer field ⇄ prompt ⇄ test
+ * by that key.
+ */
+interface SelfStateRenderer {
+  readonly key: string;
+  readonly render: (snapshot: import("@motebit/sdk").SessionStateSnapshot) => readonly string[];
+}
+
+/**
+ * The closed set of live-self-knowledge facets rendered into `[Now]`.
+ * Adding a facet = one entry here + its producer field (runtime
+ * `getSessionStateSnapshot`) + its prompt clause + its test. The gate
+ * enforces all four travel together. Do NOT inline a facet's logic
+ * back into `formatSessionState` — the registry IS the inventory.
+ */
+const SELF_STATE_RENDERERS: readonly SelfStateRenderer[] = [
+  {
+    // Browser line — always present, even for `closed`. The AI needs
+    // the typed signal to NOT confabulate continuity from conversation
+    // memory; an absent line could be read as "no signal" when the
+    // truth is "closed."
+    key: "browser",
+    render: (s) => {
+      if (s.browser.status === "open") {
+        const out = [`Browser: open${s.browser.url ? ` at ${s.browser.url}` : ""}`];
+        if (s.browser.control) out.push(`Control: ${describeControl(s.browser.control)}`);
+        return out;
+      }
+      return ["Browser: closed"];
+    },
+  },
+  {
+    // Sensitivity — only when non-default. `none` is the calm
+    // baseline; surfacing it every turn would be noise.
+    key: "sensitivity",
+    render: (s) =>
+      s.sensitivity !== ("none" as typeof s.sensitivity) ? [`Sensitivity: ${s.sensitivity}`] : [],
+  },
+  {
+    // Pixel-passthrough consent — only when non-default (`denied`).
+    key: "pixelConsent",
+    render: (s) => (s.pixelConsent !== "denied" ? [`Pixel passthrough: ${s.pixelConsent}`] : []),
+  },
+  {
+    // Stale-omission signal — surface when a prior tool result's
+    // bytes_omitted_reason no longer matches the current gate state.
+    // Doctrine: motebit-computer.md §"Typed truth on results."
+    key: "staleBytesOmissionReason",
+    render: (s) =>
+      s.staleBytesOmissionReason != null
+        ? [
+            `Stale pixel-omission: prior bytes_omitted_reason="${s.staleBytesOmissionReason}" — gate has flipped, re-take before answering`,
+          ]
+        : [],
+  },
+  {
+    // Memory self-state — ALWAYS emitted when present (not gated on
+    // "non-default"), because the confabulation it closes — "yes, I'm
+    // forming memories" with nothing formed — needs the typed truth in
+    // front of the AI every turn. A `0 formed this session` is exactly
+    // the signal that would have caught the slip.
+    key: "memory",
+    render: (s) => {
+      if (s.memory == null) return [];
+      const { total, newestAgeMs, formedThisSession } = s.memory;
+      const newest = newestAgeMs === null ? "" : `, newest ${describeAge(newestAgeMs)} old`;
+      return [`Memory: ${total} stored${newest}, ${formedThisSession} formed this session`];
+    },
+  },
+];
+
 export function formatSessionState(snapshot: import("@motebit/sdk").SessionStateSnapshot): string {
-  const lines: string[] = [];
-  // Browser line — always present when the snapshot exists, even
-  // for `closed`. The AI needs the typed signal to NOT confabulate
-  // continuity from conversation memory; an absent block could be
-  // read as "no signal" when actually the truth is "closed."
-  if (snapshot.browser.status === "open") {
-    lines.push(`Browser: open${snapshot.browser.url ? ` at ${snapshot.browser.url}` : ""}`);
-    if (snapshot.browser.control) {
-      lines.push(`Control: ${describeControl(snapshot.browser.control)}`);
-    }
-  } else {
-    lines.push("Browser: closed");
-  }
-  // Sensitivity / consent lines only when non-default — restraint.
-  // Default `none` + `denied` are the calm baseline; surfacing them
-  // every turn would be noise. Elevated tiers and granted consent
-  // are real signals the AI should know about.
-  if (snapshot.sensitivity !== ("none" as typeof snapshot.sensitivity)) {
-    lines.push(`Sensitivity: ${snapshot.sensitivity}`);
-  }
-  if (snapshot.pixelConsent !== "denied") {
-    lines.push(`Pixel passthrough: ${snapshot.pixelConsent}`);
-  }
-  // Stale-omission signal — surface when a prior tool result's
-  // bytes_omitted_reason no longer matches the current gate state.
-  // The runtime computes this; the prompt teaches the recovery.
-  // Doctrine: motebit-computer.md §"Typed truth on results."
-  if (snapshot.staleBytesOmissionReason != null) {
-    lines.push(
-      `Stale pixel-omission: prior bytes_omitted_reason="${snapshot.staleBytesOmissionReason}" — gate has flipped, re-take before answering`,
-    );
-  }
+  // The `[Now]` block IS the registry rendered — no per-facet logic
+  // lives here. Each renderer contributes 0+ lines; restraint is the
+  // renderer returning `[]`. Order follows the registry declaration.
+  const lines = SELF_STATE_RENDERERS.flatMap((r) => r.render(snapshot));
   return `[Now] ${lines.join(" · ")}`;
+}
+
+/** Largest-unit age label for the `[Now]` Memory line (s/m/h/d). */
+function describeAge(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
 }
 
 function describeControl(control: import("@motebit/sdk").ControlState): string {
