@@ -14,7 +14,6 @@
  */
 
 import type { MotebitId, NodeId } from "./index.js";
-import type { SuiteId } from "./crypto-suite.js";
 
 // ── Sensitivity ceilings — interop law vs reference default ──────────
 //
@@ -270,7 +269,7 @@ export interface HorizonWitnessRequestBody {
    * for grandfathered pre-4b-3 callers.
    */
   readonly federation_graph_anchor?: FederationGraphAnchor;
-  readonly suite: SuiteId;
+  readonly suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 /**
@@ -346,14 +345,14 @@ export interface WitnessSolicitationResponse {
 /** Subject (motebit) signature block. */
 export interface SubjectSignature {
   readonly motebit_id: MotebitId;
-  readonly suite: SuiteId;
+  readonly suite: "motebit-jcs-ed25519-b64-v1";
   readonly signature: string;
 }
 
 /** Operator signature block. */
 export interface OperatorSignature {
   readonly operator_id: string;
-  readonly suite: SuiteId;
+  readonly suite: "motebit-jcs-ed25519-b64-v1";
   readonly signature: string;
 }
 
@@ -365,7 +364,7 @@ export interface OperatorSignature {
 export interface DelegateSignature {
   readonly motebit_id: MotebitId;
   readonly delegation_receipt_id: string;
-  readonly suite: SuiteId;
+  readonly suite: "motebit-jcs-ed25519-b64-v1";
   readonly signature: string;
 }
 
@@ -377,7 +376,7 @@ export interface DelegateSignature {
 export interface GuardianSignature {
   /** Hex-encoded guardian Ed25519 public key. Matches `motebit.md` §3.3 `guardian.public_key`. */
   readonly guardian_public_key: string;
-  readonly suite: SuiteId;
+  readonly suite: "motebit-jcs-ed25519-b64-v1";
   readonly signature: string;
 }
 
@@ -456,7 +455,7 @@ export type DeletionCertificate =
        */
       readonly federation_graph_anchor?: FederationGraphAnchor;
       readonly issued_at: number;
-      readonly suite: SuiteId;
+      readonly suite: "motebit-jcs-ed25519-b64-v1";
       readonly signature: string;
     }
   | {
@@ -637,6 +636,6 @@ export interface RetentionManifest {
    * ships with the chain anchor in `honest_gaps` until stage 2.
    */
   readonly honest_gaps?: string[];
-  readonly suite: SuiteId;
+  readonly suite: "motebit-jcs-ed25519-hex-v1";
   readonly signature: string;
 }

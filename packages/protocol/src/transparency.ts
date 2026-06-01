@@ -24,15 +24,13 @@
  * Permissive floor (Apache-2.0), type-only, zero runtime deps.
  */
 
-import type { SuiteId } from "./crypto-suite.js";
-
 /**
  * The pinned cryptosuite for transparency declarations. JCS
  * canonicalization (RFC 8785) + Ed25519 + hex signature encoding.
  * Matches the identity-file + credential-anchor + content-artifact
  * family. See `SUITE_REGISTRY` in `./crypto-suite.ts`.
  */
-export const TRANSPARENCY_SUITE: SuiteId = "motebit-jcs-ed25519-hex-v1";
+export const TRANSPARENCY_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
 
 /**
  * Canonical memo prefix the relay emits when anchoring the
@@ -84,7 +82,7 @@ export interface SignedTransparencyDeclaration {
   /** Hex-encoded SHA-256 of the canonical-JSON of the signed payload. */
   readonly hash: string;
   /** Cryptosuite identifier — `motebit-jcs-ed25519-hex-v1` today. */
-  readonly suite: SuiteId;
+  readonly suite: "motebit-jcs-ed25519-hex-v1";
   /** Hex-encoded Ed25519 signature over the canonical-JSON of the signed payload. */
   readonly signature: string;
 }

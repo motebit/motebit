@@ -39,7 +39,7 @@ import { signBySuite, verifyBySuite } from "./suite-dispatch.js";
 // ── Constants ────────────────────────────────────────────────────────
 
 /** The cryptosuite every deletion certificate signs under today. */
-export const DELETION_CERTIFICATE_SUITE: SuiteId = "motebit-jcs-ed25519-b64-v1";
+export const DELETION_CERTIFICATE_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
 
 /**
  * Filing window for `WitnessOmissionDispute` (retention phase 4b-3).
@@ -723,7 +723,10 @@ export async function verifyRetentionManifest(
     errors.push(`unexpected spec: ${String(manifest.spec)}`);
   }
   if (manifest.suite !== "motebit-jcs-ed25519-hex-v1") {
-    errors.push(`unexpected suite: ${manifest.suite}`);
+    // Defensive runtime guard: the narrowed TS type proves this branch dead
+    // (suite is the literal), but wire-parsed JSON can still carry a wrong
+    // value. `String(...)` keeps the message lint-clean over the `never`.
+    errors.push(`unexpected suite: ${String(manifest.suite)}`);
   }
 
   if (errors.length > 0) {

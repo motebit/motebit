@@ -21,8 +21,6 @@
  * registry, selector, and trust gate live in the BSL @motebit/skills package.
  */
 
-import type { SuiteId } from "./crypto-suite.js";
-
 // === Sensitivity Tiers ===
 
 /**
@@ -100,7 +98,7 @@ export interface SkillHardwareAttestationGate {
  */
 export interface SkillSignature {
   /** Cryptosuite discriminator. Verifiers reject unknown values fail-closed. */
-  suite: SuiteId;
+  suite: "motebit-jcs-ed25519-b64-v1";
   /** Hex-encoded Ed25519 public key (32 bytes → 64 lowercase hex chars). */
   public_key: string;
   /** Base64url-encoded Ed25519 signature over the canonical bytes. */
