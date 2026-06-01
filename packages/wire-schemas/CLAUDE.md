@@ -23,7 +23,7 @@ Separating the physical location by license boundary is cleaner than expressing 
 
 5. **Dep discipline.** Depends on `@motebit/protocol` for the underlying types it mirrors + `zod` + `zod-to-json-schema`. No other monorepo deps. The `z.infer<...> extends ProtocolType` assignment-compatibility checks keep the zod shape and the protocol type in perfect sync.
 
-6. **Cryptosuite-agility applies.** Every signed artifact's schema accepts the closed `SuiteId` union declared in `@motebit/protocol::crypto-suite.ts`. Adding a new suite means re-running `build-schemas` to regenerate JSON; the Zod schema picks up the new union automatically because it imports `SuiteId` from the protocol.
+6. **Each signed artifact pins its single suite — never the `SuiteId` union.** Every signed artifact's schema MUST pin its `suite` field to the `z.literal(...)` matching the cryptosuite that artifact's spec section declares (e.g. `ExecutionReceipt` → `motebit-jcs-ed25519-b64-v1`; agent-settlement-anchor batch → `motebit-jcs-ed25519-hex-v1`; the suite differs by artifact family — b64url vs hex). The `@motebit/protocol` type pins the same literal (not `SuiteId`), so the two agree. Cryptosuite agility happens through a **new artifact version with a new schema pin**, never by widening to `SuiteId` — an artifact must never accept a suite it does not sign with, and runtime cross-suite confusion fails fail-closed at the schema boundary. (A blanket "schema accepts the `SuiteId` union" would be wrong on both counts; the schemas pin a literal and do not import `SuiteId`.)
 
 ## Why the physical split over a mixed-license package
 
