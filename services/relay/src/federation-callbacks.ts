@@ -32,6 +32,7 @@ import {
 } from "@motebit/encryption";
 /* eslint-enable no-restricted-imports */
 import { getRelayKeypair } from "./credentials.js";
+import { creditAccount } from "./accounts.js";
 import type { RelayIdentity, VerifiedSettlement } from "./federation.js";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { ConnectedDevice } from "./index.js";
@@ -418,6 +419,14 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       const netAmount = verified.grossAmount - feeAmount;
       const settledAt = Date.now();
 
+      // This is the FINAL hop (spec relay-federation-v1 §7.2: agent_id present
+      // on the final hop only; downstream_relay_id null). The executing agent is
+      // local to this relay — it ran the forwarded task — so the queue entry
+      // created by onTaskForwarded names the worker. The forward body does NOT
+      // carry agent_id (§7.3); the receiving relay resolves it locally.
+      const workerEntry = taskQueue.get(verified.taskId);
+      const workerId = workerEntry?.task.motebit_id ?? null;
+
       // This relay signs its OWN copy of the received settlement (issuer = this
       // relay), persisting the verbatim signed record for the §9.1 anchor leaf —
       // symmetric with the sent path. `settledAt` is shared with the row's
@@ -428,7 +437,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           task_id: verified.taskId,
           upstream_relay_id: verified.originRelay,
           downstream_relay_id: null,
-          agent_id: null,
+          agent_id: workerId,
           gross_amount: verified.grossAmount,
           fee_amount: feeAmount,
           net_amount: netAmount,
@@ -442,26 +451,51 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
         relayIdentity.privateKey,
       );
 
-      moteDb.db
-        .prepare(
-          `INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network, record_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          verified.settlementId,
-          verified.taskId,
-          verified.originRelay,
-          null,
-          null,
-          verified.grossAmount,
-          feeAmount,
-          netAmount,
-          platformFeeRate,
-          settledAt,
-          verified.receiptHash,
-          verified.x402TxHash ?? null,
-          verified.x402Network ?? null,
-          canonicalJson(signedRecord),
-        );
+      // Record the row AND pay the agent atomically (spec §7.3: "records its own
+      // settlement entry, and pays the agent"). The unique index on
+      // (task_id, upstream_relay_id) makes the INSERT idempotent; we credit the
+      // worker ONLY when this row was newly inserted (changes > 0), so a
+      // re-delivered settlement forward (the §7.4 retry path) never double-pays.
+      // Signing is async and stays OUTSIDE the transaction (sibling discipline
+      // to the main settlement path — an await inside BEGIN/COMMIT interleaves).
+      moteDb.db.exec("BEGIN");
+      try {
+        const ins = moteDb.db
+          .prepare(
+            `INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network, record_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            verified.settlementId,
+            verified.taskId,
+            verified.originRelay,
+            null,
+            workerId,
+            verified.grossAmount,
+            feeAmount,
+            netAmount,
+            platformFeeRate,
+            settledAt,
+            verified.receiptHash,
+            verified.x402TxHash ?? null,
+            verified.x402Network ?? null,
+            canonicalJson(signedRecord),
+          );
+
+        if (ins.changes > 0 && workerId != null && netAmount > 0) {
+          creditAccount(
+            moteDb.db,
+            workerId,
+            netAmount,
+            "settlement_credit",
+            verified.settlementId,
+            `Federated settlement for task ${verified.taskId}`,
+          );
+        }
+        moteDb.db.exec("COMMIT");
+      } catch (settlementErr) {
+        moteDb.db.exec("ROLLBACK");
+        throw settlementErr;
+      }
       return { feeAmount, netAmount };
     },
   };

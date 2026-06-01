@@ -495,6 +495,16 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
             public_key?: string;
             endpoint_url?: string;
             source_relay?: string;
+            // Per-capability pricing from the peer's service listing. The peer's
+            // discover handler spreads it from queryLocalAgents; without carrying
+            // it here the origin relay can't price (and thus can't settle) a
+            // cross-relay paid task — the §7 settlement chain stays inert.
+            pricing?: Array<{
+              capability: string;
+              unit_cost: number;
+              currency: string;
+              per: "task" | "tool_call" | "token";
+            }> | null;
           }>;
         };
         if (data.agents == null || data.agents.length === 0) return [];
@@ -541,11 +551,15 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
               motebit_id: asMotebitId(agent.motebit_id),
               trust_record: null, // No local trust record for remote agents
               listing: {
-                // Synthetic listing from discovery -- capabilities are known, pricing is not
+                // Synthetic listing from discovery — capabilities AND pricing
+                // come from the peer's discover response (queryLocalAgents
+                // spreads pricing). Carrying pricing here is what lets the origin
+                // relay set a budget and initiate the §7 settlement chain for a
+                // cross-relay paid task; an absent listing falls back to [].
                 listing_id: `federated-${agent.motebit_id}` as unknown as ListingId,
                 motebit_id: asMotebitId(agent.motebit_id),
                 capabilities: agent.capabilities ?? [],
-                pricing: [],
+                pricing: agent.pricing ?? [],
                 sla: { max_latency_ms: 5000, availability_guarantee: 0.99 },
                 description: "",
                 updated_at: Date.now(),

@@ -930,6 +930,17 @@ export async function handleReceiptIngestion(
       // jump to credential issuance.
       const isP2pTask = entry.settlement_mode === "p2p";
 
+      // Federated-executor dedupe (spec relay-federation-v1 §7.3): when THIS
+      // relay executed a task forwarded by a peer (origin_relay set), the local
+      // relay-settlement money path must NOT fire. Settlement is origin-driven —
+      // the originating relay extracts its fee and forwards the remainder via
+      // /settlement/forward, and this relay credits the worker exactly once in
+      // onSettlementReceived. Settling locally here would pay the worker the
+      // wrong local-price amount AND double-pay once the forwarded settlement
+      // arrives. The result is still forwarded back to origin below (see the
+      // `entry.origin_relay` block); only the fund movement is skipped.
+      const isFederatedExecutor = entry.origin_relay != null;
+
       const persistentAlloc = isP2pTask
         ? undefined
         : (moteDb.db
@@ -1029,41 +1040,42 @@ export async function handleReceiptIngestion(
       // interleave their transactions and corrupts INSERT-OR-IGNORE
       // semantics (caught by the money-loop-concurrency test on first
       // attempt; signed-but-uninserted settlements would silently drop).
-      const signedSettlement = !isP2pTask
-        ? await signSettlement(
-            {
-              settlement_id: settlement.settlement_id,
-              allocation_id: settlement.allocation_id,
-              // Payee = the executing agent named on the receipt
-              // (settleOnReceipt sets it to receipt.motebit_id).
-              motebit_id: settlement.motebit_id,
-              receipt_hash: settlement.receipt_hash,
-              ledger_hash: settlement.ledger_hash,
-              amount_settled: settlement.amount_settled,
-              platform_fee: settlement.platform_fee,
-              platform_fee_rate: settlement.platform_fee_rate,
-              // !isP2pTask branch — runs only for Arc 3 carve-outs:
-              // self-delegation (worker is the delegator, same-party),
-              // zero-cost direct delegation (unit_cost = 0, no real
-              // funds), or legacy non-P2P paths that pre-date the
-              // TASK_P2P_PROOF_REQUIRED submission gate. Paid direct
-              // delegation to a different worker can no longer reach
-              // this branch — submission rejects without a
-              // payment_proof. `settlement_mode: "relay"` here is the
-              // documented carve-out; the structural enforcement is at
-              // submission, not at this write site. See
-              // `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3
-              // carve-outs".
-              settlement_mode: "relay",
-              status: settlement.status,
-              settled_at: settlement.settled_at,
-              ...(entry.x402_tx_hash != null ? { x402_tx_hash: entry.x402_tx_hash } : {}),
-              ...(entry.x402_network != null ? { x402_network: entry.x402_network } : {}),
-              issuer_relay_id: relayIdentity.relayMotebitId,
-            },
-            relayIdentity.privateKey,
-          )
-        : null;
+      const signedSettlement =
+        !isP2pTask && !isFederatedExecutor
+          ? await signSettlement(
+              {
+                settlement_id: settlement.settlement_id,
+                allocation_id: settlement.allocation_id,
+                // Payee = the executing agent named on the receipt
+                // (settleOnReceipt sets it to receipt.motebit_id).
+                motebit_id: settlement.motebit_id,
+                receipt_hash: settlement.receipt_hash,
+                ledger_hash: settlement.ledger_hash,
+                amount_settled: settlement.amount_settled,
+                platform_fee: settlement.platform_fee,
+                platform_fee_rate: settlement.platform_fee_rate,
+                // !isP2pTask branch — runs only for Arc 3 carve-outs:
+                // self-delegation (worker is the delegator, same-party),
+                // zero-cost direct delegation (unit_cost = 0, no real
+                // funds), or legacy non-P2P paths that pre-date the
+                // TASK_P2P_PROOF_REQUIRED submission gate. Paid direct
+                // delegation to a different worker can no longer reach
+                // this branch — submission rejects without a
+                // payment_proof. `settlement_mode: "relay"` here is the
+                // documented carve-out; the structural enforcement is at
+                // submission, not at this write site. See
+                // `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3
+                // carve-outs".
+                settlement_mode: "relay",
+                status: settlement.status,
+                settled_at: settlement.settled_at,
+                ...(entry.x402_tx_hash != null ? { x402_tx_hash: entry.x402_tx_hash } : {}),
+                ...(entry.x402_network != null ? { x402_network: entry.x402_network } : {}),
+                issuer_relay_id: relayIdentity.relayMotebitId,
+              },
+              relayIdentity.privateKey,
+            )
+          : null;
 
       moteDb.db.exec("BEGIN");
       try {
@@ -1191,13 +1203,22 @@ export async function handleReceiptIngestion(
           }
         }
 
-        logger.info("settlement.created", {
-          correlationId: taskId,
-          gross: settlement.amount_settled + settlement.platform_fee,
-          fee: settlement.platform_fee,
-          net: settlement.amount_settled,
-          x402TxHash: entry.x402_tx_hash ?? null,
-        });
+        if (isFederatedExecutor) {
+          // No local settlement was written — record why for the audit trail.
+          logger.info("settlement.federated_deferred", {
+            correlationId: taskId,
+            originRelay: entry.origin_relay,
+            note: "settlement driven by originating relay via /federation/v1/settlement/forward",
+          });
+        } else {
+          logger.info("settlement.created", {
+            correlationId: taskId,
+            gross: settlement.amount_settled + settlement.platform_fee,
+            fee: settlement.platform_fee,
+            net: settlement.amount_settled,
+            x402TxHash: entry.x402_tx_hash ?? null,
+          });
+        }
         if (credentialRow) {
           logger.info("credential.issued", {
             correlationId: taskId,
@@ -2180,6 +2201,41 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                 }
 
                 federationAttempted = true;
+
+                // §7 settlement-chain arming: stamp this relay's (A's)
+                // price_snapshot from the SELECTED federated candidate's price.
+                // The candidate carries the peer's per-capability pricing,
+                // propagated through federated discovery (the keystone). Without
+                // this the snapshot is undefined (the submitter has no local
+                // listing) and A's settlement-forward block stays inert.
+                //
+                // Fee-from-budget model (spec relay-federation-v1 §7.1): the
+                // listed unit_cost IS the chain budget. Each relay extracts its
+                // 5% from what it receives and forwards the remainder, so the
+                // worker nets budget·(1−fee)^hops ($1.00 → A keeps $0.05 → B
+                // keeps $0.0475 → worker $0.9025). This is deliberately NOT the
+                // local fee-on-top model (computeGrossAmount, where the worker
+                // nets the full advertised price): grossing-up does not compose
+                // across hops, and §7.1's worked example is fee-from-budget.
+                const fedProfile = federatedCandidates.find(
+                  (fc) => fc.profile.motebit_id === selId,
+                )?.profile;
+                const fedPrice = fedProfile?.listing?.pricing.find((p) =>
+                  (requiredCaps as readonly string[]).includes(p.capability),
+                );
+                if (fedPrice != null && fedPrice.unit_cost > 0) {
+                  // taskQueue is SQLite-backed: get() reconstructs a fresh entry
+                  // from the row, so the snapshot must be written back with set()
+                  // (the mutate-then-set idiom used elsewhere in this handler) —
+                  // mutating the get() result alone would not persist, and A's
+                  // onTaskResultReceived would read the old undefined snapshot.
+                  const fedEntry = taskQueue.get(taskId);
+                  if (fedEntry) {
+                    fedEntry.price_snapshot = toMicro(fedPrice.unit_cost);
+                    taskQueue.set(taskId, fedEntry);
+                  }
+                }
+
                 try {
                   const forwardBody = {
                     task_id: taskId,

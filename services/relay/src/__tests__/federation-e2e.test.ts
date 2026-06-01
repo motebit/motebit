@@ -18,6 +18,8 @@ import type { SyncRelay } from "../index.js";
 import { generateKeypair, signExecutionReceipt, bytesToHex } from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import { AUTH_HEADER, jsonAuthWithIdempotency, createTestRelay } from "./test-helpers.js";
+import { reconcileTreasury } from "@motebit/treasury-reconciliation";
+import type { TreasuryReconciliationStore } from "@motebit/treasury-reconciliation";
 
 // === Helpers ===
 
@@ -237,6 +239,7 @@ async function registerAgent(
   relay: SyncRelay,
   name: string,
   capabilities: string[],
+  pricing: Array<{ capability: string; unit_cost: number; currency: string; per: string }> = [],
 ): Promise<{ motebitId: string; publicKeyHex: string; privateKey: Uint8Array }> {
   const keypair = await generateKeypair();
   const publicKeyHex = bytesToHex(keypair.publicKey);
@@ -278,7 +281,7 @@ async function registerAgent(
     headers: { "Content-Type": "application/json", ...AUTH_HEADER },
     body: JSON.stringify({
       capabilities,
-      pricing: [],
+      pricing,
       description: `${name} service agent`,
     }),
   });
@@ -1076,6 +1079,181 @@ describe("Federation E2E", () => {
       );
       const receiptBody = await receiptRes.text();
       expect(receiptRes.status, `Receipt post failed: ${receiptBody}`).toBeLessThan(300);
+    });
+
+    it("PHASE 2: a PAID task forwarded A→B settles on B with the 5% fee leg (the cross-operator economic loop)", async () => {
+      // The load-bearing cross-operator claim: when relay A delegates a PAID
+      // task to a worker on independent relay B, B must record a settlement and
+      // collect the platform fee. PHASE 1 proved peering; this proves the money.
+      //
+      // Worker Bob on B, priced at $1.00 for the capability. The executor relay
+      // (B) owns the worker's pricing — so B is the relay that must stamp the
+      // price onto the forwarded task and settle on it.
+      const bob = await registerAgent(
+        relayB,
+        "bob-paid",
+        ["paid-quantum"],
+        [{ capability: "paid-quantum", unit_cost: 1.0, currency: "USD", per: "task" }],
+      );
+      const bobWs = { send: vi.fn(), close: vi.fn() };
+      relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
+
+      await establishPeering(relayA, relayB);
+
+      // Submitter Alice on A.
+      const alice = await registerAgent(relayA, "alice-paid", ["web-search"]);
+
+      // Submit a PAID task on A requiring Bob's capability → A discovers Bob on
+      // B and forwards via /federation/v1/task/forward.
+      const taskRes = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify({
+          prompt: "Paid cross-operator task",
+          required_capabilities: ["paid-quantum"],
+        }),
+      });
+      expect(taskRes.status).toBe(201);
+
+      // Bob receives the forwarded task over his WebSocket.
+      const bobMessages = bobWs.send.mock.calls.map(
+        (c: unknown[]) =>
+          JSON.parse(c[0] as string) as { type: string; task?: { task_id: string } },
+      );
+      const taskRequest = bobMessages.find((m) => m.type === "task_request");
+      expect(taskRequest, "Bob must receive the forwarded task").toBeDefined();
+      const fwdTaskId = taskRequest!.task!.task_id;
+
+      // Bob executes + signs the receipt, posts the result to B (executor relay).
+      const signedReceipt = await signExecutionReceipt(
+        {
+          task_id: fwdTaskId,
+          relay_task_id: fwdTaskId,
+          motebit_id: bob.motebitId as unknown as MotebitId,
+          device_id: "bob-device" as unknown as DeviceId,
+          submitted_at: Date.now(),
+          completed_at: Date.now(),
+          status: "completed" as const,
+          result: "cross-operator paid result",
+          tools_used: ["quantum_factorize"],
+          memories_formed: 0,
+          prompt_hash: "ph",
+          result_hash: "rh",
+        },
+        bob.privateKey,
+      );
+      const resultRes = await relayB.app.request(
+        `/agent/${bob.motebitId}/task/${fwdTaskId}/result`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+          body: JSON.stringify(signedReceipt),
+        },
+      );
+      expect(resultRes.status, await resultRes.clone().text()).toBeLessThan(300);
+
+      // THE PHASE 2 ASSERTION: B recorded a federation settlement for the paid
+      // forwarded task, with the platform fee collected as a 5% leg. The chain
+      // arms when A stamps `price_snapshot` from the federated candidate's price
+      // (propagated through discovery), fires A's settlement-forward, and lands
+      // on B's onSettlementReceived — which records the final-hop row AND pays
+      // the worker.
+      const settlement = relayB.moteDb.db
+        .prepare(
+          "SELECT gross_amount, fee_amount, net_amount, fee_rate, agent_id FROM relay_federation_settlements WHERE task_id = ?",
+        )
+        .get(fwdTaskId) as
+        | {
+            gross_amount: number;
+            fee_amount: number;
+            net_amount: number;
+            fee_rate: number;
+            agent_id: string | null;
+          }
+        | undefined;
+
+      expect(
+        settlement,
+        "executor relay B must record a federation settlement for the paid forwarded task",
+      ).toBeDefined();
+      expect(settlement!.fee_rate).toBe(0.05);
+      // Per-hop invariant (robust to fee model): fee = round(gross·5%), net = gross − fee.
+      expect(settlement!.fee_amount).toBe(Math.round(settlement!.gross_amount * 0.05));
+      expect(settlement!.net_amount).toBe(settlement!.gross_amount - settlement!.fee_amount);
+      // EXACT spec §7.1 (fee-from-budget, $1.00 budget): B receives the $0.95 A
+      // forwarded, takes $0.0475, the worker nets $0.9025. agent_id is stamped
+      // on the final hop (§7.2).
+      expect(settlement!.gross_amount).toBe(950_000); // $0.95 forwarded from A
+      expect(settlement!.fee_amount).toBe(47_500); // B's 5% leg → $0.0475
+      expect(settlement!.net_amount).toBe(902_500); // worker take-home → $0.9025
+      expect(settlement!.agent_id).toBe(bob.motebitId);
+
+      // The worker is actually PAID on B (spec §7.3 "pays the agent"), not just
+      // recorded — the virtual-account credit equals the net of the final hop.
+      const bobBalance = relayB.moteDb.db
+        .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+        .get(bob.motebitId) as { balance: number } | undefined;
+      expect(bobBalance?.balance).toBe(902_500);
+
+      // ── Reconciliation finale: BOTH operators' fee legs reconcile against
+      // their OWN onchain treasury, per-operator. The cross-operator loop closes
+      // as two independent single-operator reconciliations — A audits its $0.05
+      // leg, B audits its $0.0475 leg, neither trusts the other's books. Uses the
+      // real reconcileTreasury algebra (drift = onchain − recordedFeeSum;
+      // consistent = drift ≥ 0 — the treasury-custody phase-1 invariant), here
+      // over the cross-operator relay_federation_settlements legs.
+      const fedFeeSum = (relay: SyncRelay): bigint => {
+        const row = relay.moteDb.db
+          .prepare("SELECT COALESCE(SUM(fee_amount), 0) AS s FROM relay_federation_settlements")
+          .get() as { s: number };
+        return BigInt(row.s);
+      };
+      const aFee = fedFeeSum(relayA); // A's $0.05 leg, booked on relay A
+      const bFee = fedFeeSum(relayB); // B's $0.0475 leg, booked on relay B
+      expect(aFee).toBe(50_000n);
+      expect(bFee).toBe(47_500n);
+      // Conservation: the $1.00 budget splits into exactly the two operator legs
+      // plus the worker's take-home. No micro-unit created or destroyed.
+      expect(aFee + bFee + 902_500n).toBe(1_000_000n);
+
+      const reconcileOperator = (recordedFee: bigint, onchainBalance: bigint) => {
+        const store: TreasuryReconciliationStore = {
+          getRecordedFeeSumMicro: () => recordedFee,
+          persistReconciliation: () => {},
+        };
+        // Only getBalance is exercised; the other adapter methods are unused here.
+        const rpc = {
+          getBalance: () => Promise.resolve(onchainBalance),
+          getBlockNumber: () => Promise.reject(new Error("unused")),
+          getTransferLogs: () => Promise.reject(new Error("unused")),
+        };
+        return reconcileTreasury({
+          rpc,
+          store,
+          chain: "eip155:8453",
+          treasuryAddress: "0xtreasury",
+          usdcContractAddress: "0xusdc",
+          confirmationLagBufferMs: 0,
+          generateReconciliationId: () => "rec-phase2-test",
+        });
+      };
+
+      // Each operator's treasury holds exactly its recorded leg → drift 0, consistent.
+      const aRecon = await reconcileOperator(aFee, aFee);
+      expect(aRecon.recordedFeeSumMicro).toBe(50_000n);
+      expect(aRecon.driftMicro).toBe(0n);
+      expect(aRecon.consistent).toBe(true);
+
+      const bRecon = await reconcileOperator(bFee, bFee);
+      expect(bRecon.recordedFeeSumMicro).toBe(47_500n);
+      expect(bRecon.driftMicro).toBe(0n);
+      expect(bRecon.consistent).toBe(true);
+
+      // Silent-leakage alert (negative drift): if A's treasury holds LESS than it
+      // recorded collecting, reconciliation must flag inconsistent.
+      const aLeak = await reconcileOperator(aFee, aFee - 1n);
+      expect(aLeak.consistent).toBe(false);
+      expect(aLeak.driftMicro).toBe(-1n);
     });
 
     it("federation forward timeout does not fall through to local broadcast", async () => {
