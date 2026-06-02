@@ -209,6 +209,9 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // identically (a one-micro disagreement rejects the proof), so the formula
     // is hosted here as the single canonical source consumed by both sides.
     "computeP2pFeeMicro",
+    // Cross-operator federated P2P fee-from-budget split (§7.1) — same interop-law
+    // rationale: origin relay validator + delegator client must agree leg-by-leg.
+    "computeFederatedFeeSplit",
     // base58btc codec — pure, chain-agnostic byte → string encoding (Bitcoin
     // alphabet; shared by Solana addresses, IPFS CIDv0, etc.). Same category as
     // the money converters above: deterministic byte math, no I/O, no chain

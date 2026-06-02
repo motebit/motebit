@@ -14,6 +14,7 @@ import {
   toCents,
   fromCents,
   computeP2pFeeMicro,
+  computeFederatedFeeSplit,
 } from "../money.js";
 
 describe("micro-units", () => {
@@ -91,5 +92,44 @@ describe("computeP2pFeeMicro", () => {
   it("throws when feeRate is out of [0, 1)", () => {
     expect(() => computeP2pFeeMicro(1_000_000, 1)).toThrow();
     expect(() => computeP2pFeeMicro(1_000_000, -0.1)).toThrow();
+  });
+});
+
+describe("computeFederatedFeeSplit", () => {
+  it("splits a $1.00 budget into A $0.05 / B $0.0475 / worker $0.9025 (spec §7.1 example)", () => {
+    const split = computeFederatedFeeSplit(1_000_000, 0.05);
+    expect(split.originFeeMicro).toBe(50_000);
+    expect(split.executorFeeMicro).toBe(47_500);
+    expect(split.workerNetMicro).toBe(902_500);
+  });
+
+  it("conserves the budget exactly (three legs sum to the budget)", () => {
+    for (const budget of [1, 999, 1_000_000, 7_777_777, 333_333]) {
+      const { originFeeMicro, executorFeeMicro, workerNetMicro } = computeFederatedFeeSplit(
+        budget,
+        0.05,
+      );
+      expect(originFeeMicro + executorFeeMicro + workerNetMicro).toBe(budget);
+    }
+  });
+
+  it("matches the relay validator's exact fee-from-budget formula (no drift)", () => {
+    const feeRate = 0.05;
+    for (const budget of [1_000_000, 902_500, 50_000_000]) {
+      const aFee = Math.round(budget * feeRate);
+      const fwd = budget - aFee;
+      const bFee = Math.round(fwd * feeRate);
+      const net = fwd - bFee;
+      expect(computeFederatedFeeSplit(budget, feeRate)).toEqual({
+        originFeeMicro: aFee,
+        executorFeeMicro: bFee,
+        workerNetMicro: net,
+      });
+    }
+  });
+
+  it("throws when feeRate is out of [0, 1)", () => {
+    expect(() => computeFederatedFeeSplit(1_000_000, 1)).toThrow();
+    expect(() => computeFederatedFeeSplit(1_000_000, -0.1)).toThrow();
   });
 });

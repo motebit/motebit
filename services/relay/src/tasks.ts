@@ -52,7 +52,7 @@ import {
   lexicographicComposite,
 } from "@motebit/market";
 import type { CandidateProfile, CompositeFunction } from "@motebit/market";
-import { computeP2pFeeMicro } from "@motebit/protocol";
+import { computeP2pFeeMicro, computeFederatedFeeSplit } from "@motebit/protocol";
 import { getAccountBalance, creditAccount, debitAccount, toMicro } from "./accounts.js";
 import { attemptPushWake } from "./push-adapter.js";
 import { getRelayKeypair } from "./credentials.js";
@@ -2261,12 +2261,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           // Fee-from-budget split (spec relay-federation-v1 §7.1): the listed
           // unit_cost IS the chain budget. A takes 5% of the budget, forwards
           // the remainder; B takes 5% of that; the worker nets the rest.
-          // $1.00 → A $0.05 / B $0.0475 / worker $0.9025.
+          // $1.00 → A $0.05 / B $0.0475 / worker $0.9025. The canonical
+          // `computeFederatedFeeSplit` (@motebit/protocol) is shared with the
+          // delegator client that builds the proof so the two cannot drift.
           const budgetMicro = toMicro(fedPrice.unit_cost);
-          const aFeeMicro = Math.round(budgetMicro * platformFeeRate);
-          const forwardedMicro = budgetMicro - aFeeMicro;
-          const bFeeMicro = Math.round(forwardedMicro * platformFeeRate);
-          const workerNetMicro = forwardedMicro - bFeeMicro;
+          const {
+            originFeeMicro: aFeeMicro,
+            executorFeeMicro: bFeeMicro,
+            workerNetMicro,
+          } = computeFederatedFeeSplit(budgetMicro, platformFeeRate);
 
           // Resolve treasuries: A = our identity-derived Solana address; B = the
           // hosting peer's relay-identity-derived address (relay_peers.public_key).

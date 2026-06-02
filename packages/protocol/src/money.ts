@@ -68,3 +68,41 @@ export function computeP2pFeeMicro(netCostMicro: number, feeRate: number): numbe
   }
   return Math.round(netCostMicro / (1 - feeRate)) - netCostMicro;
 }
+
+/** The three legs of a cross-operator federated P2P settlement, in micro-units. */
+export interface FederatedFeeSplit {
+  /** Origin relay (A) fee leg — `round(budget · feeRate)`. */
+  originFeeMicro: number;
+  /** Executor relay (B) fee leg — `round((budget − originFee) · feeRate)`. */
+  executorFeeMicro: number;
+  /** Worker net leg — the remainder. `budget − originFee − executorFee`. */
+  workerNetMicro: number;
+}
+
+/**
+ * Cross-operator federated P2P fee-from-budget split (spec `relay-federation-v1`
+ * §7.1). Unlike single-operator P2P (fee on TOP of the worker's unit_cost), the
+ * remote worker's listed `unit_cost` IS the budget: the origin relay (A) takes
+ * `feeRate` of it, forwards the remainder, the executor relay (B) takes `feeRate`
+ * of THAT, and the worker nets the rest. `$1.00 → A $0.05 / B $0.0475 / worker
+ * $0.9025`. The three legs sum to the budget exactly (no float drift — integer
+ * subtraction down the chain).
+ *
+ * Interop law on the money path: the origin relay's forward-site validator
+ * (`federatedP2pIntent`) and the delegator client that builds the 3-leg proof
+ * MUST compute this identically, or the proof is rejected leg-by-leg. Hosted
+ * here as the single canonical source consumed by both.
+ *
+ * @param budgetMicro the remote worker's listed unit_cost, in micro-units
+ * @param feeRate platform fee rate in [0, 1) — e.g. 0.05
+ */
+export function computeFederatedFeeSplit(budgetMicro: number, feeRate: number): FederatedFeeSplit {
+  if (feeRate < 0 || feeRate >= 1) {
+    throw new Error(`feeRate must be in [0, 1), got ${feeRate}`);
+  }
+  const originFeeMicro = Math.round(budgetMicro * feeRate);
+  const forwardedMicro = budgetMicro - originFeeMicro;
+  const executorFeeMicro = Math.round(forwardedMicro * feeRate);
+  const workerNetMicro = forwardedMicro - executorFeeMicro;
+  return { originFeeMicro, executorFeeMicro, workerNetMicro };
+}
