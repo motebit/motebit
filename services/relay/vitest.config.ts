@@ -13,14 +13,19 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 // file its own process — cross-file state can't leak — while keeping
 // files running in parallel. Small wall-time cost for a large
 // reliability gain.
-// maxForks bounds relay's footprint so it's a good citizen under `turbo run
+// maxWorkers bounds relay's footprint so it's a good citizen under `turbo run
 // test:coverage --concurrency=4` on 4-core CI runners: relay is the heaviest
-// suite (101 files), and unbounded forks (~CPU count) co-scheduled with three
-// other turbo tasks oversubscribes the runner — coverage instrumentation adds
-// per-fork overhead, contention-slowed tests cross their timeout, and the suite
-// false-fails. Capping at 2 leaves headroom for the co-scheduled tasks; the
-// drain-grace fix (drainGraceMs in test-helpers) already removed the 5s/test
-// wall-clock, so 2 forks stays fast enough without the contention risk.
+// suite (101 files), and an unbounded fork pool (~CPU count) co-scheduled with
+// three other turbo tasks oversubscribes the runner — coverage instrumentation
+// adds per-fork overhead, contention-slowed tests cross their timeout, and the
+// suite false-fails. Capping at 2 leaves headroom for the co-scheduled tasks;
+// the drain-grace fix (drainGraceMs in test-helpers) already removed the 5s/test
+// wall-clock, so 2 workers stays fast enough without the contention risk.
+//
+// vitest 4 REMOVED `poolOptions.forks.maxForks` (silent no-op + deprecation
+// warning) in favor of top-level `maxWorkers`/`minWorkers` — the cap was inert
+// after the vitest 2→4 upgrade until this was migrated (foundational-tool
+// adoption: a tool major must not silently degrade a reliability knob).
 //
 // testTimeout/hookTimeout raised 5s/10s → 20s: the residual flake under
 // `test:coverage --concurrency=4` is contention-timeout — a relay test slowed by
@@ -34,7 +39,8 @@ export default defineMotebitTest({
   thresholds: { statements: 72, branches: 61, functions: 77, lines: 72 },
   extra: {
     pool: "forks",
-    poolOptions: { forks: { maxForks: 2, minForks: 1 } },
+    maxWorkers: 2,
+    minWorkers: 1,
     testTimeout: 20_000,
     hookTimeout: 20_000,
   },

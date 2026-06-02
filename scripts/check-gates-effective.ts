@@ -1111,14 +1111,20 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
     proves:
       "flags removal of `startSolanaTreasuryReconciliationLoop` from the relay's boot path while `startP2pVerifierLoop` is still wired — Arc 2 P2P fee legs would accumulate in the treasury wallet with no automated reconciliation",
     perturb: () =>
-      // Strip the startSolanaTreasuryReconciliationLoop call from the
+      // Disable the startSolanaTreasuryReconciliationLoop CALL in the
       // relay's index.ts while leaving startP2pVerifierLoop in place.
-      // The gate must surface the missing-reconciler asymmetry.
-      // mutateFile restores byte-identical on cleanup.
+      // The gate (which matches `\bstartSolanaTreasuryReconciliationLoop\s*\(`)
+      // must surface the missing-reconciler asymmetry. We rename the call
+      // identifier rather than regex-stripping the whole `({...})` argument
+      // block — the argument object now contains nested braces (the
+      // `...(usdcMint ? { usdcMint } : {})` spread, matching the
+      // operatorSolanaTransfer site), so a `\{[^}]*\}` matcher stops at the
+      // first inner `}` and silently no-ops. Identifier-rename is formatting
+      // agnostic; mutateFile restores byte-identical on cleanup.
       mutateFile("services/relay/src/index.ts", (src) =>
         src.replace(
-          /\s*solanaTreasuryReconciliationInterval\s*=\s*startSolanaTreasuryReconciliationLoop\(\{[^}]*\}\);/,
-          "",
+          /startSolanaTreasuryReconciliationLoop\(\{/,
+          "startSolanaTreasuryReconciliationLoopDISABLED({",
         ),
       ),
   },

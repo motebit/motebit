@@ -59,6 +59,18 @@ export interface P2pVerifierConfig {
    * resolvable when the loop runs.
    */
   relayTreasuryAddress: string;
+  /**
+   * USDC SPL mint (base58). Defaults to mainnet USDC when omitted (the
+   * `Web3JsRpcAdapter` default). Threaded from `SOLANA_USDC_MINT` so a
+   * non-mainnet deployment (devnet/testnet) verifies legs against the
+   * SAME mint the delegator paid in — without it the verifier walks the
+   * mainnet mint's token accounts, finds none of the legs, and
+   * fail-verifies (then trust-downgrades) every P2P settlement. The
+   * sibling `OperatorSolanaTransfer` and the Solana treasury reconciler
+   * already honor this env; the verifier must too. Ignored when
+   * `adapter` is provided.
+   */
+  usdcMint?: string;
   /** Override check interval (default: 60s). */
   intervalMs?: number;
   /** Override max proofs per cycle (default: 20). */
@@ -98,6 +110,7 @@ export function startP2pVerifierLoop(
     new Web3JsRpcAdapter({
       rpcUrl: config.rpcUrl,
       identitySeed: READ_ONLY_SEED,
+      ...(config.usdcMint ? { usdcMint: config.usdcMint } : {}),
     });
 
   return setInterval(() => {

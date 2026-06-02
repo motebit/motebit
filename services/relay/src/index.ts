@@ -1529,9 +1529,20 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // (delegator→treasury transfer in the atomic multi-output P2P tx).
     const relayTreasuryAddress = deriveSolanaAddress(relayIdentity.publicKey);
     solanaTreasuryAddress = relayTreasuryAddress;
+    // `SOLANA_USDC_MINT` MUST reach the verifier — without it the
+    // verifier walks the mainnet USDC mint while the delegator paid in
+    // the configured (devnet/testnet) mint, finds no legs, and
+    // fail-verifies + trust-downgrades every P2P settlement. Same env
+    // the OperatorSolanaTransfer (line ~1225) and the Solana treasury
+    // reconciler (below) already honor.
+    const solanaUsdcMint = process.env.SOLANA_USDC_MINT;
     p2pVerifierInterval = startP2pVerifierLoop(
       moteDb.db,
-      { rpcUrl: solanaRpcUrl, relayTreasuryAddress },
+      {
+        rpcUrl: solanaRpcUrl,
+        relayTreasuryAddress,
+        ...(solanaUsdcMint ? { usdcMint: solanaUsdcMint } : {}),
+      },
       () => getEmergencyFreeze(),
     );
     logger.info("p2p_verifier.started", { intervalMs: 60000, relayTreasuryAddress });
@@ -1558,6 +1569,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       db: moteDb.db,
       rpcUrl: solanaRpcUrl,
       identitySeed: relayIdentity.privateKey,
+      // Same mint the verifier uses — the reconciler reads the treasury
+      // wallet's balance for THIS mint; on a non-mainnet deploy the
+      // default mainnet mint would report a zero balance and false
+      // negative-drift on every cycle.
+      ...(solanaUsdcMint ? { usdcMint: solanaUsdcMint } : {}),
       intervalMs: solanaReconciliationIntervalMs,
       isFrozen: () => getEmergencyFreeze(),
     });
