@@ -15,10 +15,15 @@
  * vendor: the agent's identity public key IS its Solana address.
  */
 
-import type { SovereignWalletRail } from "@motebit/protocol";
+import type {
+  SovereignWalletRail,
+  SovereignP2pPaymentRequest,
+  P2pPaymentProof,
+} from "@motebit/protocol";
 import type { SolanaRpcAdapter } from "./adapter.js";
 import type { SendUsdcResult, SendUsdcBatchItemResult } from "./adapter.js";
 import { Web3JsRpcAdapter } from "./web3js-adapter.js";
+import { buildP2pPaymentProof } from "./p2p-payment-proof.js";
 
 export type SendResult = SendUsdcResult;
 
@@ -148,6 +153,36 @@ export class SolanaWalletRail implements SovereignWalletRail {
       await this.ensureGas();
     }
     return this.adapter.sendUsdcBatch(items);
+  }
+
+  /**
+   * Build a P2P payment proof: broadcast the worker leg + relay-fee leg(s)
+   * in ONE atomic transaction and return the verifiable proof. This is what
+   * lets a paid direct delegation satisfy the relay's Arc-3.5 P2P-proof gate.
+   *
+   * Delegates to `buildP2pPaymentProof` (the canonical multi-leg builder) so
+   * the atomicity guarantee + proof assembly live in exactly one place — the
+   * rail only layers gas management on top. Two legs for single-operator P2P
+   * (worker + relay treasury); three for cross-operator federated P2P when
+   * the executor-relay fields are present.
+   */
+  async buildP2pPayment(request: SovereignP2pPaymentRequest): Promise<P2pPaymentProof> {
+    if (this.autoGas) {
+      await this.ensureGas();
+    }
+    return buildP2pPaymentProof(this.adapter, {
+      workerAddress: request.workerAddress,
+      amountMicro: request.amountMicro,
+      treasuryAddress: request.treasuryAddress,
+      feeAmountMicro: request.feeAmountMicro,
+      ...(request.executorTreasuryAddress != null
+        ? { executorTreasuryAddress: request.executorTreasuryAddress }
+        : {}),
+      ...(request.executorFeeAmountMicro != null
+        ? { executorFeeAmountMicro: request.executorFeeAmountMicro }
+        : {}),
+      ...(request.network != null ? { network: request.network } : {}),
+    });
   }
 
   /** Whether the RPC endpoint is reachable right now. */

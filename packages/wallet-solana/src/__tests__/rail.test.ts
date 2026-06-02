@@ -339,3 +339,82 @@ describe("createSolanaWalletRail", () => {
     expect(adapter.getUsdcMint()).toBe("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
   });
 });
+
+// ── buildP2pPayment (the delegator-client P2P proof capability) ──────────
+
+describe("SolanaWalletRail.buildP2pPayment", () => {
+  it("broadcasts a 2-leg proof (worker + relay fee) in one atomic tx", async () => {
+    const sendUsdcBatch = vi.fn().mockResolvedValue([
+      { ok: true, signature: "atomic-sig", slot: 5, reason: null },
+      { ok: true, signature: "atomic-sig", slot: 5, reason: null },
+    ]);
+    const rail = new SolanaWalletRail(makeAdapter({ sendUsdcBatch }));
+
+    const proof = await rail.buildP2pPayment({
+      workerAddress: "Worker1111111111111111111111111111111111111",
+      amountMicro: 500_000,
+      treasuryAddress: "Treasury11111111111111111111111111111111111",
+      feeAmountMicro: 26_316,
+    });
+
+    // One atomic batch carrying exactly two legs.
+    expect(sendUsdcBatch).toHaveBeenCalledTimes(1);
+    expect(sendUsdcBatch.mock.calls[0]?.[0]).toHaveLength(2);
+    expect(proof.tx_hash).toBe("atomic-sig");
+    expect(proof.to_address).toBe("Worker1111111111111111111111111111111111111");
+    expect(proof.amount_micro).toBe(500_000);
+    expect(proof.fee_to_address).toBe("Treasury11111111111111111111111111111111111");
+    expect(proof.fee_amount_micro).toBe(26_316);
+    // Single-operator P2P carries no executor (B) fee leg.
+    expect(proof.b_fee_to_address).toBeUndefined();
+    expect(proof.b_fee_amount_micro).toBeUndefined();
+  });
+
+  it("broadcasts a 3-leg proof for cross-operator federated P2P", async () => {
+    const sendUsdcBatch = vi.fn().mockResolvedValue([
+      { ok: true, signature: "fed-sig", slot: 9, reason: null },
+      { ok: true, signature: "fed-sig", slot: 9, reason: null },
+      { ok: true, signature: "fed-sig", slot: 9, reason: null },
+    ]);
+    const rail = new SolanaWalletRail(makeAdapter({ sendUsdcBatch }));
+
+    const proof = await rail.buildP2pPayment({
+      workerAddress: "Worker1111111111111111111111111111111111111",
+      amountMicro: 902_500,
+      treasuryAddress: "TreasuryA1111111111111111111111111111111111",
+      feeAmountMicro: 50_000,
+      executorTreasuryAddress: "TreasuryB1111111111111111111111111111111111",
+      executorFeeAmountMicro: 47_500,
+      network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+    });
+
+    expect(sendUsdcBatch.mock.calls[0]?.[0]).toHaveLength(3);
+    expect(proof.tx_hash).toBe("fed-sig");
+    expect(proof.b_fee_to_address).toBe("TreasuryB1111111111111111111111111111111111");
+    expect(proof.b_fee_amount_micro).toBe(47_500);
+    expect(proof.network).toBe("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1");
+  });
+
+  it("runs the gas check before broadcasting when autoGas is enabled", async () => {
+    const sendUsdcBatch = vi.fn().mockResolvedValue([
+      { ok: true, signature: "s", slot: 1, reason: null },
+      { ok: true, signature: "s", slot: 1, reason: null },
+    ]);
+    // Low SOL → ensureGas runs; with a non-web3 mock adapter it returns false
+    // without throwing, and the broadcast still proceeds (honest degradation).
+    const getSolBalance = vi.fn().mockResolvedValue(0n);
+    const rail = new SolanaWalletRail(makeAdapter({ sendUsdcBatch, getSolBalance }), {
+      autoGas: true,
+    });
+
+    await rail.buildP2pPayment({
+      workerAddress: "W11111111111111111111111111111111111111111",
+      amountMicro: 1,
+      treasuryAddress: "T11111111111111111111111111111111111111111",
+      feeAmountMicro: 1,
+    });
+
+    expect(getSolBalance).toHaveBeenCalled();
+    expect(sendUsdcBatch).toHaveBeenCalledTimes(1);
+  });
+});

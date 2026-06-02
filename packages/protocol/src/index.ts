@@ -1955,11 +1955,53 @@ export interface SovereignSendResult {
  * structurally; the runtime imports this port, never the provider. "The interior
  * defines the port; the provider implements it" — the adapter principle as a type.
  */
+/**
+ * A request to build a sovereign P2P payment proof — the delegator's atomic
+ * multi-leg onchain settlement that lets a PAID direct delegation satisfy the
+ * relay's P2P-proof gate (`requiresP2pProof`, Arc 3.5). The interior assembles
+ * this from discovery (the worker's `settlement_address`, the relay's treasury
+ * address) plus fee math (`computeGrossAmount` in `@motebit/market`); the rail
+ * broadcasts the legs in ONE transaction and returns the verifiable
+ * `P2pPaymentProof`.
+ *
+ * Single-operator P2P uses the worker + relay-fee legs only. Cross-operator
+ * federated P2P adds the executor-relay (B) fee leg — see `P2pPaymentProof`'s
+ * `b_fee_*` fields.
+ */
+export interface SovereignP2pPaymentRequest {
+  /** Worker's declared settlement address (base58 for Solana). */
+  workerAddress: string;
+  /** Worker leg amount in micro-units — the listing unit_cost, what the worker earns net. */
+  amountMicro: number;
+  /** Relay treasury address (base58) — `deriveSolanaAddress(relayPublicKey)`. */
+  treasuryAddress: string;
+  /** Fee leg amount in micro-units — `computeGrossAmount(amountMicro) - amountMicro`. */
+  feeAmountMicro: number;
+  /** Executor-relay (B) treasury address (base58) — cross-operator federated P2P only. */
+  executorTreasuryAddress?: string;
+  /** Executor-relay (B) fee leg amount in micro-units — federated P2P only. */
+  executorFeeAmountMicro?: number;
+  /** CAIP-2 network identifier (defaults to the rail's chain mainnet). */
+  network?: string;
+}
+
 export interface SovereignWalletRail extends SovereignRail {
   /** Send `microAmount` (micro-units) of the rail's asset to `toAddress`. */
   send(toAddress: string, microAmount: bigint): Promise<SovereignSendResult>;
   /** Whether the rail can currently reach its chain (RPC liveness). */
   isAvailable(): Promise<boolean>;
+  /**
+   * Build a P2P payment proof by broadcasting the delegator's atomic
+   * multi-leg settlement (worker leg + relay-fee leg[s]) in a SINGLE
+   * transaction and returning the verifiable `P2pPaymentProof`.
+   *
+   * OPTIONAL: a rail that cannot atomically pay multiple recipients omits
+   * this, and the interior degrades honestly (paid direct delegation is
+   * unavailable on that rail) — it MUST NOT split the legs across separate
+   * transactions, because the relay verifier walks ONE `tx_hash`. The
+   * reference `SolanaWalletRail` implements it via `buildP2pPaymentProof`.
+   */
+  buildP2pPayment?(request: SovereignP2pPaymentRequest): Promise<P2pPaymentProof>;
 }
 
 // === Collaborative Plan Proposals ===
@@ -2924,7 +2966,7 @@ export {
 } from "./transparency.js";
 
 import type { ToolMode } from "./tool-mode.js";
-import type { SettlementMode } from "./settlement-mode.js";
+import type { SettlementMode, P2pPaymentProof } from "./settlement-mode.js";
 import type { SettlementAsset } from "./settlement-asset.js";
 
 // ── Skill manifest + envelope (spec/skills-v1.md) ────────────────
