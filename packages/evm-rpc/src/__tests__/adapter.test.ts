@@ -469,3 +469,32 @@ describe("HttpJsonRpcEvmAdapter.getBalance", () => {
     ).rejects.toThrow(/malformed result/);
   });
 });
+
+describe("HttpJsonRpcEvmAdapter request timeout", () => {
+  it("aborts the in-flight request when requestTimeoutMs elapses and surfaces a single Error", async () => {
+    // fetch that never resolves on its own, but rejects when its AbortSignal
+    // fires — mirroring how a real fetch behaves under abort. With a tiny
+    // requestTimeoutMs, the adapter's timeout fires `controller.abort()`, the
+    // signal rejects the fetch, and (rule 1) it bubbles as one Error.
+    const fetchFn = vi.fn(
+      (_url: string, init?: { signal?: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new Error("The operation was aborted")),
+          );
+        }),
+    );
+    const adapter = new HttpJsonRpcEvmAdapter({
+      rpcUrl: "https://rpc.example",
+      requestTimeoutMs: 5,
+      fetch: fetchFn as unknown as typeof globalThis.fetch,
+    });
+
+    await expect(adapter.getBlockNumber()).rejects.toThrow(/network error/);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    // The request carried an abort signal (timeout wiring is active).
+    expect((fetchFn.mock.calls[0]![1] as { signal?: AbortSignal }).signal).toBeInstanceOf(
+      AbortSignal,
+    );
+  });
+});
