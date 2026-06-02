@@ -596,11 +596,19 @@ describe("Federation E2E", () => {
       });
       expect(discoverRes.status).toBe(200);
       const body = (await discoverRes.json()) as {
-        agents: Array<{ motebit_id: string; settlement_address?: string | null }>;
+        agents: Array<{
+          motebit_id: string;
+          settlement_address?: string | null;
+          source_relay_public_key?: string;
+        }>;
       };
       const found = body.agents.find((a) => a.motebit_id === agent.motebitId);
       expect(found, "remote worker must be discoverable from A").toBeDefined();
       expect(found!.settlement_address).toBe(workerAddress);
+      // PR-fed-1: A surfaces the hosting peer's relay public key so the client
+      // can derive the executor (B) fee-leg treasury — matching what A resolves
+      // when it validates the 3-leg proof at the forward site.
+      expect(found!.source_relay_public_key).toBe(relayB.relayIdentity.publicKeyHex);
     });
 
     it("returns local agents with hop_distance 0", async () => {

@@ -1237,8 +1237,10 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const visited = [relayIdentity.relayMotebitId];
 
     const peers = moteDb.db
-      .prepare("SELECT peer_relay_id, endpoint_url FROM relay_peers WHERE state = 'active'")
-      .all() as Array<{ peer_relay_id: string; endpoint_url: string }>;
+      .prepare(
+        "SELECT peer_relay_id, endpoint_url, public_key FROM relay_peers WHERE state = 'active'",
+      )
+      .all() as Array<{ peer_relay_id: string; endpoint_url: string; public_key: string }>;
 
     const forwardPromises = peers.map(async (peer) => {
       try {
@@ -1294,7 +1296,22 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     );
     const withHa = enrichWithHardwareAttestation(final, moteDb.db);
     const withLatency = enrichWithLatencyStats(withHa, moteDb.db);
-    return c.json({ agents: withLatency });
+
+    // Attach the hosting peer's relay public key to each DIRECT-peer candidate
+    // (source_relay matches one of our active relay_peers). A federated-P2P
+    // delegator client derives the executor (B) fee-leg treasury from this key
+    // — `deriveSolanaAddress(source_relay_public_key)` — exactly as this relay
+    // resolves it when validating the 3-leg proof at the forward site
+    // (tasks.ts federatedP2pIntent), so the two cannot disagree. Multi-hop
+    // candidates (source_relay is not a direct peer) get nothing: federated P2P
+    // is validated only against direct peers, so the client must not attempt it.
+    const peerKeyById = new Map(peers.map((p) => [p.peer_relay_id, p.public_key]));
+    const withPeerKey = withLatency.map((agent) => {
+      const sourceRelay = agent.source_relay as string | undefined;
+      const peerKey = sourceRelay != null ? peerKeyById.get(sourceRelay) : undefined;
+      return peerKey != null ? { ...agent, source_relay_public_key: peerKey } : agent;
+    });
+    return c.json({ agents: withPeerKey });
   });
 
   // GET /api/v1/agents/:motebitId — get specific agent
