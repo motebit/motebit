@@ -29,6 +29,7 @@ import {
 import { animateMarkForReceipt } from "./ui/cobrowse-chrome";
 import { renderSlabChrome } from "./ui/slab-chrome";
 import { urlHasTrustHeld } from "./cookie-host-match.js";
+import { getOrPinRelayKey } from "./relay-key-pin.js";
 import type { LiveBrowserElementHandle, SlabBodyRegister } from "@motebit/render-engine";
 import type {
   ConversationMessage,
@@ -3403,6 +3404,14 @@ export class UnbootedWebApp {
       authToken: delegationAuthToken,
     });
 
+    // Resolve the PINNED relay key (trust-on-first-use) so a paid P2P
+    // delegation derives the fee-leg treasury from a key trusted at first
+    // connect, never a per-delegation fetch (the irreversible-payment MITM
+    // surface — see relay-key-pin.ts + off-ramp-as-user-action.md § Arc 3.5).
+    // undefined → paid P2P stays disabled and delegation uses relay-mode (e.g.
+    // a fail-closed key mismatch); relay-mode still serves every task.
+    const pinnedRelayKey = await getOrPinRelayKey(relayUrl);
+
     // Enable the deterministic surface-determinism path — chip taps, slash
     // commands, scene clicks. Shares the relay coordinates with interactive
     // delegation; differs only in the invocation_origin each path stamps.
@@ -3410,6 +3419,7 @@ export class UnbootedWebApp {
     this.runtime.enableInvokeCapability({
       syncUrl: relayUrl,
       authToken: delegationAuthToken,
+      ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
     });
 
     this._servingSyncUrl = relayUrl;
