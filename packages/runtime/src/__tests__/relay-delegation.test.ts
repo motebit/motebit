@@ -8,8 +8,13 @@
  * gate-code branch sits before the generic 402 branch; this locks that order.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { P2pPaymentProof } from "@motebit/protocol";
-import { classifyRelayError, submitP2pDelegation } from "../relay-delegation.js";
+import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
+import { base58Encode, computeP2pFeeMicro, toMicro, PLATFORM_FEE_RATE } from "@motebit/protocol";
+import {
+  classifyRelayError,
+  submitP2pDelegation,
+  resolveAndSubmitP2pDelegation,
+} from "../relay-delegation.js";
 
 const envelope = (code: string, error = "rejected") => JSON.stringify({ code, error });
 
@@ -160,5 +165,174 @@ describe("submitP2pDelegation", () => {
       expect(result.taskId).toBe("task-2");
       expect(result.receipt).toMatchObject({ result_hash: "rh" });
     }
+  });
+});
+
+// ── resolveAndSubmitP2pDelegation — discover → price → pay → submit ───────
+
+const PINNED_BYTES = new Uint8Array(32).fill(7);
+const PINNED_HEX = Array.from(PINNED_BYTES, (b) => b.toString(16).padStart(2, "0")).join("");
+const EXPECTED_TREASURY = base58Encode(PINNED_BYTES);
+
+function routedFetch(handlers: {
+  discover?: () => Response;
+  listing?: () => Response;
+  submit?: () => Response;
+  poll?: () => Response;
+}) {
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes("/api/v1/agents/discover")) return handlers.discover!();
+    if (url.includes("/listing")) return handlers.listing!();
+    if (url.endsWith("/task") && init?.method === "POST") return handlers.submit!();
+    if (url.includes("/task/")) return handlers.poll!();
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+}
+
+const discoverOk = (agents: unknown[]) => () => jsonResponse(200, { agents });
+const listingOk = (pricing: unknown[]) => () => jsonResponse(200, { pricing });
+
+function resolveParams(over: Record<string, unknown> = {}) {
+  return {
+    motebitId: "alice",
+    syncUrl: "https://relay.test",
+    authToken: vi.fn(async (aud?: string) => `tok-${aud}`),
+    prompt: "summarize",
+    capability: "web_search",
+    relayPublicKeyHex: PINNED_HEX,
+    buildP2pPayment: vi.fn(
+      async (req: SovereignP2pPaymentRequest): Promise<P2pPaymentProof> => ({
+        tx_hash: "p2p-tx",
+        chain: "solana",
+        network: "solana:x",
+        to_address: req.workerAddress,
+        amount_micro: req.amountMicro,
+        fee_to_address: req.treasuryAddress,
+        fee_amount_micro: req.feeAmountMicro,
+      }),
+    ),
+    logger: { warn: vi.fn() },
+    ...over,
+  };
+}
+
+describe("resolveAndSubmitP2pDelegation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns no_sovereign_rail when no rail can build a payment (no fetch, no broadcast)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await resolveAndSubmitP2pDelegation(
+      resolveParams({ buildP2pPayment: undefined }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("no_sovereign_rail");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns malformed_request on an invalid pinned relay key", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const result = await resolveAndSubmitP2pDelegation(
+      resolveParams({ relayPublicKeyHex: "nothex" }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("malformed_request");
+  });
+
+  it("returns no_routing when no P2P-capable worker advertises the capability", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_modes: "relay" }, // advertises relay only, no addr
+          { motebit_id: "alice", settlement_address: "self", settlement_modes: "p2p" }, // self
+        ]),
+      }),
+    );
+    const result = await resolveAndSubmitP2pDelegation(resolveParams());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("no_routing");
+  });
+
+  it("returns worker_not_payable when the worker has no listing (404)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p,relay" },
+        ]),
+        listing: () => jsonResponse(404, { message: "no listing" }),
+      }),
+    );
+    const result = await resolveAndSubmitP2pDelegation(resolveParams());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("worker_not_payable");
+  });
+
+  it("builds the payment with the PINNED treasury + canonical fee, then submits the pinned proof", async () => {
+    const params = resolveParams();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p,relay" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+        // Submit 400 stops us before the timer-bound poll — we assert the build
+        // legs + that the pinned proof reached the submit.
+        submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
+      }),
+    );
+
+    const result = await resolveAndSubmitP2pDelegation(params);
+
+    const build = params.buildP2pPayment as ReturnType<typeof vi.fn>;
+    expect(build).toHaveBeenCalledTimes(1);
+    const req = build.mock.calls[0]![0] as SovereignP2pPaymentRequest;
+    expect(req.workerAddress).toBe("BobAddr");
+    // Treasury derived from the PINNED key — never a fetched value.
+    expect(req.treasuryAddress).toBe(EXPECTED_TREASURY);
+    expect(req.amountMicro).toBe(toMicro(0.5));
+    expect(req.feeAmountMicro).toBe(computeP2pFeeMicro(toMicro(0.5), PLATFORM_FEE_RATE));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("malformed_request");
+  });
+
+  it("maps an insufficient USDC balance to insufficient_balance (nothing submitted)", async () => {
+    const buildP2pPayment = vi.fn(async () => {
+      throw Object.assign(new Error("need more"), { name: "InsufficientUsdcBalanceError" });
+    });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+      }),
+    );
+    const result = await resolveAndSubmitP2pDelegation(resolveParams({ buildP2pPayment }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("insufficient_balance");
+  });
+
+  it("maps a broadcast failure to payment_broadcast_failed (nothing settled)", async () => {
+    const buildP2pPayment = vi.fn(async () => {
+      throw new Error("rpc down");
+    });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+      }),
+    );
+    const result = await resolveAndSubmitP2pDelegation(resolveParams({ buildP2pPayment }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("payment_broadcast_failed");
   });
 });

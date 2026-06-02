@@ -14,7 +14,8 @@
  */
 
 import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
-import type { P2pPaymentProof } from "@motebit/protocol";
+import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
+import { base58Encode, toMicro, computeP2pFeeMicro, PLATFORM_FEE_RATE } from "@motebit/protocol";
 
 /**
  * Closed-union error codes for relay delegation failures. The UI maps each to
@@ -49,6 +50,27 @@ export type DelegationErrorCode =
    * `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3.5".
    */
   | "payment_proof_required"
+  /**
+   * Pre-flight. Paid P2P delegation was requested but no sovereign wallet rail
+   * is configured (or the rail cannot build an atomic multi-leg payment), so
+   * the client cannot produce the proof the relay requires. Honest: "fund/enable
+   * a sovereign wallet for direct paid delegation."
+   */
+  | "no_sovereign_rail"
+  /**
+   * Pre-flight. A worker was discovered but cannot be paid directly — it has no
+   * service listing, no positive price, or no settlement address. Distinct from
+   * `no_routing` (no worker at all) and `insufficient_balance` (the delegator's
+   * shortfall).
+   */
+  | "worker_not_payable"
+  /**
+   * Pre-flight. The delegator's atomic onchain payment failed to broadcast or
+   * confirm, so NO task was submitted (the proof is never sent to the relay
+   * without a confirmed payment). The funds did not move — distinct from a
+   * confirmed-but-rejected proof.
+   */
+  | "payment_broadcast_failed"
   /** Pre-flight. Trust below the capability's threshold. */
   | "trust_threshold_unmet"
   /** Pre-flight. No agent advertises the capability. */
@@ -492,6 +514,217 @@ export async function submitP2pDelegation(
     queryHeader,
     timeoutMs,
     startedAt,
+    logger: params.logger,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+}
+
+/** Trivial hex → bytes (deterministic parse, no crypto/state/IO) — inlined per
+ *  the layer-boundary convention rather than importing a codec for four lines. */
+function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+  if (clean.length === 0 || clean.length % 2 !== 0 || /[^0-9a-fA-F]/.test(clean)) {
+    throw new Error(`invalid hex: ${hex.slice(0, 16)}…`);
+  }
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = Number.parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+const fail = (code: DelegationErrorCode, message: string, status?: number): DelegationResult => ({
+  ok: false,
+  error: status != null ? { code, message, status } : { code, message },
+});
+
+export interface ResolveAndSubmitP2pDelegationParams {
+  /** The delegator's identity (submitter / owner of the task). */
+  motebitId: string;
+  /** Base URL of the relay. */
+  syncUrl: string;
+  /** Mints audience-scoped auth tokens (the listing read needs `market:listing`). */
+  authToken: (audience?: string) => Promise<string>;
+  /** Task prompt to submit. */
+  prompt: string;
+  /** Capability the worker must advertise — used to discover + select + price. */
+  capability: string;
+  /**
+   * The relay's PINNED Ed25519 public key (hex), established at pairing. The
+   * treasury the fee leg pays is derived from THIS — `base58Encode(pubkey)` —
+   * never from a fetched response, so the irreversible onchain payment trusts
+   * the pairing root rather than the network. A MITM on relay reads cannot
+   * redirect the fee leg.
+   */
+  relayPublicKeyHex: string;
+  /**
+   * The sovereign rail's atomic multi-leg payment builder (injected so this
+   * module stays provider-agnostic — it never imports a wallet package).
+   * Absent → paid direct delegation is unavailable on this runtime.
+   */
+  buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
+  /** Invocation provenance — signature-bound on the resulting receipt. */
+  invocationOrigin?: IntentOrigin;
+  /** Upper bound on end-to-end wait. Default 120s. */
+  timeoutMs?: number;
+  /** Structured logger. */
+  logger: { warn(message: string, context?: Record<string, unknown>): void };
+  /** Abort early. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Resolve a paid direct delegation end to end: discover a payable worker,
+ * derive the relay treasury from the PINNED key, price the task, broadcast the
+ * delegator's atomic onchain payment, and submit the pinned task with the proof.
+ *
+ * Trust + safety:
+ *   - The treasury (the fee-leg recipient) is derived from `relayPublicKeyHex`,
+ *     the key pinned at pairing — never from `/.well-known` or any fetched
+ *     value — so the irreversible payment cannot be redirected by a MITM.
+ *   - The fee rate is the protocol-canonical `PLATFORM_FEE_RATE`, the same rate
+ *     the relay validator enforces; a relay running a non-canonical rate fails
+ *     CLOSED (the proof is rejected) rather than silently mispaying.
+ *   - The payment is broadcast exactly once, then handed to `submitP2pDelegation`
+ *     which never re-broadcasts on retry (no double-pay).
+ *
+ * Failure modes are explicit `DelegationErrorCode`s; nothing falls back to a
+ * relay-custody path. Discovery is a public read; the listing read is
+ * `market:listing`-audience authed.
+ */
+export async function resolveAndSubmitP2pDelegation(
+  params: ResolveAndSubmitP2pDelegationParams,
+): Promise<DelegationResult> {
+  const { syncUrl, capability, motebitId } = params;
+
+  if (params.buildP2pPayment == null) {
+    return fail(
+      "no_sovereign_rail",
+      "Paid direct delegation needs a sovereign wallet rail that can build an atomic payment.",
+    );
+  }
+
+  // 1. Treasury from the PINNED relay key — the trust root, never fetched.
+  let treasuryAddress: string;
+  try {
+    treasuryAddress = base58Encode(hexToBytes(params.relayPublicKeyHex));
+  } catch (err: unknown) {
+    return fail(
+      "malformed_request",
+      `Invalid pinned relay public key: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  // 2. Discover a payable worker (public read). Pick the first candidate that is
+  //    not self, advertises p2p, and declares a settlement address.
+  let worker: { motebit_id: string; settlement_address: string };
+  try {
+    const resp = await fetch(
+      `${syncUrl}/api/v1/agents/discover?capability=${encodeURIComponent(capability)}`,
+      { signal: params.signal },
+    );
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      return {
+        ok: false,
+        error: classifyRelayError(resp.status, text, resp.headers.get("Retry-After")),
+      };
+    }
+    const data = (await resp.json()) as {
+      agents?: Array<{
+        motebit_id: string;
+        settlement_address?: string | null;
+        settlement_modes?: string | string[] | null;
+      }>;
+    };
+    const candidate = (data.agents ?? []).find((a) => {
+      if (a.motebit_id === motebitId || a.settlement_address == null) return false;
+      const modes = Array.isArray(a.settlement_modes)
+        ? a.settlement_modes
+        : String(a.settlement_modes ?? "").split(",");
+      return modes.includes("p2p");
+    });
+    if (candidate?.settlement_address == null) {
+      return fail("no_routing", `No P2P-capable worker advertises "${capability}".`);
+    }
+    worker = { motebit_id: candidate.motebit_id, settlement_address: candidate.settlement_address };
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return fail("timeout", "Aborted during discovery");
+    }
+    return fail("network_unreachable", err instanceof Error ? err.message : String(err));
+  }
+
+  // 3. Price the task from the worker's listing (market:listing-audience read).
+  let unitCost: number;
+  try {
+    const listingToken = await params.authToken("market:listing");
+    const resp = await fetch(`${syncUrl}/api/v1/agents/${worker.motebit_id}/listing`, {
+      headers: { Authorization: `Bearer ${listingToken}` },
+      signal: params.signal,
+    });
+    if (resp.status === 404) {
+      return fail("worker_not_payable", "Worker has no service listing.");
+    }
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      return {
+        ok: false,
+        error: classifyRelayError(resp.status, text, resp.headers.get("Retry-After")),
+      };
+    }
+    const data = (await resp.json()) as {
+      pricing?: Array<{ capability?: string; unit_cost?: number }>;
+    };
+    const entry =
+      (data.pricing ?? []).find((p) => p.capability === capability) ?? (data.pricing ?? [])[0];
+    if (entry?.unit_cost == null || entry.unit_cost <= 0) {
+      return fail("worker_not_payable", `Worker has no positive price for "${capability}".`);
+    }
+    unitCost = entry.unit_cost;
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return fail("timeout", "Aborted during pricing");
+    }
+    return fail("network_unreachable", err instanceof Error ? err.message : String(err));
+  }
+
+  // 4. Legs: worker net = unit_cost; fee = computeP2pFeeMicro (the SAME primitive
+  //    the relay validator uses, at the canonical rate). Pinned treasury.
+  const amountMicro = toMicro(unitCost);
+  const feeAmountMicro = computeP2pFeeMicro(amountMicro, PLATFORM_FEE_RATE);
+
+  // 5. Broadcast the atomic payment ONCE. A throw here means nothing settled on
+  //    the relay — the proof is never submitted without a confirmed payment.
+  let proof: P2pPaymentProof;
+  try {
+    proof = await params.buildP2pPayment({
+      workerAddress: worker.settlement_address,
+      amountMicro,
+      treasuryAddress,
+      feeAmountMicro,
+    });
+  } catch (err: unknown) {
+    // wallet-solana surfaces a funds shortfall as InsufficientUsdcBalanceError.
+    if (err instanceof Error && err.name === "InsufficientUsdcBalanceError") {
+      return fail("insufficient_balance", err.message);
+    }
+    return fail(
+      "payment_broadcast_failed",
+      `P2P payment failed to broadcast: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  // 6. Submit the pre-built proof (retry-safe; never re-broadcasts).
+  return submitP2pDelegation({
+    motebitId,
+    syncUrl,
+    authToken: params.authToken,
+    prompt: params.prompt,
+    targetWorkerId: worker.motebit_id,
+    paymentProof: proof,
+    ...(params.invocationOrigin ? { invocationOrigin: params.invocationOrigin } : {}),
+    ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
     logger: params.logger,
     ...(params.signal ? { signal: params.signal } : {}),
   });
