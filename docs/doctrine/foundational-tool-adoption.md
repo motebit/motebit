@@ -23,3 +23,13 @@ When a foundational tool ships a major version, the adoption checklist is not "d
 3. If a gate degrades and there is no clean downstream fix, the upgrade waits on the gate's ecosystem catching up — adopting early while a defense is silently weakened is the regression.
 
 Premature adoption that breaks a defensive gate is reverted, not patched around. The gate is the product's claim of integrity; a half-working gate is a lie the same way a stale doctrine citation is.
+
+**Verify in a worktree before pushing — _every_ defensive gate, not just typecheck/lint/test.** Both worked examples below shipped because the local pre-push hook ran a subset of what CI enforces. When bumping a foundational tool, run the full set against the new version: typecheck, lint, test, **`test:coverage`**, the drift gates (`pnpm check`), gate-effectiveness, and format. The pre-push hook is now aligned with CI's coverage check (`.husky/pre-push` runs `test:coverage`, not bare `test`) so this specific hole stays closed.
+
+## Worked examples
+
+- **TypeScript 5.9 → 6.0 (reverted).** The migration bumped only the root `typescript` pin; the linter resolves typescript from the root, so type-aware eslint ran on TS 6.0 while every package compiled on its own 5.x pin. `@typescript-eslint` then failed to resolve node globals under TS 6, emitting hundreds of false errors across 19 packages — silently, because incremental pre-push lint rarely touches those packages. No clean downstream fix existed (an upstream `@typescript-eslint`/TS-6 bug). Reverted to `^5.9`; the typed-lint gate came back clean (0 errors across all packages). See "The decision this doctrine records" above.
+
+- **vitest 2 → 4 (kept, recalibrated).** The upgrade closed critical advisory GHSA-5xrq-8626-4rwp (Vitest UI server), so it could not be reverted. But vitest 4's `coverage-v8` counts branches/statements more granularly than v2 (JSX/conditional branches especially), dropping measured coverage below thresholds in ~40 packages — same tests, same source, different ruler. Caught only by CI's `test:coverage` (the pre-push ran bare `test`), which let three pushes ship CI-red. Resolved by: covering the one package with real new code (`services/relay`) with tests, then a one-time threshold recalibration to the new tool's floor (a deliberate ruler change, not a bar relaxation — temporary, raise as coverage recovers), and closing the pre-push gate hole. The relay suite was additionally bounded (capped fork pool + the drain-grace test fix) so the now-coverage-enforcing pre-push run stays reliable under contention.
+
+Both have the identical shape: a foundational-tool change that left a downstream defensive gate silently degraded, surfaced not by the build but by the gate — when it was finally run.

@@ -48,6 +48,18 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # Raise this number on a more capable host or delete the flag entirely.
   # CI itself skips this hook (`$CI` check at the top of the file), so
   # production CI runs at its own full parallelism regardless.
-  pnpm turbo run typecheck lint test --filter="...[origin/main]" --concurrency=2
+  # `test:coverage`, not `test`: CI's `check` job runs `test:coverage` (tests +
+  # coverage-threshold enforcement). Running plain `test` here let three pushes
+  # (vitest-4 upgrade arc, 2026-06) ship with CI red on coverage — the gate hole
+  # this closes. test:coverage is a superset (runs the tests AND checks thresholds),
+  # so it replaces `test` rather than adding a redundant second vitest pass. Set
+  # SKIP_COVERAGE=1 to fall back to plain `test` for fast local iteration (prints a
+  # warning; CI still enforces coverage regardless).
+  if [ -n "$SKIP_COVERAGE" ]; then
+    echo "⚠ SKIP_COVERAGE set — running 'test' without coverage thresholds (CI still enforces them)"
+    pnpm turbo run typecheck lint test --filter="...[origin/main]" --concurrency=2
+  else
+    pnpm turbo run typecheck lint test:coverage --filter="...[origin/main]" --concurrency=2
+  fi
   pnpm format:check
 fi
