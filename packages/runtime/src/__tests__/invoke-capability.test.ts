@@ -25,8 +25,10 @@ import {
   InMemoryAgentTrustStore,
 } from "../index";
 import type { PlatformAdapters, StreamChunk } from "../index";
+import { InvokeCapabilityManager } from "../invoke-capability.js";
 import type { StreamingProvider, AgenticChunk } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ExecutionReceipt } from "@motebit/sdk";
+import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 
 // Intercept runTurnStreaming to assert the deterministic path bypasses it.
 const mockRunTurnStreaming = vi.fn();
@@ -483,3 +485,117 @@ describe("invokeCapability — surface determinism", () => {
 // Silence unused-import lint in this file — referenced only for parity with
 // the interactive-delegation test fixtures if future tests need them.
 void InMemoryAgentTrustStore;
+
+// ── P2P path selection (PR3c) ─────────────────────────────────────────────
+//
+// When the manager has a sovereign rail (`buildP2pPayment`) AND a pinned
+// `relayPublicKey`, a paid p2p-capable capability settles peer-to-peer; when
+// no payable p2p worker advertises the capability, it falls back to relay-mode.
+
+describe("invokeCapability — P2P path selection", () => {
+  let routed: (url: string, init?: RequestInit) => Promise<Response>;
+  let lastSubmitBody: Record<string, unknown> | null;
+
+  beforeEach(() => {
+    lastSubmitBody = null;
+    routed = async () => new Response("not found", { status: 404 });
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("mock-relay.test")) return routed(url, init);
+      return originalFetch(input, init);
+    }) as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const PINNED_HEX = "07".repeat(32);
+  const jsonResp = (status: number, body: unknown): Response =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+
+  function makeManager(
+    buildP2pPayment: ((req: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>) | undefined,
+  ) {
+    return new InvokeCapabilityManager(
+      {
+        motebitId: "alice-001",
+        logger: { warn: vi.fn() },
+        bumpTrustFromReceipt: vi.fn(async () => {}),
+        stashReceipt: vi.fn(),
+        ...(buildP2pPayment ? { buildP2pPayment } : {}),
+      },
+      {
+        syncUrl: "https://mock-relay.test",
+        authToken: async (aud?: string) => `tok-${aud}`,
+        timeoutMs: 3000,
+        relayPublicKey: PINNED_HEX,
+      },
+    );
+  }
+
+  it("routes a paid p2p-capable capability through the P2P path (builds the payment)", async () => {
+    const buildP2pPayment = vi.fn(
+      async (req: SovereignP2pPaymentRequest): Promise<P2pPaymentProof> => ({
+        tx_hash: "p2p-tx",
+        chain: "solana",
+        network: "solana:x",
+        to_address: req.workerAddress,
+        amount_micro: req.amountMicro,
+        fee_to_address: req.treasuryAddress,
+        fee_amount_micro: req.feeAmountMicro,
+      }),
+    );
+    routed = async (url, init) => {
+      if (url.includes("/api/v1/agents/discover")) {
+        return jsonResp(200, {
+          agents: [{ motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" }],
+        });
+      }
+      if (url.includes("/listing")) {
+        return jsonResp(200, { pricing: [{ capability: "review_pr", unit_cost: 0.5 }] });
+      }
+      if (url.endsWith("/task") && init?.method === "POST") {
+        lastSubmitBody = JSON.parse(init.body as string) as Record<string, unknown>;
+        // 400 stops before the timer-bound poll; we only assert the P2P path ran.
+        return jsonResp(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" });
+      }
+      return new Response("nf", { status: 404 });
+    };
+
+    const mgr = makeManager(buildP2pPayment);
+    const chunks = await collect(mgr.invokeCapability("review_pr", "review my PR"));
+
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+    // The submission was the pinned P2P shape, not relay-mode capability routing.
+    expect(lastSubmitBody?.target_agent).toBe("bob");
+    expect(lastSubmitBody?.settlement_mode).toBe("p2p");
+    const err = chunks.find((c) => c.type === "invoke_error");
+    expect(err).toBeDefined();
+  });
+
+  it("falls back to relay-mode when no payable p2p worker advertises the capability", async () => {
+    const buildP2pPayment = vi.fn<(req: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>>();
+    routed = async (url, init) => {
+      if (url.includes("/api/v1/agents/discover")) {
+        return jsonResp(200, { agents: [] }); // no payable p2p worker
+      }
+      if (url.endsWith("/task") && init?.method === "POST") {
+        lastSubmitBody = JSON.parse(init.body as string) as Record<string, unknown>;
+        return jsonResp(400, { code: "BAD" }); // stop before poll
+      }
+      return new Response("nf", { status: 404 });
+    };
+
+    const mgr = makeManager(buildP2pPayment);
+    const chunks = await collect(mgr.invokeCapability("review_pr", "review my PR"));
+
+    // No payment built; the relay-mode submit (capability-routed, no target_agent) fired.
+    expect(buildP2pPayment).not.toHaveBeenCalled();
+    expect(lastSubmitBody?.required_capabilities).toEqual(["review_pr"]);
+    expect(lastSubmitBody?.target_agent).toBeUndefined();
+    expect(chunks.find((c) => c.type === "invoke_error")).toBeDefined();
+  });
+});

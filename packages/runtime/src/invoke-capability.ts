@@ -12,12 +12,15 @@
  */
 
 import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
+import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 
 import type { StreamChunk } from "./runtime-config.js";
 import {
   submitAndPollDelegation,
+  resolveAndSubmitP2pDelegation,
   type DelegationError,
   type DelegationErrorCode,
+  type DelegationResult,
 } from "./relay-delegation.js";
 
 export type { DelegationError, DelegationErrorCode };
@@ -29,6 +32,14 @@ export interface InvokeCapabilityDeps {
   bumpTrustFromReceipt: (receipt: ExecutionReceipt) => Promise<void>;
   /** Stash the receipt so a concurrent AI loop's handleAgentTask can drain it. */
   stashReceipt: (receipt: ExecutionReceipt) => void;
+  /**
+   * The sovereign rail's atomic multi-leg payment builder, bound by the runtime
+   * from its `SovereignWalletRail`. Present only when a sovereign wallet is
+   * configured. When present (and a pinned `relayPublicKey` is in the config),
+   * a paid cross-agent capability settles peer-to-peer instead of relay-custody;
+   * absent → every delegation uses the relay-mediated path.
+   */
+  buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
 }
 
 export interface InvokeCapabilityConfig {
@@ -36,6 +47,14 @@ export interface InvokeCapabilityConfig {
   authToken: (audience?: string) => Promise<string>;
   timeoutMs?: number;
   routingStrategy?: "cost" | "quality" | "balanced";
+  /**
+   * The relay's Ed25519 public key (hex), PINNED at pairing. Required for paid
+   * P2P delegation: the treasury the fee leg pays is derived from this key
+   * (never from a fetched response), so the irreversible onchain payment trusts
+   * the pairing root. Absent → P2P is disabled and every delegation uses the
+   * relay-mediated path. The surface populates it from its pairing record.
+   */
+  relayPublicKey?: string;
 }
 
 export interface InvokeCapabilityOptions {
@@ -91,18 +110,12 @@ export class InvokeCapabilityManager {
     // indicator; no special casing required.
     yield { type: "delegation_start", server, tool };
 
-    const result = await submitAndPollDelegation({
-      motebitId: this.deps.motebitId,
-      syncUrl: this.config.syncUrl,
-      authToken: this.config.authToken,
+    const result = await this.resolveDelegation(
+      capability,
       prompt,
-      requiredCapabilities: [capability],
-      routingStrategy: this.config.routingStrategy,
       invocationOrigin,
-      timeoutMs: this.config.timeoutMs,
-      logger: this.deps.logger,
-      signal: options.signal,
-    });
+      options.signal,
+    );
 
     if (!result.ok) {
       yield { type: "invoke_error", ...result.error } as StreamChunk;
@@ -147,5 +160,60 @@ export class InvokeCapabilityManager {
     // wraps a full conversational turn; this path wraps a single capability
     // invocation. The chat-layer chip handler emerges the receipt bubble on
     // `delegation_complete` and exits its `for await` when the generator ends.
+  }
+
+  /**
+   * Pick the settlement path. When a sovereign rail (`buildP2pPayment`) AND a
+   * pinned `relayPublicKey` are both configured, a PAID cross-agent capability
+   * settles peer-to-peer (`resolveAndSubmitP2pDelegation`) — the relay never
+   * custodies the worker's earnings. If no payable P2P worker advertises the
+   * capability (a free task, or cold-start before the worker is p2p-eligible),
+   * it falls back to the relay-mediated path — but ONLY on the pre-broadcast
+   * codes (`no_routing` / `worker_not_payable`). Once a payment may have moved,
+   * the P2P result is surfaced verbatim, never silently re-run as a relay-custody
+   * task (which would double-charge). Absent rail/key → relay-mode, as before.
+   */
+  private async resolveDelegation(
+    capability: string,
+    prompt: string,
+    invocationOrigin: IntentOrigin,
+    signal: AbortSignal | undefined,
+  ): Promise<DelegationResult> {
+    const buildP2pPayment = this.deps.buildP2pPayment;
+    const relayPublicKey = this.config.relayPublicKey;
+
+    if (buildP2pPayment != null && relayPublicKey != null) {
+      const p2p = await resolveAndSubmitP2pDelegation({
+        motebitId: this.deps.motebitId,
+        syncUrl: this.config.syncUrl,
+        authToken: this.config.authToken,
+        prompt,
+        capability,
+        relayPublicKeyHex: relayPublicKey,
+        buildP2pPayment,
+        invocationOrigin,
+        ...(this.config.timeoutMs != null ? { timeoutMs: this.config.timeoutMs } : {}),
+        logger: this.deps.logger,
+        ...(signal ? { signal } : {}),
+      });
+      if (p2p.ok) return p2p;
+      // Only "no payable P2P worker" (pre-broadcast) falls back to relay-mode.
+      if (p2p.error.code !== "no_routing" && p2p.error.code !== "worker_not_payable") {
+        return p2p;
+      }
+    }
+
+    return submitAndPollDelegation({
+      motebitId: this.deps.motebitId,
+      syncUrl: this.config.syncUrl,
+      authToken: this.config.authToken,
+      prompt,
+      requiredCapabilities: [capability],
+      ...(this.config.routingStrategy ? { routingStrategy: this.config.routingStrategy } : {}),
+      invocationOrigin,
+      ...(this.config.timeoutMs != null ? { timeoutMs: this.config.timeoutMs } : {}),
+      logger: this.deps.logger,
+      ...(signal ? { signal } : {}),
+    });
   }
 }

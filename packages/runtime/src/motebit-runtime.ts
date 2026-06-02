@@ -4316,6 +4316,11 @@ export class MotebitRuntime {
    */
   enableInvokeCapability(config: InvokeCapabilityConfig): void {
     if (this.invokeCapabilityManager != null) return;
+    // Bind the sovereign rail's atomic-payment builder when a wallet is
+    // configured. With it (and a pinned `config.relayPublicKey`), a paid
+    // cross-agent capability settles peer-to-peer instead of relay-custody;
+    // without it, every delegation uses the relay-mediated path (unchanged).
+    const buildP2pPayment = this._solanaWallet?.buildP2pPayment?.bind(this._solanaWallet);
     this.invokeCapabilityManager = new InvokeCapabilityManager(
       {
         motebitId: this.motebitId,
@@ -4325,6 +4330,7 @@ export class MotebitRuntime {
         // drains user-tap receipts into its parent receipt's delegation_receipts
         // chain — composition preserved.
         stashReceipt: (receipt) => this.interactiveDelegation.pushReceipt(receipt),
+        ...(buildP2pPayment ? { buildP2pPayment } : {}),
       },
       config,
     );
