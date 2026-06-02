@@ -391,6 +391,14 @@ export interface SubmitP2pDelegationParams {
   /** Task prompt to submit. */
   prompt: string;
   /**
+   * The capabilities the pinned worker must advertise. REQUIRED for a federated
+   * (cross-operator) worker: the origin relay rejects a federated P2P submission
+   * with no `required_capabilities` (it cannot locate the worker on its operator
+   * or price the §7.1 budget without them — tasks.ts). Harmless for a local
+   * worker (the target is pinned by `target_agent` regardless).
+   */
+  requiredCapabilities?: string[];
+  /**
    * The PINNED worker. P2P settlement addresses a specific worker — the proof's
    * worker leg pays that worker's `settlement_address` — so unlike relay-mode
    * capability routing, the target is fixed (submitted as `target_agent`).
@@ -466,8 +474,20 @@ export async function submitP2pDelegation(
       submitted_by: params.motebitId,
       target_agent: params.targetWorkerId,
       settlement_mode: "p2p",
-      p2p_payment_proof: params.paymentProof,
+      // The relay's task-submission handler reads the proof under `payment_proof`
+      // (services/relay/src/tasks.ts) — NOT `p2p_payment_proof` (that's only the
+      // relay's internal TaskQueue field name). Sending the wrong key made the
+      // relay see no proof and reject every paid cross-agent delegation with 402
+      // TASK_P2P_PROOF_REQUIRED. The federation-e2e client↔relay integration test
+      // locks this wire key (the seam that mocked-fetch unit tests can't catch).
+      payment_proof: params.paymentProof,
     };
+    // Federated P2P needs the capabilities to locate + price the remote worker
+    // on its operator (the relay rejects a proofed federated submission without
+    // them). Local P2P ignores them (the target is pinned).
+    if (params.requiredCapabilities && params.requiredCapabilities.length > 0) {
+      body.required_capabilities = params.requiredCapabilities;
+    }
     if (params.invocationOrigin) {
       body.invocation_origin = params.invocationOrigin;
     }
@@ -799,6 +819,9 @@ export async function resolveAndSubmitP2pDelegation(
     authToken: params.authToken,
     prompt: params.prompt,
     targetWorkerId: worker.motebit_id,
+    // The relay needs the capability to locate + price a federated worker on its
+    // operator; pinned via the same capability used for discovery.
+    requiredCapabilities: [capability],
     paymentProof: proof,
     ...(params.invocationOrigin ? { invocationOrigin: params.invocationOrigin } : {}),
     ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),

@@ -302,3 +302,22 @@ export {
   type SlabItemActions,
   type SlabRendererTarget,
 } from "./slab-bridge.js";
+
+// Delegator-client entry points. Surfaces consume these indirectly through the
+// runtime (invokeCapability / delegate_to_agent → selectAndRunDelegation), but
+// they are exported so a cross-package integration test can drive the real
+// client submission against a live relay — the seam mocked-fetch unit tests
+// cannot reach (see services/relay federation-e2e client↔relay integration).
+export {
+  selectAndRunDelegation,
+  resolveAndSubmitP2pDelegation,
+  submitP2pDelegation,
+} from "./relay-delegation.js";
+export type {
+  SelectDelegationParams,
+  ResolveAndSubmitP2pDelegationParams,
+  SubmitP2pDelegationParams,
+  DelegationResult,
+  DelegationError,
+  DelegationErrorCode,
+} from "./relay-delegation.js";

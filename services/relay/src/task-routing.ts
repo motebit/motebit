@@ -657,6 +657,15 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
      * relay never transmits; the delegator pays the worker directly).
      */
     settlement_address: string | null;
+    /**
+     * Worker's opted-in settlement modes (comma-joined: "p2p", "relay", or
+     * "p2p,relay"), null if undeclared. Surfaced alongside `settlement_address`
+     * so a delegator's client can tell which workers accept direct P2P payment
+     * — the federated P2P client filters discovery candidates on `p2p` ∈ modes.
+     * Without this the client's P2P path never finds a payable worker and
+     * silently falls back to relay-mode.
+     */
+    settlement_modes: string | null;
     /** Last heartbeat timestamp from agent_registry. */
     last_seen_at: number;
     /**
@@ -768,6 +777,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         metadata: r.metadata ? (JSON.parse(r.metadata as string) as Record<string, unknown>) : null,
         pricing: listingByAgent.get(id) ?? null,
         settlement_address: (r.settlement_address as string | null) ?? null,
+        settlement_modes: (r.settlement_modes as string | null) ?? null,
         last_seen_at: lastSeen,
         freshness: computeFreshness(lastSeen, now),
       };

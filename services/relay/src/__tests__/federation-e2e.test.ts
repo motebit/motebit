@@ -24,8 +24,16 @@ import {
   canonicalJson,
 } from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
-import { deriveSolanaAddress } from "@motebit/wallet-solana";
-import { AUTH_HEADER, jsonAuthWithIdempotency, createTestRelay } from "./test-helpers.js";
+import { deriveSolanaAddress, SolanaWalletRail } from "@motebit/wallet-solana";
+import type { SolanaRpcAdapter } from "@motebit/wallet-solana";
+import { resolveAndSubmitP2pDelegation } from "@motebit/runtime";
+import { computeFederatedFeeSplit, PLATFORM_FEE_RATE, toMicro } from "@motebit/protocol";
+import {
+  AUTH_HEADER,
+  API_TOKEN,
+  jsonAuthWithIdempotency,
+  createTestRelay,
+} from "./test-helpers.js";
 import { reconcileTreasury } from "@motebit/treasury-reconciliation";
 import type { TreasuryReconciliationStore } from "@motebit/treasury-reconciliation";
 
@@ -1385,6 +1393,120 @@ describe("Federation E2E", () => {
       const bRecon = await reconcileOperator(bFee, bFee);
       expect(bRecon.driftMicro).toBe(0n);
       expect(bRecon.consistent).toBe(true);
+    });
+
+    it("PHASE 3 P2P: the REAL @motebit/runtime client's federated proof is accepted by the relay (client↔relay seam)", async () => {
+      // The ONLY test that drives the actual delegator client
+      // (resolveAndSubmitP2pDelegation from @motebit/runtime) against the live
+      // relay. Mocked-fetch unit tests assert the body the client BUILDS;
+      // hand-built relay e2e tests (above) assert what the relay ACCEPTS;
+      // neither connects the two. This locks the cross-package seam: the wire
+      // keys, the §7.1 split, and the peer-derived treasuries the client
+      // produces are exactly what the relay's federatedP2pIntent validates.
+      //
+      // Regression anchor: this caught the client sending the proof under
+      // `p2p_payment_proof` while the relay reads `payment_proof` — the client's
+      // P2P delegation never delivered a proof, so the relay 402'd every paid
+      // cross-agent delegation. Types + the shared split primitive can't catch a
+      // wire-key mismatch; only an end-to-end submission can.
+      const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
+      const SIG = "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk";
+
+      // Remote worker bob on B: priced + p2p + a settlement address. Discovery
+      // from A surfaces its pricing + B's relay key (PR-fed-1/1b) — the inputs
+      // the client's federated branch consumes.
+      const bob = await registerAgent(
+        relayB,
+        "bob-client",
+        ["client-cap"],
+        [{ capability: "client-cap", unit_cost: 1.0, currency: "USD", per: "task" }],
+      );
+      relayB.moteDb.db
+        .prepare(
+          "UPDATE agent_registry SET settlement_address = ?, settlement_modes = 'p2p' WHERE motebit_id = ?",
+        )
+        .run(WORKER_ADDR, bob.motebitId);
+      const bobWs = { send: vi.fn(), close: vi.fn() };
+      relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
+
+      await establishPeering(relayA, relayB);
+
+      const alice = await registerAgent(relayA, "alice-client", ["web-search"]);
+
+      // The REAL wallet rail, with a FAKE adapter so the real multi-leg builder
+      // (buildP2pPaymentProof — the real request→proof field mapping, incl.
+      // executor* → b_fee_*) runs without touching Solana. autoGas defaults off.
+      let batchLegs: Array<{ toAddress: string; microAmount: bigint }> = [];
+      const fakeAdapter = {
+        ownAddress: "A1iceSo1anaAddr1111111111111111111111111111",
+        getUsdcBalance: vi.fn().mockResolvedValue(100_000_000n),
+        getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
+        sendUsdc: vi.fn(),
+        sendUsdcBatch: vi.fn(async (legs: Array<{ toAddress: string; microAmount: bigint }>) => {
+          batchLegs = legs;
+          return legs.map(() => ({ ok: true, signature: SIG, slot: 1, confirmed: true }));
+        }),
+        getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
+        isReachable: vi.fn().mockResolvedValue(true),
+      } as unknown as SolanaRpcAdapter;
+      const rail = new SolanaWalletRail(fakeAdapter);
+
+      // Drive the actual client. Treasury is derived from A's PINNED relay key
+      // (here, A's real identity key) — exactly what A recomputes at the forward
+      // site. timeoutMs is tiny: we assert the SUBMISSION was accepted + the
+      // task forwarded, not the (unsimulated) worker result, so a poll timeout
+      // is the expected terminal state.
+      const result = await resolveAndSubmitP2pDelegation({
+        motebitId: alice.motebitId,
+        syncUrl: RELAY_A_URL,
+        authToken: async () => API_TOKEN,
+        prompt: "client-driven federated P2P",
+        capability: "client-cap",
+        relayPublicKeyHex: relayA.relayIdentity.publicKeyHex,
+        buildP2pPayment: (req) => rail.buildP2pPayment!(req),
+        timeoutMs: 100,
+        logger: { warn: vi.fn() },
+      });
+
+      // 1. THE seam assertion: the relay accepted the client's proof and
+      //    forwarded the task to the remote worker. With the wire-key bug, A
+      //    saw no proof → 402 TASK_P2P_PROOF_REQUIRED → no forward.
+      const forwarded = bobWs.send.mock.calls
+        .map((c: unknown[]) => JSON.parse(c[0] as string) as { type: string })
+        .find((m) => m.type === "task_request");
+      expect(
+        forwarded,
+        "relay must accept the client's proof + forward to the remote worker",
+      ).toBeDefined();
+
+      // 2. The client did NOT hit a submission/pre-flight rejection. A `timeout`
+      //    (no worker result simulated) is the accepted-but-no-receipt outcome.
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect([
+          "payment_proof_required",
+          "malformed_request",
+          "no_routing",
+          "no_sovereign_rail",
+        ]).not.toContain(result.error.code);
+        expect(result.error.code).toBe("timeout");
+      }
+
+      // 3. The client built the §7.1 fee-from-budget 3-leg split the relay
+      //    expects: worker net + A origin-fee + B executor-fee, summing to the
+      //    $1.00 budget. (deriveSolanaAddress(peerKey) == the client's
+      //    base58Encode(peerKey), so the leg addresses match A's recompute.)
+      const split = computeFederatedFeeSplit(toMicro(1), PLATFORM_FEE_RATE);
+      expect(batchLegs).toHaveLength(3);
+      expect(batchLegs[0]).toEqual({
+        toAddress: WORKER_ADDR,
+        microAmount: BigInt(split.workerNetMicro),
+      });
+      expect(batchLegs[1]!.microAmount).toBe(BigInt(split.originFeeMicro));
+      expect(batchLegs[2]!.microAmount).toBe(BigInt(split.executorFeeMicro));
+      expect(
+        batchLegs[0]!.microAmount + batchLegs[1]!.microAmount + batchLegs[2]!.microAmount,
+      ).toBe(BigInt(toMicro(1)));
     });
 
     it("PHASE 3 P2P: proof replay is rejected after settle, but resubmittable before settle (retry-safe)", async () => {

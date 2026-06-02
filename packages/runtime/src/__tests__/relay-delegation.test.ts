@@ -115,7 +115,10 @@ describe("submitP2pDelegation", () => {
     expect(body.target_agent).toBe("bob");
     expect(body.settlement_mode).toBe("p2p");
     expect(body.submitted_by).toBe("alice");
-    expect((body.p2p_payment_proof as P2pPaymentProof).tx_hash).toBe("tx-abc");
+    // Wire key MUST be `payment_proof` — the key the relay's task handler reads
+    // (tasks.ts). A prior version sent `p2p_payment_proof` (the relay's internal
+    // field name), so the relay saw no proof and 402'd every paid delegation.
+    expect((body.payment_proof as P2pPaymentProof).tx_hash).toBe("tx-abc");
     // Idempotency keyed on the onchain tx so a re-submit dedupes, never re-pays.
     expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBe("tx-abc");
     expect(result.ok).toBe(false);
