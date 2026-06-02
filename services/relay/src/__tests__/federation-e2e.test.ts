@@ -1635,6 +1635,112 @@ describe("Federation E2E", () => {
       expect(allocCount, "no relay-custody hold is created").toBe(0);
     });
 
+    it("PHASE 3 P2P: malformed cross-operator proofs are rejected (submission + forward-site leg validation)", async () => {
+      // Covers the federated-P2P validation error branches: the submission-time
+      // requirements (required_capabilities to locate the worker, the executor-fee
+      // leg) and the forward-site three-leg validation (worker/origin-fee/executor-fee
+      // address + amount). Each malformed proof must be rejected, never forwarded —
+      // the relay only forwards a proof it can stand behind.
+      const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
+      const FAKE_TX_HASH =
+        "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk";
+      const bob = await registerAgent(
+        relayB,
+        "bob-malformed",
+        ["malformed-cap"],
+        [{ capability: "malformed-cap", unit_cost: 1.0, currency: "USD", per: "task" }],
+      );
+      relayB.moteDb.db
+        .prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?")
+        .run(WORKER_ADDR, bob.motebitId);
+      relayB.connections.set(bob.motebitId, [
+        { ws: { send: vi.fn(), close: vi.fn() } as never, deviceId: "bob-device" },
+      ]);
+      await establishPeering(relayA, relayB);
+      const idA = (await (await relayA.app.request("/federation/v1/identity")).json()) as {
+        public_key: string;
+      };
+      const idB = (await (await relayB.app.request("/federation/v1/identity")).json()) as {
+        public_key: string;
+      };
+      const aTreasury = deriveSolanaAddress(hexToBytes(idA.public_key));
+      const bTreasury = deriveSolanaAddress(hexToBytes(idB.public_key));
+      const alice = await registerAgent(relayA, "alice-malformed", ["web-search"]);
+      const t = Date.now();
+      relayA.moteDb.db
+        .prepare(
+          "INSERT INTO relay_accounts (motebit_id, balance, currency, created_at, updated_at) VALUES (?, ?, 'USD', ?, ?)",
+        )
+        .run(alice.motebitId, 5_000_000, t, t);
+
+      // The canonical $1.00 split: worker 902_500 / A 50_000 / B 47_500.
+      const validProof = {
+        tx_hash: FAKE_TX_HASH,
+        chain: "solana",
+        network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        to_address: WORKER_ADDR,
+        amount_micro: 902_500,
+        fee_to_address: aTreasury,
+        fee_amount_micro: 50_000,
+        b_fee_to_address: bTreasury,
+        b_fee_amount_micro: 47_500,
+      };
+      const submit = (body: Record<string, unknown>) =>
+        relayA.app.request(`/agent/${alice.motebitId}/task`, {
+          method: "POST",
+          headers: jsonAuthWithIdempotency(),
+          body: JSON.stringify({
+            prompt: "malformed probe",
+            submitted_by: alice.motebitId,
+            target_agent: bob.motebitId,
+            ...body,
+          }),
+        });
+      // Each malformed submission below reuses the SAME tx_hash; since none ever
+      // settles (all rejected), the replay guard never trips — rejections are on
+      // the malformation, not replay.
+
+      // (1) Remote worker + proof but NO required_capabilities → can't locate the
+      // worker on its operator → 400.
+      const noCaps = await submit({ payment_proof: validProof });
+      expect(noCaps.status, await noCaps.clone().text()).toBe(400);
+
+      // (2) Missing the executor-relay (B) fee leg → 400 at submission.
+      const { b_fee_to_address: _a, b_fee_amount_micro: _b, ...twoLegProof } = validProof;
+      const noBFee = await submit({
+        required_capabilities: ["malformed-cap"],
+        payment_proof: twoLegProof,
+      });
+      expect(noBFee.status, await noBFee.clone().text()).toBe(400);
+
+      // (3) Wrong worker-leg amount (forward-site three-leg validation) → 400.
+      const badWorkerAmt = await submit({
+        required_capabilities: ["malformed-cap"],
+        payment_proof: { ...validProof, amount_micro: 900_000 },
+      });
+      expect(badWorkerAmt.status, await badWorkerAmt.clone().text()).toBe(400);
+
+      // (4) Wrong executor-fee leg amount → 400.
+      const badBFee = await submit({
+        required_capabilities: ["malformed-cap"],
+        payment_proof: { ...validProof, b_fee_amount_micro: 47_000 },
+      });
+      expect(badBFee.status, await badBFee.clone().text()).toBe(400);
+
+      // (5) Executor-fee leg to the wrong treasury address → 400.
+      const badBTreasury = await submit({
+        required_capabilities: ["malformed-cap"],
+        payment_proof: { ...validProof, b_fee_to_address: WORKER_ADDR },
+      });
+      expect(badBTreasury.status, await badBTreasury.clone().text()).toBe(400);
+
+      // None of the rejected submissions moved money or forwarded.
+      const aliceBal = relayA.moteDb.db
+        .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+        .get(alice.motebitId) as { balance: number };
+      expect(aliceBal.balance).toBe(5_000_000);
+    });
+
     it("federation forward timeout does not fall through to local broadcast", async () => {
       // Register agent on Relay B with a unique capability only bob has
       const bob = await registerAgent(relayB, "bob-timeout", ["exotic-timeout-cap"]);
