@@ -9,7 +9,13 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
-import { base58Encode, computeP2pFeeMicro, toMicro, PLATFORM_FEE_RATE } from "@motebit/protocol";
+import {
+  base58Encode,
+  computeP2pFeeMicro,
+  computeFederatedFeeSplit,
+  toMicro,
+  PLATFORM_FEE_RATE,
+} from "@motebit/protocol";
 import {
   classifyRelayError,
   submitP2pDelegation,
@@ -335,6 +341,141 @@ describe("resolveAndSubmitP2pDelegation", () => {
     const result = await resolveAndSubmitP2pDelegation(resolveParams({ buildP2pPayment }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("payment_broadcast_failed");
+  });
+
+  // ── FEDERATED (PR-fed-3): worker on a direct peer — 3-leg fee-from-budget ──
+
+  // A 32-byte peer relay key the origin surfaced in discovery. The executor (B)
+  // treasury the client must pay is `base58Encode` of these bytes — identical to
+  // the `deriveSolanaAddress` the origin recomputes when validating the forward.
+  const PEER_KEY_BYTES = new Uint8Array(32).fill(9);
+  const PEER_KEY_HEX = Array.from(PEER_KEY_BYTES, (b) => b.toString(16).padStart(2, "0")).join("");
+  const EXPECTED_B_TREASURY = base58Encode(PEER_KEY_BYTES);
+
+  /** A rail builder that echoes ALL six legs (incl. the executor-fee leg). */
+  const buildFederatedProof = vi.fn(
+    async (req: SovereignP2pPaymentRequest): Promise<P2pPaymentProof> => ({
+      tx_hash: "fed-p2p-tx",
+      chain: "solana",
+      network: "solana:x",
+      to_address: req.workerAddress,
+      amount_micro: req.amountMicro,
+      fee_to_address: req.treasuryAddress,
+      fee_amount_micro: req.feeAmountMicro,
+      ...(req.executorTreasuryAddress != null
+        ? { b_fee_to_address: req.executorTreasuryAddress }
+        : {}),
+      ...(req.executorFeeAmountMicro != null
+        ? { b_fee_amount_micro: req.executorFeeAmountMicro }
+        : {}),
+    }),
+  );
+
+  it("federated: prices from discovery + builds the §7.1 3-leg split with the peer-derived B treasury", async () => {
+    const params = resolveParams({ buildP2pPayment: buildFederatedProof });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        // A direct-peer candidate: discovery carries the peer relay key AND the
+        // pricing (no /listing fetch — the origin can't serve a remote listing).
+        discover: discoverOk([
+          {
+            motebit_id: "remote-bob",
+            settlement_address: "RemoteBobAddr",
+            settlement_modes: "p2p",
+            source_relay_public_key: PEER_KEY_HEX,
+            pricing: [{ capability: "web_search", unit_cost: 1 }],
+          },
+        ]),
+        // Submit 400 stops us before the timer-bound poll — we assert the legs.
+        submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
+      }),
+    );
+
+    const result = await resolveAndSubmitP2pDelegation(params);
+
+    const build = params.buildP2pPayment as ReturnType<typeof vi.fn>;
+    expect(build).toHaveBeenCalledTimes(1);
+    const req = build.mock.calls[0]![0] as SovereignP2pPaymentRequest;
+    const split = computeFederatedFeeSplit(toMicro(1), PLATFORM_FEE_RATE);
+    expect(req.workerAddress).toBe("RemoteBobAddr");
+    // Worker nets the budget minus BOTH fees — not unit_cost (that's the budget).
+    expect(req.amountMicro).toBe(split.workerNetMicro);
+    // Origin (A) fee → the PINNED treasury; executor (B) fee → the peer-derived one.
+    expect(req.treasuryAddress).toBe(EXPECTED_TREASURY);
+    expect(req.feeAmountMicro).toBe(split.originFeeMicro);
+    expect(req.executorTreasuryAddress).toBe(EXPECTED_B_TREASURY);
+    expect(req.executorFeeAmountMicro).toBe(split.executorFeeMicro);
+    // Conservation: the three legs sum to the budget exactly.
+    expect(req.amountMicro + req.feeAmountMicro + req.executorFeeAmountMicro!).toBe(toMicro(1));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("malformed_request");
+  });
+
+  it("federated: no separate /listing fetch (origin can't serve a remote worker's listing)", async () => {
+    const listing = vi.fn(() => jsonResponse(200, { pricing: [] }));
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          {
+            motebit_id: "remote-bob",
+            settlement_address: "RemoteBobAddr",
+            settlement_modes: "p2p",
+            source_relay_public_key: PEER_KEY_HEX,
+            pricing: [{ capability: "web_search", unit_cost: 1 }],
+          },
+        ]),
+        listing,
+        submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
+      }),
+    );
+    await resolveAndSubmitP2pDelegation(resolveParams({ buildP2pPayment: buildFederatedProof }));
+    expect(listing).not.toHaveBeenCalled();
+  });
+
+  it("federated: worker_not_payable when the discovered remote candidate carries no price", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          {
+            motebit_id: "remote-bob",
+            settlement_address: "RemoteBobAddr",
+            settlement_modes: "p2p",
+            source_relay_public_key: PEER_KEY_HEX,
+            pricing: null,
+          },
+        ]),
+      }),
+    );
+    const result = await resolveAndSubmitP2pDelegation(
+      resolveParams({ buildP2pPayment: buildFederatedProof }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("worker_not_payable");
+  });
+
+  it("federated: malformed_request on a non-hex peer relay key (no broadcast)", async () => {
+    const build = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          {
+            motebit_id: "remote-bob",
+            settlement_address: "RemoteBobAddr",
+            settlement_modes: "p2p",
+            source_relay_public_key: "nothex",
+            pricing: [{ capability: "web_search", unit_cost: 1 }],
+          },
+        ]),
+      }),
+    );
+    const result = await resolveAndSubmitP2pDelegation(resolveParams({ buildP2pPayment: build }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("malformed_request");
+    expect(build).not.toHaveBeenCalled();
   });
 });
 

@@ -15,7 +15,13 @@
 
 import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
 import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
-import { base58Encode, toMicro, computeP2pFeeMicro, PLATFORM_FEE_RATE } from "@motebit/protocol";
+import {
+  base58Encode,
+  toMicro,
+  computeP2pFeeMicro,
+  computeFederatedFeeSplit,
+  PLATFORM_FEE_RATE,
+} from "@motebit/protocol";
 
 /**
  * Closed-union error codes for relay delegation failures. The UI maps each to
@@ -578,10 +584,25 @@ export interface ResolveAndSubmitP2pDelegationParams {
  * derive the relay treasury from the PINNED key, price the task, broadcast the
  * delegator's atomic onchain payment, and submit the pinned task with the proof.
  *
+ * Handles BOTH fee models transparently, chosen by the discovered worker:
+ *   - LOCAL (worker on this relay) — fee ON TOP of unit_cost; a 2-leg proof
+ *     (worker + origin-fee), priced from the worker's /listing.
+ *   - FEDERATED (worker on a direct peer, identified by the peer relay key the
+ *     origin surfaces in discovery) — unit_cost IS the budget; the fee comes OUT
+ *     of it and splits 3 ways (`computeFederatedFeeSplit`, spec §7.1), adding an
+ *     executor-relay (B) fee leg whose treasury is derived from the surfaced peer
+ *     key. Priced from discovery (the origin cannot serve a remote /listing). The
+ *     relay routes a non-local `target_agent` + proof to its `federatedP2pIntent`
+ *     validator, which recomputes the same split + treasuries and rejects any leg
+ *     mismatch — so client and relay cannot drift.
+ *
  * Trust + safety:
- *   - The treasury (the fee-leg recipient) is derived from `relayPublicKeyHex`,
- *     the key pinned at pairing — never from `/.well-known` or any fetched
- *     value — so the irreversible payment cannot be redirected by a MITM.
+ *   - The origin treasury (the A fee-leg recipient) is derived from
+ *     `relayPublicKeyHex`, the key pinned at pairing — never from `/.well-known`
+ *     or any fetched value — so the irreversible payment cannot be redirected by
+ *     a MITM. The executor (B) treasury is derived from the peer key the PINNED
+ *     origin relay vouches for in its discovery response, the same key it
+ *     validates the forward against.
  *   - The fee rate is the protocol-canonical `PLATFORM_FEE_RATE`, the same rate
  *     the relay validator enforces; a relay running a non-canonical rate fails
  *     CLOSED (the proof is rejected) rather than silently mispaying.
@@ -616,8 +637,17 @@ export async function resolveAndSubmitP2pDelegation(
   }
 
   // 2. Discover a payable worker (public read). Pick the first candidate that is
-  //    not self, advertises p2p, and declares a settlement address.
-  let worker: { motebit_id: string; settlement_address: string };
+  //    not self, advertises p2p, and declares a settlement address. Capture the
+  //    peer relay key — present ONLY for a direct-peer FEDERATED candidate (the
+  //    origin attaches it from `relay_peers.public_key`) — and the discovery
+  //    pricing, which is the only price source for a remote worker (the origin
+  //    cannot serve a peer worker's /listing).
+  let worker: {
+    motebit_id: string;
+    settlement_address: string;
+    sourceRelayPublicKey?: string;
+    pricing: Array<{ capability?: string; unit_cost?: number }> | null;
+  };
   try {
     const resp = await fetch(
       `${syncUrl}/api/v1/agents/discover?capability=${encodeURIComponent(capability)}`,
@@ -635,6 +665,8 @@ export async function resolveAndSubmitP2pDelegation(
         motebit_id: string;
         settlement_address?: string | null;
         settlement_modes?: string | string[] | null;
+        source_relay_public_key?: string | null;
+        pricing?: Array<{ capability?: string; unit_cost?: number }> | null;
       }>;
     };
     const candidate = (data.agents ?? []).find((a) => {
@@ -647,7 +679,14 @@ export async function resolveAndSubmitP2pDelegation(
     if (candidate?.settlement_address == null) {
       return fail("no_routing", `No P2P-capable worker advertises "${capability}".`);
     }
-    worker = { motebit_id: candidate.motebit_id, settlement_address: candidate.settlement_address };
+    worker = {
+      motebit_id: candidate.motebit_id,
+      settlement_address: candidate.settlement_address,
+      ...(candidate.source_relay_public_key != null
+        ? { sourceRelayPublicKey: candidate.source_relay_public_key }
+        : {}),
+      pricing: candidate.pricing ?? null,
+    };
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "AbortError") {
       return fail("timeout", "Aborted during discovery");
@@ -655,55 +694,93 @@ export async function resolveAndSubmitP2pDelegation(
     return fail("network_unreachable", err instanceof Error ? err.message : String(err));
   }
 
-  // 3. Price the task from the worker's listing (market:listing-audience read).
-  let unitCost: number;
-  try {
-    const listingToken = await params.authToken("market:listing");
-    const resp = await fetch(`${syncUrl}/api/v1/agents/${worker.motebit_id}/listing`, {
-      headers: { Authorization: `Bearer ${listingToken}` },
-      signal: params.signal,
-    });
-    if (resp.status === 404) {
-      return fail("worker_not_payable", "Worker has no service listing.");
+  // 3. Build the atomic payment's legs. Two fee models, selected by whether the
+  //    worker lives on THIS relay (local) or a direct peer (federated):
+  //      - LOCAL single-operator — fee is ON TOP of unit_cost (computeP2pFeeMicro);
+  //        2 legs (worker + origin-fee). Priced from the worker's /listing.
+  //      - FEDERATED cross-operator — unit_cost IS the budget; the fee comes OUT
+  //        of it and splits 3 ways (computeFederatedFeeSplit, spec §7.1). A 3rd
+  //        leg pays the executor relay (B) treasury, derived from the peer key
+  //        the origin surfaced in discovery — `base58Encode(peer pubkey)` is
+  //        exactly the `deriveSolanaAddress` the origin recomputes when it
+  //        validates the forward, so the two cannot disagree. Priced from
+  //        discovery (the origin cannot serve a remote /listing).
+  let paymentRequest: SovereignP2pPaymentRequest;
+  if (worker.sourceRelayPublicKey != null) {
+    let executorTreasuryAddress: string;
+    try {
+      executorTreasuryAddress = base58Encode(hexToBytes(worker.sourceRelayPublicKey));
+    } catch (err: unknown) {
+      return fail(
+        "malformed_request",
+        `Invalid peer relay public key in discovery: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      return {
-        ok: false,
-        error: classifyRelayError(resp.status, text, resp.headers.get("Retry-After")),
-      };
+    const priced =
+      (worker.pricing ?? []).find((p) => p.capability === capability) ?? (worker.pricing ?? [])[0];
+    if (priced?.unit_cost == null || priced.unit_cost <= 0) {
+      return fail("worker_not_payable", `Remote worker has no positive price for "${capability}".`);
     }
-    const data = (await resp.json()) as {
-      pricing?: Array<{ capability?: string; unit_cost?: number }>;
+    const budgetMicro = toMicro(priced.unit_cost);
+    const split = computeFederatedFeeSplit(budgetMicro, PLATFORM_FEE_RATE);
+    paymentRequest = {
+      workerAddress: worker.settlement_address,
+      amountMicro: split.workerNetMicro,
+      treasuryAddress,
+      feeAmountMicro: split.originFeeMicro,
+      executorTreasuryAddress,
+      executorFeeAmountMicro: split.executorFeeMicro,
     };
-    const entry =
-      (data.pricing ?? []).find((p) => p.capability === capability) ?? (data.pricing ?? [])[0];
-    if (entry?.unit_cost == null || entry.unit_cost <= 0) {
-      return fail("worker_not_payable", `Worker has no positive price for "${capability}".`);
+  } else {
+    // LOCAL: price from the worker's listing (market:listing-audience read).
+    let unitCost: number;
+    try {
+      const listingToken = await params.authToken("market:listing");
+      const resp = await fetch(`${syncUrl}/api/v1/agents/${worker.motebit_id}/listing`, {
+        headers: { Authorization: `Bearer ${listingToken}` },
+        signal: params.signal,
+      });
+      if (resp.status === 404) {
+        return fail("worker_not_payable", "Worker has no service listing.");
+      }
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "");
+        return {
+          ok: false,
+          error: classifyRelayError(resp.status, text, resp.headers.get("Retry-After")),
+        };
+      }
+      const data = (await resp.json()) as {
+        pricing?: Array<{ capability?: string; unit_cost?: number }>;
+      };
+      const entry =
+        (data.pricing ?? []).find((p) => p.capability === capability) ?? (data.pricing ?? [])[0];
+      if (entry?.unit_cost == null || entry.unit_cost <= 0) {
+        return fail("worker_not_payable", `Worker has no positive price for "${capability}".`);
+      }
+      unitCost = entry.unit_cost;
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
+        return fail("timeout", "Aborted during pricing");
+      }
+      return fail("network_unreachable", err instanceof Error ? err.message : String(err));
     }
-    unitCost = entry.unit_cost;
-  } catch (err: unknown) {
-    if (err instanceof Error && err.name === "AbortError") {
-      return fail("timeout", "Aborted during pricing");
-    }
-    return fail("network_unreachable", err instanceof Error ? err.message : String(err));
-  }
-
-  // 4. Legs: worker net = unit_cost; fee = computeP2pFeeMicro (the SAME primitive
-  //    the relay validator uses, at the canonical rate). Pinned treasury.
-  const amountMicro = toMicro(unitCost);
-  const feeAmountMicro = computeP2pFeeMicro(amountMicro, PLATFORM_FEE_RATE);
-
-  // 5. Broadcast the atomic payment ONCE. A throw here means nothing settled on
-  //    the relay — the proof is never submitted without a confirmed payment.
-  let proof: P2pPaymentProof;
-  try {
-    proof = await params.buildP2pPayment({
+    // Worker net = unit_cost; fee = computeP2pFeeMicro (the SAME primitive the
+    // relay validator uses, at the canonical rate). Pinned treasury.
+    const amountMicro = toMicro(unitCost);
+    paymentRequest = {
       workerAddress: worker.settlement_address,
       amountMicro,
       treasuryAddress,
-      feeAmountMicro,
-    });
+      feeAmountMicro: computeP2pFeeMicro(amountMicro, PLATFORM_FEE_RATE),
+    };
+  }
+
+  // 4. Broadcast the atomic payment ONCE. A throw here means nothing settled on
+  //    the relay — the proof is never submitted without a confirmed payment.
+  let proof: P2pPaymentProof;
+  try {
+    proof = await params.buildP2pPayment(paymentRequest);
   } catch (err: unknown) {
     // wallet-solana surfaces a funds shortfall as InsufficientUsdcBalanceError.
     if (err instanceof Error && err.name === "InsufficientUsdcBalanceError") {
@@ -715,7 +792,7 @@ export async function resolveAndSubmitP2pDelegation(
     );
   }
 
-  // 6. Submit the pre-built proof (retry-safe; never re-broadcasts).
+  // 5. Submit the pre-built proof (retry-safe; never re-broadcasts).
   return submitP2pDelegation({
     motebitId,
     syncUrl,
