@@ -2857,7 +2857,15 @@ export { ALL_EVENT_TYPES, isEventType } from "./event-type.js";
 // canonical converter family every consumer routes through. Inline
 // `Math.round(amount * 100|1_000_000)` is a category error gated by
 // `scripts/check-money-boundary.ts`.
-export { MICRO, CENTS, toMicro, fromMicro, toCents, fromCents } from "./money.js";
+export {
+  MICRO,
+  CENTS,
+  toMicro,
+  fromMicro,
+  toCents,
+  fromCents,
+  computeP2pFeeMicro,
+} from "./money.js";
 
 // Token audiences — closed registry of `aud` claim values for the
 // Routing primitive — closed-registry types for the auto-router.

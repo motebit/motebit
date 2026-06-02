@@ -203,6 +203,12 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "fromMicro",
     "toCents",
     "fromCents",
+    // P2P settlement fee math — pure integer micro-unit algebra over a float
+    // rate. Interop law on the money path: the relay's settlement validator
+    // and the delegator client that builds the proof must compute the fee
+    // identically (a one-micro disagreement rejects the proof), so the formula
+    // is hosted here as the single canonical source consumed by both sides.
+    "computeP2pFeeMicro",
     // base58btc codec — pure, chain-agnostic byte → string encoding (Bitcoin
     // alphabet; shared by Solana addresses, IPFS CIDv0, etc.). Same category as
     // the money converters above: deterministic byte math, no I/O, no chain

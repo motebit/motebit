@@ -6,7 +6,15 @@
  * the conversion is exercised end-to-end.
  */
 import { describe, it, expect } from "vitest";
-import { MICRO, CENTS, toMicro, fromMicro, toCents, fromCents } from "../money.js";
+import {
+  MICRO,
+  CENTS,
+  toMicro,
+  fromMicro,
+  toCents,
+  fromCents,
+  computeP2pFeeMicro,
+} from "../money.js";
 
 describe("micro-units", () => {
   it("MICRO equals one million — matches USDC's 6 decimals", () => {
@@ -55,5 +63,33 @@ describe("cents", () => {
     for (const cents of [0, 1, 100, 4_030, 999_999]) {
       expect(toCents(fromCents(cents))).toBe(cents);
     }
+  });
+});
+
+describe("computeP2pFeeMicro", () => {
+  it("computes gross - net where gross = round(net / (1 - feeRate))", () => {
+    // $1.00 net at 5% → gross round(1_000_000/0.95)=1_052_632 → fee 52_632.
+    expect(computeP2pFeeMicro(1_000_000, 0.05)).toBe(52_632);
+    // $0.50 net at 5% → gross round(500_000/0.95)=526_316 → fee 26_316.
+    expect(computeP2pFeeMicro(500_000, 0.05)).toBe(26_316);
+  });
+
+  it("matches the relay validator's exact formula (no drift)", () => {
+    // The relay's submission check computes the same expression inline-free
+    // via this primitive; replicate it here to lock the contract.
+    const feeRate = 0.05;
+    for (const net of [1, 999, 1_000_000, 902_500, 7_654_321]) {
+      const expected = Math.round(net / (1 - feeRate)) - net;
+      expect(computeP2pFeeMicro(net, feeRate)).toBe(expected);
+    }
+  });
+
+  it("returns 0 when the fee rate is 0 (no fee leg)", () => {
+    expect(computeP2pFeeMicro(1_000_000, 0)).toBe(0);
+  });
+
+  it("throws when feeRate is out of [0, 1)", () => {
+    expect(() => computeP2pFeeMicro(1_000_000, 1)).toThrow();
+    expect(() => computeP2pFeeMicro(1_000_000, -0.1)).toThrow();
   });
 });

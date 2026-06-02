@@ -52,6 +52,7 @@ import {
   lexicographicComposite,
 } from "@motebit/market";
 import type { CandidateProfile, CompositeFunction } from "@motebit/market";
+import { computeP2pFeeMicro } from "@motebit/protocol";
 import { getAccountBalance, creditAccount, debitAccount, toMicro } from "./accounts.js";
 import { attemptPushWake } from "./push-adapter.js";
 import { getRelayKeypair } from "./credentials.js";
@@ -1898,16 +1899,19 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           );
         }
 
-        // Fee amount must match the expected platform_fee given the
-        // worker's unit_cost and the current platform_fee_rate. Computed
-        // as `gross - net` where `gross = round(net / (1 - feeRate))`.
+        // Fee amount must match the expected platform_fee given the worker's
+        // unit_cost and the current platform_fee_rate. `computeP2pFeeMicro`
+        // (@motebit/protocol) is the single canonical source for `gross - net`
+        // where `gross = round(net / (1 - feeRate))` — the delegator client
+        // that builds the proof computes the fee with the SAME primitive, so
+        // the two cannot drift (a one-micro disagreement would reject every
+        // proof here).
         if (unitCostMicro != null && platformFeeRate > 0) {
-          const grossMicro = Math.round(unitCostMicro / (1 - platformFeeRate));
-          const expectedFeeMicro = grossMicro - unitCostMicro;
+          const expectedFeeMicro = computeP2pFeeMicro(unitCostMicro, platformFeeRate);
           if (proof.fee_amount_micro !== expectedFeeMicro) {
             throw new TaskError(
               "TASK_P2P_FEE_AMOUNT_MISMATCH",
-              `Payment fee_amount_micro ${proof.fee_amount_micro} does not match expected ${expectedFeeMicro} (gross ${grossMicro} - net ${unitCostMicro})`,
+              `Payment fee_amount_micro ${proof.fee_amount_micro} does not match expected ${expectedFeeMicro} (net ${unitCostMicro}, rate ${platformFeeRate})`,
               400,
             );
           }

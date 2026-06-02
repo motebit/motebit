@@ -44,3 +44,27 @@ export function toCents(dollars: number): number {
 export function fromCents(cents: number): number {
   return cents / CENTS;
 }
+
+/**
+ * P2P settlement fee leg, in micro-units. A paid direct delegation settles in
+ * one atomic onchain transaction that splits into a worker leg
+ * (`netCostMicro` — the listing unit_cost the worker earns net) and this fee
+ * leg to the relay treasury. The fee is `gross - net` where
+ * `gross = round(net / (1 - feeRate))`.
+ *
+ * This is interop law on the money path: the relay's settlement validator (the
+ * `requiresP2pProof` submission check) and the delegator client that builds the
+ * proof MUST compute the fee identically — a one-micro disagreement rejects the
+ * proof (`TASK_P2P_FEE_AMOUNT_MISMATCH`). The formula therefore lives here as
+ * the single canonical source, never inline at each site. Pure integer math
+ * over a float `feeRate` ratio — no dollar arithmetic.
+ *
+ * @param netCostMicro worker net in micro-units (integer)
+ * @param feeRate platform fee rate in [0, 1) — e.g. 0.05
+ */
+export function computeP2pFeeMicro(netCostMicro: number, feeRate: number): number {
+  if (feeRate < 0 || feeRate >= 1) {
+    throw new Error(`feeRate must be in [0, 1), got ${feeRate}`);
+  }
+  return Math.round(netCostMicro / (1 - feeRate)) - netCostMicro;
+}
