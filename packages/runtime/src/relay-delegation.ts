@@ -14,6 +14,7 @@
  */
 
 import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
+import type { P2pPaymentProof } from "@motebit/protocol";
 
 /**
  * Closed-union error codes for relay delegation failures. The UI maps each to
@@ -251,16 +252,49 @@ export async function submitAndPollDelegation(
     };
   }
 
-  // Poll. Tasks are stored under the submitter's motebitId.
-  const maxPolls = Math.ceil(timeoutMs / POLL_INTERVAL_MS);
+  // Poll until a receipt lands, the caller aborts, or the timeout elapses.
+  // Shared with the P2P path (`submitP2pDelegation`) — the only difference
+  // between the two flows is the submit body, never the poll.
+  return pollForReceipt({
+    syncUrl: params.syncUrl,
+    motebitId: params.motebitId,
+    taskId,
+    queryHeader,
+    timeoutMs,
+    startedAt,
+    logger: params.logger,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+}
+
+interface PollForReceiptArgs {
+  syncUrl: string;
+  motebitId: string;
+  taskId: string;
+  queryHeader: string;
+  timeoutMs: number;
+  startedAt: number;
+  logger: { warn(message: string, context?: Record<string, unknown>): void };
+  signal?: AbortSignal;
+}
+
+/**
+ * Poll the relay for a task's receipt. Tasks are stored under the submitter's
+ * motebitId. Returns on the first signed receipt, an explicit agent-failed
+ * status, abort, or timeout. Network glitches mid-poll are retried silently
+ * (calm-software doctrine). Extracted so the relay-mode and P2P delegation
+ * paths share one poll implementation — divergence here was the drift risk.
+ */
+async function pollForReceipt(args: PollForReceiptArgs): Promise<DelegationResult> {
+  const maxPolls = Math.ceil(args.timeoutMs / POLL_INTERVAL_MS);
   for (let i = 0; i < maxPolls; i++) {
-    if (params.signal?.aborted) {
+    if (args.signal?.aborted) {
       return { ok: false, error: { code: "timeout", message: "Aborted mid-poll" } };
     }
 
     await new Promise<void>((resolve, reject) => {
       const t = setTimeout(resolve, POLL_INTERVAL_MS);
-      params.signal?.addEventListener(
+      args.signal?.addEventListener(
         "abort",
         () => {
           clearTimeout(t);
@@ -273,14 +307,14 @@ export async function submitAndPollDelegation(
     });
 
     try {
-      const resp = await fetch(`${params.syncUrl}/agent/${params.motebitId}/task/${taskId}`, {
-        headers: { Authorization: queryHeader },
-        signal: params.signal,
+      const resp = await fetch(`${args.syncUrl}/agent/${args.motebitId}/task/${args.taskId}`, {
+        headers: { Authorization: args.queryHeader },
+        signal: args.signal,
       });
 
       if (!resp.ok) {
-        params.logger.warn("delegation poll failed", {
-          taskId,
+        args.logger.warn("delegation poll failed", {
+          taskId: args.taskId,
           status: resp.status,
           body: await resp.text().catch(() => ""),
         });
@@ -296,7 +330,7 @@ export async function submitAndPollDelegation(
       // a signed receipt — preferred) or as task.status === "failed" without
       // one. Both are terminal for a single invocation — no retry.
       if (data.receipt != null) {
-        return { ok: true, receipt: data.receipt, taskId };
+        return { ok: true, receipt: data.receipt, taskId: args.taskId };
       }
       if (data.task.status === "failed") {
         return {
@@ -312,9 +346,153 @@ export async function submitAndPollDelegation(
     }
   }
 
-  const elapsedMs = Date.now() - startedAt;
+  const elapsedMs = Date.now() - args.startedAt;
   return {
     ok: false,
     error: { code: "timeout", message: `No receipt within ${Math.round(elapsedMs / 1000)}s` },
   };
+}
+
+export interface SubmitP2pDelegationParams {
+  /** The delegator's identity (submitter / owner of the task). */
+  motebitId: string;
+  /** Base URL of the relay. */
+  syncUrl: string;
+  /** Mints audience-scoped auth tokens. */
+  authToken: (audience?: string) => Promise<string>;
+  /** Task prompt to submit. */
+  prompt: string;
+  /**
+   * The PINNED worker. P2P settlement addresses a specific worker — the proof's
+   * worker leg pays that worker's `settlement_address` — so unlike relay-mode
+   * capability routing, the target is fixed (submitted as `target_agent`).
+   */
+  targetWorkerId: string;
+  /**
+   * The pre-built P2P payment proof: the delegator's CONFIRMED atomic onchain
+   * settlement (worker leg + relay-fee leg[s]). Built ONCE by the caller via
+   * `SovereignWalletRail.buildP2pPayment` BEFORE this call. This function never
+   * broadcasts — it only submits the already-paid proof and polls. On a
+   * transient submission failure the caller MUST retry with the SAME proof,
+   * never rebuild: rebuilding broadcasts a second payment, whereas resubmitting
+   * the same `tx_hash` is safe (the relay's settlement is keyed on the tx and
+   * its replay guard rejects a *settled* proof but allows resubmitting an
+   * unsettled one). Separating the irreversible broadcast from the retryable
+   * submit is what makes "no double-pay" structural rather than a convention.
+   */
+  paymentProof: P2pPaymentProof;
+  /** Invocation provenance — signature-bound on the resulting receipt. */
+  invocationOrigin?: IntentOrigin;
+  /** Upper bound on end-to-end wait. Default 120s. */
+  timeoutMs?: number;
+  /** Structured logger. */
+  logger: { warn(message: string, context?: Record<string, unknown>): void };
+  /** Abort the poll loop early. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Submit a PAID direct delegation that settles peer-to-peer and poll until a
+ * receipt lands. The delegator has already paid the worker + relay fee in one
+ * atomic onchain transaction (`params.paymentProof`); this function pins the
+ * worker (`target_agent`), declares `settlement_mode: "p2p"`, and attaches the
+ * proof so the relay's Arc-3.5 gate (`requiresP2pProof`) is satisfied — the
+ * relay records an audit row and the async p2p-verifier confirms the legs
+ * landed. Shares `pollForReceipt` with the relay-mode path; the only difference
+ * is the submit body. Pure transport — does not bump trust, broadcast, or
+ * render.
+ *
+ * On a relay-side proof rejection (address/amount/fee mismatch → HTTP 400)
+ * the result is `malformed_request`: the proof the caller built does not match
+ * what the relay expects, which is a construction bug, not a user condition.
+ */
+export async function submitP2pDelegation(
+  params: SubmitP2pDelegationParams,
+): Promise<DelegationResult> {
+  const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const startedAt = Date.now();
+
+  let submitHeader: string;
+  let queryHeader: string;
+  try {
+    const [submitToken, queryToken] = await Promise.all([
+      params.authToken("task:submit"),
+      params.authToken("task:query"),
+    ]);
+    submitHeader = `Bearer ${submitToken}`;
+    queryHeader = `Bearer ${queryToken}`;
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: {
+        code: "auth_expired",
+        message: `Auth token mint failed: ${err instanceof Error ? err.message : String(err)}`,
+      },
+    };
+  }
+
+  let taskId: string;
+  try {
+    const body: Record<string, unknown> = {
+      prompt: params.prompt,
+      submitted_by: params.motebitId,
+      target_agent: params.targetWorkerId,
+      settlement_mode: "p2p",
+      p2p_payment_proof: params.paymentProof,
+    };
+    if (params.invocationOrigin) {
+      body.invocation_origin = params.invocationOrigin;
+    }
+
+    const resp = await fetch(`${params.syncUrl}/agent/${params.motebitId}/task`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: submitHeader,
+        // Stable across retries of the SAME logical delegation so a re-submit
+        // of the already-paid proof dedupes byte-identically rather than
+        // racing a second task. Keyed on the onchain tx_hash, which uniquely
+        // identifies this payment.
+        "Idempotency-Key": params.paymentProof.tx_hash,
+      },
+      body: JSON.stringify(body),
+      signal: params.signal,
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      return {
+        ok: false,
+        error: classifyRelayError(resp.status, text, resp.headers.get("Retry-After")),
+      };
+    }
+
+    const data = (await resp.json()) as { task_id: string };
+    taskId = data.task_id;
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return {
+        ok: false,
+        error: { code: "timeout", message: "Aborted before submission completed" },
+      };
+    }
+    return {
+      ok: false,
+      error: {
+        code: "network_unreachable",
+        message: err instanceof Error ? err.message : String(err),
+      },
+    };
+  }
+
+  return pollForReceipt({
+    syncUrl: params.syncUrl,
+    motebitId: params.motebitId,
+    taskId,
+    queryHeader,
+    timeoutMs,
+    startedAt,
+    logger: params.logger,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
 }
