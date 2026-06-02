@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * Spatial HUD tests — the read-only essentials floor.
  *

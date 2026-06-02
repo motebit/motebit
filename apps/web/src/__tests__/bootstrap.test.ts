@@ -151,10 +151,10 @@ describe("isConfigValid", () => {
 // === probeLocalModels ===
 
 describe("probeLocalModels", () => {
-  let mockFetch: ReturnType<typeof vi.fn>;
+  let mockFetch: ReturnType<typeof vi.fn> & typeof fetch;
 
   beforeEach(() => {
-    mockFetch = vi.fn();
+    mockFetch = vi.fn() as ReturnType<typeof vi.fn> & typeof fetch;
   });
 
   it("detects Ollama via /api/tags", async () => {
@@ -354,10 +354,10 @@ describe("classifyProbeFailure (CORS-vs-unreachable heuristic)", () => {
 // === detectLocalInference ===
 
 describe("detectLocalInference", () => {
-  let mockFetch: ReturnType<typeof vi.fn>;
+  let mockFetch: ReturnType<typeof vi.fn> & typeof fetch;
 
   beforeEach(() => {
-    mockFetch = vi.fn();
+    mockFetch = vi.fn() as ReturnType<typeof vi.fn> & typeof fetch;
   });
 
   it("returns kind: 'ok' for first successful probe (Ollama)", async () => {
@@ -500,10 +500,10 @@ describe("configFromProbeResult", () => {
 // === isConfigReachable ===
 
 describe("isConfigReachable", () => {
-  let mockFetch: ReturnType<typeof vi.fn>;
+  let mockFetch: ReturnType<typeof vi.fn> & typeof fetch;
 
   beforeEach(() => {
-    mockFetch = vi.fn();
+    mockFetch = vi.fn() as ReturnType<typeof vi.fn> & typeof fetch;
   });
 
   it("webllm is always reachable", async () => {

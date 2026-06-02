@@ -74,9 +74,9 @@ function makeLogger(): SolanaTreasuryReconciliationLogger & {
   error: ReturnType<typeof vi.fn>;
 } {
   return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
+    info: vi.fn<(event: string, data?: Record<string, unknown>) => void>(),
+    warn: vi.fn<(event: string, data?: Record<string, unknown>) => void>(),
+    error: vi.fn<(event: string, data?: Record<string, unknown>) => void>(),
   };
 }
 

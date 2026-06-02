@@ -14,7 +14,9 @@ const executeCommandSpy = hoisted.executeCommandSpy;
 vi.mock("@motebit/runtime", () => ({
   executeCommand: hoisted.executeCommandSpy,
   cmdSelfTest: hoisted.selfTestSpy,
-  RelayDelegationAdapter: vi.fn().mockImplementation(() => ({})),
+  RelayDelegationAdapter: vi.fn().mockImplementation(function () {
+    return {};
+  }),
 }));
 
 vi.mock("@motebit/sync-engine", () => {
@@ -44,13 +46,25 @@ vi.mock("@motebit/sync-engine", () => {
     SyncEngine: Base,
     ConversationSyncEngine: Base,
     PlanSyncEngine: Base,
-    HttpEventStoreAdapter: vi.fn().mockImplementation(() => ({})),
+    HttpEventStoreAdapter: vi.fn().mockImplementation(function () {
+      return {};
+    }),
     WebSocketEventStoreAdapter,
-    EncryptedEventStoreAdapter: vi.fn().mockImplementation(() => ({})),
-    HttpConversationSyncAdapter: vi.fn().mockImplementation(() => ({})),
-    EncryptedConversationSyncAdapter: vi.fn().mockImplementation(() => ({})),
-    HttpPlanSyncAdapter: vi.fn().mockImplementation(() => ({})),
-    EncryptedPlanSyncAdapter: vi.fn().mockImplementation(() => ({})),
+    EncryptedEventStoreAdapter: vi.fn().mockImplementation(function () {
+      return {};
+    }),
+    HttpConversationSyncAdapter: vi.fn().mockImplementation(function () {
+      return {};
+    }),
+    EncryptedConversationSyncAdapter: vi.fn().mockImplementation(function () {
+      return {};
+    }),
+    HttpPlanSyncAdapter: vi.fn().mockImplementation(function () {
+      return {};
+    }),
+    EncryptedPlanSyncAdapter: vi.fn().mockImplementation(function () {
+      return {};
+    }),
     decryptEventPayload: vi.fn((e: unknown) => Promise.resolve(e)),
   };
 });

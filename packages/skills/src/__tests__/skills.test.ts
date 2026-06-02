@@ -212,7 +212,7 @@ describe("parseSkillFile", () => {
 
 describe("SkillRegistry.install", () => {
   let adapter: InMemorySkillStorageAdapter;
-  let audit: ReturnType<typeof vi.fn>;
+  let audit: SkillAuditSink & ReturnType<typeof vi.fn>;
   let registry: SkillRegistry;
 
   beforeEach(() => {

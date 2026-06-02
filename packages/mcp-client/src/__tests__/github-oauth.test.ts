@@ -54,7 +54,7 @@ describe("GitHubOAuthTokenProvider", () => {
       clientId: "gh-client-id",
       clientSecret: "gh-client-secret",
       initialRefreshToken: "ghr_initial_refresh",
-      fetch: fetchMock,
+      fetch: fetchMock as unknown as typeof globalThis.fetch,
       ...overrides,
     });
   }

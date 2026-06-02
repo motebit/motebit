@@ -4,9 +4,9 @@ import type { PullRequestInfo } from "../github.js";
 // Hoisted mock — captured by the factory so individual tests can tweak behavior.
 const mockCreate = vi.fn();
 vi.mock("@anthropic-ai/sdk", () => ({
-  default: vi.fn().mockImplementation(() => ({
-    messages: { create: mockCreate },
-  })),
+  default: vi.fn().mockImplementation(function () {
+    return { messages: { create: mockCreate } };
+  }),
 }));
 
 const samplePr: PullRequestInfo = {

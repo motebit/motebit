@@ -18,9 +18,9 @@ import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 // tool_use → text sequence.
 const mockCreate = vi.fn();
 vi.mock("@anthropic-ai/sdk", () => ({
-  default: vi.fn().mockImplementation(() => ({
-    messages: { create: mockCreate },
-  })),
+  default: vi.fn().mockImplementation(function () {
+    return { messages: { create: mockCreate } };
+  }),
 }));
 
 // eslint-disable-next-line no-restricted-imports -- E2E tests need direct crypto

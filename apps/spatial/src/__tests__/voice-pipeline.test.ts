@@ -23,17 +23,21 @@ let mockTTS: {
 };
 
 vi.mock("@motebit/voice", () => ({
-  WebSpeechSTTProvider: vi.fn(() => mockSTT),
-  WebSpeechTTSProvider: vi.fn(() => mockTTS),
-  OpenAITTSProvider: vi.fn(() => ({
-    speak: vi.fn().mockResolvedValue(undefined),
-    cancel: vi.fn(),
-  })),
-  ElevenLabsTTSProvider: vi.fn(() => ({
-    speak: vi.fn().mockResolvedValue(undefined),
-    cancel: vi.fn(),
-  })),
-  FallbackTTSProvider: vi.fn((_providers: unknown[]) => mockTTS),
+  WebSpeechSTTProvider: vi.fn(function () {
+    return mockSTT;
+  }),
+  WebSpeechTTSProvider: vi.fn(function () {
+    return mockTTS;
+  }),
+  OpenAITTSProvider: vi.fn(function () {
+    return { speak: vi.fn().mockResolvedValue(undefined), cancel: vi.fn() };
+  }),
+  ElevenLabsTTSProvider: vi.fn(function () {
+    return { speak: vi.fn().mockResolvedValue(undefined), cancel: vi.fn() };
+  }),
+  FallbackTTSProvider: vi.fn(function (_providers: unknown[]) {
+    return mockTTS;
+  }),
 }));
 
 vi.mock("@ricky0123/vad-web", () => ({
@@ -87,7 +91,9 @@ function setupBrowserMocks() {
     configurable: true,
   });
 
-  (globalThis as Record<string, unknown>).AudioContext = vi.fn(() => mockAudioContext);
+  (globalThis as Record<string, unknown>).AudioContext = vi.fn(function () {
+    return mockAudioContext;
+  });
   (globalThis as Record<string, unknown>).requestAnimationFrame = vi.fn().mockReturnValue(1);
   (globalThis as Record<string, unknown>).cancelAnimationFrame = vi.fn();
 

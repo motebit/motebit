@@ -24,7 +24,7 @@
  * declaration prevents accidental omission.
  */
 
-import { defineConfig, type UserConfig } from "vitest/config";
+import { defineConfig, type ViteUserConfig } from "vitest/config";
 import type { InlineConfig } from "vitest/node";
 
 export interface MotebitVitestOptions {
@@ -44,14 +44,14 @@ export interface MotebitVitestOptions {
   /** Extra `test.*` options. Use sparingly — prefer the typed fields above. */
   extra?: Omit<InlineConfig, "exclude" | "coverage">;
   /** Top-level Vite config extras (plugins, resolve, etc.). */
-  vite?: Omit<UserConfig, "test">;
+  vite?: Omit<ViteUserConfig, "test">;
 }
 
 const BASE_TEST_EXCLUDE = ["**/node_modules/**", "**/dist/**", "**/coverage/**"];
 const BASE_COVERAGE_INCLUDE = ["src/**/*.ts"];
 const BASE_COVERAGE_EXCLUDE = ["src/__tests__/**", "src/**/*.d.ts"];
 
-export function defineMotebitTest(opts: MotebitVitestOptions): UserConfig {
+export function defineMotebitTest(opts: MotebitVitestOptions): ViteUserConfig {
   const { thresholds, testExclude = [], coverageInclude, coverageExclude = [], extra, vite } = opts;
 
   return defineConfig({

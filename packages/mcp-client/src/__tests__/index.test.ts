@@ -9,12 +9,17 @@ const mockListTools = vi.fn();
 const mockCallTool = vi.fn();
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: vi.fn().mockImplementation(() => ({
-    connect: mockConnect,
-    close: mockClose,
-    listTools: mockListTools,
-    callTool: mockCallTool,
-  })),
+  // vitest 4 requires a `function`/`class` (not an arrow) for a mock used as a
+  // constructor — `new Client()` can't invoke an arrow. Returning an object
+  // from the function makes that object the constructed instance.
+  Client: vi.fn().mockImplementation(function () {
+    return {
+      connect: mockConnect,
+      close: mockClose,
+      listTools: mockListTools,
+      callTool: mockCallTool,
+    };
+  }),
 }));
 
 const mockStdioTransport = vi.fn();

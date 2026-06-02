@@ -33,7 +33,7 @@ function makeGoalStore() {
       active = list;
     },
     listActiveGoals: vi.fn(() => active),
-    getRecentOutcomes: vi.fn(() => []),
+    getRecentOutcomes: vi.fn<(goalId: string, limit: number) => unknown[]>(() => []),
     updateLastRun: vi.fn((id: string, t: number) => lastRun.set(id, t)),
     resetFailures: vi.fn((id: string) => failures.set(id, 0)),
     incrementFailures: vi.fn((id: string) => failures.set(id, (failures.get(id) ?? 0) + 1)),

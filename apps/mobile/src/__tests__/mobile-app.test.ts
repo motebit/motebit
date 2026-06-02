@@ -21,35 +21,49 @@ vi.mock("expo", () => ({
 // react-native (AppState)
 vi.mock("react-native", () => ({
   AppState: {
-    addEventListener: vi.fn(() => ({ remove: vi.fn() })),
+    addEventListener: vi.fn(function () {
+      return { remove: vi.fn() };
+    }),
     currentState: "active",
   },
 }));
 
 // expo-notifications
 vi.mock("expo-notifications", () => ({
-  getPermissionsAsync: vi.fn(() => Promise.resolve({ status: "undetermined" })),
-  requestPermissionsAsync: vi.fn(() => Promise.resolve({ status: "denied" })),
-  getExpoPushTokenAsync: vi.fn(() => Promise.resolve({ data: "" })),
-  addPushTokenListener: vi.fn(() => ({ remove: vi.fn() })),
+  getPermissionsAsync: vi.fn(function () {
+    return Promise.resolve({ status: "undetermined" });
+  }),
+  requestPermissionsAsync: vi.fn(function () {
+    return Promise.resolve({ status: "denied" });
+  }),
+  getExpoPushTokenAsync: vi.fn(function () {
+    return Promise.resolve({ data: "" });
+  }),
+  addPushTokenListener: vi.fn(function () {
+    return { remove: vi.fn() };
+  }),
   setNotificationHandler: vi.fn(),
 }));
 
 // expo-task-manager
 vi.mock("expo-task-manager", () => ({
   defineTask: vi.fn(),
-  isTaskDefined: vi.fn(() => false),
+  isTaskDefined: vi.fn(function () {
+    return false;
+  }),
 }));
 
 // expo-secure-store
 const secureStoreData = new Map<string, string>();
 vi.mock("expo-secure-store", () => ({
-  getItemAsync: vi.fn((key: string) => Promise.resolve(secureStoreData.get(key) ?? null)),
-  setItemAsync: vi.fn((key: string, value: string) => {
+  getItemAsync: vi.fn(function (key: string) {
+    return Promise.resolve(secureStoreData.get(key) ?? null);
+  }),
+  setItemAsync: vi.fn(function (key: string, value: string) {
     secureStoreData.set(key, value);
     return Promise.resolve();
   }),
-  deleteItemAsync: vi.fn((key: string) => {
+  deleteItemAsync: vi.fn(function (key: string) {
     secureStoreData.delete(key);
     return Promise.resolve();
   }),
@@ -61,8 +75,10 @@ vi.mock("expo-sqlite", () => {
     openDatabaseSync: () => ({
       execSync: vi.fn(),
       runSync: vi.fn(),
-      getAllSync: vi.fn(() => []),
-      getFirstSync: vi.fn((_sql: string) => {
+      getAllSync: vi.fn(function () {
+        return [];
+      }),
+      getFirstSync: vi.fn(function (_sql: string) {
         if (_sql.includes("user_version")) return { user_version: 3 };
         return null;
       }),
@@ -74,12 +90,14 @@ vi.mock("expo-sqlite", () => {
 const asyncStoreData = new Map<string, string>();
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
-    getItem: vi.fn((key: string) => Promise.resolve(asyncStoreData.get(key) ?? null)),
-    setItem: vi.fn((key: string, value: string) => {
+    getItem: vi.fn(function (key: string) {
+      return Promise.resolve(asyncStoreData.get(key) ?? null);
+    }),
+    setItem: vi.fn(function (key: string, value: string) {
       asyncStoreData.set(key, value);
       return Promise.resolve();
     }),
-    removeItem: vi.fn((key: string) => {
+    removeItem: vi.fn(function (key: string) {
       asyncStoreData.delete(key);
       return Promise.resolve();
     }),
@@ -88,17 +106,21 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
 
 // expo-three (minimal mock)
 vi.mock("expo-three", () => ({
-  Renderer: vi.fn().mockImplementation(() => ({
-    setSize: vi.fn(),
-    setClearColor: vi.fn(),
-    render: vi.fn(),
-    dispose: vi.fn(),
-  })),
+  Renderer: vi.fn().mockImplementation(function () {
+    return {
+      setSize: vi.fn(),
+      setClearColor: vi.fn(),
+      render: vi.fn(),
+      dispose: vi.fn(),
+    };
+  }),
 }));
 
 // @motebit/crypto
 vi.mock("@motebit/encryption", () => ({
-  createSignedToken: vi.fn(() => Promise.resolve("mock-signed-token")),
+  createSignedToken: vi.fn(function () {
+    return Promise.resolve("mock-signed-token");
+  }),
 }));
 
 // @motebit/core-identity
@@ -141,25 +163,29 @@ vi.mock("@motebit/core-identity", () => ({
     },
   ),
   // MotebitRuntime imports IdentityManager internally
-  IdentityManager: vi.fn().mockImplementation(() => ({
-    create: vi.fn(() =>
-      Promise.resolve({
-        motebit_id: "rt-mote",
-        created_at: Date.now(),
-        owner_id: "rt",
-        version_clock: 0,
-      }),
-    ),
-    load: vi.fn(() => Promise.resolve(null)),
-    loadByOwner: vi.fn(() => Promise.resolve(null)),
-    registerDevice: vi.fn(() => Promise.resolve()),
-    incrementClock: vi.fn(() => Promise.resolve(1)),
-  })),
-  InMemoryIdentityStorage: vi.fn().mockImplementation(() => ({
-    save: vi.fn(() => Promise.resolve()),
-    load: vi.fn(() => Promise.resolve(null)),
-    loadByOwner: vi.fn(() => Promise.resolve(null)),
-  })),
+  IdentityManager: vi.fn().mockImplementation(function () {
+    return {
+      create: vi.fn(() =>
+        Promise.resolve({
+          motebit_id: "rt-mote",
+          created_at: Date.now(),
+          owner_id: "rt",
+          version_clock: 0,
+        }),
+      ),
+      load: vi.fn(() => Promise.resolve(null)),
+      loadByOwner: vi.fn(() => Promise.resolve(null)),
+      registerDevice: vi.fn(() => Promise.resolve()),
+      incrementClock: vi.fn(() => Promise.resolve(1)),
+    };
+  }),
+  InMemoryIdentityStorage: vi.fn().mockImplementation(function () {
+    return {
+      save: vi.fn(() => Promise.resolve()),
+      load: vi.fn(() => Promise.resolve(null)),
+      loadByOwner: vi.fn(() => Promise.resolve(null)),
+    };
+  }),
 }));
 
 // @motebit/tools/web-safe — importActual inherits every real export, so adding
@@ -169,9 +195,11 @@ vi.mock("@motebit/tools/web-safe", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
-    DuckDuckGoSearchProvider: vi.fn().mockImplementation(() => ({
-      search: vi.fn(() => Promise.resolve([])),
-    })),
+    DuckDuckGoSearchProvider: vi.fn().mockImplementation(function () {
+      return {
+        search: vi.fn(() => Promise.resolve([])),
+      };
+    }),
   };
 });
 
@@ -180,33 +208,45 @@ vi.mock("@motebit/memory-graph", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
-    embedText: vi.fn(() => Promise.resolve(new Array(384).fill(0))),
+    embedText: vi.fn(function () {
+      return Promise.resolve(new Array(384).fill(0));
+    }),
   };
 });
 
 // @motebit/sync-engine
 vi.mock("@motebit/sync-engine", () => ({
-  PairingClient: vi.fn().mockImplementation(() => ({
-    initiate: vi.fn(),
-    claim: vi.fn(),
-    getSession: vi.fn(),
-    approve: vi.fn(),
-    deny: vi.fn(),
-    pollStatus: vi.fn(),
-  })),
-  SyncEngine: vi.fn().mockImplementation(() => ({
-    connectRemote: vi.fn(),
-    start: vi.fn(),
-    stop: vi.fn(),
-    sync: vi.fn(),
-    onStatusChange: vi.fn(() => vi.fn()),
-    getStatus: vi.fn(() => "idle"),
-    getConflicts: vi.fn(() => []),
-    getCursor: vi.fn(() => ({ motebit_id: "", last_event_id: "", last_version_clock: 0 })),
-  })),
-  HttpEventStoreAdapter: vi.fn().mockImplementation(() => ({})),
-  WebSocketEventStoreAdapter: vi.fn().mockImplementation(() => ({})),
-  EncryptedEventStoreAdapter: vi.fn().mockImplementation(() => ({})),
+  PairingClient: vi.fn().mockImplementation(function () {
+    return {
+      initiate: vi.fn(),
+      claim: vi.fn(),
+      getSession: vi.fn(),
+      approve: vi.fn(),
+      deny: vi.fn(),
+      pollStatus: vi.fn(),
+    };
+  }),
+  SyncEngine: vi.fn().mockImplementation(function () {
+    return {
+      connectRemote: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      sync: vi.fn(),
+      onStatusChange: vi.fn(() => vi.fn()),
+      getStatus: vi.fn(() => "idle"),
+      getConflicts: vi.fn(() => []),
+      getCursor: vi.fn(() => ({ motebit_id: "", last_event_id: "", last_version_clock: 0 })),
+    };
+  }),
+  HttpEventStoreAdapter: vi.fn().mockImplementation(function () {
+    return {};
+  }),
+  WebSocketEventStoreAdapter: vi.fn().mockImplementation(function () {
+    return {};
+  }),
+  EncryptedEventStoreAdapter: vi.fn().mockImplementation(function () {
+    return {};
+  }),
 }));
 
 import { MobileApp, COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "../mobile-app";

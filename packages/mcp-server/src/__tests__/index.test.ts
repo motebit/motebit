@@ -29,7 +29,7 @@ const mockServerConnect = vi.fn();
 const mockServerClose = vi.fn();
 
 vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
-  McpServer: vi.fn().mockImplementation(() => {
+  McpServer: vi.fn().mockImplementation(function () {
     registrations = {
       tools: new Map(),
       resources: new Map(),
