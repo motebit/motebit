@@ -209,6 +209,16 @@ export interface SyncRelayConfig {
   getShuttingDown?: ShutdownStateGetter;
   /** Max pending tasks per submitter. Default: 1000. */
   maxTasksPerSubmitter?: number;
+  /**
+   * Graceful-shutdown drain grace in ms — how long `close()` waits for
+   * connected clients to disconnect voluntarily before force-closing.
+   * Default: 5000 (production). Tests set this low (the test harness uses
+   * mock WebSocket connections that never disconnect, so the full grace
+   * would otherwise be paid on every `close()` in `afterEach` — ~5s per
+   * test — making the relay suite slow and timer-bound, which is what
+   * amplifies contention flakes under parallel `turbo run test`).
+   */
+  drainGraceMs?: number;
   /** Federation configuration. Omit to disable federation. */
   federation?: {
     /** Display name for this relay in the federation. */
@@ -565,7 +575,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // Graceful shutdown state — readiness probe reports not_ready while draining.
   let draining = false;
-  const DRAIN_GRACE_MS = 5_000;
+  const DRAIN_GRACE_MS = config.drainGraceMs ?? 5_000;
 
   // --- Shared state ---
   const connections = new Map<string, ConnectedDevice[]>();

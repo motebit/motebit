@@ -39,6 +39,12 @@ export async function createTestRelay(overrides?: Partial<SyncRelayConfig>): Pro
   return createSyncRelay({
     apiToken: API_TOKEN,
     x402: X402_TEST_CONFIG,
+    // Tests use mock WebSocket connections that never disconnect, so the
+    // production 5s drain grace would be paid in full on every `close()`
+    // (afterEach) — ~5s/test, making the suite slow and timer-bound (the
+    // contention-flake amplifier under parallel `turbo run test`). 10ms keeps
+    // the drain code path exercised without the wall-clock + flake cost.
+    drainGraceMs: 10,
     ...overrides,
   });
 }
