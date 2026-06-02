@@ -6,6 +6,12 @@
  * or asynchronous (mobile AsyncStorage).
  */
 import { describe, it, expect, vi } from "vitest";
+import {
+  generateKeypair,
+  signKeySuccession,
+  bytesToHex,
+  type KeySuccessionRecord,
+} from "@motebit/crypto";
 import { getOrPinRelayKey, type RelayKeyPinStorage } from "../relay-key-pin.js";
 
 const RELAY = "https://relay.test";
@@ -92,5 +98,139 @@ describe("getOrPinRelayKey", () => {
     const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({}) }) as Response);
     expect(await getOrPinRelayKey(RELAY, { fetchImpl, storage })).toBeUndefined();
     expect(storage.store.get(`motebit:relay_pin:${RELAY}`)).toBeUndefined();
+  });
+});
+
+// ── rotation-aware re-pin (verifies the relay's signed succession chain) ──
+
+/** Mimic the relay's succession endpoint, which omits the (constant) suite. */
+function endpointRecord(r: KeySuccessionRecord): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...r };
+  delete copy.suite;
+  return copy;
+}
+
+/** Route /.well-known + /succession; everything else 404. */
+function rotationFetch(opts: {
+  livePublicKey: string;
+  relayId?: string;
+  chain?: Record<string, unknown>[];
+  currentPublicKey?: string;
+  successionStatus?: number;
+}) {
+  return vi.fn(async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes("/.well-known/motebit.json")) {
+      return {
+        ok: true,
+        json: async () => ({
+          public_key: opts.livePublicKey,
+          ...(opts.relayId != null ? { relay_id: opts.relayId } : {}),
+        }),
+      } as Response;
+    }
+    if (url.includes("/succession")) {
+      if (opts.successionStatus != null && opts.successionStatus >= 400) {
+        return { ok: false, status: opts.successionStatus } as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({ chain: opts.chain ?? [], current_public_key: opts.currentPublicKey }),
+      } as Response;
+    }
+    return { ok: false, status: 404 } as Response;
+  });
+}
+
+describe("getOrPinRelayKey — rotation-aware re-pin", () => {
+  it("re-pins when a signed succession chain proves pinned → fetched (legitimate rotation)", async () => {
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+    const oldHex = bytesToHex(oldKp.publicKey);
+    const newHex = bytesToHex(newKp.publicKey);
+    const rec = await signKeySuccession(
+      oldKp.privateKey,
+      newKp.privateKey,
+      newKp.publicKey,
+      oldKp.publicKey,
+    );
+
+    const storage = syncStorage({ [`motebit:relay_pin:${RELAY}`]: oldHex });
+    const logger = { warn: vi.fn() };
+    const fetchImpl = rotationFetch({
+      livePublicKey: newHex,
+      relayId: "relay-1",
+      chain: [endpointRecord(rec)],
+      currentPublicKey: newHex,
+    });
+
+    const result = await getOrPinRelayKey(RELAY, { fetchImpl, storage, logger });
+    expect(result).toBe(newHex);
+    // Pin advanced to the rotated key.
+    expect(storage.store.get(`motebit:relay_pin:${RELAY}`)).toBe(newHex);
+    expect(logger.warn).toHaveBeenCalledWith("relay_key_pin.rotated", expect.any(Object));
+  });
+
+  it("fails closed when the succession chain is valid but NOT rooted at the pinned key (equivocation)", async () => {
+    // A valid X → C chain, but our pin is an unrelated key.
+    const xKp = await generateKeypair();
+    const cKp = await generateKeypair();
+    const cHex = bytesToHex(cKp.publicKey);
+    const rec = await signKeySuccession(
+      xKp.privateKey,
+      cKp.privateKey,
+      cKp.publicKey,
+      xKp.publicKey,
+    );
+
+    const pinnedHex = bytesToHex((await generateKeypair()).publicKey); // unrelated to the chain
+    const storage = syncStorage({ [`motebit:relay_pin:${RELAY}`]: pinnedHex });
+    const fetchImpl = rotationFetch({
+      livePublicKey: cHex,
+      relayId: "relay-1",
+      chain: [endpointRecord(rec)],
+      currentPublicKey: cHex,
+    });
+
+    expect(await getOrPinRelayKey(RELAY, { fetchImpl, storage })).toBeUndefined();
+    expect(storage.store.get(`motebit:relay_pin:${RELAY}`)).toBe(pinnedHex); // pin untouched
+  });
+
+  it("fails closed when the key changed but no succession chain is available", async () => {
+    const oldHex = bytesToHex((await generateKeypair()).publicKey);
+    const newHex = bytesToHex((await generateKeypair()).publicKey);
+    const storage = syncStorage({ [`motebit:relay_pin:${RELAY}`]: oldHex });
+    const fetchImpl = rotationFetch({
+      livePublicKey: newHex,
+      relayId: "relay-1",
+      successionStatus: 404,
+    });
+    expect(await getOrPinRelayKey(RELAY, { fetchImpl, storage })).toBeUndefined();
+    expect(storage.store.get(`motebit:relay_pin:${RELAY}`)).toBe(oldHex);
+  });
+
+  it("fails closed on a tampered succession signature", async () => {
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+    const oldHex = bytesToHex(oldKp.publicKey);
+    const newHex = bytesToHex(newKp.publicKey);
+    const rec = await signKeySuccession(
+      oldKp.privateKey,
+      newKp.privateKey,
+      newKp.publicKey,
+      oldKp.publicKey,
+    );
+    const tampered = endpointRecord({ ...rec, new_key_signature: "00".repeat(64) });
+
+    const storage = syncStorage({ [`motebit:relay_pin:${RELAY}`]: oldHex });
+    const fetchImpl = rotationFetch({
+      livePublicKey: newHex,
+      relayId: "relay-1",
+      chain: [tampered],
+      currentPublicKey: newHex,
+    });
+
+    expect(await getOrPinRelayKey(RELAY, { fetchImpl, storage })).toBeUndefined();
+    expect(storage.store.get(`motebit:relay_pin:${RELAY}`)).toBe(oldHex);
   });
 });
