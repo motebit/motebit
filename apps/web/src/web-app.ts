@@ -7,6 +7,7 @@ import {
   resolveProactiveAnchor,
   bindSlabControllerToRenderer,
   createRelayBackedSandboxTokenSource,
+  getOrPinRelayKey,
 } from "@motebit/runtime";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
 import type {
@@ -29,7 +30,6 @@ import {
 import { animateMarkForReceipt } from "./ui/cobrowse-chrome";
 import { renderSlabChrome } from "./ui/slab-chrome";
 import { urlHasTrustHeld } from "./cookie-host-match.js";
-import { getOrPinRelayKey } from "./relay-key-pin.js";
 import type { LiveBrowserElementHandle, SlabBodyRegister } from "@motebit/render-engine";
 import type {
   ConversationMessage,
@@ -3399,18 +3399,20 @@ export class UnbootedWebApp {
       const t = await this.createSyncToken(aud);
       return t ?? "";
     };
-    this.runtime.enableInteractiveDelegation({
-      syncUrl: relayUrl,
-      authToken: delegationAuthToken,
-    });
-
     // Resolve the PINNED relay key (trust-on-first-use) so a paid P2P
     // delegation derives the fee-leg treasury from a key trusted at first
     // connect, never a per-delegation fetch (the irreversible-payment MITM
-    // surface — see relay-key-pin.ts + off-ramp-as-user-action.md § Arc 3.5).
-    // undefined → paid P2P stays disabled and delegation uses relay-mode (e.g.
-    // a fail-closed key mismatch); relay-mode still serves every task.
-    const pinnedRelayKey = await getOrPinRelayKey(relayUrl);
+    // surface — see @motebit/runtime relay-key-pin + off-ramp-as-user-action.md
+    // § Arc 3.5). undefined → paid P2P stays disabled and delegation uses
+    // relay-mode (e.g. a fail-closed key mismatch); relay-mode still serves
+    // every task. Shared by both delegation entry points below.
+    const pinnedRelayKey = await getOrPinRelayKey(relayUrl, { storage: localStorage });
+
+    this.runtime.enableInteractiveDelegation({
+      syncUrl: relayUrl,
+      authToken: delegationAuthToken,
+      ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
+    });
 
     // Enable the deterministic surface-determinism path — chip taps, slash
     // commands, scene clicks. Shares the relay coordinates with interactive

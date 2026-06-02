@@ -15,7 +15,12 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { MotebitRuntime } from "@motebit/runtime";
-import { executeCommand, cmdSelfTest, RelayDelegationAdapter } from "@motebit/runtime";
+import {
+  executeCommand,
+  cmdSelfTest,
+  RelayDelegationAdapter,
+  getOrPinRelayKey,
+} from "@motebit/runtime";
 import {
   DeviceCapability,
   type Plan,
@@ -449,10 +454,21 @@ export class MobileSyncController {
           runtime.setDelegationAdapter(delegationAdapter);
 
           // Enable interactive delegation — lets the AI transparently delegate
-          // tasks to remote agents during conversation.
+          // tasks to remote agents during conversation. Resolve the PINNED
+          // relay key (TOFU) via AsyncStorage so a paid P2P delegation derives
+          // the fee-leg treasury from a key trusted at first connect, never a
+          // fetched value (the irreversible-payment MITM surface). undefined →
+          // P2P disabled, relay-mode still serves the task.
+          const pinnedRelayKey = await getOrPinRelayKey(syncUrl, {
+            storage: {
+              getItem: (k) => AsyncStorage.getItem(k),
+              setItem: (k, v) => AsyncStorage.setItem(k, v),
+            },
+          });
           runtime.enableInteractiveDelegation({
             syncUrl,
             authToken: () => this.deps.createSyncToken("task:submit"),
+            ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
           });
 
           // Store serving state

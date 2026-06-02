@@ -26,7 +26,7 @@
  */
 
 import type { MotebitRuntime } from "@motebit/runtime";
-import { executeCommand, cmdSelfTest } from "@motebit/runtime";
+import { executeCommand, cmdSelfTest, getOrPinRelayKey } from "@motebit/runtime";
 import { DeviceCapability } from "@motebit/sdk";
 import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
@@ -313,10 +313,22 @@ export class SyncController {
 
     // Enable interactive delegation — lets the AI transparently delegate tasks
     // to remote agents during conversation via the delegate_to_agent tool.
+    // Resolve the PINNED relay key (TOFU) so a paid P2P delegation derives the
+    // fee-leg treasury from a key trusted at first connect, never a fetched
+    // value (the irreversible-payment MITM surface). undefined → P2P disabled,
+    // relay-mode still serves the task. localStorage may be unavailable in some
+    // desktop contexts (see runSelfTestOnce) — guard so it never blocks sync.
     const privKeyHex = keypair.privateKey;
+    let pinnedRelayKey: string | undefined;
+    try {
+      pinnedRelayKey = await getOrPinRelayKey(syncUrl, { storage: localStorage });
+    } catch {
+      pinnedRelayKey = undefined;
+    }
     runtime.enableInteractiveDelegation({
       syncUrl,
       authToken: async () => this.deps.createSyncToken(privKeyHex, "task:submit"),
+      ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
     });
 
     // Store serving state for task handler
