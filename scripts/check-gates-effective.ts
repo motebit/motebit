@@ -1607,6 +1607,23 @@ export function probeConvert(amount: number): number {
       ),
   },
   {
+    script: "check-money-boundary",
+    proves:
+      "flags an inline `Math.round(net / (1 - rate))` P2P gross/fee formula outside `money.ts` — the same primitive-not-a-snippet rule, now covering `computeP2pFeeMicro`; a re-rolled copy at the relay validator or the delegator client is the one-micro drift that rejects every proof.",
+    perturb: () =>
+      // A file that re-rolls the P2P fee gross formula inline with a
+      // money-shaped variable (`feeAmount`). The gate must exit non-zero.
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}inline-p2p-fee.ts`,
+        `// Probe-only file that re-rolls the computeP2pFeeMicro formula inline.
+// If check-money-boundary is working, it refuses to accept this file.
+export function probeFee(feeAmountMicro: number, rate: number): number {
+  return Math.round(feeAmountMicro / (1 - rate)) - feeAmountMicro;
+}
+`,
+      ),
+  },
+  {
     script: "check-ha-not-a-gate",
     proves:
       "flags a hardware-attestation threshold compare in routing/scoring/policy/runtime — `attestation_score < N` converts the additive scoring axis into an admission criterion, silently excluding the software-only-identity floor. Negative invariant + waiver mechanism per `docs/doctrine/hardware-attestation.md`.",

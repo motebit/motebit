@@ -92,11 +92,26 @@ const MONEY_TOKENS = [
 const CONVERTER_PATTERN =
   /Math\.round\s*\(\s*([^*()]+?)\s*\*\s*(100|1[_]?000[_]?000|MICRO|CENTS)\s*\)/g;
 
+/**
+ * P2P settlement gross/fee formula: `Math.round(<net> / (1 - <rate>))`. The
+ * gross of a worker's net unit cost (from which the fee leg = gross - net) is a
+ * primitive — `computeP2pFeeMicro` in `@motebit/protocol/src/money.ts`. The
+ * relay's proof validator and the delegator client that builds the proof MUST
+ * compute it identically or the proof is rejected; an inline copy at either
+ * site is the exact drift this captures (it landed re-rolled at
+ * `services/relay/src/tasks.ts` before `computeP2pFeeMicro` consolidated it).
+ * Captures `<net>` for the money-shape filter. `computeGrossAmount`
+ * (`@motebit/market`, no `Math.round`) returns a dollar-domain float and does
+ * not match this micro-domain rounded form.
+ */
+const GROSS_FEE_PATTERN = /Math\.round\s*\(\s*([^/()]+?)\s*\/\s*\(\s*1\s*-\s*[^)]+?\)\s*\)/g;
+
 interface Finding {
   file: string;
   line: number;
   precision: string;
   context: string;
+  fix: "converter" | "p2p_fee";
 }
 
 function isMoneyShaped(expr: string): boolean {
@@ -161,6 +176,20 @@ function scanFile(abs: string): Finding[] {
         line: i + 1,
         precision,
         context: line.trim(),
+        fix: "converter",
+      });
+    }
+    // P2P gross/fee formula — `Math.round(<net> / (1 - <rate>))`.
+    GROSS_FEE_PATTERN.lastIndex = 0;
+    while ((match = GROSS_FEE_PATTERN.exec(code)) !== null) {
+      const expr = match[1]!;
+      if (!isMoneyShaped(expr)) continue;
+      findings.push({
+        file: rel,
+        line: i + 1,
+        precision: "gross = net / (1 - rate)",
+        context: line.trim(),
+        fix: "p2p_fee",
       });
     }
   }
@@ -190,16 +219,29 @@ function main(): void {
     return;
   }
 
-  console.log(`✗ Inline converter formulas found — replace with the canonical primitive:\n`);
+  console.log(`✗ Inline money formulas found — replace with the canonical primitive:\n`);
   for (const f of findings) {
-    console.log(`  ${f.file}:${f.line}  Math.round(_ * ${f.precision})`);
+    const shape =
+      f.fix === "p2p_fee" ? `Math.round(_ / (1 - rate))` : `Math.round(_ * ${f.precision})`;
+    console.log(`  ${f.file}:${f.line}  ${shape}`);
     console.log(`    ${f.context}`);
   }
-  console.log(
-    `\n  Fix: import { toMicro, toCents } from "@motebit/protocol" (or from\n` +
-      `       "@motebit/virtual-accounts" which re-exports them) and use the\n` +
-      `       named function in place of the inline formula.`,
-  );
+  const hasConverter = findings.some((f) => f.fix === "converter");
+  const hasP2pFee = findings.some((f) => f.fix === "p2p_fee");
+  if (hasConverter) {
+    console.log(
+      `\n  Fix (converter): import { toMicro, toCents } from "@motebit/protocol" (or from\n` +
+        `       "@motebit/virtual-accounts" which re-exports them) and use the\n` +
+        `       named function in place of the inline formula.`,
+    );
+  }
+  if (hasP2pFee) {
+    console.log(
+      `\n  Fix (P2P fee): import { computeP2pFeeMicro } from "@motebit/protocol" and use it\n` +
+        `       for the fee leg (gross - net). The relay validator and the delegator client\n` +
+        `       MUST share this primitive or the proof is rejected on a one-micro mismatch.`,
+    );
+  }
   process.exit(1);
 }
 
