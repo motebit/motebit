@@ -68,6 +68,11 @@ module.exports = {
         "@typescript-eslint/no-unsafe-argument": "off",
         "@typescript-eslint/no-unsafe-return": "off",
         "@typescript-eslint/no-unsafe-call": "off",
+        // Async mock implementations (`vi.fn().mockImplementation(async () => …)`)
+        // legitimately return a Promise where the mocked signature is void —
+        // standard test mechanic, a false positive in mock/stub context (same
+        // rationale as the unsafe-* relaxations above). Production code keeps it.
+        "@typescript-eslint/no-misused-promises": "off",
         "@typescript-eslint/unbound-method": "off",
         "@typescript-eslint/no-explicit-any": "off",
         "@typescript-eslint/no-unsafe-enum-comparison": "off",

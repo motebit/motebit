@@ -96,6 +96,7 @@ Cross-cutting doctrine (read on demand):
 - [`docs/doctrine/nist-alignment.md`](docs/doctrine/nist-alignment.md) — alignment as derivation, not certification; NCCoE Agent Identity co-authorship; structurally bound to code via `check-doctrine-citations`
 - [`docs/doctrine/runtime-invariants-over-prompt-rules.md`](docs/doctrine/runtime-invariants-over-prompt-rules.md) — make illegal states unrepresentable at the runtime; the prompt teaches what's true, not what to do. Five-question audit before each new prompt clause
 - [`docs/doctrine/registry-pattern-canonical.md`](docs/doctrine/registry-pattern-canonical.md) — eight-artifact set per typed vocabulary; meta-gate `check-closed-registry-canonical.ts` (#98) locks the gates that lock the registries
+- [`docs/doctrine/foundational-tool-adoption.md`](docs/doctrine/foundational-tool-adoption.md) — adopting a foundational-tool major (TypeScript, Node, vitest, linter) is gated on its downstream defensive gates (typed-lint, coverage, drift) staying clean under it, not on the build being green; records the TypeScript `^5.9` pin (TS 6.0 reverted — broke typed-linting in ~19 packages via an upstream `@typescript-eslint`/TS-6 bug) and the re-evaluation trigger
 - [`docs/drift-defenses.md`](docs/drift-defenses.md) — synchronization invariants inventory (current count lives in the doc; `check-doc-counts` keeps it honest)
 
 ## Principles
