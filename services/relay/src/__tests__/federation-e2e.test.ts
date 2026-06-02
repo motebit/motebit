@@ -611,6 +611,44 @@ describe("Federation E2E", () => {
       expect(found!.source_relay_public_key).toBe(relayB.relayIdentity.publicKeyHex);
     });
 
+    it("PHASE 3 P-A2: federated discovery exposes the remote worker's pricing", async () => {
+      // The federated-P2P delegator client prices the chain budget from the
+      // remote worker's listed unit_cost (spec relay-federation-v1 §7.1:
+      // unit_cost IS the budget). That pricing must reach the client through
+      // the SAME public discover surface that carries settlement_address +
+      // source_relay_public_key — queryLocalAgents (which populates `pricing`
+      // from relay_service_listings) → /federation/v1/discover (spreads ...a)
+      // → origin merge, with no field projection. This locks that path so a
+      // future projection can't silently strip pricing and leave the client
+      // unable to price a cross-operator task.
+      const agent = await registerAgent(
+        relayB,
+        "bob-priced",
+        ["priced-cap"],
+        [{ capability: "priced-cap", unit_cost: 1, currency: "USD", per: "call" }],
+      );
+
+      await establishPeering(relayA, relayB);
+
+      const discoverRes = await relayA.app.request(
+        "/api/v1/agents/discover?capability=priced-cap",
+        { headers: AUTH_HEADER },
+      );
+      expect(discoverRes.status).toBe(200);
+      const body = (await discoverRes.json()) as {
+        agents: Array<{
+          motebit_id: string;
+          source_relay?: string;
+          pricing?: Array<{ capability: string; unit_cost: number }> | null;
+        }>;
+      };
+      const found = body.agents.find((a) => a.motebit_id === agent.motebitId);
+      expect(found, "remote priced worker must be discoverable from A").toBeDefined();
+      expect(found!.source_relay).toBe(relayB.relayIdentity.relayMotebitId);
+      const entry = found!.pricing?.find((p) => p.capability === "priced-cap");
+      expect(entry?.unit_cost).toBe(1);
+    });
+
     it("returns local agents with hop_distance 0", async () => {
       const agent = await registerAgent(relayA, "alice", ["web-search"]);
 
