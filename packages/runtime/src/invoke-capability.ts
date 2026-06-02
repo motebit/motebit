@@ -16,8 +16,7 @@ import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/proto
 
 import type { StreamChunk } from "./runtime-config.js";
 import {
-  submitAndPollDelegation,
-  resolveAndSubmitP2pDelegation,
+  selectAndRunDelegation,
   type DelegationError,
   type DelegationErrorCode,
   type DelegationResult,
@@ -179,36 +178,14 @@ export class InvokeCapabilityManager {
     invocationOrigin: IntentOrigin,
     signal: AbortSignal | undefined,
   ): Promise<DelegationResult> {
-    const buildP2pPayment = this.deps.buildP2pPayment;
-    const relayPublicKey = this.config.relayPublicKey;
-
-    if (buildP2pPayment != null && relayPublicKey != null) {
-      const p2p = await resolveAndSubmitP2pDelegation({
-        motebitId: this.deps.motebitId,
-        syncUrl: this.config.syncUrl,
-        authToken: this.config.authToken,
-        prompt,
-        capability,
-        relayPublicKeyHex: relayPublicKey,
-        buildP2pPayment,
-        invocationOrigin,
-        ...(this.config.timeoutMs != null ? { timeoutMs: this.config.timeoutMs } : {}),
-        logger: this.deps.logger,
-        ...(signal ? { signal } : {}),
-      });
-      if (p2p.ok) return p2p;
-      // Only "no payable P2P worker" (pre-broadcast) falls back to relay-mode.
-      if (p2p.error.code !== "no_routing" && p2p.error.code !== "worker_not_payable") {
-        return p2p;
-      }
-    }
-
-    return submitAndPollDelegation({
+    return selectAndRunDelegation({
       motebitId: this.deps.motebitId,
       syncUrl: this.config.syncUrl,
       authToken: this.config.authToken,
       prompt,
       requiredCapabilities: [capability],
+      ...(this.deps.buildP2pPayment ? { buildP2pPayment: this.deps.buildP2pPayment } : {}),
+      ...(this.config.relayPublicKey != null ? { relayPublicKey: this.config.relayPublicKey } : {}),
       ...(this.config.routingStrategy ? { routingStrategy: this.config.routingStrategy } : {}),
       invocationOrigin,
       ...(this.config.timeoutMs != null ? { timeoutMs: this.config.timeoutMs } : {}),

@@ -729,3 +729,93 @@ export async function resolveAndSubmitP2pDelegation(
     ...(params.signal ? { signal: params.signal } : {}),
   });
 }
+
+export interface SelectDelegationParams {
+  /** The delegator's identity (submitter / owner of the task). */
+  motebitId: string;
+  /** Base URL of the relay. */
+  syncUrl: string;
+  /** Mints audience-scoped auth tokens. */
+  authToken: (audience?: string) => Promise<string>;
+  /** Task prompt to submit. */
+  prompt: string;
+  /**
+   * Capabilities the target must advertise. Relay-mode routes on the full list;
+   * the P2P path discovers + pins on the FIRST capability (one worker, one
+   * pinned payment). Empty/absent → relay-mode (P2P needs a capability to
+   * discover by).
+   */
+  requiredCapabilities?: string[];
+  /**
+   * The relay's pinned Ed25519 public key (hex). With `buildP2pPayment`, enables
+   * the P2P path (treasury derived from this key). Absent → relay-mode.
+   */
+  relayPublicKey?: string;
+  /** The sovereign rail's atomic payment builder. Absent → relay-mode. */
+  buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
+  /** Routing strategy for relay-mode candidate ranking. */
+  routingStrategy?: "cost" | "quality" | "balanced";
+  /** Invocation provenance — signature-bound on the resulting receipt. */
+  invocationOrigin?: IntentOrigin;
+  /** Upper bound on end-to-end wait. */
+  timeoutMs?: number;
+  /** Structured logger. */
+  logger: { warn(message: string, context?: Record<string, unknown>): void };
+  /** Abort early. */
+  signal?: AbortSignal;
+}
+
+/**
+ * The single delegation-path selector shared by every entry point (the
+ * deterministic `invokeCapability` and the AI-loop `delegate_to_agent`).
+ * Centralizing it here is deliberate: divergence between the two paths was the
+ * drift risk that motivated extracting `relay-delegation.ts` in the first place
+ * (see this file's header).
+ *
+ * Picks P2P when a sovereign rail (`buildP2pPayment`) AND a pinned
+ * `relayPublicKey` AND a capability to discover by are all present — a paid
+ * cross-agent capability then settles peer-to-peer instead of relay-custody.
+ * Falls back to the relay-mediated path when P2P is unconfigured, OR on the
+ * PRE-BROADCAST codes (`no_routing` / `worker_not_payable` — a free task or no
+ * payable p2p worker). It never falls back once a payment may have moved (any
+ * other P2P error is surfaced verbatim), so a relay-custody re-submit can't
+ * double-charge.
+ */
+export async function selectAndRunDelegation(
+  params: SelectDelegationParams,
+): Promise<DelegationResult> {
+  const capability = params.requiredCapabilities?.[0];
+
+  if (params.buildP2pPayment != null && params.relayPublicKey != null && capability != null) {
+    const p2p = await resolveAndSubmitP2pDelegation({
+      motebitId: params.motebitId,
+      syncUrl: params.syncUrl,
+      authToken: params.authToken,
+      prompt: params.prompt,
+      capability,
+      relayPublicKeyHex: params.relayPublicKey,
+      buildP2pPayment: params.buildP2pPayment,
+      ...(params.invocationOrigin ? { invocationOrigin: params.invocationOrigin } : {}),
+      ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
+      logger: params.logger,
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+    if (p2p.ok) return p2p;
+    if (p2p.error.code !== "no_routing" && p2p.error.code !== "worker_not_payable") {
+      return p2p;
+    }
+  }
+
+  return submitAndPollDelegation({
+    motebitId: params.motebitId,
+    syncUrl: params.syncUrl,
+    authToken: params.authToken,
+    prompt: params.prompt,
+    ...(params.requiredCapabilities ? { requiredCapabilities: params.requiredCapabilities } : {}),
+    ...(params.routingStrategy ? { routingStrategy: params.routingStrategy } : {}),
+    ...(params.invocationOrigin ? { invocationOrigin: params.invocationOrigin } : {}),
+    ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
+    logger: params.logger,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+}

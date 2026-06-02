@@ -14,6 +14,7 @@ import {
   classifyRelayError,
   submitP2pDelegation,
   resolveAndSubmitP2pDelegation,
+  selectAndRunDelegation,
 } from "../relay-delegation.js";
 
 const envelope = (code: string, error = "rejected") => JSON.stringify({ code, error });
@@ -334,5 +335,113 @@ describe("resolveAndSubmitP2pDelegation", () => {
     const result = await resolveAndSubmitP2pDelegation(resolveParams({ buildP2pPayment }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("payment_broadcast_failed");
+  });
+});
+
+// ── selectAndRunDelegation — the shared P2P-vs-relay path selector ────────
+
+describe("selectAndRunDelegation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const buildProof = () =>
+    vi.fn(
+      async (req: SovereignP2pPaymentRequest): Promise<P2pPaymentProof> => ({
+        tx_hash: "p2p-tx",
+        chain: "solana",
+        network: "solana:x",
+        to_address: req.workerAddress,
+        amount_micro: req.amountMicro,
+        fee_to_address: req.treasuryAddress,
+        fee_amount_micro: req.feeAmountMicro,
+      }),
+    );
+
+  const baseSelect = () => ({
+    motebitId: "alice",
+    syncUrl: "https://relay.test",
+    authToken: vi.fn(async (aud?: string) => `tok-${aud}`),
+    prompt: "do it",
+    logger: { warn: vi.fn() },
+  });
+
+  it("routes to P2P when rail + pinned key + a capability are all present", async () => {
+    const buildP2pPayment = buildProof();
+    let discovered = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.includes("/api/v1/agents/discover")) {
+          discovered = true;
+          return jsonResponse(200, {
+            agents: [{ motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" }],
+          });
+        }
+        if (url.includes("/listing"))
+          return jsonResponse(200, { pricing: [{ capability: "review_pr", unit_cost: 0.5 }] });
+        if (url.endsWith("/task") && init?.method === "POST")
+          return jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }); // stop before poll
+        return jsonResponse(404, {});
+      }),
+    );
+
+    await selectAndRunDelegation({
+      ...baseSelect(),
+      requiredCapabilities: ["review_pr"],
+      relayPublicKey: PINNED_HEX,
+      buildP2pPayment,
+    });
+
+    expect(discovered).toBe(true);
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses relay-mode (no P2P, no discovery) when no rail is configured", async () => {
+    let submitBody: Record<string, unknown> | null = null;
+    let discovered = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.includes("/api/v1/agents/discover")) discovered = true;
+        if (url.endsWith("/task") && init?.method === "POST") {
+          submitBody = JSON.parse(init.body as string) as Record<string, unknown>;
+          return jsonResponse(400, { code: "BAD" });
+        }
+        return jsonResponse(404, {});
+      }),
+    );
+
+    // relayPublicKey present but NO buildP2pPayment → relay-mode.
+    await selectAndRunDelegation({
+      ...baseSelect(),
+      requiredCapabilities: ["review_pr"],
+      relayPublicKey: PINNED_HEX,
+    });
+
+    expect(discovered).toBe(false);
+    expect(submitBody!.required_capabilities).toEqual(["review_pr"]);
+    expect(submitBody!.target_agent).toBeUndefined();
+  });
+
+  it("uses relay-mode when there is no capability to discover by, even if rail+key present", async () => {
+    const buildP2pPayment = buildProof();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/task") && init?.method === "POST")
+          return jsonResponse(400, { code: "BAD" });
+        return jsonResponse(404, {});
+      }),
+    );
+
+    await selectAndRunDelegation({
+      ...baseSelect(),
+      requiredCapabilities: [], // nothing to discover by
+      relayPublicKey: PINNED_HEX,
+      buildP2pPayment,
+    });
+
+    expect(buildP2pPayment).not.toHaveBeenCalled();
   });
 });

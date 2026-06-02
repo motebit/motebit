@@ -4296,7 +4296,15 @@ export class MotebitRuntime {
    * on verified receipts, and returns the result as normal tool output.
    */
   enableInteractiveDelegation(config: InteractiveDelegationConfig): void {
-    this.interactiveDelegation.enable(config);
+    // Bind the sovereign rail's atomic-payment builder (when a wallet is
+    // configured) so a paid cross-agent `delegate_to_agent` call can settle
+    // peer-to-peer — mirrors enableInvokeCapability. The surface supplies the
+    // pinned `relayPublicKey` in `config`; both together enable the P2P path.
+    const buildP2pPayment = this._solanaWallet?.buildP2pPayment?.bind(this._solanaWallet);
+    this.interactiveDelegation.enable({
+      ...config,
+      ...(buildP2pPayment ? { buildP2pPayment } : {}),
+    });
   }
 
   /**

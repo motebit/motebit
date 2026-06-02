@@ -8,7 +8,8 @@
 
 import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
 
-import { submitAndPollDelegation } from "./relay-delegation.js";
+import { selectAndRunDelegation } from "./relay-delegation.js";
+import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 
 /** ToolRegistry extended with `has()` — matches SimpleToolRegistry in MotebitRuntime. */
 interface ToolRegistryWithHas extends ToolRegistry {
@@ -41,6 +42,20 @@ export interface InteractiveDelegationConfig {
   authToken: (audience?: string) => Promise<string>;
   timeoutMs?: number;
   routingStrategy?: "cost" | "quality" | "balanced";
+  /**
+   * The relay's Ed25519 public key (hex), PINNED at pairing. With
+   * `buildP2pPayment`, a paid cross-agent `delegate_to_agent` call settles
+   * peer-to-peer (treasury derived from this key, never a fetched response);
+   * absent → relay-mediated. Surface-provided. See `relay-delegation.ts`
+   * `selectAndRunDelegation` + `docs/doctrine/off-ramp-as-user-action.md` § Arc 3.5.
+   */
+  relayPublicKey?: string;
+  /**
+   * The sovereign rail's atomic multi-leg payment builder, bound by the runtime
+   * from its `SovereignWalletRail` at enable time. Present only when a sovereign
+   * wallet is configured.
+   */
+  buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
 }
 
 // === Manager ===
@@ -162,15 +177,17 @@ export class InteractiveDelegationManager {
         const prompt = args.prompt as string;
         const requiredCapabilities = args.required_capabilities as string[] | undefined;
 
-        const result = await submitAndPollDelegation({
+        const result = await selectAndRunDelegation({
           motebitId,
           syncUrl: config.syncUrl,
           authToken: config.authToken,
           prompt,
-          requiredCapabilities,
-          routingStrategy: config.routingStrategy,
+          ...(requiredCapabilities ? { requiredCapabilities } : {}),
+          ...(config.buildP2pPayment ? { buildP2pPayment: config.buildP2pPayment } : {}),
+          ...(config.relayPublicKey != null ? { relayPublicKey: config.relayPublicKey } : {}),
+          ...(config.routingStrategy ? { routingStrategy: config.routingStrategy } : {}),
           invocationOrigin: "ai-loop",
-          timeoutMs,
+          ...(timeoutMs != null ? { timeoutMs } : {}),
           logger,
         });
 
