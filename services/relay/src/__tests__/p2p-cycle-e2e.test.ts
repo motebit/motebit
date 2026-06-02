@@ -7,10 +7,17 @@
  * Also proves: ineligible pair falls back to relay, p2p dispute creates
  * trust-layer complaint.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Buffer } from "node:buffer";
 import type { SyncRelay } from "../index.js";
-import { deriveSolanaAddress, SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
+import {
+  deriveSolanaAddress,
+  SOLANA_MAINNET_CAIP2,
+  SolanaWalletRail,
+} from "@motebit/wallet-solana";
+import type { SolanaRpcAdapter } from "@motebit/wallet-solana";
+import { InvokeCapabilityManager } from "@motebit/runtime";
+import { computeP2pFeeMicro, toMicro, PLATFORM_FEE_RATE } from "@motebit/protocol";
 import {
   generateKeypair,
   bytesToHex,
@@ -21,6 +28,7 @@ import {
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import {
   AUTH_HEADER as AUTH,
+  API_TOKEN,
   JSON_AUTH,
   jsonAuthWithIdempotency,
   createTestRelay,
@@ -104,6 +112,196 @@ describe("P2P Settlement Cycle E2E", () => {
 
   afterEach(async () => {
     await relay.close();
+  });
+
+  it("invokeCapability (the REAL surface entry) drives single-op P2P end-to-end against the live relay", async () => {
+    // The #1 verification. 147f414b "activated P2P across all surfaces" by
+    // wiring relayPublicKey + buildP2pPayment into invokeCapability, but that
+    // config-assembly layer was never run against a real relay — the same
+    // "activated but never exercised end-to-end" shape that hid the wire-key
+    // bug one layer down. This drives the actual InvokeCapabilityManager
+    // (@motebit/runtime) — the deterministic chip-tap entry point — against the
+    // live relay and proves it (a) assembles the P2P config, (b) takes the P2P
+    // path rather than silently falling back to relay-mode, and (c) the relay
+    // accepts the proof (past eligibility + 2-leg validation) + dispatches.
+    const SYNC_URL = "http://relay.invoke.test";
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.startsWith(SYNC_URL)) return relay.app.request(url.slice(SYNC_URL.length), init);
+      return originalFetch(input as never, init);
+    });
+
+    // Worker connection so the accepted P2P task dispatches over ws.
+    const workerWs = { send: vi.fn(), close: vi.fn() };
+    relay.connections.set(worker.motebitId, [{ ws: workerWs as never, deviceId: worker.deviceId }]);
+
+    // Real wallet rail + fake adapter (no Solana). Single-op P2P = 2 legs.
+    let batchLegs: Array<{ toAddress: string; microAmount: bigint }> = [];
+    const fakeAdapter = {
+      ownAddress: "De1egatorSo1anaAddr11111111111111111111111",
+      getUsdcBalance: vi.fn().mockResolvedValue(100_000_000n),
+      getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
+      sendUsdc: vi.fn(),
+      sendUsdcBatch: vi.fn(async (legs: Array<{ toAddress: string; microAmount: bigint }>) => {
+        batchLegs = legs;
+        return legs.map(() => ({ ok: true, signature: FAKE_TX_HASH, slot: 1, confirmed: true }));
+      }),
+      getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
+      isReachable: vi.fn().mockResolvedValue(true),
+    } as unknown as SolanaRpcAdapter;
+    const rail = new SolanaWalletRail(fakeAdapter);
+
+    const manager = new InvokeCapabilityManager(
+      {
+        motebitId: delegator.motebitId,
+        logger: { warn: vi.fn() },
+        bumpTrustFromReceipt: async () => {},
+        stashReceipt: () => {},
+        buildP2pPayment: (req) => rail.buildP2pPayment!(req),
+      },
+      {
+        syncUrl: SYNC_URL,
+        authToken: async () => API_TOKEN,
+        relayPublicKey: relay.relayIdentity.publicKeyHex,
+        timeoutMs: 100,
+      },
+    );
+
+    const chunks: Array<{ type: string; code?: string }> = [];
+    for await (const c of manager.invokeCapability(
+      "web_search",
+      "search via the real entry point",
+    )) {
+      chunks.push(c as { type: string; code?: string });
+    }
+    vi.unstubAllGlobals();
+
+    // (a)+(b): invokeCapability assembled the config + took the LOCAL single-op
+    //    P2P path — 2 legs (worker net + relay-treasury fee), NOT a federated
+    //    3-leg and NOT a no-build relay-mode fallback.
+    expect(batchLegs).toHaveLength(2);
+    expect(batchLegs[0]).toEqual({
+      toAddress: WORKER_SOLANA_ADDR,
+      microAmount: BigInt(toMicro(0.5)),
+    });
+    expect(batchLegs[1]!.microAmount).toBe(
+      BigInt(computeP2pFeeMicro(toMicro(0.5), PLATFORM_FEE_RATE)),
+    );
+
+    // (c): the relay ACCEPTED the proof + dispatched to the worker. A submission
+    //    rejection (eligibility / proof / wire-key) would never reach dispatch.
+    const dispatched = workerWs.send.mock.calls
+      .map((c: unknown[]) => JSON.parse(c[0] as string) as { type: string })
+      .find((m) => m.type === "task_request");
+    expect(
+      dispatched,
+      "relay must accept the proof + dispatch the P2P task to the worker",
+    ).toBeDefined();
+
+    // The only terminal error is a poll timeout (no worker receipt in 100ms),
+    // NOT a pre-flight/submission rejection.
+    const err = chunks.find((c) => c.type === "invoke_error");
+    if (err) {
+      expect([
+        "unauthorized",
+        "payment_proof_required",
+        "malformed_request",
+        "no_routing",
+        "no_sovereign_rail",
+      ]).not.toContain(err.code);
+      expect(err.code).toBe("timeout");
+    }
+  });
+
+  it("invokeCapability cold-start: new pair is 403'd without the ack (after broadcast), accepted with it", async () => {
+    // The realistic NEW-USER path: a first paid delegation to a worker with no
+    // trust history. The relay's single-op eligibility gate only admits a new
+    // pair when the delegator acknowledges cold-start risk. This proves both
+    // (1) the gap — without the ack the relay 403s AFTER the client has already
+    // broadcast the payment (funds move, task rejected, no fallback), and
+    // (2) the fix — `acknowledgeNoHistoryRisk` makes the new-pair path work.
+    const SYNC_URL = "http://relay.coldstart.test";
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.startsWith(SYNC_URL)) return relay.app.request(url.slice(SYNC_URL.length), init);
+      return originalFetch(input as never, init);
+    });
+    // Remove the seeded trust → the pair is genuinely cold-start.
+    relay.moteDb.db
+      .prepare("DELETE FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?")
+      .run(delegator.motebitId, worker.motebitId);
+    relay.connections.set(worker.motebitId, [
+      { ws: { send: vi.fn(), close: vi.fn() } as never, deviceId: worker.deviceId },
+    ]);
+
+    // Distinct tx per run — a real delegation never reuses a signature, and
+    // sharing one would trip the relay's idempotency / proof-replay guards.
+    const SIG_NO_ACK = FAKE_TX_HASH;
+    const SIG_ACK = "2bQr9sTuVwXyZaCdEfGhJkMnPqRsTuVwXyZaCdEfGhJkMnPqRsTuVwXyZaCdEfGhJk";
+    const makeRail = (sig: string) => {
+      const broadcasts: number[] = [];
+      const adapter = {
+        ownAddress: "De1egatorSo1anaAddr11111111111111111111111",
+        getUsdcBalance: vi.fn().mockResolvedValue(100_000_000n),
+        getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
+        sendUsdc: vi.fn(),
+        sendUsdcBatch: vi.fn(async (legs: Array<{ microAmount: bigint }>) => {
+          broadcasts.push(legs.length);
+          return legs.map(() => ({ ok: true, signature: sig, slot: 1, confirmed: true }));
+        }),
+        getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
+        isReachable: vi.fn().mockResolvedValue(true),
+      } as unknown as SolanaRpcAdapter;
+      return { rail: new SolanaWalletRail(adapter), broadcasts };
+    };
+
+    const run = async (
+      acknowledgeNoHistoryRisk: boolean,
+      broadcasts: number[],
+      rail: SolanaWalletRail,
+    ) => {
+      const manager = new InvokeCapabilityManager(
+        {
+          motebitId: delegator.motebitId,
+          logger: { warn: vi.fn() },
+          bumpTrustFromReceipt: async () => {},
+          stashReceipt: () => {},
+          buildP2pPayment: (req) => rail.buildP2pPayment!(req),
+        },
+        {
+          syncUrl: SYNC_URL,
+          authToken: async () => API_TOKEN,
+          relayPublicKey: relay.relayIdentity.publicKeyHex,
+          timeoutMs: 100,
+          ...(acknowledgeNoHistoryRisk ? { acknowledgeNoHistoryRisk: true } : {}),
+        },
+      );
+      const chunks: Array<{ type: string; code?: string }> = [];
+      for await (const c of manager.invokeCapability("web_search", "cold-start paid delegation")) {
+        chunks.push(c as { type: string; code?: string });
+      }
+      return { err: chunks.find((c) => c.type === "invoke_error"), broadcasts };
+    };
+
+    // WITHOUT the ack: the relay rejects the cold-start pair (403 → unauthorized)
+    // — but only AFTER the client broadcast (the money-safety hazard the ack
+    // closes). The broadcast having happened is the point of the assertion.
+    const noAck = makeRail(SIG_NO_ACK);
+    const withoutAck = await run(false, noAck.broadcasts, noAck.rail);
+    expect(withoutAck.err?.code).toBe("unauthorized");
+    expect(noAck.broadcasts, "client broadcast BEFORE the relay's eligibility rejection").toEqual([
+      2,
+    ]);
+
+    // WITH the ack: the new-pair branch admits it → no submission rejection.
+    const withAckRail = makeRail(SIG_ACK);
+    const withAck = await run(true, withAckRail.broadcasts, withAckRail.rail);
+    vi.unstubAllGlobals();
+    expect(withAck.err?.code).not.toBe("unauthorized");
+    expect(withAck.err?.code).not.toBe("payment_proof_required");
+    if (withAck.err) expect(withAck.err.code).toBe("timeout");
   });
 
   it("full p2p cycle: eligible → submit with proof → receipt → audit record", async () => {

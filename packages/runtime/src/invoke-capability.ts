@@ -54,6 +54,16 @@ export interface InvokeCapabilityConfig {
    * relay-mediated path. The surface populates it from its pairing record.
    */
   relayPublicKey?: string;
+  /**
+   * The user consciously accepts cold-start risk for paying a NEW worker (no
+   * trust history) directly. Forwarded to the P2P path as
+   * `delegator_acknowledges_no_history_risk` (Arc 3). Without it, a first-time
+   * paid P2P delegation to an unknown worker is rejected by the relay's
+   * eligibility gate (403) AFTER the payment has already broadcast — so a
+   * surface offering paid delegation to new agents MUST set this from an
+   * explicit user opt-in. Established pairs ignore it.
+   */
+  acknowledgeNoHistoryRisk?: boolean;
 }
 
 export interface InvokeCapabilityOptions {
@@ -186,6 +196,7 @@ export class InvokeCapabilityManager {
       requiredCapabilities: [capability],
       ...(this.deps.buildP2pPayment ? { buildP2pPayment: this.deps.buildP2pPayment } : {}),
       ...(this.config.relayPublicKey != null ? { relayPublicKey: this.config.relayPublicKey } : {}),
+      ...(this.config.acknowledgeNoHistoryRisk === true ? { acknowledgeNoHistoryRisk: true } : {}),
       ...(this.config.routingStrategy ? { routingStrategy: this.config.routingStrategy } : {}),
       invocationOrigin,
       ...(this.config.timeoutMs != null ? { timeoutMs: this.config.timeoutMs } : {}),

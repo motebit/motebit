@@ -321,3 +321,15 @@ export type {
   DelegationError,
   DelegationErrorCode,
 } from "./relay-delegation.js";
+// The deterministic surface-affordance entry point (chip tap / button →
+// invokeCapability). Exported so an integration test can drive the REAL entry
+// point against a live relay — the layer above selectAndRunDelegation, where
+// the surface→runtime config assembly (relayPublicKey + buildP2pPayment) lives
+// and was "activated across all surfaces" but never run end-to-end.
+export { InvokeCapabilityManager } from "./invoke-capability.js";
+export type {
+  InvokeCapabilityDeps,
+  InvokeCapabilityConfig,
+  InvokeCapabilityOptions,
+  InvokeErrorChunk,
+} from "./invoke-capability.js";

@@ -399,6 +399,18 @@ export interface SubmitP2pDelegationParams {
    */
   requiredCapabilities?: string[];
   /**
+   * Cold-start acknowledgment. The relay's single-operator P2P eligibility gate
+   * (`evaluateSettlementEligibility`) rejects a NEW delegator↔worker pair (no
+   * trust history) with 403 unless the delegator consciously accepts the
+   * cold-start risk (Arc 3, `docs/doctrine/off-ramp-as-user-action.md`). Set
+   * true to send `delegator_acknowledges_no_history_risk` so a first-time paid
+   * P2P delegation is accepted rather than 403'd. CRITICAL: without it, a
+   * cold-start pair fails the gate AFTER the client has already broadcast the
+   * payment (resolve broadcasts before submit) — funds move, task rejected, no
+   * relay-mode fallback. Established pairs (trust ≥ threshold) ignore it.
+   */
+  acknowledgeNoHistoryRisk?: boolean;
+  /**
    * The PINNED worker. P2P settlement addresses a specific worker — the proof's
    * worker leg pays that worker's `settlement_address` — so unlike relay-mode
    * capability routing, the target is fixed (submitted as `target_agent`).
@@ -488,6 +500,11 @@ export async function submitP2pDelegation(
     if (params.requiredCapabilities && params.requiredCapabilities.length > 0) {
       body.required_capabilities = params.requiredCapabilities;
     }
+    // Cold-start: lets the relay's single-op P2P eligibility gate accept a
+    // no-trust-history pair (else 403 AFTER the payment already broadcast).
+    if (params.acknowledgeNoHistoryRisk === true) {
+      body.delegator_acknowledges_no_history_risk = true;
+    }
     if (params.invocationOrigin) {
       body.invocation_origin = params.invocationOrigin;
     }
@@ -575,6 +592,12 @@ export interface ResolveAndSubmitP2pDelegationParams {
   prompt: string;
   /** Capability the worker must advertise — used to discover + select + price. */
   capability: string;
+  /**
+   * Cold-start acknowledgment for a new delegator↔worker pair — forwarded to
+   * `submitP2pDelegation`. See its doc: without it the relay's single-op P2P
+   * eligibility gate 403s a no-history pair after the payment already broadcast.
+   */
+  acknowledgeNoHistoryRisk?: boolean;
   /**
    * The relay's PINNED Ed25519 public key (hex), established at pairing. The
    * treasury the fee leg pays is derived from THIS — `base58Encode(pubkey)` —
@@ -822,6 +845,7 @@ export async function resolveAndSubmitP2pDelegation(
     // The relay needs the capability to locate + price a federated worker on its
     // operator; pinned via the same capability used for discovery.
     requiredCapabilities: [capability],
+    ...(params.acknowledgeNoHistoryRisk === true ? { acknowledgeNoHistoryRisk: true } : {}),
     paymentProof: proof,
     ...(params.invocationOrigin ? { invocationOrigin: params.invocationOrigin } : {}),
     ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
@@ -853,6 +877,12 @@ export interface SelectDelegationParams {
   relayPublicKey?: string;
   /** The sovereign rail's atomic payment builder. Absent → relay-mode. */
   buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
+  /**
+   * Cold-start acknowledgment for a new delegator↔worker pair — forwarded to the
+   * P2P path. Only meaningful when the P2P path is taken. See
+   * `SubmitP2pDelegationParams.acknowledgeNoHistoryRisk`.
+   */
+  acknowledgeNoHistoryRisk?: boolean;
   /** Routing strategy for relay-mode candidate ranking. */
   routingStrategy?: "cost" | "quality" | "balanced";
   /** Invocation provenance — signature-bound on the resulting receipt. */
@@ -895,6 +925,7 @@ export async function selectAndRunDelegation(
       capability,
       relayPublicKeyHex: params.relayPublicKey,
       buildP2pPayment: params.buildP2pPayment,
+      ...(params.acknowledgeNoHistoryRisk === true ? { acknowledgeNoHistoryRisk: true } : {}),
       ...(params.invocationOrigin ? { invocationOrigin: params.invocationOrigin } : {}),
       ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
       logger: params.logger,
