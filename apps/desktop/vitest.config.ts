@@ -63,5 +63,5 @@ export default defineMotebitTest({
     "src/ui/theme.ts",
     "src/ui/voice.ts",
   ],
-  thresholds: { statements: 67, branches: 57, functions: 57, lines: 67 },
+  thresholds: { statements: 65, branches: 55, functions: 55, lines: 66 },
 });

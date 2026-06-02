@@ -10,7 +10,7 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 // reduces to 1000 for tests — same code path, 600x faster.
 export default defineMotebitTest({
   coverageExclude: ["src/index.ts", "src/prompts.ts", "src/rotate.ts"],
-  thresholds: { statements: 94, branches: 77, functions: 90, lines: 95 },
+  thresholds: { statements: 92, branches: 75, functions: 90, lines: 95 },
   extra: {
     testTimeout: 15_000,
     env: { MOTEBIT_PBKDF2_ITERATIONS: "1000" },

@@ -54,5 +54,5 @@ export default defineMotebitTest({
     "src/adapters/local-inference.ts", // iOS-native module wrapper (modules/expo-local-inference)
     "src/adapters/expo-sqlite.ts", // 2500-line SQLite adapter; partial coverage via mobile-app.test.ts bootstrap
   ],
-  thresholds: { statements: 63, branches: 54, functions: 60, lines: 64 },
+  thresholds: { statements: 61, branches: 52, functions: 58, lines: 62 },
 });

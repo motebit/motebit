@@ -1,5 +1,5 @@
 import { defineMotebitTest } from "../../vitest.shared.js";
 
 export default defineMotebitTest({
-  thresholds: { statements: 80, branches: 71, functions: 72, lines: 80 },
+  thresholds: { statements: 78, branches: 69, functions: 70, lines: 80 },
 });

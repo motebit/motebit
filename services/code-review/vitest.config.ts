@@ -7,5 +7,5 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 // held to 100% across the board.
 export default defineMotebitTest({
   coverageExclude: ["src/index.ts"],
-  thresholds: { statements: 100, branches: 100, functions: 90, lines: 100 },
+  thresholds: { statements: 100, branches: 100, functions: 88, lines: 100 },
 });

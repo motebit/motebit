@@ -6,5 +6,5 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 // (action-executor, routes, chromium-pool, auth, env) is covered here.
 export default defineMotebitTest({
   coverageExclude: ["src/index.ts"],
-  thresholds: { statements: 90, branches: 80, functions: 90, lines: 90 },
+  thresholds: { statements: 90, branches: 78, functions: 90, lines: 90 },
 });

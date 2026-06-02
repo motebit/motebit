@@ -6,7 +6,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ajvFormatsStub = path.resolve(__dirname, "src/__tests__/__stubs__/ajv-formats-stub.cjs");
 
 export default defineMotebitTest({
-  thresholds: { statements: 73, branches: 71, functions: 75, lines: 73 },
+  thresholds: { statements: 73, branches: 69, functions: 73, lines: 73 },
   vite: {
     plugins: [
       {

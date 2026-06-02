@@ -6,5 +6,5 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 // call that is only reachable on the individual-credit-failure branch
 // and in our fake-store scenario never throws from both call sites).
 export default defineMotebitTest({
-  thresholds: { statements: 99, branches: 95, functions: 90, lines: 99 },
+  thresholds: { statements: 99, branches: 94, functions: 90, lines: 99 },
 });

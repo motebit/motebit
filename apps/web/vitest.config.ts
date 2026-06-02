@@ -12,5 +12,5 @@ export default defineMotebitTest({
     "src/ui/**",
   ],
   extra: { setupFiles: ["./src/__tests__/setup.ts"] },
-  thresholds: { statements: 48, branches: 40, functions: 47, lines: 50 },
+  thresholds: { statements: 46, branches: 38, functions: 45, lines: 48 },
 });

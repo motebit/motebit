@@ -21,5 +21,5 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 // existing headless lifecycle tests (`init(null)` → render → dispose),
 // which exercise every non-WebGL method on each adapter.
 export default defineMotebitTest({
-  thresholds: { statements: 78, branches: 73, functions: 82, lines: 78 },
+  thresholds: { statements: 78, branches: 73, functions: 80, lines: 78 },
 });

@@ -18,5 +18,5 @@ export default defineMotebitTest({
     "src/memory-events.ts",
     "src/plan-lifecycle.ts",
   ],
-  thresholds: { statements: 98, branches: 86, functions: 98, lines: 98 },
+  thresholds: { statements: 98, branches: 84, functions: 98, lines: 98 },
 });

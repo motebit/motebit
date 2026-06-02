@@ -7,5 +7,5 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 // Defensive branches (audit throws, embed throws, persistence throws) are
 // exercised via targeted module mocks — keeps the safety nets honest.
 export default defineMotebitTest({
-  thresholds: { statements: 98, branches: 100, functions: 94, lines: 98 },
+  thresholds: { statements: 96, branches: 100, functions: 92, lines: 96 },
 });

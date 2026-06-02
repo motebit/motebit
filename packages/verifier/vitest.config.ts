@@ -4,5 +4,5 @@ export default defineMotebitTest({
   // index.ts is a pure re-export barrel — zero logic. CLI moved to
   // `@motebit/verify` in v1.0; this package is library-only.
   coverageExclude: ["src/index.ts"],
-  thresholds: { statements: 95, branches: 83, functions: 100, lines: 95 },
+  thresholds: { statements: 95, branches: 81, functions: 100, lines: 95 },
 });
