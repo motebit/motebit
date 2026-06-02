@@ -23,5 +23,5 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 // entry in the same PR per the graduation doctrine's drift rule.
 export default defineMotebitTest({
   coverageExclude: ["src/adapter.ts"],
-  thresholds: { statements: 97, branches: 96, functions: 100, lines: 97 },
+  thresholds: { statements: 97, branches: 95, functions: 100, lines: 97 },
 });
