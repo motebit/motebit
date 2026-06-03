@@ -554,6 +554,11 @@ describe("invokeCapability — P2P path selection", () => {
           agents: [{ motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" }],
         });
       }
+      // Pre-flight must confirm eligibility before the irreversible broadcast
+      // (fail-closed); an eligible worker returns allowed:true.
+      if (url.includes("/p2p-eligibility")) {
+        return jsonResp(200, { allowed: true });
+      }
       if (url.includes("/listing")) {
         return jsonResp(200, { pricing: [{ capability: "review_pr", unit_cost: 0.5 }] });
       }

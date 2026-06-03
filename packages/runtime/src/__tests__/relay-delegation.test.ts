@@ -373,6 +373,48 @@ describe("resolveAndSubmitP2pDelegation", () => {
     expect(params.buildP2pPayment, "irreversible payment must NOT be built").not.toHaveBeenCalled();
   });
 
+  it("FAILS CLOSED: pre-flight unavailable (non-200) → p2p_ineligible, NO broadcast", async () => {
+    // On the irreversible path we broadcast ONLY on an explicit allowed:true. If
+    // the eligibility endpoint can't confirm (older relay missing it, an error),
+    // we must NOT move funds — degrade to relay-mode instead of paying blind.
+    const params = resolveParams();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" },
+        ]),
+        eligibility: () => jsonResponse(404, { error: "no such endpoint" }),
+      }),
+    );
+    const result = await resolveAndSubmitP2pDelegation(params);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("p2p_ineligible");
+    expect(
+      params.buildP2pPayment,
+      "must not broadcast on an unconfirmed pre-flight",
+    ).not.toHaveBeenCalled();
+  });
+
+  it("FAILS CLOSED: pre-flight network error → p2p_ineligible, NO broadcast", async () => {
+    const params = resolveParams();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" },
+        ]),
+        eligibility: () => {
+          throw new TypeError("fetch failed: ECONNRESET");
+        },
+      }),
+    );
+    const result = await resolveAndSubmitP2pDelegation(params);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("p2p_ineligible");
+    expect(params.buildP2pPayment).not.toHaveBeenCalled();
+  });
+
   // ── FEDERATED (PR-fed-3): worker on a direct peer — 3-leg fee-from-budget ──
 
   // A 32-byte peer relay key the origin surfaced in discovery. The executor (B)
@@ -549,6 +591,7 @@ describe("selectAndRunDelegation", () => {
             agents: [{ motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" }],
           });
         }
+        if (url.includes("/p2p-eligibility")) return jsonResponse(200, { allowed: true });
         if (url.includes("/listing"))
           return jsonResponse(200, { pricing: [{ capability: "review_pr", unit_cost: 0.5 }] });
         if (url.endsWith("/task") && init?.method === "POST")

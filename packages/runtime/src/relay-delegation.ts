@@ -787,13 +787,20 @@ export async function resolveAndSubmitP2pDelegation(
     // 3a. PRE-FLIGHT eligibility BEFORE the irreversible broadcast (single-op
     //     only — a federated worker has no eligibility gate at its forward site).
     //     The dedicated caller-bound /p2p-eligibility read returns the SAME
-    //     decision the submission gate enforces; if it says no, bail WITHOUT
-    //     broadcasting (p2p_ineligible → relay-mode fallback in
-    //     selectAndRunDelegation), closing the broadcast-then-403 fund-loss
-    //     window. `acknowledge_no_history_risk` mirrors the submission body so
-    //     pre-flight and submit agree. A non-200 (older relay without the
-    //     endpoint / a network glitch) → proceed; the submission gate still
-    //     enforces — we just forgo the pre-broadcast safety on that one call.
+    //     decision the submission gate enforces; bail WITHOUT broadcasting
+    //     (p2p_ineligible → relay-mode fallback in selectAndRunDelegation),
+    //     closing the broadcast-then-403 fund-loss window.
+    //     `acknowledge_no_history_risk` mirrors the submission body so pre-flight
+    //     and submit agree.
+    //
+    //     FAIL CLOSED on the irreversible money path: we broadcast ONLY on an
+    //     explicit `allowed: true`. A non-200 (older relay missing the endpoint),
+    //     an unparseable body, or a network error means we CANNOT confirm
+    //     eligibility — so we do NOT move funds; we return p2p_ineligible and let
+    //     selectAndRunDelegation degrade to relay-mode. Trading P2P availability
+    //     for never paying a worker the relay would reject is the correct call
+    //     when the payment is irreversible (metabolic principle: deny on error).
+    let preflightAllowed = false;
     try {
       const eligToken = await params.authToken("market:listing");
       const ackQuery =
@@ -807,12 +814,20 @@ export async function resolveAndSubmitP2pDelegation(
         if (data.allowed !== true) {
           return fail("p2p_ineligible", data.reason ?? "Not P2P-eligible for this worker");
         }
+        preflightAllowed = true;
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") {
         return fail("timeout", "Aborted during eligibility pre-flight");
       }
-      // Advisory pre-flight network glitch — proceed; the submission gate enforces.
+      // Fall through to the fail-closed guard below — never broadcast on a
+      // pre-flight we couldn't complete.
+    }
+    if (!preflightAllowed) {
+      return fail(
+        "p2p_ineligible",
+        "P2P eligibility could not be confirmed (pre-flight unavailable) — refusing to broadcast an unconfirmed payment.",
+      );
     }
 
     // 3b. Price from the worker's listing (market:listing-audience read).
