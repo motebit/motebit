@@ -29,9 +29,24 @@
  *   SOLANA_RPC_URL        the chain RPC the staging relay's verifier uses
  *   CAPABILITY            capability to delegate, e.g. web_search
  * Optional:
+ *   SOLANA_USDC_MINT      USDC SPL mint the delegator pays in. Defaults to the
+ *                         mainnet mint. Set to USDC_MINT_DEVNET
+ *                         (4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU) to
+ *                         rehearse the FULL loop on devnet with free faucet USDC
+ *                         — zero real money, identical code path. MUST match the
+ *                         mint the target relay's verifier uses (SOLANA_USDC_MINT
+ *                         on the relay), or the verifier walks the wrong mint's
+ *                         token accounts and fail-verifies every leg.
  *   DRY_RUN               "0" to actually broadcast; anything else / unset = dry run
  *   PROMPT                task prompt (default a fixed string)
  *   TIMEOUT_MS            poll budget for the real run (default 60000)
+ *
+ * The DEVNET REHEARSAL (the professional first run — $0, real crypto):
+ *   point STAGING_RELAY_URL at a relay started with SOLANA_RPC_URL=<devnet> +
+ *   SOLANA_USDC_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU, set the same
+ *   SOLANA_USDC_MINT + a devnet SOLANA_RPC_URL here, fund the delegator from the
+ *   devnet SOL + USDC faucets, and run DRY_RUN=0. The mainnet run is the IDENTICAL
+ *   invocation with the mainnet mint + a mainnet RPC + a wallet holding real USDC.
  *
  * Run:  pnpm exec tsx scripts/p2p-cold-start-staging-proof.ts
  */
@@ -53,7 +68,9 @@ function usage(missing: string): never {
   console.error(`\n[staging-proof] missing required env: ${missing}\n`);
   console.error("Required:");
   for (const k of REQUIRED) console.error(`  ${k}`);
-  console.error("\nOptional: DRY_RUN (=0 to broadcast), PROMPT, TIMEOUT_MS\n");
+  console.error(
+    "\nOptional: SOLANA_USDC_MINT (devnet rehearsal), DRY_RUN (=0 to broadcast), PROMPT, TIMEOUT_MS\n",
+  );
   console.error("Safety: dry-run by default — prints the plan and stops before any broadcast.\n");
   process.exit(2);
 }
@@ -71,8 +88,13 @@ async function main(): Promise<void> {
   const dryRun = process.env.DRY_RUN !== "0";
   const prompt = process.env.PROMPT ?? `staging cold-start P2P proof for "${capability}"`;
   const timeoutMs = Number(process.env.TIMEOUT_MS ?? "60000");
+  // Default mainnet; set to USDC_MINT_DEVNET for the free devnet rehearsal. MUST
+  // equal the relay verifier's SOLANA_USDC_MINT — same mint on both sides or the
+  // legs are invisible to the verifier.
+  const usdcMint = process.env.SOLANA_USDC_MINT?.trim() || undefined;
 
   log(`relay=${relayUrl}  capability=${capability}  DRY_RUN=${dryRun}`);
+  log(`usdc_mint=${usdcMint ?? "<mainnet default>"}`);
   const authToken = async (): Promise<string> => token;
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -140,7 +162,11 @@ async function main(): Promise<void> {
   const grossMicro = amountMicro + feeMicro;
 
   // 4. balance check
-  const rail = createSolanaWalletRail({ rpcUrl, identitySeed: Buffer.from(seedHex, "hex") });
+  const rail = createSolanaWalletRail({
+    rpcUrl,
+    identitySeed: Buffer.from(seedHex, "hex"),
+    ...(usdcMint ? { usdcMint } : {}),
+  });
   const balanceMicro = await rail.getBalance();
 
   log("");
