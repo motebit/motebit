@@ -3,6 +3,7 @@ export * from "./models.js";
 export * from "./provider-mode.js";
 export * from "./provider-resolver.js";
 export * from "./color-presets.js";
+export * from "./identity-sigil.js";
 export * from "./approval-presets.js";
 export * from "./risk-labels.js";
 export * from "./surface-options.js";

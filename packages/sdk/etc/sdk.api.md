@@ -33,6 +33,18 @@ import type { StateSnapshotAdapter } from '@motebit/protocol';
 import type { ToolDefinition } from '@motebit/protocol';
 import type { TrustMode } from '@motebit/protocol';
 
+// @public
+export interface AgentSigil {
+    accent: OklchColor;
+    count: number;
+    density: number;
+    geometrySeed: number;
+    primary: OklchColor;
+    rotation: number;
+    stroke: number;
+    symmetry: SigilSymmetry;
+}
+
 // @public (undocumented)
 export interface AIResponse {
     // (undocumented)
@@ -287,6 +299,9 @@ export function defaultModelForVendor(vendor: ByokVendor): string;
 
 // @public
 export function defaultProviderConfig(): MotebitCloudProviderConfig;
+
+// @public
+export function deriveAgentSigil(publicKeyHex: string): AgentSigil;
 
 // @public (undocumented)
 export interface ExportManifest {
@@ -606,6 +621,16 @@ export interface MotebitState {
 // @public
 export function normalizeLocalServerEndpoint(url: string): string;
 
+// @public
+export interface OklchColor {
+    c: number;
+    h: number;
+    l: number;
+}
+
+// @public
+export function oklchToRgb(input: OklchColor): [number, number, number];
+
 // @public @deprecated (undocumented)
 export const OLLAMA_SUGGESTED_MODELS: readonly ["llama3.2", "llama3.1", "llama3", "mistral", "codellama", "gemma2", "phi3", "qwen2"];
 
@@ -731,6 +756,15 @@ export interface SessionStateSnapshot {
     readonly sensitivity: SensitivityLevel;
     readonly staleBytesOmissionReason?: PixelOmittedReason;
 }
+
+// @public
+export function shortFingerprint(publicKeyHex: string, opts?: {
+    head?: number;
+    tail?: number;
+}): string;
+
+// @public
+export type SigilSymmetry = "radial" | "bilateral" | "orbital";
 
 // @public
 export interface SkillInjection {
