@@ -23,6 +23,20 @@ the browser needs a real Solana RPC, and the deployed bundle drifts behind `main
 
 Redeploy after changing env (Vercel doesn't rebuild on env change alone).
 
+### RPC key security
+
+`VITE_*` vars ship in the client bundle, so the RPC key is publicly extractable.
+The provider is commodity: it never touches keys or funds (it only relays signed
+bytes and reads public chain data) and it is swappable behind `SolanaRpcAdapter`,
+so the only exposure is quota abuse. Two mitigations:
+
+- **Now:** in the Helius dashboard, restrict the key by allowed origin/domain
+  (`motebit.com`). Rotate if abused (free tier — low stakes).
+- **Later:** proxy RPC through our own relay (which already holds a server-side
+  `SOLANA_RPC_URL`) so no key ships in the browser. Display reads proxy cleanly;
+  the broadcast can move to a relay forward-signed-bytes endpoint (the relay
+  forwards an already-signed tx — still sovereign; the relay never holds the key).
+
 ## Deploy
 
 - Git-connected: a production deploy of `main` (push, or dashboard **Redeploy**
