@@ -176,6 +176,77 @@ the short term and each fights the architecture — trading the sybil-resistant
 first-person moat for a legibility you get more honestly from a derived face and a
 petname.
 
+## Gotchas and bounds
+
+This architecture is correct, not free. Each elegance buys a cost; the bound is
+what keeps the cost from eating the property it paid for.
+
+- **Cold-start re-centralizes in the relay (the load-bearing one).** First-person
+  trust is useless at first contact — every peer starts `unknown`, so the first
+  delegation is always blind, and the relay's `ReputationCredential` hint becomes
+  the _only_ signal at exactly the moment trust is decisive. Through usage, that
+  hint can quietly become the de facto global score, re-centralizing trust in the
+  relay — the precise thing §1 refuses. **Bound:** the relay hint is structurally
+  capped (it may not dominate a routing decision), decays as first-person edges
+  accrue, and renders always-labeled as the relay's unverified claim. A hint that
+  can override first-person trust is a bug, not a default.
+
+- **It is an ego-star, not a transitive graph.** First-person trust has no
+  transitivity (I trust Alice, Alice trusts Bob ⇒ I learn nothing about Bob); the
+  only multi-hop structure is delegation edges I personally witnessed. **Bound:**
+  do not market "trust graph" as recommendation/reachability; transitive or
+  delegated trust is a future axis with its own threat model (trust laundering
+  through cheap intermediaries), never a silent default.
+
+- **The sigil's distinctness budget is necessary, not sufficient (§4).** The
+  measurable bound is output-space size; the real limit is human perceptual
+  discrimination — far smaller, and worse at list scale, across themes, and under
+  colorblindness (~8% of men). **Bound:** the fingerprint stays primary for any
+  trust-bearing decision (the UI enforces this, not just the prose); the sigil is
+  tuned for discrimination at the _smallest_ render size with a colorblind-safe
+  primary axis; pair it with a word-pair fingerprint (BIP-39-style) — humans
+  compare words far better than abstract shapes. Note also: a key-derived face
+  cannot disambiguate _your own_ petname collisions ("Scout" vs "Scott"), and
+  deterministic art from arbitrary keys is unmoderatable without breaking
+  determinism — both are recognition limits, not identity proofs.
+
+- **Petnames solve personal legibility, not collaborative legibility (§3).** Local
+  names do not travel; the moment two parties coordinate about a third agent they
+  fall back to the fingerprint. And petname assignment is a pincer: manual ⇒ the
+  long tail stays UUIDs; auto-from-self-asserted-name ⇒ the squattable name becomes
+  the default and the impersonator wins. **Bound:** the fingerprint is the shared
+  cross-party referent; petname auto-suggestion (if any) is gated behind earned
+  first-person trust, never adopted at discovery.
+
+- **Legibility is back-loaded — it does not, alone, answer the distribution gap.**
+  Faces + petnames + earned trust are most legible to a veteran; the Known tab is
+  empty at onboarding, so a stranger sees only the relay roster, faceless and
+  trustless. The model also _refuses_ the at-a-glance aggregate (no global score to
+  total). **Bound:** treat this doctrine as the panel's _honesty_ fix, not the
+  product's _front door_. The legible-to-a-stranger wedge is a separate problem
+  (see [`identity-universal-boundary.md`](identity-universal-boundary.md), §
+  sequencing); do not conflate the two.
+
+- **"Derive from receipts" has a render cost.** Literal per-paint receipt-tree
+  walks are slow; denormalizing a money field onto the trust record is forbidden
+  (§6). **Bound:** the permitted middle path is a **materialized projection** — a
+  cache rebuilt _from_ receipts, clearly derived, never a source of truth.
+
+- **Hire-as-act is asserted before it is proven implementable (§5).** Spatial has
+  no panels and CLI has no interior register to rotate; the invariant may force an
+  awkward flow there, and the relief valve is exactly the drift this doc forbids (a
+  surface ships a modal, or the invariant is quietly relaxed). **Bound:** the
+  invariant holds, but it must be _demonstrated_ on spatial + CLI before the
+  cross-surface choreography hardens — prove the check can be cashed.
+
+- **Sequencing — the meta-gotcha.** Writing this doctrine now is cheap and correct
+  (it prevents drift while the design is fresh). _Implementing_ it is real feature
+  work that sits _after_ "external users" in motebit's own build order
+  ([`identity-universal-boundary.md`](identity-universal-boundary.md)). **Bound:**
+  gate the build on a concrete consumer (the live demo needs it, or a builder asks)
+  — not on the design merely feeling resolved. Architecture is more comfortable
+  than distribution; this section exists partly to name that.
+
 ---
 
 Related: [`delegation.md`](delegation.md),
