@@ -215,6 +215,36 @@ export function loadProactiveConfig(defaultEnabled = false): WebProactiveConfig 
   }
 }
 
+// === Paid P2P Cold-Start Opt-In ===
+//
+// Whether the user has consciously opted into paying a NEW worker (no trust
+// history with them) directly, peer-to-peer — the Arc-3 cold-start
+// acknowledgment. Default OFF (conservative): without it, a first paid
+// delegation to an unknown worker safely degrades to relay-mode rather than
+// moving funds onchain. When ON, the deterministic `invokeCapability` path
+// passes `acknowledgeNoHistoryRisk`, so the relay's eligibility gate admits the
+// new pair (and trust accrues from real transactions for future routing). See
+// `docs/doctrine/off-ramp-as-user-action.md` § Arc 3 and the runtime contract
+// `InvokeCapabilityOptions.acknowledgeNoHistoryRisk`.
+
+const P2P_COLD_START_KEY = "motebit-p2p-cold-start-optin";
+
+export function saveColdStartOptIn(enabled: boolean): void {
+  try {
+    localStorage.setItem(P2P_COLD_START_KEY, enabled ? "true" : "false");
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+export function loadColdStartOptIn(): boolean {
+  try {
+    return localStorage.getItem(P2P_COLD_START_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 // === Voice Config ===
 //
 // The authoritative `VoiceConfig` shape lives in `@motebit/sdk`. Web persists

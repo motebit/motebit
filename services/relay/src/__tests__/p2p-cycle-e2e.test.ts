@@ -312,11 +312,16 @@ describe("P2P Settlement Cycle E2E", () => {
             ),
           relayPublicKey: relay.relayIdentity.publicKeyHex,
           timeoutMs: 100,
-          ...(acknowledgeNoHistoryRisk ? { acknowledgeNoHistoryRisk: true } : {}),
         },
       );
       const chunks: Array<{ type: string; code?: string }> = [];
-      for await (const c of manager.invokeCapability("web_search", "cold-start paid delegation")) {
+      // Per-invocation options ack — the exact path the web surface uses
+      // (WebApp.invokeCapability reads the persisted opt-in and passes it here).
+      for await (const c of manager.invokeCapability(
+        "web_search",
+        "cold-start paid delegation",
+        acknowledgeNoHistoryRisk ? { acknowledgeNoHistoryRisk: true } : {},
+      )) {
         chunks.push(c as { type: string; code?: string });
       }
       return { err: chunks.find((c) => c.type === "invoke_error"), broadcasts };

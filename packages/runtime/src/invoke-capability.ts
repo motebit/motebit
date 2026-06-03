@@ -75,6 +75,15 @@ export interface InvokeCapabilityOptions {
   invocationOrigin?: IntentOrigin;
   /** Abort the in-flight poll. The relay continues processing server-side. */
   signal?: AbortSignal;
+  /**
+   * Per-invocation cold-start acknowledgment (overrides the config default).
+   * The surface sets this from an explicit user opt-in so a paid delegation to
+   * a NEW worker (no trust history) is admitted by the relay's P2P eligibility
+   * gate rather than falling back to relay-mode. Read fresh per call so a live
+   * preference toggle takes effect without re-enabling the capability. See
+   * `InvokeCapabilityConfig.acknowledgeNoHistoryRisk`.
+   */
+  acknowledgeNoHistoryRisk?: boolean;
 }
 
 /**
@@ -124,6 +133,7 @@ export class InvokeCapabilityManager {
       prompt,
       invocationOrigin,
       options.signal,
+      options.acknowledgeNoHistoryRisk,
     );
 
     if (!result.ok) {
@@ -187,7 +197,11 @@ export class InvokeCapabilityManager {
     prompt: string,
     invocationOrigin: IntentOrigin,
     signal: AbortSignal | undefined,
+    acknowledgeNoHistoryRisk: boolean | undefined,
   ): Promise<DelegationResult> {
+    // Per-invocation opt-in overrides the config default (read fresh so a live
+    // surface preference toggle takes effect without re-enabling the capability).
+    const ack = acknowledgeNoHistoryRisk ?? this.config.acknowledgeNoHistoryRisk;
     return selectAndRunDelegation({
       motebitId: this.deps.motebitId,
       syncUrl: this.config.syncUrl,
@@ -196,7 +210,7 @@ export class InvokeCapabilityManager {
       requiredCapabilities: [capability],
       ...(this.deps.buildP2pPayment ? { buildP2pPayment: this.deps.buildP2pPayment } : {}),
       ...(this.config.relayPublicKey != null ? { relayPublicKey: this.config.relayPublicKey } : {}),
-      ...(this.config.acknowledgeNoHistoryRisk === true ? { acknowledgeNoHistoryRisk: true } : {}),
+      ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
       ...(this.config.routingStrategy ? { routingStrategy: this.config.routingStrategy } : {}),
       invocationOrigin,
       ...(this.config.timeoutMs != null ? { timeoutMs: this.config.timeoutMs } : {}),

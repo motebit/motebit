@@ -123,6 +123,7 @@ import {
   markMigrationDone,
   loadGovernanceConfig,
   loadProactiveConfig,
+  loadColdStartOptIn,
   loadProviderConfig,
   loadSyncUrl,
 } from "./storage.js";
@@ -1815,14 +1816,24 @@ export class UnbootedWebApp {
   async *invokeCapability(
     capability: string,
     prompt: string,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; acknowledgeNoHistoryRisk?: boolean },
   ): AsyncGenerator<StreamChunk> {
     if (!this.runtime) throw new Error("Runtime not initialized");
     if (this._isProcessing) throw new Error("Already processing");
 
     this._isProcessing = true;
     try {
-      yield* this.runtime.invokeCapability(capability, prompt, options);
+      // Cold-start opt-in: a paid delegation to a NEW worker (no trust history)
+      // proceeds P2P only when the user has consciously opted in (Settings →
+      // Governance → "Pay new agents directly"). Read fresh per call so the
+      // toggle takes effect live. Default off → an ineligible cold-start pair
+      // safely degrades to relay-mode (the pre-flight blocks the broadcast, so
+      // no funds move). An explicit option overrides the stored preference.
+      const acknowledgeNoHistoryRisk = options?.acknowledgeNoHistoryRisk ?? loadColdStartOptIn();
+      yield* this.runtime.invokeCapability(capability, prompt, {
+        ...options,
+        ...(acknowledgeNoHistoryRisk ? { acknowledgeNoHistoryRisk: true } : {}),
+      });
     } finally {
       this._isProcessing = false;
     }

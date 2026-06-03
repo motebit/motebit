@@ -9166,6 +9166,27 @@
             </div>
           </div>
           <div class="settings-card">
+            <div class="card-title">Direct Payment</div>
+            <div class="settings-field">
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Pay new agents directly (peer-to-peer)</div>
+                  <div class="toggle-desc">
+                    The first paid task to an agent you have no history with falls back to
+                    relay-coordinated settlement. Enable to pay a new agent directly onchain instead,
+                    accepting the cold-start risk — trust then accrues from the transaction for future
+                    routing. Default off: until you opt in, no funds move to an unknown agent. Takes
+                    effect on your next delegation; no reload needed.
+                  </div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="gov-p2p-cold-start" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="settings-card">
             <div class="card-title">Recent Activity</div>
             <div id="audit-activity-list" class="audit-activity-list"></div>
             <div id="audit-activity-empty" class="audit-activity-empty" style="display: none">

@@ -7,6 +7,8 @@ import {
   saveGovernanceConfig,
   saveProactiveConfig,
   loadProactiveConfig,
+  saveColdStartOptIn,
+  loadColdStartOptIn,
   loadGovernanceConfig,
   saveVoiceConfig,
   loadVoiceConfig,
@@ -109,6 +111,7 @@ const govProactiveEnabled = document.getElementById(
 const govProactiveAnchor = document.getElementById(
   "gov-proactive-anchor",
 ) as HTMLInputElement | null;
+const govP2pColdStart = document.getElementById("gov-p2p-cold-start") as HTMLInputElement | null;
 
 // PIN dialog elements (operator-mode escalation)
 const pinBackdrop = document.getElementById("pin-backdrop");
@@ -1124,6 +1127,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const proactiveConfig = loadProactiveConfig();
     if (govProactiveEnabled != null) govProactiveEnabled.checked = proactiveConfig.enabled;
     if (govProactiveAnchor != null) govProactiveAnchor.checked = proactiveConfig.anchorOnchain;
+    if (govP2pColdStart != null) govP2pColdStart.checked = loadColdStartOptIn();
     // Operator-mode toggle reflects runtime state. The policy gate is the
     // source of truth; the toggle is a view onto it.
     if (settingsOperatorMode != null) {
@@ -1456,6 +1460,10 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       enabled: govProactiveEnabled?.checked === true,
       anchorOnchain: govProactiveAnchor?.checked === true,
     });
+
+    // Cold-start opt-in is read fresh per delegation by WebApp.invokeCapability,
+    // so this takes effect on the next delegation with no reload.
+    saveColdStartOptIn(govP2pColdStart?.checked === true);
 
     // Persist BYOK voice keys first so the rebuild below sees fresh values.
     // Empty-string clears the slot (setVendorKey removes the localStorage entry).

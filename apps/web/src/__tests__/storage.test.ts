@@ -29,6 +29,8 @@ import {
   markMigrationDone,
   getTTSKey,
   setTTSKey,
+  saveColdStartOptIn,
+  loadColdStartOptIn,
   type ProviderConfig,
   type GovernanceConfig,
   type VoiceConfig,
@@ -225,6 +227,19 @@ describe("GovernanceConfig persistence", () => {
   it("returns null on corrupt JSON", () => {
     localStorage.setItem("motebit-governance", "{{");
     expect(loadGovernanceConfig()).toBeNull();
+  });
+});
+
+describe("Paid P2P cold-start opt-in persistence", () => {
+  it("defaults OFF when never set (conservative — no funds move to a new agent)", () => {
+    expect(loadColdStartOptIn()).toBe(false);
+  });
+
+  it("round-trips the opt-in", () => {
+    saveColdStartOptIn(true);
+    expect(loadColdStartOptIn()).toBe(true);
+    saveColdStartOptIn(false);
+    expect(loadColdStartOptIn()).toBe(false);
   });
 });
 
