@@ -56,6 +56,17 @@ export interface InteractiveDelegationConfig {
    * wallet is configured.
    */
   buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
+  /**
+   * Cold-start opt-in: whether the user has consented to pay a worker they have
+   * NO trust history with directly, peer-to-peer (the Arc-3 acknowledgment).
+   * Without it, a first paid delegation to an unknown worker is ineligible for
+   * P2P and degrades to relay-mode — so the `delegate_to_agent` tool MUST forward
+   * it or the surface's "pay new agents directly" toggle is a no-op for chat-
+   * driven delegation (the bug this closes). A function is read fresh per call so
+   * toggling the preference takes effect without re-enabling — mirrors
+   * `InvokeCapabilityConfig.acknowledgeNoHistoryRisk`.
+   */
+  acknowledgeNoHistoryRisk?: boolean | (() => boolean);
 }
 
 // === Manager ===
@@ -177,6 +188,16 @@ export class InteractiveDelegationManager {
         const prompt = args.prompt as string;
         const requiredCapabilities = args.required_capabilities as string[] | undefined;
 
+        // Resolve the cold-start ack fresh per call (a function reflects a live
+        // surface toggle without re-enabling). Without forwarding this, a paid
+        // delegation to a no-history worker is denied P2P eligibility and silently
+        // degrades to relay-mode — the "pay new agents directly" toggle would be a
+        // no-op for the AI-loop path.
+        const ack =
+          typeof config.acknowledgeNoHistoryRisk === "function"
+            ? config.acknowledgeNoHistoryRisk()
+            : config.acknowledgeNoHistoryRisk;
+
         const result = await selectAndRunDelegation({
           motebitId,
           syncUrl: config.syncUrl,
@@ -185,6 +206,7 @@ export class InteractiveDelegationManager {
           ...(requiredCapabilities ? { requiredCapabilities } : {}),
           ...(config.buildP2pPayment ? { buildP2pPayment: config.buildP2pPayment } : {}),
           ...(config.relayPublicKey != null ? { relayPublicKey: config.relayPublicKey } : {}),
+          ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
           ...(config.routingStrategy ? { routingStrategy: config.routingStrategy } : {}),
           invocationOrigin: "ai-loop",
           ...(timeoutMs != null ? { timeoutMs } : {}),

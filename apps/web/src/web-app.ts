@@ -3446,6 +3446,11 @@ export class UnbootedWebApp {
       syncUrl: relayUrl,
       authToken: delegationAuthToken,
       ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
+      // Forward the cold-start opt-in as a LIVE getter so the "Pay new agents
+      // directly" toggle governs chat-driven (delegate_to_agent) delegation,
+      // not just the deterministic invokeCapability path. Read per call → no
+      // re-enable needed when the user flips it.
+      acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
     });
 
     // Enable the deterministic surface-determinism path — chip taps, slash
