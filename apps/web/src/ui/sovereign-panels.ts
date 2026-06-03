@@ -6,7 +6,7 @@
 // web-specific affordances (Fund sovereign onramp, top-up hint).
 
 import type { WebContext } from "../types";
-import { toMicro } from "@motebit/sdk";
+import { toMicro, ACCOUNT_BALANCE_AUDIENCE } from "@motebit/sdk";
 import { loadSyncUrl } from "../storage";
 import { fetchSolanaBalanceUsdc, openSovereignFundingFlow } from "./wallet-balance";
 import { setEmptyPulse } from "./empty-states";
@@ -93,6 +93,20 @@ async function bootstrapAnchor(syncUrl: string): Promise<TransparencyAnchor | un
 
 // --- Adapter ---
 
+// Audience binding is per-endpoint (relay CLAUDE.md rule 5 — a token minted
+// for one purpose is rejected by an endpoint expecting another). The balance
+// endpoint's `dualAuth` enforces `account:balance` (services/relay/middleware.ts);
+// a `sync`-audience token there fails verification → 401, which the controller
+// swallowed into a null balance → the panel showed a false `0.00` operating
+// balance even with funds in the relay ledger. Mint the audience the route
+// expects. Default stays `sync` (the general relay-state audience) for every
+// other path. Only canonical `TokenAudience` values appear here so
+// `check-audience-canonical` stays green.
+function audienceForPath(path: string): string {
+  if (path.includes("/balance")) return ACCOUNT_BALANCE_AUDIENCE;
+  return "sync";
+}
+
 // Web's sync auth is a rotating signed token minted per-call (`createSyncToken`).
 // The controller asks the adapter for `fetch(path, init)`; this closure mints
 // a fresh token on each request, dodging relay-side replay windows.
@@ -107,7 +121,7 @@ function createWebAdapter(ctx: WebContext): SovereignFetchAdapter {
     async fetch(path: string, init?: SovereignFetchInit) {
       const syncUrl = loadSyncUrl();
       if (!syncUrl) throw new Error("No relay URL configured");
-      const token = await ctx.app.createSyncToken();
+      const token = await ctx.app.createSyncToken(audienceForPath(path));
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         ...(init?.headers ?? {}),

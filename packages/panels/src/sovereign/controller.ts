@@ -498,17 +498,6 @@ export function createSovereignController(adapter: SovereignFetchAdapter): Sover
     }
   }
 
-  async function fetchBudget(): Promise<BudgetResponse | null> {
-    if (!adapter.syncUrl || !adapter.motebitId) return null;
-    try {
-      const res = await adapter.fetch(`/agent/${adapter.motebitId}/budget`);
-      if (!res.ok) return null;
-      return (await res.json()) as BudgetResponse;
-    } catch {
-      return null;
-    }
-  }
-
   async function fetchSuccession(): Promise<SuccessionResponse | null> {
     if (!adapter.syncUrl || !adapter.motebitId) return null;
     try {
@@ -559,16 +548,21 @@ export function createSovereignController(adapter: SovereignFetchAdapter): Sover
     patch({ loading: true, error: null });
 
     try {
-      const [credResult, goals, balance, budget, succession, sovereign, localIdentity] =
-        await Promise.all([
-          fetchCredentials(),
-          fetchGoals(),
-          fetchBalance(),
-          fetchBudget(),
-          fetchSuccession(),
-          fetchSovereignBalance(),
-          fetchLocalIdentity(),
-        ]);
+      // NOTE: budget allocations have no device-accessible relay producer.
+      // The old `/agent/:id/budget` endpoint was removed (it 404'd on every
+      // refresh); the balance endpoint carries `pending_allocations` but not
+      // the per-allocation list the `BudgetResponse` shape needs. So `budget`
+      // stays at its initial `null` — the Allocations UI renders its
+      // forward-framed empty register rather than firing a dead request.
+      // Re-add a fetch here only when a real allocations endpoint exists.
+      const [credResult, goals, balance, succession, sovereign, localIdentity] = await Promise.all([
+        fetchCredentials(),
+        fetchGoals(),
+        fetchBalance(),
+        fetchSuccession(),
+        fetchSovereignBalance(),
+        fetchLocalIdentity(),
+      ]);
 
       if (disposed) return;
 
@@ -577,7 +571,6 @@ export function createSovereignController(adapter: SovereignFetchAdapter): Sover
         revokedIds: credResult.revokedIds,
         goals,
         balance,
-        budget,
         succession,
         sovereignAddress: sovereign.address,
         sovereignBalanceUsdc: sovereign.usdc,

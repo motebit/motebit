@@ -16,7 +16,6 @@ import {
   type SovereignFetchInit,
   type CredentialEntry,
   type BalanceResponse,
-  type BudgetResponse,
   type SuccessionResponse,
   type GoalRow,
   type LedgerManifest,
@@ -97,13 +96,6 @@ const balanceFixture: BalanceResponse = {
   settlement_address: null,
 };
 
-const budgetFixture: BudgetResponse = {
-  motebit_id: "mb_test",
-  total_locked: 4.25,
-  total_settled: 10.0,
-  allocations: [],
-};
-
 const successionFixture: SuccessionResponse = {
   motebit_id: "mb_test",
   chain: [],
@@ -144,7 +136,6 @@ function allRelayHandlers(): Map<string, MockHandler> {
     ],
     ["/api/v1/goals/mb_test", { body: { goals: goalsFixture } }],
     ["/api/v1/agents/mb_test/balance", { body: balanceFixture }],
-    ["/agent/mb_test/budget", { body: budgetFixture }],
     ["/api/v1/agents/mb_test/succession", { body: successionFixture }],
   ]);
 }
@@ -164,7 +155,7 @@ describe("SovereignController — initial state", () => {
 });
 
 describe("SovereignController — refresh()", () => {
-  it("fetches all six endpoints in parallel", async () => {
+  it("fetches the live relay endpoints in parallel", async () => {
     const { adapter, calls } = createAdapter({
       handlers: allRelayHandlers(),
       getLocalCredentials: () => [localCred],
@@ -177,8 +168,10 @@ describe("SovereignController — refresh()", () => {
     expect(paths).toContain("/api/v1/credentials/batch-status");
     expect(paths).toContain("/api/v1/goals/mb_test");
     expect(paths).toContain("/api/v1/agents/mb_test/balance");
-    expect(paths).toContain("/agent/mb_test/budget");
     expect(paths).toContain("/api/v1/agents/mb_test/succession");
+    // The removed `/agent/:id/budget` endpoint must NOT be requested — it
+    // 404'd on every refresh. Allocations have no device-accessible producer.
+    expect(paths).not.toContain("/agent/mb_test/budget");
   });
 
   it("populates state with fetched data", async () => {
@@ -191,7 +184,8 @@ describe("SovereignController — refresh()", () => {
     const s = ctrl.getState();
 
     expect(s.balance).toEqual(balanceFixture);
-    expect(s.budget).toEqual(budgetFixture);
+    // Budget has no relay producer (dead endpoint dropped) — stays null.
+    expect(s.budget).toBeNull();
     expect(s.succession).toEqual(successionFixture);
     expect(s.credentials).toHaveLength(2);
     expect(s.revokedIds.has("cred-local-1")).toBe(true);
@@ -288,7 +282,7 @@ describe("SovereignController — refresh()", () => {
     const s = ctrl.getState();
     // Balance null, others populated, no error state.
     expect(s.balance).toBeNull();
-    expect(s.budget).toEqual(budgetFixture);
+    expect(s.budget).toBeNull();
     expect(s.error).toBeNull();
   });
 
