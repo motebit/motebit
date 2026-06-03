@@ -9,7 +9,7 @@ import type { PlatformAdapters, StreamChunk } from "../index";
 import type { StreamingProvider, AgenticChunk, TurnResult } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ExecutionReceipt, AgentTask } from "@motebit/sdk";
 import { TrustMode, BatteryMode, AgentTaskStatus, AgentTrustLevel } from "@motebit/sdk";
-import type { AgentServiceListing } from "@motebit/sdk";
+import type { AgentServiceListing, P2pPaymentProof } from "@motebit/sdk";
 import { generateKeypair } from "@motebit/encryption";
 import type { ServiceListingStoreAdapter } from "../index";
 
@@ -257,6 +257,101 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     expect(pollCount).toBeGreaterThanOrEqual(1);
     expect(result.ok).toBe(true);
     expect(result.data).toContain("motebit is a sovereign AI agent framework");
+  });
+
+  it("surfaces the onchain settlement fact in the tool result when the P2P branch engages", async () => {
+    // Inject a sovereign wallet (buildP2pPayment) + pinned relay key so the
+    // shared selectAndRunDelegation takes the P2P branch — the relay-mode tests
+    // above never reach it. The deferred integration test from
+    // federation_phase3_funding_arc: a SUCCESSFUL paid delegation must report
+    // the payment, not confabulate "settlement isn't active."
+    const runtime = new MotebitRuntime(
+      { motebitId: "alice-001", tickRateHz: 0 },
+      createAdapters(createMockProvider()),
+    );
+
+    const proof: P2pPaymentProof = {
+      tx_hash: "tx-p2p-test",
+      chain: "solana",
+      network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+      to_address: "BobWorkerAddr1111111111111111111111111111111",
+      amount_micro: 50_000, // worker net = $0.05
+      fee_to_address: "Treasury1111111111111111111111111111111111",
+      fee_amount_micro: 2_632, // 5% fee-on-top
+    };
+    const buildP2pPayment = vi.fn(async () => proof);
+    const receipt = fakeReceipt();
+
+    mockFetchHandler = async (url: string, init?: RequestInit) => {
+      if (url.includes("/api/v1/agents/discover")) {
+        return new Response(
+          JSON.stringify({
+            agents: [
+              {
+                motebit_id: "bob-worker",
+                settlement_address: "BobWorkerAddr1111111111111111111111111111111",
+                settlement_modes: "relay,p2p",
+                pricing: [{ capability: "web_search", unit_cost: 0.05 }],
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.includes("/p2p-eligibility")) {
+        return new Response(JSON.stringify({ allowed: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/agents/bob-worker/listing")) {
+        return new Response(
+          JSON.stringify({ pricing: [{ capability: "web_search", unit_cost: 0.05 }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.includes("/agent/alice-001/task") && init?.method === "POST") {
+        const body = JSON.parse(init.body as string) as Record<string, unknown>;
+        // P2P submission carries the pinned target + the proof under payment_proof.
+        expect(body.settlement_mode).toBe("p2p");
+        expect(body.target_agent).toBe("bob-worker");
+        expect((body.payment_proof as P2pPaymentProof).tx_hash).toBe("tx-p2p-test");
+        return new Response(JSON.stringify({ task_id: "p2p-task-1" }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/agent/alice-001/task/p2p-task-1")) {
+        return new Response(JSON.stringify({ task: { status: "completed" }, receipt }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async () => "test-token",
+      relayPublicKey: "07".repeat(32),
+      buildP2pPayment,
+      acknowledgeNoHistoryRisk: true,
+    });
+
+    const result = await runtime.getToolRegistry().execute("delegate_to_agent", {
+      prompt: "search the web for motebit",
+      required_capabilities: ["web_search"],
+    });
+
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+    // Worker answer stays primary…
+    expect(result.data).toContain("motebit is a sovereign AI agent framework");
+    // …and the payment fact is stated for the model to relay truthfully.
+    expect(result.data).toContain("peer-to-peer onchain");
+    expect(result.data).toContain("$0.050000");
+    expect(result.data).toContain("$0.002632");
+    expect(result.data).toContain("tx-p2p-test");
   });
 
   it("returns error on relay submission failure (402 insufficient budget)", async () => {

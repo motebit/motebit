@@ -8,8 +8,28 @@
 
 import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
 
-import { selectAndRunDelegation } from "./relay-delegation.js";
+import { selectAndRunDelegation, type DelegationSettlement } from "./relay-delegation.js";
+import { fromMicro } from "@motebit/protocol";
 import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
+
+/**
+ * Render the settlement fact as a sentence the model can relay verbatim. The
+ * AI loop reads the tool's `data` text; without an explicit payment statement
+ * it confabulated "settlement isn't active" on a SUCCESSFUL onchain payment.
+ * Typed-truth: state what actually moved, let the model report it.
+ */
+function formatSettlementNote(settlement: DelegationSettlement | undefined): string {
+  if (!settlement) return "";
+  if (settlement.mode === "relay") {
+    return "[settlement] Paid via the relay ledger (instant settlement).";
+  }
+  // P2P — onchain, paid by the delegator's own atomic transaction.
+  const paid =
+    settlement.paidMicro != null ? `$${fromMicro(settlement.paidMicro).toFixed(6)}` : "—";
+  const fee = settlement.feeMicro != null ? `$${fromMicro(settlement.feeMicro).toFixed(6)}` : "—";
+  const tx = settlement.txHash ? ` Transaction: ${settlement.txHash}.` : "";
+  return `[settlement] Paid ${paid} to the worker + ${fee} platform fee, peer-to-peer onchain.${tx}`;
+}
 
 /** ToolRegistry extended with `has()` — matches SimpleToolRegistry in MotebitRuntime. */
 interface ToolRegistryWithHas extends ToolRegistry {
@@ -227,7 +247,15 @@ export class InteractiveDelegationManager {
         // Stash receipt for handleAgentTask to drain into delegation_receipts
         stashReceipt(result.receipt);
 
-        return { ok: true, data: result.receipt.result ?? "Task completed (no result text)" };
+        // Surface the settlement fact so the model reports payment truthfully
+        // (it previously narrated "settlement isn't active" on a paid run). The
+        // worker's answer stays primary; the payment is a labeled footnote.
+        const workerResult = result.receipt.result ?? "Task completed (no result text)";
+        const settlementNote = formatSettlementNote(result.settlement);
+        return {
+          ok: true,
+          data: settlementNote ? `${workerResult}\n\n${settlementNote}` : workerResult,
+        };
       },
     );
 

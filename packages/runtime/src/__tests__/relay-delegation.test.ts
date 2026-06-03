@@ -174,6 +174,46 @@ describe("submitP2pDelegation", () => {
     if (result.ok) {
       expect(result.taskId).toBe("task-2");
       expect(result.receipt).toMatchObject({ result_hash: "rh" });
+      // The onchain settlement fact is attached from the submitted proof so the
+      // caller (and the AI loop) can report payment truthfully. paidMicro =
+      // worker net; feeMicro = the single-op fee leg; txHash = the proof's tx.
+      expect(result.settlement).toEqual({
+        mode: "p2p",
+        txHash: "tx-abc",
+        paidMicro: 500_000,
+        feeMicro: 26_316,
+      });
+    }
+  });
+
+  it("sums both fee legs into settlement.feeMicro for a federated 3-leg proof", async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { task_id: "task-fed" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { task: { status: "completed" }, receipt: { result_hash: "rh" } }),
+      );
+
+    // Federated proof carries the executor-relay (B) fee leg; settlement.feeMicro
+    // must be origin + executor fee, not just the origin leg.
+    const federatedProof: P2pPaymentProof = {
+      ...PROOF,
+      tx_hash: "tx-fed",
+      b_fee_to_address: "BTreasury1111111111111111111111111111111111",
+      b_fee_amount_micro: 25_000,
+    };
+    const promise = submitP2pDelegation({ ...baseParams(), paymentProof: federatedProof });
+    await vi.advanceTimersByTimeAsync(2100);
+    const result = await promise;
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.settlement).toEqual({
+        mode: "p2p",
+        txHash: "tx-fed",
+        paidMicro: 500_000,
+        feeMicro: 26_316 + 25_000,
+      });
     }
   });
 });

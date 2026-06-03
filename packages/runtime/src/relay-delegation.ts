@@ -111,8 +111,32 @@ export interface DelegationError {
   status?: number;
 }
 
+/**
+ * What actually settled — the money fact a successful delegation must carry so
+ * the caller (and the AI loop) can report payment truthfully instead of
+ * confabulating "settlement isn't active." Populated by the leaf submitters:
+ * `submitP2pDelegation` fills the onchain facts from the payment proof;
+ * `submitAndPollDelegation` marks `mode: "relay"` (the relay records the
+ * ledger movement internally — no client-visible tx). Typed-truth doctrine:
+ * the result states what happened, the prompt only teaches how to read it.
+ */
+export interface DelegationSettlement {
+  /** `p2p` = paid onchain in the delegator's atomic tx; `relay` = relay-ledger settlement. */
+  mode: "p2p" | "relay";
+  /** Onchain transaction signature (P2P only). */
+  txHash?: string;
+  /** Micro-units paid to the worker, net of fees (P2P only — the proof's `amount_micro`). */
+  paidMicro?: number;
+  /**
+   * Platform fee in micro-units (P2P only). Single-operator = the one fee leg;
+   * federated = origin-relay fee + executor-relay fee (`fee_amount_micro +
+   * b_fee_amount_micro`).
+   */
+  feeMicro?: number;
+}
+
 export type DelegationResult =
-  | { ok: true; receipt: ExecutionReceipt; taskId: string }
+  | { ok: true; receipt: ExecutionReceipt; taskId: string; settlement?: DelegationSettlement }
   | { ok: false; error: DelegationError };
 
 export interface SubmitAndPollParams {
@@ -292,7 +316,7 @@ export async function submitAndPollDelegation(
   // Poll until a receipt lands, the caller aborts, or the timeout elapses.
   // Shared with the P2P path (`submitP2pDelegation`) — the only difference
   // between the two flows is the submit body, never the poll.
-  return pollForReceipt({
+  const result = await pollForReceipt({
     syncUrl: params.syncUrl,
     motebitId: params.motebitId,
     taskId,
@@ -302,6 +326,10 @@ export async function submitAndPollDelegation(
     logger: params.logger,
     ...(params.signal ? { signal: params.signal } : {}),
   });
+  // Relay-mediated settlement — the relay records the ledger movement; there is
+  // no client-visible onchain tx. Mark the mode so the caller reports honestly
+  // ("settled via the relay ledger") rather than confabulating no settlement.
+  return result.ok ? { ...result, settlement: { mode: "relay" } } : result;
 }
 
 interface PollForReceiptArgs {
@@ -559,7 +587,7 @@ export async function submitP2pDelegation(
     };
   }
 
-  return pollForReceipt({
+  const result = await pollForReceipt({
     syncUrl: params.syncUrl,
     motebitId: params.motebitId,
     taskId,
@@ -569,6 +597,24 @@ export async function submitP2pDelegation(
     logger: params.logger,
     ...(params.signal ? { signal: params.signal } : {}),
   });
+  // Attach the onchain settlement fact from the proof we just submitted: the
+  // worker net (`amount_micro`), the platform fee (single-op = `fee_amount_micro`;
+  // federated = origin + executor fee legs), and the tx that paid them. The
+  // delegator already broadcast this atomically before submission, so these are
+  // settled facts, not a forecast.
+  if (result.ok) {
+    const proof = params.paymentProof;
+    return {
+      ...result,
+      settlement: {
+        mode: "p2p",
+        txHash: proof.tx_hash,
+        paidMicro: proof.amount_micro,
+        feeMicro: proof.fee_amount_micro + (proof.b_fee_amount_micro ?? 0),
+      },
+    };
+  }
+  return result;
 }
 
 /** Trivial hex → bytes (deterministic parse, no crypto/state/IO) — inlined per
