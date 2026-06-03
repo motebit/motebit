@@ -152,13 +152,15 @@
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "changeset publish",
-    "prepare": "husky"
+    "prepare": "husky",
+    "p2p-staging-proof": "tsx scripts/p2p-cold-start-staging-proof.ts"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
     "@changesets/changelog-github": "^0.6.0",
     "@changesets/cli": "^2.30.0",
     "@microsoft/api-extractor": "^7.58.2",
+    "@motebit/wallet-solana": "workspace:*",
     "@typescript-eslint/eslint-plugin": "^8.58.0",
     "@typescript-eslint/parser": "^8.58.0",
     "@vitest/coverage-v8": "^4.1.8",

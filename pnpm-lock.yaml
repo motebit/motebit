@@ -39,6 +39,9 @@ importers:
       '@microsoft/api-extractor':
         specifier: ^7.58.2
         version: 7.58.2(@types/node@22.19.11)
+      '@motebit/wallet-solana':
+        specifier: workspace:*
+        version: link:packages/wallet-solana
       '@typescript-eslint/eslint-plugin':
         specifier: ^8.58.0
         version: 8.58.0(@typescript-eslint/parser@8.58.0(eslint@8.57.1)(typescript@5.9.3))(eslint@8.57.1)(typescript@5.9.3)
