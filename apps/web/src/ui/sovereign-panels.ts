@@ -49,7 +49,11 @@ function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
-function truncate(text: string, max: number): string {
+function truncate(text: string | null | undefined, max: number): string {
+  // A render utility must never throw on partial/null data (CLAUDE.md UI
+  // doctrine — degrade honestly). Nullish in → empty out; callers that want
+  // a visible placeholder substitute their own ("—") before calling.
+  if (text == null) return "";
   if (text.length <= max) return text;
   return text.slice(0, max - 3) + "...";
 }
@@ -1017,7 +1021,12 @@ function renderSuccession(
 
   const idValue = document.createElement("div");
   idValue.className = "sov-hero-value-code";
-  idValue.textContent = truncate(data.current_public_key, 32);
+  // The relay returns `current_public_key: null` for a motebit with no
+  // `agent_registry` row (a sovereign wallet that paired for sync but never
+  // registered as a discoverable agent — the common web case). Fall back to
+  // the locally-known signing key, then "—". Never feed null to `truncate`.
+  const currentKey = data.current_public_key ?? state.localIdentity?.publicKeyHex ?? null;
+  idValue.textContent = currentKey ? truncate(currentKey, 32) : "—";
   idBody.appendChild(idValue);
 
   const idSubtitle = document.createElement("div");

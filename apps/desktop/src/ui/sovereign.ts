@@ -61,7 +61,13 @@ function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
-function truncate(text: string, max: number): string {
+function truncate(text: string | null | undefined, max: number): string {
+  // A render utility must never throw on partial/null data — nullish in,
+  // empty out. The relay returns `current_public_key: null` for an
+  // unregistered-as-agent motebit; an unguarded `null.length` here crashed
+  // the web sibling's Sovereign panel. Callers substitute "—" when they want
+  // a visible placeholder.
+  if (text == null) return "";
   if (text.length <= max) return text;
   return text.slice(0, max - 3) + "...";
 }
@@ -690,7 +696,7 @@ function renderSuccession(state: SovereignState, hasRelay: boolean): void {
       <span style="font-weight:600;">Genesis key:</span> <code style="font-size:10px;">${escapeHtml(truncate(genesisKey, 24))}</code>
     </div>
     <div style="font-size:11px;color:var(--text-ghost);">
-      <span style="font-weight:600;">Current key:</span> <code style="font-size:10px;">${escapeHtml(truncate(data.current_public_key, 24))}</code>
+      <span style="font-weight:600;">Current key:</span> <code style="font-size:10px;">${data.current_public_key ? escapeHtml(truncate(data.current_public_key, 24)) : "—"}</code>
     </div>
   `;
   successionContent.appendChild(summary);

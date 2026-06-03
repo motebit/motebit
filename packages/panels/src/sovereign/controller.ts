@@ -101,7 +101,15 @@ export interface KeySuccessionEntry {
 export interface SuccessionResponse {
   motebit_id: string;
   chain: KeySuccessionEntry[];
-  current_public_key: string;
+  // Nullable: the relay returns `null` when the motebit has no row in
+  // `agent_registry` (e.g. a sovereign wallet that paired for sync but
+  // never registered as a discoverable agent). The previous `string`
+  // type was a lie the renderers trusted — `truncate(null, …)` then
+  // threw `Cannot read properties of null (reading 'length')`, crashing
+  // the Sovereign panel on refresh. Honest type forces every renderer to
+  // handle the null (typed-truth doctrine). See key-rotation.ts:198
+  // (`agent?.public_key ?? null`).
+  current_public_key: string | null;
 }
 
 // ── Adapter ───────────────────────────────────────────────────────────

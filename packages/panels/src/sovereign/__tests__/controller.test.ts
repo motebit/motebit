@@ -200,6 +200,23 @@ describe("SovereignController — refresh()", () => {
     expect(s.error).toBeNull();
   });
 
+  it("accepts a null current_public_key (motebit not in agent_registry)", async () => {
+    // The relay returns `current_public_key: null` for a sovereign wallet
+    // that paired for sync but never registered as a discoverable agent
+    // (key-rotation.ts: `agent?.public_key ?? null`). The wire type is
+    // nullable; renderers must guard it. Locking the reality here so the
+    // honest `string | null` type can't silently regress to `string`.
+    const handlers = allRelayHandlers();
+    handlers.set("/api/v1/agents/mb_test/succession", {
+      body: { motebit_id: "mb_test", chain: [], current_public_key: null },
+    });
+    const { adapter } = createAdapter({ handlers });
+    const ctrl = createSovereignController(adapter);
+    await ctrl.refresh();
+    expect(ctrl.getState().succession?.current_public_key).toBeNull();
+    expect(ctrl.getState().error).toBeNull();
+  });
+
   it("filters goals to completed/failed only", async () => {
     const { adapter } = createAdapter({ handlers: allRelayHandlers() });
     const ctrl = createSovereignController(adapter);
