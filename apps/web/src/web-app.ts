@@ -105,6 +105,7 @@ import {
   type PairingSession,
   type PairingStatus,
   type SyncStatus,
+  type CredentialSource,
 } from "@motebit/sync-engine";
 import {
   registerBrowserSafeBuiltins,
@@ -3373,11 +3374,24 @@ export class UnbootedWebApp {
     // Future peer-attestation flow is the correct surface for routing
     // aggregation per spec §3.4.
 
+    // Fresh-token credential source — re-mints the signed sync token PER
+    // REQUEST (HTTP) / per connect (WS). The `token` above is a 5-minute JWT;
+    // handing that static string to the long-lived sync adapters meant a
+    // session open >5 min reused an expired token and the relay 403'd every
+    // /sync call (AUTHZ_DEVICE_NOT_AUTHORIZED — an expired signature reads as
+    // "device not authorized"). The adapters resolve a credentialSource on
+    // each request, so it never goes stale. (The AI-loop delegation path
+    // already uses a fresh provider — `delegationAuthToken` below — so this is
+    // the data-sync gap specifically, not the delegation path.)
+    const syncCredentialSource: CredentialSource = {
+      getCredential: () => this.createSyncToken("sync"),
+    };
+
     // Build adapter stack: HTTP → Encrypted HTTP → WS → Encrypted WS
     const httpAdapter = new HttpEventStoreAdapter({
       baseUrl: relayUrl,
       motebitId: this._motebitId,
-      authToken: token,
+      credentialSource: syncCredentialSource,
     });
     const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
 
@@ -3391,18 +3405,21 @@ export class UnbootedWebApp {
     const wsAdapter = new WebSocketEventStoreAdapter({
       url: wsUrl,
       motebitId: this._motebitId,
-      authToken: token,
+      credentialSource: syncCredentialSource,
       capabilities: [DeviceCapability.HttpMcp],
       httpFallback: encryptedHttp,
       localStore: localEventStore ?? undefined,
     });
     this._wsAdapter = wsAdapter;
 
-    // Wire delegation adapter so PlanEngine can delegate steps to capable devices
+    // Wire delegation adapter so PlanEngine can delegate steps to capable
+    // devices. Same staleness fix: a fresh-token provider that re-mints per
+    // call, honoring the requested audience (defaults to the prior "sync").
     const delegationAdapter = new RelayDelegationAdapter({
       syncUrl: relayUrl,
       motebitId: this._motebitId,
-      authToken: token ?? undefined,
+      authToken: (audience?: string) =>
+        this.createSyncToken(audience ?? "sync").then((t) => t ?? ""),
       sendRaw: (data: string) => wsAdapter.sendRaw(data),
       onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
       getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
