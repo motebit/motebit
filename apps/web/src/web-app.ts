@@ -628,9 +628,15 @@ export class UnbootedWebApp {
       // else. Re-attempting at next bootstrap.
     }
 
-    // Solana RPC endpoint. Default to mainnet-beta public RPC (rate-limited
-    // ~5 req/s, free, fine for the MVP since we only call getBalance()
-    // occasionally). Override at build time via VITE_SOLANA_RPC_URL.
+    // Solana RPC endpoint. The public `api.mainnet-beta.solana.com` is a
+    // BROWSER DEAD-END: it 403s cross-origin browser requests, so it can read
+    // neither the sovereign balance nor broadcast the P2P payment tx — every
+    // onchain op from the web surface needs a browser-capable (CORS-enabled)
+    // provider. Set VITE_SOLANA_RPC_URL to a real endpoint (Helius/Triton/
+    // QuickNode — free tiers allow browser origins) in any deployment that
+    // does onchain work. The default is kept only as a last-resort fallback;
+    // when it fails, the balance read surfaces "—"/Couldn't refresh (never a
+    // false $0 — see fetchSolanaBalanceUsdc), and onchain sends error loudly.
     const env = (import.meta as { env?: Record<string, string | undefined> }).env;
     const solanaRpcUrl = env?.VITE_SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 

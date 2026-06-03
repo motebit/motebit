@@ -228,6 +228,12 @@ export interface SovereignState {
   budget: BudgetResponse | null;
   sovereignAddress: string | null;
   sovereignBalanceUsdc: number | null;
+  // True when the onchain balance read FAILED (RPC unreachable), distinct
+  // from `sovereignBalanceUsdc: null` meaning unfunded/no-wallet. The render
+  // shows "—" + a retry on error, and a substrate-honest `0.00` only when
+  // there's a wallet, no error, and no balance yet. Never assert a zero you
+  // didn't read.
+  sovereignBalanceError: boolean;
   goals: GoalRow[];
   ledgerDetails: ReadonlyMap<string, LedgerManifest>;
   succession: SuccessionResponse | null;
@@ -261,6 +267,7 @@ function initialState(): SovereignState {
     budget: null,
     sovereignAddress: null,
     sovereignBalanceUsdc: null,
+    sovereignBalanceError: false,
     goals: [],
     ledgerDetails: new Map(),
     succession: null,
@@ -508,14 +515,21 @@ export function createSovereignController(adapter: SovereignFetchAdapter): Sover
   async function fetchSovereignBalance(): Promise<{
     address: string | null;
     usdc: number | null;
+    error: boolean;
   }> {
     const address = adapter.getSolanaAddress();
-    if (!address) return { address: null, usdc: null };
+    if (!address) return { address: null, usdc: null, error: false };
     try {
       const micro = await adapter.getSolanaBalanceMicro();
-      return { address, usdc: micro != null ? fromMicro(Number(micro)) : null };
+      return { address, usdc: micro != null ? fromMicro(Number(micro)) : null, error: false };
     } catch {
-      return { address, usdc: null };
+      // Read failure (e.g. an RPC the browser can't reach) — do NOT collapse
+      // to `usdc: null`, which the renderer shows as a substrate-honest
+      // `0.00`. A balance we couldn't read is unknown, not zero. Surface it
+      // as `error: true` so the surface renders "—" + a retry, never a false
+      // $0. Per CLAUDE.md rule 5: errors surface as state, prior-good intact
+      // (the address still renders; only the amount slot reads "—").
+      return { address, usdc: null, error: true };
     }
   }
 
@@ -559,6 +573,7 @@ export function createSovereignController(adapter: SovereignFetchAdapter): Sover
         succession,
         sovereignAddress: sovereign.address,
         sovereignBalanceUsdc: sovereign.usdc,
+        sovereignBalanceError: sovereign.error,
         localIdentity,
         loading: false,
       });

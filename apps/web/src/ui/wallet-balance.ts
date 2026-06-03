@@ -15,8 +15,20 @@ import { loadSyncUrl } from "../storage";
 
 /**
  * Fetch the motebit's onchain USDC balance via RPC through the runtime.
- * Returns null when the runtime has no wallet configured or the RPC call
- * fails — callers should render "—" in that case (fail-quiet, not loud).
+ *
+ * Returns null ONLY when there is genuinely no wallet to read (no runtime,
+ * no derived address, or no sovereign rail configured) — that null is the
+ * honest "no wallet" signal. An RPC failure (e.g. the public mainnet
+ * endpoint 403-ing the browser) is NOT swallowed: it throws, so the caller
+ * can surface "couldn't refresh" rather than a false `0.00`.
+ *
+ * Money-surface rule: never assert a balance you didn't actually read. The
+ * Sovereign panel reads a `null` here as "unfunded → 0.00 USDC"; turning an
+ * unreachable RPC into that null is a lie in the dangerous direction (the
+ * user funded $2 and the panel said $0). So the only contract is:
+ *   - no wallet            → null  (panel: "no wallet configured")
+ *   - RPC/read failure      → throw (panel: "—" + "Couldn't refresh")
+ *   - read succeeded        → the USDC amount
  */
 export async function fetchSolanaBalanceUsdc(
   runtime: ReturnType<WebContext["app"]["getRuntime"]>,
@@ -24,15 +36,14 @@ export async function fetchSolanaBalanceUsdc(
   if (!runtime) return null;
   const address = runtime.getSolanaAddress?.() ?? null;
   if (!address) return null;
-  try {
-    const microUsdc = await runtime.getSolanaBalance?.();
-    if (microUsdc == null) return null;
-    // USDC is 6-decimal native; display resolution is 2 decimals elsewhere,
-    // but we return the exact value so callers can format as they wish.
-    return Number(microUsdc) / 1_000_000;
-  } catch {
-    return null;
-  }
+  // No try/catch: `runtime.getSolanaBalance()` returns null when there is no
+  // sovereign rail (genuine "no wallet") and THROWS on RPC failure. Let the
+  // throw propagate so the failure is visible instead of masquerading as $0.
+  const microUsdc = await runtime.getSolanaBalance?.();
+  if (microUsdc == null) return null;
+  // USDC is 6-decimal native; display resolution is 2 decimals elsewhere,
+  // but we return the exact value so callers can format as they wish.
+  return Number(microUsdc) / 1_000_000;
 }
 
 /**

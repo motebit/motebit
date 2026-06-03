@@ -480,8 +480,15 @@ function renderBudget(
   // instead of "you have $0" (the lie in the wrong direction). The
   // mirror of the succession-tab error row, narrowed to the cold-load
   // path where the substrate-honest default would mislead.
+  // A balance is "unknown" (show "—" + retry) when either the whole refresh
+  // tripped `state.error` on a cold load, OR the onchain balance read itself
+  // failed (`sovereignBalanceError` — e.g. the browser's Solana RPC 403-ing).
+  // The latter is the load-bearing case: without it, an unreachable RPC reads
+  // as a false `0.00` (the lie that told the user their funded wallet was empty).
   const balancesFailedToLoad =
-    state.error != null && state.balance == null && state.sovereignBalanceUsdc == null;
+    (state.error != null || state.sovereignBalanceError) &&
+    state.balance == null &&
+    state.sovereignBalanceUsdc == null;
   if (balancesFailedToLoad) {
     const errorRow = document.createElement("div");
     errorRow.className = "sov-error-row";
@@ -524,11 +531,13 @@ function renderBudget(
   } else if (sovereignAddress) {
     const sovValue = document.createElement("div");
     sovValue.className = "sov-hero-value";
-    if (balancesFailedToLoad) {
+    if (balancesFailedToLoad || state.sovereignBalanceError) {
       // Failure-explicit: refresh tried, refresh couldn't. "—" here
-      // is paired with the error row above; reading them together
       // resolves cleanly to "we don't know" instead of the lie
-      // "$0.00" would tell when the actual balance is unknown.
+      // "$0.00" would tell when the actual balance is unknown. Keyed
+      // on `sovereignBalanceError` directly (not just the cold-load
+      // `balancesFailedToLoad`) so a failed onchain read shows "—"
+      // even when the relay operating balance loaded fine.
       sovValue.textContent = "—";
     } else {
       // Substrate-honest default: an unfunded motebit IS at $0

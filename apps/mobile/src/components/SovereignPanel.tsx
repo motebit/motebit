@@ -194,6 +194,7 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
     budget: null,
     sovereignAddress: null,
     sovereignBalanceUsdc: null,
+    sovereignBalanceError: false,
     goals: [],
     ledgerDetails: new Map(),
     succession: null,
@@ -617,7 +618,7 @@ function BudgetHeader(props: {
     onFundSovereign,
     fundingInFlight,
   } = props;
-  const { balance, budget, sovereignAddress, sovereignBalanceUsdc } = state;
+  const { balance, budget, sovereignAddress, sovereignBalanceUsdc, sovereignBalanceError } = state;
 
   const effectiveAddress = balance?.settlement_address ?? sovereignAddress;
   const thresholdDollars = balance?.sweep_threshold ?? null;
@@ -631,9 +632,13 @@ function BudgetHeader(props: {
           <Text style={styles.balanceAmount}>
             {sovereignBalanceUsdc != null
               ? sovereignBalanceUsdc.toFixed(2)
-              : sovereignAddress
-                ? "…"
-                : "—"}
+              : !sovereignAddress
+                ? "—"
+                : // Read failed (RPC unreachable) → "—", not a perpetual "…"
+                  // that hides the failure. Sibling of web/desktop.
+                  sovereignBalanceError
+                  ? "—"
+                  : "…"}
           </Text>
           <Text style={styles.balanceCurrency}>{sovereignAddress ? "USDC" : ""}</Text>
         </View>

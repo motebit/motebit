@@ -423,9 +423,13 @@ function renderBudget(
   const sovText =
     state.sovereignBalanceUsdc != null
       ? `${state.sovereignBalanceUsdc.toFixed(2)} USDC`
-      : hasWallet
-        ? "Loading\u2026"
-        : "\u2014";
+      : !hasWallet
+        ? "\u2014"
+        : // Read failed (e.g. RPC unreachable) \u2192 "\u2014", never a perpetual
+          // "Loading\u2026" that hides the failure. Sibling of apps/web's "\u2014".
+          state.sovereignBalanceError
+          ? "\u2014"
+          : "Loading\u2026";
   sovRow.innerHTML = `
     <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-faint);">Sovereign reserve</div>
     <div style="font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--text-heading);">${sovText}</div>

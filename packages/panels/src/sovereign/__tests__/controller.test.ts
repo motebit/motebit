@@ -229,6 +229,27 @@ describe("SovereignController — refresh()", () => {
     await ctrl.refresh();
     expect(ctrl.getState().sovereignAddress).toBe("SoLaNaAddr123");
     expect(ctrl.getState().sovereignBalanceUsdc).toBe(5);
+    expect(ctrl.getState().sovereignBalanceError).toBe(false);
+  });
+
+  it("surfaces a balance-read failure as error, never a false zero", async () => {
+    // RPC unreachable (e.g. the browser's Solana endpoint 403-ing). The read
+    // THROWS — the controller must NOT collapse it to `usdc: 0`/null-as-zero;
+    // it sets `sovereignBalanceError` so the surface renders "—", not "$0".
+    // Money-surface rule: never assert a balance you didn't read.
+    const { adapter } = createAdapter({
+      handlers: allRelayHandlers(),
+      getSolanaAddress: () => "SoLaNaAddr123",
+      getSolanaBalanceMicro: async () => {
+        throw new Error("403 Forbidden");
+      },
+    });
+    const ctrl = createSovereignController(adapter);
+    await ctrl.refresh();
+    const s = ctrl.getState();
+    expect(s.sovereignAddress).toBe("SoLaNaAddr123"); // address still renders
+    expect(s.sovereignBalanceUsdc).toBeNull(); // unknown, NOT zero
+    expect(s.sovereignBalanceError).toBe(true); // → surface shows "—" + retry
   });
 
   it("leaves sovereign balance null when address is absent", async () => {
@@ -237,6 +258,8 @@ describe("SovereignController — refresh()", () => {
     await ctrl.refresh();
     expect(ctrl.getState().sovereignAddress).toBeNull();
     expect(ctrl.getState().sovereignBalanceUsdc).toBeNull();
+    // No wallet is NOT a read error — distinct from the RPC-failure case.
+    expect(ctrl.getState().sovereignBalanceError).toBe(false);
   });
 
   it("tolerates individual endpoint failures without throwing", async () => {
