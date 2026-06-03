@@ -923,6 +923,11 @@ export interface WebLLMProviderSpec {
     temperature?: number;
 }
 
+// @public
+export function wordFingerprint(publicKeyHex: string, opts?: {
+    words?: number;
+}): string;
+
 
 export * from "@motebit/protocol";
 

@@ -204,8 +204,8 @@ what keeps the cost from eating the property it paid for.
   colorblindness (~8% of men). **Bound:** the fingerprint stays primary for any
   trust-bearing decision (the UI enforces this, not just the prose); the sigil is
   tuned for discrimination at the _smallest_ render size with a colorblind-safe
-  primary axis; pair it with a word-pair fingerprint (BIP-39-style) — humans
-  compare words far better than abstract shapes. Note also: a key-derived face
+  primary axis; pair it with the word-pair fingerprint (`wordFingerprint`, BIP-39)
+  — humans compare words far better than abstract shapes. Note also: a key-derived face
   cannot disambiguate _your own_ petname collisions ("Scout" vs "Scott"), and
   deterministic art from arbitrary keys is unmoderatable without breaking
   determinism — both are recognition limits, not identity proofs.
@@ -239,13 +239,35 @@ what keeps the cost from eating the property it paid for.
   invariant holds, but it must be _demonstrated_ on spatial + CLI before the
   cross-surface choreography hardens — prove the check can be cashed.
 
-- **Sequencing — the meta-gotcha.** Writing this doctrine now is cheap and correct
-  (it prevents drift while the design is fresh). _Implementing_ it is real feature
-  work that sits _after_ "external users" in motebit's own build order
-  ([`identity-universal-boundary.md`](identity-universal-boundary.md)). **Bound:**
-  gate the build on a concrete consumer (the live demo needs it, or a builder asks)
-  — not on the design merely feeling resolved. Architecture is more comfortable
-  than distribution; this section exists partly to name that.
+- **Sequencing — and which rules survive AI-native development.** The first
+  temptation is to gate on labor: "don't build it until forced; building is
+  expensive." That premise is dead — an agent ships a tested implementation
+  cheaply, and motebit's own `feedback_endgame_not_mvp` already ruled it: _"defer
+  only when semantics are unforced or validation is impossible, not when coding is
+  expensive… build the seam AND the first implementation, not just the seam."_ A
+  param-only seam with nothing rendering it is therefore the anti-pattern, not the
+  discipline. **Bound — the real gate is three non-labor axes, never cost:**
+  (1) _forced design_ — build only what has a frozen contract or an adopted
+  standard; an undecided design (the §5 hire-as-act fork) must not be cheaply
+  committed across surfaces, because AI makes a wrong default arrive faster and
+  look more finished. (2) _reversibility_ — a frozen public artifact (a minted
+  wordlist, a semver-locked renderer family) earns extra scrutiny; getting it wrong
+  fast is worse than not having it. (3) _attention / strategy_ — the bottleneck is
+  distribution, not construction; cheap building grows the comfortable thing while
+  the hard thing (a real builder asking) stays exactly as hard. So: "cheap to
+  build" is no reason to build (`feedback_cheap_is_not_a_reason`) **and** "expensive
+  to build" is no reason to defer (`feedback_endgame_not_mvp`) — build the
+  forced-and-reversible, hold the unforced-or-irreversible. Architecture is more
+  comfortable than distribution; this section exists partly to name that.
+
+**State (as of this writing).** Shipped under the gate above: the Ring-1 sigil
+params (`deriveAgentSigil`, `oklchToRgb`, `shortFingerprint`) and the
+human-comparable `wordFingerprint` (BIP-39, SHA-256-verified — adopted, not
+minted) in `@motebit/sdk`; one reference web SVG renderer (`apps/web`, unwired)
+that makes the mark observable and validates the param shape on a real screen.
+Held — unforced or irreversible: the cross-surface renderer set and the
+Agents-panel wiring (the §5 open fork), and the petname field. These ship when a
+concrete consumer pulls (the live demo, or a builder), not before.
 
 ---
 

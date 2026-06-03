@@ -31,11 +31,13 @@
  * density / `geometrySeed`) carry independent entropy and stay discriminable
  * under color-vision deficiency.
  *
- * (A human-comparable word-pair fingerprint, BIP-39-style, is the complementary
- * recognition aid named in the doctrine bound; it needs a curated wordlist and
- * is deferred to its own primitive. {@link shortFingerprint} is the authority
- * anchor available now.)
+ * For a human-comparable recognition aid, {@link wordFingerprint} renders the key
+ * as BIP-39 words (humans compare words far better than abstract shapes) — the
+ * doctrine bound. Both {@link shortFingerprint} and {@link wordFingerprint} are
+ * recognition aids; the full key / signed receipts stay the authority.
  */
+
+import { BIP39_WORDLIST } from "./bip39-wordlist.js";
 
 /** A color in the OKLCH perceptually-uniform space. */
 export interface OklchColor {
@@ -209,4 +211,33 @@ export function shortFingerprint(
   const head = opts?.head ?? 6;
   const tail = opts?.tail ?? 6;
   return `${s.slice(0, head)}…${s.slice(s.length - tail)}`;
+}
+
+/**
+ * A human-comparable word fingerprint of the public key — BIP-39 words derived
+ * from the key (e.g. `amber-tide-quiet-orbit`). Humans compare words far better
+ * than abstract shapes or hex, so this is the doctrine's "word-pair" recognition
+ * aid. Like {@link shortFingerprint} it is a recognition aid, never proof — the
+ * full key / signed receipts stay the authority.
+ *
+ * Uses the canonical, SHA-256-verified BIP-39 English wordlist (a frozen public
+ * standard, adopted not minted per the metabolic principle), so the key→words
+ * mapping never drifts. Each word carries 11 bits; the stream is salted distinctly
+ * from the sigil's so the two recognition aids do not correlate.
+ *
+ * @param publicKeyHex - 64-char hex Ed25519 public key (case-insensitive).
+ * @param opts.words - how many words (default 4; the doctrine's "pair" is the
+ *   2-word minimum).
+ * @throws if the input is not a 64-char hex string, or `words` is not in `1..24`.
+ */
+export function wordFingerprint(publicKeyHex: string, opts?: { words?: number }): string {
+  const key = normalizePublicKey(publicKeyHex);
+  const words = opts?.words ?? 4;
+  if (!Number.isInteger(words) || words < 1 || words > 24) {
+    throw new Error("identity-sigil: words must be an integer in 1..24");
+  }
+  const hash = xmur3(`word-fingerprint:${key}`);
+  const out: string[] = [];
+  for (let i = 0; i < words; i++) out.push(BIP39_WORDLIST[hash() & 0x7ff]!);
+  return out.join("-");
 }

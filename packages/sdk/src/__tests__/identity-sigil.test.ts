@@ -3,9 +3,11 @@ import {
   deriveAgentSigil,
   oklchToRgb,
   shortFingerprint,
+  wordFingerprint,
   type AgentSigil,
   type OklchColor,
 } from "../identity-sigil.js";
+import { BIP39_WORDLIST } from "../bip39-wordlist.js";
 
 const KEY_A = "a".repeat(64);
 const KEY_B = "b".repeat(64);
@@ -168,6 +170,49 @@ describe("shortFingerprint", () => {
 
   it("is case-insensitive (normalizes to lowercase)", () => {
     expect(shortFingerprint(KEY_A.toUpperCase())).toBe(shortFingerprint(KEY_A));
+  });
+});
+
+describe("wordFingerprint", () => {
+  it("is deterministic and case-insensitive", () => {
+    expect(wordFingerprint(KEY_A)).toBe(wordFingerprint(KEY_A));
+    expect(wordFingerprint(KEY_A.toUpperCase())).toBe(wordFingerprint(KEY_A));
+  });
+
+  it("defaults to 4 words, all from the BIP-39 list", () => {
+    const fp = wordFingerprint(KEY_A);
+    const parts = fp.split("-");
+    expect(parts).toHaveLength(4);
+    const set = new Set(BIP39_WORDLIST);
+    for (const w of parts) expect(set.has(w)).toBe(true);
+  });
+
+  it("honors a custom word count (incl. the doctrine's 2-word 'pair')", () => {
+    expect(wordFingerprint(KEY_A, { words: 2 }).split("-")).toHaveLength(2);
+    expect(wordFingerprint(KEY_A, { words: 8 }).split("-")).toHaveLength(8);
+  });
+
+  it("is decorrelated from the sigil stream (salted) and distinct across keys", () => {
+    const fps = new Set<string>();
+    for (let i = 0; i < 500; i++) fps.add(wordFingerprint(keyFromSeed(i)));
+    // near-zero collisions over 500 keys at 4 words (44 bits)
+    expect(fps.size).toBe(500);
+  });
+
+  it("throws on out-of-range or non-integer word counts", () => {
+    for (const n of [0, -1, 25, 1.5]) {
+      expect(() => wordFingerprint(KEY_A, { words: n })).toThrow(/words must be/);
+    }
+  });
+});
+
+describe("BIP-39 wordlist integrity", () => {
+  it("is the canonical 2048-word list with unique entries", () => {
+    expect(BIP39_WORDLIST).toHaveLength(2048);
+    expect(new Set(BIP39_WORDLIST).size).toBe(2048);
+    // canonical anchors: first and last words of the frozen standard
+    expect(BIP39_WORDLIST[0]).toBe("abandon");
+    expect(BIP39_WORDLIST[2047]).toBe("zoo");
   });
 });
 
