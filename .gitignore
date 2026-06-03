@@ -78,3 +78,6 @@ services/*/data/
 
 # Turborepo
 .turbo
+
+# devnet rehearsal local state (keys + mint — devnet-only, valueless, but never commit)
+.devnet-rehearsal/

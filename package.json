@@ -161,6 +161,8 @@
     "@changesets/cli": "^2.30.0",
     "@microsoft/api-extractor": "^7.58.2",
     "@motebit/wallet-solana": "workspace:*",
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.95.0",
     "@typescript-eslint/eslint-plugin": "^8.58.0",
     "@typescript-eslint/parser": "^8.58.0",
     "@vitest/coverage-v8": "^4.1.8",
