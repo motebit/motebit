@@ -264,10 +264,15 @@ what keeps the cost from eating the property it paid for.
 params (`deriveAgentSigil`, `oklchToRgb`, `shortFingerprint`) and the
 human-comparable `wordFingerprint` (BIP-39, SHA-256-verified — adopted, not
 minted) in `@motebit/sdk`; one reference web SVG renderer (`apps/web`, unwired)
-that makes the mark observable and validates the param shape on a real screen.
-Held — unforced or irreversible: the cross-surface renderer set and the
-Agents-panel wiring (the §5 open fork), and the petname field. These ship when a
-concrete consumer pulls (the live demo, or a builder), not before.
+that makes the mark observable; and the first-person **petname data field**
+(`AgentTrustRecord.petname`, local-only — never on the wire — with
+`runtime.setAgentPetname`) — forced and reversible, so the data primitive ships
+even though no UI consumes it yet. Held — unforced or surface-committing: the
+cross-surface renderer set and the Agents-panel wiring (the §5 open fork), the
+petname **UI** (editing / showing it), and petname **auto-suggestion** (the §3
+pincer — gate any auto-suggest behind earned trust, never adopt the self-asserted
+name at discovery). These ship when a concrete consumer pulls (the live demo, or
+a builder), not before.
 
 ---
 

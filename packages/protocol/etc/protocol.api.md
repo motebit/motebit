@@ -215,6 +215,7 @@ export interface AgentTrustRecord {
     motebit_id: MotebitId;
     // (undocumented)
     notes?: string;
+    petname?: string;
     // (undocumented)
     public_key?: string;
     quality_sample_count?: number;
@@ -643,6 +644,12 @@ export interface CollaborativeReceipt {
 
 // @public
 export function composeTrustChain(scores: number[]): number;
+
+// @public
+export function computeFederatedFeeSplit(budgetMicro: number, feeRate: number): FederatedFeeSplit;
+
+// @public
+export function computeP2pFeeMicro(netCostMicro: number, feeRate: number): number;
 
 // @alpha
 export const COMPUTER_ACTION_KINDS: readonly ["screenshot", "cursor_position", "click", "double_click", "mouse_move", "drag", "type", "key", "scroll", "navigate", "click_element", "focus_element", "type_into"];
@@ -1615,6 +1622,13 @@ export interface ExecutionTimelineEntry {
 
 // @public (undocumented)
 export type ExecutionTimelineType = "goal_started" | "plan_created" | "step_started" | "tool_invoked" | "tool_result" | "step_completed" | "step_failed" | "step_delegated" | "plan_completed" | "plan_failed" | "goal_completed" | "proposal_created" | "proposal_accepted" | "proposal_rejected" | "proposal_countered" | "collaborative_step_completed";
+
+// @public
+export interface FederatedFeeSplit {
+    executorFeeMicro: number;
+    originFeeMicro: number;
+    workerNetMicro: number;
+}
 
 // @public
 export interface FederationGraphAnchor {
@@ -3349,6 +3363,17 @@ export interface SolvencyProof {
 }
 
 // @public
+export interface SovereignP2pPaymentRequest {
+    amountMicro: number;
+    executorFeeAmountMicro?: number;
+    executorTreasuryAddress?: string;
+    feeAmountMicro: number;
+    network?: string;
+    treasuryAddress: string;
+    workerAddress: string;
+}
+
+// @public
 export interface SovereignRail extends SettlementRail {
     readonly address: string;
     readonly asset: SettlementAsset;
@@ -3365,8 +3390,9 @@ export interface SovereignSendResult {
     slot: number;
 }
 
-// @public
+// @public (undocumented)
 export interface SovereignWalletRail extends SovereignRail {
+    buildP2pPayment?(request: SovereignP2pPaymentRequest): Promise<P2pPaymentProof>;
     isAvailable(): Promise<boolean>;
     send(toAddress: string, microAmount: bigint): Promise<SovereignSendResult>;
 }

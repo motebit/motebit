@@ -2293,6 +2293,7 @@ interface AgentTrustRow {
   successful_tasks: number;
   failed_tasks: number;
   notes: string | null;
+  petname: string | null;
 }
 
 function rowToAgentTrust(row: AgentTrustRow): AgentTrustRecord {
@@ -2307,6 +2308,7 @@ function rowToAgentTrust(row: AgentTrustRow): AgentTrustRecord {
     successful_tasks: row.successful_tasks ?? 0,
     failed_tasks: row.failed_tasks ?? 0,
     notes: row.notes ?? undefined,
+    petname: row.petname ?? undefined,
   };
 }
 
@@ -2322,8 +2324,8 @@ export class SqliteAgentTrustStore {
     );
     this.stmtSet = db.prepare(
       `INSERT OR REPLACE INTO agent_trust
-       (motebit_id, remote_motebit_id, trust_level, public_key, first_seen_at, last_seen_at, interaction_count, successful_tasks, failed_tasks, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (motebit_id, remote_motebit_id, trust_level, public_key, first_seen_at, last_seen_at, interaction_count, successful_tasks, failed_tasks, notes, petname)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtList = db.prepare(
       `SELECT * FROM agent_trust WHERE motebit_id = ? ORDER BY last_seen_at DESC`,
@@ -2354,6 +2356,7 @@ export class SqliteAgentTrustStore {
       record.successful_tasks ?? 0,
       record.failed_tasks ?? 0,
       record.notes ?? null,
+      record.petname ?? null,
     );
   }
 

@@ -110,6 +110,20 @@ describe("SqliteAgentTrustStore", () => {
     const found = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");
     expect(found!.public_key).toBeUndefined();
     expect(found!.notes).toBeUndefined();
+    expect(found!.petname).toBeUndefined();
+  });
+
+  it("stores and retrieves a petname (first-person local nickname)", async () => {
+    await moteDb.agentTrustStore.setAgentTrust(makeRecord({ petname: "Scout" }));
+    const found = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");
+    expect(found!.petname).toBe("Scout");
+  });
+
+  it("clears a petname when the record is re-set without one", async () => {
+    await moteDb.agentTrustStore.setAgentTrust(makeRecord({ petname: "Scout" }));
+    await moteDb.agentTrustStore.setAgentTrust(makeRecord({ petname: undefined }));
+    const found = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");
+    expect(found!.petname).toBeUndefined();
   });
 
   it("can block an agent", async () => {

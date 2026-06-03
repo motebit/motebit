@@ -4014,6 +4014,20 @@ export class MotebitRuntime {
     this.agentGraph.invalidate();
   }
 
+  /**
+   * Set or clear the first-person local nickname (petname) for a known peer.
+   * Display-only and local — never on the wire, and not a routing input, so the
+   * agent graph is NOT invalidated. No-op when trust isn't tracked or the peer is
+   * unknown: you petname agents you've actually met, not arbitrary ids. Pass
+   * `undefined` to clear. Doctrine: `agents-as-first-person-trust-graph.md` §3.
+   */
+  async setAgentPetname(remoteMotebitId: string, petname: string | undefined): Promise<void> {
+    if (this.agentTrustStore == null) return;
+    const existing = await this.agentTrustStore.getAgentTrust(this.motebitId, remoteMotebitId);
+    if (existing == null) return;
+    await this.agentTrustStore.setAgentTrust({ ...existing, petname });
+  }
+
   /** Get the agent network graph manager for routing queries. */
   getAgentGraph(): AgentGraphManager {
     return this.agentGraph;

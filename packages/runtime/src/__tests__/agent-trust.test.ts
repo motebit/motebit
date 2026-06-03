@@ -91,6 +91,32 @@ describe("MotebitRuntime Agent Trust", () => {
     expect(found!.trust_level).toBe(AgentTrustLevel.Verified);
   });
 
+  it("setAgentPetname sets and clears a petname on a known peer", async () => {
+    await runtime.recordAgentInteraction("remote-mote-1");
+
+    await runtime.setAgentPetname("remote-mote-1", "Scout");
+    expect((await runtime.getAgentTrust("remote-mote-1"))!.petname).toBe("Scout");
+
+    await runtime.setAgentPetname("remote-mote-1", undefined);
+    expect((await runtime.getAgentTrust("remote-mote-1"))!.petname).toBeUndefined();
+  });
+
+  it("setAgentPetname is a no-op for an unknown peer (you petname agents you've met)", async () => {
+    await runtime.setAgentPetname("never-met", "Ghost");
+    expect(await runtime.getAgentTrust("never-met")).toBeNull();
+  });
+
+  it("setAgentPetname does not change trust level or interaction count", async () => {
+    await runtime.recordAgentInteraction("remote-mote-1");
+    await runtime.setAgentTrustLevel("remote-mote-1", AgentTrustLevel.Trusted);
+    await runtime.setAgentPetname("remote-mote-1", "Scout");
+
+    const found = await runtime.getAgentTrust("remote-mote-1");
+    expect(found!.trust_level).toBe(AgentTrustLevel.Trusted);
+    expect(found!.interaction_count).toBe(1);
+    expect(found!.petname).toBe("Scout");
+  });
+
   it("uses default in-memory trust store when none explicitly provided", async () => {
     const defaultRuntime = new MotebitRuntime(
       { motebitId: "test-mote", tickRateHz: 0 },

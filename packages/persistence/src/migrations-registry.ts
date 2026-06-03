@@ -350,4 +350,14 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE settlements ADD COLUMN motebit_id TEXT",
     ],
   },
+  {
+    version: 39,
+    description: "agent_trust.petname — first-person local nickname for a peer",
+    statements: [
+      // AgentTrustRecord gained an optional `petname`: a first-person, local-only
+      // nickname for a peer (doctrine agents-as-first-person-trust-graph.md §3).
+      // Never on the wire; additive nullable column, absent ⇒ no petname set.
+      "ALTER TABLE agent_trust ADD COLUMN petname TEXT",
+    ],
+  },
 ];

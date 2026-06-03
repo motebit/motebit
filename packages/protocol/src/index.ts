@@ -129,6 +129,14 @@ export interface AgentTrustRecord {
   successful_tasks?: number;
   failed_tasks?: number;
   notes?: string;
+  /**
+   * First-person local nickname for this peer — what *I* call them, in my own
+   * namespace. Local-only: never on the wire, never sent to a peer or the relay.
+   * Naming is first-person (the petname resolution to Zooko's triangle — see
+   * `docs/doctrine/agents-as-first-person-trust-graph.md` §3), distinct from the
+   * peer's squattable self-asserted listing name. Optional; absent ⇒ no petname.
+   */
+  petname?: string;
   /** Exponential moving average of result quality [0, 1]. */
   avg_quality?: number;
   /** Number of quality samples collected. */
