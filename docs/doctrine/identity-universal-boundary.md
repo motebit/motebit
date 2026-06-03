@@ -17,10 +17,14 @@ trust consequence. Everything above (intelligence, apps, surfaces) and below
 
 ## The boundaries
 
-Same key, same `/.well-known` publication, same signing discipline. Each new
-boundary is an **adapter, not a new primitive** — a fresh agility axis over the
-existing identity (see [`agility-as-role.md`](agility-as-role.md)), never a fork
-of the self.
+Same sovereign **identity**, compatible `/.well-known` publication, same signing
+discipline — the identity signs a boundary directly _or attests a per-boundary
+key_ (hierarchical binding, the same pattern as hardware attestation; see
+[`identity-binding-verification.md`](identity-binding-verification.md)), never a
+blind reuse of one private key across every surface (your treasury key is not your
+web-request key). Each new boundary is an **adapter, not a new primitive** — a
+fresh agility axis over the existing identity (see
+[`agility-as-role.md`](agility-as-role.md)), never a fork of the self.
 
 | Boundary            | State                    | Mechanism                                       |
 | ------------------- | ------------------------ | ----------------------------------------------- |
@@ -108,12 +112,12 @@ sovereign key, no new primitive.
 > Operator requests; a BCP was targeted ~Aug 2026. Treat participants/dates as a
 > dated snapshot, not doctrine.
 
-The industry taxonomy splits agent-auth into four trust anchors — card-network
-tokens (Mastercard Agent Pay), attestation headers (Visa TAP), issuer-signed VCs
-(Google AP2), and **self-sovereign DIDs settling onchain.** The fourth slot _is_
-motebit (did:key Ed25519 + Solana settlement). The other three are
-platform/network-owned; motebit is the self-sovereign one — a named, distinct
-place in the landscape.
+One useful way to read the emerging landscape (our interpretation, not an
+established standard) is by _trust anchor_: card-network tokens (Mastercard Agent
+Pay), attestation headers (Visa TAP), issuer-signed VCs (Google AP2), and
+**self-sovereign identities with independently verifiable settlement.** Motebit
+is the fourth: did:key Ed25519 + signed receipts + sovereign onchain settlement.
+The other three are platform/network-owned; motebit is the self-sovereign one.
 
 **Discipline (per the metabolic principle):** _adopt_ the standard when it
 stabilizes; never invent a bespoke request-signing scheme (that fragments and
