@@ -23,6 +23,7 @@ import {
   bytesToHex,
   signDisputeRequest,
   signExecutionReceipt,
+  createSignedToken,
   hash as sha256,
 } from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
@@ -39,6 +40,32 @@ import {
 const WORKER_SOLANA_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
 // Valid base58 tx hash (64-88 chars, no 0/O/I/l)
 const FAKE_TX_HASH = "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk";
+
+/**
+ * A signed device token — what the runtime's `authToken` mints in production
+ * (carries `mid`, so the relay sets `callerMotebitId`). The master test token
+ * does NOT, so the listing pre-flight eligibility — which is caller-bound — only
+ * fires under a real signed token.
+ */
+function makeSignedToken(
+  motebitId: string,
+  deviceId: string,
+  privateKey: Uint8Array,
+  aud: string,
+): Promise<string> {
+  const now = Date.now();
+  return createSignedToken(
+    {
+      mid: motebitId,
+      did: deviceId,
+      iat: now,
+      exp: now + 5 * 60 * 1000,
+      jti: crypto.randomUUID(),
+      aud,
+    },
+    privateKey,
+  );
+}
 
 function setTrust(
   db: import("@motebit/persistence").DatabaseDriver,
@@ -214,13 +241,15 @@ describe("P2P Settlement Cycle E2E", () => {
     }
   });
 
-  it("invokeCapability cold-start: new pair is 403'd without the ack (after broadcast), accepted with it", async () => {
+  it("invokeCapability cold-start: pre-flight blocks the broadcast when ineligible; ack makes it eligible", async () => {
     // The realistic NEW-USER path: a first paid delegation to a worker with no
     // trust history. The relay's single-op eligibility gate only admits a new
-    // pair when the delegator acknowledges cold-start risk. This proves both
-    // (1) the gap — without the ack the relay 403s AFTER the client has already
-    // broadcast the payment (funds move, task rejected, no fallback), and
-    // (2) the fix — `acknowledgeNoHistoryRisk` makes the new-pair path work.
+    // pair when the delegator acknowledges cold-start risk. This proves the
+    // MONEY-SAFETY fix: the relay's pre-flight eligibility (folded into the
+    // listing read the client makes BEFORE broadcasting) lets the client refuse
+    // to broadcast for an ineligible pair — so funds NEVER move on a doomed
+    // submission. Without the ack: no broadcast, degrade to relay-mode. With the
+    // ack: the pair becomes eligible, the client broadcasts and the relay accepts.
     const SYNC_URL = "http://relay.coldstart.test";
     const originalFetch = globalThis.fetch;
     vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
@@ -272,7 +301,15 @@ describe("P2P Settlement Cycle E2E", () => {
         },
         {
           syncUrl: SYNC_URL,
-          authToken: async () => API_TOKEN,
+          // Signed token (not the master token) so the relay sets callerMotebitId
+          // and the listing pre-flight eligibility — caller-bound — actually runs.
+          authToken: (aud?: string) =>
+            makeSignedToken(
+              delegator.motebitId,
+              delegator.deviceId,
+              delegatorKp.privateKey,
+              aud ?? "sync",
+            ),
           relayPublicKey: relay.relayIdentity.publicKeyHex,
           timeoutMs: 100,
           ...(acknowledgeNoHistoryRisk ? { acknowledgeNoHistoryRisk: true } : {}),
@@ -285,23 +322,57 @@ describe("P2P Settlement Cycle E2E", () => {
       return { err: chunks.find((c) => c.type === "invoke_error"), broadcasts };
     };
 
-    // WITHOUT the ack: the relay rejects the cold-start pair (403 → unauthorized)
-    // — but only AFTER the client broadcast (the money-safety hazard the ack
-    // closes). The broadcast having happened is the point of the assertion.
+    // WITHOUT the ack: the pre-flight (folded into the listing read the client
+    // makes BEFORE broadcasting) reports the cold-start pair ineligible, so the
+    // client never broadcasts — funds never move. p2p_ineligible is
+    // pre-broadcast → degrade to relay-mode. Before this fix the client
+    // broadcast THEN got a 403 → funds lost. The empty broadcast IS the fix.
     const noAck = makeRail(SIG_NO_ACK);
     const withoutAck = await run(false, noAck.broadcasts, noAck.rail);
-    expect(withoutAck.err?.code).toBe("unauthorized");
-    expect(noAck.broadcasts, "client broadcast BEFORE the relay's eligibility rejection").toEqual([
-      2,
-    ]);
+    expect(noAck.broadcasts, "no broadcast for an ineligible cold-start pair").toEqual([]);
+    expect(withoutAck.err?.code).not.toBe("unauthorized"); // not a post-broadcast 403
 
-    // WITH the ack: the new-pair branch admits it → no submission rejection.
+    // WITH the ack: the pre-flight (and the submission) admit the new pair, so
+    // the client DOES broadcast (2 legs) and the relay accepts.
     const withAckRail = makeRail(SIG_ACK);
     const withAck = await run(true, withAckRail.broadcasts, withAckRail.rail);
     vi.unstubAllGlobals();
+    expect(withAckRail.broadcasts, "ack makes the pair eligible → broadcast proceeds").toEqual([2]);
     expect(withAck.err?.code).not.toBe("unauthorized");
     expect(withAck.err?.code).not.toBe("payment_proof_required");
-    if (withAck.err) expect(withAck.err.code).toBe("timeout");
+  });
+
+  it("p2p-eligibility endpoint: caller-bound — cold-start denied, ack admits, master/no-caller advisory-allowed", async () => {
+    // Locks the pre-flight endpoint's contract directly. It returns the SAME
+    // decision the submission gate enforces, so a delegator client can avoid
+    // broadcasting to a worker that would be rejected.
+    relay.moteDb.db
+      .prepare("DELETE FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?")
+      .run(delegator.motebitId, worker.motebitId);
+    const tok = await makeSignedToken(
+      delegator.motebitId,
+      delegator.deviceId,
+      delegatorKp.privateKey,
+      "market:listing",
+    );
+    const eligible = async (query = ""): Promise<boolean> => {
+      const r = await relay.app.request(
+        `/api/v1/agents/${worker.motebitId}/p2p-eligibility${query}`,
+        { headers: { Authorization: `Bearer ${tok}` } },
+      );
+      return ((await r.json()) as { allowed: boolean }).allowed;
+    };
+    // Caller-bound: a cold-start pair (no trust) is ineligible without the ack…
+    expect(await eligible()).toBe(false);
+    // …and eligible WITH the conscious cold-start acknowledgment.
+    expect(await eligible("?acknowledge_no_history_risk=true")).toBe(true);
+    // Master/service token carries no `mid` → advisory allowed:true (the
+    // submission gate still enforces; a privileged caller isn't a sybil risk).
+    const masterRes = await relay.app.request(
+      `/api/v1/agents/${worker.motebitId}/p2p-eligibility`,
+      { headers: AUTH },
+    );
+    expect(((await masterRes.json()) as { allowed: boolean }).allowed).toBe(true);
   });
 
   it("full p2p cycle: eligible → submit with proof → receipt → audit record", async () => {

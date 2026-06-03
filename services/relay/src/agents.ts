@@ -14,6 +14,7 @@ import type { ConnectedDevice } from "./index.js";
 import type { RelayIdentity } from "./federation.js";
 import { insertRevocationEvent } from "./federation.js";
 import type { TaskRouter } from "./task-routing.js";
+import { evaluateSettlementEligibility } from "./task-routing.js";
 import {
   hexPublicKeyToDidKey,
   verifyKeySuccession,
@@ -570,7 +571,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // Determine expected audience from route path
     const path = c.req.path;
     let agentAudience: string;
-    if (path.includes("/listing")) {
+    if (path.includes("/p2p-eligibility")) {
+      // Caller-bound P2P pre-flight read — reuses the market:listing audience
+      // the delegator client already mints (sibling of the listing price read).
+      agentAudience = "market:listing";
+    } else if (path.includes("/listing")) {
       agentAudience = "market:listing";
     } else if (path.includes("/credentials")) {
       agentAudience = "credentials";
@@ -1312,6 +1317,37 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       return peerKey != null ? { ...agent, source_relay_public_key: peerKey } : agent;
     });
     return c.json({ agents: withPeerKey });
+  });
+
+  // GET /api/v1/agents/:motebitId/p2p-eligibility — pre-flight settlement check.
+  // @internal: an ADVISORY mirror of the submission-time eligibility gate so a
+  // delegator client avoids broadcasting to a worker that would be rejected; the
+  // gate (evaluateSettlementEligibility) is the law, this is a convenience read.
+  /** @internal */
+  app.get("/api/v1/agents/:motebitId/p2p-eligibility", async (c) => {
+    // The delegator client calls this BEFORE broadcasting the irreversible
+    // onchain payment, so it never pays a worker the relay would reject at
+    // submission (cold-start without the ack, an active dispute) — closing the
+    // broadcast-then-403 fund-loss window. Returns the SAME decision the
+    // submission gate (`evaluateSettlementEligibility`) enforces, so the two
+    // cannot disagree; `acknowledge_no_history_risk` mirrors the submission body
+    // field. Caller-bound (single-operator path): when the caller can't be
+    // identified (master/service token with no `mid`), returns `allowed: true`
+    // (advisory — the submission gate still enforces; a privileged caller is not
+    // a cold-start sybil risk).
+    const workerId = asMotebitId(c.req.param("motebitId"));
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    const ack = c.req.query("acknowledge_no_history_risk") === "true";
+    if (callerMotebitId == null || callerMotebitId === workerId) {
+      return c.json({ allowed: true, reason: "caller not identified — advisory only" });
+    }
+    const eligibility = await evaluateSettlementEligibility(
+      moteDb.db,
+      callerMotebitId,
+      workerId,
+      ack,
+    );
+    return c.json({ allowed: eligibility.allowed, reason: eligibility.reason });
   });
 
   // GET /api/v1/agents/:motebitId — get specific agent

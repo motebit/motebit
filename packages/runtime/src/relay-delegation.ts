@@ -71,6 +71,15 @@ export type DelegationErrorCode =
    */
   | "worker_not_payable"
   /**
+   * Pre-flight, BEFORE broadcast. The relay's listing read reported the
+   * delegator↔worker pair is not P2P-eligible (cold-start without the
+   * acknowledgment, or an active dispute) — so the client did NOT broadcast the
+   * payment. Distinct from a post-broadcast rejection: no funds moved. In the
+   * `selectAndRunDelegation` fallback set, so the delegation degrades to the
+   * relay-mediated path rather than losing funds to a doomed P2P submission.
+   */
+  | "p2p_ineligible"
+  /**
    * Pre-flight. The delegator's atomic onchain payment failed to broadcast or
    * confirm, so NO task was submitted (the proof is never sent to the relay
    * without a confirmed payment). The funds did not move — distinct from a
@@ -775,7 +784,38 @@ export async function resolveAndSubmitP2pDelegation(
       executorFeeAmountMicro: split.executorFeeMicro,
     };
   } else {
-    // LOCAL: price from the worker's listing (market:listing-audience read).
+    // 3a. PRE-FLIGHT eligibility BEFORE the irreversible broadcast (single-op
+    //     only — a federated worker has no eligibility gate at its forward site).
+    //     The dedicated caller-bound /p2p-eligibility read returns the SAME
+    //     decision the submission gate enforces; if it says no, bail WITHOUT
+    //     broadcasting (p2p_ineligible → relay-mode fallback in
+    //     selectAndRunDelegation), closing the broadcast-then-403 fund-loss
+    //     window. `acknowledge_no_history_risk` mirrors the submission body so
+    //     pre-flight and submit agree. A non-200 (older relay without the
+    //     endpoint / a network glitch) → proceed; the submission gate still
+    //     enforces — we just forgo the pre-broadcast safety on that one call.
+    try {
+      const eligToken = await params.authToken("market:listing");
+      const ackQuery =
+        params.acknowledgeNoHistoryRisk === true ? "?acknowledge_no_history_risk=true" : "";
+      const resp = await fetch(
+        `${syncUrl}/api/v1/agents/${worker.motebit_id}/p2p-eligibility${ackQuery}`,
+        { headers: { Authorization: `Bearer ${eligToken}` }, signal: params.signal },
+      );
+      if (resp.ok) {
+        const data = (await resp.json()) as { allowed?: boolean; reason?: string };
+        if (data.allowed !== true) {
+          return fail("p2p_ineligible", data.reason ?? "Not P2P-eligible for this worker");
+        }
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
+        return fail("timeout", "Aborted during eligibility pre-flight");
+      }
+      // Advisory pre-flight network glitch — proceed; the submission gate enforces.
+    }
+
+    // 3b. Price from the worker's listing (market:listing-audience read).
     let unitCost: number;
     try {
       const listingToken = await params.authToken("market:listing");
@@ -932,7 +972,15 @@ export async function selectAndRunDelegation(
       ...(params.signal ? { signal: params.signal } : {}),
     });
     if (p2p.ok) return p2p;
-    if (p2p.error.code !== "no_routing" && p2p.error.code !== "worker_not_payable") {
+    // Fall back to relay-mode ONLY on PRE-BROADCAST codes (no funds moved):
+    // no payable p2p worker, or the relay's pre-flight said the pair is
+    // ineligible. Any other code may follow a broadcast → surface verbatim so a
+    // relay-custody re-submit can't double-charge.
+    if (
+      p2p.error.code !== "no_routing" &&
+      p2p.error.code !== "worker_not_payable" &&
+      p2p.error.code !== "p2p_ineligible"
+    ) {
       return p2p;
     }
   }

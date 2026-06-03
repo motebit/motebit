@@ -186,12 +186,17 @@ const EXPECTED_TREASURY = base58Encode(PINNED_BYTES);
 
 function routedFetch(handlers: {
   discover?: () => Response;
+  eligibility?: () => Response;
   listing?: () => Response;
   submit?: () => Response;
   poll?: () => Response;
 }) {
   return vi.fn(async (url: string, init?: RequestInit) => {
     if (url.includes("/api/v1/agents/discover")) return handlers.discover!();
+    // Pre-flight eligibility (single-op LOCAL branch). Default eligible so the
+    // existing pricing/broadcast tests aren't blocked; override to test denial.
+    if (url.includes("/p2p-eligibility"))
+      return (handlers.eligibility ?? (() => jsonResponse(200, { allowed: true })))();
     if (url.includes("/listing")) return handlers.listing!();
     if (url.endsWith("/task") && init?.method === "POST") return handlers.submit!();
     if (url.includes("/task/")) return handlers.poll!();
@@ -344,6 +349,28 @@ describe("resolveAndSubmitP2pDelegation", () => {
     const result = await resolveAndSubmitP2pDelegation(resolveParams({ buildP2pPayment }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("payment_broadcast_failed");
+  });
+
+  it("pre-flight ineligible → p2p_ineligible WITHOUT broadcasting (no funds move)", async () => {
+    // The money-safety guard: the relay's /p2p-eligibility read (BEFORE the
+    // broadcast) reports the pair ineligible (e.g. cold-start without the ack),
+    // so the client returns p2p_ineligible and NEVER calls buildP2pPayment —
+    // closing the broadcast-then-403 fund-loss window. p2p_ineligible is in
+    // selectAndRunDelegation's pre-broadcast fallback set (separately tested).
+    const params = resolveParams();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" },
+        ]),
+        eligibility: () => jsonResponse(200, { allowed: false, reason: "cold-start, no ack" }),
+      }),
+    );
+    const result = await resolveAndSubmitP2pDelegation(params);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("p2p_ineligible");
+    expect(params.buildP2pPayment, "irreversible payment must NOT be built").not.toHaveBeenCalled();
   });
 
   // ── FEDERATED (PR-fed-3): worker on a direct peer — 3-leg fee-from-budget ──
@@ -539,6 +566,43 @@ describe("selectAndRunDelegation", () => {
 
     expect(discovered).toBe(true);
     expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to relay-mode when the pre-flight reports the pair P2P-ineligible (no broadcast)", async () => {
+    // p2p_ineligible is a PRE-BROADCAST code: the relay's /p2p-eligibility read
+    // said no BEFORE any payment, so it's safe to degrade to relay-mode rather
+    // than surface a hard error or (the old bug) pay-then-get-403.
+    const buildP2pPayment = buildProof();
+    let submitBody: Record<string, unknown> | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.includes("/api/v1/agents/discover"))
+          return jsonResponse(200, {
+            agents: [{ motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" }],
+          });
+        if (url.includes("/p2p-eligibility"))
+          return jsonResponse(200, { allowed: false, reason: "cold-start, no ack" });
+        if (url.endsWith("/task") && init?.method === "POST") {
+          submitBody = JSON.parse(init.body as string) as Record<string, unknown>;
+          return jsonResponse(400, { code: "BAD" }); // stop before the poll
+        }
+        return jsonResponse(404, {});
+      }),
+    );
+
+    await selectAndRunDelegation({
+      ...baseSelect(),
+      requiredCapabilities: ["review_pr"],
+      relayPublicKey: PINNED_HEX,
+      buildP2pPayment,
+    });
+
+    // No broadcast (pre-flight blocked it), and the fallback is relay-mode — its
+    // body carries no target_agent / payment_proof.
+    expect(buildP2pPayment).not.toHaveBeenCalled();
+    expect(submitBody!.target_agent).toBeUndefined();
+    expect(submitBody!.payment_proof).toBeUndefined();
   });
 
   it("uses relay-mode (no P2P, no discovery) when no rail is configured", async () => {
