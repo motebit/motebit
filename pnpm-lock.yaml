@@ -1550,6 +1550,9 @@ importers:
       '@motebit/tools':
         specifier: workspace:*
         version: link:../tools
+      '@motebit/wallet-solana':
+        specifier: workspace:*
+        version: link:../wallet-solana
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
