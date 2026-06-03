@@ -15,7 +15,11 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Warm Vercel builds finish in ~70s, but a COLD build (no restored cache —
+    # e.g. after a prior failed deploy) of this monorepo can exceed 15m and hit
+    # the job timeout, which GitHub reports as `cancelled`. 30m gives a cold
+    # build ample headroom while still bounding a genuinely hung deploy.
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
