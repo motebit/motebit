@@ -395,6 +395,21 @@ export interface ServiceServerConfig {
   apiToken?: string;
   /** Public endpoint URL for relay registration (default: http://localhost:<port>). */
   publicEndpointUrl?: string;
+  /**
+   * Onchain settlement address (Solana base58) advertised at registration —
+   * where a delegator's direct P2P payment leg lands. Derive from the service's
+   * own identity public key (`deriveSolanaAddress`), never hardcode. Omitted →
+   * `settlement_address` stays null and the service is relay-mode only.
+   */
+  settlementAddress?: string;
+  /**
+   * Settlement modes the service opts into (comma-joined, e.g. "relay" or
+   * "relay,p2p"). Default behavior (omitted) leaves it unset → relay-mode only.
+   * A service must include "p2p" to be selected for paid peer-to-peer delegation
+   * — only enable it once the service can actually SPEND received funds, or
+   * earnings accrue at `settlementAddress` with no way out.
+   */
+  settlementModes?: string;
 
   /** Called on startup with tool count and port. */
   onStart?: (port: number, toolCount: number) => void;
@@ -490,6 +505,12 @@ export async function startServiceServer(
       endpoint_url: endpointUrl,
       capabilities: toolNames,
       metadata: { name: serverName },
+      // Settlement fields are written ONLY by the register route (the relay's
+      // PATCH /sweep-config sets address but not modes), so they MUST travel in
+      // this body or a service can never become P2P-capable. Sent only when
+      // configured; absent → relay-mode only (back-compatible).
+      ...(config.settlementAddress != null ? { settlement_address: config.settlementAddress } : {}),
+      ...(config.settlementModes != null ? { settlement_modes: config.settlementModes } : {}),
     };
 
     /** Full registration: register + publish listing. Idempotent, concurrency-guarded. */

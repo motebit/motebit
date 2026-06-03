@@ -32,6 +32,7 @@ import { dirname, resolve as resolvePath } from "node:path";
 import { RiskLevel } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { bootstrapAndEmitIdentity, startServiceServer, wireServerDeps } from "@motebit/mcp-server";
+import { deriveSolanaAddress } from "@motebit/wallet-solana";
 import type {
   BootstrapAndEmitIdentityOptions,
   BootstrapAndEmitIdentityResult,
@@ -410,6 +411,21 @@ export async function runMolecule(
   if (config.publicUrl != null) serverCfg.publicEndpointUrl = config.publicUrl;
   if (molecule.customRoutes) serverCfg.customRoutes = molecule.customRoutes;
   if (adapters.serverLog) serverCfg.log = adapters.serverLog;
+
+  // P2P settlement enablement (opt-in, back-compatible). Default — env unset —
+  // registers exactly as before (relay-mode only, no settlement fields). When
+  // the operator sets MOTEBIT_SETTLEMENT_MODES (e.g. "relay,p2p"), advertise
+  // those modes AND a settlement address DERIVED from this service's own
+  // identity key (never hardcoded — survives key handling; the relay validates
+  // a P2P proof's worker leg against exactly this address). Only enable "p2p"
+  // once the service can SPEND received funds (sweep), or earnings accrue here
+  // with no way out. See docs/doctrine/off-ramp-as-user-action.md.
+  const settlementModes = process.env.MOTEBIT_SETTLEMENT_MODES?.trim();
+  if (settlementModes != null && settlementModes.length > 0) {
+    serverCfg.settlementModes = settlementModes;
+    serverCfg.settlementAddress = deriveSolanaAddress(identity.publicKey);
+    log(`Settlement: modes="${settlementModes}" address=${serverCfg.settlementAddress}`);
+  }
 
   return startServer(deps, serverCfg);
 }

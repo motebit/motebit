@@ -23,6 +23,7 @@ import type { MotebitDatabase } from "@motebit/persistence";
 import { createInMemoryStorage } from "@motebit/runtime";
 import type { MoleculeConfig, MoleculeRunnerAdapters } from "../index.js";
 import { defaultCreateRuntime, defaultLog, runMolecule } from "../index.js";
+import { deriveSolanaAddress } from "@motebit/wallet-solana";
 
 // ---------------------------------------------------------------------------
 // Stub builders — reusable across tests
@@ -253,6 +254,34 @@ describe("runMolecule", () => {
     expect(serverCfg.port).toBe(cfg.port);
     expect(serverCfg.motebitType).toBe("service");
     expect(String(serverCfg.name)).toContain("motebit-test-mot_test");
+  });
+
+  it("P2P settlement: advertises a derived address + modes ONLY when MOTEBIT_SETTLEMENT_MODES is set", async () => {
+    const prev = process.env.MOTEBIT_SETTLEMENT_MODES;
+    try {
+      // Env unset → relay-mode only, exactly as before (back-compatible): the
+      // service registers with NO settlement fields.
+      delete process.env.MOTEBIT_SETTLEMENT_MODES;
+      const a1 = baseAdapters();
+      await runMolecule(baseConfig(), () => ({ toolRegistry: new InMemoryToolRegistry() }), a1);
+      const cfg1 = (a1.startCalls[0] as { cfg: Record<string, unknown> }).cfg;
+      expect(cfg1.settlementModes).toBeUndefined();
+      expect(cfg1.settlementAddress).toBeUndefined();
+
+      // Env set → advertise the modes AND a Solana address DERIVED from the
+      // service's own identity public key (never hardcoded) — the worker leg
+      // the relay validates a P2P proof against.
+      process.env.MOTEBIT_SETTLEMENT_MODES = "relay,p2p";
+      const a2 = baseAdapters();
+      await runMolecule(baseConfig(), () => ({ toolRegistry: new InMemoryToolRegistry() }), a2);
+      const cfg2 = (a2.startCalls[0] as { cfg: Record<string, unknown> }).cfg;
+      expect(cfg2.settlementModes).toBe("relay,p2p");
+      // fakeIdentity().publicKey is a 32-byte zero key → its derived address.
+      expect(cfg2.settlementAddress).toBe(deriveSolanaAddress(new Uint8Array(32)));
+    } finally {
+      if (prev == null) delete process.env.MOTEBIT_SETTLEMENT_MODES;
+      else process.env.MOTEBIT_SETTLEMENT_MODES = prev;
+    }
   });
 
   it("creates the DB parent directory when missing", async () => {

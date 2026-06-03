@@ -20,7 +20,8 @@
     "@motebit/persistence": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@motebit/sdk": "workspace:*",
-    "@motebit/tools": "workspace:*"
+    "@motebit/tools": "workspace:*",
+    "@motebit/wallet-solana": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
