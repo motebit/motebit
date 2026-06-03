@@ -284,6 +284,45 @@ describe("runMolecule", () => {
     }
   });
 
+  it("SPEND sweep: env-gated; on boot sweeps the identity wallet to MOTEBIT_SWEEP_ADDRESS", async () => {
+    const prevAddr = process.env.MOTEBIT_SWEEP_ADDRESS;
+    const prevRpc = process.env.MOTEBIT_SOLANA_RPC_URL;
+    const DEST = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
+    try {
+      const send = vi.fn().mockResolvedValue({ signature: "sweep-sig" });
+      const createSweepWallet = vi.fn(() => ({
+        isAvailable: vi.fn().mockResolvedValue(true),
+        getBalance: vi.fn().mockResolvedValue(500_000n),
+        send,
+      }));
+
+      // Env unset → no wallet constructed, no sweep (back-compatible).
+      delete process.env.MOTEBIT_SWEEP_ADDRESS;
+      delete process.env.MOTEBIT_SOLANA_RPC_URL;
+      await runMolecule(baseConfig(), () => ({ toolRegistry: new InMemoryToolRegistry() }), {
+        ...baseAdapters(),
+        createSweepWallet,
+      });
+      expect(createSweepWallet).not.toHaveBeenCalled();
+
+      // Env set → wallet built from the identity seed + initial sweep sends the
+      // full balance to the destination. (Timer is unref'd; no hanging handle.)
+      process.env.MOTEBIT_SWEEP_ADDRESS = DEST;
+      process.env.MOTEBIT_SOLANA_RPC_URL = "https://rpc.test";
+      await runMolecule(baseConfig(), () => ({ toolRegistry: new InMemoryToolRegistry() }), {
+        ...baseAdapters(),
+        createSweepWallet,
+      });
+      expect(createSweepWallet).toHaveBeenCalledWith("https://rpc.test", expect.any(Uint8Array));
+      await vi.waitFor(() => expect(send).toHaveBeenCalledWith(DEST, 500_000n));
+    } finally {
+      if (prevAddr == null) delete process.env.MOTEBIT_SWEEP_ADDRESS;
+      else process.env.MOTEBIT_SWEEP_ADDRESS = prevAddr;
+      if (prevRpc == null) delete process.env.MOTEBIT_SOLANA_RPC_URL;
+      else process.env.MOTEBIT_SOLANA_RPC_URL = prevRpc;
+    }
+  });
+
   it("creates the DB parent directory when missing", async () => {
     const adapters = baseAdapters();
     adapters.existsReturns["/tmp/motebit-test-data"] = false;

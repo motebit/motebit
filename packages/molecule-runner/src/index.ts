@@ -32,7 +32,12 @@ import { dirname, resolve as resolvePath } from "node:path";
 import { RiskLevel } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { bootstrapAndEmitIdentity, startServiceServer, wireServerDeps } from "@motebit/mcp-server";
-import { deriveSolanaAddress } from "@motebit/wallet-solana";
+import {
+  deriveSolanaAddress,
+  createSolanaWalletRail,
+  sweepWalletRail,
+  type SweepableWallet,
+} from "@motebit/wallet-solana";
 import type {
   BootstrapAndEmitIdentityOptions,
   BootstrapAndEmitIdentityResult,
@@ -206,6 +211,12 @@ export interface MoleculeRunnerAdapters {
   embedText?: ((text: string) => Promise<number[]>) | null;
   /** Override server start. Default: `startServiceServer` from @motebit/mcp-server. */
   startServer?: typeof startServiceServer;
+  /**
+   * Override construction of the sovereign wallet used for sweeping earnings.
+   * Default: `createSolanaWalletRail({ rpcUrl, identitySeed })`. Tests inject a
+   * fake to exercise the sweep wiring without a network.
+   */
+  createSweepWallet?: (rpcUrl: string, identitySeed: Uint8Array) => SweepableWallet;
   /** Override the log sink for the runner's own boot messages. Default: console.log. */
   log?: (msg: string) => void;
   /**
@@ -425,6 +436,48 @@ export async function runMolecule(
     serverCfg.settlementModes = settlementModes;
     serverCfg.settlementAddress = deriveSolanaAddress(identity.publicKey);
     log(`Settlement: modes="${settlementModes}" address=${serverCfg.settlementAddress}`);
+  }
+
+  // SPEND — sweep accrued earnings out of the service's identity wallet to an
+  // operator-controlled destination. Opt-in via MOTEBIT_SWEEP_ADDRESS (only
+  // meaningful for a P2P-enabled service that RECEIVES funds). Initial sweep on
+  // boot + a periodic timer; the timer is unref'd (never keeps the process
+  // alive) and cleared on shutdown. The service pays its own SOL gas
+  // (wallet-solana CLAUDE.md rule 4) — fund it with a little SOL or sweeps fail.
+  const sweepAddress = process.env.MOTEBIT_SWEEP_ADDRESS?.trim();
+  const sweepRpcUrl = process.env.MOTEBIT_SOLANA_RPC_URL?.trim();
+  if (
+    sweepAddress != null &&
+    sweepAddress.length > 0 &&
+    sweepRpcUrl != null &&
+    sweepRpcUrl.length > 0
+  ) {
+    const minMicro = BigInt(process.env.MOTEBIT_SWEEP_MIN_MICRO ?? "10000"); // $0.01 floor
+    const intervalMs = Number(process.env.MOTEBIT_SWEEP_INTERVAL_MS ?? `${30 * 60 * 1000}`); // 30 min
+    const wallet =
+      adapters.createSweepWallet?.(sweepRpcUrl, identity.privateKey) ??
+      createSolanaWalletRail({ rpcUrl: sweepRpcUrl, identitySeed: identity.privateKey });
+    const doSweep = async (): Promise<void> => {
+      try {
+        const r = await sweepWalletRail(wallet, sweepAddress, minMicro);
+        log(
+          r.swept
+            ? `Swept ${r.balanceMicro} micro-USDC → ${sweepAddress} (${r.signature})`
+            : `Sweep skipped (${r.reason}; balance ${r.balanceMicro})`,
+        );
+      } catch (err: unknown) {
+        log(`Sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+    void doSweep();
+    const sweepTimer = setInterval(() => void doSweep(), intervalMs);
+    if (typeof sweepTimer.unref === "function") sweepTimer.unref();
+    const prevOnStop = serverCfg.onStop;
+    serverCfg.onStop = () => {
+      clearInterval(sweepTimer);
+      prevOnStop?.();
+    };
+    log(`Sweep enabled → ${sweepAddress} (every ${intervalMs}ms, min ${minMicro} micro)`);
   }
 
   return startServer(deps, serverCfg);

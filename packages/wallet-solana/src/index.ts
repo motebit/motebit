@@ -37,6 +37,8 @@ export { Web3JsRpcAdapter, deriveSolanaAddress } from "./web3js-adapter.js";
 
 export { buildP2pPaymentProof, type BuildP2pPaymentProofArgs } from "./p2p-payment-proof.js";
 
+export { sweepWalletRail, type SweepableWallet, type SweepResult } from "./sweep.js";
+
 export {
   USDC_MINT_MAINNET,
   USDC_MINT_DEVNET,
