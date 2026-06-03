@@ -191,6 +191,11 @@
       "default": false
     },
     {
+      "name": "pay-new-agents",
+      "type": "boolean",
+      "default": false
+    },
+    {
       "name": "pay-to-address",
       "type": "string"
     },

@@ -417,6 +417,7 @@ describe("MobileApp.settings", () => {
       },
       maxTokens: 4096,
       proactive: { enabled: false, anchorOnchain: false },
+      coldStartOptIn: true,
     };
     await app.saveSettings(custom);
     const loaded = await app.loadSettings();

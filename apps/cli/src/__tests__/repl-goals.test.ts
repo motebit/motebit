@@ -53,6 +53,7 @@ const stubConfig = {
   price: undefined,
   plan: false,
   sovereign: false,
+  payNewAgents: false,
   serveTransport: undefined,
   servePort: undefined,
   tools: undefined,

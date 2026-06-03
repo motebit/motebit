@@ -14,6 +14,7 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { loadColdStartOptIn } from "./cold-start-optin";
 import type { MotebitRuntime } from "@motebit/runtime";
 import {
   executeCommand,
@@ -469,6 +470,11 @@ export class MobileSyncController {
             syncUrl,
             authToken: () => this.deps.createSyncToken("task:submit"),
             ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
+            // Forward the cold-start opt-in as a LIVE getter (reads the in-memory
+            // mirror of MobileSettings.coldStartOptIn) so the Governance toggle
+            // governs chat-driven (delegate_to_agent) P2P delegation, not just a
+            // re-enable — parity with the web fix (d6cab601).
+            acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
           });
 
           // Store serving state

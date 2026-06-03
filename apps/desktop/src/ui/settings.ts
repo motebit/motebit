@@ -8,6 +8,7 @@ import type { ColorPickerAPI } from "./color-picker";
 import type { VoiceAPI } from "./voice";
 import type { PairingAPI } from "./pairing";
 import { saveFocus, restoreFocus } from "./focus";
+import { saveColdStartOptIn, loadColdStartOptIn } from "../cold-start-optin";
 import {
   ANTHROPIC_MODELS,
   OPENAI_MODELS,
@@ -91,6 +92,7 @@ const proactiveEnabled = document.getElementById(
 const proactiveAnchor = document.getElementById(
   "settings-proactive-anchor",
 ) as HTMLInputElement | null;
+const p2pColdStart = document.getElementById("settings-p2p-cold-start") as HTMLInputElement | null;
 
 const settingsElevenLabsApiKey = document.getElementById(
   "settings-elevenlabs-apikey",
@@ -1514,6 +1516,11 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     if (proactiveAnchor != null) {
       proactiveAnchor.checked = config?.proactive?.anchorOnchain === true;
     }
+    // Cold-start P2P opt-in lives in localStorage (a UI pref), not the Tauri
+    // governance config — same store + key the web surface uses.
+    if (p2pColdStart != null) {
+      p2pColdStart.checked = loadColdStartOptIn();
+    }
     selectApprovalPreset(selectedApprovalPreset);
 
     switchTab("appearance");
@@ -1707,6 +1714,11 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       enabled: proactiveEnabled?.checked === true,
       anchorOnchain: proactiveAnchor?.checked === true,
     };
+    // Persist the cold-start P2P opt-in (localStorage, independent of the Tauri
+    // config write). The sync-controller reads it per delegation via a live
+    // getter, so this takes effect on the next paid delegation without a
+    // re-enable — mirrors the web Governance toggle.
+    saveColdStartOptIn(p2pColdStart?.checked === true);
     const newConfig: DesktopAIConfig = {
       ...(currentConfig ?? { isTauri, provider }),
       provider,

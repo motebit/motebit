@@ -46,6 +46,17 @@ export interface CliConfig {
   price: string | undefined;
   plan: boolean;
   sovereign: boolean;
+  /**
+   * Paid P2P cold-start opt-in (`--pay-new-agents`). When set, a paid
+   * delegation to a worker with NO trust history may settle directly
+   * peer-to-peer from the sovereign wallet (the Arc-3 acknowledgment);
+   * default off → such a delegation degrades to relay-mode. Forwarded as
+   * `acknowledgeNoHistoryRisk` into enableInteractiveDelegation /
+   * enableInvokeCapability — the CLI-native equivalent of the web/desktop/
+   * mobile "Pay new agents directly" toggle. See
+   * docs/doctrine/off-ramp-as-user-action.md § Arc 3.
+   */
+  payNewAgents: boolean;
   serveTransport: string | undefined;
   servePort: string | undefined;
   tools: string | undefined;
@@ -125,6 +136,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       price: { type: "string" },
       plan: { type: "boolean", default: false },
       sovereign: { type: "boolean", default: false },
+      "pay-new-agents": { type: "boolean", default: false },
       "serve-transport": { type: "string" },
       "serve-port": { type: "string" },
       tools: { type: "string" },
@@ -236,6 +248,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     price: values.price,
     plan: values.plan,
     sovereign: values.sovereign,
+    payNewAgents: values["pay-new-agents"],
     serveTransport: values["serve-transport"],
     servePort: values["serve-port"],
     tools: values.tools,
@@ -422,6 +435,7 @@ Commands:
     --budget <amount>         Max spend in USD (default: from listing price)
     --plan                    Decompose into multi-step plan, delegate each to specialists
     --sovereign               Pay agents directly via Solana wallet (no relay settlement)
+    --pay-new-agents          Allow paid P2P delegation to agents with no trust history (cold-start opt-in; default off)
   withdraw <amount> [--destination <addr>]  Request a withdrawal
   approvals list            List approval queue items
   approvals show <id>       Show approval detail

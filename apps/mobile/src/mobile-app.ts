@@ -108,6 +108,7 @@ import {
 } from "./goal-scheduler";
 export type { GoalCompleteEvent, GoalApprovalEvent } from "./goal-scheduler";
 import { MobileSyncController, type SyncStatus } from "./sync-controller";
+import { setColdStartOptIn } from "./cold-start-optin";
 export type { SyncStatus } from "./sync-controller";
 import { MobileMcpManager } from "./mcp-manager";
 import { MobilePairingManager } from "./pairing-manager";
@@ -190,6 +191,18 @@ export interface MobileSettings {
    * matches the doctrine in `docs/doctrine/proactive-interior.md`.
    */
   proactive: { enabled: boolean; anchorOnchain: boolean };
+  /**
+   * Paid P2P cold-start opt-in (Arc-3 acknowledgment). When true, the motebit
+   * may pay a worker it has NO trust history with directly from the sovereign
+   * wallet, peer-to-peer onchain; when false a first paid delegation to an
+   * unknown worker safely degrades to relay-mode. Forwarded into
+   * `enableInteractiveDelegation` as a live getter (via the in-memory cache in
+   * `./cold-start-optin`) so the Governance toggle governs chat-driven
+   * delegation, not just a re-enable. Default false — sovereign fail-closed.
+   * Sibling of web/desktop's localStorage opt-in. See
+   * docs/doctrine/off-ramp-as-user-action.md § Arc 3.
+   */
+  coldStartOptIn: boolean;
 }
 
 const DEFAULT_SETTINGS: MobileSettings = {
@@ -205,6 +218,7 @@ const DEFAULT_SETTINGS: MobileSettings = {
   voice: { ...DEFAULT_VOICE_CONFIG },
   maxTokens: 4096,
   proactive: { enabled: false, anchorOnchain: false },
+  coldStartOptIn: false,
 };
 
 // Legacy module-level constants kept for call-site compatibility. The
@@ -1624,7 +1638,11 @@ export class MobileApp {
       // / BYOK), opt-in on metered motebit-cloud — but only when the user
       // never persisted a proactive choice (`parsed.proactive` absent).
       // A stored proactive block (the toggle was touched) always wins.
-      return parsed.proactive === undefined ? withProactiveDefault(loaded) : loaded;
+      const result = parsed.proactive === undefined ? withProactiveDefault(loaded) : loaded;
+      // Hydrate the sync cache so the sync-controller's live cold-start getter
+      // sees the persisted value (AsyncStorage can't be read synchronously).
+      setColdStartOptIn(result.coldStartOptIn === true);
+      return result;
     } catch {
       return withProactiveDefault({ ...DEFAULT_SETTINGS });
     }
@@ -1632,6 +1650,10 @@ export class MobileApp {
 
   async saveSettings(settings: MobileSettings): Promise<void> {
     await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    // Keep the sync cache in step with persisted settings so a toggled
+    // cold-start opt-in takes effect on the next paid delegation without a
+    // re-enable (mirrors the web/desktop live getter).
+    setColdStartOptIn(settings.coldStartOptIn === true);
   }
 
   // === Identity Info ===

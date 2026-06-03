@@ -125,6 +125,17 @@ export function GovernanceTab({
           thumbColor={draft.proactive.anchorOnchain ? colors.textPrimary : colors.textMuted}
         />
       </View>
+
+      <Text style={styles.sectionTitle}>Sovereign Payments</Text>
+      <View style={styles.switchRow}>
+        <Text style={styles.switchLabel}>Pay new agents directly (peer-to-peer)</Text>
+        <Switch
+          value={draft.coldStartOptIn}
+          onValueChange={(v) => onUpdate({ coldStartOptIn: v })}
+          trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+          thumbColor={draft.coldStartOptIn ? colors.textPrimary : colors.textMuted}
+        />
+      </View>
     </View>
   );
 }

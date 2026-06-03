@@ -50,6 +50,7 @@ import {
   TauriPlanSyncStoreAdapter,
 } from "./tauri-sync-adapters.js";
 import type { InvokeFn, TauriConversationStore, TauriPlanStore } from "./tauri-storage.js";
+import { loadColdStartOptIn } from "./cold-start-optin.js";
 
 export type SyncIndicatorStatus =
   | "disconnected"
@@ -329,6 +330,12 @@ export class SyncController {
       syncUrl,
       authToken: async () => this.deps.createSyncToken(privKeyHex, "task:submit"),
       ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
+      // Forward the cold-start opt-in as a LIVE getter so the "Pay new agents
+      // directly" Governance toggle governs chat-driven (delegate_to_agent) P2P
+      // delegation, not just the relay-mode fallback. Without this the toggle is
+      // a no-op for the AI-loop path (the bug closed on web by d6cab601, now at
+      // parity here). Read per call → no re-enable needed when the user flips it.
+      acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
     });
 
     // Store serving state for task handler

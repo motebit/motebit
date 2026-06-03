@@ -7446,6 +7446,26 @@
             </div>
           </div>
           <div class="settings-card">
+            <div class="card-title">Sovereign Payments</div>
+            <div class="settings-field">
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Pay new agents directly (peer-to-peer)</div>
+                  <div class="toggle-desc">
+                    Lets the motebit pay a worker it has no trust history with directly from your
+                    sovereign wallet, onchain, in a single atomic transaction (worker + 5% relay
+                    fee). Off by default — a first paid delegation to an unknown agent safely
+                    settles through the relay ledger instead. Requires a configured Solana wallet.
+                  </div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="settings-p2p-cold-start" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="settings-card">
             <div class="card-title">Recent Activity</div>
             <div id="audit-activity-list" class="audit-activity-list"></div>
             <div id="audit-activity-empty" class="audit-activity-empty" style="display: none">

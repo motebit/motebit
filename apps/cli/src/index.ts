@@ -694,6 +694,10 @@ async function main(): Promise<void> {
           ...(config.routingStrategy !== undefined
             ? { routingStrategy: config.routingStrategy }
             : {}),
+          // Cold-start opt-in (`--pay-new-agents`) — admit paid P2P delegation
+          // to a no-history worker (else relay-mode). Shared by both the chat
+          // (delegate_to_agent) and deterministic (invokeCapability) paths.
+          ...(config.payNewAgents ? { acknowledgeNoHistoryRisk: true } : {}),
         };
         runtime.enableInteractiveDelegation(delegationCfg);
         runtime.enableInvokeCapability(delegationCfg);
@@ -706,6 +710,7 @@ async function main(): Promise<void> {
             ...(config.routingStrategy !== undefined
               ? { routingStrategy: config.routingStrategy }
               : {}),
+            ...(config.payNewAgents ? { acknowledgeNoHistoryRisk: true } : {}),
           };
           runtime.enableInteractiveDelegation(delegationCfg);
           runtime.enableInvokeCapability(delegationCfg);
