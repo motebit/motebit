@@ -305,21 +305,58 @@ describe("runMolecule", () => {
       });
       expect(createSweepWallet).not.toHaveBeenCalled();
 
-      // Env set → wallet built from the identity seed + initial sweep sends the
-      // full balance to the destination. (Timer is unref'd; no hanging handle.)
+      // Address set but RPC missing → incomplete config, no sweep (no wallet).
       process.env.MOTEBIT_SWEEP_ADDRESS = DEST;
-      process.env.MOTEBIT_SOLANA_RPC_URL = "https://rpc.test";
+      delete process.env.MOTEBIT_SOLANA_RPC_URL;
       await runMolecule(baseConfig(), () => ({ toolRegistry: new InMemoryToolRegistry() }), {
         ...baseAdapters(),
         createSweepWallet,
       });
+      expect(createSweepWallet).not.toHaveBeenCalled();
+
+      // Env set → wallet built from the identity seed + initial sweep sends the
+      // full balance. A tiny interval fires the periodic sweep (covers the timer
+      // callback); then the shutdown wrapper clears it.
+      process.env.MOTEBIT_SWEEP_ADDRESS = DEST;
+      process.env.MOTEBIT_SOLANA_RPC_URL = "https://rpc.test";
+      process.env.MOTEBIT_SWEEP_INTERVAL_MS = "5";
+      const a2 = { ...baseAdapters(), createSweepWallet };
+      await runMolecule(baseConfig(), () => ({ toolRegistry: new InMemoryToolRegistry() }), a2);
       expect(createSweepWallet).toHaveBeenCalledWith("https://rpc.test", expect.any(Uint8Array));
-      await vi.waitFor(() => expect(send).toHaveBeenCalledWith(DEST, 500_000n));
+      // Initial sweep + ≥1 periodic fire.
+      await vi.waitFor(() => expect(send.mock.calls.length).toBeGreaterThanOrEqual(2));
+      expect(send).toHaveBeenCalledWith(DEST, 500_000n);
+      // Shutdown wrapper: clears the sweep timer + chains the original onStop.
+      const cfg = (a2.startCalls[0] as { cfg: { onStop?: () => void } }).cfg;
+      cfg.onStop?.();
+
+      // Error path: a rejecting send is caught + logged, never crashes the boot.
+      // Drop the interval override (covers the default-interval branch) and set
+      // an explicit min (covers the min-micro override branch).
+      delete process.env.MOTEBIT_SWEEP_INTERVAL_MS;
+      process.env.MOTEBIT_SWEEP_MIN_MICRO = "1";
+      const send2 = vi.fn().mockRejectedValue(new Error("rpc down"));
+      const failWallet = vi.fn(() => ({
+        isAvailable: vi.fn().mockResolvedValue(true),
+        getBalance: vi.fn().mockResolvedValue(500_000n),
+        send: send2,
+      }));
+      const a3 = { ...baseAdapters(), createSweepWallet: failWallet };
+      const h3 = await runMolecule(
+        baseConfig(),
+        () => ({ toolRegistry: new InMemoryToolRegistry() }),
+        a3,
+      );
+      await vi.waitFor(() => expect(send2).toHaveBeenCalled());
+      (a3.startCalls[0] as { cfg: { onStop?: () => void } }).cfg.onStop?.();
+      void h3;
     } finally {
       if (prevAddr == null) delete process.env.MOTEBIT_SWEEP_ADDRESS;
       else process.env.MOTEBIT_SWEEP_ADDRESS = prevAddr;
       if (prevRpc == null) delete process.env.MOTEBIT_SOLANA_RPC_URL;
       else process.env.MOTEBIT_SOLANA_RPC_URL = prevRpc;
+      delete process.env.MOTEBIT_SWEEP_INTERVAL_MS;
+      delete process.env.MOTEBIT_SWEEP_MIN_MICRO;
     }
   });
 

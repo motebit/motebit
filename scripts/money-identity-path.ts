@@ -84,6 +84,12 @@ export const MONEY_IDENTITY_PATH: ReadonlyMap<string, PathTier> = new Map([
   ["@motebit/evm-rpc", "money"],
   ["@motebit/deposit-detector", "money"],
   ["@motebit/treasury-reconciliation", "money"],
+  // Worker boot kernel — derives a service's sovereign settlement address and
+  // sweeps its accrued P2P earnings (constructs SolanaWalletRail from the
+  // identity seed). Genuinely money-path (unlike the runtime core, which #110
+  // moved OFF the path via the SovereignWalletRail port): a worker handles its
+  // own funds, so the kernel that wires that gets the registry's scrutiny.
+  ["@motebit/molecule-runner", "money"],
   ["@motebit/core-identity", "identity"],
   ["@motebit/identity-file", "identity"],
   ["@motebit/crypto", "identity"], // member-by-declaration; NOT a trigger (see header)
