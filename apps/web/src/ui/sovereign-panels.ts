@@ -1018,44 +1018,52 @@ function renderSuccession(
     return;
   }
 
-  // Loaded — always render the current identity as the hero card. The
-  // identity is the most foundational fact in this tab; per the same
-  // hero-card pattern as Sovereign reserve in Budget, it gets display
-  // material weight whether or not rotations exist.
-  const identityCard = document.createElement("div");
-  identityCard.className = "sov-hero-card";
+  // The relay-succession hero. A local identity hero may already have rendered
+  // above (the bootstrap card) — rendering this too would show a SECOND
+  // "Current identity", which is just the same key again when nothing has
+  // rotated. So render it only when it ADDS information:
+  //   • after rotations → it's the CURRENT signing key, distinct from the
+  //     local genesis key, and is labeled "Current signing key";
+  //   • with no local identity (older surfaces) → it stands in as the
+  //     "Current identity" hero.
+  // Identity is the constant motebit_id; the signing key is what can rotate —
+  // never conflate the two under one "Current identity" header.
+  if (!state.localIdentity || data.chain.length > 0) {
+    const identityCard = document.createElement("div");
+    identityCard.className = "sov-hero-card";
 
-  const idBody = document.createElement("div");
-  idBody.className = "sov-hero-body";
+    const idBody = document.createElement("div");
+    idBody.className = "sov-hero-body";
 
-  const idLabel = document.createElement("div");
-  idLabel.className = "sov-hero-label";
-  idLabel.textContent = "Current identity";
-  idBody.appendChild(idLabel);
+    const idLabel = document.createElement("div");
+    idLabel.className = "sov-hero-label";
+    idLabel.textContent = state.localIdentity ? "Current signing key" : "Current identity";
+    idBody.appendChild(idLabel);
 
-  const idValue = document.createElement("div");
-  idValue.className = "sov-hero-value-code";
-  // The relay returns `current_public_key: null` for a motebit with no
-  // `agent_registry` row (a sovereign wallet that paired for sync but never
-  // registered as a discoverable agent — the common web case). Fall back to
-  // the locally-known signing key, then "—". Never feed null to `truncate`.
-  const currentKey = data.current_public_key ?? state.localIdentity?.publicKeyHex ?? null;
-  idValue.textContent = currentKey ? truncate(currentKey, 32) : "—";
-  idBody.appendChild(idValue);
+    const idValue = document.createElement("div");
+    idValue.className = "sov-hero-value-code";
+    // The relay returns `current_public_key: null` for a motebit with no
+    // `agent_registry` row (a sovereign wallet that paired for sync but never
+    // registered as a discoverable agent — the common web case). Fall back to
+    // the locally-known signing key, then "—". Never feed null to `truncate`.
+    const currentKey = data.current_public_key ?? state.localIdentity?.publicKeyHex ?? null;
+    idValue.textContent = currentKey ? truncate(currentKey, 32) : "—";
+    idBody.appendChild(idValue);
 
-  const idSubtitle = document.createElement("div");
-  idSubtitle.className = "sov-hero-subtitle";
-  if (data.chain.length > 0) {
-    const genesisKey = data.chain[0]!.old_public_key;
-    const rotationWord = data.chain.length === 1 ? "rotation" : "rotations";
-    idSubtitle.textContent = `${data.chain.length} ${rotationWord} · genesis ${truncate(genesisKey, 12)}`;
-  } else {
-    idSubtitle.textContent = "Ed25519 sovereign key";
+    const idSubtitle = document.createElement("div");
+    idSubtitle.className = "sov-hero-subtitle";
+    if (data.chain.length > 0) {
+      const genesisKey = data.chain[0]!.old_public_key;
+      const rotationWord = data.chain.length === 1 ? "rotation" : "rotations";
+      idSubtitle.textContent = `${data.chain.length} ${rotationWord} · genesis ${truncate(genesisKey, 12)}`;
+    } else {
+      idSubtitle.textContent = "Ed25519 sovereign key";
+    }
+    idBody.appendChild(idSubtitle);
+
+    identityCard.appendChild(idBody);
+    successionContent.appendChild(identityCard);
   }
-  idBody.appendChild(idSubtitle);
-
-  identityCard.appendChild(idBody);
-  successionContent.appendChild(identityCard);
 
   // Key rotations section — always rendered, holds either the timeline
   // (when rotations exist) or a forward-framed empty register.
