@@ -23,7 +23,6 @@ import {
   classifyCertainty,
   formatHardwarePlatform,
   formatLatency,
-  agentDisplayLabel,
   shortMotebitId,
   type AgentHardwareAttestation,
   type AgentLatencyStats,
@@ -926,6 +925,13 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       const data = (await res.json()) as { agents?: DiscoveredAgent[] };
       return data.agents ?? [];
     },
+    // First-person, local-only: writes the petname to this motebit's own trust
+    // record via the runtime. Never a relay/global name. Doctrine §3.
+    setPetname: async (remoteMotebitId: string, petname: string | undefined): Promise<void> => {
+      const runtime = ctx.app.getRuntime();
+      if (!runtime) return;
+      await runtime.setAgentPetname(remoteMotebitId, petname);
+    },
   };
 
   const agentsCtrl = createAgentsController(agentsAdapter);
@@ -936,7 +942,14 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   // doctrine agents-as-first-person-trust-graph §4. The sigil's accessible
   // title is the UUID-safe short id (never user-set petname) so no untrusted
   // text enters the SVG string; the visible petname goes through textContent.
-  function renderAgentIdentity(opts: { fullId: string; petname?: string }): HTMLElement {
+  // `onSetPetname` (Known only) makes the label an inline, local petname editor —
+  // a record edit, not creation, so it's inline (no modal; no interior-register
+  // rotation). First-person only; the short id stays the authority anchor.
+  function renderAgentIdentity(opts: {
+    fullId: string;
+    petname?: string;
+    onSetPetname?: (petname: string | undefined) => void;
+  }): HTMLElement {
     const header = document.createElement("div");
     header.className = "agent-item-identity";
 
@@ -957,24 +970,72 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     const col = document.createElement("div");
     col.className = "agent-id-col";
     col.title = opts.fullId;
+    const short = shortMotebitId(opts.fullId);
+    const hasPetname = opts.petname != null && opts.petname.length > 0;
 
-    const label = document.createElement("div");
-    label.className = "agent-item-id";
-    label.textContent = agentDisplayLabel({
-      motebit_id: opts.fullId,
-      remote_motebit_id: opts.fullId,
-      petname: opts.petname,
-    });
-    col.appendChild(label);
+    const startEdit = (): void => {
+      const onSet = opts.onSetPetname;
+      if (onSet == null) return;
+      col.innerHTML = "";
+      const input = document.createElement("input");
+      input.className = "agent-petname-input";
+      input.value = opts.petname ?? "";
+      input.placeholder = "name this agent";
+      input.maxLength = 40;
+      col.appendChild(input);
+      input.focus();
+      input.select();
+      let done = false;
+      const finish = (save: boolean): void => {
+        if (done) return;
+        done = true;
+        if (save)
+          onSet(input.value); // empty ⇒ clears (controller trims)
+        else buildView(); // cancel — restore the label view
+      };
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          finish(true);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          finish(false);
+        }
+      });
+      input.addEventListener("blur", () => finish(false));
+    };
 
-    if (opts.petname != null && opts.petname.length > 0) {
-      // Keep the verifiable short id visible beneath a petname.
-      const fp = document.createElement("div");
-      fp.className = "agent-item-fingerprint";
-      fp.textContent = shortMotebitId(opts.fullId);
-      col.appendChild(fp);
+    function buildView(): void {
+      col.innerHTML = "";
+      const label = document.createElement("div");
+      label.className = "agent-item-id";
+      label.textContent = hasPetname ? opts.petname! : short;
+      col.appendChild(label);
+
+      if (hasPetname) {
+        // petname headline → keep the verifiable short id beneath it
+        const fp = document.createElement("div");
+        fp.className = "agent-item-fingerprint";
+        fp.textContent = short;
+        col.appendChild(fp);
+        if (opts.onSetPetname != null) {
+          label.classList.add("agent-petname-editable");
+          label.title = "Rename (local)";
+          label.addEventListener("click", startEdit);
+        }
+      } else if (opts.onSetPetname != null) {
+        // no petname → short id headline + a subtle local "name" affordance
+        const add = document.createElement("button");
+        add.type = "button";
+        add.className = "agent-add-name";
+        add.textContent = "+ name";
+        add.title = "Give this agent a local name";
+        add.addEventListener("click", startEdit);
+        col.appendChild(add);
+      }
     }
 
+    buildView();
     header.appendChild(col);
     return header;
   }
@@ -1002,7 +1063,11 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       item.className = "panel-list-card agent-item";
 
       item.appendChild(
-        renderAgentIdentity({ fullId: agent.remote_motebit_id, petname: agent.petname }),
+        renderAgentIdentity({
+          fullId: agent.remote_motebit_id,
+          petname: agent.petname,
+          onSetPetname: (pn) => void agentsCtrl.setPetname(agent.remote_motebit_id, pn),
+        }),
       );
 
       const meta = document.createElement("div");

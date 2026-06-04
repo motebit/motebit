@@ -298,6 +298,13 @@ export interface AgentsFetchAdapter {
   readonly motebitId: string | null;
   listTrustedAgents(): Promise<AgentRecord[]>;
   discoverAgents(): Promise<DiscoveredAgent[]>;
+  /**
+   * Set or clear the first-person local petname for a Known peer. Optional: a
+   * surface that doesn't offer petname editing omits it (the controller's
+   * `setPetname` no-ops then). Local-only — the host wires it to the runtime's
+   * `setAgentPetname`; never a relay/global write. Pass `undefined` to clear.
+   */
+  setPetname?(remoteMotebitId: string, petname: string | undefined): Promise<void>;
 }
 
 // ── Sort + filter (derived view) ──────────────────────────────────────
@@ -426,6 +433,11 @@ export interface AgentsController {
   setCapabilityFilter(filter: string): void;
   refreshKnown(): Promise<void>;
   refreshDiscover(): Promise<void>;
+  /**
+   * Set or clear a Known peer's first-person petname, then refresh. No-ops if the
+   * adapter doesn't support it. Local record edit — never a global/relay name.
+   */
+  setPetname(remoteMotebitId: string, petname: string | undefined): Promise<void>;
   /** Derived view — discovered agents with sort + filter applied. */
   discoveredView(): DiscoveredAgent[];
   dispose(): void;
@@ -496,6 +508,17 @@ export function createAgentsController(adapter: AgentsFetchAdapter): AgentsContr
     patch({ capabilityFilter: filter });
   }
 
+  async function setPetname(remoteMotebitId: string, petname: string | undefined): Promise<void> {
+    if (disposed || adapter.setPetname == null) return;
+    const trimmed = petname?.trim();
+    await adapter.setPetname(
+      remoteMotebitId,
+      trimmed != null && trimmed.length > 0 ? trimmed : undefined,
+    );
+    if (disposed) return;
+    await refreshKnown();
+  }
+
   function discoveredView(): DiscoveredAgent[] {
     return applySortFilter(state.discovered, state.sort, state.capabilityFilter);
   }
@@ -524,6 +547,7 @@ export function createAgentsController(adapter: AgentsFetchAdapter): AgentsContr
     setCapabilityFilter,
     refreshKnown,
     refreshDiscover,
+    setPetname,
     discoveredView,
     dispose,
   };

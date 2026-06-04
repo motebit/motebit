@@ -1,7 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { shortMotebitId, agentDisplayLabel } from "../agents/controller.js";
+import {
+  shortMotebitId,
+  agentDisplayLabel,
+  createAgentsController,
+  type AgentsFetchAdapter,
+} from "../agents/controller.js";
 
 const UUID = "019d6828-969e-7e9b-baa2-481ece0f80c2";
+
+function makeAdapter(over: Partial<AgentsFetchAdapter> = {}): AgentsFetchAdapter {
+  return {
+    syncUrl: null,
+    motebitId: "me",
+    listTrustedAgents: async () => [],
+    discoverAgents: async () => [],
+    ...over,
+  };
+}
 
 describe("shortMotebitId", () => {
   it("shortens a motebit_id to head…tail", () => {
@@ -37,5 +52,47 @@ describe("agentDisplayLabel", () => {
 
   it("returns an empty string when no id is present (defensive)", () => {
     expect(agentDisplayLabel({})).toBe("");
+  });
+});
+
+describe("createAgentsController — setPetname (first-person, local)", () => {
+  it("writes the trimmed petname via the adapter, then refreshes Known", async () => {
+    const calls: Array<[string, string | undefined]> = [];
+    let listed = 0;
+    const ctrl = createAgentsController(
+      makeAdapter({
+        listTrustedAgents: async () => {
+          listed++;
+          return [];
+        },
+        setPetname: async (id, pn) => {
+          calls.push([id, pn]);
+        },
+      }),
+    );
+    await ctrl.setPetname("remote-1", "  Scout  ");
+    expect(calls).toEqual([["remote-1", "Scout"]]); // trimmed
+    expect(listed).toBeGreaterThan(0); // refreshed after write
+    ctrl.dispose();
+  });
+
+  it("clears the petname when given empty/whitespace", async () => {
+    const seen: Array<string | undefined> = [];
+    const ctrl = createAgentsController(
+      makeAdapter({
+        setPetname: async (_id, pn) => {
+          seen.push(pn);
+        },
+      }),
+    );
+    await ctrl.setPetname("remote-1", "   ");
+    expect(seen).toEqual([undefined]); // empty ⇒ clear
+    ctrl.dispose();
+  });
+
+  it("no-ops when the adapter does not support setPetname", async () => {
+    const ctrl = createAgentsController(makeAdapter()); // no setPetname method
+    await expect(ctrl.setPetname("remote-1", "Scout")).resolves.toBeUndefined();
+    ctrl.dispose();
   });
 });
