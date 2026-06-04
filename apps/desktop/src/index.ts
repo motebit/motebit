@@ -1744,6 +1744,12 @@ export class DesktopApp {
     return this.runtime.listTrustedAgents();
   }
 
+  /** First-person local petname for a peer agent (display-only; never on the wire). */
+  async setAgentPetname(remoteMotebitId: string, petname: string | undefined) {
+    if (!this.runtime) return;
+    return this.runtime.setAgentPetname(remoteMotebitId, petname);
+  }
+
   /**
    * Session sensitivity tier. Default `none`. Surfaces elevate via the
    * `/sensitivity` slash command (or future settings affordance) when

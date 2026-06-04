@@ -1921,6 +1921,15 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-sigil-renderer-parity",
+    proves:
+      "flags the web + desktop agent-sigil renderers drifting — the same agent rendering a DIFFERENT mark per surface. Probe rewrites a geometry constant (`size * 0.46` → `size * 0.50`, the droplet radius) in the desktop copy only; the gate must surface the code-region divergence against the web copy. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`apps/desktop/src/ui/agent-sigil.ts`, (src) =>
+        src.replace("const r = size * 0.46;", "const r = size * 0.5;"),
+      ),
+  },
+  {
     script: "check-merkle-tree-hash-canonical",
     proves:
       "flags an inline RFC 6962 domain-separation tag byte outside the two allowlisted Merkle primitives — the LOAD-BEARING assertion (`check-suite-dispatch` shape, NOT vacuous registry self-consistency): the `0x00` leaf / `0x01` node tag may live ONLY in `packages/crypto/src/merkle.ts` + `packages/encryption/src/merkle.ts`, so a second hand-rolled Merkle combine/leaf that silently ships RFC-6962-minus-§2.1 hashing is caught. Drift class: a new anchor consumer copy-pastes the tag-prepend idiom instead of routing through `canonicalLeaf`/`verifyMerkleInclusion`. Probe appends a `new Uint8Array([0x01])` line to a non-allowlisted source file; the gate's tag-localization scan must surface it. byte-identical restoration on cleanup via mutateFile.",

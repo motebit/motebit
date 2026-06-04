@@ -5,6 +5,8 @@ import {
   collectCapabilities,
   formatHardwarePlatform,
   formatLatency,
+  shortMotebitId,
+  trustAuraClass,
   type AgentHardwareAttestation,
   type AgentLatencyStats,
   type AgentRecord,
@@ -14,6 +16,8 @@ import {
   type PricingEntry,
   type SortKey,
 } from "@motebit/panels";
+import { deriveAgentSigil } from "@motebit/sdk";
+import { sigilToSvg } from "./agent-sigil";
 
 // === DOM Refs ===
 
@@ -119,6 +123,7 @@ function createDesktopAgentsAdapter(ctx: DesktopContext): AgentsFetchAdapter {
     },
     listTrustedAgents: () => ctx.app.listTrustedAgents(),
     discoverAgents: () => ctx.app.discoverAgents(),
+    setPetname: (remoteMotebitId, petname) => ctx.app.setAgentPetname(remoteMotebitId, petname),
   };
 }
 
@@ -171,6 +176,110 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
 
   // --- Renderers ---
 
+  // Identity header for an agent row: the key-derived sigil face + the
+  // human-readable handle (petname when known, else the short motebit_id), with
+  // the full id on `title`. "The face is the key" — doctrine §4. Sibling of
+  // web's `renderAgentIdentity` (apps/web/src/ui/gated-panels.ts). The sigil
+  // title is the UUID-safe short id (never user text → no untrusted text in the
+  // SVG string); the petname goes through textContent. `onSetPetname` (Known
+  // only) makes the label an inline local petname editor — a record edit, inline
+  // (no modal). Trust aura (Known only) wraps the mark; omitted on Discover,
+  // where trust would be the relay's claim, not yours.
+  function renderAgentIdentity(opts: {
+    fullId: string;
+    petname?: string;
+    trustLevel?: string;
+    onSetPetname?: (petname: string | undefined) => void;
+  }): HTMLElement {
+    const header = document.createElement("div");
+    header.className = "agent-item-identity";
+
+    const face = document.createElement("span");
+    face.className = "agent-sigil";
+    if (opts.trustLevel != null) {
+      const aura = trustAuraClass(opts.trustLevel);
+      if (aura.length > 0) face.classList.add(aura);
+    }
+    if (opts.fullId.length > 0) {
+      face.innerHTML = sigilToSvg(deriveAgentSigil(opts.fullId), {
+        size: 32,
+        title: shortMotebitId(opts.fullId),
+      });
+    } else {
+      face.classList.add("agent-sigil-empty");
+    }
+    header.appendChild(face);
+
+    const col = document.createElement("div");
+    col.className = "agent-id-col";
+    col.title = opts.fullId;
+    const short = shortMotebitId(opts.fullId);
+    const hasPetname = opts.petname != null && opts.petname.length > 0;
+
+    const startEdit = (): void => {
+      const onSet = opts.onSetPetname;
+      if (onSet == null) return;
+      col.innerHTML = "";
+      const input = document.createElement("input");
+      input.className = "agent-petname-input";
+      input.value = opts.petname ?? "";
+      input.placeholder = "name this agent";
+      input.maxLength = 40;
+      col.appendChild(input);
+      input.focus();
+      input.select();
+      let done = false;
+      const finish = (save: boolean): void => {
+        if (done) return;
+        done = true;
+        if (save) onSet(input.value);
+        else buildView();
+      };
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          finish(true);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          finish(false);
+        }
+      });
+      input.addEventListener("blur", () => finish(false));
+    };
+
+    function buildView(): void {
+      col.innerHTML = "";
+      const label = document.createElement("div");
+      label.className = "agent-item-id";
+      label.textContent = hasPetname ? opts.petname! : short;
+      col.appendChild(label);
+
+      if (hasPetname) {
+        const fp = document.createElement("div");
+        fp.className = "agent-item-fingerprint";
+        fp.textContent = short;
+        col.appendChild(fp);
+        if (opts.onSetPetname != null) {
+          label.classList.add("agent-petname-editable");
+          label.title = "Rename (local)";
+          label.addEventListener("click", startEdit);
+        }
+      } else if (opts.onSetPetname != null) {
+        const add = document.createElement("button");
+        add.type = "button";
+        add.className = "agent-add-name";
+        add.textContent = "+ name";
+        add.title = "Give this agent a local name";
+        add.addEventListener("click", startEdit);
+        col.appendChild(add);
+      }
+    }
+
+    buildView();
+    header.appendChild(col);
+    return header;
+  }
+
   function renderKnown(state: AgentsState): void {
     agentsList.innerHTML = "";
     if (state.known.length === 0) {
@@ -183,11 +292,14 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
       const item = document.createElement("div");
       item.className = "agent-item";
 
-      const idDiv = document.createElement("div");
-      idDiv.className = "agent-item-id";
-      idDiv.textContent = agent.remote_motebit_id;
-      idDiv.title = agent.remote_motebit_id;
-      item.appendChild(idDiv);
+      item.appendChild(
+        renderAgentIdentity({
+          fullId: agent.remote_motebit_id,
+          petname: agent.petname,
+          trustLevel: agent.trust_level,
+          onSetPetname: (petname) => void ctrl.setPetname(agent.remote_motebit_id, petname),
+        }),
+      );
 
       const meta = document.createElement("div");
       meta.className = "agent-item-meta";
@@ -311,11 +423,7 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
       const item = document.createElement("div");
       item.className = "agent-item";
 
-      const idDiv = document.createElement("div");
-      idDiv.className = "agent-item-id";
-      idDiv.textContent = agent.motebit_id;
-      idDiv.title = agent.motebit_id;
-      item.appendChild(idDiv);
+      item.appendChild(renderAgentIdentity({ fullId: agent.motebit_id }));
 
       if (agent.capabilities.length > 0) {
         const priceByCapability = new Map<string, PricingEntry>();
