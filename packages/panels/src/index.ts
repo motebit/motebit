@@ -29,6 +29,7 @@ export {
   formatLatency,
   shortMotebitId,
   agentDisplayLabel,
+  trustAuraClass,
   type AgentsController,
   type AgentsFetchAdapter,
   type AgentsState,

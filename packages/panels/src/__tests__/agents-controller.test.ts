@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   shortMotebitId,
   agentDisplayLabel,
+  trustAuraClass,
   createAgentsController,
   type AgentsFetchAdapter,
 } from "../agents/controller.js";
@@ -52,6 +53,23 @@ describe("agentDisplayLabel", () => {
 
   it("returns an empty string when no id is present (defensive)", () => {
     expect(agentDisplayLabel({})).toBe("");
+  });
+});
+
+describe("trustAuraClass", () => {
+  it("earns no aura below verified (honest: no glow without earned trust)", () => {
+    expect(trustAuraClass("first_contact")).toBe("");
+    expect(trustAuraClass("unknown")).toBe("");
+    expect(trustAuraClass("")).toBe("");
+  });
+
+  it("maps verified/trusted to ring/glow tokens", () => {
+    expect(trustAuraClass("verified")).toBe("agent-trust-verified");
+    expect(trustAuraClass("trusted")).toBe("agent-trust-trusted");
+  });
+
+  it("maps blocked to a (muted) token, not an alarm", () => {
+    expect(trustAuraClass("blocked")).toBe("agent-trust-blocked");
   });
 });
 

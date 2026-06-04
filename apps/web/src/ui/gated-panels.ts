@@ -24,6 +24,7 @@ import {
   formatHardwarePlatform,
   formatLatency,
   shortMotebitId,
+  trustAuraClass,
   type AgentHardwareAttestation,
   type AgentLatencyStats,
   type AgentRecord,
@@ -948,6 +949,9 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   function renderAgentIdentity(opts: {
     fullId: string;
     petname?: string;
+    // First-person trust tier (Known only) → a ring/glow wrapping the mark.
+    // Omitted on Discover: that trust would be the relay's claim, not yours.
+    trustLevel?: string;
     onSetPetname?: (petname: string | undefined) => void;
   }): HTMLElement {
     const header = document.createElement("div");
@@ -955,6 +959,10 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
     const face = document.createElement("span");
     face.className = "agent-sigil";
+    if (opts.trustLevel != null) {
+      const aura = trustAuraClass(opts.trustLevel);
+      if (aura.length > 0) face.classList.add(aura);
+    }
     if (opts.fullId.length > 0) {
       // Face from the motebit_id — always present, so the same agent shows the
       // SAME mark in Known and Discover (a pubkey isn't reliably client-side).
@@ -1066,6 +1074,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
         renderAgentIdentity({
           fullId: agent.remote_motebit_id,
           petname: agent.petname,
+          trustLevel: agent.trust_level,
           onSetPetname: (pn) => void agentsCtrl.setPetname(agent.remote_motebit_id, pn),
         }),
       );

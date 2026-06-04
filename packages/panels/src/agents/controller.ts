@@ -278,6 +278,31 @@ export function agentDisplayLabel(agent: {
   return agent.petname != null && agent.petname.length > 0 ? agent.petname : shortMotebitId(id);
 }
 
+/**
+ * Trust-aura class token for a Known agent's mark, reflecting your FIRST-PERSON
+ * trust with them — a ring/glow that *wraps* the identity mark, never recolors
+ * its core. The core is universal (same everywhere); the aura is local (varies
+ * per viewer by relationship). Doctrine `agents-as-first-person-trust-graph.md`
+ * §1 (trust is first-person) + §4 (mark core is stable).
+ *
+ * Honest by default: nothing below `verified` — first contact has earned no glow.
+ * `blocked` is a muted treatment, never an alarm (calm software). Known only —
+ * a Discover agent's `trust_level` is the relay's claim, not your earned trust,
+ * so it must get no aura. Surfaces map the token to their own ring/glow CSS.
+ */
+export function trustAuraClass(trustLevel: string): string {
+  switch (trustLevel) {
+    case "verified":
+      return "agent-trust-verified";
+    case "trusted":
+      return "agent-trust-trusted";
+    case "blocked":
+      return "agent-trust-blocked";
+    default:
+      return ""; // unknown / first_contact ⇒ no aura (no glow without earned trust)
+  }
+}
+
 // ── Adapter ──────────────────────────────────────────────────────────
 
 /**

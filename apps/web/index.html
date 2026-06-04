@@ -5264,9 +5264,24 @@
         width: 32px;
         height: 32px;
         flex: 0 0 auto;
-        border-radius: 8px;
+        border-radius: 50%;
         overflow: hidden;
         display: inline-flex;
+      }
+      /* Trust aura — a ring/glow wrapping the mark, NOT a recolor of its core.
+         First-person trust tier (Known only). Nothing below verified: no glow
+         without earned trust. Calm — blocked is muted, never an alarm. */
+      .agent-sigil.agent-trust-verified {
+        box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.4);
+      }
+      .agent-sigil.agent-trust-trusted {
+        box-shadow:
+          0 0 0 1.5px rgba(255, 255, 255, 0.55),
+          0 0 7px 1px rgba(255, 255, 255, 0.3);
+      }
+      .agent-sigil.agent-trust-blocked {
+        opacity: 0.45;
+        filter: grayscale(0.7);
       }
       .agent-sigil svg {
         display: block;
