@@ -131,6 +131,14 @@ export {
   buildSignedTransparencyDeclarationJsonSchema,
 } from "./transparency-declaration.js";
 export {
+  AgentRevocationRecordSchema,
+  AgentRevocationFeedSchema,
+  AGENT_REVOCATION_RECORD_SCHEMA_ID,
+  AGENT_REVOCATION_FEED_SCHEMA_ID,
+  buildAgentRevocationRecordJsonSchema,
+  buildAgentRevocationFeedJsonSchema,
+} from "./agent-revocation.js";
+export {
   AgentSettlementAnchorBatchSchema,
   AGENT_SETTLEMENT_ANCHOR_BATCH_SCHEMA_ID,
   buildAgentSettlementAnchorBatchJsonSchema,

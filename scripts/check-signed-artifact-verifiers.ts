@@ -134,6 +134,11 @@ export const REGISTRY: Record<string, Classification> = {
   },
   SkillEnvelope: { kind: "verifier", verifier: "verifySkillEnvelope" },
   SignedTransparencyDeclaration: { kind: "verifier", verifier: "verifyTransparencyDeclaration" },
+  // Agent-revocation family (spec/agent-revocation-v1.md) — portable verifiers
+  // in @motebit/state-export-client, against the same pinned relay key as the
+  // transparency declaration. The operator's de-list power, sovereign-verifiable.
+  AgentRevocationRecord: { kind: "verifier", verifier: "verifyAgentRevocationRecord" },
+  AgentRevocationFeed: { kind: "verifier", verifier: "verifyAgentRevocationFeed" },
   // Migration family (spec/migration-v1.md) — portable verifiers added
   // 2026-05-24 alongside the relay hex→base64url encoding fix.
   MigrationRequest: { kind: "verifier", verifier: "verifyMigrationRequest" },

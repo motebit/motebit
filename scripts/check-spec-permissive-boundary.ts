@@ -75,6 +75,15 @@ const WAIVED_CALLABLES: Record<string, string> = {
   fetchFederatedCandidates:
     "relay-federation-v1 Appendix A.2 — named alongside augmentGraphWithFederatedAgents as reference-impl-only; protocol law is trust-algebra composition across federation hops",
 
+  // Portable verifiers on the permissive floor, but in @motebit/state-export-client
+  // (the browser-safe verification home) rather than protocol/crypto/sdk. A third
+  // party verifies the agent-revocation feed offline with this Apache-2.0 package +
+  // the relay's pinned key — same posture as verifyTransparencyDeclaration.
+  verifyAgentRevocationRecord:
+    "agent-revocation-v1 §5 — portable verifier exported from @motebit/state-export-client (Apache-2.0 permissive floor), the documented verification home alongside verifyTransparencyDeclaration",
+  verifyAgentRevocationFeed:
+    "agent-revocation-v1 §5 — portable verifier exported from @motebit/state-export-client (Apache-2.0 permissive floor); verifies the feed digest + every contained record against the pinned relay key",
+
   // Adapter-interface method names (documented interfaces, not standalone exports)
   listBySubject:
     "documented adapter method name (credential store); concrete adapter is BSL, interface shape is permissive-floor (Apache-2.0)",

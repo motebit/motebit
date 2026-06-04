@@ -2983,6 +2983,25 @@ export {
   isSignedTransparencyDeclaration,
 } from "./transparency.js";
 
+// ── Agent revocation — operator de-list power, sovereign-verifiable ──
+// The relay's hygiene tool for a permissionless registry. Each revocation
+// (and reinstatement) is a signed, reasoned, publicly-fetchable record
+// against the pinned relay key — de-list, never de-identify; post-hoc
+// hygiene, never editorial curation. See `./agent-revocation.ts` header.
+export type {
+  AgentRevocationReason,
+  AgentRevocationActor,
+  AgentRevocationRecord,
+  AgentRevocationSignedPayload,
+  AgentRevocationFeed,
+} from "./agent-revocation.js";
+export {
+  ALL_AGENT_REVOCATION_REASONS,
+  isAgentRevocationReason,
+  AGENT_REVOCATION_SUITE,
+  AGENT_REVOCATION_SPEC_ID,
+} from "./agent-revocation.js";
+
 import type { ToolMode } from "./tool-mode.js";
 import type { SettlementMode, P2pPaymentProof } from "./settlement-mode.js";
 import type { SettlementAsset } from "./settlement-asset.js";

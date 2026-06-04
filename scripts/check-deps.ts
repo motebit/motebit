@@ -240,6 +240,11 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // docs/doctrine/registry-pattern-canonical.md on second-asset
     // consumer. Same shape as `isSettlementMode`.
     "isSettlementAsset",
+    // Agent-revocation reason vocabulary — pure type guard over the
+    // frozen `ALL_AGENT_REVOCATION_REASONS` array. The ninth registered
+    // closed registry per docs/doctrine/registry-pattern-canonical.md.
+    // Same shape as `isSettlementMode`.
+    "isAgentRevocationReason",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)

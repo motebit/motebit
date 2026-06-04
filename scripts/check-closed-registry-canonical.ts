@@ -241,6 +241,25 @@ const REGISTERED_REGISTRIES: ReadonlyArray<RegisteredRegistry> = [
     gateName: "check-merkle-tree-hash-canonical",
     doctrinePaths: ["docs/doctrine/merkle-tree-hash-versioning.md"],
   },
+  {
+    name: "AgentRevocationReason",
+    // Ninth registered registry — the categorized reason on every signed
+    // `AgentRevocationRecord` (the relay's operator-hygiene de-list power
+    // made sovereign-verifiable). Single-file source = tooling, same shape
+    // as `SettlementMode`. Snake_case wire-format (like `EventType`), so
+    // its bespoke gate uses the snake_case pattern, not lowercase-only.
+    sourceFile: "packages/protocol/src/agent-revocation.ts",
+    toolingFile: "packages/protocol/src/agent-revocation.ts",
+    typeName: "AgentRevocationReason",
+    arrayName: "ALL_AGENT_REVOCATION_REASONS",
+    guardName: "isAgentRevocationReason",
+    gatePath: "scripts/check-agent-revocation-reason-canonical.ts",
+    gateName: "check-agent-revocation-reason-canonical",
+    doctrinePaths: [
+      "docs/doctrine/registry-pattern-canonical.md",
+      "docs/doctrine/agents-as-first-person-trust-graph.md",
+    ],
+  },
 ];
 
 function readFile(path: string): string | null {

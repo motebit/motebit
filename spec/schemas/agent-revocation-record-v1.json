@@ -1,0 +1,175 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/agent-revocation-record-v1.json",
+  "title": "AgentRevocationRecord (v1)",
+  "description": "One signed agent de-listing / reinstatement. Signed by `relay_public_key` over canonicalJson of every field except `hash`/`suite`/`signature`. De-list, not de-identify — the agent's identity, key, and receipts remain valid. See spec/agent-revocation-v1.md.",
+  "type": "object",
+  "properties": {
+    "spec": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Spec identifier — e.g. `motebit-agent-revocation/draft-2026-06-04`."
+    },
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The agent whose discoverability changed."
+    },
+    "revoked": {
+      "type": "boolean",
+      "description": "Resulting state: `true` = de-listed from Discover, `false` = reinstated."
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "operator_test_cleanup",
+        "spam",
+        "abuse",
+        "malware",
+        "policy_violation",
+        "dmca",
+        "reinstated"
+      ],
+      "description": "Categorized reason (`AgentRevocationReason`). `reinstated` accompanies a reinstatement (`revoked: false`)."
+    },
+    "actor": {
+      "type": "string",
+      "enum": ["operator", "self"],
+      "description": "Who performed the change. `operator` = master-token hygiene; `self` = the agent itself."
+    },
+    "note": {
+      "type": "string",
+      "description": "Optional free-text operator note. Not a substitute for `reason`."
+    },
+    "effective_at": {
+      "type": "number",
+      "description": "Epoch milliseconds when the change took effect."
+    },
+    "relay_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The relay's MotebitId."
+    },
+    "relay_public_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Hex-encoded Ed25519 public key (32 bytes / 64 chars) — the trust anchor."
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Hex-encoded SHA-256 of `canonicalJson` of the signed payload."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-hex-v1",
+      "description": "Cryptosuite — always `motebit-jcs-ed25519-hex-v1` (JCS, Ed25519, HEX encoding)."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Hex-encoded Ed25519 signature over the canonical-JSON signed payload."
+    }
+  },
+  "required": [
+    "spec",
+    "motebit_id",
+    "revoked",
+    "reason",
+    "actor",
+    "effective_at",
+    "relay_id",
+    "relay_public_key",
+    "hash",
+    "suite",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "AgentRevocationRecord": {
+      "type": "object",
+      "properties": {
+        "spec": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Spec identifier — e.g. `motebit-agent-revocation/draft-2026-06-04`."
+        },
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The agent whose discoverability changed."
+        },
+        "revoked": {
+          "type": "boolean",
+          "description": "Resulting state: `true` = de-listed from Discover, `false` = reinstated."
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "operator_test_cleanup",
+            "spam",
+            "abuse",
+            "malware",
+            "policy_violation",
+            "dmca",
+            "reinstated"
+          ],
+          "description": "Categorized reason (`AgentRevocationReason`). `reinstated` accompanies a reinstatement (`revoked: false`)."
+        },
+        "actor": {
+          "type": "string",
+          "enum": ["operator", "self"],
+          "description": "Who performed the change. `operator` = master-token hygiene; `self` = the agent itself."
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional free-text operator note. Not a substitute for `reason`."
+        },
+        "effective_at": {
+          "type": "number",
+          "description": "Epoch milliseconds when the change took effect."
+        },
+        "relay_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The relay's MotebitId."
+        },
+        "relay_public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Hex-encoded Ed25519 public key (32 bytes / 64 chars) — the trust anchor."
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Hex-encoded SHA-256 of `canonicalJson` of the signed payload."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-hex-v1",
+          "description": "Cryptosuite — always `motebit-jcs-ed25519-hex-v1` (JCS, Ed25519, HEX encoding)."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hex-encoded Ed25519 signature over the canonical-JSON signed payload."
+        }
+      },
+      "required": [
+        "spec",
+        "motebit_id",
+        "revoked",
+        "reason",
+        "actor",
+        "effective_at",
+        "relay_id",
+        "relay_public_key",
+        "hash",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

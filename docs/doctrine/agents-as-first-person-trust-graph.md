@@ -177,6 +177,52 @@ boundary adapters when a consumer arrives; never copy a global-reputation or
 central-naming architecture that fights sovereignty. This is the same posture as
 [`identity-universal-boundary.md`](identity-universal-boundary.md).
 
+## 8. Operator de-listing is hygiene, and the power is itself sovereign-verifiable
+
+A permissionless registry accumulates junk: spam listings, abandoned test agents,
+abusive capabilities. The only automatic remedy is the 90-day no-heartbeat TTL
+janitor — too slow for live abuse. So the operator needs a de-list tool. But an
+operator who can silently disappear an agent is exactly the trust root the relay
+is forbidden from being ([`services/relay/CLAUDE.md`](../../services/relay/CLAUDE.md)
+rule 6). The resolution is the same move motebit makes everywhere else — declared
+posture → _proven_ posture: the operator's de-list power is itself made
+accountable, not refused.
+
+Four invariants make it on-thesis rather than against it:
+
+- **De-list, not de-identify.** Revoking a _listing_ sets the relay's
+  `agent_registry.revoked` flag, which Discover filters. The agent's identity,
+  key, succession chain, and receipts stay served by the identity endpoint — it
+  remains hireable directly by id. This is distinct from the _identity_
+  revocation at `POST /agents/:id/revoke` (key-compromise; anchors an on-chain
+  memo so verifiers reject the key); de-listing a spam agent must not assert its
+  key is compromised. Different act, different route (`/revoke-listing`).
+- **Post-hoc hygiene, not editorial curation.** Discovery stays permissionless —
+  no allowlist, no pre-approval (§2). The operator only _removes_ junk/abuse; it
+  never _picks_ winners. That line is what keeps the sybil-resistant,
+  first-person model (§1) intact: quality is still earned trust, not operator
+  blessing.
+- **Every revoke/reinstate is a signed, reasoned, public record.** Each action
+  emits an `AgentRevocationRecord` (`@motebit/protocol`) — JCS + Ed25519 over the
+  relay key, the same key the transparency declaration commits — appended to the
+  public `GET /api/v1/agents/revocations` feed. Anyone fetches the operator's
+  complete moderation history and verifies each entry offline. This is what
+  converts "operator can censor" into "operator is accountable for every
+  removal." The categorized `AgentRevocationReason` (a registered registry:
+  `operator_test_cleanup`, `spam`, `abuse`, `malware`, `policy_violation`,
+  `dmca`, `reinstated`) keeps the feed legible and drift-locked.
+- **Reversible, append-only.** A reinstate is itself a signed record; the feed is
+  the full append-only history, never a mutated current-state view.
+
+Gotchas and bounds: the on-chain anchoring of the feed digest (mirroring the
+transparency declaration's Solana memo) is additive and deferred — the feed is
+verifiable via the pinned relay key today, the anchor only closes the
+trust-on-first-use gap. And a `reason` is operator-asserted prose-of-category, not
+a proof of abuse; the accountability is that the _claim_ is signed and public, so
+a bad-faith de-listing is visible and challengeable — not that the reason is
+independently verified. Self-revocation (an agent removing its own listing) and an
+appeal flow are the natural next records on the same feed.
+
 ## What not to build
 
 A global reputation score or leaderboard; a fleet / org-chart framing (those agents

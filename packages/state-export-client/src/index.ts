@@ -52,6 +52,15 @@ export type {
   FetchTransparencyAnchorOptions,
 } from "./transparency-anchor.js";
 
+export { verifyAgentRevocationRecord, verifyAgentRevocationFeed } from "./agent-revocation.js";
+export type {
+  AgentRevocationRecord,
+  AgentRevocationFeed,
+  AgentRevocationFailureReason,
+  AgentRevocationVerifyResult,
+  AgentRevocationFeedVerifyResult,
+} from "./agent-revocation.js";
+
 export {
   verifiedStateExportFetch,
   verifyManifestAgainstBytes,

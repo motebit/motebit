@@ -2,7 +2,7 @@
  * Agent registration, discovery, capabilities, settlements, ledger, and verification routes.
  */
 
-import type { Hono } from "hono";
+import type { Hono, Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase, DatabaseDriver } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
@@ -29,6 +29,13 @@ import type { KeySuccessionRecord } from "@motebit/encryption";
 import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { getAccountBalanceDetailed } from "./accounts.js";
+import { isAgentRevocationReason, type AgentRevocationReason } from "@motebit/protocol";
+import {
+  buildSignedRevocationRecord,
+  insertRevocationRecord,
+  listRevocationRecords,
+  buildSignedRevocationFeed,
+} from "./agent-revocation.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "agents" });
@@ -546,6 +553,14 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
     // Discovery is publicly readable — agents need to find each other without pre-existing auth
     if (c.req.path === "/api/v1/agents/discover" && c.req.method === "GET") {
+      await next();
+      return;
+    }
+
+    // The revocations feed is publicly readable — it is the operator's
+    // signed, auditable moderation history; anyone may fetch it and verify
+    // each record against the pinned relay key (CLAUDE.md rule 6).
+    if (c.req.path === "/api/v1/agents/revocations" && c.req.method === "GET") {
       await next();
       return;
     }
@@ -1318,6 +1333,122 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     });
     return c.json({ agents: withPeerKey });
   });
+
+  // === Operator hygiene — agent revocation (de-list), sovereign-verifiable ===
+  //
+  // A permissionless registry accumulates junk (spam, abandoned test agents,
+  // abusive capabilities) and the only automatic remedy is the 90-day
+  // no-heartbeat TTL — too slow for live abuse. These routes give the
+  // operator a de-list tool, but de-listing power on a permissionless relay
+  // is exactly the trust-root the relay is forbidden from being (CLAUDE.md
+  // rule 6). So the power is made accountable: every revoke/reinstate is a
+  // signed, reasoned `AgentRevocationRecord` appended to the public
+  // `GET /api/v1/agents/revocations` feed.
+  //
+  //   - De-list, not de-identify: this sets `agent_registry.revoked`, which
+  //     Discover filters (task-routing's revokedFilter). The agent's identity,
+  //     key, succession chain, and receipts stay served by the identity
+  //     endpoint — it remains hireable directly by id.
+  //   - Post-hoc hygiene, not editorial curation: discovery stays
+  //     permissionless; this only REMOVES junk/abuse, it never picks winners.
+  //   - Operator-only: the master token is required. Every `/api/v1/agents/*`
+  //     route except the public reads goes through the auth middleware, which
+  //     sets `callerMotebitId` for a verified AGENT token and leaves it unset
+  //     on the master-token bypass. A present `callerMotebitId` here therefore
+  //     means a non-operator caller — rejected. An agent removes ITSELF via
+  //     DELETE /deregister; it never revokes a peer.
+  //
+  // Registered here, BEFORE the `/:motebitId` param routes below, so the
+  // static `/revocations` path and the `/revoke` /`/unrevoke` suffixes win
+  // over the `:motebitId` capture under the order-sensitive router fallback.
+
+  // GET /api/v1/agents/revocations — public, signed moderation feed.
+  // Anyone may fetch the operator's complete revocation history and verify
+  // each record (and the feed digest) against the pinned relay key.
+  /** @spec motebit/agent-revocation@1.0 */
+  app.get("/api/v1/agents/revocations", async (c) => {
+    const records = listRevocationRecords(moteDb.db);
+    const feed = await buildSignedRevocationFeed(relayIdentity, records);
+    return c.json(feed);
+  });
+
+  /** Shared revoke/reinstate handler. `revoked` distinguishes the two routes. */
+  async function applyRevocation(c: Context, revoked: boolean): Promise<Response> {
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (callerMotebitId) {
+      // A verified agent token reached here — only the operator (master
+      // token) may revoke or reinstate an arbitrary agent.
+      throw new HTTPException(403, {
+        message: "Agent revocation is operator-only (master token required)",
+      });
+    }
+
+    const motebitId = c.req.param("motebitId");
+    if (!motebitId) {
+      throw new HTTPException(400, { message: "Missing motebit_id path parameter" });
+    }
+    const body = await c.req.json<{ reason?: string; note?: string }>().catch(() => ({}) as never);
+
+    // A reinstate is always reason `reinstated`; a revoke requires a
+    // categorized reason from the closed registry (fails closed — an
+    // unrecognized reason must never land in the signed, verified feed).
+    let reason: AgentRevocationReason;
+    if (revoked) {
+      if (!isAgentRevocationReason(body.reason) || body.reason === "reinstated") {
+        throw new HTTPException(400, {
+          message:
+            "Missing or invalid 'reason' — must be one of: operator_test_cleanup, spam, abuse, malware, policy_violation, dmca",
+        });
+      }
+      reason = body.reason;
+    } else {
+      reason = "reinstated";
+    }
+
+    const note =
+      typeof body.note === "string" && body.note.trim() !== "" ? body.note.trim() : undefined;
+
+    const existing = moteDb.db
+      .prepare("SELECT motebit_id FROM agent_registry WHERE motebit_id = ?")
+      .get(motebitId) as { motebit_id: string } | undefined;
+    if (!existing) {
+      throw new HTTPException(404, { message: "Agent not registered" });
+    }
+
+    // Flip the discoverability flag (what Discover filters) and append the
+    // signed record in the same path. Append-only: never an update/delete.
+    moteDb.db
+      .prepare("UPDATE agent_registry SET revoked = ? WHERE motebit_id = ?")
+      .run(revoked ? 1 : 0, motebitId);
+
+    const record = await buildSignedRevocationRecord(relayIdentity, {
+      motebitId,
+      revoked,
+      reason,
+      actor: "operator",
+      note,
+    });
+    insertRevocationRecord(moteDb.db, record);
+
+    logger.info(revoked ? "agent.revoked" : "agent.reinstated", {
+      motebit_id: motebitId,
+      reason,
+    });
+
+    return c.json(record);
+  }
+
+  // POST /api/v1/agents/:motebitId/revoke-listing — operator de-lists an agent.
+  // Distinct from the IDENTITY revocation at `:motebitId/revoke` (key-rotation.ts,
+  // motebit/identity@1.0): that marks a key compromised and anchors an on-chain
+  // revocation memo. De-listing is discovery hygiene — it removes the agent from
+  // Discover and asserts nothing about its key. Different act, different route.
+  /** @internal */
+  app.post("/api/v1/agents/:motebitId/revoke-listing", (c) => applyRevocation(c, true));
+
+  // POST /api/v1/agents/:motebitId/restore-listing — operator reinstates an agent.
+  /** @internal */
+  app.post("/api/v1/agents/:motebitId/restore-listing", (c) => applyRevocation(c, false));
 
   // GET /api/v1/agents/:motebitId/p2p-eligibility — pre-flight settlement check.
   // @internal: an ADVISORY mirror of the submission-time eligibility gate so a

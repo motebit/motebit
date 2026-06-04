@@ -80,6 +80,25 @@ if (v.binding === "revoked") {
 
 `verifyReceiptDocument` is the brain behind a public, login-free receipt verifier. It runs entirely offline (no relay) for the integrity check, never throws on bad input (typed `reason`s instead), and keeps **integrity** (the bytes were signed, untampered) strictly separate from **binding** (the key belongs to this `motebitId`). The binding ladder: `integrity-only` (no options) < `pinned` (pass `options.identity` — the key is time-valid in the motebit's own succession chain) < `anchored` (also pass `options.anchor` — the binding is in the relay's transparency log AND that root is independently confirmed on-chain). Never render "from &lt;motebit&gt;" below `pinned`. `revoked` is off the ladder — a poison verdict: pass `options.revocation` and if the signing key has an on-chain revocation memo dated at/before the receipt, `binding` is `revoked` regardless of everything else (read from the neutral chain, never the relay's word).
 
+## Quick start — verify the agent-revocation feed (operator moderation history)
+
+```ts
+import { fetchTransparencyAnchor, verifyAgentRevocationFeed } from "@motebit/state-export-client";
+
+// Pin the relay key (TOFU), then audit the operator's de-listings offline.
+const anchor = await fetchTransparencyAnchor("https://relay.example.com");
+const feed = await (await fetch("https://relay.example.com/api/v1/agents/revocations")).json();
+
+const v = await verifyAgentRevocationFeed(
+  feed,
+  anchor.ok ? anchor.anchor.relayPublicKeyHex : undefined,
+);
+if (v.ok) show(`Verified ${v.count} signed de-listing/reinstatement record(s)`);
+else show(`Feed verification failed: ${v.reason}`); // signature_invalid | producer_key_mismatch | record_invalid | …
+```
+
+`verifyAgentRevocationFeed` verifies the feed's signed digest **and** every contained record against the pinned relay key; `verifyAgentRevocationRecord` verifies a single record standalone. This is the consumer side of the operator's de-list power made accountable ([`spec/agent-revocation-v1.md`](../../spec/agent-revocation-v1.md)): a relay can remove an agent from Discover, but only by emitting a signed, reasoned record anyone can fetch and verify — de-list, never de-identify. Same fail-closed, typed-`reason` contract as the verifiers above; same pinned key as `verifyTransparencyDeclaration`.
+
 ## Trust-anchor chain
 
 ```

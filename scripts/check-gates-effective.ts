@@ -1912,6 +1912,15 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-agent-revocation-reason-canonical",
+    proves:
+      'flags the AgentRevocationReason three-way lock breaking — a value rotated in `ALL_AGENT_REVOCATION_REASONS` without updating the union (or gate reference). Drift class: same shape as the SettlementMode probe — union AND array share one file (`packages/protocol/src/agent-revocation.ts`), so the probe targets the comma-bearing array entry (`"spam",`) which matches only the array (the union form uses ` | `). Gate must surface the sibling-alignment violation (union has `spam` but ALL_AGENT_REVOCATION_REASONS contains `spamm` instead). byte-identical restoration on cleanup via mutateFile.',
+    perturb: () =>
+      mutateFile(`packages/protocol/src/agent-revocation.ts`, (src) =>
+        src.replace(/"spam",/g, '"spamm",'),
+      ),
+  },
+  {
     script: "check-merkle-tree-hash-canonical",
     proves:
       "flags an inline RFC 6962 domain-separation tag byte outside the two allowlisted Merkle primitives — the LOAD-BEARING assertion (`check-suite-dispatch` shape, NOT vacuous registry self-consistency): the `0x00` leaf / `0x01` node tag may live ONLY in `packages/crypto/src/merkle.ts` + `packages/encryption/src/merkle.ts`, so a second hand-rolled Merkle combine/leaf that silently ships RFC-6962-minus-§2.1 hashing is caught. Drift class: a new anchor consumer copy-pastes the tag-prepend idiom instead of routing through `canonicalLeaf`/`verifyMerkleInclusion`. Probe appends a `new Uint8Array([0x01])` line to a non-allowlisted source file; the gate's tag-localization scan must surface it. byte-identical restoration on cleanup via mutateFile.",

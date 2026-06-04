@@ -1373,4 +1373,47 @@ export const relayMigrations: Migration[] = [
       );
     },
   },
+  {
+    version: 31,
+    name: "agent_revocations_signed_feed",
+    up: (db) => {
+      // The append-only, signed audit log of operator agent de-listings.
+      //
+      // A permissionless registry accumulates junk (spam, abandoned test
+      // agents, abusive capabilities); the only automatic remedy is the
+      // 90-day no-heartbeat TTL, too slow for live abuse. The operator
+      // therefore needs a de-list tool — but a SILENT de-list is exactly the
+      // trust root the relay is forbidden from being (CLAUDE.md rule 6). So
+      // every revoke/reinstate is a signed, reasoned `AgentRevocationRecord`
+      // (`@motebit/protocol`), and this table is the public, verifiable
+      // moderation history served at `GET /api/v1/agents/revocations`.
+      //
+      // Append-only: a revoke inserts `revoked=1`, an un-revoke inserts a NEW
+      // `revoked=0` row — never an UPDATE/DELETE, so the operator's complete
+      // history stays auditable. Current discoverability is the
+      // `agent_registry.revoked` flag (the latest record mirrors it).
+      // `record_json` holds the byte-identical canonical record (same
+      // append-only-verbatim discipline as `relay_receipts.receipt_json`,
+      // CLAUDE.md rule 11) so the feed serves exactly what was signed.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_agent_revocations (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          motebit_id       TEXT NOT NULL,
+          revoked          INTEGER NOT NULL,
+          reason           TEXT NOT NULL,
+          actor            TEXT NOT NULL,
+          note             TEXT,
+          effective_at     INTEGER NOT NULL,
+          relay_id         TEXT NOT NULL,
+          relay_public_key TEXT NOT NULL,
+          hash             TEXT NOT NULL,
+          suite            TEXT NOT NULL,
+          signature        TEXT NOT NULL,
+          record_json      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_revocations_motebit
+          ON relay_agent_revocations(motebit_id, effective_at);
+      `);
+    },
+  },
 ];

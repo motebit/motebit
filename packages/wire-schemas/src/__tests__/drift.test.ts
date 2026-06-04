@@ -32,6 +32,12 @@ import {
 } from "../agent-service-listing.js";
 import { AGENT_TASK_SCHEMA_ID, buildAgentTaskJsonSchema } from "../agent-task.js";
 import {
+  AGENT_REVOCATION_RECORD_SCHEMA_ID,
+  AGENT_REVOCATION_FEED_SCHEMA_ID,
+  buildAgentRevocationRecordJsonSchema,
+  buildAgentRevocationFeedJsonSchema,
+} from "../agent-revocation.js";
+import {
   CREDENTIAL_ANCHOR_BATCH_SCHEMA_ID,
   CREDENTIAL_ANCHOR_PROOF_SCHEMA_ID,
   buildCredentialAnchorBatchJsonSchema,
@@ -606,6 +612,18 @@ const CASES: SchemaCase[] = [
     filename: "witness-omission-dispute-v1.json",
     expectedId: WITNESS_OMISSION_DISPUTE_SCHEMA_ID,
     build: buildWitnessOmissionDisputeJsonSchema,
+  },
+  {
+    name: "agent-revocation-record-v1",
+    filename: "agent-revocation-record-v1.json",
+    expectedId: AGENT_REVOCATION_RECORD_SCHEMA_ID,
+    build: buildAgentRevocationRecordJsonSchema,
+  },
+  {
+    name: "agent-revocation-feed-v1",
+    filename: "agent-revocation-feed-v1.json",
+    expectedId: AGENT_REVOCATION_FEED_SCHEMA_ID,
+    build: buildAgentRevocationFeedJsonSchema,
   },
 ];
 

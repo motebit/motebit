@@ -27,6 +27,10 @@ import {
 } from "../src/credential-anchor.js";
 import { buildSignedTransparencyDeclarationJsonSchema } from "../src/transparency-declaration.js";
 import {
+  buildAgentRevocationRecordJsonSchema,
+  buildAgentRevocationFeedJsonSchema,
+} from "../src/agent-revocation.js";
+import {
   buildAgentSettlementAnchorBatchJsonSchema,
   buildAgentSettlementAnchorProofJsonSchema,
 } from "../src/agent-settlement-anchor.js";
@@ -119,6 +123,8 @@ const SCHEMA_DIR = join(__dirname, "..", "..", "..", "spec", "schemas");
 
 const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }> = [
   { filename: "execution-receipt-v1.json", build: buildExecutionReceiptJsonSchema },
+  { filename: "agent-revocation-record-v1.json", build: buildAgentRevocationRecordJsonSchema },
+  { filename: "agent-revocation-feed-v1.json", build: buildAgentRevocationFeedJsonSchema },
   { filename: "delegation-token-v1.json", build: buildDelegationTokenJsonSchema },
   { filename: "agent-service-listing-v1.json", build: buildAgentServiceListingJsonSchema },
   { filename: "agent-resolution-result-v1.json", build: buildAgentResolutionResultJsonSchema },
