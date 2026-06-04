@@ -131,6 +131,19 @@ export interface AgentRecord {
   successful_tasks?: number;
   failed_tasks?: number;
   notes?: string;
+  /**
+   * The peer's Ed25519 public key (64-char hex), when known. The render-time
+   * input to the identity sigil (`deriveAgentSigil` in `@motebit/sdk`) — the
+   * face is the key. Absent for legacy records that never captured it; the
+   * surface falls back to a neutral mark.
+   */
+  public_key?: string;
+  /**
+   * First-person local nickname for this peer (Known tab only). Naming is
+   * first-person — doctrine `agents-as-first-person-trust-graph.md` §3 — so it
+   * exists only for agents you've met and named; absent ⇒ show the short id.
+   */
+  petname?: string;
   /** Hardware-attestation snapshot. Absent when the relay forwarded no claim. */
   hardware_attestation?: AgentHardwareAttestation;
   /** Observed-latency snapshot. Absent when the local store has zero samples. */
@@ -145,6 +158,14 @@ export interface AgentRecord {
 export interface DiscoveredAgent {
   motebit_id: string;
   capabilities: string[];
+  /**
+   * The agent's Ed25519 public key (64-char hex), projected by the relay's
+   * discover response. Public by nature; lets a client verify identity and
+   * render the identity sigil (`deriveAgentSigil`). Absent when talking to a
+   * relay that predates the projection — the surface falls back to a neutral
+   * mark. (No petname on Discover: those are agents you haven't met.)
+   */
+  public_key?: string;
   trust_level?: TrustLevel | (string & {});
   interaction_count?: number;
   pricing?: PricingEntry[] | null;
@@ -240,6 +261,36 @@ export function formatLatency(stats: AgentLatencyStats): string {
     ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
   const tailDiverges = stats.p95_ms > stats.avg_ms * 1.2;
   return tailDiverges ? `${fmt(stats.avg_ms)} · p95 ${fmt(stats.p95_ms)}` : fmt(stats.avg_ms);
+}
+
+// ── Identity display ──────────────────────────────────────────────────
+
+/**
+ * Compact, scannable form of a `motebit_id` (a UUID) for display in place of
+ * the full string — head…tail, the wallet convention. The full id stays
+ * available for copy/verify; this is the at-a-glance handle. Distinct from
+ * `shortFingerprint` in `@motebit/sdk`, which shortens the 64-hex public key —
+ * here we shorten the id the user already sees in the panel.
+ */
+export function shortMotebitId(id: string, head = 8, tail = 6): string {
+  return id.length <= head + tail + 1 ? id : `${id.slice(0, head)}…${id.slice(-tail)}`;
+}
+
+/**
+ * The at-a-glance display label for an agent: its first-person petname when set
+ * (Known tab only — naming is first-person, doctrine
+ * `agents-as-first-person-trust-graph.md` §3), otherwise the short motebit_id.
+ * The identity sigil (from `public_key`) and the full id carry the verifiable
+ * identity; this is the human-readable handle that sits beside them. Accepts
+ * either record shape (`remote_motebit_id` for Known, `motebit_id` for Discover).
+ */
+export function agentDisplayLabel(agent: {
+  motebit_id?: string;
+  remote_motebit_id?: string;
+  petname?: string;
+}): string {
+  const id = agent.remote_motebit_id ?? agent.motebit_id ?? "";
+  return agent.petname != null && agent.petname.length > 0 ? agent.petname : shortMotebitId(id);
 }
 
 // ── Adapter ──────────────────────────────────────────────────────────

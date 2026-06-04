@@ -5255,10 +5255,44 @@
       .agent-item:hover {
         background: var(--bg-card);
       }
+      .agent-item-identity {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .agent-sigil {
+        width: 28px;
+        height: 28px;
+        flex: 0 0 auto;
+        border-radius: 7px;
+        overflow: hidden;
+        display: inline-flex;
+      }
+      .agent-sigil svg {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      .agent-sigil-empty {
+        background: var(--bg-card);
+        box-shadow: inset 0 0 0 1px var(--border, rgba(255, 255, 255, 0.08));
+      }
+      .agent-id-col {
+        min-width: 0;
+        flex: 1 1 auto;
+      }
       .agent-item-id {
         font-size: 11px;
         font-family: "SF Mono", "Fira Code", monospace;
         color: var(--text-primary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .agent-item-fingerprint {
+        font-size: 10px;
+        font-family: "SF Mono", "Fira Code", monospace;
+        color: var(--text-faint);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -7611,14 +7645,11 @@
     <div id="divergence-banner" class="divergence-banner" style="display: none">
       <div class="divergence-banner-icon">⚠</div>
       <div class="divergence-banner-body">
-        <div class="divergence-banner-title">
-          Previous identity could not be loaded
-        </div>
+        <div class="divergence-banner-title">Previous identity could not be loaded</div>
         <div class="divergence-banner-text">
           The keystore had no matching private key for
-          <code id="divergence-banner-motebit-id">…</code>. A new identity was created on
-          this device. If you have a backup, restore it to recover funds, credentials, and
-          trust.
+          <code id="divergence-banner-motebit-id">…</code>. A new identity was created on this
+          device. If you have a backup, restore it to recover funds, credentials, and trust.
         </div>
       </div>
       <div class="divergence-banner-actions">
@@ -7992,7 +8023,10 @@
       <div id="cap-pane-skills" class="capabilities-pane">
         <div class="skills-toolbar">
           <input id="skills-search" type="text" placeholder="Search skills..." autocomplete="off" />
-          <label class="skills-include-unfeatured" title="Show every submitted skill, not just featured">
+          <label
+            class="skills-include-unfeatured"
+            title="Show every submitted skill, not just featured"
+          >
             <input type="checkbox" id="skills-include-unfeatured" />
             show all
           </label>
@@ -8081,7 +8115,12 @@
       click / ESC / cancel is decline.
     -->
     <div id="skills-consent-backdrop"></div>
-    <div id="skills-consent-modal" role="dialog" aria-modal="true" aria-labelledby="skills-consent-title">
+    <div
+      id="skills-consent-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="skills-consent-title"
+    >
       <div class="skills-consent-title" id="skills-consent-title">Install Sensitive Skill?</div>
       <div class="skills-consent-body" id="skills-consent-body"></div>
       <div class="skills-consent-actions">
@@ -9153,9 +9192,9 @@
                   <div class="toggle-label">Publish consolidation proofs onchain</div>
                   <div class="toggle-desc">
                     Anchors batches of signed receipts to Solana as Merkle memos (~$0.001 per batch,
-                    8 receipts per batch). Requires consolidation above AND an identity with
-                    signing keys. The motebit's Solana address is its identity public key; it pays
-                    its own fees. Default off.
+                    8 receipts per batch). Requires consolidation above AND an identity with signing
+                    keys. The motebit's Solana address is its identity public key; it pays its own
+                    fees. Default off.
                   </div>
                 </div>
                 <label class="toggle-switch">
@@ -9173,10 +9212,10 @@
                   <div class="toggle-label">Pay new agents directly (peer-to-peer)</div>
                   <div class="toggle-desc">
                     The first paid task to an agent you have no history with falls back to
-                    relay-coordinated settlement. Enable to pay a new agent directly onchain instead,
-                    accepting the cold-start risk — trust then accrues from the transaction for future
-                    routing. Default off: until you opt in, no funds move to an unknown agent. Takes
-                    effect on your next delegation; no reload needed.
+                    relay-coordinated settlement. Enable to pay a new agent directly onchain
+                    instead, accepting the cold-start risk — trust then accrues from the transaction
+                    for future routing. Default off: until you opt in, no funds move to an unknown
+                    agent. Takes effect on your next delegation; no reload needed.
                   </div>
                 </div>
                 <label class="toggle-switch">
@@ -9235,10 +9274,7 @@
             <div class="card-title">Recovery Seed</div>
             <div class="identity-field">
               <span class="identity-label">Seed</span>
-              <span
-                class="identity-value"
-                id="identity-recovery-seed"
-                data-state="hidden"
+              <span class="identity-value" id="identity-recovery-seed" data-state="hidden"
                 >— hidden —</span
               >
               <button class="copy-btn" id="reveal-recovery-seed" type="button">Reveal</button>
@@ -9333,16 +9369,12 @@
             <div style="font-size: 11px; color: var(--text-muted); margin-top: -2px">
               Full identity bundle. You'll also need your recovery seed.
             </div>
-            <button
-              class="settings-outline-btn"
-              id="settings-restore-seed"
-              style="margin-top: 4px"
-            >
+            <button class="settings-outline-btn" id="settings-restore-seed" style="margin-top: 4px">
               Restore from recovery seed…
             </button>
             <div style="font-size: 11px; color: var(--text-muted); margin-top: -2px">
-              Raw key only. Reclaims funds + private key, but creates a new motebit_id
-              (the original UUID is not derivable from the seed).
+              Raw key only. Reclaims funds + private key, but creates a new motebit_id (the original
+              UUID is not derivable from the seed).
             </div>
           </div>
         </div>
@@ -9407,8 +9439,8 @@
         <div id="restore-step-file" class="restore-step">
           <div class="restore-title">Restore from motebit.md</div>
           <div class="restore-body">
-            Select your motebit.md backup file. You'll provide your recovery seed in
-            the next step to complete the restore.
+            Select your motebit.md backup file. You'll provide your recovery seed in the next step
+            to complete the restore.
           </div>
           <div class="restore-actions">
             <button id="restore-cancel-1" class="restore-cancel">Cancel</button>
@@ -9421,9 +9453,9 @@
         <div id="restore-step-seed-only" class="restore-step" style="display: none">
           <div class="restore-title">Restore from recovery seed</div>
           <div class="restore-body">
-            Paste your 64-hex-char recovery seed. The original motebit_id cannot be
-            recovered from the seed alone — a new one will be assigned. Your
-            cryptographic identity (private key + Solana address + funds) is preserved.
+            Paste your 64-hex-char recovery seed. The original motebit_id cannot be recovered from
+            the seed alone — a new one will be assigned. Your cryptographic identity (private key +
+            Solana address + funds) is preserved.
           </div>
           <div class="restore-field-group">
             <label class="restore-label" for="restore-seed-only-input">
@@ -9477,8 +9509,8 @@
             </span>
           </label>
           <div class="restore-warning">
-            This replaces your current identity. Funds, credentials, and trust
-            currently on this device will be ORPHANED. Cannot be undone.
+            This replaces your current identity. Funds, credentials, and trust currently on this
+            device will be ORPHANED. Cannot be undone.
           </div>
           <div class="restore-field-group">
             <label class="restore-label" for="restore-confirm">
@@ -9496,9 +9528,7 @@
           <div id="restore-error" class="restore-error"></div>
           <div class="restore-actions">
             <button id="restore-cancel-2" class="restore-cancel">Cancel</button>
-            <button id="restore-replace" class="restore-primary" disabled>
-              Replace identity
-            </button>
+            <button id="restore-replace" class="restore-primary" disabled>Replace identity</button>
           </div>
         </div>
       </div>

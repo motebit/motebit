@@ -27,6 +27,8 @@ export {
   scoreHardwareAttestation,
   formatHardwarePlatform,
   formatLatency,
+  shortMotebitId,
+  agentDisplayLabel,
   type AgentsController,
   type AgentsFetchAdapter,
   type AgentsState,

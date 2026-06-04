@@ -23,6 +23,8 @@ import {
   classifyCertainty,
   formatHardwarePlatform,
   formatLatency,
+  agentDisplayLabel,
+  shortMotebitId,
   type AgentHardwareAttestation,
   type AgentLatencyStats,
   type AgentRecord,
@@ -37,6 +39,8 @@ import {
   type ScheduledGoal,
 } from "@motebit/panels";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
+import { deriveAgentSigil } from "@motebit/sdk";
+import { sigilToSvg } from "../identity-sigil-svg.js";
 
 export interface GatedPanelsAPI {
   openMemory(auditNodeIds?: Map<string, string>): void;
@@ -926,6 +930,58 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
 
   const agentsCtrl = createAgentsController(agentsAdapter);
 
+  // Identity header for an agent row: the key-derived sigil face + the
+  // human-readable handle (petname when known, else the short motebit_id),
+  // with the full id on `title` for copy/verify. "The face is the key" —
+  // doctrine agents-as-first-person-trust-graph §4. The sigil's accessible
+  // title is the UUID-safe short id (never user-set petname) so no untrusted
+  // text enters the SVG string; the visible petname goes through textContent.
+  function renderAgentIdentity(opts: {
+    fullId: string;
+    publicKey?: string;
+    petname?: string;
+  }): HTMLElement {
+    const header = document.createElement("div");
+    header.className = "agent-item-identity";
+
+    const face = document.createElement("span");
+    face.className = "agent-sigil";
+    if (opts.publicKey != null && /^[0-9a-f]{64}$/i.test(opts.publicKey)) {
+      face.innerHTML = sigilToSvg(deriveAgentSigil(opts.publicKey), {
+        size: 28,
+        title: shortMotebitId(opts.fullId),
+      });
+    } else {
+      // Legacy record / pre-projection relay: no key → neutral mark, no crash.
+      face.classList.add("agent-sigil-empty");
+    }
+    header.appendChild(face);
+
+    const col = document.createElement("div");
+    col.className = "agent-id-col";
+    col.title = opts.fullId;
+
+    const label = document.createElement("div");
+    label.className = "agent-item-id";
+    label.textContent = agentDisplayLabel({
+      motebit_id: opts.fullId,
+      remote_motebit_id: opts.fullId,
+      petname: opts.petname,
+    });
+    col.appendChild(label);
+
+    if (opts.petname != null && opts.petname.length > 0) {
+      // Keep the verifiable short id visible beneath a petname.
+      const fp = document.createElement("div");
+      fp.className = "agent-item-fingerprint";
+      fp.textContent = shortMotebitId(opts.fullId);
+      col.appendChild(fp);
+    }
+
+    header.appendChild(col);
+    return header;
+  }
+
   function renderKnown(state: AgentsState): void {
     agentsList.innerHTML = "";
     if (state.known.length === 0) {
@@ -948,11 +1004,13 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       // preserved for trust-badge / hardware-attestation selector hooks.
       item.className = "panel-list-card agent-item";
 
-      const idDiv = document.createElement("div");
-      idDiv.className = "agent-item-id";
-      idDiv.textContent = agent.remote_motebit_id;
-      idDiv.title = agent.remote_motebit_id;
-      item.appendChild(idDiv);
+      item.appendChild(
+        renderAgentIdentity({
+          fullId: agent.remote_motebit_id,
+          publicKey: agent.public_key,
+          petname: agent.petname,
+        }),
+      );
 
       const meta = document.createElement("div");
       meta.className = "agent-item-meta";
@@ -1040,11 +1098,12 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       // preserved for trust-badge / hardware-attestation selector hooks.
       item.className = "panel-list-card agent-item";
 
-      const idDiv = document.createElement("div");
-      idDiv.className = "agent-item-id";
-      idDiv.textContent = agent.motebit_id;
-      idDiv.title = agent.motebit_id;
-      item.appendChild(idDiv);
+      item.appendChild(
+        renderAgentIdentity({
+          fullId: agent.motebit_id,
+          publicKey: agent.public_key,
+        }),
+      );
 
       if (agent.capabilities.length > 0) {
         const priceByCapability = new Map<string, PricingEntry>();
