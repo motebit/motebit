@@ -969,6 +969,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       face.innerHTML = sigilToSvg(deriveAgentSigil(opts.fullId), {
         size: 32,
         title: shortMotebitId(opts.fullId),
+        ground: document.documentElement.dataset.theme === "dark" ? "dark" : "light",
       });
     } else {
       face.classList.add("agent-sigil-empty");

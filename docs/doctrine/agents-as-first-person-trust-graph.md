@@ -136,6 +136,41 @@ Two rules make this safe rather than decorative:
   fingerprint proves identity; petname anchors the relationship; receipts prove the
   history.
 
+- **The 2D mark is a fingerprint, not a mini-droplet — the self/other split.** The
+  droplet is the _self_: your creature, embodied, faced, the form your identity
+  takes in spatial ([`spatial-as-endgame.md`](spatial-as-endgame.md)). A peer is an
+  _other_, and you recognise an other by its **signature**, not by it being a tiny
+  copy of you — so in the 2D panel the medium-native identity form is a **frameless
+  trust-graph fingerprint**: geometry + hue + value, filling the frame, no body /
+  membrane / container. This is `params-not-pixels` taken seriously — the same
+  `deriveAgentSigil` params render as a droplet in spatial and a fingerprint in the
+  list; the "same species" lives in the params + palette, not in literally drawing a
+  small droplet. (Making peers mini-droplets is the failure mode that reads as a
+  candy bead and competes with the creature; the fingerprint resolves it.) Renderer:
+  `apps/web/src/identity-sigil-svg.ts` + its byte-identical desktop sibling
+  `apps/desktop/src/ui/agent-sigil.ts`, locked by `check-sigil-renderer-parity`.
+  - **Theme-native, because frameless.** With no container, the mark depends on the
+    card ground (passed as `ground`): **dark** → a luminous soul-coloured
+    constellation (light from within, not surface gloss); **light** → an inked crest,
+    peak-normalised so even the near-neutral Moonlight family reads as a confidently
+    dark mark on white. Aliveness is inner light / value contrast, never a glossy
+    highlight (a hard highlight reads as a manufactured bead). Glass optics are
+    borrowed for the luminance only, never a literal-glass material
+    ([[liquescent-not-glass]], gate #102).
+  - **Colour is a reference to the soul family, never a sync.** The identity hue is
+    drawn from the canonical soul-colour family
+    ([`color-presets.ts`](../../packages/sdk/src/color-presets.ts)) with a
+    deterministic per-`motebit_id` micro-variation _within_ the family — a reference
+    to the creature's chromatic universe, not a small fixed enum (which would collapse
+    the distinctness budget) and **never** the user's chosen/custom soul colour.
+    Syncing would be a recognition bug: a peer's mark must not change when _you_
+    re-theme. Custom soul colour is the user's own self-expression; a peer's mark is
+    its own sovereign identity.
+  - **Aura = trust/state** — outside the mark (the surface), first-person trust tier,
+    Known only. Faceless: the creature owns the face; peers are counterparties, not a
+    fleet. Motion (an attention-breath on hover/focus) is a deferred layer, never an
+    ambient pulse (calm software).
+
 ## 5. The panel holds records; hiring is an act
 
 The Agents panel is a **record surface** — who exists, who I know, what they claim,
