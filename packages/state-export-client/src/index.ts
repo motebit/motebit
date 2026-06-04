@@ -98,6 +98,13 @@ export type {
   InnerReceiptsVerification,
 } from "./inner-receipts.js";
 
+export { verifiedSettlementSummaryFetch, settlementSummaryUrl } from "./settlement-summary.js";
+export type {
+  SettlementSummaryExport,
+  SettlementSummaryPeer,
+  SettlementSummaryUnattributed,
+} from "./settlement-summary.js";
+
 export { verifyReceiptDocument } from "./receipt-document.js";
 export type {
   ReceiptDocumentVerification,

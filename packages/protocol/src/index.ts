@@ -2961,7 +2961,14 @@ export {
   SYNC_PULL_ARTIFACT,
   EXECUTION_LEDGER_ARTIFACT,
   GOAL_RESULT_ARTIFACT,
+  SETTLEMENT_SUMMARY_ARTIFACT,
 } from "./artifact-type.js";
+
+export type {
+  SettlementSummaryExport,
+  SettlementSummaryPeer,
+  SettlementSummaryUnattributed,
+} from "./settlement-summary.js";
 
 // Operator-transparency declaration — the trust-anchor primitive
 // (spec/relay-transparency-v1.md, Stage 2b-i). The relay publishes a

@@ -25,6 +25,9 @@ import {
   formatLatency,
   shortMotebitId,
   trustAuraClass,
+  economicForPeer,
+  formatPeerEconomics,
+  type AgentEconomicSummary,
   type AgentHardwareAttestation,
   type AgentLatencyStats,
   type AgentRecord,
@@ -41,6 +44,27 @@ import {
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import { deriveAgentSigil } from "@motebit/sdk";
 import { sigilToSvg } from "../identity-sigil-svg.js";
+import {
+  verifiedSettlementSummaryFetch,
+  fetchTransparencyAnchor,
+  type TransparencyAnchor,
+} from "@motebit/state-export-client";
+
+// Relay transparency anchor for verifying the settlement-summary export's
+// producer key (the user's own money history → same pinning posture as the
+// sovereign balance read, sovereign-panels.ts). Cached per session;
+// degrades to anchor-less signature verification on a bootstrap failure.
+let cachedSettlementAnchor: TransparencyAnchor | undefined;
+async function settlementAnchor(syncUrl: string): Promise<TransparencyAnchor | undefined> {
+  if (cachedSettlementAnchor !== undefined) return cachedSettlementAnchor;
+  try {
+    const result = await fetchTransparencyAnchor(syncUrl);
+    if (result.ok) cachedSettlementAnchor = result.anchor;
+    return cachedSettlementAnchor;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface GatedPanelsAPI {
   openMemory(auditNodeIds?: Map<string, string>): void;
@@ -933,6 +957,23 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       if (!runtime) return;
       await runtime.setAgentPetname(remoteMotebitId, petname);
     },
+    // The money side of the trust graph (doctrine §6): the caller's own
+    // per-peer economic history, verified against the relay's pinned key
+    // before it reaches the panel. `account:balance` audience (read-only own
+    // financial state). Returns null on no-relay / verification failure —
+    // fail-closed, the mark + trust still render.
+    listSettlementSummary: async (): Promise<AgentEconomicSummary | null> => {
+      const syncUrl = loadSyncUrl();
+      const motebitId = ctx.app.motebitId;
+      if (!syncUrl || !motebitId) return null;
+      const token = await ctx.app.createSyncToken("account:balance");
+      const anchor = await settlementAnchor(syncUrl);
+      const res = await verifiedSettlementSummaryFetch(syncUrl, motebitId, {
+        anchor,
+        init: token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
+      });
+      return res.verification.valid ? res.body : null;
+    },
   };
 
   const agentsCtrl = createAgentsController(agentsAdapter);
@@ -1105,6 +1146,17 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       time.textContent = formatTimeAgo(agent.last_seen_at);
       meta.appendChild(time);
 
+      // The money side of the trust graph: net earned/paid with this peer,
+      // derived from the relay's signed settlement ledger. Honest-empty —
+      // rendered only when there's settled history (never a fabricated $0).
+      const money = formatPeerEconomics(economicForPeer(state.economic, agent.remote_motebit_id));
+      if (money != null) {
+        const moneyEl = document.createElement("span");
+        moneyEl.className = "agent-item-money";
+        moneyEl.textContent = money;
+        meta.appendChild(moneyEl);
+      }
+
       item.appendChild(meta);
       agentsList.appendChild(item);
     }
@@ -1249,6 +1301,10 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
     agentsPanel.classList.add("open");
     agentsBackdrop.classList.add("open");
     void agentsCtrl.refreshKnown();
+    // Money side of the trust graph — fetched alongside Known, rendered under
+    // each peer's mark. Independent + fail-soft (the relay read can fail
+    // without disturbing the local Known list).
+    void agentsCtrl.refreshEconomic();
   }
 
   function closeAgents(): void {

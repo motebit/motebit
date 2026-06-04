@@ -189,10 +189,43 @@ with them_ rotates the interior register or fires as a body act.
 ## 6. Money history derives from receipts, never trust-record drift
 
 `AgentTrustRecord` carries interaction and task counts and latency stats — not a
-settled-dollar total. To show economic history, derive it from the **receipt
-tree** (the source of truth; see [`receipts-unified.md`](receipts-unified.md)).
+settled-dollar total. To show economic history, derive it from the **receipt /
+settlement tree** (the source of truth; see [`receipts-unified.md`](receipts-unified.md)).
 Never denormalize a money field onto the trust record — that is the kind of drift
 that lies later.
+
+**Shipped (2026-06-04): the materialized projection, signed and verified.** The
+panel renders, under each Known peer's mark, the caller's first-person economic
+history with that peer — net earned/paid + a settlement count, honest-empty when
+there's none. The data is a **projection over the relay's signed settlement
+ledger** (`relay_settlements`), keyed `[motebit_id, remote_motebit_id]`:
+
+- **Producer** — `GET /api/v1/agents/:motebitId/settlements`
+  (`services/relay/src/state-export.ts`) aggregates per counterparty (earned =
+  rows where I'm payee + peer is delegator; paid = the inverse), emits a signed
+  `settlement-summary` `ContentArtifactManifest` via `emitSignedExport`. Money in
+  integer micro-units. Rows with no attributable `delegator_id` go to an honest
+  `unattributed` bucket — never folded into a peer; self-settlements and
+  failed-p2p-verification rows are excluded.
+- **Boundary** — first-person by construction: `account:balance` audience +
+  own-id check (a device token reads only its own history; master token =
+  operator console). The URL lives in the `/api/v1/agents/*` namespace so it
+  is device-token-authed, not caught by the catch-all master-token gate.
+- **Consumer** — `verifiedSettlementSummaryFetch` in
+  `@motebit/state-export-client` verifies the manifest against the relay's pinned
+  transparency-anchor key before the panel sees a byte; fail-closed
+  (`unexpected_artifact_type` if signed for the wrong export). The URL is built
+  _inside_ the verifier, so a surface cannot fetch this money data without
+  verifying it — structural encapsulation, stronger than a lint.
+- **View-model** — `AgentEconomicSummary` is held **separately** in panel state
+  (`@motebit/panels`), looked up by peer id at render. It is never merged onto
+  `AgentRecord`. The "permitted middle path" from the Gotchas below: a cache
+  rebuilt _from_ the ledger, clearly derived, never a source of truth.
+
+Locked by the existing state-export triad — `check-state-export-signed` (#86,
+the route must sign), `check-artifact-type-canonical` (#85, the type is
+canonical) — and the round-trip test in `state-export-manifest.test.ts`. The
+money line is wired on web + desktop; mobile is the contained follow-on.
 
 ## 7. ERC-8004 / ANS validate the category, not the architecture
 

@@ -26,7 +26,11 @@ import type { EventLogEntry, ToolAuditEntry } from "@motebit/sdk";
 import { asMotebitId, asNodeId, asConversationId, asPlanId } from "@motebit/sdk";
 import { canonicalJson, bytesToHex, toBase64Url } from "@motebit/encryption";
 import { signContentArtifact } from "@motebit/crypto";
-import type { ContentArtifactType } from "@motebit/protocol";
+import type {
+  ContentArtifactType,
+  SettlementSummaryPeer,
+  SettlementSummaryUnattributed,
+} from "@motebit/protocol";
 import type { RelayIdentity } from "./federation.js";
 import { getStoredReceiptJson } from "./receipts-store.js";
 
@@ -273,6 +277,115 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
       motebit_id: motebitId,
       current: snapshots[0] ?? null,
       history: snapshots,
+    });
+  });
+
+  // --- Per-peer settlement summary — the money side of the first-person
+  //     trust graph (docs/doctrine/agents-as-first-person-trust-graph.md §6) ---
+  //
+  // UNLIKE the other routes in this file (master-token admin/dashboard
+  // reads), this is the caller's OWN economic history. It is gated by the
+  // `account:balance` audience via `dualAuth` (see middleware.ts) and
+  // own-id-checked below so a device token minted for one motebit cannot
+  // read another's money graph. A master token (callerMotebitId unset)
+  // bypasses for the operator console, exactly like the balance route.
+  //
+  // The body is a materialized projection over the signed `relay_settlements`
+  // ledger — never a denormalized balance. Receipts / settlement rows stay
+  // source of truth (docs/doctrine/receipts-unified.md). Emitted signed via
+  // `emitSignedExport` so a verifier checks it against the relay's pinned key
+  // offline (@motebit/state-export-client), making it dispute-grade.
+  /** @internal */
+  app.get("/api/v1/agents/:motebitId/settlements", async (c) => {
+    const motebitId = asMotebitId(c.req.param("motebitId"));
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (callerMotebitId != null && callerMotebitId !== "" && callerMotebitId !== motebitId) {
+      throw new HTTPException(403, {
+        message:
+          "settlement history is first-person: a device token may read only its own motebit's history",
+      });
+    }
+
+    // Attributable settlements between the caller and each counterparty,
+    // both directions. `completed` rows only; a p2p row whose onchain
+    // leg-check FAILED is dropped (the claimed payment never landed — honest
+    // history, not recorded intent). Self-settlements excluded (not a
+    // relationship). On an earned row a null/'' `delegator_id` means the
+    // payer is unknown ⇒ the unattributed bucket, never a phantom peer.
+    const rows = moteDb.db
+      .prepare(
+        `SELECT delegator_id AS peer_id, amount_settled, platform_fee, settlement_mode, settled_at, 'earned' AS direction
+           FROM relay_settlements
+          WHERE motebit_id = ? AND status = 'completed'
+            AND COALESCE(payment_verification_status, 'verified') != 'failed'
+            AND COALESCE(delegator_id, '') != motebit_id
+         UNION ALL
+         SELECT motebit_id AS peer_id, amount_settled, platform_fee, settlement_mode, settled_at, 'paid' AS direction
+           FROM relay_settlements
+          WHERE delegator_id = ? AND status = 'completed'
+            AND COALESCE(payment_verification_status, 'verified') != 'failed'
+            AND motebit_id != delegator_id`,
+      )
+      .all(motebitId, motebitId) as Array<{
+      peer_id: string | null;
+      amount_settled: number;
+      platform_fee: number;
+      settlement_mode: string | null;
+      settled_at: number;
+      direction: "earned" | "paid";
+    }>;
+
+    const peers = new Map<string, SettlementSummaryPeer>();
+    const unattributed: SettlementSummaryUnattributed = {
+      earned_micro: 0,
+      fee_micro: 0,
+      settled_count: 0,
+    };
+
+    for (const r of rows) {
+      const isP2p = (r.settlement_mode ?? "relay") === "p2p";
+      if (r.direction === "earned" && (r.peer_id == null || r.peer_id === "")) {
+        unattributed.earned_micro += r.amount_settled;
+        unattributed.fee_micro += r.platform_fee;
+        unattributed.settled_count += 1;
+        continue;
+      }
+      const peerId = r.peer_id as string;
+      let p = peers.get(peerId);
+      if (p == null) {
+        p = {
+          peer_id: peerId,
+          earned_micro: 0,
+          paid_micro: 0,
+          net_micro: 0,
+          fee_micro: 0,
+          settled_count: 0,
+          p2p_count: 0,
+          first_at: r.settled_at,
+          last_at: r.settled_at,
+        };
+        peers.set(peerId, p);
+      }
+      if (r.direction === "earned") {
+        p.earned_micro += r.amount_settled;
+      } else {
+        // The caller funded this leg; the platform fee on it is the caller's
+        // coordination cost with this peer (never the peer's fee).
+        p.paid_micro += r.amount_settled;
+        p.fee_micro += r.platform_fee;
+      }
+      p.settled_count += 1;
+      if (isP2p) p.p2p_count += 1;
+      if (r.settled_at < p.first_at) p.first_at = r.settled_at;
+      if (r.settled_at > p.last_at) p.last_at = r.settled_at;
+    }
+    for (const p of peers.values()) p.net_micro = p.earned_micro - p.paid_micro;
+
+    const peerList = [...peers.values()].sort((a, b) => b.last_at - a.last_at);
+    return emitSignedExport(c, "settlement-summary", {
+      motebit_id: motebitId,
+      peers: peerList,
+      unattributed,
     });
   });
 

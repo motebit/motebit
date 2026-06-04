@@ -298,6 +298,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/agents/:motebitId/solvency-proof", rl(readLimiter));
   app.use("/api/v1/agents/:motebitId/withdrawals", rl(readLimiter));
   app.use("/api/v1/agents/:motebitId/checkout", rl(writeLimiter));
+  app.use("/api/v1/agents/:motebitId/settlements", rl(readLimiter));
   app.use("/api/v1/stripe/webhook", rl(publicLimiter));
   app.use("/api/v1/admin/withdrawals/*", rl(writeLimiter));
   app.use("/api/v1/admin/reconciliation", rl(expensiveLimiter));
@@ -700,6 +701,17 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
     return dualAuth(c, next, ACCOUNT_DEPOSIT_AUDIENCE);
   });
   app.use("/api/v1/agents/*/balance", async (c, next) => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+    return dualAuth(c, next, ACCOUNT_BALANCE_AUDIENCE);
+  });
+  // Per-peer settlement summary — the caller's own economic history (the
+  // money side of the first-person trust graph). Lives in the /api/v1/agents
+  // namespace so the catch-all master-token gate exempts it (like balance);
+  // same security class as balance (read-only own financial state, no
+  // mutation), so it reuses the `account:balance` audience rather than
+  // expanding the audience registry. The handler in state-export.ts enforces
+  // own-id (path == caller).
+  app.use("/api/v1/agents/*/settlements", async (c, next) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
     return dualAuth(c, next, ACCOUNT_BALANCE_AUDIENCE);
   });

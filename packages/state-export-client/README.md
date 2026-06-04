@@ -99,6 +99,33 @@ else show(`Feed verification failed: ${v.reason}`); // signature_invalid | produ
 
 `verifyAgentRevocationFeed` verifies the feed's signed digest **and** every contained record against the pinned relay key; `verifyAgentRevocationRecord` verifies a single record standalone. This is the consumer side of the operator's de-list power made accountable ([`spec/agent-revocation-v1.md`](../../spec/agent-revocation-v1.md)): a relay can remove an agent from Discover, but only by emitting a signed, reasoned record anyone can fetch and verify — de-list, never de-identify. Same fail-closed, typed-`reason` contract as the verifiers above; same pinned key as `verifyTransparencyDeclaration`.
 
+## Quick start — settlement summary (the money side of the trust graph)
+
+```ts
+import {
+  fetchTransparencyAnchor,
+  verifiedSettlementSummaryFetch,
+} from "@motebit/state-export-client";
+
+// Pin the relay key (TOFU), then fetch + verify your own per-peer economic
+// history (what you earned from / paid to each counterparty).
+const anchor = await fetchTransparencyAnchor("https://relay.example.com");
+const { body, verification } = await verifiedSettlementSummaryFetch(
+  "https://relay.example.com",
+  myMotebitId,
+  {
+    anchor: anchor.ok ? anchor.anchor : undefined,
+    init: { headers: { Authorization: `Bearer ${token}` } },
+  },
+);
+
+if (verification.valid && body)
+  renderPerPeerMoney(body.peers); // never render unverified money
+else show(`unverifiable: ${verification.reason}`); // unexpected_artifact_type | producer_key_mismatch | content_hash_mismatch | …
+```
+
+`verifiedSettlementSummaryFetch` builds the canonical URL (`settlementSummaryUrl` — so a surface cannot fetch the money graph without verifying it), verifies the `settlement-summary` manifest against the pinned relay key, and fails closed: even when the bytes verify, a manifest signed for a different `artifact_type` is rejected with `unexpected_artifact_type`. The body is a materialized projection over the relay's signed settlement ledger — first-person, keyed `[motebit_id, peer]`, never a denormalized balance. Doctrine: [`docs/doctrine/agents-as-first-person-trust-graph.md`](../../docs/doctrine/agents-as-first-person-trust-graph.md) §6.
+
 ## Trust-anchor chain
 
 ```

@@ -150,6 +150,16 @@ describe("Money Loop E2E", () => {
     // The platform fee is non-zero (relay captured it).
     expect(10.0 - afterB.balance).toBeGreaterThan(0);
 
+    // The relay-custody settlement records the payer in `delegator_id` so the
+    // per-peer settlement-summary export can attribute it (here the payer is
+    // the worker itself — self-delegation — which the projection then excludes;
+    // the point is that the producer populates the column, not only P2P rows).
+    const settledRow = relay.moteDb.db
+      .prepare("SELECT delegator_id, settlement_mode FROM relay_settlements WHERE motebit_id = ?")
+      .get(agent.motebitId) as { delegator_id: string | null; settlement_mode: string } | undefined;
+    expect(settledRow?.settlement_mode).toBe("relay");
+    expect(settledRow?.delegator_id).toBe(agent.motebitId);
+
     // === STEP 5: WITHDRAW (back-date to clear the 24h dispute-window hold) ===
     relay.moteDb.db
       .prepare("UPDATE relay_settlements SET settled_at = ? WHERE motebit_id = ?")

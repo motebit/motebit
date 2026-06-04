@@ -5355,6 +5355,14 @@
         font-size: 10px;
         color: var(--text-faint);
       }
+      /* Money side of the trust graph — net earned/paid with this peer.
+         Calm: a slightly stronger weight than surrounding meta, no color
+         alarm (gains and net-payments read the same; the sign carries it). */
+      .agent-item-money {
+        font-variant-numeric: tabular-nums;
+        font-weight: 500;
+        color: var(--text-secondary);
+      }
       .agent-trust-badge {
         font-size: 9px;
         padding: 1px 6px;

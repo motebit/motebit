@@ -72,6 +72,7 @@ const CANONICAL_ARTIFACT_TYPES = new Set<string>([
   "sync-pull",
   "execution-ledger",
   "goal-result",
+  "settlement-summary",
 ]);
 
 /**

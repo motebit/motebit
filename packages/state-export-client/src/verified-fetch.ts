@@ -48,7 +48,12 @@ export type StateExportVerificationFailureReason =
   | "malformed_public_key"
   | "malformed_signature"
   | "unsupported_suite"
-  | "producer_key_mismatch";
+  | "producer_key_mismatch"
+  // The bytes verified, but the manifest's artifact_type is not the one the
+  // typed wrapper expected for this endpoint (e.g. a settlement-summary URL
+  // returned a manifest signed for a different export). Fail-closed: signed,
+  // but signed for the wrong thing.
+  | "unexpected_artifact_type";
 
 export interface VerifiedStateExportResponse<T> {
   /**

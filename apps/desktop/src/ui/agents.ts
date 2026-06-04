@@ -7,6 +7,9 @@ import {
   formatLatency,
   shortMotebitId,
   trustAuraClass,
+  economicForPeer,
+  formatPeerEconomics,
+  type AgentEconomicSummary,
   type AgentHardwareAttestation,
   type AgentLatencyStats,
   type AgentRecord,
@@ -18,6 +21,26 @@ import {
 } from "@motebit/panels";
 import { deriveAgentSigil } from "@motebit/sdk";
 import { sigilToSvg } from "./agent-sigil";
+import {
+  verifiedSettlementSummaryFetch,
+  fetchTransparencyAnchor,
+  type TransparencyAnchor,
+} from "@motebit/state-export-client";
+
+// Relay transparency anchor for the settlement-summary producer-key pin —
+// same posture as web (gated-panels.ts). Cached per session; degrades to
+// anchor-less signature verification on bootstrap failure.
+let cachedSettlementAnchor: TransparencyAnchor | undefined;
+async function settlementAnchor(syncUrl: string): Promise<TransparencyAnchor | undefined> {
+  if (cachedSettlementAnchor !== undefined) return cachedSettlementAnchor;
+  try {
+    const result = await fetchTransparencyAnchor(syncUrl);
+    if (result.ok) cachedSettlementAnchor = result.anchor;
+    return cachedSettlementAnchor;
+  } catch {
+    return undefined;
+  }
+}
 
 // === DOM Refs ===
 
@@ -124,6 +147,22 @@ function createDesktopAgentsAdapter(ctx: DesktopContext): AgentsFetchAdapter {
     listTrustedAgents: () => ctx.app.listTrustedAgents(),
     discoverAgents: () => ctx.app.discoverAgents(),
     setPetname: (remoteMotebitId, petname) => ctx.app.setAgentPetname(remoteMotebitId, petname),
+    // Money side of the trust graph (doctrine §6): the caller's own per-peer
+    // economic history, verified against the relay's pinned key. Desktop auths
+    // with the static master token (panels CLAUDE.md rule 3); null on
+    // no-relay / verification failure (fail-closed — mark + trust still render).
+    listSettlementSummary: async (): Promise<AgentEconomicSummary | null> => {
+      const config = ctx.getConfig();
+      const syncUrl = config?.syncUrl;
+      const motebitId = ctx.app.motebitId;
+      if (!syncUrl || !motebitId) return null;
+      const anchor = await settlementAnchor(syncUrl);
+      const init = config.syncMasterToken
+        ? { headers: { Authorization: `Bearer ${config.syncMasterToken}` } }
+        : undefined;
+      const res = await verifiedSettlementSummaryFetch(syncUrl, motebitId, { anchor, init });
+      return res.verification.valid ? res.body : null;
+    },
   };
 }
 
@@ -326,6 +365,17 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
       const time = document.createElement("span");
       time.textContent = formatTimeAgo(agent.last_seen_at);
       meta.appendChild(time);
+
+      // Money side of the trust graph: net earned/paid with this peer, derived
+      // from the relay's signed settlement ledger. Honest-empty — rendered only
+      // when there's settled history (never a fabricated $0).
+      const money = formatPeerEconomics(economicForPeer(state.economic, agent.remote_motebit_id));
+      if (money != null) {
+        const moneyEl = document.createElement("span");
+        moneyEl.className = "agent-item-money";
+        moneyEl.textContent = money;
+        meta.appendChild(moneyEl);
+      }
 
       item.appendChild(meta);
 
@@ -692,6 +742,7 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
     agentsPanel.classList.add("open");
     agentsBackdrop.classList.add("open");
     void ctrl.refreshKnown();
+    void ctrl.refreshEconomic();
     void refreshBalance();
   }
 

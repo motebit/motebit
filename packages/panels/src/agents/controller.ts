@@ -303,6 +303,82 @@ export function trustAuraClass(trustLevel: string): string {
   }
 }
 
+// ── Economic projection ───────────────────────────────────────────────
+//
+// The money side of the first-person trust graph
+// (docs/doctrine/agents-as-first-person-trust-graph.md §6). What *I* earned
+// from / paid to each peer, derived by the relay from its signed settlement
+// ledger and fetched as a verified `settlement-summary` export. This is a
+// **projection**, held separately from `AgentRecord` and looked up by id at
+// render time — never a denormalized balance on the trust record. Money in
+// integer micro-units (the panels layer never imports @motebit/protocol, so
+// the shape is inlined; it mirrors `SettlementSummaryExport`).
+
+const MICRO_PER_UNIT = 1_000_000;
+
+/** Per-counterparty economic history with the calling motebit. */
+export interface AgentPeerEconomics {
+  peer_id: string;
+  /** Micro-units I earned from this peer (I was the worker/payee). */
+  earned_micro: number;
+  /** Micro-units I paid to this peer (I was the delegator/payer). */
+  paid_micro: number;
+  /** `earned_micro - paid_micro`; negative ⇒ net payer to this peer. */
+  net_micro: number;
+  /** Platform fee (micro) I paid as the funder on legs with this peer. */
+  fee_micro: number;
+  settled_count: number;
+  p2p_count: number;
+  first_at: number;
+  last_at: number;
+}
+
+/** Settlements with no attributable counterparty (legacy / pre-attribution rows). */
+export interface AgentEconomicUnattributed {
+  earned_micro: number;
+  fee_micro: number;
+  settled_count: number;
+}
+
+/**
+ * The caller's whole first-person economic summary — surface-agnostic
+ * view-model mirroring the relay's `settlement-summary` export. Held as one
+ * object in panel state; the render looks up each Known peer's slice by id.
+ */
+export interface AgentEconomicSummary {
+  motebit_id: string;
+  peers: AgentPeerEconomics[];
+  unattributed: AgentEconomicUnattributed;
+}
+
+/** The economic slice for one peer, or undefined when there's no history. */
+export function economicForPeer(
+  summary: AgentEconomicSummary | null,
+  peerId: string,
+): AgentPeerEconomics | undefined {
+  return summary?.peers.find((p) => p.peer_id === peerId);
+}
+
+/**
+ * Calm money line for a peer — net signed dollars + a settlement count.
+ * Returns `null` when there is no settled history (the render shows nothing,
+ * or an honest "no settled work yet" — never a fabricated $0 that implies
+ * activity). Dollars are display-only (micro → fixed-2); the money PATH
+ * stays in integer micro-units upstream.
+ *
+ * Examples:
+ *   { net_micro: 2_500_000, settled_count: 3 } → "net +$2.50 · 3 settlements"
+ *   { net_micro: -500_000, settled_count: 1 }  → "net -$0.50 · 1 settlement"
+ */
+export function formatPeerEconomics(e: AgentPeerEconomics | undefined): string | null {
+  if (e == null || e.settled_count === 0) return null;
+  const net = e.net_micro / MICRO_PER_UNIT;
+  const sign = net > 0 ? "+" : net < 0 ? "-" : "";
+  const abs = Math.abs(net).toFixed(2);
+  const count = e.settled_count === 1 ? "1 settlement" : `${e.settled_count} settlements`;
+  return `net ${sign}$${abs} · ${count}`;
+}
+
 // ── Adapter ──────────────────────────────────────────────────────────
 
 /**
@@ -330,6 +406,17 @@ export interface AgentsFetchAdapter {
    * `setAgentPetname`; never a relay/global write. Pass `undefined` to clear.
    */
   setPetname?(remoteMotebitId: string, petname: string | undefined): Promise<void>;
+  /**
+   * Fetch the caller's first-person economic summary (per-peer earned / paid
+   * / net, derived from the relay's signed settlement ledger). Optional: a
+   * surface that hasn't wired it omits it (the controller's `refreshEconomic`
+   * no-ops, and no money line renders). The host implements it over
+   * `verifiedSettlementSummaryFetch` from `@motebit/state-export-client` so
+   * the response is verified against the relay's pinned key before it reaches
+   * the panel. Returns `null` when there's nothing to show (or verification
+   * failed — fail-closed, the panel renders the mark + trust without money).
+   */
+  listSettlementSummary?(): Promise<AgentEconomicSummary | null>;
 }
 
 // ── Sort + filter (derived view) ──────────────────────────────────────
@@ -434,6 +521,13 @@ export interface AgentsState {
   capabilityFilter: string;
   loading: boolean;
   error: string | null;
+  /**
+   * First-person economic summary (per-peer earned/paid/net). Held separately
+   * from `known` — a projection looked up by peer id at render, never merged
+   * onto the trust record. `null` until fetched, on adapter-unsupported, or on
+   * a verification/fetch failure (fail-closed: the money line just doesn't show).
+   */
+  economic: AgentEconomicSummary | null;
 }
 
 function initialState(): AgentsState {
@@ -445,6 +539,7 @@ function initialState(): AgentsState {
     capabilityFilter: "",
     loading: false,
     error: null,
+    economic: null,
   };
 }
 
@@ -463,6 +558,13 @@ export interface AgentsController {
    * adapter doesn't support it. Local record edit — never a global/relay name.
    */
   setPetname(remoteMotebitId: string, petname: string | undefined): Promise<void>;
+  /**
+   * Fetch the first-person economic summary and patch it into state. No-ops if
+   * the adapter doesn't support it. Fail-soft: a fetch/verification failure
+   * leaves `economic` unchanged (the mark + trust still render); it never
+   * surfaces an error banner — money legibility is additive, not load-bearing.
+   */
+  refreshEconomic(): Promise<void>;
   /** Derived view — discovered agents with sort + filter applied. */
   discoveredView(): DiscoveredAgent[];
   dispose(): void;
@@ -544,6 +646,19 @@ export function createAgentsController(adapter: AgentsFetchAdapter): AgentsContr
     await refreshKnown();
   }
 
+  async function refreshEconomic(): Promise<void> {
+    if (disposed || adapter.listSettlementSummary == null) return;
+    try {
+      const summary = await adapter.listSettlementSummary();
+      if (disposed) return;
+      patch({ economic: summary });
+    } catch {
+      // Fail-soft: money legibility is additive. Leave the prior `economic`
+      // in place (or null) and let the mark + trust render unaffected. No
+      // error banner — a settlement-export hiccup is not a panel failure.
+    }
+  }
+
   function discoveredView(): DiscoveredAgent[] {
     return applySortFilter(state.discovered, state.sort, state.capabilityFilter);
   }
@@ -573,6 +688,7 @@ export function createAgentsController(adapter: AgentsFetchAdapter): AgentsContr
     refreshKnown,
     refreshDiscover,
     setPetname,
+    refreshEconomic,
     discoveredView,
     dispose,
   };

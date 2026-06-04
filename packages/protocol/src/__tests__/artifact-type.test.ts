@@ -30,17 +30,20 @@ import {
   SYNC_PULL_ARTIFACT,
   EXECUTION_LEDGER_ARTIFACT,
   GOAL_RESULT_ARTIFACT,
+  SETTLEMENT_SUMMARY_ARTIFACT,
   type ContentArtifactType,
 } from "../artifact-type.js";
 
 describe("ALL_CONTENT_ARTIFACT_TYPES", () => {
-  it("has exactly the thirteen registered entries — twelve relay state-export + one motebit-direct (goal-result)", () => {
-    // Twelve state-export endpoints (relay-signed) + the first non-relay
-    // consumer (`goal-result` — motebit-direct per-fire artifact, agent-
-    // signed) per `docs/doctrine/goal-results.md` §"Phase 3" and the
-    // `docs/doctrine/nist-alignment.md` §8 expansion. Future additions
-    // bump this count + the corresponding named constant assertion.
-    expect(ALL_CONTENT_ARTIFACT_TYPES.length).toBe(13);
+  it("has exactly the fourteen registered entries — thirteen relay state-export + one motebit-direct (goal-result)", () => {
+    // Thirteen state-export endpoints (relay-signed) — the original twelve
+    // plus `settlement-summary` (the per-peer economic projection) — plus
+    // the first non-relay consumer (`goal-result` — motebit-direct per-fire
+    // artifact, agent-signed) per `docs/doctrine/goal-results.md` §"Phase 3",
+    // the `docs/doctrine/nist-alignment.md` §8 expansion, and
+    // `docs/doctrine/agents-as-first-person-trust-graph.md` §6. Future
+    // additions bump this count + the corresponding named constant assertion.
+    expect(ALL_CONTENT_ARTIFACT_TYPES.length).toBe(14);
   });
 
   it("enumerates every named constant exactly once", () => {
@@ -58,6 +61,7 @@ describe("ALL_CONTENT_ARTIFACT_TYPES", () => {
       SYNC_PULL_ARTIFACT,
       EXECUTION_LEDGER_ARTIFACT,
       GOAL_RESULT_ARTIFACT,
+      SETTLEMENT_SUMMARY_ARTIFACT,
     ];
     expect([...named].sort()).toEqual([...ALL_CONTENT_ARTIFACT_TYPES].sort());
     expect(new Set(named).size).toBe(named.length);

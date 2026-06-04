@@ -4,7 +4,11 @@ import {
   agentDisplayLabel,
   trustAuraClass,
   createAgentsController,
+  economicForPeer,
+  formatPeerEconomics,
   type AgentsFetchAdapter,
+  type AgentEconomicSummary,
+  type AgentPeerEconomics,
 } from "../agents/controller.js";
 
 const UUID = "019d6828-969e-7e9b-baa2-481ece0f80c2";
@@ -111,6 +115,81 @@ describe("createAgentsController — setPetname (first-person, local)", () => {
   it("no-ops when the adapter does not support setPetname", async () => {
     const ctrl = createAgentsController(makeAdapter()); // no setPetname method
     await expect(ctrl.setPetname("remote-1", "Scout")).resolves.toBeUndefined();
+    ctrl.dispose();
+  });
+});
+
+const PEER: AgentPeerEconomics = {
+  peer_id: "peer-1",
+  earned_micro: 3_000_000,
+  paid_micro: 500_000,
+  net_micro: 2_500_000,
+  fee_micro: 25_000,
+  settled_count: 3,
+  p2p_count: 2,
+  first_at: 100,
+  last_at: 300,
+};
+
+const SUMMARY: AgentEconomicSummary = {
+  motebit_id: "me",
+  peers: [PEER],
+  unattributed: { earned_micro: 0, fee_micro: 0, settled_count: 0 },
+};
+
+describe("formatPeerEconomics", () => {
+  it("renders net positive dollars + plural settlement count", () => {
+    expect(formatPeerEconomics(PEER)).toBe("net +$2.50 · 3 settlements");
+  });
+
+  it("renders net negative (net payer) with a singular count", () => {
+    expect(formatPeerEconomics({ ...PEER, net_micro: -500_000, settled_count: 1 })).toBe(
+      "net -$0.50 · 1 settlement",
+    );
+  });
+
+  it("is honest-empty (null) with no settled history — never a fabricated $0", () => {
+    expect(formatPeerEconomics(undefined)).toBeNull();
+    expect(formatPeerEconomics({ ...PEER, settled_count: 0 })).toBeNull();
+  });
+});
+
+describe("economicForPeer", () => {
+  it("returns the peer slice by id, undefined when absent or summary null", () => {
+    expect(economicForPeer(SUMMARY, "peer-1")).toBe(PEER);
+    expect(economicForPeer(SUMMARY, "nobody")).toBeUndefined();
+    expect(economicForPeer(null, "peer-1")).toBeUndefined();
+  });
+});
+
+describe("createAgentsController — refreshEconomic", () => {
+  it("patches the fetched summary into state", async () => {
+    const ctrl = createAgentsController(
+      makeAdapter({ listSettlementSummary: async () => SUMMARY }),
+    );
+    await ctrl.refreshEconomic();
+    expect(ctrl.getState().economic).toEqual(SUMMARY);
+    ctrl.dispose();
+  });
+
+  it("no-ops when the adapter does not support it (state stays null)", async () => {
+    const ctrl = createAgentsController(makeAdapter());
+    await ctrl.refreshEconomic();
+    expect(ctrl.getState().economic).toBeNull();
+    ctrl.dispose();
+  });
+
+  it("fails soft — a fetch/verification error leaves prior state intact, no error banner", async () => {
+    const ctrl = createAgentsController(
+      makeAdapter({
+        listSettlementSummary: async () => {
+          throw new Error("relay unreachable");
+        },
+      }),
+    );
+    await ctrl.refreshEconomic();
+    expect(ctrl.getState().economic).toBeNull();
+    expect(ctrl.getState().error).toBeNull(); // additive, not load-bearing
     ctrl.dispose();
   });
 });

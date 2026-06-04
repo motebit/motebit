@@ -32,14 +32,15 @@
 
 /**
  * The closed set of content-artifact categories motebit currently
- * signs. The first twelve cover the state-export endpoints at
+ * signs. Thirteen cover the state-export endpoints at
  * `services/relay/src/state-export.ts` (relay-assembled bundles
  * the relay signs as a witness over its database state per the
- * recognition note in `docs/doctrine/nist-alignment.md` §8). The
- * thirteenth — `goal-result` — is the **first non-relay-state-export
- * consumer**: a motebit-direct, per-fire artifact that the motebit
- * itself signs as the producer (the agent's own work product, not
- * a relay-assembled bundle). The expansion is doctrinally aligned —
+ * recognition note in `docs/doctrine/nist-alignment.md` §8) — the
+ * original twelve plus `settlement-summary` (the per-peer economic
+ * projection over `relay_settlements`). `goal-result` is the **first
+ * non-relay-state-export consumer**: a motebit-direct, per-fire
+ * artifact that the motebit itself signs as the producer (the agent's
+ * own work product, not a relay-assembled bundle). The expansion is doctrinally aligned —
  * the registry's stated semantic is "content-artifact category for
  * C2PA-shape provenance," not "relay state-export bundle." Goals
  * is the first arc to prove the registry generalizes; future
@@ -79,6 +80,15 @@
  *     categories" — the artifact category's cryptographic
  *     provenance envelope. Bound to the fire via `invocation`
  *     (goal_id + execution-receipt id when present).
+ *   - `settlement-summary` — per-peer economic history projected
+ *     from the relay's signed settlement ledger
+ *     (`/api/v1/agents/:motebitId/settlements`). Relay-assembled witness
+ *     over `relay_settlements`: for the calling motebit, what it
+ *     earned from and paid to each counterparty, in micro-units.
+ *     The money side of the first-person trust graph — receipts
+ *     stay source of truth, this is a materialized projection, never
+ *     a denormalized balance. Doctrine:
+ *     `docs/doctrine/agents-as-first-person-trust-graph.md` §6.
  *
  * Adding an endpoint is intentional protocol-level work: a new
  * `ContentArtifactType` entry here, a new named constant, a new
@@ -103,7 +113,8 @@ export type ContentArtifactType =
   | "gradient-history"
   | "sync-pull"
   | "execution-ledger"
-  | "goal-result";
+  | "goal-result"
+  | "settlement-summary";
 
 // === Named constants — same value, narrower type ============================
 //
@@ -164,6 +175,15 @@ export const EXECUTION_LEDGER_ARTIFACT: ContentArtifactType = "execution-ledger"
  */
 export const GOAL_RESULT_ARTIFACT: ContentArtifactType = "goal-result";
 
+/**
+ * Relay-assembled per-peer economic history for a motebit — what it
+ * earned from and paid to each counterparty, projected from the signed
+ * `relay_settlements` ledger. The money side of the first-person trust
+ * graph; a materialized projection, never a stored balance. Doctrine:
+ * `docs/doctrine/agents-as-first-person-trust-graph.md` §6.
+ */
+export const SETTLEMENT_SUMMARY_ARTIFACT: ContentArtifactType = "settlement-summary";
+
 // === Iteration + type guard =================================================
 
 /**
@@ -185,6 +205,7 @@ export const ALL_CONTENT_ARTIFACT_TYPES: readonly ContentArtifactType[] = Object
   "sync-pull",
   "execution-ledger",
   "goal-result",
+  "settlement-summary",
 ]);
 
 /**

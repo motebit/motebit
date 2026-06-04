@@ -61,6 +61,7 @@ const ENDPOINTS: ReadonlyArray<Endpoint> = [
   { path: `/api/v1/plans/${MOTEBIT_ID}`, expectedType: "plan-list" },
   { path: `/api/v1/gradient/${MOTEBIT_ID}`, expectedType: "gradient-history" },
   { path: `/api/v1/sync/${MOTEBIT_ID}/pull`, expectedType: "sync-pull" },
+  { path: `/api/v1/agents/${MOTEBIT_ID}/settlements`, expectedType: "settlement-summary" },
 ];
 
 describe("State-export manifest sweep — every GET emits a verifiable signed bundle", () => {
@@ -98,7 +99,7 @@ describe("State-export manifest sweep — every GET emits a verifiable signed bu
     });
   }
 
-  it("all 10 sampled endpoints use the SAME producer key (one relay identity)", async () => {
+  it("all sampled endpoints use the SAME producer key (one relay identity)", async () => {
     const producers = new Set<string>();
     for (const endpoint of ENDPOINTS) {
       const res = await relay.app.request(endpoint.path, {

@@ -147,6 +147,10 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
     capabilityFilter: "",
     loading: false,
     error: null,
+    // Mobile doesn't render the money line yet (the contained follow-on); it
+    // still constructs valid panel state. `economic` stays null until mobile
+    // wires `listSettlementSummary` + the per-peer render.
+    economic: null,
   }));
 
   useEffect(() => {

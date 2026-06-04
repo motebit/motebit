@@ -1101,8 +1101,8 @@ export async function handleReceiptIngestion(
           moteDb.db
             .prepare(
               `INSERT OR IGNORE INTO relay_settlements
-               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, x402_tx_hash, x402_network, issuer_relay_id, suite, signature, record_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, delegator_id, x402_tx_hash, x402_network, issuer_relay_id, suite, signature, record_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               signedSettlement.settlement_id,
@@ -1117,6 +1117,14 @@ export async function handleReceiptIngestion(
               signedSettlement.status,
               signedSettlement.settled_at,
               signedSettlement.settlement_mode,
+              // The payer/delegator, so the per-peer settlement-summary export
+              // (state-export.ts) can attribute relay-custody settlements to a
+              // counterparty — not only P2P rows. `null` when self-funded /
+              // unknown (no distinct submitter) → stays in the unattributed
+              // bucket rather than mis-attributing to self. Only the p2p-verifier
+              // reads this column, and it filters `settlement_mode='p2p'`, so a
+              // value on relay-custody rows is inert there.
+              entry.submitted_by ?? entry.task.submitted_by ?? null,
               entry.x402_tx_hash ?? null,
               entry.x402_network ?? null,
               signedSettlement.issuer_relay_id,
