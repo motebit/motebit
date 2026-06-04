@@ -58,7 +58,7 @@
     "@noble/curves": "^2.2.0",
     "@noble/ed25519": "~3.1.0",
     "@noble/hashes": "^2.2.0",
-    "@tauri-apps/cli": "^2.10.1",
+    "@tauri-apps/cli": "^2.11.2",
     "@types/better-sqlite3": "^7.6.0",
     "@types/three": "^0.170.0",
     "better-sqlite3": "^12.0.0",
