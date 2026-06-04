@@ -132,13 +132,6 @@ export interface AgentRecord {
   failed_tasks?: number;
   notes?: string;
   /**
-   * The peer's Ed25519 public key (64-char hex), when known. The render-time
-   * input to the identity sigil (`deriveAgentSigil` in `@motebit/sdk`) — the
-   * face is the key. Absent for legacy records that never captured it; the
-   * surface falls back to a neutral mark.
-   */
-  public_key?: string;
-  /**
    * First-person local nickname for this peer (Known tab only). Naming is
    * first-person — doctrine `agents-as-first-person-trust-graph.md` §3 — so it
    * exists only for agents you've met and named; absent ⇒ show the short id.
@@ -158,14 +151,6 @@ export interface AgentRecord {
 export interface DiscoveredAgent {
   motebit_id: string;
   capabilities: string[];
-  /**
-   * The agent's Ed25519 public key (64-char hex), projected by the relay's
-   * discover response. Public by nature; lets a client verify identity and
-   * render the identity sigil (`deriveAgentSigil`). Absent when talking to a
-   * relay that predates the projection — the surface falls back to a neutral
-   * mark. (No petname on Discover: those are agents you haven't met.)
-   */
-  public_key?: string;
   trust_level?: TrustLevel | (string & {});
   interaction_count?: number;
   pricing?: PricingEntry[] | null;

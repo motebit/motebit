@@ -217,12 +217,30 @@ describe("BIP-39 wordlist integrity", () => {
 });
 
 describe("input validation", () => {
-  const bad = ["", "xyz", "g".repeat(64), "a".repeat(63), "a".repeat(65)];
-  it("deriveAgentSigil throws on non-64-hex input", () => {
-    for (const k of bad) expect(() => deriveAgentSigil(k)).toThrow(/64 hex/);
+  const badKeys = ["", "xyz", "g".repeat(64), "a".repeat(63), "a".repeat(65)];
+
+  it("deriveAgentSigil accepts any non-empty identity (motebit_id or pubkey), throws only on empty", () => {
+    // A motebit_id (UUID) is the canonical input — must not throw.
+    expect(() => deriveAgentSigil("019d6828-969e-7e9b-baa2-481ece0f80c2")).not.toThrow();
+    // Empty / whitespace-only is the one rejected case.
+    for (const bad of ["", "   "]) {
+      expect(() => deriveAgentSigil(bad)).toThrow(/non-empty/);
+    }
   });
-  it("shortFingerprint throws on non-64-hex input", () => {
-    for (const k of bad) expect(() => shortFingerprint(k)).toThrow(/64 hex/);
+
+  it("deriveAgentSigil is deterministic on a motebit_id and differs from the pubkey-derived sigil", () => {
+    const id = "019d6828-969e-7e9b-baa2-481ece0f80c2";
+    expect(deriveAgentSigil(id)).toEqual(deriveAgentSigil(id));
+    // Different identity string ⇒ different sigil (id vs a 64-hex key).
+    expect(deriveAgentSigil(id)).not.toEqual(deriveAgentSigil(KEY_A));
+  });
+
+  it("shortFingerprint still requires a 64-hex public key", () => {
+    for (const k of badKeys) expect(() => shortFingerprint(k)).toThrow(/64 hex/);
+  });
+
+  it("wordFingerprint still requires a 64-hex public key", () => {
+    for (const k of badKeys) expect(() => wordFingerprint(k)).toThrow(/64 hex/);
   });
 });
 

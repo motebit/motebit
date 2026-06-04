@@ -93,16 +93,26 @@ static presets
 So identity is cryptographically self-certifying and visually anonymous. That gap
 _is_ the legibility problem.
 
-The fix is on-thesis: **the face is the key.** Derive a deterministic visual
-fingerprint from the agent's pubkey / genesis key (not the truncated id — more
-entropy, survives any id-representation change; see
+The fix is on-thesis: **the face is the identity.** Derive a deterministic visual
+fingerprint from the agent's `motebit_id` — the canonical identity present at every
+display site, itself `UUIDv8(SHA-256(pubkey))` (so still key-derived, one hash
+removed; ample entropy; see
 [`identity-binding-verification.md`](identity-binding-verification.md)). You cannot
-choose another agent's face, because it is a function of their key.
+choose another agent's face, because it is a function of their identity.
+
+> Derive from the `motebit_id`, not the raw public key — corrected 2026-06-03 by
+> the territory. The key gives marginally more "the face is the genesis key"
+> purity, but it is **not reliably client-side** (a known agent's local trust
+> record may not carry the pubkey), so pubkey-derived faces came out blank in the
+> Known tab while the same agent had a face in Discover. An inconsistent or absent
+> face is worse than the entropy nuance: a recognition mark's first duty is to be
+> **the same everywhere and always present**. The `motebit_id` is — and it's
+> key-derived anyway.
 
 Two rules make this safe rather than decorative:
 
 - **Sigils derive params, not pixels.** The pure function is
-  `pubkey → { palette, geometry seed, symmetry, density, … }` — Ring 1, identical
+  `motebit_id → { palette, geometry seed, symmetry, density, … }` — Ring 1, identical
   everywhere, zero-dep, testable. The _render_ is per-surface (Ring 3): SVG/canvas
   on web, `StyleSheet` on mobile, compact glyph on CLI, and — the payoff — a **3D
   droplet presence in spatial from the same seed** (see

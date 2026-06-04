@@ -301,7 +301,7 @@ export function defaultModelForVendor(vendor: ByokVendor): string;
 export function defaultProviderConfig(): MotebitCloudProviderConfig;
 
 // @public
-export function deriveAgentSigil(publicKeyHex: string): AgentSigil;
+export function deriveAgentSigil(identity: string): AgentSigil;
 
 // @public (undocumented)
 export interface ExportManifest {

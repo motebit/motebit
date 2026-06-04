@@ -1,10 +1,10 @@
 /**
  * Identity sigil — deterministic visual recognition parameters derived from an
- * agent's Ed25519 public key.
+ * agent's stable identity (its `motebit_id` — itself `SHA-256(pubkey)`-derived).
  *
  * Doctrine: `docs/doctrine/agents-as-first-person-trust-graph.md` §4.
  *
- * This is a **Ring-1 param primitive, not a renderer.** It maps a public key to
+ * This is a **Ring-1 param primitive, not a renderer.** It maps an identity to
  * a deterministic, perceptually-spread set of visual parameters; each surface
  * renders those params natively (Ring 3): SVG/canvas on web, `StyleSheet` on
  * mobile, a compact glyph on CLI, and a 3D droplet presence in spatial from the
@@ -133,15 +133,31 @@ function normalizePublicKey(publicKeyHex: string): string {
   return s;
 }
 
+/** Normalize any stable identity string for sigil derivation: non-empty, case-folded. */
+function normalizeIdentity(identity: string): string {
+  const s = identity.trim().toLowerCase();
+  if (s.length === 0) {
+    throw new Error("identity-sigil: identity must be a non-empty string");
+  }
+  return s;
+}
+
 /**
- * Derive an agent's identity sigil parameters from its Ed25519 public key.
- * Pure, synchronous, deterministic: the same key always yields the same sigil.
+ * Derive an agent's identity sigil parameters from its stable identity string.
+ * Pure, synchronous, deterministic: the same identity always yields the same sigil.
  *
- * @param publicKeyHex - 64-char hex Ed25519 public key (case-insensitive).
- * @throws if the input is not a 64-char hex string.
+ * Pass the agent's `motebit_id` — the canonical identity present at every display
+ * site, itself `UUIDv8(SHA-256(pubkey))` (so still key-derived, one hash removed).
+ * The raw public key works too, but it isn't reliably available client-side (a
+ * known agent's trust record may not carry it), and an agent must show the SAME
+ * face everywhere — so derive from the id that's always present. Doctrine:
+ * `agents-as-first-person-trust-graph.md` §4.
+ *
+ * @param identity - the agent's stable identity (its `motebit_id`, or a public key).
+ * @throws if the input is empty.
  */
-export function deriveAgentSigil(publicKeyHex: string): AgentSigil {
-  const key = normalizePublicKey(publicKeyHex);
+export function deriveAgentSigil(identity: string): AgentSigil {
+  const key = normalizeIdentity(identity);
   const hash = xmur3(key);
   const rand = mulberry32(hash());
   const range = (lo: number, hi: number): number => lo + rand() * (hi - lo);

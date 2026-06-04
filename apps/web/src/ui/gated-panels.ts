@@ -936,23 +936,20 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
   // doctrine agents-as-first-person-trust-graph §4. The sigil's accessible
   // title is the UUID-safe short id (never user-set petname) so no untrusted
   // text enters the SVG string; the visible petname goes through textContent.
-  function renderAgentIdentity(opts: {
-    fullId: string;
-    publicKey?: string;
-    petname?: string;
-  }): HTMLElement {
+  function renderAgentIdentity(opts: { fullId: string; petname?: string }): HTMLElement {
     const header = document.createElement("div");
     header.className = "agent-item-identity";
 
     const face = document.createElement("span");
     face.className = "agent-sigil";
-    if (opts.publicKey != null && /^[0-9a-f]{64}$/i.test(opts.publicKey)) {
-      face.innerHTML = sigilToSvg(deriveAgentSigil(opts.publicKey), {
+    if (opts.fullId.length > 0) {
+      // Face from the motebit_id — always present, so the same agent shows the
+      // SAME mark in Known and Discover (a pubkey isn't reliably client-side).
+      face.innerHTML = sigilToSvg(deriveAgentSigil(opts.fullId), {
         size: 28,
         title: shortMotebitId(opts.fullId),
       });
     } else {
-      // Legacy record / pre-projection relay: no key → neutral mark, no crash.
       face.classList.add("agent-sigil-empty");
     }
     header.appendChild(face);
@@ -1005,11 +1002,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       item.className = "panel-list-card agent-item";
 
       item.appendChild(
-        renderAgentIdentity({
-          fullId: agent.remote_motebit_id,
-          publicKey: agent.public_key,
-          petname: agent.petname,
-        }),
+        renderAgentIdentity({ fullId: agent.remote_motebit_id, petname: agent.petname }),
       );
 
       const meta = document.createElement("div");
@@ -1098,12 +1091,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       // preserved for trust-badge / hardware-attestation selector hooks.
       item.className = "panel-list-card agent-item";
 
-      item.appendChild(
-        renderAgentIdentity({
-          fullId: agent.motebit_id,
-          publicKey: agent.public_key,
-        }),
-      );
+      item.appendChild(renderAgentIdentity({ fullId: agent.motebit_id }));
 
       if (agent.capabilities.length > 0) {
         const priceByCapability = new Map<string, PricingEntry>();
