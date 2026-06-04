@@ -22,8 +22,8 @@
     "clean": "rm -rf dist .turbo .expo src/creature-webview-bundle.generated.ts"
   },
   "dependencies": {
-    "@babel/runtime": "^7.29.2",
-    "@craftzdog/react-native-buffer": "^6.0.5",
+    "@babel/runtime": "^7.29.7",
+    "@craftzdog/react-native-buffer": "^6.1.2",
     "@expo/metro-runtime": "~55.0.10",
     "@expo/vector-icons": "^15.1.1",
     "@motebit/ai-core": "workspace:*",
@@ -72,10 +72,10 @@
     "expo-sqlite": "~55.0.15",
     "expo-task-manager": "~55.0.15",
     "react": "^19.2.4",
-    "react-native": "0.83.6",
+    "react-native": "0.85.3",
     "react-native-get-random-values": "1.11.0",
     "react-native-quick-crypto": "0.7.7",
-    "react-native-webview": "^13.16.0",
+    "react-native-webview": "^13.16.1",
     "readable-stream": "^4.7.0"
   },
   "devDependencies": {
