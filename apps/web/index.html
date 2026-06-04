@@ -5175,6 +5175,10 @@
         color: var(--text-ghost);
         font-size: 12px;
         padding: 8px 12px;
+        /* Two tabs fill the row (50/50) so the bar doesn't read as having
+           room for absent tabs — Known/Discover is the complete view. */
+        flex: 1;
+        text-align: center;
         cursor: pointer;
         transition:
           color 0.15s,
@@ -6980,6 +6984,10 @@
         color: var(--text-ghost);
         font-size: 12px;
         padding: 8px 12px;
+        /* Sibling of .agents-tab — fill the row 50/50 so the two bars keep
+           one visual language (no implied missing tabs). */
+        flex: 1;
+        text-align: center;
         cursor: pointer;
         transition:
           color 0.15s,
