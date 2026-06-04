@@ -65,10 +65,11 @@ export function sigilToSvg(sigil: AgentSigil, opts?: SigilSvgOptions): string {
   const gradId = `mb-grad-${uid}`;
 
   // Body = the droplet, lit top-left → its hue. Interior pattern = dark ink for
-  // contrast on the mid-light body; accent gives the nucleus + the mirror tone.
-  const bodyLight = rgb({ ...sigil.primary, l: Math.min(sigil.primary.l + 0.13, 0.92) });
+  // strong contrast on the mid-light body at card scale; accent gives the nucleus
+  // + the mirror tone. (Ink darkened + rim firmed for small-size legibility.)
+  const bodyLight = rgb({ ...sigil.primary, l: Math.min(sigil.primary.l + 0.16, 0.93) });
   const body = rgb(sigil.primary);
-  const ink = rgb({ l: 0.32, c: clamp(sigil.primary.c, 0.04, 0.12), h: sigil.primary.h });
+  const ink = rgb({ l: 0.24, c: clamp(sigil.primary.c, 0.04, 0.12), h: sigil.primary.h });
   const accent = rgb(sigil.accent);
 
   // Interior geometry, contained well inside the membrane (margin from the rim).
@@ -106,7 +107,7 @@ export function sigilToSvg(sigil: AgentSigil, opts?: SigilSvgOptions): string {
   // Nucleus — a small accent core.
   interior.push(`<circle cx="${n(c)}" cy="${n(c)}" r="${n(sw * 1.3)}" fill="${accent}"/>`);
 
-  const rimW = Math.max(0.75, size * 0.028);
+  const rimW = Math.max(0.9, size * 0.035);
   const sheenRx = size * 0.18;
   const sheenRy = size * 0.12;
 
@@ -125,7 +126,7 @@ export function sigilToSvg(sigil: AgentSigil, opts?: SigilSvgOptions): string {
     // key-derived interior, clipped to the membrane
     `<g clip-path="url(#${clipId})">${interior.join("")}</g>` +
     // membrane rim
-    `<circle cx="${n(c)}" cy="${n(c)}" r="${n(r)}" fill="none" stroke="${ink}" stroke-opacity="0.35" stroke-width="${n(rimW)}"/>` +
+    `<circle cx="${n(c)}" cy="${n(c)}" r="${n(r)}" fill="none" stroke="${ink}" stroke-opacity="0.5" stroke-width="${n(rimW)}"/>` +
     // glass sheen (top-left), the droplet read that rhymes with the big creature
     `<ellipse cx="${n(size * 0.37)}" cy="${n(size * 0.31)}" rx="${n(sheenRx)}" ry="${n(sheenRy)}" fill="#fff" fill-opacity="0.3"/>` +
     `</svg>`

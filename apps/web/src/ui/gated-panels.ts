@@ -946,7 +946,7 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       // Face from the motebit_id — always present, so the same agent shows the
       // SAME mark in Known and Discover (a pubkey isn't reliably client-side).
       face.innerHTML = sigilToSvg(deriveAgentSigil(opts.fullId), {
-        size: 28,
+        size: 32,
         title: shortMotebitId(opts.fullId),
       });
     } else {
@@ -1151,6 +1151,14 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
       }
       appendLatencyReadout(meta, agent.latency_stats);
       item.appendChild(meta);
+
+      // Epistemic cue: Discover is the network's claim, not a proven relationship.
+      // Any trust shown above is the relay's aggregate opinion, not first-person.
+      const prov = document.createElement("div");
+      prov.className = "agent-provenance";
+      const earned = typeof agent.interaction_count === "number" && agent.interaction_count > 0;
+      prov.textContent = earned ? "via relay" : "via relay · no earned trust yet";
+      item.appendChild(prov);
 
       discoverList.appendChild(item);
     }
