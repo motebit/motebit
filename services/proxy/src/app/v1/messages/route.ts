@@ -20,6 +20,9 @@ import { dispatchRouting, applyBalanceFilter, REFERENCE_ROUTING_POLICY } from "@
 // unit-tested sibling module — the edge route is glue, the cost-critical request
 // shape is testable on its own.
 import { buildProviderRequest } from "./provider-request";
+// Streaming usage extraction (pure, unit-tested) — normalizes each provider's
+// token-usage shape for the cost calc, incl. OpenAI's cached_tokens split.
+import { extractUsage, type UsageAccumulator } from "./usage";
 
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
@@ -120,44 +123,6 @@ function getProviderApiKey(provider: InferenceHost): string | null {
       // call sites — defense in depth against a future bug that
       // smuggles an on-device model into the proxy's catalog.
       return null;
-  }
-}
-
-/** Extract token usage from a streaming SSE chunk. Handles both Anthropic and OpenAI formats. */
-function extractUsage(
-  provider: InferenceHost,
-  line: string,
-  usage: { input: number; output: number; cacheRead: number; cacheCreation: number },
-): void {
-  if (!line.startsWith("data: ")) return;
-  const json = line.slice(6);
-  if (json === "[DONE]") return;
-  try {
-    const evt = JSON.parse(json) as Record<string, unknown>;
-
-    if (provider === "anthropic") {
-      // Anthropic: initial message has usage.input_tokens, message_delta has usage.output_tokens
-      const u = evt.usage as
-        | {
-            input_tokens?: number;
-            output_tokens?: number;
-            cache_read_input_tokens?: number;
-            cache_creation_input_tokens?: number;
-          }
-        | undefined;
-      if (u?.input_tokens != null) usage.input = u.input_tokens;
-      if (u?.output_tokens != null) usage.output = u.output_tokens;
-      if (u?.cache_read_input_tokens != null) usage.cacheRead = u.cache_read_input_tokens;
-      if (u?.cache_creation_input_tokens != null)
-        usage.cacheCreation = u.cache_creation_input_tokens;
-    } else {
-      // OpenAI / Google: final chunk has usage object
-      const u = evt.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
-      if (u?.prompt_tokens != null) usage.input = u.prompt_tokens;
-      if (u?.completion_tokens != null) usage.output = u.completion_tokens;
-    }
-  } catch {
-    // Not valid JSON — ignore
   }
 }
 
@@ -455,7 +420,7 @@ export async function POST(request: Request): Promise<Response> {
     const mid = tokenPayload.mid;
     const model = resolvedModel;
     const prov = resolvedProvider;
-    const usage = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+    const usage: UsageAccumulator = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
 
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const writer = writable.getWriter();
@@ -487,10 +452,11 @@ export async function POST(request: Request): Promise<Response> {
             usage.cacheRead,
             usage.cacheCreation,
           ) + classifierCost;
-        // Log raw provider token fields for billing verification.
-        // Check: does input_tokens include cached tokens or not?
-        // If input = uncached + cacheRead + cacheCreation, our formula is correct.
-        // If input = uncached only, we're double-counting cached tokens (overcharging).
+        // Log normalized token fields for billing verification. `extractUsage`
+        // normalizes every provider so `input` is UNCACHED and `cacheRead` is the
+        // cached/discounted portion (additive) — so the calculateCostMicro formula
+        // (uncached + cacheRead·discount + cacheCreation·1.25) is correct without
+        // double-counting. cacheRead > 0 here is the proof caching is landing.
         console.log(
           JSON.stringify({
             event: "proxy.usage",

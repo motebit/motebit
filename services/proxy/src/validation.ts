@@ -358,9 +358,16 @@ export function calculateCostMicro(
 ): number {
   const config = MODEL_CONFIG[model];
   if (!config) return 0;
+  // Cache-read discount is provider-specific: Anthropic reads cached input at
+  // 0.1x (90% off), OpenAI at 0.5x (50% off). Cache CREATION is an Anthropic-only
+  // surcharge (1.25x) — OpenAI auto-caches with no creation charge, so its callers
+  // pass cacheCreationTokens=0. `extractUsage` normalizes inputTokens to the
+  // UNCACHED portion for every provider, so these terms are additive (no
+  // double-count). See usage.ts.
+  const cacheReadMultiplier = config.host === "openai" ? 0.5 : 0.1;
   const rawCost =
     (inputTokens / 1_000_000) * config.input +
-    (cacheReadTokens / 1_000_000) * config.input * 0.1 +
+    (cacheReadTokens / 1_000_000) * config.input * cacheReadMultiplier +
     (cacheCreationTokens / 1_000_000) * config.input * 1.25 +
     (outputTokens / 1_000_000) * config.output;
   return Math.ceil(rawCost * (1 + MARGIN) * MICRO);

@@ -165,6 +165,21 @@ describe("calculateCostMicro", () => {
     expect(calculateCostMicro("claude-sonnet-4-6", 0, 10000)).toBe(180000);
   });
 
+  it("bills Anthropic cached-read input at 0.1x (90% off)", () => {
+    // raw = (1000/1e6)*3.0 + (2000/1e6)*3.0*0.1 + (500/1e6)*15.0
+    //     = 0.003 + 0.0006 + 0.0075 = 0.0111; *1.2*1e6 = 13320
+    expect(calculateCostMicro("claude-sonnet-4-6", 1000, 500, 2000)).toBe(13320);
+  });
+
+  it("bills OpenAI cached input at 0.5x (50% off), NOT Anthropic's 0.1x", () => {
+    // gpt-5.4: input 2.5, output 15.0. The cached term uses 0.5x (OpenAI), so
+    // cached input is more expensive than the Anthropic discount would imply —
+    // the whole point of the host-aware multiplier (fair billing).
+    // raw = (1000/1e6)*2.5 + (2000/1e6)*2.5*0.5 + (500/1e6)*15.0
+    //     = 0.0025 + 0.0025 + 0.0075 = 0.0125; *1.2*1e6 = 15000
+    expect(calculateCostMicro("gpt-5.4", 1000, 500, 2000)).toBe(15000);
+  });
+
   it("ceils fractional micro-units", () => {
     // 1 input token of haiku: raw = (1/1e6)*1.0 = 0.000001
     // margin = 0.0000012, micro = ceil(1.2) = 2
