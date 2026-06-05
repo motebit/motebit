@@ -15,6 +15,9 @@ import {
   createAgentsController,
   formatHardwarePlatform,
   formatLatency,
+  economicForPeer,
+  formatPeerEconomics,
+  type AgentEconomicSummary,
   type AgentFreshness,
   type AgentHardwareAttestation,
   type AgentLatencyStats,
@@ -24,6 +27,26 @@ import {
   type AgentsTab,
   type DiscoveredAgent,
 } from "@motebit/panels";
+import {
+  verifiedSettlementSummaryFetch,
+  fetchTransparencyAnchor,
+  type TransparencyAnchor,
+} from "@motebit/state-export-client";
+
+// Relay transparency anchor for the settlement-summary producer-key pin —
+// same posture as web + desktop. Cached per session; degrades to anchor-less
+// signature verification on bootstrap failure.
+let cachedSettlementAnchor: TransparencyAnchor | undefined;
+async function settlementAnchor(syncUrl: string): Promise<TransparencyAnchor | undefined> {
+  if (cachedSettlementAnchor !== undefined) return cachedSettlementAnchor;
+  try {
+    const result = await fetchTransparencyAnchor(syncUrl);
+    if (result.ok) cachedSettlementAnchor = result.anchor;
+    return cachedSettlementAnchor;
+  } catch {
+    return undefined;
+  }
+}
 
 const FRESHNESS_COLORS: Record<AgentFreshness, string> = {
   awake: "#4ade80",
@@ -130,6 +153,22 @@ function createMobileAgentsAdapter(app: MobileApp): AgentsFetchAdapter {
     discoverAgents: async () => {
       return (await app.discoverAgents()) as DiscoveredAgent[];
     },
+    // Money side of the trust graph (doctrine §6): the caller's own per-peer
+    // economic history, verified against the relay's pinned key. `account:balance`
+    // audience (read-only own financial state). null on no-relay / verification
+    // failure — fail-closed, the rest of the row still renders.
+    listSettlementSummary: async (): Promise<AgentEconomicSummary | null> => {
+      const syncUrl = await app.getSyncUrl();
+      const motebitId = app.motebitId !== "mobile-local" ? app.motebitId : null;
+      if (syncUrl == null || syncUrl === "" || motebitId == null) return null;
+      const token = await app.createSyncToken("account:balance");
+      const anchor = await settlementAnchor(syncUrl);
+      const res = await verifiedSettlementSummaryFetch(syncUrl, motebitId, {
+        anchor,
+        init: token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
+      });
+      return res.verification.valid ? res.body : null;
+    },
   };
 }
 
@@ -170,8 +209,13 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
     if (!visible) return;
     const ctrl = ctrlRef.current;
     if (!ctrl) return;
-    if (state.activeTab === "known") void ctrl.refreshKnown();
-    else void ctrl.refreshDiscover();
+    if (state.activeTab === "known") {
+      void ctrl.refreshKnown();
+      // Money side of the trust graph — fetched alongside Known, rendered under
+      // each peer. Independent + fail-soft (the relay read can fail without
+      // disturbing the local Known list).
+      void ctrl.refreshEconomic();
+    } else void ctrl.refreshDiscover();
   }, [visible, state.activeTab]);
 
   const onSetTab = (tab: AgentsTab): void => ctrlRef.current?.setActiveTab(tab);
@@ -247,6 +291,15 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
                     <Text style={styles.statText}>{item.interaction_count} interactions</Text>
                   </View>
                   <Text style={styles.seenText}>last seen {formatTimeAgo(item.last_seen_at)}</Text>
+                  {(() => {
+                    // Money side of the trust graph: net earned/paid with this
+                    // peer, from the relay's signed ledger. Honest-empty —
+                    // rendered only when there's settled history.
+                    const money = formatPeerEconomics(
+                      economicForPeer(state.economic, item.remote_motebit_id),
+                    );
+                    return money != null ? <Text style={styles.moneyText}>{money}</Text> : null;
+                  })()}
                 </View>
               );
             }}
@@ -448,6 +501,8 @@ function createStyles(c: ThemeColors) {
       fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     },
     seenText: { color: c.textMuted, fontSize: 10 },
+    // Money side of the trust graph — a touch stronger than meta, no color alarm.
+    moneyText: { color: c.textSecondary, fontSize: 11, fontWeight: "500", marginTop: 2 },
     seenRow: { flexDirection: "row", alignItems: "center" },
     freshnessDot: { width: 6, height: 6, borderRadius: 3, marginRight: 4 },
     emptyContainer: { paddingVertical: 40, alignItems: "center" },
