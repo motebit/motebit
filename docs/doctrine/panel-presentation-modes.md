@@ -61,20 +61,42 @@ A "spatial panel" — a glass object the user opens via a window-manager afforda
 
 So in spatial, **there is no `PanelPresentationMode`**. The same controller state that renders as a rail or immersive panel on web/desktop/mobile renders as a **Presentation primitive** on spatial — the 5th spatial primitive, anchored to the creature's act of showing. The user says "show me my goals"; motebit summons + holds + dissolves a held-tablet shape with the goals content rendered inside. Same controller. Different render category. Different summoning semantics.
 
-The render-target translation is per-surface, not per-mode:
+The render-target translation is per-surface, not per-mode (refined below — web/desktop carry **both** categories):
 
-| Surface                 | Records render category      | Summoning semantics                                         |
-| ----------------------- | ---------------------------- | ----------------------------------------------------------- |
-| Web (flat viewport)     | **Panel** (rail / immersive) | User opens panel                                            |
-| Desktop (flat viewport) | **Panel** (rail / immersive) | User opens panel                                            |
-| Mobile (flat viewport)  | **Panel** (immersive sheet)  | User opens panel                                            |
-| Spatial (3D scene)      | **Presentation** primitive   | User expresses intent → motebit summons / holds / dissolves |
+| Surface                      | Records render category                              | Summoning semantics                                         |
+| ---------------------------- | ---------------------------------------------------- | ----------------------------------------------------------- |
+| Web (flat + 3D scene)        | **Panel** (rail / immersive) **or** **Presentation** | user opens panel / motebit summons artifact                 |
+| Desktop (flat + 3D scene)    | **Panel** (rail / immersive) **or** **Presentation** | user opens panel / motebit summons artifact                 |
+| Mobile (flat, no scene room) | **Panel** (immersive sheet)                          | user opens panel                                            |
+| Spatial (3D scene)           | **Presentation** primitive                           | user expresses intent → motebit summons / holds / dissolves |
 
 When the spatial app builds out, the Goals controller does not change. Its `getState()`, `subscribe()`, and action methods are renderer-agnostic. The spatial app implements a renderer that **does not consume `PanelPresentationMode`** — it composes a Presentation primitive instead, sourced from the same controller. The information is constant; the embodiment changes categorically, not modally.
 
 **Individual records graduate to satellites via detach.** Inside a Presentation (or on the flat-surface panel today), an individual card can be long-pressed or dragged off the surface to detach as a **scene artifact / satellite** orbiting the creature — the same `detach` mechanic [`motebit-computer`](motebit-computer.md) §"Three end states" defines for slab items, with the same Rayleigh-Plateau bead-release physics. The Presentation is the _collection container_; the satellite is the _individual record made spatial and persistent_. This is the bridge between the records primitives across all three relevant doctrines: panels (this memo, flat-surface collection), Presentation primitives ([`spatial-as-endgame`](spatial-as-endgame.md) §"The five spatial primitives", spatial collection), and satellites ([`spatial-as-endgame`](spatial-as-endgame.md), spatial individual). The graduation pattern works on every surface — long-press a card on the web Goals rail today and it could already pin via the same mechanic; spatial just renders the satellite in the user's room instead of the slab's right-of-creature region.
 
 **This doctrine memo's scope ends at flat surfaces.** The spatial render category is governed by [`spatial-as-endgame`](spatial-as-endgame.md), not here. Don't add `spatial` to `PanelPresentationMode` — that's the doctrine collision corrected in this memo's history.
+
+## Refinement (2026-06-04): the three record-embodiments — panel, slab, artifact
+
+The flat/spatial split above is correct but was drawn too coarsely, and the coarseness let two misreads in: "no panels" (a _spatial_ statement) read as "no panels anywhere," and "panels become Presentations" read as "a panel becomes a free-floating window-object." Both wrong. A whole panel graduating into a floating window is the **spatial anti-goal** ("disconnected window-manager panels… remain the anti-goal," [`spatial-as-endgame`](spatial-as-endgame.md); the slab is itself "not a panel, not a window," [`motebit-computer`](motebit-computer.md)).
+
+The correct model is **three record-embodiments, not two**, and they already coexist on web/desktop:
+
+1. **Panel — browse.** The dense records surface (agent roster, credential list, balance ledger). `rail` / `immersive`. Records are _panel content, not slab content_ ([`motebit-computer`](motebit-computer.md)). The scan/compare workhorse — 50 agents in a side rail beats a floating cluster.
+2. **Slab — present / compose / act.** The motebit's **workstation** beside the creature — the surface in the app today where it reads a page or runs a tool. Selected content is _presented through the one slab_; **composing and acting happen here.** A hire is a **form + a delegation outbound**, which are the slab's **hand** organ verbatim ([`motebit-computer`](motebit-computer.md) §Hand). It is not a new floating object; it is the single working surface that already exists.
+3. **Artifact / satellite — promote.** An individual durable record (a signed receipt, an active delegation) **detaches** from the slab into the scene — the slab's `detach` end-state + the satellite mechanic (§"Spatial: panels become Presentations"). Promotion, only when earned. A panel never graduates _wholesale_; individual records do.
+
+So records flow: **panel (browse) → slab (present / compose / act) → artifact (durable, detached).** The "Presentation primitive" of [`spatial-as-endgame`](spatial-as-endgame.md) is the **spatial render of the slab's present role**; on a flat 3D viewport the slab fills that role directly.
+
+Per-surface substrate:
+
+- **Web / desktop** — all three (panel + slab + detached artifacts). Slab + scene exist today.
+- **Mobile** — panel (`immersive`) + slab (the creature webview); artifacts sparingly (no room for a populated scene).
+- **Spatial (glasses)** — slab-as-Presentation + satellites; **no panel.**
+
+**The through-line — one controller, three surfaces:** a phone renders the roster as a **panel**, a laptop presents it through the **slab**, and glasses render that same slab role as a **held-tablet the motebit presents into your view** — all from the one unchanged `AgentsController` (`getState` / `subscribe` / actions). (Geometry per [`spatial-as-endgame`](spatial-as-endgame.md): the creature _rests_ near your shoulder and orbits, gaze-aware; a _presentation_ is reached **forward into your view**, anchored to the motebit's gesture, never free-floating — rest position and present position are different.) This is the argument that the **spatial endgame is not a rewrite**: it is the same controller meeting a wider substrate, `params-not-pixels` ([`the-stack-one-layer-up`](the-stack-one-layer-up.md)) at the records layer. Web/desktop are therefore the **spatial rehearsal** — the endgame is dogfoodable on a Mac before the hardware exists. Build the controller once; the surfaces are render targets.
+
+**What does NOT change.** `PanelPresentationMode` stays `"rail" | "immersive"` — the slab and the Presentation/satellite primitives are _separate render categories_ ([`motebit-computer`](motebit-computer.md), [`spatial-as-endgame`](spatial-as-endgame.md)), never panel modes. No `spatial` enum entry; `PanelSurface` unchanged; the typed enforcement below untouched. **Status:** this names the model; the slab already renders on web/desktop today, and the spatial Presentation/satellite render is the named next render-engine arc — not "shipped," but "model locked, renderer named."
 
 ## Inline > transition > modal-forbidden
 

@@ -188,6 +188,41 @@ with them_ rotates the interior register or fires as a body act.
 > implementation fork** — to be resolved against the spatial Presentation primitive
 > before UI is wired, not pre-committed here.
 
+**Update (2026-06-04): the fork's _shape_ is settled.** The hire is **one act**
+(`authorize → policy → action → receipt → settlement → trust`) that flows across the
+three record-embodiments ([`panel-presentation-modes`](panel-presentation-modes.md)
+§"the three record-embodiments"):
+
+> **The roster is browsed in the panel → the hire is composed and performed on the
+> slab → the receipt detaches as an artifact (or settles back as a panel record).**
+
+The compose step is **not** a panel interior-register. Hiring composes an _act_, and
+acts live on the motebit's workstation: a hire is a **form + a delegation outbound**,
+which are the slab's **hand** organ verbatim ([`motebit-computer`](motebit-computer.md)
+§Hand — "forms filling," "delegation outbound — packet leaves the slab; returns as a
+bead with a signed receipt"). The panel stays **pure browse** (records are "panel
+content, not slab content"). So §5's "rotate the register _or_ fire as a body act"
+resolves, for hiring, to **the body/slab-act side** — the register side is for record
+_creation_ (e.g. Goals "commit a goal"), not act _composition_.
+
+Two separable guarantees, not to be bundled
+([`surface-determinism`](surface-determinism.md)):
+
+- **The path enforces.** The tap calls `invokeCapability(capability, {worker})` with
+  typed args — the model is never in the loop, and there is **no fall-through to the
+  AI loop** (failures degrade honestly: a system message or a real failed/unverified
+  receipt, never a silent retry). Statically held by `check-affordance-routing`. This
+  is what makes the affordance not lie.
+- **The value records.** `invocation_origin: "user-tap"` is a **signature-bound
+  provenance stamp** on the receipt — un-downgradeable evidence that a human
+  authorized _this specific_ invocation (load-bearing for an R4_MONEY hire), not a
+  runtime gate.
+
+"The motebit turns toward the agent" is a **spatial** behavior (agents embodied as
+scene droplets — §4 sigil → spatial droplet); on flat the act is the slab delegation
+arc, not a head-turn toward a record. What stays open is only the per-surface render
+(panel vs spatial Presentation), not the choreography.
+
 ## 6. Money history derives from receipts, never trust-record drift
 
 `AgentTrustRecord` carries interaction and task counts and latency stats — not a
