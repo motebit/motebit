@@ -256,6 +256,14 @@ describe("AnthropicProvider Anthropic integration", () => {
     globalThis.fetch = originalFetch;
   });
 
+  // The system prompt is sent as structured content blocks (for prompt caching),
+  // not a plain string — join the block texts to assert on content.
+  type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
+  const systemText = (system: unknown): string =>
+    Array.isArray(system)
+      ? (system as SystemBlock[]).map((b) => b.text).join("\n\n")
+      : String(system);
+
   it("sends correct request body", async () => {
     mockFetchSuccess("Hi");
 
@@ -269,7 +277,7 @@ describe("AnthropicProvider Anthropic integration", () => {
     expect(body.max_tokens).toBe(2048);
     expect(body.temperature).toBe(0.5);
     expect(body.messages).toEqual([{ role: "user", content: "Test" }]);
-    expect(body.system).toContain("motebit");
+    expect(systemText(body.system)).toContain("motebit");
   });
 
   it("system prompt contains state field documentation", async () => {
@@ -281,9 +289,55 @@ describe("AnthropicProvider Anthropic integration", () => {
     const mock = getFetchMock();
     const [, opts] = mock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(opts.body as string);
-    expect(body.system).toContain("[INTERNAL REFERENCE — state fields");
-    expect(body.system).toContain("affect_valence");
-    expect(body.system).toContain("trust_mode");
+    const text = systemText(body.system);
+    expect(text).toContain("[INTERNAL REFERENCE — state fields");
+    expect(text).toContain("affect_valence");
+    expect(text).toContain("trust_mode");
+  });
+
+  it("sends the system prompt as cache_control-bearing blocks (prompt caching)", async () => {
+    mockFetchSuccess("Hi");
+
+    const provider = new AnthropicProvider(config);
+    await provider.generate(makeContextPack({ user_message: "Test" }));
+
+    const mock = getFetchMock();
+    const [, opts] = mock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(opts.body as string) as { system: SystemBlock[] };
+    // system MUST be an array of blocks — a top-level cache_control body field is
+    // silently ignored by Anthropic, so a plain-string system caches nothing.
+    expect(Array.isArray(body.system)).toBe(true);
+    // The first (static) block carries the ephemeral cache breakpoint.
+    expect(body.system[0]!.cache_control).toEqual({ type: "ephemeral" });
+    expect(body.system[0]!.text).toContain("motebit");
+    // No stray top-level cache_control (that shape does nothing).
+    expect((body as Record<string, unknown>).cache_control).toBeUndefined();
+  });
+
+  it("marks the last tool cacheable so the tool schemas cache too", async () => {
+    mockFetchSuccess("Hi");
+
+    const provider = new AnthropicProvider(config);
+    await provider.generate(
+      makeContextPack({
+        user_message: "Test",
+        tools: [
+          { name: "a", description: "tool a", inputSchema: { type: "object" } },
+          { name: "b", description: "tool b", inputSchema: { type: "object" } },
+        ],
+      }),
+    );
+
+    const mock = getFetchMock();
+    const [, opts] = mock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(opts.body as string) as {
+      tools: Array<{ name: string; cache_control?: { type: "ephemeral" } }>;
+    };
+    expect(body.tools).toHaveLength(2);
+    // Cache breakpoint on the LAST tool (caches the whole static tools prefix);
+    // earlier tools carry none.
+    expect(body.tools[0]!.cache_control).toBeUndefined();
+    expect(body.tools[1]!.cache_control).toEqual({ type: "ephemeral" });
   });
 
   it("parses memory tags from response", async () => {

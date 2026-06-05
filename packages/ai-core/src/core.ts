@@ -12,7 +12,7 @@ import type {
   ToolCall,
 } from "@motebit/sdk";
 import { SensitivityLevel, MemoryType } from "@motebit/sdk";
-import { buildSystemPrompt as buildPrompt } from "./prompt.js";
+import { buildSystemPromptCacheable as buildPromptCacheable } from "./prompt.js";
 
 /** Default URL for a local Ollama instance. */
 export const DEFAULT_OLLAMA_URL = "http://localhost:11434";
@@ -843,7 +843,6 @@ export class AnthropicProvider implements StreamingProvider {
 
   async generate(contextPack: ContextPack): Promise<AIResponse> {
     const baseUrl = this.config.base_url ?? this.getDefaultBaseUrl();
-    const systemPrompt = this.buildSystemPrompt(contextPack);
     const messages = this.buildMessages(contextPack);
 
     const body: Record<string, unknown> = {
@@ -854,17 +853,16 @@ export class AnthropicProvider implements StreamingProvider {
       // it's present. Omitting it lets each model use its own default; users
       // who want to tune sampling still can via `config.temperature`.
       ...(this.config.temperature !== undefined && { temperature: this.config.temperature }),
-      system: systemPrompt,
+      // Cacheable system blocks (see buildSystemBlocks) — the static prefix
+      // caches at 1/10th input cost, the lever for cost on the agentic loop.
+      system: this.buildSystemBlocks(contextPack),
       messages,
       stream: false,
     };
 
-    if (contextPack.tools && contextPack.tools.length > 0) {
-      body.tools = contextPack.tools.map((t) => ({
-        name: t.name,
-        description: t.description,
-        input_schema: t.inputSchema,
-      }));
+    const tools = this.buildCacheableTools(contextPack);
+    if (tools) {
+      body.tools = tools;
     }
 
     const res = await fetchWithConnectionTimeout(
@@ -926,7 +924,6 @@ export class AnthropicProvider implements StreamingProvider {
     contextPack: ContextPack,
   ): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: AIResponse }> {
     const baseUrl = this.config.base_url ?? this.getDefaultBaseUrl();
-    const systemPrompt = this.buildSystemPrompt(contextPack);
     const messages = this.buildMessages(contextPack);
 
     const body: Record<string, unknown> = {
@@ -937,17 +934,16 @@ export class AnthropicProvider implements StreamingProvider {
       // it's present. Omitting it lets each model use its own default; users
       // who want to tune sampling still can via `config.temperature`.
       ...(this.config.temperature !== undefined && { temperature: this.config.temperature }),
-      system: systemPrompt,
+      // Cacheable system blocks (see buildSystemBlocks) — same caching lever as
+      // generate(); the streaming path is the one the chat surface actually uses.
+      system: this.buildSystemBlocks(contextPack),
       messages,
       stream: true,
     };
 
-    if (contextPack.tools && contextPack.tools.length > 0) {
-      body.tools = contextPack.tools.map((t) => ({
-        name: t.name,
-        description: t.description,
-        input_schema: t.inputSchema,
-      }));
+    const tools = this.buildCacheableTools(contextPack);
+    if (tools) {
+      body.tools = tools;
     }
 
     const res = await fetchWithConnectionTimeout(
@@ -1201,8 +1197,43 @@ export class AnthropicProvider implements StreamingProvider {
     return messages;
   }
 
-  private buildSystemPrompt(contextPack: ContextPack): string {
-    return buildPrompt(contextPack, this.config.personalityConfig);
+  /**
+   * System prompt as structured content blocks with `cache_control` on the
+   * static prefix, so Anthropic caches it (~3K tokens of identity + doctrine +
+   * injection defense) at 1/10th input cost on every subsequent turn within the
+   * 5-minute TTL. Critical for the agentic loop, where each tool round-trip is a
+   * fresh request that would otherwise re-pay the full static prefix. The
+   * dynamic suffix (state, memories, events) is a separate, uncached block.
+   *
+   * Anthropic accepts `system` as either a string or a block array; sending
+   * blocks is the ONLY way to attach `cache_control` (a top-level `cache_control`
+   * is silently ignored). When this provider talks to the motebit-cloud proxy,
+   * the proxy passes the blocks through to its Anthropic upstream and flattens
+   * them to a string for OpenAI/Google/Groq upstreams.
+   */
+  private buildSystemBlocks(
+    contextPack: ContextPack,
+  ): Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> {
+    return buildPromptCacheable(contextPack, this.config.personalityConfig);
+  }
+
+  /**
+   * Tool definitions with a `cache_control` breakpoint on the LAST tool, marking
+   * the end of the (static) tools block as cacheable. Anthropic builds its cache
+   * prefix in order tools → system → messages, so this breakpoint + the static
+   * system block form the stable cached prefix; the schemas don't change between
+   * turns, so they're re-paid at 1/10th cost. Returns undefined when no tools.
+   */
+  private buildCacheableTools(contextPack: ContextPack): Record<string, unknown>[] | undefined {
+    if (!contextPack.tools || contextPack.tools.length === 0) return undefined;
+    const tools: Record<string, unknown>[] = contextPack.tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.inputSchema,
+    }));
+    const lastIdx = tools.length - 1;
+    tools[lastIdx] = { ...tools[lastIdx], cache_control: { type: "ephemeral" } };
+    return tools;
   }
 
   private parseAnthropicResponse(data: AnthropicResponse): AIResponse {

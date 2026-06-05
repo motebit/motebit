@@ -16,6 +16,10 @@ import {
 } from "../../../validation";
 import { isTaskShape, type RoutingConstraint } from "@motebit/protocol";
 import { dispatchRouting, applyBalanceFilter, REFERENCE_ROUTING_POLICY } from "@motebit/policy";
+// Provider request shaping (incl. Anthropic prompt-caching) lives in a pure,
+// unit-tested sibling module — the edge route is glue, the cost-critical request
+// shape is testable on its own.
+import { buildProviderRequest } from "./provider-request";
 
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
@@ -116,131 +120,6 @@ function getProviderApiKey(provider: InferenceHost): string | null {
       // call sites — defense in depth against a future bug that
       // smuggles an on-device model into the proxy's catalog.
       return null;
-  }
-}
-
-interface ProviderRequest {
-  url: string;
-  headers: Record<string, string>;
-  body: string;
-}
-
-/** Build the provider-specific request. All providers receive the same logical input. */
-function buildProviderRequest(
-  provider: InferenceHost,
-  apiKey: string,
-  model: string,
-  body: Record<string, unknown>,
-  maxTokensCap: number,
-): ProviderRequest {
-  const messages = body.messages as Array<{ role: string; content: string }>;
-  const system = body.system as string | undefined;
-  const maxTokens =
-    maxTokensCap > 0
-      ? Math.min((body.max_tokens as number) || maxTokensCap, maxTokensCap)
-      : (body.max_tokens as number) || 4096;
-
-  switch (provider) {
-    case "anthropic":
-      return {
-        url: "https://api.anthropic.com/v1/messages",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model,
-          messages,
-          system,
-          max_tokens: maxTokens,
-          temperature: body.temperature,
-          stream: true,
-          // Enable prompt caching — Anthropic caches the longest stable prefix
-          // of the system prompt at 1/10th input cost. The system prompt is
-          // structured static-first so the cache covers ~3K tokens of identity,
-          // behavior rules, and injection defense.
-          cache_control: { type: "ephemeral" },
-          ...(body.tools != null ? { tools: body.tools } : {}),
-        }),
-      };
-
-    case "openai": {
-      // OpenAI format: system is a message, not a separate field
-      const openaiMessages = system ? [{ role: "system", content: system }, ...messages] : messages;
-      return {
-        url: "https://api.openai.com/v1/chat/completions",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: openaiMessages,
-          max_tokens: maxTokens,
-          temperature: body.temperature,
-          stream: true,
-          stream_options: { include_usage: true },
-          ...(body.tools != null ? { tools: body.tools } : {}),
-        }),
-      };
-    }
-
-    case "google": {
-      // Google AI uses OpenAI-compatible endpoint
-      const geminiMessages = system ? [{ role: "system", content: system }, ...messages] : messages;
-      return {
-        url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: geminiMessages,
-          max_tokens: maxTokens,
-          temperature: body.temperature,
-          stream: true,
-          stream_options: { include_usage: true },
-        }),
-      };
-    }
-
-    case "groq": {
-      // Groq exposes an OpenAI-compatible endpoint at api.groq.com/openai/v1;
-      // hosts open-source models (Llama 3.3 70B, GPT-OSS 120B) on LPU chips
-      // for high-throughput inference. Tools pass through in OpenAI shape.
-      const groqMessages = system ? [{ role: "system", content: system }, ...messages] : messages;
-      return {
-        url: "https://api.groq.com/openai/v1/chat/completions",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: groqMessages,
-          max_tokens: maxTokens,
-          temperature: body.temperature,
-          stream: true,
-          stream_options: { include_usage: true },
-          ...(body.tools != null ? { tools: body.tools } : {}),
-        }),
-      };
-    }
-
-    case "local-server":
-      // On-device consumer's host — the user's own machine. Proxy
-      // doesn't route here; the on-device runtime invokes the local
-      // server directly. Reaching this arm means a configuration
-      // bug at a call site upstream put an on-device model into the
-      // proxy's catalog — fail-closed throw so the bug surfaces
-      // rather than the proxy silently sending the request to the
-      // wrong endpoint. Doctrine: `docs/doctrine/auto-routing-as-
-      // protocol-primitive.md` § "PR 3 — on-device consumer".
-      throw new Error(
-        "proxy.buildProviderRequest: InferenceHost `local-server` is not routable through the proxy — on-device consumers invoke their own local inference server directly",
-      );
   }
 }
 
