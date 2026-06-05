@@ -73,6 +73,62 @@ function toOpenAiMessages(messages: unknown): Array<{ role: string; content: str
   });
 }
 
+/**
+ * Split a string-or-blocks system into its static prefix and per-turn dynamic
+ * suffix. The ai-core AnthropicProvider sends `system` as
+ * `[{static, cache_control}, {dynamic}]` (buildSystemPromptCacheable); block[0]
+ * is the static doctrine, the rest is the per-turn suffix. A plain string can't
+ * be split → it's all "static" (no reorder, same as before).
+ */
+function splitSystem(system: unknown): { staticText: string; dynamicText?: string } {
+  if (typeof system === "string") return { staticText: system };
+  if (Array.isArray(system)) {
+    const blocks = system as Array<{ text?: unknown }>;
+    const staticText = typeof blocks[0]?.text === "string" ? blocks[0].text : "";
+    const dynamicParts: string[] = [];
+    for (let i = 1; i < blocks.length; i++) {
+      const t = blocks[i]?.text;
+      if (typeof t === "string" && t.length > 0) dynamicParts.push(t);
+    }
+    return dynamicParts.length > 0
+      ? { staticText, dynamicText: dynamicParts.join("\n\n") }
+      : { staticText };
+  }
+  return { staticText: "" };
+}
+
+/**
+ * Assemble OpenAI messages for AUTOMATIC prompt caching (mirrors
+ * `OpenAIProvider.buildMessages`): static doctrine leads, history follows, and
+ * the per-turn dynamic context is a SEPARATE system message anchored immediately
+ * before the last user message. That anchor is stable across agentic-loop
+ * iterations, so within-turn caching holds, while prior-turn history — now ahead
+ * of the dynamic block — caches across turns. OpenAI-proper only (multiple /
+ * mid-conversation system messages are well-defined there).
+ */
+function assembleOpenAiCachedMessages(
+  system: unknown,
+  convo: Array<{ role: string; content: string }>,
+): Array<{ role: string; content: string }> {
+  const { staticText, dynamicText } = splitSystem(system);
+  const out: Array<{ role: string; content: string }> = [];
+  if (staticText) out.push({ role: "system", content: staticText });
+  out.push(...convo);
+  if (dynamicText != null && dynamicText.length > 0) {
+    let lastUserIdx = -1;
+    for (let i = out.length - 1; i >= 0; i--) {
+      if (out[i].role === "user") {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    const dyn = { role: "system", content: dynamicText };
+    if (lastUserIdx >= 0) out.splice(lastUserIdx, 0, dyn);
+    else out.push(dyn);
+  }
+  return out;
+}
+
 /** Build the provider-specific request. All providers receive the same logical input. */
 export function buildProviderRequest(
   provider: InferenceHost,
@@ -121,8 +177,13 @@ export function buildProviderRequest(
       };
 
     case "openai": {
-      // OpenAI format: system is a message, not a separate field
-      const openaiMessages = system ? [{ role: "system", content: system }, ...messages] : messages;
+      // Model-aware caching layout (mirrors ai-core OpenAIProvider): static
+      // doctrine leads, history follows, per-turn dynamic context is a separate
+      // system message before the last user turn — so OpenAI's automatic prefix
+      // cache covers the conversation history cross-turn, not just the static
+      // prefix. Google (Gemini OpenAI-compat: uncertain multi-system handling)
+      // and Groq (no caching) keep the simpler front-loaded layout below.
+      const openaiMessages = assembleOpenAiCachedMessages(body.system, messages);
       return {
         url: "https://api.openai.com/v1/chat/completions",
         headers: {

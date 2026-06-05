@@ -118,14 +118,47 @@ describe("buildProviderRequest — Anthropic prompt caching", () => {
 });
 
 describe("buildProviderRequest — OpenAI-shaped upstreams flatten system to a string", () => {
-  it("openai: system blocks become a leading system message (string content)", () => {
+  it("openai: reorders for auto-cache — static system leads, dynamic before the user turn", () => {
     const req = buildProviderRequest("openai", "sk-x", "gpt-4o", anthropicBody(CACHED), 4096);
-    const body = JSON.parse(req.body) as { messages: Array<{ role: string; content: string }> };
-    expect(body.messages[0]).toEqual({
-      role: "system",
-      content: "STATIC identity + doctrine\n\ndynamic suffix",
-    });
+    const msgs = (JSON.parse(req.body) as { messages: Array<{ role: string; content: string }> })
+      .messages;
+    // Static doctrine leads (the cacheable prefix) — dynamic is split OUT, not
+    // joined into the leading message.
+    expect(msgs[0]).toEqual({ role: "system", content: "STATIC identity + doctrine" });
+    // Dynamic context is a separate system message anchored before the user turn.
+    const lastUserIdx = msgs.map((m) => m.role).lastIndexOf("user");
+    expect(msgs[lastUserIdx - 1]).toEqual({ role: "system", content: "dynamic suffix" });
+    expect(msgs[lastUserIdx]!.content).toBe("hi");
+    expect(req.body).not.toContain("cache_control");
     expect(req.url).toContain("openai.com");
+  });
+
+  it("openai: prior-turn history sits BEFORE the dynamic block (so it caches cross-turn)", () => {
+    const body = {
+      ...anthropicBody(CACHED),
+      messages: [
+        { role: "user", content: "earlier" },
+        { role: "assistant", content: "earlier reply" },
+        { role: "user", content: "now" },
+      ],
+    };
+    const req = buildProviderRequest("openai", "sk-x", "gpt-4o", body, 4096);
+    const msgs = (JSON.parse(req.body) as { messages: Array<{ role: string; content: string }> })
+      .messages;
+    const earlierIdx = msgs.findIndex((m) => m.content === "earlier");
+    const lastUserIdx = msgs.map((m) => m.role).lastIndexOf("user");
+    expect(earlierIdx).toBeGreaterThan(0); // after the static system lead
+    expect(earlierIdx).toBeLessThan(lastUserIdx - 1); // before the dynamic block
+    expect(msgs[lastUserIdx - 1]!.content).toBe("dynamic suffix");
+    expect(msgs[lastUserIdx]!.content).toBe("now");
+  });
+
+  it("groq: NOT reordered (no caching) — stays front-loaded, flattened to string", () => {
+    const req = buildProviderRequest("groq", "sk-x", "llama-3.3-70b", anthropicBody(CACHED), 4096);
+    const body = JSON.parse(req.body) as { messages: Array<{ role: string; content: unknown }> };
+    expect(typeof body.messages[0]!.content).toBe("string");
+    // Front-loaded: static+dynamic joined into the single leading system message.
+    expect(body.messages[0]!.content).toBe("STATIC identity + doctrine\n\ndynamic suffix");
   });
 
   it("groq: blocks flattened too; no array leaks into the OpenAI shape", () => {
