@@ -787,7 +787,11 @@ describe("AnthropicProvider.generate — conversation history shapes", () => {
     // Final user message should be [listening]
     const last = msgs[msgs.length - 1]!;
     expect(last.role).toBe("user");
-    expect(last.content).toBe("[listening]");
+    // The last message is promoted to a cache_control-bearing block for
+    // incremental conversation caching — assert the text inside the block.
+    expect(last.content).toEqual([
+      { type: "text", text: "[listening]", cache_control: { type: "ephemeral" } },
+    ]);
   });
 });
 

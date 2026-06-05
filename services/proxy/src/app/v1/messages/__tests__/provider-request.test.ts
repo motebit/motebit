@@ -151,6 +151,38 @@ describe("buildProviderRequest — OpenAI-shaped upstreams flatten system to a s
   });
 });
 
+describe("buildProviderRequest — message handling across upstreams", () => {
+  // The ai-core client marks the last message's content as a cache_control block
+  // (incremental caching). Anthropic upstream must see it verbatim; OpenAI-shaped
+  // upstreams must NOT (they'd choke on the block shape + unknown field).
+  const blockMessages = [
+    { role: "user", content: "earlier" },
+    {
+      role: "user",
+      content: [{ type: "text", text: "latest", cache_control: { type: "ephemeral" } }],
+    },
+  ];
+
+  it("anthropic: passes block-content messages through verbatim (cache_control preserved)", () => {
+    const body = { ...anthropicBody(CACHED), messages: blockMessages };
+    const req = buildProviderRequest("anthropic", "sk-x", "m", body, 4096);
+    const out = JSON.parse(req.body) as { messages: unknown };
+    expect(out.messages).toEqual(blockMessages);
+  });
+
+  it("openai: flattens block content to a string and strips cache_control", () => {
+    const body = { ...anthropicBody(CACHED), messages: blockMessages };
+    const req = buildProviderRequest("openai", "sk-x", "gpt-4o", body, 4096);
+    const out = JSON.parse(req.body) as { messages: Array<{ role: string; content: unknown }> };
+    // messages[0] is the system message (flattened); the conversation follows.
+    const convo = out.messages.filter((m) => m.role === "user");
+    expect(convo.every((m) => typeof m.content === "string")).toBe(true);
+    expect(convo.map((m) => m.content)).toEqual(["earlier", "latest"]);
+    // No cache_control survives into the OpenAI shape.
+    expect(req.body).not.toContain("cache_control");
+  });
+});
+
 describe("buildProviderRequest — local-server is not routable", () => {
   it("throws fail-closed for an on-device host", () => {
     expect(() => buildProviderRequest("local-server", "", "m", anthropicBody("x"), 4096)).toThrow(

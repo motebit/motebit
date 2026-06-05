@@ -753,6 +753,30 @@ export interface StreamingProvider extends IntelligenceProvider {
  * present at all is the projectForAi gate; this helper only
  * unflattens what's already in the envelope.
  */
+/**
+ * Attach `cache_control` to the final content block of the last message, so the
+ * conversation prefix (history + within-turn tool rounds) caches. A string
+ * content is promoted to a one-element text block to carry the marker; an
+ * already-structured content array marks its last block. No-op on empty content
+ * (Anthropic rejects empty text blocks, and there's nothing worth caching). The
+ * marker moves to the newest message every request — Anthropic reads the longest
+ * matching prefix and only (re)creates cache for the delta.
+ */
+function markLastMessageCacheable(messages: Record<string, unknown>[]): void {
+  const last = messages[messages.length - 1];
+  if (!last) return;
+  const content = last.content;
+  if (typeof content === "string") {
+    if (content.length === 0) return;
+    last.content = [{ type: "text", text: content, cache_control: { type: "ephemeral" } }];
+    return;
+  }
+  if (Array.isArray(content) && content.length > 0) {
+    const lastBlock = content[content.length - 1] as Record<string, unknown>;
+    content[content.length - 1] = { ...lastBlock, cache_control: { type: "ephemeral" } };
+  }
+}
+
 function buildToolResultContentForAnthropic(
   content: string,
 ): string | Array<Record<string, unknown>> {
@@ -1193,6 +1217,15 @@ export class AnthropicProvider implements StreamingProvider {
         }
       }
     }
+
+    // Incremental conversation caching: mark the final content block so
+    // Anthropic caches the whole message prefix (history + within-turn tool
+    // rounds). Each agentic-loop iteration and each new turn then READS the
+    // prior prefix at 1/10th cost instead of re-paying it; Anthropic matches the
+    // longest cached prefix and only creates cache for the newest delta. This is
+    // the third cache breakpoint (with the static system block + last tool —
+    // Anthropic's ceiling is 4).
+    markLastMessageCacheable(messages);
 
     return messages;
   }

@@ -53,6 +53,26 @@ export function systemToAnthropicBlocks(system: unknown): SystemBlock[] | undefi
   return undefined; // unexpected shape — never fabricate "[object Object]"
 }
 
+/**
+ * Normalize messages for OpenAI-shaped upstreams: flatten block content to a
+ * plain string (extracting text) and drop `cache_control`, which only Anthropic
+ * understands. The ai-core client marks the last message's content as a
+ * cache_control block (incremental caching); without this, that block shape
+ * would leak to OpenAI/Google/Groq, which expect string content. Tool_use /
+ * tool_result blocks have no `.text` and flatten to empty — the pre-existing
+ * Anthropic→OpenAI tool-translation gap, neither closed nor worsened here.
+ */
+function toOpenAiMessages(messages: unknown): Array<{ role: string; content: string }> {
+  if (!Array.isArray(messages)) return [];
+  return messages.map((m) => {
+    const msg = m as { role?: unknown; content?: unknown };
+    return {
+      role: typeof msg.role === "string" ? msg.role : "user",
+      content: typeof msg.content === "string" ? msg.content : (systemToText(msg.content) ?? ""),
+    };
+  });
+}
+
 /** Build the provider-specific request. All providers receive the same logical input. */
 export function buildProviderRequest(
   provider: InferenceHost,
@@ -61,7 +81,10 @@ export function buildProviderRequest(
   body: Record<string, unknown>,
   maxTokensCap: number,
 ): ProviderRequest {
-  const messages = body.messages as Array<{ role: string; content: string }>;
+  // Anthropic upstream gets the messages verbatim (incl. cache_control blocks on
+  // the last message); OpenAI-shaped upstreams get them flattened to strings.
+  const rawMessages = body.messages;
+  const messages = toOpenAiMessages(rawMessages);
   // `system` may be a string (legacy clients) or cache_control-bearing blocks
   // (current ai-core AnthropicProvider). Anthropic upstream gets blocks;
   // OpenAI-shaped upstreams get flattened text.
@@ -82,7 +105,7 @@ export function buildProviderRequest(
         },
         body: JSON.stringify({
           model,
-          messages,
+          messages: rawMessages,
           // Structured system blocks carry `cache_control` so Anthropic caches
           // the static prefix (~3K tokens: identity, behavior, injection
           // defense) at 1/10th input cost. MUST be on a content block — the

@@ -276,7 +276,14 @@ describe("AnthropicProvider Anthropic integration", () => {
     expect(body.model).toBe("claude-sonnet-4-5-20250929");
     expect(body.max_tokens).toBe(2048);
     expect(body.temperature).toBe(0.5);
-    expect(body.messages).toEqual([{ role: "user", content: "Test" }]);
+    // The last message's content is promoted to a cache_control-bearing block
+    // (incremental conversation caching), so assert the role + text, not a raw
+    // string-content equality.
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0].role).toBe("user");
+    expect(body.messages[0].content).toEqual([
+      { type: "text", text: "Test", cache_control: { type: "ephemeral" } },
+    ]);
     expect(systemText(body.system)).toContain("motebit");
   });
 
@@ -338,6 +345,34 @@ describe("AnthropicProvider Anthropic integration", () => {
     // earlier tools carry none.
     expect(body.tools[0]!.cache_control).toBeUndefined();
     expect(body.tools[1]!.cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  it("marks the last message cacheable (incremental conversation caching)", async () => {
+    mockFetchSuccess("Hi");
+
+    const provider = new AnthropicProvider(config);
+    await provider.generate(
+      makeContextPack({
+        user_message: "latest question",
+        conversation_history: [
+          { role: "user", content: "earlier" },
+          { role: "assistant", content: "earlier reply" },
+        ],
+      }),
+    );
+
+    const mock = getFetchMock();
+    const [, opts] = mock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(opts.body as string) as {
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    // Only the LAST message carries the cache breakpoint (the prefix caches; the
+    // delta is the newest message). Earlier messages stay plain strings.
+    const last = body.messages[body.messages.length - 1]!;
+    expect(last.content).toEqual([
+      { type: "text", text: "latest question", cache_control: { type: "ephemeral" } },
+    ]);
+    expect(typeof body.messages[0]!.content).toBe("string");
   });
 
   it("parses memory tags from response", async () => {
