@@ -1042,6 +1042,32 @@ export async function selectAndRunDelegation(
 ): Promise<DelegationResult> {
   const capability = params.requiredCapabilities?.[0];
 
+  // A pinned hire ("pin who") can ONLY be honored on the P2P path. Relay-mode
+  // capability routing does not accept a target (the submit body carries no
+  // `target_agent` without a proof — see submitAndPollDelegation) — so falling
+  // through to it would silently substitute a different worker for a free task,
+  // or 402 opaquely for a paid one. Fail CLOSED when the pin cannot be served,
+  // rather than routing capability-mode. This is the guard that makes the
+  // SelectDelegationParams.targetWorkerId contract ("never substitute, never
+  // silently route capability-mode") hold OUTSIDE the P2P branch too — without
+  // it, the in-branch `return p2p` below only covers the rail-configured case.
+  // surface-determinism: a user-tap that names a worker is deterministic or it
+  // fails honestly; it never resolves to someone else.
+  if (params.targetWorkerId != null) {
+    if (capability == null) {
+      return fail(
+        "malformed_request",
+        "A pinned hire requires a capability to discover the worker by.",
+      );
+    }
+    if (params.buildP2pPayment == null || params.relayPublicKey == null) {
+      return fail(
+        "no_sovereign_rail",
+        "Hiring a specific agent settles peer-to-peer and needs a configured sovereign wallet rail.",
+      );
+    }
+  }
+
   if (params.buildP2pPayment != null && params.relayPublicKey != null && capability != null) {
     const p2p = await resolveAndSubmitP2pDelegation({
       motebitId: params.motebitId,

@@ -754,6 +754,39 @@ describe("selectAndRunDelegation", () => {
     expect(submitBody!.target_agent).toBeUndefined();
   });
 
+  it("fails closed (no relay-mode substitution) when a pinned hire has no sovereign rail", async () => {
+    // The "pin who" hole: targetWorkerId set, but no buildP2pPayment → the P2P
+    // branch is skipped. The pin must NOT fall through to relay-mode capability
+    // routing (which would pick a different worker for a free task). Fail closed
+    // with no_sovereign_rail and submit NOTHING.
+    let submitted = false;
+    let discovered = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.includes("/api/v1/agents/discover")) discovered = true;
+        if (url.endsWith("/task") && init?.method === "POST") {
+          submitted = true;
+          return jsonResponse(400, { code: "BAD" });
+        }
+        return jsonResponse(404, {});
+      }),
+    );
+
+    const result = await selectAndRunDelegation({
+      ...baseSelect(),
+      requiredCapabilities: ["review_pr"],
+      relayPublicKey: PINNED_HEX, // key present, but NO rail
+      targetWorkerId: "bob",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("no_sovereign_rail");
+    // Never substituted: no discovery, no relay-mode submit.
+    expect(discovered).toBe(false);
+    expect(submitted).toBe(false);
+  });
+
   it("uses relay-mode when there is no capability to discover by, even if rail+key present", async () => {
     const buildP2pPayment = buildProof();
     vi.stubGlobal(
