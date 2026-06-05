@@ -1507,21 +1507,38 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     webllmProgressText.textContent = "Loading model...";
     webllmProgressFill.style.width = "0%";
 
+    // A short, human display name for the HUD — the dropdown option reads
+    // "gemma-2-9b (6.3 GB)"; strip the size for the ambient indicator.
+    const modelLabel =
+      webllmModel.selectedOptions[0]?.textContent?.replace(/\s*\(.*\)\s*$/, "").trim() ||
+      (config.model ?? "model");
+
     try {
       const provider = new WebLLMProvider(config.model ?? "Llama-3.1-8B-Instruct-q4f16_1-MLC");
       await provider.init((progress) => {
-        webllmProgressFill.style.width = `${Math.round(progress.progress * 100)}%`;
+        const pct = Math.round(progress.progress * 100);
+        webllmProgressFill.style.width = `${pct}%`;
         webllmProgressText.textContent = progress.text;
+        // Mirror progress onto the HUD indicator so the download is observable
+        // OUTSIDE the settings modal (the modal closes on Save; the download
+        // continues for minutes). The active model stays underneath until ready.
+        setModelIndicatorLoading(modelLabel, pct);
       });
       // Set the initialized WebLLM provider directly on the runtime
       ctx.app.setProviderDirect(provider);
       webllmProgressText.textContent = "Ready";
+      // Settle the HUD from "preparing…" to the now-active model name
+      // (updateModelIndicator drops the loading pulse).
       updateModelIndicator();
       updateConnectPrompt();
       ctx.showToast("WebLLM model loaded");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       webllmProgressText.textContent = `Failed: ${msg}`;
+      // Surface the failure on the HUD too, not only as a transient toast —
+      // otherwise a user who closed the modal sees the stale active model and
+      // no sign the switch failed.
+      setModelIndicatorError(modelLabel);
       ctx.showToast(`WebLLM failed: ${msg}`);
     }
   }
@@ -1538,8 +1555,29 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // === Model Indicator ===
 
   function updateModelIndicator(): void {
+    // Any normal indicator update is a settled state — drop a stale loading
+    // pulse / error so the HUD can't get stuck mid-transition.
+    modelIndicator.classList.remove("is-loading", "is-error");
     const model = ctx.app.currentModel;
     modelIndicator.textContent = ctx.app.isProviderConnected ? (model ?? "") : "";
+  }
+
+  /**
+   * Ambient "a model is loading" state on the HUD indicator — the third truth
+   * the indicator must render (active / none / loading). The active model stays
+   * live underneath; this only signals that a switch is in flight so a
+   * multi-GB download is observable after the modal closes.
+   */
+  function setModelIndicatorLoading(modelLabel: string, pct: number): void {
+    modelIndicator.classList.remove("is-error");
+    modelIndicator.classList.add("is-loading");
+    modelIndicator.textContent = `preparing ${modelLabel} · ${pct}%`;
+  }
+
+  function setModelIndicatorError(modelLabel: string): void {
+    modelIndicator.classList.remove("is-loading");
+    modelIndicator.classList.add("is-error");
+    modelIndicator.textContent = `couldn't load ${modelLabel}`;
   }
 
   function updateConnectPrompt(): void {

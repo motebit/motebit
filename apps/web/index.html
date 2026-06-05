@@ -380,6 +380,27 @@
       #model-indicator:empty {
         display: none;
       }
+      /* Ambient model-load state — a model download/init is multi-GB and
+         multi-minute, and the user can't observe it once the settings modal
+         closes (calm software surfaces async work you can't see). A calm pulse
+         on the HUD indicator carries "preparing <model> · NN%"; it settles to
+         the plain model name when ready. */
+      #model-indicator.is-loading {
+        color: var(--text-secondary);
+        animation: model-indicator-pulse 1.8s ease-in-out infinite;
+      }
+      #model-indicator.is-error {
+        color: var(--status-warning-fg, var(--text-secondary));
+      }
+      @keyframes model-indicator-pulse {
+        0%,
+        100% {
+          opacity: 0.5;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
       .chat-bubble {
         max-width: 70%;
         padding: 8px 14px;
@@ -9072,7 +9093,8 @@
                   <div class="webllm-progress-text" id="webllm-progress-text"></div>
                 </div>
                 <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px">
-                  Runs in your browser via WebGPU. First download ~1.8 GB.
+                  Downloads once (size shown above), then runs offline in your
+                  browser via WebGPU.
                 </div>
               </div>
               <!-- Local Server sub-panel -->
