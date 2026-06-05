@@ -84,6 +84,18 @@ export interface InvokeCapabilityOptions {
    * `InvokeCapabilityConfig.acknowledgeNoHistoryRisk`.
    */
   acknowledgeNoHistoryRisk?: boolean;
+  /**
+   * Pin the delegation to a SPECIFIC worker (the agent the user explicitly tapped
+   * to hire), rather than letting capability-discovery pick the first eligible
+   * candidate. This is the deterministic "pin who" the surface-determinism
+   * doctrine requires for a user-tap hire: the tap names the worker; the runtime
+   * does not re-derive it. When set, discovery still resolves the worker's price +
+   * settlement address, but only for THIS `motebit_id` — if that worker doesn't
+   * advertise the capability P2P-eligibly, the delegation fails closed
+   * (`no_routing`) rather than silently substituting a different worker. Absent ⇒
+   * capability routing picks (the chip path, e.g. `review_pr`).
+   */
+  targetWorkerId?: string;
 }
 
 /**
@@ -134,6 +146,7 @@ export class InvokeCapabilityManager {
       invocationOrigin,
       options.signal,
       options.acknowledgeNoHistoryRisk,
+      options.targetWorkerId,
     );
 
     if (!result.ok) {
@@ -198,6 +211,7 @@ export class InvokeCapabilityManager {
     invocationOrigin: IntentOrigin,
     signal: AbortSignal | undefined,
     acknowledgeNoHistoryRisk: boolean | undefined,
+    targetWorkerId: string | undefined,
   ): Promise<DelegationResult> {
     // Per-invocation opt-in overrides the config default (read fresh so a live
     // surface preference toggle takes effect without re-enabling the capability).
@@ -208,6 +222,7 @@ export class InvokeCapabilityManager {
       authToken: this.config.authToken,
       prompt,
       requiredCapabilities: [capability],
+      ...(targetWorkerId != null ? { targetWorkerId } : {}),
       ...(this.deps.buildP2pPayment ? { buildP2pPayment: this.deps.buildP2pPayment } : {}),
       ...(this.config.relayPublicKey != null ? { relayPublicKey: this.config.relayPublicKey } : {}),
       ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),

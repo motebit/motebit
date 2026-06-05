@@ -1823,7 +1823,7 @@ export class UnbootedWebApp {
   async *invokeCapability(
     capability: string,
     prompt: string,
-    options?: { signal?: AbortSignal; acknowledgeNoHistoryRisk?: boolean },
+    options?: { signal?: AbortSignal; acknowledgeNoHistoryRisk?: boolean; targetWorkerId?: string },
   ): AsyncGenerator<StreamChunk> {
     if (!this.runtime) throw new Error("Runtime not initialized");
     if (this._isProcessing) throw new Error("Already processing");

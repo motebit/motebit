@@ -648,6 +648,13 @@ export interface ResolveAndSubmitP2pDelegationParams {
   /** Capability the worker must advertise — used to discover + select + price. */
   capability: string;
   /**
+   * Pin discovery to a SPECIFIC worker (`motebit_id`) instead of selecting the
+   * first eligible P2P candidate for the capability. When set, only that worker
+   * is considered; if it doesn't advertise the capability P2P-eligibly, the
+   * result is `no_routing` (fail closed — never substitute another worker).
+   */
+  targetWorkerId?: string;
+  /**
    * Cold-start acknowledgment for a new delegator↔worker pair — forwarded to
    * `submitP2pDelegation`. See its doc: without it the relay's single-op P2P
    * eligibility gate 403s a no-history pair after the payment already broadcast.
@@ -769,13 +776,21 @@ export async function resolveAndSubmitP2pDelegation(
     };
     const candidate = (data.agents ?? []).find((a) => {
       if (a.motebit_id === motebitId || a.settlement_address == null) return false;
+      // Pinned hire: only the worker the user tapped is eligible — never
+      // substitute another candidate for the same capability.
+      if (params.targetWorkerId != null && a.motebit_id !== params.targetWorkerId) return false;
       const modes = Array.isArray(a.settlement_modes)
         ? a.settlement_modes
         : String(a.settlement_modes ?? "").split(",");
       return modes.includes("p2p");
     });
     if (candidate?.settlement_address == null) {
-      return fail("no_routing", `No P2P-capable worker advertises "${capability}".`);
+      return fail(
+        "no_routing",
+        params.targetWorkerId != null
+          ? `Pinned worker "${params.targetWorkerId}" is not P2P-eligible for "${capability}".`
+          : `No P2P-capable worker advertises "${capability}".`,
+      );
     }
     worker = {
       motebit_id: candidate.motebit_id,
@@ -972,6 +987,16 @@ export interface SelectDelegationParams {
    */
   requiredCapabilities?: string[];
   /**
+   * Pin the delegation to a SPECIFIC worker (the agent the user tapped to hire)
+   * instead of letting discovery pick the first eligible candidate. When set,
+   * the P2P resolver discovers only THIS `motebit_id`; if that worker isn't
+   * P2P-eligible for the capability, the delegation **fails closed** rather than
+   * substituting a different worker or silently routing capability-mode — the
+   * deterministic "pin who" surface-determinism requires. Absent ⇒ capability
+   * routing picks (the chip path).
+   */
+  targetWorkerId?: string;
+  /**
    * The relay's pinned Ed25519 public key (hex). With `buildP2pPayment`, enables
    * the P2P path (treasury derived from this key). Absent → relay-mode.
    */
@@ -1024,6 +1049,7 @@ export async function selectAndRunDelegation(
       authToken: params.authToken,
       prompt: params.prompt,
       capability,
+      ...(params.targetWorkerId != null ? { targetWorkerId: params.targetWorkerId } : {}),
       relayPublicKeyHex: params.relayPublicKey,
       buildP2pPayment: params.buildP2pPayment,
       ...(params.acknowledgeNoHistoryRisk === true ? { acknowledgeNoHistoryRisk: true } : {}),
@@ -1033,10 +1059,16 @@ export async function selectAndRunDelegation(
       ...(params.signal ? { signal: params.signal } : {}),
     });
     if (p2p.ok) return p2p;
-    // Fall back to relay-mode ONLY on PRE-BROADCAST codes (no funds moved):
-    // no payable p2p worker, or the relay's pre-flight said the pair is
-    // ineligible. Any other code may follow a broadcast → surface verbatim so a
-    // relay-custody re-submit can't double-charge.
+    // A PINNED target never falls back to capability-routed relay-mode: that
+    // would silently substitute a different worker than the one the user tapped
+    // (a "pin who" violation, surface-determinism). Surface the P2P result
+    // verbatim — including a pre-broadcast `p2p_ineligible`, which honestly
+    // tells the user to opt into paying new agents rather than re-routing.
+    if (params.targetWorkerId != null) return p2p;
+    // Unpinned (capability-routed): fall back to relay-mode ONLY on PRE-BROADCAST
+    // codes (no funds moved): no payable p2p worker, or the relay's pre-flight
+    // said the pair is ineligible. Any other code may follow a broadcast →
+    // surface verbatim so a relay-custody re-submit can't double-charge.
     if (
       p2p.error.code !== "no_routing" &&
       p2p.error.code !== "worker_not_payable" &&

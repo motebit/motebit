@@ -391,6 +391,45 @@ describe("resolveAndSubmitP2pDelegation", () => {
     if (!result.ok) expect(result.error.code).toBe("payment_broadcast_failed");
   });
 
+  // ── Target-pinning (P1: the user-tap hire pins WHO) ───────────────────────
+  it("pins discovery to targetWorkerId — selects the named worker, not the first candidate", async () => {
+    const params = resolveParams({ targetWorkerId: "bob" });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "carol", settlement_address: "CarolAddr", settlement_modes: "p2p" }, // first
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p,relay" }, // pinned
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+        // Submit 400 stops before the timer-bound poll; we only assert who was paid.
+        submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
+      }),
+    );
+    await resolveAndSubmitP2pDelegation(params);
+    const build = params.buildP2pPayment as ReturnType<typeof vi.fn>;
+    expect(build).toHaveBeenCalledTimes(1);
+    const req = build.mock.calls[0]![0] as SovereignP2pPaymentRequest;
+    expect(req.workerAddress).toBe("BobAddr"); // the pinned worker, not first-candidate Carol
+  });
+
+  it("fails closed (no_routing) when the pinned worker isn't P2P-eligible — never substitutes, never pays", async () => {
+    const params = resolveParams({ targetWorkerId: "carol" }); // carol is not in the roster
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" }, // eligible but NOT pinned
+        ]),
+      }),
+    );
+    const result = await resolveAndSubmitP2pDelegation(params);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("no_routing");
+    // The pin must never substitute → no payment was built or broadcast.
+    expect(params.buildP2pPayment).not.toHaveBeenCalled();
+  });
+
   it("pre-flight ineligible → p2p_ineligible WITHOUT broadcasting (no funds move)", async () => {
     // The money-safety guard: the relay's /p2p-eligibility read (BEFORE the
     // broadcast) reports the pair ineligible (e.g. cold-start without the ack),
