@@ -77,6 +77,42 @@ Of the three registers, `home` deserves its own subsection — it's the fourth c
 
 Doctrine compounds: home is `records-as-resumption` — the records-vs-acts test (`records-vs-acts.md`) holds because the same byte-records appear in two **registers**, not because records moved onto the body. The panel's credential list is records-as-records; the slab's home tile is records-as-resumption. Both refer to the same signed data, neither is the other.
 
+### Home, refined (2026-06-04): the resting face
+
+> **The slab's home is the motebit's self-knowledge rendered as its resting face.**
+
+Everything below follows from that line. The current default — a URL bar + `"type a URL"` + `"Anywhere."` — is **browser chrome wearing the costume of the workstation** (the eye organ standing in for the whole). The home register is not a browser; it is the slab at rest, showing what this motebit _is_ and _could do next_.
+
+**Chrome is ingress; the body is the home register.** Reconciles the seam with [`intent-gated-slab`](intent-gated-slab.md) §"Modal — empty is READY" ("the chrome IS the affordance… URL input"): the **chrome strip** is the always-on _way in_ (ask / name a destination); the **slab body** is the home register (the content). Both present, never competing — the URL input is the chrome, this §home is the body. The de-browser fix is in the chrome's _lead_: "ask me, or name where to go" — the URL is one affordance, not the slab's identity.
+
+**The body has two content sources and an arc between them:**
+
+- **Resumption tiles** — audit-log-derived (`Continue google.com`), history-gated. The full-state above.
+- **Capability-seed tiles** — registry-derived (`Find an agent`, `Read a page`), available from N=0. The workstation introducing what it can do.
+
+The arc _is_ the accumulation thesis at the home layer:
+
+```
+N=0      capability-seed         "here's what I am / could do next"
+N grows  resumption fills in     "here's where we've been"; capability recedes to secondary
+N large  resumption-dominant     "this is yours now"
+```
+
+So the home register is a **what-can-we-do surface whose content shifts from invitation to resumption** — not a resumption viewer with a blank fallback. The longer it runs, the more _yours_ it is: identity formation rendered in tiles.
+
+**Derive the seed; never author it.** The seed is `capability-registry × config-state`, sourced from the rings + tool-registry + readiness the motebit already tracks — not a hand-maintained list (which would drift from what's actually wired: the claimed-vs-enforced hazard this repo gates against). So the N=0 surface _cannot lie_ about what the motebit can do — a mirror, not a brochure. Three layers, by readiness:
+
+1. **Intrinsic floor — never gated.** The irreducible self is the **identity** (key-derived: sigil + `motebit_id`), present at absolute zero. This is the metabolic principle as the home floor — _the body is yours, the identity is yours, the intelligence is pluggable_ ([`THE_METABOLIC_PRINCIPLE.md`](../../THE_METABOLIC_PRINCIPLE.md)). With it: **declare-intent** (`Set a goal` — a local record, genuinely model-free) and **address-me** (the chat input is always present). The floor presents _the self and the path to a mind_.
+   > **Precision (load-bearing).** "Ask me" is the _address-surface_ (always present) — but a working _answer_ is model-gated. A bare motebit (no model) shows the self + `connect a mind`, **never a chat that pretends to think** (the honest-degradation violation of [`surface-determinism`](surface-determinism.md)). Self present, mind not yet plugged in. The floor can be neither hidden (erosion) nor made to over-promise.
+2. **Config-gated — instance-wired.** `Find an agent` (relay), `Read a page` (the computer), `Hire` (wallet + relay). Surface only when the dependency is wired. Honest by construction.
+3. **Setup-affordances — when a dependency is missing.** `Connect a model`, `Connect a relay` — the honest first move for an unconfigured motebit (the path to _become more_). **Calm, not nags:** they recede once wired; a setup-affordance that persists after wiring is a noisier failure than the blank it solved.
+
+This supersedes the bare "`Anywhere.` — one watermark word, no decorative mark" reading of empty-empty: `Anywhere.` stays as the **watermark soul** (a workstation word — "I can take you anywhere"), but it is the chrome's backdrop, not the body — the capability-seed is the body. A few soul-tinted invitations, breathing; never a launcher grid (the sci-fi-dashboard anti-pattern). Every tile routes through `invokeCapability` ([`surface-determinism`](surface-determinism.md)), never a synthesized prompt.
+
+**Spatial rehearsal.** The same home register renders as the slab-beside-the-creature on web/desktop today and as the motebit's held-Presentation home on glasses — one controller, render targets per surface ([`panel-presentation-modes`](panel-presentation-modes.md)).
+
+**Status:** model locked; the realized home register (de-browsered chrome + derived capability-seed + resumption arc) is the **named next render arc**, layered above the panel→slab→artifact hire — not "shipped." Today's bare URL chrome is the gap this names.
+
 ## Rings-aware duplication
 
 The slab's **renderer** is Ring 3 (3D creature / scene; requires WebGL, on-screen creature, wide-enough viewport). Chat is **Ring 1** (text always available).
