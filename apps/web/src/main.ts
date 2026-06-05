@@ -241,7 +241,10 @@ initKeyboard({
   },
 });
 
-const gatedPanels = initGatedPanels(ctx);
+// The Agents panel browses the roster; a tapped priced capability hands the
+// hire to the slab, where it's composed + performed. See
+// docs/doctrine/agents-as-first-person-trust-graph.md §5.
+const gatedPanels = initGatedPanels(ctx, { onHire: (req) => chatAPI.emergeHire(req) });
 const sovereignPanels = initSovereignPanels(ctx);
 const capabilitiesPanel = initCapabilitiesPanel(ctx);
 const activityPanel = initActivityPanel(ctx);

@@ -15,7 +15,7 @@ import {
   normalizeRelayUrl,
 } from "../storage";
 import type { PlanChunk } from "@motebit/runtime";
-import { renderMarkdown } from "./chat";
+import { renderMarkdown, type HireComposeRequest } from "./chat";
 import { setEmptyPulse, setEmptyRow } from "./empty-states";
 import {
   createAgentsController,
@@ -73,6 +73,17 @@ export interface GatedPanelsAPI {
   closeAll(): void;
 }
 
+/**
+ * Cross-surface handoffs the panels initiate but do NOT perform. The Agents
+ * panel browses the roster; performing a hire belongs to the slab, so the panel
+ * raises `onHire` and the slab (chat) composes + acts. Keeping the act out of
+ * the panel is the §5 record-vs-act split — see
+ * docs/doctrine/agents-as-first-person-trust-graph.md.
+ */
+export interface GatedPanelsHooks {
+  onHire?: (req: HireComposeRequest) => void;
+}
+
 function formatTimeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
   if (seconds < 60) return "just now";
@@ -93,7 +104,7 @@ const SYNC_STATUS_LABELS: Record<WebSyncStatus, string> = {
   disconnected: "Disconnected",
 };
 
-export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
+export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): GatedPanelsAPI {
   // === Memory Panel (functional) ===
   // Fetch + filter + delete live in @motebit/panels MemoryController.
   // This block owns DOM rendering + markdown + the inline delete-confirm UX.
@@ -1229,10 +1240,36 @@ export function initGatedPanels(ctx: WebContext): GatedPanelsAPI {
         const capsRow = document.createElement("div");
         capsRow.className = "agent-caps-row";
         for (const cap of agent.capabilities) {
+          const price = priceByCapability.get(cap);
+          const priced = price != null && price.unit_cost > 0;
+          // A priced capability is hireable: the tag becomes a launch affordance
+          // that hands the hire to the slab (panel browses, slab composes +
+          // acts). Free capabilities stay informational spans. The tap pins WHO
+          // (this agent) + WHAT (this capability) and routes through
+          // invokeCapability — never the AI loop (surface-determinism).
+          if (priced && hooks.onHire) {
+            const priceLabel = `$${price.unit_cost.toFixed(2)}`;
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "agent-cap-tag priced agent-cap-hire";
+            btn.textContent = `${cap} · ${priceLabel}/${price.per}`;
+            btn.title = `Hire ${shortMotebitId(agent.motebit_id)} for ${cap} — ${price.unit_cost} ${price.currency} per ${price.per}`;
+            btn.setAttribute("aria-label", `Hire for ${cap}, ${priceLabel} per ${price.per}`);
+            btn.addEventListener("click", () => {
+              closeAgents();
+              hooks.onHire!({
+                workerId: agent.motebit_id,
+                capability: cap,
+                label: shortMotebitId(agent.motebit_id),
+                priceLabel,
+              });
+            });
+            capsRow.appendChild(btn);
+            continue;
+          }
           const tag = document.createElement("span");
           tag.className = "agent-cap-tag";
-          const price = priceByCapability.get(cap);
-          if (price && price.unit_cost > 0) {
+          if (priced) {
             tag.textContent = `${cap} · $${price.unit_cost.toFixed(2)}/${price.per}`;
             tag.classList.add("priced");
             tag.title = `${price.unit_cost} ${price.currency} per ${price.per}`;

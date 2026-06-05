@@ -1913,6 +1913,109 @@
         line-height: 1;
       }
 
+      /* Hire-compose register — emerges above the chat input when a priced
+         capability is tapped in the Agents panel. The pinned agent + capability
+         sit on the left; the act-button (Run · $price) carries the price on the
+         right (payment-as-act). The chat input is the compose field. */
+      .hire-compose-chip {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 0;
+        right: 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 6px 8px 6px 14px;
+        border: 1px solid var(--border-input-glass);
+        border-radius: 16px;
+        background: var(--bg-glass);
+        backdrop-filter: blur(24px) saturate(1.3);
+        -webkit-backdrop-filter: blur(24px) saturate(1.3);
+        color: var(--text-primary);
+        font-family: inherit;
+        font-size: 13px;
+        box-shadow: 0 2px 12px var(--shadow-sm);
+        transform-origin: 12px 100%;
+        transform: scale(0.92) translateY(2px);
+        opacity: 0;
+        transition:
+          transform 0.28s cubic-bezier(0.2, 0.8, 0.25, 1),
+          opacity 0.18s ease;
+      }
+      .hire-compose-chip.visible {
+        transform: scale(1) translateY(0);
+        opacity: 1;
+      }
+      .hire-compose-chip.is-leaving {
+        transform: scale(0.92) translateY(2px);
+        opacity: 0;
+      }
+      .hire-compose-ident {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+      .hire-compose-mark {
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+        flex: 0 0 auto;
+        background: var(--text-secondary);
+        transform: rotate(45deg);
+        opacity: 0.7;
+      }
+      .hire-compose-who {
+        font-weight: 600;
+      }
+      .hire-compose-sep {
+        color: var(--text-secondary);
+      }
+      .hire-compose-cap {
+        color: var(--text-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .hire-compose-run {
+        flex: 0 0 auto;
+        padding: 6px 14px;
+        border: 1px solid var(--border-input-glass);
+        border-radius: 12px;
+        background: var(--bg-glass-hover);
+        color: var(--text-primary);
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition:
+          background 0.15s ease,
+          opacity 0.15s ease;
+      }
+      .hire-compose-run:hover:not(:disabled) {
+        background: var(--accent-soft, var(--bg-glass-hover));
+      }
+      .hire-compose-run:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      /* The priced capability tag on a Discover card doubles as the hire launch
+         affordance — signal it's tappable. */
+      button.agent-cap-hire {
+        cursor: pointer;
+        font-family: inherit;
+        transition:
+          background 0.15s ease,
+          border-color 0.15s ease;
+      }
+      button.agent-cap-hire:hover {
+        border-color: var(--text-secondary);
+        background: var(--bg-glass-hover);
+      }
+
       .plan-step-line {
         padding: 2px 0;
         opacity: 0.7;

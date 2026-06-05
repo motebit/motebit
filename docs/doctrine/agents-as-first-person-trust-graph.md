@@ -223,6 +223,23 @@ scene droplets — §4 sigil → spatial droplet); on flat the act is the slab d
 arc, not a head-turn toward a record. What stays open is only the per-surface render
 (panel vs spatial Presentation), not the choreography.
 
+**Shipped (2026-06-05): the web hire, end to end.** The Agents panel's **Discover**
+card renders each _priced_ capability as a hire launch affordance; tapping it closes
+the panel and emerges the **hire-compose register** on the slab (`hire-chip.ts`,
+sibling of `pr-url-chip.ts`) pinned to `{worker, capability, price}`. The chat input
+is the compose field; the act-button carries the price (`Run · $0.50`) — payment-as-act,
+one deliberate commit _after_ the task is composed. Fire routes through
+`invokeCapability(capability, task, { targetWorkerId })`, the **target-pinned** path:
+the runtime fails closed if that exact worker can't be paid P2P — it never substitutes
+a capability-routed worker (the pin's money-safety invariant, locked in
+`relay-delegation.ts` `selectAndRunDelegation` + tested both in-branch and at the
+no-rail boundary). The panel stays pure browse — the launch affordance _initiates_ the
+handoff; the slab composes + performs. Cold-start consent is the existing Settings →
+Governance "Pay new agents directly" opt-in (a Discover agent is by definition a
+no-history pair); without it the hire fails closed with actionable copy pointing at the
+toggle. Held still: re-hiring a **Known** peer (Known cards carry no pricing row yet),
+the desktop/mobile hire affordances, and the spatial Presentation render.
+
 ## 6. Money history derives from receipts, never trust-record drift
 
 `AgentTrustRecord` carries interaction and task counts and latency stats — not a
@@ -429,7 +446,8 @@ that makes the mark observable; and the first-person **petname data field**
 (`AgentTrustRecord.petname`, local-only — never on the wire — with
 `runtime.setAgentPetname`) — forced and reversible, so the data primitive ships
 even though no UI consumes it yet. Held — unforced or surface-committing: the
-cross-surface renderer set and the Agents-panel wiring (the §5 open fork), the
+cross-surface renderer set, the desktop/mobile/spatial **hire** affordances (the
+**web** hire shipped 2026-06-05 — §5), the
 petname **UI** (editing / showing it), and petname **auto-suggestion** (the §3
 pincer — gate any auto-suggest behind earned trust, never adopt the self-asserted
 name at discovery). These ship when a concrete consumer pulls (the live demo, or

@@ -6,6 +6,9 @@ import { stripInternalTags } from "@motebit/ai-core";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { buildReceiptArtifact } from "@motebit/render-engine";
 import { installPrUrlChip } from "./pr-url-chip";
+import { installHireChip, type HireComposeRequest } from "./hire-chip";
+
+export type { HireComposeRequest };
 
 // === Lightweight Markdown Renderer ===
 
@@ -560,6 +563,21 @@ function failureCopy(code: string, retryAfterSeconds?: number): string {
       // This surface doesn't sign that payment yet — honest "not yet," not a
       // funding problem. NOT "insufficient balance" (there may well be funds).
       return "Paid delegation to that agent settles peer-to-peer onchain, which this surface can't sign yet.";
+    case "p2p_ineligible":
+      // The hire path's most common wall: a brand-new agent (no trust history)
+      // is paid directly only when the user has consciously opted in. No funds
+      // moved (the eligibility pre-flight blocks the broadcast). Remediation is
+      // the exact Governance toggle. Calm + actionable, never a dead end.
+      return `Paying a new agent directly is off by default. ${SETTINGS_LINK}Turn on "Pay new agents directly"</a> in Settings → Governance to hire them.`;
+    case "no_sovereign_rail":
+      // A pinned hire settles peer-to-peer, so it needs a funded sovereign
+      // wallet. Without one the runtime fails closed rather than substituting a
+      // relay-routed worker (surface-determinism).
+      return "Hiring a specific agent settles peer-to-peer — fund a sovereign wallet in the Sovereign panel to pay directly.";
+    case "worker_not_payable":
+      return "That agent isn't set up to be paid right now (no price or settlement address).";
+    case "payment_broadcast_failed":
+      return "The onchain payment didn't go through — no funds moved. Check your balance and try again.";
     case "trust_threshold_unmet":
       return "Trust below threshold for that capability. Reviews accumulate trust over time.";
     case "no_routing":
@@ -591,6 +609,12 @@ export interface ChatAPI {
   handleVoiceSend(transcript: string): Promise<void>;
   /** Register slash command handler so Enter key executes commands. */
   setSlashCommands(handle: { tryExecute(text: string): boolean }): void;
+  /**
+   * Emerge the hire-compose register on the slab, pinned to a specific agent +
+   * capability. Called by the Agents panel when the user taps a priced
+   * capability — the panel browses, the slab composes + acts.
+   */
+  emergeHire(req: HireComposeRequest): void;
 }
 
 export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
@@ -995,7 +1019,11 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
    * `docs/doctrine/surface-determinism.md`. No AI in the routing path; no
    * fall-through to `handleSend` on failure — honest degradation only.
    */
-  async function runChipInvocation(capability: string, prompt: string): Promise<void> {
+  async function runChipInvocation(
+    capability: string,
+    prompt: string,
+    pin?: { targetWorkerId?: string },
+  ): Promise<void> {
     if (ctx.app.isProcessing) return;
 
     addMessage("user", `${capabilityLabel(capability)}: ${prompt}`);
@@ -1009,7 +1037,11 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     let capturedReceipt: ExecutionReceipt | null = null;
 
     try {
-      for await (const chunk of ctx.app.invokeCapability(capability, prompt)) {
+      // A pinned `targetWorkerId` makes this a deterministic hire of THAT worker
+      // (the agent the user tapped) — never a capability-routed substitute. The
+      // runtime fails closed if that worker can't be paid P2P (see
+      // relay-delegation `selectAndRunDelegation`); no AI in the routing path.
+      for await (const chunk of ctx.app.invokeCapability(capability, prompt, pin)) {
         switch (chunk.type) {
           case "delegation_start":
             // Already showing tool_status — no double-indicator.
@@ -1071,6 +1103,24 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     }
   }
 
+  // === Hire-compose register (the slab hand-organ) ===
+  // The roster is browsed in the Agents panel; the hire is composed and
+  // performed HERE, on the slab. A Discover-card hire pins {worker, capability,
+  // price}; the chat input becomes the compose field; the act-button carries the
+  // price (payment-as-act). The pin flows to invokeCapability as
+  // `targetWorkerId`, which fails closed (never substitutes) per
+  // surface-determinism. Standalone component (sibling of pr-url-chip); we own
+  // the single Enter handler below and defer to its isActive()/fire(). See
+  // docs/doctrine/agents-as-first-person-trust-graph.md §5 + motebit-computer.md.
+  const hireChip = installHireChip({
+    input: chatInput,
+    row: chatInputRow,
+    onRun: (capability, task, workerId) =>
+      void runChipInvocation(capability, task, { targetWorkerId: workerId }),
+    labelCapability: capabilityLabel,
+  });
+  const emergeHire = (req: HireComposeRequest): void => hireChip.emerge(req);
+
   // Wire up the PR-URL paste chip — deterministic `review_pr` invocation.
   // No AI in the routing path; see docs/doctrine/surface-determinism.md.
   installPrUrlChip({
@@ -1079,10 +1129,20 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     onInvoke: (capability, promptText) => void runChipInvocation(capability, promptText),
   });
 
-  // Wire up Enter key
+  // Wire up Enter key. While a hire is composing, Enter (and the Run button)
+  // fire the hire; Escape dismisses the register and restores normal send.
   chatInput.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Escape" && hireChip.isActive()) {
+      e.preventDefault();
+      hireChip.dismiss();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (hireChip.isActive()) {
+        hireChip.fire();
+        return;
+      }
       void handleSend();
     }
   });
@@ -1133,5 +1193,6 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     setSlashCommands(handle: { tryExecute(text: string): boolean }) {
       slashHandle = handle;
     },
+    emergeHire,
   };
 }
