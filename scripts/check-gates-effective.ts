@@ -1923,7 +1923,7 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-sigil-renderer-parity",
     proves:
-      "flags the web + desktop agent-sigil renderers drifting — the same agent rendering a DIFFERENT mark per surface. Probe rewrites a geometry constant (`nodeR = size * 0.058` → `size * 0.07`, the node radius) in the desktop copy only; the gate must surface the code-region divergence against the web copy. byte-identical restoration on cleanup via mutateFile.",
+      "flags the web + desktop + mobile agent-sigil renderers drifting — the same agent rendering a DIFFERENT mark per surface. Probe rewrites a geometry constant (`nodeR = size * 0.058` → `size * 0.07`, the node radius) in the desktop copy only; the gate must surface the code-region divergence against the canonical web copy. byte-identical restoration on cleanup via mutateFile.",
     perturb: () =>
       mutateFile(`apps/desktop/src/ui/agent-sigil.ts`, (src) =>
         src.replace("const nodeR = size * 0.058;", "const nodeR = size * 0.07;"),

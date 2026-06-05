@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
+import { AgentSigilMark } from "./agent-sigil";
 import {
   createAgentsController,
   formatHardwarePlatform,
@@ -270,7 +271,14 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
               return (
                 <View style={styles.agentItem}>
                   <View style={styles.agentHeader}>
-                    <Text style={styles.agentId}>{truncateId(item.remote_motebit_id)}</Text>
+                    <View style={styles.identityRow}>
+                      <AgentSigilMark
+                        id={item.remote_motebit_id}
+                        size={26}
+                        ground={colors.scheme}
+                      />
+                      <Text style={styles.agentId}>{truncateId(item.remote_motebit_id)}</Text>
+                    </View>
                     <View style={styles.badgeRow}>
                       <View style={[styles.trustBadge, { borderColor: trustColor }]}>
                         <Text style={[styles.trustText, { color: trustColor }]}>
@@ -340,7 +348,10 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
               return (
                 <View style={styles.agentItem}>
                   <View style={styles.agentHeader}>
-                    <Text style={styles.agentId}>{truncateId(item.motebit_id)}</Text>
+                    <View style={styles.identityRow}>
+                      <AgentSigilMark id={item.motebit_id} size={26} ground={colors.scheme} />
+                      <Text style={styles.agentId}>{truncateId(item.motebit_id)}</Text>
+                    </View>
                     <View style={styles.badgeRow}>
                       {item.trust_level && (
                         <View style={[styles.trustBadge, { borderColor: trustColor }]}>
@@ -448,6 +459,7 @@ function createStyles(c: ThemeColors) {
       alignItems: "center",
       marginBottom: 6,
     },
+    identityRow: { flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 1 },
     agentId: {
       color: c.textPrimary,
       fontSize: 13,

@@ -113,8 +113,10 @@ Two rules make this safe rather than decorative:
 
 - **Sigils derive params, not pixels.** The pure function is
   `motebit_id → { palette, geometry seed, symmetry, density, … }` — Ring 1, identical
-  everywhere, zero-dep, testable. The _render_ is per-surface (Ring 3): SVG/canvas
-  on web, `StyleSheet` on mobile, compact glyph on CLI, and — the payoff — a **3D
+  everywhere, zero-dep, testable. The _render_ is per-surface (Ring 3): an SVG
+  string on web + desktop (DOM) and on mobile (react-native-svg `SvgXml` paints the
+  same string — shipped 2026-06-04, locked byte-identical across all three by
+  `check-sigil-renderer-parity`), compact glyph on CLI, and — the payoff — a **3D
   droplet presence in spatial from the same seed** (see
   [`spatial-as-endgame.md`](spatial-as-endgame.md)). Emitting pixels from a shared
   package breaks the panels pattern ([`panels-pattern.md`](panels-pattern.md)) and

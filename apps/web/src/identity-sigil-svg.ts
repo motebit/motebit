@@ -27,8 +27,10 @@
  *
  * Lives here (a surface), never in shared `@motebit/sdk`: emitting pixels from the
  * shared package would break params-not-pixels. The code region below (from
- * `SigilSvgOptions`) is byte-identical to its desktop sibling
- * `apps/desktop/src/ui/agent-sigil.ts`, locked by `check-sigil-renderer-parity`.
+ * `SigilSvgOptions`) is byte-identical to its desktop + mobile siblings
+ * (`apps/desktop/src/ui/agent-sigil.ts`, `apps/mobile/src/components/agent-sigil.tsx`
+ * — mobile paints the same string via react-native-svg), locked by
+ * `check-sigil-renderer-parity`.
  */
 
 import { type AgentSigil, COLOR_PRESETS } from "@motebit/sdk";

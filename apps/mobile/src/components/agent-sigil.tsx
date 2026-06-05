@@ -1,17 +1,42 @@
 /**
- * Ring-3 renderer for the agent identity mark — the desktop surface's rendering
- * of "the face is the identity" (doctrine: agents-as-first-person-trust-graph §4).
+ * Mobile Ring-3 renderer for the agent identity mark — "the face is the identity"
+ * (doctrine: agents-as-first-person-trust-graph §4).
  *
- * Desktop is a Chromium webview, so its mark is the same DOM/SVG form as the web
- * surface's. This file is a per-surface sibling of `apps/web/src/identity-sigil-svg.ts`
- * (and `apps/mobile/src/components/agent-sigil.tsx`, which paints the same string via
- * react-native-svg); the code region below `SigilSvgOptions` is byte-identical across
- * all three and locked by `check-sigil-renderer-parity`. The mark is a frameless trust-graph FINGERPRINT
- * (the droplet is the self/spatial form; a peer is recognised by its signature),
- * theme-native via `ground`. See the web sibling's header for the full doctrine.
+ * Mobile is a genuinely different medium, but it renders the SAME SVG the DOM
+ * surfaces emit: `sigilToSvg` (below) is byte-identical to its web + desktop
+ * siblings (`apps/web/src/identity-sigil-svg.ts`, `apps/desktop/src/ui/agent-sigil.ts`),
+ * and `AgentSigilMark` paints that string with react-native-svg's `SvgXml`. Same
+ * params (`deriveAgentSigil`, from `@motebit/sdk`) → same SVG → the same agent
+ * shows the same mark everywhere (recognition is the prime directive). The
+ * byte-identical code region (from `SigilSvgOptions` to EOF) is locked across all
+ * three surfaces by `check-sigil-renderer-parity`.
+ *
+ * The header above that region is mobile-specific (the RN wrapper); everything
+ * from the `SigilSvgOptions` interface down is the shared, locked renderer.
  */
 
-import { type AgentSigil, COLOR_PRESETS } from "@motebit/sdk";
+import React from "react";
+import { SvgXml } from "react-native-svg";
+import { deriveAgentSigil, type AgentSigil, COLOR_PRESETS } from "@motebit/sdk";
+
+/**
+ * The agent identity mark as a React Native element. Derives the sigil params
+ * from the agent's `motebit_id` and paints the byte-identical `sigilToSvg`
+ * output via `SvgXml`. `ground` follows the theme (luminous on dark, inked on
+ * light) — pass `colors.scheme`.
+ */
+export function AgentSigilMark({
+  id,
+  size = 28,
+  ground = "dark",
+}: {
+  id: string;
+  size?: number;
+  ground?: "dark" | "light";
+}): React.ReactElement {
+  const xml = sigilToSvg(deriveAgentSigil(id), { size, title: id.slice(0, 8), ground });
+  return <SvgXml xml={xml} width={size} height={size} />;
+}
 
 export interface SigilSvgOptions {
   /** Square viewport size in px (default 64). */

@@ -12,6 +12,11 @@ import { Appearance } from "react-native";
 // === Theme Colors Interface ===
 
 export interface ThemeColors {
+  // Which ground this palette is — drives theme-native renders (e.g. the agent
+  // sigil mark renders luminous on dark, inked on light). Resolved from the
+  // user's setting (incl. "system" → Appearance) by `resolveTheme`.
+  scheme: "dark" | "light";
+
   // Backgrounds
   bgPrimary: string;
   bgSecondary: string;
@@ -75,6 +80,7 @@ export interface ThemeColors {
 // === Dark Colors (existing hardcoded values) ===
 
 export const DARK_COLORS: ThemeColors = {
+  scheme: "dark",
   bgPrimary: "#0a0a0a",
   bgSecondary: "#0f1820",
   bgTertiary: "#0a1018",
@@ -127,6 +133,7 @@ export const DARK_COLORS: ThemeColors = {
 // === Light Colors (warm beige matching desktop) ===
 
 export const LIGHT_COLORS: ThemeColors = {
+  scheme: "light",
   bgPrimary: "#f5f0e8",
   bgSecondary: "#ffffff",
   bgTertiary: "#ede8e0",

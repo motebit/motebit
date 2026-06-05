@@ -6,23 +6,26 @@
  * The agent identity mark ("the face is the key", `docs/doctrine/agents-as-first-person-trust-graph.md`
  * §4) is rendered per-surface, never from shared `@motebit/sdk` (params-not-pixels:
  * the SDK emits sigil PARAMS via `deriveAgentSigil`; each surface emits its own
- * pixels). Web and desktop are both DOM/Chromium surfaces, so their renderers are
- * the SAME SVG-string form — two physical copies:
+ * pixels). All three flat surfaces render the SAME SVG-string form — web + desktop
+ * paint it in the DOM, mobile paints it via react-native-svg's `SvgXml` — so each
+ * carries a physical copy of the renderer:
  *
  *   - `apps/web/src/identity-sigil-svg.ts`
  *   - `apps/desktop/src/ui/agent-sigil.ts`
+ *   - `apps/mobile/src/components/agent-sigil.tsx` (header wraps the region in `SvgXml`)
  *
- * Two copies is a drift hazard (the textbook synchronization-invariant shape:
+ * Three copies is a drift hazard (the textbook synchronization-invariant shape:
  * one canonical render, a sibling drifts, the same agent shows a DIFFERENT mark
- * on web vs desktop — recognition breaks). This gate forecloses that: the code
- * region of both files (from `export interface SigilSvgOptions` to EOF) MUST be
- * byte-identical. Only the leading doc-comment (which names the surface) may
- * differ. Mobile (`react-native-svg`) and spatial (3D) are genuinely different
- * media and are NOT siblings here.
+ * across surfaces — recognition breaks). This gate forecloses that: the code
+ * region of every file (from `export interface SigilSvgOptions` to EOF) MUST be
+ * byte-identical. Only the leading header (which names the surface and, on mobile,
+ * carries the `SvgXml` wrapper) may differ. Spatial (3D) is a genuinely different
+ * medium — it renders the droplet from the same PARAMS, not the SVG string — and
+ * is NOT a sibling here.
  *
- * If a third DOM consumer appears or the duplication becomes painful, the
- * resolution is to promote a shared DOM-render module — at which point this gate
- * is deleted. Until then, duplicate-and-lock is the doctrine-literal choice.
+ * If the duplication becomes painful, the resolution is to promote a shared
+ * render module — at which point this gate is deleted. Until then,
+ * duplicate-and-lock is the doctrine-literal choice.
  */
 
 import { readFileSync } from "node:fs";
@@ -32,8 +35,18 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 
-const WEB = "apps/web/src/identity-sigil-svg.ts";
-const DESKTOP = "apps/desktop/src/ui/agent-sigil.ts";
+/**
+ * The surfaces that share the SVG-string sigil renderer. Web + desktop are
+ * DOM/Chromium; mobile is react-native-svg's `SvgXml`, which paints the SAME
+ * SVG string (so the same agent shows the same mark on every flat surface).
+ * All three carry a byte-identical code region; only the leading header (the
+ * per-surface wrapper / imports) may differ.
+ */
+const SURFACES = [
+  "apps/web/src/identity-sigil-svg.ts",
+  "apps/desktop/src/ui/agent-sigil.ts",
+  "apps/mobile/src/components/agent-sigil.tsx",
+] as const;
 
 /** The shared marker — everything from this line to EOF is the locked code region. */
 const REGION_START = "export interface SigilSvgOptions";
@@ -56,53 +69,51 @@ function codeRegion(src: string): string | null {
 }
 
 function main(): void {
-  const webSrc = readFile(WEB);
-  const desktopSrc = readFile(DESKTOP);
-
-  if (webSrc === null || desktopSrc === null) {
-    console.error("check-sigil-renderer-parity: could not read both sigil renderer files.");
-    if (webSrc === null) console.error(`  missing: ${WEB}`);
-    if (desktopSrc === null) console.error(`  missing: ${DESKTOP}`);
-    process.exit(1);
+  // Read + extract the locked region from every surface.
+  const regions: Array<{ file: string; region: string }> = [];
+  for (const file of SURFACES) {
+    const src = readFile(file);
+    if (src === null) {
+      console.error(`check-sigil-renderer-parity: could not read sigil renderer file ${file}.`);
+      process.exit(1);
+    }
+    const region = codeRegion(src);
+    if (region === null) {
+      console.error(
+        `check-sigil-renderer-parity: could not locate the code region marker \`${REGION_START}\` in ${file}.`,
+      );
+      process.exit(1);
+    }
+    regions.push({ file, region });
   }
 
-  const web = codeRegion(webSrc);
-  const desktop = codeRegion(desktopSrc);
-
-  if (web === null || desktop === null) {
+  // Compare every surface to the first (web, the canonical copy).
+  const canonical = regions[0]!;
+  for (const other of regions.slice(1)) {
+    if (other.region === canonical.region) continue;
     console.error(
-      `check-sigil-renderer-parity: could not locate the code region marker \`${REGION_START}\`.`,
-    );
-    if (web === null) console.error(`  not found in: ${WEB}`);
-    if (desktop === null) console.error(`  not found in: ${DESKTOP}`);
-    process.exit(1);
-  }
-
-  if (web !== desktop) {
-    console.error(
-      "check-sigil-renderer-parity: the web and desktop agent-sigil renderers have drifted.",
+      `check-sigil-renderer-parity: the agent-sigil renderer has drifted between surfaces.`,
     );
     console.error("");
-    console.error(`  ${WEB}`);
-    console.error(`  ${DESKTOP}`);
+    console.error(`  canonical: ${canonical.file}`);
+    console.error(`  drifted:   ${other.file}`);
     console.error("");
     console.error(
-      `Both files' code region (from \`${REGION_START}\` to EOF) MUST be byte-identical — the`,
+      `Every surface's code region (from \`${REGION_START}\` to EOF) MUST be byte-identical — the`,
     );
     console.error(
-      "same agent must render the SAME mark on web and desktop. Update both copies in the same",
+      "same agent must render the SAME mark on web, desktop, and mobile. Update all copies in the",
     );
-    console.error("commit, or promote a shared DOM-render module and delete this gate.");
-    // Show the first differing line to speed the fix.
-    const webLines = web.split("\n");
-    const deskLines = desktop.split("\n");
-    const max = Math.max(webLines.length, deskLines.length);
+    console.error("same commit, or promote a shared render module and delete this gate.");
+    const aLines = canonical.region.split("\n");
+    const bLines = other.region.split("\n");
+    const max = Math.max(aLines.length, bLines.length);
     for (let i = 0; i < max; i++) {
-      if (webLines[i] !== deskLines[i]) {
+      if (aLines[i] !== bLines[i]) {
         console.error("");
         console.error(`  first divergence at code-region line ${i + 1}:`);
-        console.error(`    web:     ${JSON.stringify(webLines[i] ?? "<EOF>")}`);
-        console.error(`    desktop: ${JSON.stringify(deskLines[i] ?? "<EOF>")}`);
+        console.error(`    ${canonical.file}: ${JSON.stringify(aLines[i] ?? "<EOF>")}`);
+        console.error(`    ${other.file}: ${JSON.stringify(bLines[i] ?? "<EOF>")}`);
         break;
       }
     }
@@ -110,7 +121,7 @@ function main(): void {
   }
 
   console.log(
-    "✓ check-sigil-renderer-parity: web + desktop agent-sigil renderers are byte-identical (code region).",
+    `✓ check-sigil-renderer-parity: ${SURFACES.length} agent-sigil renderers (web + desktop + mobile) are byte-identical (code region).`,
   );
 }
 
