@@ -191,6 +191,87 @@ describe("OpenAIProvider", () => {
       expect(body.messages[body.messages.length - 1]!.content).toBe("ping");
     });
 
+    // ── Model-aware caching layout (OpenAI auto-cache) ──────────────────────
+    // OpenAI caches the longest stable prefix. The static doctrine must lead and
+    // the per-turn dynamic context must sit AFTER history (so history caches
+    // cross-turn), anchored immediately before the user message (so within-turn
+    // / agentic-loop caching is preserved). Same canonical content as the
+    // Anthropic path — only the wire layout differs.
+    const REINFORCE = "If the user shared something new and lasting about themselves";
+
+    it("leads with static doctrine; per-turn context split out after history, before the user turn", async () => {
+      mockFetchJson(mockChatCompletion("hi"));
+      const provider = new OpenAIProvider(makeConfig());
+      await provider.generate(
+        makeContextPack({
+          user_message: "ping",
+          conversation_history: [
+            { role: "user", content: "earlier" },
+            { role: "assistant", content: "earlier reply" },
+          ],
+        }),
+      );
+      const msgs = (
+        JSON.parse(getLastFetchCall().init.body as string) as {
+          messages: Array<{ role: string; content: string }>;
+        }
+      ).messages;
+
+      // 1. Leading system message is the STATIC doctrine and does NOT carry the
+      //    per-turn dynamic suffix — so [system + history] is a stable prefix.
+      expect(msgs[0]!.role).toBe("system");
+      expect(msgs[0]!.content.length).toBeGreaterThan(0);
+      expect(msgs[0]!.content).not.toContain(REINFORCE);
+
+      // 2. The dynamic context is a SEPARATE system message immediately before
+      //    the last user message.
+      const lastUserIdx = msgs.map((m) => m.role).lastIndexOf("user");
+      expect(msgs[lastUserIdx - 1]!.role).toBe("system");
+      expect(msgs[lastUserIdx - 1]!.content).toContain(REINFORCE);
+
+      // 3. Prior-turn history sits BEFORE the dynamic block (caches cross-turn).
+      const earlierIdx = msgs.findIndex((m) => m.content === "earlier");
+      expect(earlierIdx).toBeGreaterThan(0);
+      expect(earlierIdx).toBeLessThan(lastUserIdx - 1);
+
+      // 4. The user message is last (the model responds to it).
+      expect(msgs[msgs.length - 1]!.role).toBe("user");
+      expect(msgs[msgs.length - 1]!.content).toBe("ping");
+    });
+
+    it("anchors the dynamic block before the turn's user message during a tool loop", async () => {
+      // Continuation: empty user_message; history holds this turn's user + a tool
+      // round. The dynamic block must sit before the SAME user anchor as the
+      // initial request (so within-turn caching holds across iterations).
+      mockFetchJson(mockChatCompletion("hi"));
+      const provider = new OpenAIProvider(makeConfig());
+      await provider.generate(
+        makeContextPack({
+          user_message: "",
+          conversation_history: [
+            { role: "user", content: "do a search" },
+            {
+              role: "assistant",
+              content: "",
+              tool_calls: [{ id: "t1", name: "search", args: {} }],
+            },
+            { role: "tool", tool_call_id: "t1", content: '{"ok":true}' },
+          ],
+        }),
+      );
+      const msgs = (
+        JSON.parse(getLastFetchCall().init.body as string) as {
+          messages: Array<{ role: string; content: string }>;
+        }
+      ).messages;
+
+      const userIdx = msgs.findIndex((m) => m.content === "do a search");
+      expect(msgs[userIdx - 1]!.role).toBe("system");
+      expect(msgs[userIdx - 1]!.content).toContain(REINFORCE);
+      // No spurious trailing user message — the tool result is the turn.
+      expect(msgs[msgs.length - 1]!.role).toBe("tool");
+    });
+
     it("encodes tools in OpenAI's function-calling shape (parameters, not input_schema)", async () => {
       mockFetchJson(mockChatCompletion("hi"));
       const provider = new OpenAIProvider(makeConfig());

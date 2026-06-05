@@ -30,7 +30,7 @@ import type {
   MemoryCandidate,
   ToolCall,
 } from "@motebit/sdk";
-import { buildSystemPrompt as buildPrompt } from "./prompt.js";
+import { buildSystemPromptCacheable } from "./prompt.js";
 import {
   extractMemoryTags,
   extractNarrationTag,
@@ -414,26 +414,43 @@ export class OpenAIProvider implements IntelligenceProvider {
     }));
   }
 
-  private buildSystemPrompt(contextPack: ContextPack): string {
-    return buildPrompt(contextPack, this.config.personalityConfig);
-  }
-
   /**
-   * Build the OpenAI `messages` array. The shape is:
-   *   - System prompt as a `system` message (OpenAI lifts it into the
-   *     messages array, unlike Anthropic which has it as a top-level field)
-   *   - Conversation history mapped 1:1 (user, assistant, tool)
-   *   - Assistant tool calls flattened into `tool_calls` field
-   *   - Tool results emitted as separate `tool` messages with `tool_call_id`
-   *   - Final user message (or `[continue]` if empty during a tool loop)
+   * Build the OpenAI `messages` array — model-aware assembly tuned for OpenAI /
+   * Gemini AUTOMATIC prompt caching (longest-stable-prefix, no `cache_control`).
+   * The shape is:
+   *   - System message holds ONLY the static doctrine prefix — byte-identical
+   *     every turn, so it + the conversation history form the longest cacheable
+   *     prefix (this is what lets OpenAI cache the history across turns).
+   *   - Conversation history mapped 1:1 (user, assistant, tool); tool calls on
+   *     the assistant message, tool results as their own `tool` messages.
+   *   - The per-turn DYNAMIC context (state, memories, events, tools/skills) is
+   *     injected as a SYSTEM message immediately BEFORE the current turn's user
+   *     message. That anchor is stable across agentic-loop iterations (the user
+   *     message doesn't move relative to it), so within-turn caching is
+   *     preserved, while prior-turn history — now ahead of the dynamic block —
+   *     caches across turns. System role preserves doctrine authority.
+   *   - Final user message (or `[continue]` if empty during a tool loop).
+   *
+   * Same canonical ingredients as the Anthropic path (`buildSystemPromptCacheable`)
+   * — only the wire layout differs. Anthropic uses explicit `cache_control`
+   * breakpoints and keeps the dynamic block in `system`; it does NOT need this
+   * reordering. See docs/doctrine/intelligence-pluggability-contract.md
+   * ("model-aware prompt assembly") + runtime-invariants-over-prompt-rules
+   * (the doctrine content stays canonical across providers).
    *
    * The role/content shape is intentionally NOT identical to Anthropic's:
    * tool calls live on the assistant message, tool results are their own
    * messages with `tool_call_id`. Don't mirror Anthropic's content blocks.
    */
   private buildMessages(contextPack: ContextPack): OpenAIMessage[] {
+    // Split the system prompt into its static prefix (cacheable, fixed) and the
+    // per-turn dynamic suffix — the same two blocks the Anthropic path caches.
+    const blocks = buildSystemPromptCacheable(contextPack, this.config.personalityConfig);
+    const staticDoctrine = blocks[0]?.text ?? "";
+    const dynamicContext = blocks[1]?.text; // undefined when there's no suffix
+
     const messages: OpenAIMessage[] = [];
-    messages.push({ role: "system", content: this.buildSystemPrompt(contextPack) });
+    messages.push({ role: "system", content: staticDoctrine });
 
     const history = contextPack.conversation_history ?? [];
     for (const msg of history) {
@@ -474,6 +491,26 @@ export class OpenAIProvider implements IntelligenceProvider {
       // Tool results are the user turn here — don't add an empty user message
     } else {
       messages.push({ role: "user", content: userContent || "[continue]" });
+    }
+
+    // Inject the per-turn dynamic context as a system message immediately before
+    // the LAST user-role message — the cache-stable anchor (see method doc).
+    if (dynamicContext != null && dynamicContext.length > 0) {
+      let lastUserIdx = -1;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i]!.role === "user") {
+          lastUserIdx = i;
+          break;
+        }
+      }
+      const dynMsg: OpenAIMessage = { role: "system", content: dynamicContext };
+      if (lastUserIdx >= 0) {
+        messages.splice(lastUserIdx, 0, dynMsg);
+      } else {
+        // No user message (pure tool continuation) — context goes last so it's
+        // the freshest thing before generation.
+        messages.push(dynMsg);
+      }
     }
 
     return messages;
