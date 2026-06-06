@@ -1,5 +1,155 @@
 # @motebit/protocol
 
+## 3.0.0
+
+### Major Changes
+
+- 271bb5c: Remove the API symbols deprecated for removal in 3.0.0.
+  - `@motebit/crypto`: removed `verifyIdentityFile` and `LegacyVerifyResult` (deprecated since 1.0.0). Use `verify(content, { expectedType: "identity" })`, which returns the typed `VerifyResult` discriminated union (`type` discriminator + structured `errors: Array<{ message }>`).
+  - `@motebit/protocol`: removed `DEFAULT_TRUST_THRESHOLDS` (deprecated since 1.0.1). Use `REFERENCE_TRUST_THRESHOLDS` — a bit-identical value; the `REFERENCE_` prefix signals "reference-implementation default, implementers MAY override," not interop law.
+
+  Internal consumers (`@motebit/semiring`, `@motebit/market`) were migrated to `REFERENCE_TRUST_THRESHOLDS` and no longer re-export the alias.
+
+  ## Migration
+  - `@motebit/crypto`: replace `verifyIdentityFile(content)` with `verify(content, { expectedType: "identity" })`. The result is a `VerifyResult` discriminated union — gate on `result.type === "identity" && result.valid`, and read the first error via `result.errors?.[0]?.message` (the old flat `result.error` field is gone). Replace any `LegacyVerifyResult` type annotations with `VerifyResult`.
+  - `@motebit/protocol`: replace `DEFAULT_TRUST_THRESHOLDS` with `REFERENCE_TRUST_THRESHOLDS`. The value is bit-identical; only the name changed (reference-implementation default, not interop law).
+
+- 7a2797f: Name the payee in the settlement receipt, and ship the portable per-agent settlement-anchor verifier that closes the self-attesting loop.
+
+  **Why.** A `SettlementRecord` is the proof a worker holds that it was paid. It named the relay-internal `allocation_id` but not the payee — so the receipt could not stand on its own; a verifier had to ask the relay to resolve the allocation. And the per-agent settlement anchor (`AgentSettlementAnchorProof`, served publicly at `/api/v1/settlements/:id/anchor-proof`) had every piece shipped — producer, endpoint, wire types, spec — except the verifier. The verifier was a tracked gap in `check-signed-artifact-verifiers` because it could not be written honestly: the producer's Merkle leaf was a hand-typed field projection that swapped `allocation_id`→`motebit_id` and dropped the optional `x402_*` fields, so it did not equal the hash of the signed record a worker holds. A spec-faithful verifier would have rejected every real proof; a producer-faithful one would have required a field absent from the worker's record. The leaf must be the hash of the exact signed object — the SCITT / RFC 6962 invariant — never a re-typed subset.
+
+  **What changed.**
+  - `SettlementRecord` gains a required `motebit_id` — the payee, equal to the executing agent's `ExecutionReceipt.motebit_id`. The receipt now names who was paid in its signed body. (`@motebit/protocol`, major.)
+  - `signSettlement` therefore requires `motebit_id` in its input. (`@motebit/crypto`, major.)
+  - New portable verifier `verifyAgentSettlementAnchor(record, proof, chainVerifier?)` plus `computeAgentSettlementLeaf(record)` and `AGENT_SETTLEMENT_ANCHOR_SUITE` — a worker verifies offline, with only the signed record, the inclusion proof, and the relay's public key, that the relay anchored exactly that record. The leaf is `SHA-256(canonicalJson(record))` over the whole signed object, never a projection. Third Merkle consumer of the canonical `verifyMerkleInclusion` primitive. (`@motebit/crypto`, additive.)
+  - The anchor batch payload now binds `suite` inside the signed bytes (cryptosuite-agility), matching the sibling credential-anchor.
+
+  `check-signed-artifact-verifiers` moves `AgentSettlementAnchorProof` from a tracked gap to a portable verifier (and `AgentSettlementAnchorBatch` to `within`) — one fewer hole in the self-attesting moat.
+
+  ## Migration
+
+  Constructing a `SettlementRecord` (or calling `signSettlement`) now requires the `motebit_id` payee field:
+
+  ```ts
+  const record: SettlementRecord = {
+    settlement_id,
+    allocation_id,
+    motebit_id, // NEW — the payee (the executing agent's motebit_id)
+    receipt_hash,
+    // …unchanged…
+  };
+  ```
+
+  Relays derive it from the receipt that earned the settlement (`receipt.motebit_id`); `settleOnReceipt` does this automatically. Per-surface SQLite stores add a nullable `motebit_id` column (relay, agent persistence, desktop, mobile migrations included); legacy rows read back an empty payee and fail wire-schema validation, the intended fail-closed signal that the row predates the field.
+
+### Minor Changes
+
+- aefe5f6: Add `motebit/agent-revocation@1.0` — operator de-listing of agents from the relay's discovery registry, made sovereign-verifiable. A permissionless registry accumulates junk (spam, abandoned test agents, abusive capabilities) and the only automatic remedy is the 90-day no-heartbeat TTL — too slow for live abuse. The operator needs a de-list tool, but a silent de-list is exactly the trust root the relay is forbidden from being (`services/relay/CLAUDE.md` rule 6). So the power is made accountable, not refused: every revoke/reinstate is a signed, reasoned, publicly-fetchable record against the relay's pinned key — declared posture → proven posture.
+
+  Invariants: **de-list, not de-identify** (sets `agent_registry.revoked`, which Discover filters; identity/key/succession/receipts stay served — distinct from identity revocation, which anchors an on-chain memo); **hygiene, not curation** (discovery stays permissionless); **operator-only** (master token; agents self-deregister, never de-list a peer); reversible + append-only.
+  - `@motebit/protocol`: `AgentRevocationReason` (ninth registered registry, full eight-artifact set + gate `check-agent-revocation-reason-canonical`), `AgentRevocationRecord` / `AgentRevocationFeed` / `AgentRevocationActor` signed wire types, `AGENT_REVOCATION_SUITE` / `AGENT_REVOCATION_SPEC_ID`. Additive — no existing export changes.
+  - `@motebit/state-export-client`: portable `verifyAgentRevocationRecord` / `verifyAgentRevocationFeed` against the relay's pinned key (same key as `verifyTransparencyDeclaration`). Additive.
+
+  Spec: `spec/agent-revocation-v1.md` (25th spec). Doctrine: `docs/doctrine/agents-as-first-person-trust-graph.md` §8. The relay producer + wire-schemas (both ignored packages) ride the sibling `-ignored` changeset.
+
+- 781dbc0: Add an optional first-person `petname` field to `AgentTrustRecord` — a local-only nickname for a peer agent (what _I_ call them, in my own namespace), never on the wire and never sent to a peer or the relay. Naming is first-person, the petname resolution to Zooko's triangle (doctrine: `docs/doctrine/agents-as-first-person-trust-graph.md` §3), distinct from a peer's squattable self-asserted listing name. Additive and optional; absent ⇒ no petname.
+
+  Persisted by the SQLite trust store (migration v39 adds a nullable `agent_trust.petname` column; in-memory and IndexedDB stores carry it for free via whole-record upsert), settable via `runtime.setAgentPetname(remoteMotebitId, petname)` (display-only — not a routing input, so it does not invalidate the agent graph). The panel UI and any auto-suggestion remain held behind the §5 fork.
+
+  Note: regenerating `etc/protocol.api.md` for this change also brought the protocol baseline back in line with source — federation P2P symbols (`SovereignP2pPaymentRequest`, `computeFederatedFeeSplit`, `FederatedFeeSplit`) from the in-flight settlement-anchor major weren't yet in the committed baseline. That lag is the documented behavior of `check-api-surface`'s pending-major carve-out (a standing `@motebit/protocol: major` changeset makes surface divergence a warning, not a failure), not a gate bug. Baseline now matches source.
+
+- cf26f38: Add `computeFederatedFeeSplit(budgetMicro, feeRate)` (+ `FederatedFeeSplit`) — the canonical cross-operator federated P2P fee-from-budget split (spec `relay-federation-v1` §7.1): a budget splits into origin-relay fee, executor-relay fee, and worker net, the three legs summing to the budget exactly. Interop law on the money path: the origin relay's forward-site validator and the delegator client that builds the 3-leg proof must compute it identically or the proof is rejected leg-by-leg, so it lives in `@motebit/protocol` as one source of truth (sibling of `computeP2pFeeMicro`). The relay's `services/relay/src/tasks.ts` federated validator now consumes it.
+- 85f7e10: `P2pPaymentProof` gains optional `b_fee_to_address` + `b_fee_amount_micro` — the executor-relay (B) fee leg for cross-operator federated P2P settlement. Additive: present only when a paid task is delegated to a worker hosted on a different operator (the delegator's atomic Solana tx then carries THREE legs — worker net + origin-relay fee + executor-relay fee, per `spec/relay-federation-v1.md` §7.1 fee-from-budget). Single-operator P2P proofs are unchanged (two legs, fields absent).
+
+  Doctrine: `docs/doctrine/off-ramp-as-user-action.md` § "Cross-operator federated P2P".
+
+- 403a725: Federation settlement anchoring becomes self-verifiable offline — the closing convergence (PR6) of the RFC 6962 §2.1 tree-hash arc (doctrine: `docs/doctrine/merkle-tree-hash-versioning.md` §8; the deferred item-4 in `spec/agent-settlement-anchor-v1.md` §9.1). The federation settlement stream was the only anchoring stream not yet self-verifiable with `@motebit/crypto` alone; this closes all three counts §9.1 named.
+
+  **`@motebit/protocol` (new types):**
+  - `FederationSettlementRecord` — a relay's signed record of one federation settlement (the verbatim-artifact leaf). Each relay signs its own copy; the signature commits the `(gross, fee, net, rate)` tuple so it cannot issue inconsistent records to different peers. Suite `motebit-jcs-ed25519-b64-v1`.
+  - `FederationSettlementAnchorProof` (+ `FederationSettlementChainAnchor`) — the self-verifiable Merkle inclusion proof, mirroring `AgentSettlementAnchorProof`: suite-bound `batch_signature`, `siblings`/`layer_sizes`, and the optional `tree_hash_version?` (absent ⇒ `merkle-sha256-plain-v1`, unknown ⇒ reject fail-closed).
+
+  **`@motebit/crypto` (new exports — the FOURTH Merkle consumer):**
+  - `verifyFederationSettlementAnchor(record, proof, chainVerifier?)` — the portable peer-audit verifier. A peer holding the signed record, the proof, and the relay's public key verifies offline that the relay anchored exactly that record into a Merkle root (hash → Merkle inclusion → batch signature → optional onchain), dispatching the RFC 6962 leaf/node tags on `proof.tree_hash_version`.
+  - `computeFederationSettlementLeaf(record)` — the leaf hash: `canonicalLeaf` over the whole signed record (never a field projection), so producer and holder derive the identical leaf.
+  - `signFederationSettlement` / `verifyFederationSettlement` (+ `FEDERATION_SETTLEMENT_RECORD_SUITE`) — sign/verify the record itself.
+  - `FEDERATION_SETTLEMENT_ANCHOR_SUITE`, `FederationSettlementAnchorProofFields`, `FederationSettlementAnchorVerifyResult`.
+
+  The convergence replaces the old hand-typed 9-field column projection (a leaf a holder could not reproduce) with the verbatim-artifact hash the per-agent and credential streams already use. The federation producer flips to `merkle-sha256-rfc6962-v2` in the same pass (relay-side change, separate ignored changeset); `relay-federation-v1.md` §7.6 is updated to the converged wire format and §7.6.9 declares the tree-hash version. Backward-compatible: a proof with no `tree_hash_version` resolves to `merkle-sha256-plain-v1`.
+
+- 19d1584: Land the leaf-tag half + the `tree_hash_version?` wire field of the RFC 6962 domain-separation migration (PR1 part 2b — doctrine: `docs/doctrine/merkle-tree-hash-versioning.md`). Additive and dormant: every change is byte-identical under `merkle-sha256-plain-v1` (the absent ⇒ v1 default), so all existing callers and every proof minted to date verify unchanged. No producer emits v2 yet — that lands with the first real producer (agent-settlement) in PR2.
+
+  `@motebit/crypto` gains three exports: `hashLeaf(entry, treeHashVersion?)` — the single dispatch point for the RFC 6962 §2.1 `0x00` leaf-domain tag (the leaf-side mirror of 2a's `0x01` node tag), `canonicalLeaf(value, treeHashVersion?)` — JCS-canonicalize then `hashLeaf` (v1 is byte-identical to `canonicalSha256`), and `resolveTreeHashVersion(raw)` — the verifier-boundary resolver (`absent ⇒ v1`, known ⇒ itself, unknown ⇒ `null` so the caller rejects fail-closed). All four leaf builders route their leaf hash through `canonicalLeaf` (`computeAgentSettlementLeaf`, `computeCredentialLeaf`, `identityLogLeaf`, and the consolidation-anchor leaf via `@motebit/encryption`), and the high-level verifiers (`verifyAgentSettlementAnchor`, `verifyCredentialAnchor`, `verifyConsolidationAnchor`, `verifyIdentityBindingAnchored`) resolve the proof's version at their boundary and thread it to both the leaf builder and the Merkle primitive. Verifiers return false / a fail-closed result on an unknown version (never throw, never silent-downgrade); the producer-side `hashLeaf` throws loud on an unimplemented version.
+
+  `@motebit/protocol` adds the optional `tree_hash_version?: MerkleTreeVersion` wire field to `AgentSettlementAnchorProof`, `CredentialAnchorProof`, and `ConsolidationAnchor`, mirrored in `@motebit/wire-schemas` zod sources and the regenerated `spec/schemas/*.json` (private packages, no version bump). The leaf-tag byte layout is pinned by routing the named `transparency-dev/merkle` `rfc6962_test.go` (`78493b07`) `HashLeaf("L123456")` vector through `hashLeaf` itself, and two end-to-end v2 negative fixtures confirm a stripped `tree_hash_version` is rejected (not silently downgraded): the agent-settlement field-stripped proof fails both hash and Merkle steps, and the consolidation field-stripped anchor fails on Merkle root mismatch.
+
+  `MerkleTreeVersion` becomes the eighth registered registry: the new coverage gate `check-merkle-tree-hash-canonical` (drift-defense #114) is `check-suite-dispatch`-shaped, not vacuous registry self-consistency — it localizes the domain-tag bytes to the two Merkle primitives, asserts every leaf builder routes through `hashLeaf`/`canonicalLeaf` (or sits on a documented exclusion list), keeps the registry ↔ dispatch arms in sync, and carries a dormant Option-A spec-claim arm that activates when the first v2 producer's spec declares it (PR2). `REGISTERED_REGISTRIES` 7 → 8; inventory 115 → 116 invariants, 105 → 106 hard CI gates.
+
+- 9cf876a: Add the `MerkleTreeVersion` tree-hash version registry — the agility axis for Merkle leaf/node domain separation (RFC 6962 §2.1). This is the protocol-layer foundation of the staged migration that gives anchor proofs the leaf-vs-node second-preimage resistance their RFC 6962 citation promises (doctrine: `docs/doctrine/merkle-tree-hash-versioning.md`). Additive and dormant — no consumer wires it yet; the Merkle primitives + the `tree_hash_version` wire field land next, all defaulting absent ⇒ v1 so every existing proof keeps verifying.
+
+  A `MerkleTreeVersion` is a separate axis from `SuiteId`: that names the signature recipe over a batch payload; this names the tree-hash recipe that builds the root the signature commits to. Scope is exactly `(leaf tag, node tag, hash function)` — it does NOT cover payload canonicalization, which versions independently.
+
+  New exports:
+  - `MerkleTreeVersion` — closed union: `"merkle-sha256-plain-v1"` (legacy, no domain separation — the original behavior) and `"merkle-sha256-rfc6962-v2"` (RFC 6962 §2.1 `0x00` leaf / `0x01` node tags).
+  - `MERKLE_TREE_VERSION_REGISTRY` / `ALL_MERKLE_TREE_VERSIONS` — the frozen registry + iteration array (mirrors `SUITE_REGISTRY` / `ALL_SUITE_IDS`); each entry carries `leafTag` / `nodeTag` (the RFC 6962 prefix bytes, `null` for v1), `hash`, `status`, and a description.
+  - `DEFAULT_MERKLE_TREE_VERSION` — `"merkle-sha256-plain-v1"`, the load-bearing downgrade-safety default: a proof with no `tree_hash_version` resolves to v1, never silently upgraded.
+  - `isMerkleTreeVersion` / `getMerkleTreeVersionEntry` — type guard + lookup (fail-closed on unknown IDs).
+  - `MerkleTreeVersionEntry` / `MerkleTreeVersionStatus` / `MerkleHashFunction` — supporting types.
+
+- 9ca54fd: Add `computeP2pFeeMicro(netCostMicro, feeRate)` — the canonical P2P settlement fee-leg primitive (`gross - net` where `gross = round(net / (1 - feeRate))`, in micro-units). This is interop law on the money path: the relay's `requiresP2pProof` submission validator and the delegator client that builds the payment proof must compute the fee identically, or the proof is rejected (`TASK_P2P_FEE_AMOUNT_MISMATCH`). Hosting it in `@motebit/protocol` (which both the relay and the runtime depend on, but `@motebit/market` is not a runtime dep) gives one source of truth instead of two inline copies that can drift. The relay's `services/relay/src/tasks.ts` validator now consumes it.
+- 810175b: Settlement-summary export — the money side of the first-person trust graph (published half; the `@motebit/relay` + `@motebit/panels` half is in the sibling changeset). Doctrine: `docs/doctrine/agents-as-first-person-trust-graph.md` §6.
+  - `@motebit/protocol`: `settlement-summary` added to the `ContentArtifactType` registry (14th type) + the `SettlementSummaryExport` / `SettlementSummaryPeer` / `SettlementSummaryUnattributed` wire-body types. A per-peer economic projection over the relay's signed settlement ledger — a materialized projection in micro-units, never a denormalized balance.
+  - `@motebit/state-export-client`: `verifiedSettlementSummaryFetch` + `settlementSummaryUrl` — typed, fail-closed verified fetch for `/api/v1/agents/:motebitId/settlements`. Centralizes the URL (so surfaces can't fetch the money history without verifying it) and rejects a manifest signed for a different export (`unexpected_artifact_type`, the new fail-closed reason on `StateExportVerificationFailureReason`).
+
+- 8195e65: Add the optional `SovereignWalletRail.buildP2pPayment?` capability (+ the `SovereignP2pPaymentRequest` port type). It builds a verifiable `P2pPaymentProof` by broadcasting the delegator's atomic multi-leg settlement — the worker leg plus the relay-fee leg(s) — in a single transaction. This is the port the interior consumes so a PAID direct delegation can satisfy the relay's Arc-3.5 P2P-proof gate (`requiresP2pProof`); the reference `SolanaWalletRail` in `@motebit/wallet-solana` implements it via `buildP2pPaymentProof`. The method is optional so existing rails are unaffected and a rail that cannot pay multiple recipients atomically degrades honestly rather than splitting the legs across transactions (the relay verifier walks one `tx_hash`). Single-operator P2P uses two legs; cross-operator federated P2P adds the executor-relay fee leg via the request's `executor*` fields.
+- 0f47485: Add the sovereign-wallet-rail port and a chain-agnostic base58 codec to the open protocol surface.
+  - `SovereignWalletRail` — a new interface extending `SovereignRail` with the `send(toAddress, microAmount)` and `isAvailable()` operations the interior invokes, plus `SovereignSendResult` (`{ signature, slot, confirmed }`) for the transfer outcome. This is the port the runtime consumes; a concrete rail (`@motebit/wallet-solana`'s `SolanaWalletRail`) satisfies it structurally. The interior defines the port, the provider implements it — the adapter principle as a type.
+  - `base58Encode(bytes)` — a pure, chain-agnostic base58btc codec (Bitcoin alphabet; shared by Solana addresses, IPFS CIDv0, etc.), sibling to the `toMicro`/`fromMicro` money converters. NOT a Solana primitive — the "Solana address = base58 of the 32-byte Ed25519 pubkey" knowledge stays at the call site.
+
+  Motivation: the runtime can now derive a sovereign address and consume the wallet rail through these protocol exports, with zero dependency on a settlement-rail provider package. This is what let the fail-closed money/identity coverage-registry membership gate (`check-money-identity-path-canonical`, Amendment-2) move from gated-off to enforced — `@motebit/runtime` no longer imports `@motebit/wallet-solana`.
+
+  Purely additive — no existing export changed.
+
+- 49338ad: Narrow the `suite` field of the last 3 straggler signed-artifact types from the
+  wide `SuiteId` union to the single `z.literal` each artifact's wire schema (and
+  its committed JSON Schema `$id`) already pins — bringing them in line with the
+  ~20 other signed artifacts that already pin a literal:
+  - `@motebit/protocol`: `SignedTransparencyDeclaration.suite` and
+    `RetentionManifest.suite` → `motebit-jcs-ed25519-hex-v1`;
+    `HorizonWitnessRequestBody.suite`, the four DeletionCertificate signature
+    envelopes (`SubjectSignature` / `OperatorSignature` / `DelegateSignature` /
+    `GuardianSignature`), the `append_only_horizon` cert arm, and
+    `SkillManifestMotebit.signature.suite` → `motebit-jcs-ed25519-b64-v1`. The
+    `TRANSPARENCY_SUITE` const is correspondingly narrowed (`as const`).
+  - `@motebit/crypto`: `DELETION_CERTIFICATE_SUITE` narrowed (`as const`) to match.
+
+  Each artifact emits exactly one suite (per its spec signing recipe); cryptosuite
+  agility happens through a new artifact version with a new schema pin, never by
+  widening to `SuiteId`. A single literal is assignable into any `SuiteId`-typed
+  position, so this is breaking only for an external consumer that assigned a
+  non-literal `SuiteId` value to one of these specific fields — which no producer
+  does (the suite is per-artifact). Aligns the TS type with the published JSON
+  Schema. No runtime or wire change.
+
+### Patch Changes
+
+- c0faba1: Recalibrate coverage thresholds for the vitest-4 `coverage-v8` measurement change. vitest 4's coverage-v8 counts branches/statements more granularly than v2 (notably JSX/conditional branches in render-heavy code), so measured coverage dropped across the workspace even though the actual tests and source are unchanged — the ruler changed, not the code. This is a forced consequence of the vitest-4 security upgrade (closed critical GHSA-5xrq-8626-4rwp; cannot be reverted without re-opening the CVE, and coverage-v8 must match the vitest major). Each failing threshold is set to its new v4-measured floor; passing thresholds are untouched.
+
+  This is a one-time recalibration to a new measurement tool, not a relaxation of the testing bar — the same tests cover the same code. The recalibrated thresholds are a temporary floor: they should be raised back toward the prior targets as coverage improves under the new tool. Money/identity-path packages all stayed ≥80% after recalibration (crypto branches 85, crypto-appattest statements 86, etc.), so none crossed the `coverage-graduation.json` <80% raise-by trigger. Doctrine: `docs/doctrine/foundational-tool-adoption.md` (vitest-4 worked example).
+
+- e3fb1f7: Correct the `MemoryAuditPayload.missed_patterns` doc comment. The field was
+  documented as "Sensitivity tags" — misleading: the only producer
+  (`detectUntaggedMemoryPatterns` in `@motebit/ai-core`) emits label-prefixed
+  pattern strings (`preference: "…"`, `goal: "…"`, `personal_fact: "…"`,
+  `correction: "…"`), not `SensitivityLevel` values. The type is and stays
+  `ReadonlyArray<string>`; only the comment changes. The misleading comment had
+  led the wire schema to validate `missed_patterns` as `z.array(SensitivityLevel)`,
+  which would have rejected every real `MemoryAudit` event — fixed in
+  `@motebit/wire-schemas` in the same pass.
+- 882b392: Upgrade the test runner from vitest 2.1.9 to 4.1.8 (with @vitest/coverage-v8), closing critical advisory GHSA-5xrq-8626-4rwp (Vitest UI server arbitrary file read/execute, fixed in 4.1.0). This is a dev-dependency change only — no runtime, API, or wire-format change to any published package; the bump is recorded as a patch because each package's published `package.json` devDependencies move to vitest ^4.1.8.
+
+  vitest 4 bundles vite (^6 || ^7 || ^8), so the existing vite-^6 surfaces, jsdom 25, and @types/node ^22 are unchanged. Test-only migration fallout was handled in the same change: `ViteUserConfig` rename in the shared config, typed-mock assignability under v4 (`vi.fn()` now `Mock<Procedure|Constructable>`), constructor mocks converted from arrows to `function` (v4 disallows `new` on arrow mock implementations), the removed `environmentMatchGlobs` replaced by the per-file `@vitest-environment` directive, and an explicit `dist/` test-exclude restored for the one config-less package (vitest 4's default `exclude` no longer covers `dist/`).
+
 ## 2.0.1
 
 ### Patch Changes

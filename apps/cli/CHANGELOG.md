@@ -1,5 +1,19 @@
 # motebit CLI Changelog
 
+## 1.4.2
+
+### Patch Changes
+
+- d789bc9: Add `--pay-new-agents`, the CLI's paid-P2P cold-start opt-in — surface parity with the web/desktop/mobile "Pay new agents directly" toggle.
+
+  The cold-start acknowledgment (`acknowledgeNoHistoryRisk`) was wired only on web. On the CLI, `enableInteractiveDelegation` / `enableInvokeCapability` omitted it, so the runtime's auto-bound sovereign P2P path was a no-op for a first paid delegation to a worker with no trust history — it silently degraded to relay-mode with no operator control. The new flag forwards the ack into both delegation entry points (`apps/cli/src/index.ts` chat + invoke paths, `apps/cli/src/subcommands/delegate.ts`).
+
+  Process-lifetime config, so a plain boolean — no live getter (unlike the web/desktop localStorage and mobile in-memory-mirror getters that let an interactive toggle take effect without a re-enable). Default OFF (sovereign fail-closed): without `--pay-new-agents`, a paid delegation to an unknown worker still settles through the relay ledger. Use `motebit run --pay-new-agents` (or `delegate`) to allow direct peer-to-peer payment of new agents from the sovereign wallet.
+
+- 882b392: Upgrade the test runner from vitest 2.1.9 to 4.1.8 (with @vitest/coverage-v8), closing critical advisory GHSA-5xrq-8626-4rwp (Vitest UI server arbitrary file read/execute, fixed in 4.1.0). This is a dev-dependency change only — no runtime, API, or wire-format change to any published package; the bump is recorded as a patch because each package's published `package.json` devDependencies move to vitest ^4.1.8.
+
+  vitest 4 bundles vite (^6 || ^7 || ^8), so the existing vite-^6 surfaces, jsdom 25, and @types/node ^22 are unchanged. Test-only migration fallout was handled in the same change: `ViteUserConfig` rename in the shared config, typed-mock assignability under v4 (`vi.fn()` now `Mock<Procedure|Constructable>`), constructor mocks converted from arrows to `function` (v4 disallows `new` on arrow mock implementations), the removed `environmentMatchGlobs` replaced by the per-file `@vitest-environment` directive, and an explicit `dist/` test-exclude restored for the one config-less package (vitest 4's default `exclude` no longer covers `dist/`).
+
 ## 1.4.1
 
 ### Patch Changes
