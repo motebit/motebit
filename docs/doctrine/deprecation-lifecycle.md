@@ -167,7 +167,7 @@ Practical implication: deprecating BSL code with a `removed in` that falls _afte
 
 The ~15 existing `@deprecated` markers across the codebase land in the grandfathered category — they were added before this doctrine existed. Classification pass in a follow-up commit:
 
-- **`LegacyVerifyResult` + `verifyIdentityFile`** (`@motebit/crypto`) — active API, wide consumption. Needs `since 1.0.0, removed in 2.0.0. Use verify() + VerifyResult.` + a runtime deprecation warning on `verifyIdentityFile` call.
+- **`LegacyVerifyResult` + `verifyIdentityFile`** (`@motebit/crypto`) — classified active-API here, annotated `@deprecated since 1.0.0, removed in 3.0.0`, and **removed in the 3.0.0 crypto major** (2026-06-06), where a pre-removal holder check found them zero-holder. Replacement: `verify()` + `VerifyResult`.
 - **`detectLocalInference` / `AnthropicProvider` legacy names** (`@motebit/ai-core`) — BSL runtime-internal, can collapse to the next minor.
 - **Market scoring legacy functions** (`@motebit/market`) — BSL internal, same.
 - **`@motebit/mcp-client` credential-source backwards-compat** — BSL internal. Named sunset at next minor.

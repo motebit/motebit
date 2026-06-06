@@ -33,6 +33,12 @@ export interface AdjudicatorVote {
 // @public
 export const ADMIN_QUERY_AUDIENCE: TokenAudience;
 
+// @public
+export const AGENT_REVOCATION_SPEC_ID: "motebit-agent-revocation/draft-2026-06-04";
+
+// @public
+export const AGENT_REVOCATION_SUITE: "motebit-jcs-ed25519-hex-v1";
+
 // @public (undocumented)
 export interface AgentCapabilities {
     did?: string;
@@ -67,6 +73,42 @@ export interface AgentResolutionResult {
     settlement_modes?: string[];
     ttl: number;
 }
+
+// @public
+export type AgentRevocationActor = "operator" | "self";
+
+// @public
+export interface AgentRevocationFeed {
+    readonly generated_at: number;
+    readonly records: readonly AgentRevocationRecord[];
+    readonly relay_id: string;
+    readonly relay_public_key: string;
+    readonly signature: string;
+    readonly spec: string;
+    readonly suite: "motebit-jcs-ed25519-hex-v1";
+}
+
+// @public
+export type AgentRevocationReason = "operator_test_cleanup" | "spam" | "abuse" | "malware" | "policy_violation" | "dmca" | "reinstated";
+
+// @public
+export interface AgentRevocationRecord {
+    readonly actor: AgentRevocationActor;
+    readonly effective_at: number;
+    readonly hash: string;
+    readonly motebit_id: string;
+    readonly note?: string;
+    readonly reason: AgentRevocationReason;
+    readonly relay_id: string;
+    readonly relay_public_key: string;
+    readonly revoked: boolean;
+    readonly signature: string;
+    readonly spec: string;
+    readonly suite: "motebit-jcs-ed25519-hex-v1";
+}
+
+// @public
+export type AgentRevocationSignedPayload = Pick<AgentRevocationRecord, "spec" | "motebit_id" | "revoked" | "reason" | "actor" | "note" | "effective_at" | "relay_id" | "relay_public_key">;
 
 // @public (undocumented)
 export interface AgentServiceListing {
@@ -238,6 +280,9 @@ export interface AgentTrustStoreAdapter {
     // (undocumented)
     updateTrustLevel(motebitId: string, remoteMotebitId: string, level: AgentTrustLevel): Promise<void>;
 }
+
+// @public
+export const ALL_AGENT_REVOCATION_REASONS: readonly AgentRevocationReason[];
 
 // @public
 export const ALL_CONTENT_ARTIFACT_TYPES: readonly ContentArtifactType[];
@@ -798,7 +843,7 @@ export interface ConsolidationReceipt {
 }
 
 // @public
-export type ContentArtifactType = "state-snapshot" | "memory-export" | "goal-list" | "conversation-list" | "conversation-messages" | "device-list" | "audit-trail" | "plan-list" | "plan-detail" | "gradient-history" | "sync-pull" | "execution-ledger" | "goal-result";
+export type ContentArtifactType = "state-snapshot" | "memory-export" | "goal-list" | "conversation-list" | "conversation-messages" | "device-list" | "audit-trail" | "plan-list" | "plan-detail" | "gradient-history" | "sync-pull" | "execution-ledger" | "goal-result" | "settlement-summary";
 
 // @alpha
 export type ControlHolder = "user" | "motebit";
@@ -994,9 +1039,6 @@ export enum DataClass {
 
 // @public
 export const DEFAULT_MERKLE_TREE_VERSION: MerkleTreeVersion;
-
-// @public @deprecated (undocumented)
-export const DEFAULT_TRUST_THRESHOLDS: TrustTransitionThresholds;
 
 // @public (undocumented)
 export interface DelegatedStepResult {
@@ -1929,6 +1971,9 @@ export interface InjectionWarning {
 
 // @public
 export type IntentOrigin = "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
+
+// @public
+export function isAgentRevocationReason(value: unknown): value is AgentRevocationReason;
 
 // @public
 export function isBatchableRail(rail: GuestRail): rail is BatchableGuestRail;
@@ -3075,6 +3120,9 @@ export interface ServiceListingStoreAdapter {
 }
 
 // @public
+export const SETTLEMENT_SUMMARY_ARTIFACT: ContentArtifactType;
+
+// @public
 export type SettlementAsset = "USDC";
 
 // @public
@@ -3134,6 +3182,33 @@ export interface SettlementStoreAdapter {
     get(settlementId: string): Promise<SettlementRecord | null>;
     // (undocumented)
     listByAllocation(allocationId: string): Promise<SettlementRecord[]>;
+}
+
+// @public
+export interface SettlementSummaryExport {
+    motebit_id: string;
+    peers: SettlementSummaryPeer[];
+    unattributed: SettlementSummaryUnattributed;
+}
+
+// @public
+export interface SettlementSummaryPeer {
+    earned_micro: number;
+    fee_micro: number;
+    first_at: number;
+    last_at: number;
+    net_micro: number;
+    p2p_count: number;
+    paid_micro: number;
+    peer_id: string;
+    settled_count: number;
+}
+
+// @public
+export interface SettlementSummaryUnattributed {
+    earned_micro: number;
+    fee_micro: number;
+    settled_count: number;
 }
 
 // @public (undocumented)

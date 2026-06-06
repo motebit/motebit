@@ -309,7 +309,7 @@ export const DELEGATION_TOKEN_SUITE: "motebit-jcs-ed25519-b64-v1";
 export { DelegationToken }
 
 // @public
-export const DELETION_CERTIFICATE_SUITE: SuiteId;
+export const DELETION_CERTIFICATE_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
 export interface DeletionCertificateVerifyContext {
@@ -753,25 +753,6 @@ export interface KeySuccessionRecord {
 
 // @public
 export type KnownKeys = Map<string, Uint8Array>;
-
-// @public @deprecated (undocumented)
-export interface LegacyVerifyResult {
-    // (undocumented)
-    did?: string;
-    // (undocumented)
-    error?: string;
-    // (undocumented)
-    identity: MotebitIdentityFile | null;
-    // (undocumented)
-    succession?: {
-        valid: boolean;
-        genesis_public_key?: string;
-        rotations: number;
-        error?: string;
-    };
-    // (undocumented)
-    valid: boolean;
-}
 
 // @public
 export function mintSecureEnclaveReceiptForTest(input: {
@@ -1551,9 +1532,6 @@ export function verifyHorizonWitnessRequestSignature(body: HorizonWitnessRequest
 
 // @public
 export function verifyIdentityBindingAnchored(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, proof: IdentityLogInclusionProof, guardianPublicKeyHex?: string): Promise<KeyBindingResult>;
-
-// @public @deprecated
-export function verifyIdentityFile(content: string): Promise<LegacyVerifyResult>;
 
 // @public
 export function verifyKeyBindingAtTime(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, guardianPublicKeyHex?: string): Promise<KeyBindingResult>;

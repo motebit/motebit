@@ -207,6 +207,10 @@ const IDENTIFIER_ALLOWLIST: Record<string, string> = {
     "historical reference — `migration-cleanup.md` names this in the post-strip example row (0-holder bucket: reader returns null after the type was struck).",
   migrateLegacyProvider:
     "historical reference — `migration-cleanup.md` names this as the empirically-reclassified zero-holder migrator stripped in commit `adc87d19` on 2026-04-23. The reclassification narrative names the function as evidence.",
+  verifyIdentityFile:
+    'historical reference — `migration-cleanup.md` + `deprecation-lifecycle.md` narrate this as the pre-discriminated-union identity-verify wrapper, found zero-holder and removed in the 3.0.0 crypto major (2026-06-06). Replacement is `verify(content, { expectedType: "identity" })`.',
+  LegacyVerifyResult:
+    "historical reference — sibling of `verifyIdentityFile` above (its legacy flat-`error` return type); same removal narrative in `migration-cleanup.md` + `deprecation-lifecycle.md`. Replacement is the `VerifyResult` discriminated union.",
   ScheduledAgent:
     "historical reference — `panels-pattern.md` names this as one of web's two pre-unification goal types (recurring simple), folded into the shared `ScheduledGoal` shape on 2026-04-22 alongside `WebGoal` (sibling).",
   WebGoal:

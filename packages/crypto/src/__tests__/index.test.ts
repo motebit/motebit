@@ -797,50 +797,9 @@ describe("verify — JSON string dispatch", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// verify() — verifyIdentityFile (deprecated wrapper)
-// ---------------------------------------------------------------------------
-
-import { verifyIdentityFile } from "../index";
-
-describe("verifyIdentityFile — deprecated wrapper", () => {
-  it("returns valid result for a correctly signed file", async () => {
-    const { content } = await generateValidFile();
-    const result = await verifyIdentityFile(content);
-    expect(result.valid).toBe(true);
-    expect(result.identity).not.toBeNull();
-    expect(result.identity!.motebit_id).toBe("01234567-89ab-cdef-0123-456789abcdef");
-    expect(result.did).toMatch(/^did:key:z/);
-    expect(result.error).toBeUndefined();
-  });
-
-  it("returns error for a tampered file", async () => {
-    const { content } = await generateValidFile();
-    const tampered = content.replace("owner-test", "evil-owner");
-    const result = await verifyIdentityFile(tampered);
-    expect(result.valid).toBe(false);
-    expect(result.identity).toBeNull();
-    expect(result.error).toBe("Signature verification failed");
-  });
-
-  it("returns succession result when present", async () => {
-    const kp1 = await makeKeypair();
-    const kp2 = await makeKeypair();
-
-    const record = await createSuccessionRecord(kp1, kp2, 1000000);
-    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record]);
-
-    const frontmatterBytes = new TextEncoder().encode(yaml);
-    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
-    const content = buildIdentityFile(yaml, toHex(signature));
-
-    const result = await verifyIdentityFile(content);
-    expect(result.valid).toBe(true);
-    expect(result.succession).toBeDefined();
-    expect(result.succession!.valid).toBe(true);
-    expect(result.succession!.rotations).toBe(1);
-  });
-});
+// verifyIdentityFile (the pre-0.4.0 deprecated wrapper) was removed at 3.0.0.
+// Its behavior is covered by the verify(content, { expectedType: "identity" })
+// tests above.
 
 // ---------------------------------------------------------------------------
 // verify() — JSON parse failure path (line 1034)

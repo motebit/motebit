@@ -80,8 +80,6 @@ export {
   TRUST_LEVEL_SCORES,
   evaluateTrustTransition,
   REFERENCE_TRUST_THRESHOLDS,
-  // eslint-disable-next-line @typescript-eslint/no-deprecated -- intentional re-export of deprecated alias
-  DEFAULT_TRUST_THRESHOLDS,
 } from "@motebit/semiring";
 export type { DelegationReceiptLike } from "@motebit/semiring";
 export { PLATFORM_FEE_RATE } from "@motebit/protocol";

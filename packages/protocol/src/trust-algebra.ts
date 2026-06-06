@@ -84,18 +84,5 @@ export const REFERENCE_TRUST_THRESHOLDS: TrustTransitionThresholds = {
   demote_minTasks: 3,
 };
 
-/**
- * @deprecated since 1.0.1, removed in 3.0.0. Use {@link REFERENCE_TRUST_THRESHOLDS} instead.
- *
- * Reason: the `DEFAULT_` prefix read as "THE value every motebit
- * implementation uses," but trust-transition thresholds are motebit
- * product tuning — they govern promotion and demotion policy, not
- * protocol interop. A third-party motebit implementation may choose
- * different thresholds and still interoperate correctly (the semiring
- * algebra above is the interop contract). The `REFERENCE_` prefix
- * signals "motebit's reference-implementation default; implementers
- * MAY choose their own values." Rename-plus-deprecate so the naming
- * correction ships without a breaking change; the old export is
- * removed at 2.0.0.
- */
-export const DEFAULT_TRUST_THRESHOLDS: TrustTransitionThresholds = REFERENCE_TRUST_THRESHOLDS;
+// `DEFAULT_TRUST_THRESHOLDS` (the back-compat alias of REFERENCE_TRUST_THRESHOLDS)
+// was removed at 3.0.0 per its deprecation. Use REFERENCE_TRUST_THRESHOLDS.

@@ -27,10 +27,6 @@ export {
   composeTrustChain,
   joinParallelRoutes,
   REFERENCE_TRUST_THRESHOLDS,
-  // Back-compat alias — deprecated since 1.0.1, removed in 2.0.0.
-  // Downstream code should switch to REFERENCE_TRUST_THRESHOLDS.
-  // eslint-disable-next-line @typescript-eslint/no-deprecated -- intentional re-export of deprecated alias
-  DEFAULT_TRUST_THRESHOLDS,
 } from "@motebit/protocol";
 
 // ── Judgment: Trust Level Transitions (BSL) ────────────────────────
