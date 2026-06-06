@@ -12,7 +12,7 @@ The one thing to internalize first: **the verifier is already published. Do not 
 Two real, signed fixtures, one per binding rung. Fetch either and run the steps below; both verify offline.
 
 - **Sovereign** (the strongest rung — `motebit_id` commits to the signing key, provable with no server): [`sovereign-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/sovereign-receipt.json)
-- **Integrity-only** (signature valid, identity *not* bound — the honest weaker rung): [`example-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/example-receipt.json)
+- **Integrity-only** (signature valid, identity _not_ bound — the honest weaker rung): [`example-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/example-receipt.json)
 
 Fastest check, no install — the CLI against the live fixture:
 
@@ -54,10 +54,12 @@ if (result.type === "receipt" && result.valid) {
 
 A receipt answers two different questions, and conflating them is the most common integration bug:
 
-- **Integrity** — `result.valid`. The signature checks out over the canonical bytes; nothing was tampered with. This is verified against the key *embedded in the receipt*, so by itself it proves authorship-by-some-key, **not** that the key belongs to anyone in particular.
-- **Identity binding** — the ladder `integrity-only → pinned → anchored → sovereign`. This answers *whose* key it is. `result.sovereign === true` is the strongest rung and is checkable offline, because a sovereign `motebit_id` is the commitment to its own signing key. `anchored` means the key was pinned against an operator's [transparency declaration](/docs/concepts/federation) at `/.well-known/motebit-transparency.json`. An on-chain anchor (Solana) is a second channel that hardens trust-on-first-use — it is **not** what makes a receipt sovereign, and you do not need a chain lookup to reach the top rung.
+- **Integrity** — `result.valid`. The signature checks out over the canonical bytes; nothing was tampered with. This is verified against the key _embedded in the receipt_, so by itself it proves authorship-by-some-key, **not** that the key belongs to anyone in particular.
+- **Identity binding** — the ladder `integrity-only → pinned → anchored → sovereign`. This answers _whose_ key it is. `result.sovereign === true` is the strongest rung and is checkable offline, because a sovereign `motebit_id` is the commitment to its own signing key. `anchored` means the key was pinned against an operator's [transparency declaration](/docs/concepts/federation) at `/.well-known/motebit-transparency.json`. An on-chain anchor (Solana) is a second channel that hardens trust-on-first-use — it is **not** what makes a receipt sovereign, and you do not need a chain lookup to reach the top rung.
 
 Never present `valid: true` as proof of identity on the strength of the embedded key alone. Render the rung you actually verified. If you want the highest assurance without any network call, check `result.sovereign`.
+
+> **`result.sovereign` lives on `@motebit/verifier`'s result, not on `@motebit/crypto`'s.** The binding rung is on this package's `VerifyResultWithBinding` — the bare `@motebit/crypto` `VerifyResult` does not carry it. If you type against crypto directly, `.sovereign` won't exist. Import `verifyArtifact` from `@motebit/verifier` to get the rung. And note the ladder is split across surfaces: `@motebit/verifier` computes `integrity` + `sovereign` **offline**; `pinned`/`anchored` need the relay second channel via `@motebit/state-export-client`. Which package for which rung → [Choosing a Verify Surface](/docs/developer/choosing-a-verify-surface).
 
 ### Suites: never hardcode one
 
@@ -77,7 +79,7 @@ The binary is `motebit-verify`. It prints the same binding-ladder rung the libra
 
 ## No web page, no install — see it work
 
-Paste any receipt into [receipt.computer](https://receipt.computer): a public, login-free verifier that runs the *same* verification client-side and reports the same rung. Because it uses `@motebit/verifier`, a receipt you verify in your own code and a receipt you verify there produce the byte-identical verdict — that agreement is the proof, not a claim about it.
+Paste any receipt into [receipt.computer](https://receipt.computer): a public, login-free verifier that runs the _same_ verification client-side and reports the same rung. Because it uses `@motebit/verifier`, a receipt you verify in your own code and a receipt you verify there produce the byte-identical verdict — that agreement is the proof, not a claim about it.
 
 ## Any other language
 

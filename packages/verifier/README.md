@@ -7,11 +7,18 @@ npm i @motebit/verifier
 ```
 
 ```ts
-import { verifyFile } from "@motebit/verifier";
+import { verifyArtifact } from "@motebit/verifier";
 
-const result = await verifyFile("./receipt.json");
-if (result.valid && result.type === "receipt") {
-  console.log(`receipt signed by ${result.signer}`);
+// In-memory / browser: pass the receipt JSON string. (Node convenience:
+// `verifyFile("./receipt.json")` reads the file for you.)
+const result = await verifyArtifact(receiptJson);
+if (result.type === "receipt" && result.valid) {
+  // `valid` is integrity (signed + intact) — NOT identity. The binding rung
+  // is `result.sovereign`, on this package's result type (not the bare
+  // `@motebit/crypto` result). Render the rung, never `valid`, as identity:
+  console.log(
+    result.sovereign ? "sovereign — author proven offline" : "integrity-only — signer not bound",
+  );
 }
 ```
 
