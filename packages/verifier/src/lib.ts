@@ -16,8 +16,12 @@
  * caller can render a structured reason instead of catching exceptions.
  */
 
-import { readFile, stat } from "node:fs/promises";
-import { join, basename } from "node:path";
+// `node:fs/promises` / `node:path` are imported dynamically inside the two
+// disk-reading functions (`verifyFile`, `verifySkillDirectory`) rather than at
+// module top. This keeps the default export browser-pure: a bundler that pulls
+// this module in only for `verifyArtifact` never drags a Node builtin into the
+// graph. The dynamic import is evaluated only when the disk path actually runs
+// (Node), preserving the existing API and behavior exactly.
 
 import {
   verify,
@@ -87,6 +91,7 @@ export async function verifyFile(
 ): Promise<VerifyResultWithBinding> {
   // I/O failures bubble up per the existing contract — the caller
   // (CLI, library consumer) decides whether to surface or transform.
+  const { readFile, stat } = await import("node:fs/promises");
   const stats = await stat(path);
   if (stats.isDirectory()) {
     return verifySkillDirectory(path, opts);
@@ -142,8 +147,13 @@ export async function verifySkillDirectory(
   dir: string,
   opts?: VerifyFileOptions,
 ): Promise<SkillVerifyResult> {
-  const envelopePath = join(dir, "skill-envelope.json");
-  const skillMdPath = join(dir, "SKILL.md");
+  const { readFile } = await import("node:fs/promises");
+  // Namespace import (not destructured): `node:path`'s functions are typed
+  // as methods, so pulling them out as bare references trips
+  // @typescript-eslint/unbound-method. `fs/promises` is unaffected.
+  const path = await import("node:path");
+  const envelopePath = path.join(dir, "skill-envelope.json");
+  const skillMdPath = path.join(dir, "SKILL.md");
 
   // Step 0 — read the envelope. Failures collapse to a structured
   // valid-false rather than throwing so the CLI's --json output stays
@@ -153,14 +163,14 @@ export async function verifySkillDirectory(
     envelopeJson = await readFile(envelopePath, "utf-8");
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return invalidSkillResult(`failed to read ${basename(envelopePath)}: ${msg}`);
+    return invalidSkillResult(`failed to read ${path.basename(envelopePath)}: ${msg}`);
   }
   let envelope: SkillEnvelope;
   try {
     envelope = JSON.parse(envelopeJson) as SkillEnvelope;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return invalidSkillResult(`failed to parse ${basename(envelopePath)}: ${msg}`);
+    return invalidSkillResult(`failed to parse ${path.basename(envelopePath)}: ${msg}`);
   }
 
   if (opts?.expectedType !== undefined && opts.expectedType !== "skill") {
@@ -180,14 +190,14 @@ export async function verifySkillDirectory(
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return ioFailureSkillResult(envelope, [
-      { message: `failed to read ${basename(skillMdPath)}: ${msg}`, path: "body_hash" },
+      { message: `failed to read ${path.basename(skillMdPath)}: ${msg}`, path: "body_hash" },
     ]);
   }
   const bodyBytes = extractSkillBody(skillMd);
   if (bodyBytes === null) {
     return ioFailureSkillResult(envelope, [
       {
-        message: `${basename(skillMdPath)} is not a valid SKILL.md (missing frontmatter delimiters)`,
+        message: `${path.basename(skillMdPath)} is not a valid SKILL.md (missing frontmatter delimiters)`,
         path: "body_hash",
       },
     ]);
@@ -199,7 +209,7 @@ export async function verifySkillDirectory(
   // path.
   const fileBytes: Record<string, Uint8Array> = {};
   for (const entry of envelope.files) {
-    const filePath = join(dir, entry.path);
+    const filePath = path.join(dir, entry.path);
     try {
       const buf = await readFile(filePath);
       fileBytes[entry.path] = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
