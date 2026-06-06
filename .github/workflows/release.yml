@@ -23,7 +23,35 @@ jobs:
       pull-requests: write
       id-token: write
     steps:
+      # Durable release token — mint a short-lived GitHub App installation
+      # token at runtime instead of a yearly-expiring fine-grained PAT
+      # (CHANGESETS_TOKEN). Activate by creating a GitHub App with Contents +
+      # Pull-requests write, installing it on this repo, and setting repo
+      # secrets APP_ID + APP_PRIVATE_KEY. `continue-on-error` + the
+      # `app-token || GITHUB_TOKEN` fallback chain below make this a NO-OP
+      # until those secrets exist (falls back to the prior GITHUB_TOKEN
+      # behavior), so it ships safely ahead of setup. It retires the
+      # expired-prone CHANGESETS_TOKEN — that secret is deliberately dropped
+      # from the chain because an expired-but-present PAT would be selected by
+      # `||` (non-empty) and break checkout. The App token (unlike GITHUB_TOKEN) authors the
+      # Version-Packages PR + pushes tags AND lets the PR's required checks run
+      # without the action_required gate — replacing the manual PAT renewal.
+      - name: Generate GitHub App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      # Checkout with the release token so the persisted git credentials —
+      # which the direct-publish step's `git push origin --tags` relies on —
+      # are the App token, not the default GITHUB_TOKEN. Overriding only the
+      # env GITHUB_TOKEN (not checkout) is why the 2026-06-06 release published
+      # to npm but left its tags unpushed.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
 
       - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v4
 
@@ -157,11 +185,13 @@ jobs:
       # internally.
       # State 3 (all-ignored): skipped — direct-publish handles it
       # below as a no-op (workspace versions match npm).
-      # Token selection (CHANGESETS_TOKEN || GITHUB_TOKEN). When the
-      # repo secret `CHANGESETS_TOKEN` is set (a fine-grained PAT with
-      # Contents + Pull-requests write on motebit/motebit), the Version
-      # Packages PR is authored by the PAT's owner — a real user, not
-      # github-actions[bot]. CI workflow runs on that PR then fire
+      # Token selection (App token || GITHUB_TOKEN). Preferred: the GitHub
+      # App installation token from the step above (durable — no expiry,
+      # replaces the yearly-expiring CHANGESETS_TOKEN PAT). Fallback:
+      # GITHUB_TOKEN (the prior behavior — works, but its PRs hit the
+      # action_required gate and its pushes don't fire downstream workflows).
+      # With the App token the Version Packages PR is authored by a
+      # non-github-actions[bot] identity, so CI on that PR fires
       # without GitHub's `action_required` approval gate, which the
       # default GITHUB_TOKEN-authored PRs trigger to prevent recursive
       # workflow exploits. Without the PAT, the Version Packages PR
@@ -188,7 +218,7 @@ jobs:
           commit: "Version Packages"
           createGithubReleases: true
         env:
-          GITHUB_TOKEN: ${{ secrets.CHANGESETS_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
 
@@ -233,7 +263,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
-          GITHUB_TOKEN: ${{ secrets.CHANGESETS_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
 
       # Poll npm until every publishable workspace package's package.json
       # version is visible on the registry. Replaces a fixed `sleep 10`
