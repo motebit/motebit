@@ -9,10 +9,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+COPY packages/ packages/
 COPY services/embed/ services/embed/
 
-RUN pnpm install --frozen-lockfile --filter @motebit/embed...
-RUN pnpm --filter @motebit/embed build
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @motebit/embed... build
 RUN pnpm --filter @motebit/embed deploy --prod /app/deployed
 
 # --- Runtime: lean glibc image ---
