@@ -1,7 +1,7 @@
 /**
  * Deployment parity check.
  *
- * Enforces five invariants across services that ship to production:
+ * Enforces six invariants across services that ship to production:
  *
  *   1. services/<svc>/fly.toml → .github/workflows/deploy-<app>.yml
  *      If a service declares a fly.toml with `app = "motebit-<name>"`, the
@@ -42,6 +42,22 @@
  *      whatever signing identity the published artifacts assume. Closes the
  *      direction `check-deploy-parity` already enforces in rule 3 from the
  *      other side: rule 3 catches stale-doc, rule 5 catches undocumented-read.
+ *
+ *   6. Fly-deployed service whose Dockerfile runs `pnpm … deploy` must
+ *      `COPY packages/` into the build stage.
+ *      The shared root pnpm-lock.yaml references workspace packages
+ *      (`@motebit/wallet-solana@workspace:*`, etc.) regardless of which
+ *      service is being built. pnpm's `deploy` step resolves the whole
+ *      workspace graph against that lockfile, so the workspace packages
+ *      must be present on disk — even for a service with no direct
+ *      `@motebit/*` deps. A Dockerfile that copies only its own service dir
+ *      resolves an empty workspace and dies with
+ *      ERR_PNPM_WORKSPACE_PKG_NOT_FOUND at deploy time. This is the exact
+ *      drift that took the embed service's deploy red: every sibling
+ *      (summarize, read-url, research, web-search, code-review) copies
+ *      packages/; embed had drifted to copying only services/embed/, and
+ *      the break stayed latent until a lockfile regeneration re-triggered
+ *      the deploy. Same `pnpm deploy` fragility family as rule 4.
  *
  * Services without a fly.toml are not deployed and are skipped entirely
  * (e.g. services/proxy ships via Vercel edge — a different deploy
@@ -234,6 +250,27 @@ function main(): void {
         violations.push({
           service: svc,
           detail: `${relative(ROOT, pkgJsonPath)} depends on @motebit/persistence but does not declare "better-sqlite3" directly — \`pnpm deploy --prod\` will drop the native binding (it's an optionalDependency of persistence for the CLI scaffold's sql.js fallback path) and the running service will silently degrade to sql.js (WAL disabled, full-file rewrites on a 1s debounce). Add \`"better-sqlite3": "^12.0.0"\` to this service's dependencies`,
+        });
+      }
+    }
+
+    // Invariant 6: Dockerfile workspace-context parity.
+    // A service whose Dockerfile runs `pnpm … deploy` flattens its prod
+    // closure against the shared root lockfile, which references workspace
+    // packages (`@motebit/*@workspace:*`). pnpm resolves the whole workspace
+    // graph, so packages/ must be on disk in the build stage or deploy dies
+    // with ERR_PNPM_WORKSPACE_PKG_NOT_FOUND — even for a service with no
+    // direct @motebit/* deps. (`package.json` matches `package` but not
+    // `packages/`, so the COPY check won't false-pass on the manifest copy.)
+    const dockerfile = join(serviceDir, "Dockerfile");
+    if (existsSync(dockerfile)) {
+      const df = readFileSync(dockerfile, "utf-8");
+      const usesPnpmDeploy = /\bpnpm\b[^\n]*\bdeploy\b/m.test(df);
+      const copiesPackages = /^\s*COPY\b[^\n]*\bpackages\//m.test(df);
+      if (usesPnpmDeploy && !copiesPackages) {
+        violations.push({
+          service: svc,
+          detail: `services/${svc}/Dockerfile runs \`pnpm … deploy\` but never copies packages/ into the build stage. The shared pnpm-lock.yaml references workspace packages (e.g. @motebit/wallet-solana@workspace:*), so \`pnpm deploy\` resolves an empty workspace and fails with ERR_PNPM_WORKSPACE_PKG_NOT_FOUND. Every sibling fly service copies packages/; add \`COPY packages/ packages/\` before the service COPY`,
         });
       }
     }
