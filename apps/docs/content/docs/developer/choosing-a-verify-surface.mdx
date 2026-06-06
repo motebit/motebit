@@ -11,11 +11,11 @@ The decision turns on two questions: **how deep a binding rung do you need**, an
 
 All three sit on `@motebit/crypto`, the zero-dependency floor. They differ in what they add on top.
 
-| Package                            | Adds over the floor                                                    | Reaches                                       | Network          | Use it for                                                           |
-| ---------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------- | ---------------- | -------------------------------------------------------------------- |
-| **`@motebit/crypto`**              | nothing — it _is_ the primitive (`verifyReceipt`, suite-dispatch, JCS) | integrity + the `sovereign`-binding primitive | no               | building another verifier; **never call it from a UI**               |
-| **`@motebit/verifier`**            | `result.sovereign` + `formatHuman`                                     | integrity → **sovereign**                     | **no (offline)** | in-browser proof, the CLI — anything that must verify with no server |
-| **`@motebit/state-export-client`** | the relay second channel                                               | integrity-only → **pinned → anchored**        | **yes (relay)**  | showing the operator-anchored binding                                |
+| Package                            | Adds over the floor                                                    | Reaches                                       | Network                      | Use it for                                                           |
+| ---------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------- | ---------------------------- | -------------------------------------------------------------------- |
+| **`@motebit/crypto`**              | nothing — it _is_ the primitive (`verifyReceipt`, suite-dispatch, JCS) | integrity + the `sovereign`-binding primitive | no                           | building another verifier; **never call it from a UI**               |
+| **`@motebit/verifier`**            | `result.sovereign` + `formatHuman`                                     | integrity → **sovereign**                     | **no (offline)**             | in-browser proof, the CLI — anything that must verify with no server |
+| **`@motebit/state-export-client`** | the relay second channel                                               | integrity → sovereign → **pinned → anchored** | relay (pinned/anchored only) | the full ladder incl. operator anchoring                             |
 
 ## Which do I use?
 
@@ -41,7 +41,7 @@ const view = await verifyReceiptDocument(receiptJson /*, anchor options */);
 The [binding rungs](/docs/developer/verify-a-receipt#valid-is-not-the-same-as-identity-proven) — `integrity-only → pinned → anchored → sovereign` — are not all reachable from every surface:
 
 - `integrity` and `sovereign` are **offline** facts (signature valid; `motebit_id` commits to the key). `@motebit/verifier` gives you both with no network — it is the surface that computes the offline `sovereign` rung.
-- `pinned` and `anchored` are **second-channel** facts (the key was pinned against the operator's relay transparency declaration). Only `@motebit/state-export-client` reaches them, because only it makes that call. Note it reports `integrity-only` until you supply anchor material — it does **not** compute the offline `sovereign` rung today, so for sovereign use `@motebit/verifier` (the two surfaces agree on integrity, which is what the conformance gate enforces).
+- `pinned` and `anchored` are **second-channel** facts (the key was pinned against the operator's relay transparency declaration). Only `@motebit/state-export-client` reaches them, because only it makes that call. It also computes the offline `sovereign` rung (same `@motebit/crypto.verifySovereignBinding` primitive as `@motebit/verifier`), so the two surfaces agree on both integrity _and_ the offline sovereign rung — `check-receipt-conformance` enforces that agreement. The practical split: reach for `@motebit/verifier` when you only need the offline rungs (smaller, browser-pure, zero network); reach for `@motebit/state-export-client` when you also want `pinned`/`anchored`.
 
 So `sovereign` is _not_ a weaker `anchored` — it's a different axis. `sovereign` proves _the `motebit_id` commits to the signing key, offline_; `anchored` proves _the operator's transparency log vouches for that key_. A proof brand that wants "verified with no server" should lead with `sovereign`; that claim is **stronger**, not weaker, for being offline.
 

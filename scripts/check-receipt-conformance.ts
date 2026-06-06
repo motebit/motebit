@@ -13,15 +13,15 @@
  *
  * and that every fixture, once a byte is mutated, is REJECTED by all of them.
  *
- * Scope note — why this asserts INTEGRITY, not the binding rung. The three TS
- * surfaces deliberately compute *different* binding rungs (verifier computes the
- * offline `sovereign` rung; state-export-client scopes its ladder to the
- * operator anchor — integrity-only → pinned → anchored — and does not compute
- * the offline sovereign rung). They MUST agree on integrity (signature valid /
- * tamper rejected) — that is the byte-for-byte interlock the whole proof story
- * rests on. The rung is per-surface by design (see choosing-a-verify-surface).
- * As a separate guard, this gate also pins the verifier's own `sovereign` rung
- * per fixture, so that offline-sovereign computation can't silently regress.
+ * What this asserts. (1) INTEGRITY agreement — every surface returns the same
+ * valid/invalid verdict, and all reject a tampered byte; that is the
+ * byte-for-byte interlock the whole proof story rests on. (2) OFFLINE SOVEREIGN
+ * RUNG agreement — `@motebit/verifier`'s `result.sovereign` and
+ * `@motebit/state-export-client`'s offline `binding === "sovereign"` must match
+ * per fixture. Both compute it through the same `@motebit/crypto`
+ * `verifySovereignBinding` primitive, so a divergence means one wrapper drifted
+ * (the gap this gate originally surfaced; closed once both compute it). The
+ * relay-only rungs (`pinned`/`anchored`) need material and are not exercised here.
  *
  * Requires the packages to be built (CI runs `pnpm build` first). The Python leg
  * runs when `python3` + `pynacl` are available; in CI set REQUIRE_PYTHON=1 to
@@ -100,6 +100,15 @@ async function main(): Promise<void> {
     const want = expectSovereign(file);
     if (Boolean(v.sovereign) !== want) {
       failures.push(`${file}: verifier sovereign=${Boolean(v.sovereign)}, expected ${want}`);
+    }
+
+    // 2b. state-export-client's offline sovereign rung must AGREE with verifier's
+    // (both route through @motebit/crypto's verifySovereignBinding — a mismatch
+    // means one wrapper reimplemented or skipped the rung).
+    if ((s.binding === "sovereign") !== Boolean(v.sovereign)) {
+      failures.push(
+        `${file}: offline sovereign-rung DISAGREEMENT — verifier=${Boolean(v.sovereign)} state-export-client.binding=${s.binding}`,
+      );
     }
 
     // 3. Tamper → all reject. Flip one char of a signed field.

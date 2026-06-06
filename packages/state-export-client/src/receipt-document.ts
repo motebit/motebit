@@ -31,6 +31,7 @@ import {
   verifyReceipt,
   verifyKeyBindingAtTime,
   verifyIdentityBindingAnchored,
+  verifySovereignBinding,
   type IdentityLogInclusionProof,
   type MotebitIdentityFile,
 } from "@motebit/crypto";
@@ -319,6 +320,22 @@ export async function verifyReceiptDocument(
       if (rev.status === "revoked" && rev.revokedAt <= parsed.completed_at) {
         return { ...view, binding: "revoked", revokedAt: rev.revokedAt };
       }
+    }
+    // Receipt-alone sovereign — the strongest root, fully offline, needs NO
+    // identity file or relay: the `motebit_id` is itself the commitment to the
+    // receipt's signing key. Matches @motebit/verifier's offline `sovereign`
+    // rung (same `verifySovereignBinding` primitive), so the two surfaces agree
+    // on the rung, not just on integrity (locked by check-receipt-conformance).
+    // Checked after revocation (a revoked key must not bind) and before the
+    // identity/anchor ladder (sovereign is the top rung — supplying anchor
+    // material must never downgrade it). Rotated-key receipts fail this and fall
+    // through to the identity-file succession path below.
+    if (typeof parsed.public_key === "string") {
+      const receiptAloneSovereign = await verifySovereignBinding(
+        String(parsed.motebit_id),
+        parsed.public_key,
+      );
+      if (receiptAloneSovereign) return { ...view, binding: "sovereign" };
     }
     if (options?.identity) {
       // Sovereign is the strongest root AND fully offline — check it first; a

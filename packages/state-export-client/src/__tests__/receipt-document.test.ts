@@ -72,6 +72,31 @@ describe("verifyReceiptDocument", () => {
     expect(v.reason).toBeUndefined();
   });
 
+  it("a receipt whose motebit_id commits to its signing key is sovereign offline (no identity file, no relay)", async () => {
+    const kp = await generateKeypair();
+    const motebitId = await deriveSovereignMotebitId(bytesToHex(kp.publicKey));
+    const unsigned = {
+      task_id: "t-sov",
+      motebit_id: motebitId,
+      device_id: "device-1",
+      submitted_at: 1000,
+      completed_at: 2000,
+      status: "completed",
+      result: "ok",
+      tools_used: ["web_search"],
+      memories_formed: 0,
+      prompt_hash: "0".repeat(64),
+      result_hash: "1".repeat(64),
+      public_key: bytesToHex(kp.publicKey),
+    } as unknown as Parameters<typeof signExecutionReceipt>[0];
+    const receipt = await signExecutionReceipt(unsigned, kp.privateKey);
+    const v = await verifyReceiptDocument(JSON.stringify(receipt));
+    expect(v.integrity).toBe(true);
+    // Top rung, reached offline with no identity file or relay — matches
+    // @motebit/verifier's offline sovereign (same crypto primitive).
+    expect(v.binding).toBe("sovereign");
+  });
+
   it("a matching identity file upgrades the binding to pinned", async () => {
     const receipt = await signedReceipt({ task_id: "t-pin", motebit_id: "mote-x" });
     const identity = identityFor("mote-x", receipt.public_key!);
