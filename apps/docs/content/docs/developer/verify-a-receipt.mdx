@@ -7,6 +7,22 @@ You have an `ExecutionReceipt` and you want to prove it's real. The whole point 
 
 The one thing to internalize first: **the verifier is already published. Do not write your own.** Canonicalization (JCS / RFC 8785) and cryptosuite dispatch are exactly where hand-rolled verifiers silently pass on one receipt and fail on the next. The permissive-floor library handles both, is Apache-2.0 with a patent grant, has zero monorepo dependencies, and runs in the browser.
 
+## Try it now — real receipts to verify
+
+Two real, signed fixtures, one per binding rung. Fetch either and run the steps below; both verify offline.
+
+- **Sovereign** (the strongest rung — `motebit_id` commits to the signing key, provable with no server): [`sovereign-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/sovereign-receipt.json)
+- **Integrity-only** (signature valid, identity *not* bound — the honest weaker rung): [`example-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/example-receipt.json)
+
+Fastest check, no install — the CLI against the live fixture:
+
+```bash
+curl -s https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/sovereign-receipt.json -o receipt.json
+npx @motebit/verify receipt.json    # binary is `motebit-verify`
+```
+
+The sovereign fixture reports `sovereign · motebit_id commits to the key (offline, no operator)`; flip one character of any field and it reports an invalid signature. That break-it-yourself round-trip is the proof — and the two fixtures show the two rungs the result can report (see [`valid` is not the same as identity proven](#valid-is-not-the-same-as-identity-proven) below).
+
 ## JavaScript / TypeScript
 
 ```bash
