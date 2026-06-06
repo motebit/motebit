@@ -40,25 +40,47 @@ ExecutionReceipts are signed under **`motebit-jcs-ed25519-b64-v1` only**; `verif
 
 The **anchored** rung pins the `motebit_id`→key binding against the _operator's_ relay transparency anchor (`/.well-known/motebit-transparency.json`, signed by `relay_public_key`). Its trust root is that **signature**, not the origin that serves it. A site serving its _own_ transparency declaration is self-attestation — a fancier self-signature, **not** anchored; the TLS padlock proves "you're on this domain," never "this signer is the real agent per the operator's log." On-page, agency renders **integrity + sovereign only** (both offline, both real). Anchored requires the real operator anchor; do not relabel a same-origin self-anchor as "anchored." (Same error class as treating a Solana lookup as the definition of anchored — see [`identity-binding-verification.md`](identity-binding-verification.md).)
 
-## 7. Fixtures (ground truth, reachable)
+## 7. Fixtures (ground truth, reachable, frozen)
 
-Two committed fixtures, one per shipped rung, both reachable by raw URL and linked from [`docs/developer/verify-a-receipt`](../../apps/docs/content/docs/developer/verify-a-receipt.mdx):
+Committed fixtures under `examples/python-receipt-verifier/fixtures/`, reachable by raw URL and linked from [`docs/developer/verify-a-receipt`](../../apps/docs/content/docs/developer/verify-a-receipt.mdx):
 
-- `examples/python-receipt-verifier/fixtures/sovereign-receipt.json` — `sovereign: true`, minted through the canonical `signExecutionReceipt` (never hand-rolled), reproducible via `mint-sovereign-fixture.mjs` with a fixed **public** demo key.
-- `examples/python-receipt-verifier/fixtures/example-receipt.json` — integrity-only (`sovereign: false`).
+- `example-receipt.json` — integrity-only (`sovereign: false`).
+- `sovereign-receipt.json` — `sovereign: true`; self-referential `result` (a verifier smoke test, not a product demo).
+- `sovereign-receipt-stripe-audit.json`, `sovereign-receipt-email-approval.json` — `sovereign: true`, **outcome-shaped** (§11): the demo vectors a proof UI should ship.
 
-Deferred, explicitly, never faked: **pinned / anchored** fixtures need a real relay transparency anchor to sign against; the **hardware-suite** vector needs real device attestation. A faked hardware fixture in a proof brand is the worst artifact there is — ship "not yet" instead.
+All minted through the canonical `signExecutionReceipt` (never hand-rolled), reproducible via the committed `mint-*.mjs` generators with a fixed **public** demo key.
+
+**Frozen-vector contract.** Published fixtures are immutable: never reformat or regenerate one in place — a changed receipt gets a new filename. Consumers byte-match them (`test:fixture-fresh`), so an in-place edit (even a prettier reflow) would silently red a consumer's CI. This reciprocal is what makes coupling a consumer's gate to the platform's serialization safe.
+
+Deferred, explicitly, never faked: **pinned / anchored** fixtures need a real relay transparency anchor; the **hardware-suite** vector needs real device attestation. A faked hardware fixture in a proof brand is the worst artifact there is — ship "not yet" instead.
 
 ## 8. Definition of done = the offline tamper test
 
 Phase 1 exists when, **with the network blocked**: the real sovereign fixture → `sovereign`-green, and one mutated byte → `§11.2` red. Encoded as a CI gate, not a screenshot. The demo is the spec.
 
-## 9. Version parity with receipt.computer
+## 9. The interlock is the shared floor, not a version string
 
-Agency pins the exact `@motebit/verifier` version `receipt.computer` ships, with a CI assertion that they match. "Same engine, byte-for-byte interlock" must be enforced, not asserted in prose (Hyrum's Law: the moment the versions drift, the interlock silently dies).
+The instinct to "pin the same `@motebit/verifier` version receipt.computer ships" is **wrong and unwireable** — receipt.computer is `@motebit/verify-web`, which verifies via `@motebit/state-export-client` (the full-ladder surface), not `@motebit/verifier` at all (§12). There is no shared verifier version to match. The real interlock lives one layer down: every surface verifies through `@motebit/crypto`'s JCS canonicalization + the fixed `motebit-jcs-ed25519-b64-v1` suite — guaranteed by the shared floor, not a version.
+
+- **Consumer scope:** assert your committed fixture is byte-identical to the published canonical one (`test:fixture-fresh`) and verifies offline (`test:proof`). That is all a consumer can and should own.
+- **Platform scope (motebit):** cross-implementation conformance — same fixture → same verdict across `@motebit/verifier`, the `state-export-client` path, and the Python reference — lives in this repo, where all three impls do. Never bolt a Python runtime onto a consumer's CI to re-prove a guarantee that isn't theirs.
 
 ## 10. agency stays an outsider — that's the experiment
 
 Separate repo, public packages only, no insider access, no private imports. **Outsider friction is a logged bug in motebit's docs/packages, never a workaround.** The grade is a _cold_ run: a fresh agent, no briefing, given only `docs.motebit.com` + npm, must reach the offline tamper test (harness: `examples/third-party-integrator-eval`). We do not grade our own homework.
 
-Trust tiers, by **how much of agency you must trust** — ship all three: on-page (agency's served JS) → receipt.computer (motebit's origin, same package) → `npx @motebit/verify` (only npm + `@motebit/*`, not agency's page at all). The third tier — "don't even trust this page, run it yourself" — is the real floor.
+Trust tiers, by **how much of agency you must trust** — ship all three: on-page (agency's served JS) → receipt.computer (motebit's origin) → `npx @motebit/verify` (only npm + `@motebit/*`, not agency's page at all). The third tier — "don't even trust this page, run it yourself" — is the real floor.
+
+## 11. Sign a receipt of work, not of math
+
+A proof is only as compelling as the claim it secures. A receipt whose `result` describes its own verification ("this receipt was signed by a key…") proves a triviality — the visitor breaks the proof of _nothing they care about_, which _under-sells the very feature_ the proof exists to showcase. The demo vector must be a receipt of **recognizable work** — "audited 1,284 Stripe payouts, flagged 3 over $50, paused before export" — so the skeptic breaks the proof of _the thing they'd actually delegate_. The UI **leads with the act** (who / what / the policy pause — the `result`), with `sovereign` / `Ed25519 ✓` as the quiet trust line beneath, never the headline (`records-vs-acts`: the body shows the act; the crypto is the record that makes it trustworthy). This is honesty _and_ UX, not a trade — you don't choose between a real proof and a compelling one; you sign a real receipt of a compelling act. (How the pendulum overshot from "fake receipts of real outcomes" to "real receipts of math" is the cautionary tale that produced this clause.)
+
+## 12. Which verify surface (the topology that beat everyone)
+
+Three surfaces, all on the `@motebit/crypto` floor; pick by the deepest rung you need:
+
+- `@motebit/crypto` — the primitive; never called from a UI.
+- `@motebit/verifier` — **offline** (integrity → sovereign, `formatHuman`) → agency's surface and the CLI.
+- `@motebit/state-export-client` — **full ladder** (adds pinned → anchored via the relay second channel) → receipt.computer's surface.
+
+This composition is the one thing the public surface failed to make legible — it produced three independent misreads in this experiment (Solana = anchored, same-origin = anchored, receipt.computer = verifier), from both outside _and_ inside. The consumer-facing fix is [`docs/developer/choosing-a-verify-surface`](../../apps/docs/content/docs/developer/choosing-a-verify-surface.mdx). The anchored upgrade path is `verifier → state-export-client` (same family, no fork) — never a DIY same-origin trick (§6).

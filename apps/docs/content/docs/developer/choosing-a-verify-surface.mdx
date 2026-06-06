@@ -1,0 +1,54 @@
+---
+title: Choosing a Verify Surface
+description: Three packages verify motebit receipts — crypto, verifier, state-export-client. Which one you import depends on the deepest binding rung you need and whether you can use the network.
+---
+
+There are three motebit packages that verify receipts, and picking the wrong one is the single most common integration mistake — not because the cryptography is hard (it isn't; it's the same Ed25519-over-JCS floor in all three) but because the **composition** is easy to misread. This page is the map.
+
+The decision turns on two questions: **how deep a binding rung do you need**, and **can you make a network call?**
+
+## The three surfaces
+
+All three sit on `@motebit/crypto`, the zero-dependency floor. They differ in what they add on top.
+
+| Package                            | Adds over the floor                                                    | Reaches                                       | Network          | Use it for                                                           |
+| ---------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------- | ---------------- | -------------------------------------------------------------------- |
+| **`@motebit/crypto`**              | nothing — it _is_ the primitive (`verifyReceipt`, suite-dispatch, JCS) | integrity + the `sovereign`-binding primitive | no               | building another verifier; **never call it from a UI**               |
+| **`@motebit/verifier`**            | `result.sovereign` + `formatHuman`                                     | integrity → **sovereign**                     | **no (offline)** | in-browser proof, the CLI — anything that must verify with no server |
+| **`@motebit/state-export-client`** | the relay second channel                                               | integrity → sovereign → **pinned → anchored** | **yes (relay)**  | showing the maximal, operator-anchored binding                       |
+
+## Which do I use?
+
+- **"Verify a receipt in the browser, no server."** → **`@motebit/verifier`** (`verifyArtifact` + `formatHuman`). It reaches the `sovereign` rung offline — `motebit_id` is the commitment to its own signing key, so the strongest _offline_ binding needs no relay and no chain. This is what most integrations want.
+- **"Show the full ladder, including `anchored` against the operator's transparency log."** → **`@motebit/state-export-client`** (`verifyReceiptDocument`). `anchored` _requires_ a second channel — fetching and verifying the operator's signed transparency declaration — so this surface is online by construction.
+- **"I'm building my own verifier UI on raw crypto."** → don't. That's reimplementing one of the two wrappers above, and a sibling verifier that drifts from the spec is the worst possible artifact for a proof. Import the wrapper.
+
+```ts
+// Offline, up to sovereign — the common case
+import { verifyArtifact } from "@motebit/verifier";
+const r = await verifyArtifact(receiptJson);
+// r.valid (integrity) · r.sovereign (the binding rung)
+```
+
+```ts
+// Full ladder, including anchored — needs the relay
+import { verifyReceiptDocument } from "@motebit/state-export-client";
+const view = await verifyReceiptDocument(receiptJson /*, anchor options */);
+```
+
+## The binding ladder maps to the surface
+
+The [binding rungs](/docs/developer/verify-a-receipt#valid-is-not-the-same-as-identity-proven) — `integrity-only → pinned → anchored → sovereign` — are not all reachable from every surface:
+
+- `integrity` and `sovereign` are **offline** facts (signature valid; `motebit_id` commits to the key). `@motebit/verifier` gives you both with no network.
+- `pinned` and `anchored` are **second-channel** facts (the key was pinned against the operator's relay transparency declaration). Only `@motebit/state-export-client` reaches them, because only it makes that call.
+
+So `sovereign` is _not_ a weaker `anchored` — it's a different axis. `sovereign` proves _the `motebit_id` commits to the signing key, offline_; `anchored` proves _the operator's transparency log vouches for that key_. A proof brand that wants "verified with no server" should lead with `sovereign`; that claim is **stronger**, not weaker, for being offline.
+
+## The anchored upgrade path
+
+If you start on `@motebit/verifier` (offline, sovereign) and later want to show `anchored`, you do **not** fork anything or invent a trick (a same-origin `/.well-known/...` you serve yourself is _self-attestation_, not anchored — the trust root is the operator's relay signature, not your origin). You **graduate** to `@motebit/state-export-client` — same family, same floor, one layer up — and accept that `anchored` is online where `sovereign` was offline.
+
+## The one rule
+
+Never call `@motebit/crypto` from a UI, and never reimplement a verifier. Pick the wrapper by the deepest rung you need; the floor (`@motebit/crypto`'s JCS canonicalization + the fixed suite) is shared, so every surface agrees on the integrity core byte-for-byte. See [Verify a Receipt](/docs/developer/verify-a-receipt) for the install-and-go path, and [the receipts concept](/docs/concepts/receipts) for the artifact family.

@@ -10,6 +10,7 @@
     "multi-hop",
     "execution-ledger",
     "verify-a-receipt",
+    "choosing-a-verify-surface",
     "budget-settlement",
     "semiring-routing",
     "federation",
