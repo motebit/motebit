@@ -413,6 +413,16 @@ jobs:
         # If a spec drift breaks this, the committed fixture would silently rot.
         run: python examples/python-receipt-verifier/verify.py examples/python-receipt-verifier/fixtures/example-receipt.json
 
+      - name: Cross-implementation receipt conformance
+        # Every committed receipt vector must verify to the same INTEGRITY verdict
+        # across @motebit/verifier, @motebit/crypto, @motebit/state-export-client,
+        # and the Python reference — and every tampered byte must be rejected by
+        # all of them. The platform owns this (all impls live here); REQUIRE_PYTHON
+        # makes the Python leg mandatory in this job, where pynacl is installed.
+        run: |
+          pnpm --filter @motebit/verifier... --filter @motebit/state-export-client... build
+          REQUIRE_PYTHON=1 npx tsx scripts/check-receipt-conformance.ts
+
       - name: Capture relay log lines for the round-trip
         if: success()
         run: |

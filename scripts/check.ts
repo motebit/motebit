@@ -114,6 +114,8 @@ const EXCLUDED_CHECKS: Record<string, string> = {
   "check-sibling-boundaries": "PR-diff scoped advisory — runs as a separate CI job",
   "check-gates-effective":
     "meta-probe that runs every GATES entry under a deliberate perturbation — would invoke each gate a second time per PR. Runs as a separate CI job scoped to scripts/* changes.",
+  "check-receipt-conformance":
+    "cross-impl conformance — needs the packages built (dist) + python/pynacl, so it runs in the python-receipt-verifier-conformance CI job (with REQUIRE_PYTHON=1), not in the static `pnpm check` pass.",
 };
 
 // Order matters: run fastest first so CI fails loudly on the cheapest signal.
