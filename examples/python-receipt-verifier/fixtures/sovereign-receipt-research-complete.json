@@ -1,0 +1,17 @@
+{
+  "task_id": "019dc500-0000-7000-a000-00000000c0de",
+  "motebit_id": "65b60673-d6ed-884b-b01c-2c222d82ada0",
+  "device_id": "019dc500-0000-7000-a000-0000000000de",
+  "invocation_origin": "user-tap",
+  "submitted_at": 1777109000245,
+  "completed_at": 1777109000246,
+  "status": "completed",
+  "result": "Researched 10 vertical-SaaS billing competitors and compiled a comparison sheet (10 rows, 6 columns: pricing, tiers, gaps). Completed and saved to the workspace — read-only sources, nothing sent or changed.",
+  "tools_used": ["browser", "web.search"],
+  "memories_formed": 1,
+  "prompt_hash": "2c80d35a38975c3b7dfabdcf9fa6f26970890e65dfdbe793b9000bc3cf406bd4",
+  "result_hash": "de9d8b40bbe1043551d04a96849f41e72e9bb6e84b1ec836ec155b6a99250e99",
+  "public_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "signature": "a8ai57dK7LOrJrhQ1SQaWpWEHbtJXLyiSzbZFkGaZfRWJ9_KgyRXoGkC3Cu99kHc3Mp99xRNB77FlmbsQTakAA"
+}

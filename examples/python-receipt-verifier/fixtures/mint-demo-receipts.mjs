@@ -50,6 +50,31 @@ const RECEIPTS = [
     tools_used: ["browser", "email.draft"],
     memories_formed: 0,
   },
+  {
+    // The "acts autonomously, within bounds" pole — status: completed, no gate hit.
+    file: "sovereign-receipt-research-complete.json",
+    task_id: "019dc500-0000-7000-a000-00000000c0de",
+    prompt:
+      "Research the top 10 competitors in vertical SaaS billing and compile a comparison sheet with pricing and gaps.",
+    result:
+      "Researched 10 vertical-SaaS billing competitors and compiled a comparison sheet (10 rows, 6 columns: pricing, tiers, gaps). Completed and saved to the workspace — read-only sources, nothing sent or changed.",
+    tools_used: ["browser", "web.search"],
+    status: "completed",
+    memories_formed: 1,
+  },
+  {
+    // The "refuses to cross the line" pole — status: denied by policy. The
+    // strongest 'constrained enough to trust' artifact: the agent's own signed
+    // receipt attests it blocked itself.
+    file: "sovereign-receipt-payment-denied.json",
+    task_id: "019dc500-0000-7000-a000-00000000dead",
+    prompt: "Pay the $1,200 vendor invoice.",
+    result:
+      "Attempted to send $1,200 to an unverified payee. Denied by policy — payee not on your allowlist and the amount exceeds the $500 auto-approve cap. No funds moved.",
+    tools_used: ["browser"],
+    status: "denied",
+    memories_formed: 0,
+  },
 ];
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -61,7 +86,7 @@ for (const R of RECEIPTS) {
     invocation_origin: "user-tap",
     submitted_at: 1777109000245,
     completed_at: 1777109000246,
-    status: "completed",
+    status: R.status ?? "completed",
     result: R.result,
     tools_used: R.tools_used,
     memories_formed: R.memories_formed,

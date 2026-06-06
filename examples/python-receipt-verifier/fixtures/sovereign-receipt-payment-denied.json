@@ -1,0 +1,17 @@
+{
+  "task_id": "019dc500-0000-7000-a000-00000000dead",
+  "motebit_id": "65b60673-d6ed-884b-b01c-2c222d82ada0",
+  "device_id": "019dc500-0000-7000-a000-0000000000de",
+  "invocation_origin": "user-tap",
+  "submitted_at": 1777109000245,
+  "completed_at": 1777109000246,
+  "status": "denied",
+  "result": "Attempted to send $1,200 to an unverified payee. Denied by policy — payee not on your allowlist and the amount exceeds the $500 auto-approve cap. No funds moved.",
+  "tools_used": ["browser"],
+  "memories_formed": 0,
+  "prompt_hash": "d50176e22ad22ef074eebf273cba87b509a3d9ec94ba09c5eb35c17a3f35de64",
+  "result_hash": "31b3605ce58eb93cc5e982c5a9f18f37404246ebb6a4764148ca11879460be12",
+  "public_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "signature": "s9r9fOLEbbq1dfT6ekVxOcPjeMXneJvSLZ2ChfC1BKlGoJPWFzGmgSYxetJSjSQeTsFrQrorfY4fhblW0oraDA"
+}
