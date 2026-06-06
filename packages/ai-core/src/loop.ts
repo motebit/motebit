@@ -481,6 +481,16 @@ export interface TurnResult {
   toolCallsSucceeded: number;
   /** Number of tool calls blocked by policy or requiring approval. */
   toolCallsBlocked: number;
+  /**
+   * Number of tool calls HARD-DENIED by governance — a strict subset of
+   * `toolCallsBlocked` that excludes approval-gates, injection-quarantine, and
+   * tool-not-found. Optional + additive: absent on legacy `TurnResult` literals
+   * (read as 0), always emitted by the loop. The delegated-task handler keys an
+   * agent-signed `status:"denied"` receipt on `toolCallsSucceeded === 0 &&
+   * toolCallsDenied > 0` — a task that accomplished nothing because policy
+   * forbade every action it attempted.
+   */
+  toolCallsDenied?: number;
   /** Number of tool calls that failed during execution. */
   toolCallsFailed: number;
 }
@@ -838,6 +848,16 @@ export async function* runTurnStreaming(
   let iteration = 0;
   let toolCallsSucceeded = 0;
   let toolCallsBlocked = 0;
+  // Hard governance refusals only — a strict subset of `toolCallsBlocked`.
+  // Incremented solely at the PolicyGate `!decision.allowed` site (deny_above
+  // risk band, denylist, delegated-scope, budget ceiling, blocked caller), NOT
+  // for approval-gates (a pause, not a refusal), injection-quarantine (the tool
+  // ran; its result was withheld), or tool-not-found. The delegated-task path
+  // reads this to mint an agent-signed `status:"denied"` ExecutionReceipt when a
+  // task accomplished nothing because governance forbade every action it tried —
+  // the difference between "I refused" and "I finished." See
+  // docs/doctrine/delegation.md + agent-task-handler.ts.
+  let toolCallsDenied = 0;
   let toolCallsFailed = 0;
   // Typed-truth log for the dishonest-closing intercept. Captures
   // structured tool result data PRE-sanitization so the typed-truth
@@ -991,6 +1011,12 @@ export async function* runTurnStreaming(
 
         if (!decision.allowed) {
           toolCallsBlocked++;
+          // Hard governance refusal (deny_above / denylist / scope / budget /
+          // blocked caller) — the one block category that is a true "no," not a
+          // pause. Counted distinctly so a delegated task that does nothing but
+          // get refused mints a signed `denied` receipt rather than a misleading
+          // `completed` one.
+          toolCallsDenied++;
           yield {
             type: "tool_status",
             name: toolCall.name,
@@ -1652,6 +1678,7 @@ export async function* runTurnStreaming(
       iterations: iteration,
       toolCallsSucceeded,
       toolCallsBlocked,
+      toolCallsDenied,
       toolCallsFailed,
       ...(turnCtx && turnCtx.costAccumulated > 0 ? { totalTokens: turnCtx.costAccumulated } : {}),
     },

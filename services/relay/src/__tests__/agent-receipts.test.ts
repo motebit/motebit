@@ -27,7 +27,10 @@ interface SeededAgent {
 }
 
 /** Register an identity + device and persist one signed receipt for it. */
-async function seedAgentWithReceipt(relay: SyncRelay): Promise<SeededAgent> {
+async function seedAgentWithReceipt(
+  relay: SyncRelay,
+  status: "completed" | "denied" = "completed",
+): Promise<SeededAgent> {
   const kp = await generateKeypair();
   const pubKeyHex = bytesToHex(kp.publicKey);
   const idRes = await relay.app.request("/identity", {
@@ -50,9 +53,12 @@ async function seedAgentWithReceipt(relay: SyncRelay): Promise<SeededAgent> {
     device_id,
     submitted_at: 1000,
     completed_at: 2000,
-    status: "completed",
-    result: "audited the ledger and paused for approval",
-    tools_used: ["web_search"],
+    status,
+    result:
+      status === "denied"
+        ? "Task refused by governance: 1 action(s) exceeded this motebit's policy."
+        : "audited the ledger and paused for approval",
+    tools_used: status === "denied" ? [] : ["web_search"],
     memories_formed: 0,
     prompt_hash: "0".repeat(64),
     result_hash: "1".repeat(64),
@@ -114,6 +120,23 @@ describe("user-owned receipt retrieval", () => {
     expect(getRes.status).toBe(200);
     const one = (await getRes.json()) as Parameters<typeof verifyReceipt>[0];
     expect((await verifyReceipt(one)).valid).toBe(true);
+  });
+
+  it("a status:'denied' refusal receipt is retrievable + offline-verifiable (delegation refusal path)", async () => {
+    // The agent refuses itself (deny_above / scope / budget); the runtime signs
+    // the refusal with its OWN key. This closes the user-facing leg: the signed
+    // denial is pulled back through the same owner-scoped endpoint and re-verified
+    // offline, byte-verbatim — a refusal is as auditable as a completion.
+    const a = await seedAgentWithReceipt(relay, "denied");
+    const token = await mintToken(a.motebitId, a.deviceId, a.privateKey);
+
+    const getRes = await relay.app.request(`/api/v1/agents/${a.motebitId}/receipts/${a.taskId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(getRes.status).toBe(200);
+    const receipt = (await getRes.json()) as Parameters<typeof verifyReceipt>[0];
+    expect((receipt as { status: string }).status).toBe("denied");
+    expect((await verifyReceipt(receipt)).valid).toBe(true);
   });
 
   it("the operator master token can read any motebit's receipts", async () => {

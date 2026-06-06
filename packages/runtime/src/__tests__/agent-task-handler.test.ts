@@ -48,6 +48,35 @@ async function* mockStreamWithTools(text: string, tools: string[]): AsyncGenerat
   };
 }
 
+/**
+ * A stream that attempts work but is hard-denied by governance: the loop made
+ * `succeeded` successful tool calls and `denied` policy-refused ones. Mirrors
+ * what `runTurnStreaming` emits when PolicyGate.validate returns
+ * `allowed: false` (deny_above / denylist / scope / budget).
+ */
+async function* mockStreamGoverned(
+  text: string,
+  succeeded: number,
+  denied: number,
+): AsyncGenerator<StreamChunk> {
+  yield { type: "text", text };
+  yield {
+    type: "result",
+    result: {
+      response: text,
+      memoriesFormed: [],
+      memoriesRetrieved: [],
+      stateAfter: {} as any,
+      cues: {} as any,
+      iterations: 1,
+      toolCallsSucceeded: succeeded,
+      toolCallsBlocked: denied,
+      toolCallsDenied: denied,
+      toolCallsFailed: 0,
+    },
+  };
+}
+
 async function collectChunks(gen: AsyncGenerator<StreamChunk>): Promise<StreamChunk[]> {
   const chunks: StreamChunk[] = [];
   for await (const chunk of gen) {
@@ -238,6 +267,87 @@ describe("handleAgentTask (direct)", () => {
     expect(receipt.result_hash).toBeDefined();
     expect(receipt.prompt_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(receipt.result_hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  // === Delegation policy refusal path ===
+
+  it("mints an agent-signed status:'denied' receipt when governance refused every action", async () => {
+    const deps = createMockDeps({
+      sendMessageStreaming: vi
+        .fn()
+        .mockReturnValue(mockStreamGoverned("I'm not permitted to do that.", 0, 1)),
+    });
+    const task = createMockTask();
+
+    const result = await getTaskResult(
+      handleAgentTask(deps, task, keypair.privateKey, "device-001", keypair.publicKey),
+    );
+
+    // The agent refuses itself — signed by its OWN key, verifiable offline.
+    expect(result.receipt.status).toBe("denied");
+    expect(result.receipt.result).toContain("refused by governance");
+    expect(await verifyExecutionReceipt(result.receipt, keypair.publicKey)).toBe(true);
+  });
+
+  it("logs the denial as AgentTaskDenied", async () => {
+    const deps = createMockDeps({
+      sendMessageStreaming: vi.fn().mockReturnValue(mockStreamGoverned("nope", 0, 2)),
+    });
+    const task = createMockTask();
+
+    await collectChunks(
+      handleAgentTask(deps, task, keypair.privateKey, "device-001", keypair.publicKey),
+    );
+
+    const calls = (deps.events.appendWithClock as any).mock.calls as Array<
+      [{ event_type: string }]
+    >;
+    expect(calls.some(([e]) => e.event_type === "agent_task_denied")).toBe(true);
+  });
+
+  it("does NOT deny when at least one action succeeded (partial work is completion, not refusal)", async () => {
+    const deps = createMockDeps({
+      sendMessageStreaming: vi.fn().mockReturnValue(mockStreamGoverned("Did part of it.", 1, 1)),
+    });
+    const task = createMockTask();
+
+    const result = await getTaskResult(
+      handleAgentTask(deps, task, keypair.privateKey, "device-001", keypair.publicKey),
+    );
+
+    expect(result.receipt.status).toBe("completed");
+  });
+
+  it("does NOT deny a zero-action task (nothing was refused)", async () => {
+    const deps = createMockDeps({
+      sendMessageStreaming: vi.fn().mockReturnValue(mockStreamGoverned("Here's the answer.", 0, 0)),
+    });
+    const task = createMockTask();
+
+    const result = await getTaskResult(
+      handleAgentTask(deps, task, keypair.privateKey, "device-001", keypair.publicKey),
+    );
+
+    expect(result.receipt.status).toBe("completed");
+  });
+
+  it("a thrown provider error stays 'failed', never reclassified as 'denied'", async () => {
+    // A crash is a failure; a policy block is a denial. The two must not be
+    // confused on the signed record — the downgrade only fires from 'completed'.
+    const deps = createMockDeps({
+      sendMessageStreaming: vi.fn().mockImplementation(function () {
+        return (async function* (): AsyncGenerator<StreamChunk> {
+          throw new Error("Provider unavailable");
+        })();
+      }),
+    });
+    const task = createMockTask();
+
+    const result = await getTaskResult(
+      handleAgentTask(deps, task, keypair.privateKey, "device-001", keypair.publicKey),
+    );
+
+    expect(result.receipt.status).toBe("failed");
   });
 
   it("restores conversation context even when streaming fails", async () => {
