@@ -1295,19 +1295,26 @@ async function verifyReceiptSignature(
 ): Promise<{ valid: boolean; error?: string }> {
   const { signature, ...body } = receipt;
 
+  // Failure messages cite spec/execution-ledger-v1.md §11.2 (the signature
+  // section), phrased to match the Python reference verifier byte-for-byte —
+  // the cross-language conformance story depends on both verifiers reporting
+  // the same spec violation for the same artifact.
   if (!signature || signature.trim() === "") {
-    return { valid: false, error: "Receipt signature is empty" };
+    return { valid: false, error: "§11.2 violation: receipt signature is empty" };
   }
 
   let sig: Uint8Array;
   try {
     sig = fromBase64Url(signature);
   } catch {
-    return { valid: false, error: "Receipt signature is not valid base64url" };
+    return { valid: false, error: "§11.2 violation: receipt signature is not valid base64url" };
   }
 
   if (sig.length !== 64) {
-    return { valid: false, error: `Receipt signature must be 64 bytes, got ${sig.length}` };
+    return {
+      valid: false,
+      error: `§11.2 violation: receipt signature must be 64 bytes, got ${sig.length}`,
+    };
   }
 
   const canonical = canonicalJson(body);
@@ -1373,7 +1380,11 @@ export async function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptV
       type: "receipt",
       valid: false,
       receipt,
-      errors: [{ message: "No embedded public_key — cannot verify without known keys" }],
+      errors: [
+        {
+          message: "§11.3 violation: No embedded public_key — cannot verify without known keys",
+        },
+      ],
       ...(delegations.length > 0 ? { delegations } : {}),
     };
   }
@@ -1382,7 +1393,9 @@ export async function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptV
   const errors: VerificationError[] = [];
 
   if (!sigResult.valid) {
-    errors.push({ message: sigResult.error ?? "Receipt signature verification failed" });
+    errors.push({
+      message: sigResult.error ?? "§11.2 violation: Ed25519 signature did not verify",
+    });
   }
 
   // Recursively verify delegation receipts
@@ -1390,7 +1403,7 @@ export async function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptV
   const delegationErrors = delegations.filter((d) => !d.valid);
   for (const d of delegationErrors) {
     errors.push({
-      message: `Delegation ${d.receipt?.task_id ?? "unknown"}: verification failed`,
+      message: `§11.5 violation: delegation ${d.receipt?.task_id ?? "unknown"} verification failed`,
       path: `delegation_receipts`,
     });
   }

@@ -116,7 +116,9 @@ describe("verify — execution receipts", () => {
     expect(result.type).toBe("receipt");
     expect(result.valid).toBe(false);
     expect(result.errors).toBeDefined();
-    expect(result.errors![0]!.message).toContain("signature verification failed");
+    // Citation-grade failure: cites the spec section (§11.2 = signature),
+    // matching the Python reference verifier's string byte-for-byte.
+    expect(result.errors![0]!.message).toBe("§11.2 violation: Ed25519 signature did not verify");
   });
 
   it("fails on receipt signed with wrong key", async () => {
