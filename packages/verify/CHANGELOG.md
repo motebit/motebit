@@ -1,5 +1,12 @@
 # @motebit/verify
 
+## 1.4.3
+
+### Patch Changes
+
+- Updated dependencies [0c097f2]
+  - @motebit/verifier@1.2.3
+
 ## 1.4.2
 
 ### Patch Changes
