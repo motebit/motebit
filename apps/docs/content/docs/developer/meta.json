@@ -9,6 +9,7 @@
     "delegation",
     "multi-hop",
     "execution-ledger",
+    "verify-a-receipt",
     "budget-settlement",
     "semiring-routing",
     "federation",

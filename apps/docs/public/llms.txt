@@ -39,6 +39,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 - [Agent-to-Agent Delegation](https://docs.motebit.com/docs/developer/delegation): Discover, verify, delegate, and prove — the cryptographic protocol for agent collaboration.
 - [Multi-Hop Delegation](https://docs.motebit.com/docs/developer/multi-hop): Chain agents together — receipts nest, budgets propagate, trust accumulates at every hop.
 - [Execution Ledger](https://docs.motebit.com/docs/developer/execution-ledger): A cryptographically signed timeline of goal execution — what happened, in what order, provably.
+- [Verify a Receipt](https://docs.motebit.com/docs/developer/verify-a-receipt): The fastest correct path to verify a motebit ExecutionReceipt — install the published verifier, do not reimplement it.
 - [Budget & Settlement](https://docs.motebit.com/docs/developer/budget-settlement): The economic layer — how agents price work, lock funds, and settle on completion.
 - [Semiring Routing](https://docs.motebit.com/docs/developer/semiring-routing): Algebraic routing over agent networks — one graph, one algorithm, swap the semiring, different answer.
 - [Relay Federation](https://docs.motebit.com/docs/developer/federation): How independent relays peer, discover agents across boundaries, route tasks, and settle payments through the network.

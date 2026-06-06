@@ -1,0 +1,82 @@
+---
+title: Verify a Receipt
+description: The fastest correct path to verify a motebit ExecutionReceipt — install the published verifier, do not reimplement it.
+---
+
+You have an `ExecutionReceipt` and you want to prove it's real. The whole point of the protocol is that you can do this yourself, offline, with no relay and no account. This page is the shortest correct path — for JavaScript/TypeScript, for the command line, and for any other language.
+
+The one thing to internalize first: **the verifier is already published. Do not write your own.** Canonicalization (JCS / RFC 8785) and cryptosuite dispatch are exactly where hand-rolled verifiers silently pass on one receipt and fail on the next. The permissive-floor library handles both, is Apache-2.0 with a patent grant, has zero monorepo dependencies, and runs in the browser.
+
+## JavaScript / TypeScript
+
+```bash
+npm install @motebit/verifier
+```
+
+```ts
+import { verifyArtifact } from "@motebit/verifier";
+
+const receipt = await fetch("/receipt_9f4c.json").then((r) => r.json());
+const result = await verifyArtifact(receipt);
+
+if (result.type === "receipt" && result.valid) {
+  // Integrity holds: the bytes are intact and the embedded key signed them.
+  console.log("signer:", result.signer);
+
+  // Identity binding — how much you can trust *who* signed it.
+  if (result.sovereign) {
+    // Strongest rung, checkable offline: the motebit_id is itself the
+    // commitment to the signing key. No relay, no chain lookup required.
+    console.log("sovereign — author proven from the receipt alone");
+  }
+}
+```
+
+`verifyArtifact` accepts the already-loaded artifact (object or JSON string); `verifyFile(path)` reads it off disk. Both return the same typed result, and `formatHuman(result)` renders the multi-line summary the CLI prints. That's the entire integration — three calls, no crypto code of your own.
+
+### `valid` is not the same as "identity proven"
+
+A receipt answers two different questions, and conflating them is the most common integration bug:
+
+- **Integrity** — `result.valid`. The signature checks out over the canonical bytes; nothing was tampered with. This is verified against the key *embedded in the receipt*, so by itself it proves authorship-by-some-key, **not** that the key belongs to anyone in particular.
+- **Identity binding** — the ladder `integrity-only → pinned → anchored → sovereign`. This answers *whose* key it is. `result.sovereign === true` is the strongest rung and is checkable offline, because a sovereign `motebit_id` is the commitment to its own signing key. `anchored` means the key was pinned against an operator's [transparency declaration](/docs/concepts/federation) at `/.well-known/motebit-transparency.json`. An on-chain anchor (Solana) is a second channel that hardens trust-on-first-use — it is **not** what makes a receipt sovereign, and you do not need a chain lookup to reach the top rung.
+
+Never present `valid: true` as proof of identity on the strength of the embedded key alone. Render the rung you actually verified. If you want the highest assurance without any network call, check `result.sovereign`.
+
+### Suites: never hardcode one
+
+Every signed artifact carries an explicit `suite` field on the wire — for example `motebit-jcs-ed25519-b64-v1` (base64url signature) or `motebit-jcs-ed25519-hex-v1` (hex signature). Motebit is cryptosuite-agile by design; post-quantum suites are a registry addition, not a wire break. `verifyArtifact` dispatches on the `suite` field for you. A verifier that hardcodes one suite's signature encoding will pass the suite it was written against and silently fail every other — which is precisely why you let the library dispatch instead of decoding the signature yourself.
+
+### Delegation chains
+
+If the receipt delegated sub-tasks, each nested receipt is independently signed and verified. Walk `result.delegations` to inspect every hop; the library recurses for you (the spec caps nesting depth at 10).
+
+## Command line
+
+```bash
+npx @motebit/verify ./receipt_9f4c.json
+```
+
+The binary is `motebit-verify`. It prints the same binding-ladder rung the library reports and additionally wires the canonical hardware-attestation leaves (App Attest, TPM, Android Keystore, WebAuthn) for credentials that carry them. Use it in CI, shell scripts, or to sanity-check a receipt by hand.
+
+## No web page, no install — see it work
+
+Paste any receipt into [receipt.computer](https://receipt.computer): a public, login-free verifier that runs the *same* verification client-side and reports the same rung. Because it uses `@motebit/verifier`, a receipt you verify in your own code and a receipt you verify there produce the byte-identical verdict — that agreement is the proof, not a claim about it.
+
+## Any other language
+
+The verification recipe is fully specified, and a working non-TypeScript reference exists:
+
+- **Spec** — [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11 fixes the wire format and the verification steps: strip `signature`, JCS-canonicalize the remaining body, decode the signature per the `suite`, Ed25519-verify against the embedded `public_key`.
+- **Python reference verifier** — [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier): a single file, two PyPI dependencies, no motebit code consumed. It exists as a concrete proof that the spec alone is sufficient to verify receipts third-party-implementably, and it ships a committed fixture you can verify offline.
+
+## Building your own verifier (last resort)
+
+Only if you cannot use the published library in your environment. If you do, you inherit two correctness burdens the floor otherwise carries for you: byte-exact JCS / RFC 8785 canonicalization (signer and verifier must produce identical bytes or signatures fail mysteriously), and `suite`-field dispatch across every encoding the network emits. Treat the Python reference verifier and the spec's §11 steps as conformance targets, and test against the committed fixtures. When you can, prefer `@motebit/crypto` (the primitive `@motebit/verifier` wraps) over raw Ed25519.
+
+## See also
+
+- [Receipts](/docs/concepts/receipts) — what a receipt is and why it's the unit of trust
+- [Execution ledger](/docs/developer/execution-ledger) — the full wire format
+- [Delegation](/docs/developer/delegation) — discover → verify → delegate → receipt
+- [API reference](/docs/developer/api-reference) — the published package surface
