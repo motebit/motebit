@@ -12,21 +12,39 @@ const fresh = (): UsageAccumulator => ({ input: 0, output: 0, cacheRead: 0, cach
 const sse = (obj: unknown) => `data: ${JSON.stringify(obj)}`;
 
 describe("extractUsage — anthropic", () => {
-  it("passes input/output/cache fields through (input already excludes cached)", () => {
+  it("reads input/cache from message_start.message.usage and output from message_delta.usage", () => {
     const u = fresh();
+    // Real Anthropic wire: input + cache fields are NESTED under message.usage on
+    // message_start; the final output_tokens arrives top-level on message_delta.
     extractUsage(
       "anthropic",
       sse({
-        usage: {
-          input_tokens: 100,
-          output_tokens: 40,
-          cache_read_input_tokens: 3000,
-          cache_creation_input_tokens: 50,
+        type: "message_start",
+        message: {
+          usage: {
+            input_tokens: 100,
+            cache_read_input_tokens: 3000,
+            cache_creation_input_tokens: 50,
+          },
         },
       }),
       u,
     );
+    extractUsage("anthropic", sse({ type: "message_delta", usage: { output_tokens: 40 } }), u);
+    // input EXCLUDES cached → additive with the cache fields.
     expect(u).toEqual({ input: 100, output: 40, cacheRead: 3000, cacheCreation: 50 });
+  });
+
+  it("does NOT read top-level usage on message_start (the wrong shape captures nothing)", () => {
+    const u = fresh();
+    // A flat top-level usage on a message_start-like event is a shape Anthropic
+    // never emits — it must NOT populate input/cache (this guards the prior bug).
+    extractUsage(
+      "anthropic",
+      sse({ usage: { input_tokens: 100, cache_read_input_tokens: 3000 } }),
+      u,
+    );
+    expect(u).toEqual({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
   });
 });
 

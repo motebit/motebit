@@ -34,22 +34,28 @@ export function extractUsage(provider: InferenceHost, line: string, usage: Usage
     const evt = JSON.parse(json) as Record<string, unknown>;
 
     if (provider === "anthropic") {
-      // Anthropic: initial message has usage.input_tokens, message_delta has
-      // usage.output_tokens. input_tokens EXCLUDES cached — additive with the
-      // cache fields, so pass through unchanged.
-      const u = evt.usage as
-        | {
-            input_tokens?: number;
-            output_tokens?: number;
-            cache_read_input_tokens?: number;
-            cache_creation_input_tokens?: number;
-          }
-        | undefined;
-      if (u?.input_tokens != null) usage.input = u.input_tokens;
-      if (u?.output_tokens != null) usage.output = u.output_tokens;
-      if (u?.cache_read_input_tokens != null) usage.cacheRead = u.cache_read_input_tokens;
-      if (u?.cache_creation_input_tokens != null)
-        usage.cacheCreation = u.cache_creation_input_tokens;
+      // Anthropic nests input + cache usage on `message_start` under
+      // `message.usage` (NOT top-level), and reports the final output_tokens on
+      // `message_delta` under top-level `usage`. Reading top-level `usage` for
+      // everything silently drops input + cache (billing the bulk of the request
+      // at 0 and making cacheRead unobservable). Mirror the wire shape — and the
+      // BYOK parser in @motebit/ai-core (core.ts) — exactly.
+      // input_tokens EXCLUDES cached, so the cache fields stay additive.
+      type AnthropicUsage = {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+      };
+      const start = (evt.message as { usage?: AnthropicUsage } | undefined)?.usage;
+      if (start) {
+        if (start.input_tokens != null) usage.input = start.input_tokens;
+        if (start.cache_read_input_tokens != null) usage.cacheRead = start.cache_read_input_tokens;
+        if (start.cache_creation_input_tokens != null)
+          usage.cacheCreation = start.cache_creation_input_tokens;
+      }
+      const delta = evt.usage as AnthropicUsage | undefined;
+      if (delta?.output_tokens != null) usage.output = delta.output_tokens;
       return;
     }
 
