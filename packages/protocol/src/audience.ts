@@ -41,6 +41,7 @@
  *     - `task:submit` — submitting a task to a peer via the relay
  *     - `admin:query` — admin-bound read paths (transparency, etc.)
  *     - `proposal` — collaborative proposal lifecycle
+ *     - `receipts:read` — a motebit reading its OWN signed execution receipts
  *
  *   **Virtual accounts (the relay-mediated economic loop)**
  *     - `account:balance` — read balance
@@ -62,6 +63,7 @@ export type TokenAudience =
   | "task:submit"
   | "admin:query"
   | "proposal"
+  | "receipts:read"
   | "account:balance"
   | "account:deposit"
   | "account:withdraw"
@@ -100,6 +102,9 @@ export const ADMIN_QUERY_AUDIENCE: TokenAudience = "admin:query";
 
 /** Collaborative proposal lifecycle. */
 export const PROPOSAL_AUDIENCE: TokenAudience = "proposal";
+
+/** A motebit reading its OWN signed execution receipts from the relay archive. */
+export const RECEIPTS_READ_AUDIENCE: TokenAudience = "receipts:read";
 
 /** Read virtual-account balance. */
 export const ACCOUNT_BALANCE_AUDIENCE: TokenAudience = "account:balance";
@@ -147,6 +152,7 @@ export const ALL_TOKEN_AUDIENCES: readonly TokenAudience[] = Object.freeze([
   "task:submit",
   "admin:query",
   "proposal",
+  "receipts:read",
   "account:balance",
   "account:deposit",
   "account:withdraw",

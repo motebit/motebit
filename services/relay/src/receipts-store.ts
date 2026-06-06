@@ -121,3 +121,38 @@ export function getStoredReceiptJson(
     .get(motebitId, taskId) as { receipt_json: string } | undefined;
   return row?.receipt_json ?? null;
 }
+
+/** A row in a motebit's own receipt history. `receipt_json` is the
+ *  byte-identical canonical JSON (rule 11) — return it verbatim so the
+ *  caller can re-verify the signature offline. */
+export interface StoredReceiptSummary {
+  readonly task_id: string;
+  readonly status: string;
+  readonly invocation_origin: string | null;
+  readonly received_at: number;
+  readonly receipt_json: string;
+}
+
+/**
+ * List a motebit's OWN top-level execution receipts (depth 0 — each is
+ * a task; nested delegations are reachable inside each receipt's own
+ * `delegation_receipts`). Newest first, hard-capped. Caller enforces
+ * auth (the route gates on a `receipts:read` device token for this
+ * `motebitId`); this module only reads rows.
+ */
+export function listStoredReceipts(
+  db: DatabaseDriver,
+  motebitId: string,
+  limit = 50,
+): StoredReceiptSummary[] {
+  const capped = Math.max(1, Math.min(limit, 200));
+  return db
+    .prepare(
+      `SELECT task_id, status, invocation_origin, received_at, receipt_json
+         FROM relay_receipts
+        WHERE motebit_id = ? AND depth = 0
+        ORDER BY received_at DESC
+        LIMIT ?`,
+    )
+    .all(motebitId, capped) as StoredReceiptSummary[];
+}

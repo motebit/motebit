@@ -29,6 +29,7 @@ import type { KeySuccessionRecord } from "@motebit/encryption";
 import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { getAccountBalanceDetailed } from "./accounts.js";
+import { listStoredReceipts, getStoredReceiptJson } from "./receipts-store.js";
 import { isAgentRevocationReason, type AgentRevocationReason } from "@motebit/protocol";
 import {
   buildSignedRevocationRecord,
@@ -596,6 +597,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       agentAudience = "credentials";
     } else if (path.includes("/presentation")) {
       agentAudience = "credentials:present";
+    } else if (path.includes("/receipts")) {
+      // A motebit reading its OWN archived execution receipts. The handler
+      // additionally enforces callerMotebitId === :motebitId so a valid token
+      // for one motebit cannot enumerate another's history.
+      agentAudience = "receipts:read";
     } else {
       // register, heartbeat, deregister, discover, agent info
       agentAudience = "admin:query";
@@ -616,6 +622,41 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // Store caller identity for route handlers
     c.set("callerMotebitId" as never, claims.mid as never);
     await next();
+  });
+
+  // GET /api/v1/agents/:motebitId/receipts — a motebit's OWN execution-receipt
+  // history (top-level tasks, newest first). Gated by the /api/v1/agents/* auth
+  // middleware on the `receipts:read` audience; the handler additionally enforces
+  // that the caller controls THIS motebit (a device token for another motebit, or
+  // none, cannot enumerate this history). The operator master token bypasses
+  // (callerMotebitId unset). Each row carries the byte-verbatim canonical
+  // `receipt_json` (rule 11) so the caller re-verifies every signature offline.
+  /** @internal */
+  app.get("/api/v1/agents/:motebitId/receipts", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const caller = c.get("callerMotebitId" as never) as string | undefined;
+    if (caller !== undefined && caller !== motebitId) {
+      throw new HTTPException(403, { message: "Cannot read another motebit's receipts" });
+    }
+    const limit = parseInt(c.req.query("limit") ?? "50", 10) || 50;
+    return c.json({ receipts: listStoredReceipts(moteDb.db, motebitId, limit) });
+  });
+
+  // GET /api/v1/agents/:motebitId/receipts/:taskId — one receipt, returned as the
+  // byte-verbatim canonical JSON (rule 11) so the caller verifies the signature
+  // offline. Same owner-scoped auth as the list.
+  /** @internal */
+  app.get("/api/v1/agents/:motebitId/receipts/:taskId", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const caller = c.get("callerMotebitId" as never) as string | undefined;
+    if (caller !== undefined && caller !== motebitId) {
+      throw new HTTPException(403, { message: "Cannot read another motebit's receipts" });
+    }
+    const json = getStoredReceiptJson(moteDb.db, motebitId, c.req.param("taskId"));
+    if (json === null) {
+      throw new HTTPException(404, { message: "No such receipt" });
+    }
+    return c.body(json, 200, { "content-type": "application/json" });
   });
 
   // POST /api/v1/agents/bootstrap — unauthenticated (rate-limited) one-call identity + device registration

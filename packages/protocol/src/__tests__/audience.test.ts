@@ -17,6 +17,7 @@ import {
   TASK_SUBMIT_AUDIENCE,
   ADMIN_QUERY_AUDIENCE,
   PROPOSAL_AUDIENCE,
+  RECEIPTS_READ_AUDIENCE,
   ACCOUNT_BALANCE_AUDIENCE,
   ACCOUNT_DEPOSIT_AUDIENCE,
   ACCOUNT_WITHDRAW_AUDIENCE,
@@ -28,8 +29,8 @@ import {
 } from "../audience.js";
 
 describe("ALL_TOKEN_AUDIENCES", () => {
-  it("has exactly the fifteen registered entries", () => {
-    expect(ALL_TOKEN_AUDIENCES.length).toBe(15);
+  it("has exactly the sixteen registered entries", () => {
+    expect(ALL_TOKEN_AUDIENCES.length).toBe(16);
   });
 
   it("enumerates every named constant exactly once", () => {
@@ -42,6 +43,7 @@ describe("ALL_TOKEN_AUDIENCES", () => {
       TASK_SUBMIT_AUDIENCE,
       ADMIN_QUERY_AUDIENCE,
       PROPOSAL_AUDIENCE,
+      RECEIPTS_READ_AUDIENCE,
       ACCOUNT_BALANCE_AUDIENCE,
       ACCOUNT_DEPOSIT_AUDIENCE,
       ACCOUNT_WITHDRAW_AUDIENCE,

@@ -3706,7 +3706,7 @@ export type TaskShape = "quick" | "chat" | "reasoning" | "code" | "research" | "
 export function toCents(dollars: number): number;
 
 // @public
-export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "admin:query" | "proposal" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "browser-sandbox-grant" | "browser-sandbox";
+export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "admin:query" | "proposal" | "receipts:read" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "browser-sandbox-grant" | "browser-sandbox";
 
 // @public
 export function toMicro(dollars: number): number;

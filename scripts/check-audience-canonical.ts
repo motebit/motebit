@@ -67,6 +67,7 @@ const CANONICAL_AUDIENCES = new Set<string>([
   "task:submit",
   "admin:query",
   "proposal",
+  "receipts:read",
   "account:balance",
   "account:deposit",
   "account:withdraw",
