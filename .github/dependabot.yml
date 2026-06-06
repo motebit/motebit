@@ -70,6 +70,21 @@ updates:
           - "hono"
           - "@hono/*"
 
+      # SDKs / 0.x libraries that ship breaking changes inside minor/patch
+      # bumps — isolated so a large jump never wedges the routine batch. Two
+      # offenders proven (2026-06-06): @anthropic-ai/sdk 0.52→0.101 rode the
+      # production-minor-patch group straight onto the proxy/ai-core caching
+      # path, and @ricky0123/vad-web dropped RealTimeVADOptions.stream in a
+      # 0.0.x bump and red-wedged the whole group via apps/spatial's build.
+      # Each now lands as its own reviewable PR.
+      anthropic-sdk:
+        patterns:
+          - "@anthropic-ai/*"
+
+      vad:
+        patterns:
+          - "@ricky0123/vad-web"
+
       # === Residual groups (long tail) ===
 
       dev-minor-patch:
@@ -92,6 +107,8 @@ updates:
           - "jsdom"
           - "hono"
           - "@hono/*"
+          - "@anthropic-ai/*"
+          - "@ricky0123/vad-web"
 
       dev-major:
         dependency-type: "development"
@@ -112,6 +129,8 @@ updates:
           - "jsdom"
           - "hono"
           - "@hono/*"
+          - "@anthropic-ai/*"
+          - "@ricky0123/vad-web"
 
       production-minor-patch:
         dependency-type: "production"
@@ -133,6 +152,8 @@ updates:
           - "jsdom"
           - "hono"
           - "@hono/*"
+          - "@anthropic-ai/*"
+          - "@ricky0123/vad-web"
 
       production-major:
         dependency-type: "production"
@@ -153,6 +174,8 @@ updates:
           - "jsdom"
           - "hono"
           - "@hono/*"
+          - "@anthropic-ai/*"
+          - "@ricky0123/vad-web"
 
     open-pull-requests-limit: 10
 
