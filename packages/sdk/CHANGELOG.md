@@ -1,5 +1,50 @@
 # @motebit/sdk Changelog
 
+## 2.2.0
+
+### Minor Changes
+
+- 75babcf: Add the identity-sigil primitive — `deriveAgentSigil`, `oklchToRgb`, `shortFingerprint`, and `wordFingerprint` (with `AgentSigil`, `OklchColor`, `SigilSymmetry` types). Doctrine: `docs/doctrine/agents-as-first-person-trust-graph.md` §4.
+
+  A pure, synchronous, deterministic function from an agent's stable identity string (its `motebit_id` — itself `SHA-256(pubkey)`-derived — or a public key) to perceptually-spread visual parameters (OKLCH primary + harmonic accent, symmetry, element count, density, rotation, stroke, and a 32-bit `geometrySeed`). This is the Ring-1 _param_ half of "the face is the identity"; each surface renders the params natively (Ring 3) — web/SVG, mobile/`StyleSheet`, CLI glyph, and the spatial droplet from the same `geometrySeed`. The module never emits pixels. (Callers should pass the `motebit_id`: it is present at every display site, so the same agent shows the same face everywhere, where a raw pubkey isn't reliably client-side.)
+
+  Deliberately non-cryptographic: the sigil is a glance-level recognition aid, never identity proof — `shortFingerprint` (or the full key / signed receipts) stays the authority for any trust-bearing decision. Distinctness is spread across many orthogonal axes (not hue alone — lightness and the geometric axes stay discriminable under color-vision deficiency), per the doctrine's distinctness-budget bound. Distinct from the _chosen_ creature aesthetic in `color-presets.ts`: a peer's sigil is _derived_ and cannot be chosen.
+
+  `wordFingerprint` is the human-comparable recognition aid (the doctrine's "word-pair"), rendering the key as BIP-39 words via the canonical, SHA-256-verified English wordlist (adopted, not minted — the metabolic principle) so the mapping never drifts. Like `shortFingerprint` it is a recognition aid, never identity proof.
+
+  Additive (new exports only); no behavior change to existing surface. Cross-surface renderers and panel wiring are intentionally not included — they ship when a consumer (the live demo or a builder) needs them (a single unwired reference SVG renderer lives in `apps/web`, not the SDK).
+
+- 82f5283: Add `MemorySelfState` and an optional `SessionStateSnapshot.memory` field — the typed memory self-state the runtime surfaces in the AI's `[Now]` block.
+
+  This extends the existing `[Now]`-block grounding (which already prevents browser-state confabulation) to the motebit's own memory. `MemorySelfState` carries `total` (non-tombstoned nodes held), `newestAgeMs` (age of the most recent memory, or `null` when empty), and `formedThisSession` (count since the runtime woke up). The runtime composes it in `getSessionStateSnapshot()`; `@motebit/ai-core` renders it as a `Memory:` line.
+
+  It closes the self-state sibling of the browser-state hallucination: asked "are you forming memories?", the AI would read its architecture description and answer "yes" even with zero formed this session. The typed count — `0 formed this session` — is the grounded truth it now reads instead of inferring. Additive and backward-compatible; the field is optional and the `[Now]` block omits the line when absent.
+
+### Patch Changes
+
+- 882b392: Upgrade the test runner from vitest 2.1.9 to 4.1.8 (with @vitest/coverage-v8), closing critical advisory GHSA-5xrq-8626-4rwp (Vitest UI server arbitrary file read/execute, fixed in 4.1.0). This is a dev-dependency change only — no runtime, API, or wire-format change to any published package; the bump is recorded as a patch because each package's published `package.json` devDependencies move to vitest ^4.1.8.
+
+  vitest 4 bundles vite (^6 || ^7 || ^8), so the existing vite-^6 surfaces, jsdom 25, and @types/node ^22 are unchanged. Test-only migration fallout was handled in the same change: `ViteUserConfig` rename in the shared config, typed-mock assignability under v4 (`vi.fn()` now `Mock<Procedure|Constructable>`), constructor mocks converted from arrows to `function` (v4 disallows `new` on arrow mock implementations), the removed `environmentMatchGlobs` replaced by the per-file `@vitest-environment` directive, and an explicit `dist/` test-exclude restored for the one config-less package (vitest 4's default `exclude` no longer covers `dist/`).
+
+- Updated dependencies [aefe5f6]
+- Updated dependencies [781dbc0]
+- Updated dependencies [c0faba1]
+- Updated dependencies [cf26f38]
+- Updated dependencies [85f7e10]
+- Updated dependencies [403a725]
+- Updated dependencies [19d1584]
+- Updated dependencies [9cf876a]
+- Updated dependencies [e3fb1f7]
+- Updated dependencies [9ca54fd]
+- Updated dependencies [271bb5c]
+- Updated dependencies [7a2797f]
+- Updated dependencies [810175b]
+- Updated dependencies [8195e65]
+- Updated dependencies [0f47485]
+- Updated dependencies [49338ad]
+- Updated dependencies [882b392]
+  - @motebit/protocol@3.0.0
+
 ## 2.1.0
 
 ### Minor Changes

@@ -1,5 +1,0 @@
----
-"@motebit/crypto": minor
----
-
-Add `treeHashVersion` support to the Merkle primitive `verifyMerkleInclusion` (PR1 part 2a of the RFC 6962 domain-separation migration — doctrine: `docs/doctrine/merkle-tree-hash-versioning.md`). Additive and dormant: the new 6th parameter is optional and defaults to `merkle-sha256-plain-v1`, so all existing 5-arg callers are byte-identical to today. Under `merkle-sha256-rfc6962-v2` the interior-node hash gains the RFC 6962 §2.1 `0x01` domain-separation tag (`node = SHA-256(0x01 ‖ left ‖ right)`), closing the leaf-vs-node second-preimage gap the anchor specs' RFC 6962 citation promises. Unknown/unsupported versions fail closed (return false, never silently downgrade). The node-tag byte layout is pinned by known-answer vectors from `transparency-dev/merkle` `rfc6962/rfc6962_test.go` (commit `78493b07`), including a 3-leaf asymmetric tree cross-verified against the producer primitive in `@motebit/encryption`. No producer emits v2 yet (that lands with the wire field in part 2b → PR2).

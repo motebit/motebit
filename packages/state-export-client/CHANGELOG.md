@@ -1,5 +1,52 @@
 # @motebit/state-export-client
 
+## 0.4.0
+
+### Minor Changes
+
+- aefe5f6: Add `motebit/agent-revocation@1.0` — operator de-listing of agents from the relay's discovery registry, made sovereign-verifiable. A permissionless registry accumulates junk (spam, abandoned test agents, abusive capabilities) and the only automatic remedy is the 90-day no-heartbeat TTL — too slow for live abuse. The operator needs a de-list tool, but a silent de-list is exactly the trust root the relay is forbidden from being (`services/relay/CLAUDE.md` rule 6). So the power is made accountable, not refused: every revoke/reinstate is a signed, reasoned, publicly-fetchable record against the relay's pinned key — declared posture → proven posture.
+
+  Invariants: **de-list, not de-identify** (sets `agent_registry.revoked`, which Discover filters; identity/key/succession/receipts stay served — distinct from identity revocation, which anchors an on-chain memo); **hygiene, not curation** (discovery stays permissionless); **operator-only** (master token; agents self-deregister, never de-list a peer); reversible + append-only.
+  - `@motebit/protocol`: `AgentRevocationReason` (ninth registered registry, full eight-artifact set + gate `check-agent-revocation-reason-canonical`), `AgentRevocationRecord` / `AgentRevocationFeed` / `AgentRevocationActor` signed wire types, `AGENT_REVOCATION_SUITE` / `AGENT_REVOCATION_SPEC_ID`. Additive — no existing export changes.
+  - `@motebit/state-export-client`: portable `verifyAgentRevocationRecord` / `verifyAgentRevocationFeed` against the relay's pinned key (same key as `verifyTransparencyDeclaration`). Additive.
+
+  Spec: `spec/agent-revocation-v1.md` (25th spec). Doctrine: `docs/doctrine/agents-as-first-person-trust-graph.md` §8. The relay producer + wire-schemas (both ignored packages) ride the sibling `-ignored` changeset.
+
+- 810175b: Settlement-summary export — the money side of the first-person trust graph (published half; the `@motebit/relay` + `@motebit/panels` half is in the sibling changeset). Doctrine: `docs/doctrine/agents-as-first-person-trust-graph.md` §6.
+  - `@motebit/protocol`: `settlement-summary` added to the `ContentArtifactType` registry (14th type) + the `SettlementSummaryExport` / `SettlementSummaryPeer` / `SettlementSummaryUnattributed` wire-body types. A per-peer economic projection over the relay's signed settlement ledger — a materialized projection in micro-units, never a denormalized balance.
+  - `@motebit/state-export-client`: `verifiedSettlementSummaryFetch` + `settlementSummaryUrl` — typed, fail-closed verified fetch for `/api/v1/agents/:motebitId/settlements`. Centralizes the URL (so surfaces can't fetch the money history without verifying it) and rejects a manifest signed for a different export (`unexpected_artifact_type`, the new fail-closed reason on `StateExportVerificationFailureReason`).
+
+### Patch Changes
+
+- c0faba1: Recalibrate coverage thresholds for the vitest-4 `coverage-v8` measurement change. vitest 4's coverage-v8 counts branches/statements more granularly than v2 (notably JSX/conditional branches in render-heavy code), so measured coverage dropped across the workspace even though the actual tests and source are unchanged — the ruler changed, not the code. This is a forced consequence of the vitest-4 security upgrade (closed critical GHSA-5xrq-8626-4rwp; cannot be reverted without re-opening the CVE, and coverage-v8 must match the vitest major). Each failing threshold is set to its new v4-measured floor; passing thresholds are untouched.
+
+  This is a one-time recalibration to a new measurement tool, not a relaxation of the testing bar — the same tests cover the same code. The recalibrated thresholds are a temporary floor: they should be raised back toward the prior targets as coverage improves under the new tool. Money/identity-path packages all stayed ≥80% after recalibration (crypto branches 85, crypto-appattest statements 86, etc.), so none crossed the `coverage-graduation.json` <80% raise-by trigger. Doctrine: `docs/doctrine/foundational-tool-adoption.md` (vitest-4 worked example).
+
+- 882b392: Upgrade the test runner from vitest 2.1.9 to 4.1.8 (with @vitest/coverage-v8), closing critical advisory GHSA-5xrq-8626-4rwp (Vitest UI server arbitrary file read/execute, fixed in 4.1.0). This is a dev-dependency change only — no runtime, API, or wire-format change to any published package; the bump is recorded as a patch because each package's published `package.json` devDependencies move to vitest ^4.1.8.
+
+  vitest 4 bundles vite (^6 || ^7 || ^8), so the existing vite-^6 surfaces, jsdom 25, and @types/node ^22 are unchanged. Test-only migration fallout was handled in the same change: `ViteUserConfig` rename in the shared config, typed-mock assignability under v4 (`vi.fn()` now `Mock<Procedure|Constructable>`), constructor mocks converted from arrows to `function` (v4 disallows `new` on arrow mock implementations), the removed `environmentMatchGlobs` replaced by the per-file `@vitest-environment` directive, and an explicit `dist/` test-exclude restored for the one config-less package (vitest 4's default `exclude` no longer covers `dist/`).
+
+- Updated dependencies [aefe5f6]
+- Updated dependencies [781dbc0]
+- Updated dependencies [c0faba1]
+- Updated dependencies [cf26f38]
+- Updated dependencies [85f7e10]
+- Updated dependencies [403a725]
+- Updated dependencies [ebd3ff5]
+- Updated dependencies [19d1584]
+- Updated dependencies [9cf876a]
+- Updated dependencies [e3fb1f7]
+- Updated dependencies [9ca54fd]
+- Updated dependencies [271bb5c]
+- Updated dependencies [7a2797f]
+- Updated dependencies [810175b]
+- Updated dependencies [8195e65]
+- Updated dependencies [0f47485]
+- Updated dependencies [49338ad]
+- Updated dependencies [882b392]
+  - @motebit/protocol@3.0.0
+  - @motebit/crypto@3.0.0
+
 ## 0.3.1
 
 ### Patch Changes

@@ -1,5 +1,40 @@
 # @motebit/verify
 
+## 1.4.2
+
+### Patch Changes
+
+- 882b392: Upgrade the test runner from vitest 2.1.9 to 4.1.8 (with @vitest/coverage-v8), closing critical advisory GHSA-5xrq-8626-4rwp (Vitest UI server arbitrary file read/execute, fixed in 4.1.0). This is a dev-dependency change only — no runtime, API, or wire-format change to any published package; the bump is recorded as a patch because each package's published `package.json` devDependencies move to vitest ^4.1.8.
+
+  vitest 4 bundles vite (^6 || ^7 || ^8), so the existing vite-^6 surfaces, jsdom 25, and @types/node ^22 are unchanged. Test-only migration fallout was handled in the same change: `ViteUserConfig` rename in the shared config, typed-mock assignability under v4 (`vi.fn()` now `Mock<Procedure|Constructable>`), constructor mocks converted from arrows to `function` (v4 disallows `new` on arrow mock implementations), the removed `environmentMatchGlobs` replaced by the per-file `@vitest-environment` directive, and an explicit `dist/` test-exclude restored for the one config-less package (vitest 4's default `exclude` no longer covers `dist/`).
+
+- Updated dependencies [aefe5f6]
+- Updated dependencies [781dbc0]
+- Updated dependencies [c0faba1]
+- Updated dependencies [cf26f38]
+- Updated dependencies [85f7e10]
+- Updated dependencies [403a725]
+- Updated dependencies [ebd3ff5]
+- Updated dependencies [19d1584]
+- Updated dependencies [9cf876a]
+- Updated dependencies [e3fb1f7]
+- Updated dependencies [9ca54fd]
+- Updated dependencies [271bb5c]
+- Updated dependencies [7a2797f]
+- Updated dependencies [810175b]
+- Updated dependencies [8195e65]
+- Updated dependencies [0f47485]
+- Updated dependencies [49338ad]
+- Updated dependencies [882b392]
+  - @motebit/protocol@3.0.0
+  - @motebit/state-export-client@0.4.0
+  - @motebit/crypto@3.0.0
+  - @motebit/crypto-appattest@1.0.8
+  - @motebit/verifier@1.2.2
+  - @motebit/crypto-android-keystore@1.1.6
+  - @motebit/crypto-tpm@1.1.7
+  - @motebit/crypto-webauthn@1.0.8
+
 ## 1.4.1
 
 ### Patch Changes
