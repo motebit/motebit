@@ -1,0 +1,17 @@
+{
+  "task_id": "019dc500-0000-7000-a000-00000000e3a1",
+  "motebit_id": "65b60673-d6ed-884b-b01c-2c222d82ada0",
+  "device_id": "019dc500-0000-7000-a000-0000000000de",
+  "invocation_origin": "user-tap",
+  "submitted_at": 1777109000245,
+  "completed_at": 1777109000246,
+  "status": "completed",
+  "result": "Drafted an outbound email to billing@acme.example re: invoice #4471 ($214.37 discrepancy) and queued it for your approval. Not sent — outbound send is gated behind your permission.",
+  "tools_used": ["browser", "email.draft"],
+  "memories_formed": 0,
+  "prompt_hash": "8a4ec5c63e0335cd4aa6cf8a76a45a3992d35512c47935c33b4bca09bed79134",
+  "result_hash": "d11e9a9e89e73362a3fa46fbca8b88f8da84f89969c87ed091c1bae62bbf6a5a",
+  "public_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "signature": "6afrIFxduTgDllQ5057cL-Crglq6yJCgQXcaNoaUNH-rHI3RQ1vM2dWXoIlzIfXhthQNyhCUwQSZ1iaqF_hfDw"
+}

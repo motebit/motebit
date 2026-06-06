@@ -1,0 +1,17 @@
+{
+  "task_id": "019dc500-0000-7000-a000-00000000a17d",
+  "motebit_id": "65b60673-d6ed-884b-b01c-2c222d82ada0",
+  "device_id": "019dc500-0000-7000-a000-0000000000de",
+  "invocation_origin": "user-tap",
+  "submitted_at": 1777109000245,
+  "completed_at": 1777109000246,
+  "status": "completed",
+  "result": "Audited 1,284 Stripe payouts against the ledger for May 2026. Flagged 3 mismatches over $50 (total $214.37). Paused before exporting the report — held for your approval, nothing sent or changed.",
+  "tools_used": ["browser", "stripe.payouts.read", "ledger.read"],
+  "memories_formed": 1,
+  "prompt_hash": "caea134302d1f13c4e02540f586b35a422666faa6a597830b798736ec3ee81a8",
+  "result_hash": "328adafc698dc4c1b5bba95d833bea24cb19295c90bbda6d57cf7d364541066c",
+  "public_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "signature": "QugVB53lk7357UQmdlNVf5rxTQ6O0Ver_OvQuscD4ud4AT7elcbXRRXOrlmQVWbmFVdE_yLsb4lg7zZqWnAxDw"
+}
