@@ -25,6 +25,7 @@
 import type { MerkleTreeVersion } from "@motebit/protocol";
 import { verifyBySuite } from "./suite-dispatch.js";
 import { verifyMerkleInclusion, canonicalLeaf, resolveTreeHashVersion } from "./merkle.js";
+import { verifyToolInvocationReceipt, type SignableToolInvocationReceipt } from "./artifacts.js";
 // The @noble/ed25519 SHA-512 binding is performed in suite-dispatch.ts
 // as a side effect of module load. Importing verifyBySuite here is
 // enough to guarantee that the primitive is ready before any verify
@@ -220,6 +221,19 @@ export interface ReceiptVerifyResult extends BaseResult {
   delegations?: ReceiptVerifyResult[];
 }
 
+export interface ToolInvocationVerifyResult extends BaseResult {
+  type: "tool-invocation";
+  toolInvocation: SignableToolInvocationReceipt | null;
+  signer?: string;
+  /**
+   * Always `"embedded"` when present: resolved from the receipt's own
+   * `public_key` — proves byte-integrity, NOT identity binding (same caveat as
+   * `ReceiptVerifyResult.keySource`). The binding rung is computed by the
+   * `@motebit/verifier` wrapper, not asserted here.
+   */
+  keySource?: "embedded";
+}
+
 export interface CredentialVerifyResult extends BaseResult {
   type: "credential";
   credential: VerifiableCredential | null;
@@ -302,6 +316,7 @@ export interface SkillVerifyResult extends BaseResult {
 export type VerifyResult =
   | IdentityVerifyResult
   | ReceiptVerifyResult
+  | ToolInvocationVerifyResult
   | CredentialVerifyResult
   | PresentationVerifyResult
   | SkillVerifyResult;
@@ -642,6 +657,17 @@ function detectArtifactType(artifact: unknown): ArtifactType | null {
   // Verifiable Credential: has "credentialSubject" + "issuer" + "proof"
   if ("credentialSubject" in obj && "issuer" in obj && "proof" in obj) {
     return "credential";
+  }
+
+  // Tool-Invocation Receipt: has "invocation_id" + "tool_name" + "motebit_id"
+  // + "signature". Checked BEFORE the execution-receipt branch on its UNIQUE
+  // marker `invocation_id` (an ExecutionReceipt never carries one; conversely a
+  // ToolInvocationReceipt never carries `prompt_hash`), so the two are disjoint
+  // and neither can be classified as the other. Without this branch a genuine
+  // tool-invocation receipt fell through to `null` and `verify()` reported it as
+  // a failed identity artifact — a true receipt reading as forged.
+  if ("invocation_id" in obj && "tool_name" in obj && "motebit_id" in obj && "signature" in obj) {
+    return "tool-invocation";
   }
 
   // Execution Receipt: has "task_id" + "motebit_id" + "signature" + "prompt_hash"
@@ -1419,6 +1445,54 @@ export async function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptV
   };
 }
 
+/**
+ * Verify a `ToolInvocationReceipt` resolved from auto-detection. Mirrors
+ * `verifyReceipt`: resolves the signer key from the receipt's own `public_key`
+ * (integrity, not identity binding — the rung is computed by `@motebit/verifier`)
+ * and dispatches to `verifyToolInvocationReceipt`. Returns a structured result
+ * with the same shape contract as the other arms, so a genuine tool-invocation
+ * receipt gets a real verdict from `verify()` instead of falling through to a
+ * misleading "invalid identity artifact."
+ */
+async function verifyToolInvocation(
+  receipt: SignableToolInvocationReceipt,
+): Promise<ToolInvocationVerifyResult> {
+  let publicKey: Uint8Array | null = null;
+  let signerDid: string | undefined;
+
+  if (receipt.public_key) {
+    try {
+      publicKey = hexToBytes(receipt.public_key);
+      if (publicKey.length === 32) {
+        signerDid = publicKeyToDidKey(publicKey);
+      } else {
+        publicKey = null;
+      }
+    } catch {
+      publicKey = null;
+    }
+  }
+
+  if (!publicKey) {
+    return {
+      type: "tool-invocation",
+      valid: false,
+      toolInvocation: receipt,
+      errors: [{ message: "No embedded public_key — cannot verify without known keys" }],
+    };
+  }
+
+  const valid = await verifyToolInvocationReceipt(receipt, publicKey);
+  return {
+    type: "tool-invocation",
+    valid,
+    toolInvocation: receipt,
+    signer: signerDid,
+    keySource: "embedded",
+    ...(valid ? {} : { errors: [{ message: "Ed25519 signature did not verify" }] }),
+  };
+}
+
 async function verifyReceiptDelegations(receipt: ExecutionReceipt): Promise<ReceiptVerifyResult[]> {
   if (!receipt.delegation_receipts || receipt.delegation_receipts.length === 0) {
     return [];
@@ -1872,6 +1946,7 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
       valid: false,
       ...(fallbackType === "identity" ? { identity: null } : {}),
       ...(fallbackType === "receipt" ? { receipt: null } : {}),
+      ...(fallbackType === "tool-invocation" ? { toolInvocation: null } : {}),
       ...(fallbackType === "credential" ? { credential: null } : {}),
       ...(fallbackType === "presentation" ? { presentation: null } : {}),
       ...(fallbackType === "skill"
@@ -1894,6 +1969,7 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
       valid: false,
       ...(detected === "identity" ? { identity: null } : {}),
       ...(detected === "receipt" ? { receipt: null } : {}),
+      ...(detected === "tool-invocation" ? { toolInvocation: null } : {}),
       ...(detected === "credential" ? { credential: null } : {}),
       ...(detected === "presentation" ? { presentation: null } : {}),
       ...(detected === "skill"
@@ -1920,6 +1996,7 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
         type: detected,
         valid: false,
         ...(detected === "receipt" ? { receipt: null } : {}),
+        ...(detected === "tool-invocation" ? { toolInvocation: null } : {}),
         ...(detected === "credential" ? { credential: null } : {}),
         ...(detected === "presentation" ? { presentation: null } : {}),
         ...(detected === "skill"
@@ -1942,6 +2019,8 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
       return verifyIdentity(resolved as string);
     case "receipt":
       return verifyReceipt(resolved as ExecutionReceipt);
+    case "tool-invocation":
+      return verifyToolInvocation(resolved as SignableToolInvocationReceipt);
     case "credential":
       return verifyCredential(
         resolved as VerifiableCredential,

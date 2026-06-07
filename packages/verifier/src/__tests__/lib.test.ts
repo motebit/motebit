@@ -15,7 +15,11 @@ import * as ed from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha2.js";
 
 import type { ExecutionReceipt } from "@motebit/crypto";
-import { deriveSovereignMotebitId } from "@motebit/crypto";
+import {
+  deriveSovereignMotebitId,
+  signToolInvocationReceipt,
+  hashToolPayload,
+} from "@motebit/crypto";
 
 import { formatHuman, verifyArtifact, verifyFile } from "../lib.js";
 
@@ -99,6 +103,32 @@ async function sovereignReceipt(): Promise<ExecutionReceipt> {
   return { ...withSuite, signature: toBase64Url(sig) };
 }
 
+// A sovereign-minted ToolInvocationReceipt: motebit_id commits to the key, same
+// as the execution receipt, signed through the canonical signer.
+async function sovereignToolInvocation() {
+  const sk = ed.utils.randomSecretKey();
+  const pk = await ed.getPublicKeyAsync(sk);
+  const pkHex = toHex(pk);
+  const unsigned = {
+    invocation_id: "tc-sovereign-test",
+    task_id: "task-sovereign-test",
+    motebit_id: await deriveSovereignMotebitId(pkHex),
+    public_key: pkHex,
+    device_id: "dev-verifier-1",
+    tool_name: "send_email",
+    started_at: 1_000_000,
+    completed_at: 1_001_000,
+    status: "completed" as const,
+    args_hash: await hashToolPayload({ to: "x@example.com" }),
+    result_hash: await hashToolPayload("sent"),
+  };
+  return signToolInvocationReceipt(
+    unsigned as Parameters<typeof signToolInvocationReceipt>[0],
+    sk,
+    pk,
+  );
+}
+
 // Tests write receipt files into a per-test tmp dir; collect them so
 // teardown is best-effort (tmp cleanup isn't load-bearing for
 // correctness).
@@ -115,6 +145,27 @@ afterEach(() => {
 });
 
 // ── tests ───────────────────────────────────────────────────────────
+
+describe("verifyArtifact — ToolInvocationReceipt dispatch + binding rung", () => {
+  it("verifies a genuine tool-invocation receipt as tool-invocation, sovereign:true", async () => {
+    const tir = await sovereignToolInvocation();
+    const result = await verifyArtifact(JSON.stringify(tir));
+    expect(result.type).toBe("tool-invocation");
+    expect(result.valid).toBe(true);
+    expect(result.sovereign).toBe(true);
+    const human = formatHuman(result);
+    expect(human).toContain("tool:");
+    expect(human).toContain("sovereign · motebit_id commits to the key");
+  });
+
+  it("does not read a genuine tool-invocation receipt as a failed identity artifact", async () => {
+    const tir = await sovereignToolInvocation();
+    const result = await verifyArtifact(JSON.stringify(tir));
+    // Regression guard: before dispatch, this returned { type: "identity", valid: false }.
+    expect(result.type).not.toBe("identity");
+    expect(result.valid).toBe(true);
+  });
+});
 
 describe("verifyArtifact — receipt binding rung (offline, receipt-alone)", () => {
   it("reports sovereign:true when motebit_id commits to the key", async () => {
