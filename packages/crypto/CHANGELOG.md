@@ -1,5 +1,29 @@
 # @motebit/crypto Changelog
 
+## 3.2.0
+
+### Minor Changes
+
+- 8935905: `verifyArtifact` / `verify` now auto-detect and verify `ToolInvocationReceipt`s — close the cold-consume seam where a genuine receipt read as forged.
+
+  A cold consumer (agency.computer) verifying a `ToolInvocationReceipt` through the canonical `verifyArtifact` path got `valid:false` — because `detectArtifactType` recognized `ExecutionReceipt` (keyed on `prompt_hash`) but not its sibling, so a genuine receipt fell through to the generic `type:"identity", valid:false` fallback. That conflates "wrong verifier" with "forged" — the one failure mode a proof tool can't have.
+  - `@motebit/crypto`: `detectArtifactType` recognizes `ToolInvocationReceipt` on its unique `invocation_id` marker (disjoint from `ExecutionReceipt`'s `prompt_hash` — neither can be classified as the other); `verify()` dispatches it to a new `verifyToolInvocation` wrapper returning a `ToolInvocationVerifyResult` (`type: "tool-invocation"`). Additive: no existing artifact's verdict changes; the only behavior change is a genuine tool-invocation receipt now gets a real verdict.
+  - `@motebit/verifier`: `verifyArtifact` computes the sovereign binding rung for `ToolInvocationReceipt`s (same `motebit_id → key` commitment as receipts), and `formatHuman` renders the tool/invocation/task/binding lines.
+  - `@motebit/verify`: `--expect tool-invocation` accepted.
+
+  Still deferred (consumer-forced): a distinct "unrecognized artifact type" result so genuinely-unknown artifacts (e.g. a flat `ApprovalDecision` consumed via `verifyArtifact`) read as unrecognized rather than `valid:false` — the general honesty floor, a separate `VerifyResult` variant.
+
+- 2a767e9: `verify` / `verifyArtifact` report unrecognized artifacts as a distinct `type: "unknown"` instead of `valid:false` on a fabricated type — the honesty floor that keeps "I don't recognize this" from reading as "this is forged."
+
+  Before, an artifact `detectArtifactType` didn't recognize returned `{ type: options.expectedType ?? "identity", valid: false }` — so an unrecognized blob (a flat `ApprovalDecision` consumed via `verifyArtifact`, or any foreign JSON) was indistinguishable from a _tampered identity file_. That conflates "unknown type / wrong verifier" with "forged known artifact" — the one ambiguity a proof tool can't have.
+  - `@motebit/crypto`: new `UnknownVerifyResult` (`type:"unknown"`, `valid:false`, `reason:"unrecognized_artifact_type"`); `verify()`'s no-detection branch returns it. `detectArtifactType` never yields `"unknown"` (it returns `null`), so the dispatch switch stays exhaustive over exactly the detectable types.
+  - `@motebit/verifier`: `formatHuman` renders `UNRECOGNIZED (unknown)`, not `INVALID`.
+  - `@motebit/verify`: an unrecognized artifact exits **2** (usage/unrecognized) — distinct from 1 (invalid signature) — per the CLI exit-code contract.
+
+  **Behavior change** (minor; `valid` is unchanged — still `false`): unrecognized input now reports `type:"unknown"` rather than the old `"identity"` (or `expectedType`) fallback. A consumer that branched on the fallback type for unrecognized input should switch on `type === "unknown"`.
+
+  Completes the honesty pass begun with `ToolInvocationReceipt` auto-detect: recognized artifacts get a real verdict, unrecognized artifacts get an honest "I don't know this," and neither reads as forged.
+
 ## 3.1.0
 
 ### Minor Changes

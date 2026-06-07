@@ -1,5 +1,41 @@
 # @motebit/verify
 
+## 1.6.0
+
+### Minor Changes
+
+- 2a767e9: `verify` / `verifyArtifact` report unrecognized artifacts as a distinct `type: "unknown"` instead of `valid:false` on a fabricated type — the honesty floor that keeps "I don't recognize this" from reading as "this is forged."
+
+  Before, an artifact `detectArtifactType` didn't recognize returned `{ type: options.expectedType ?? "identity", valid: false }` — so an unrecognized blob (a flat `ApprovalDecision` consumed via `verifyArtifact`, or any foreign JSON) was indistinguishable from a _tampered identity file_. That conflates "unknown type / wrong verifier" with "forged known artifact" — the one ambiguity a proof tool can't have.
+  - `@motebit/crypto`: new `UnknownVerifyResult` (`type:"unknown"`, `valid:false`, `reason:"unrecognized_artifact_type"`); `verify()`'s no-detection branch returns it. `detectArtifactType` never yields `"unknown"` (it returns `null`), so the dispatch switch stays exhaustive over exactly the detectable types.
+  - `@motebit/verifier`: `formatHuman` renders `UNRECOGNIZED (unknown)`, not `INVALID`.
+  - `@motebit/verify`: an unrecognized artifact exits **2** (usage/unrecognized) — distinct from 1 (invalid signature) — per the CLI exit-code contract.
+
+  **Behavior change** (minor; `valid` is unchanged — still `false`): unrecognized input now reports `type:"unknown"` rather than the old `"identity"` (or `expectedType`) fallback. A consumer that branched on the fallback type for unrecognized input should switch on `type === "unknown"`.
+
+  Completes the honesty pass begun with `ToolInvocationReceipt` auto-detect: recognized artifacts get a real verdict, unrecognized artifacts get an honest "I don't know this," and neither reads as forged.
+
+### Patch Changes
+
+- 53b9248: Surface `ApprovalDecision` verification for browser/library consumers — close the cold-consume gaps an external integrator hit.
+
+  A cold consume of the just-shipped governance triad (an outside developer using only public docs + npm) found the approve-band artifact was real but undiscoverable: the docs pointed browser users to `@motebit/verifier`, which didn't expose approval verification, and the `@motebit/verify` README never mentioned it — so the capability looked absent when it was only unsurfaced.
+  - `@motebit/verifier`: re-export `verifyApprovalDecision` (+ the `ApprovalDecision` type) from the browser-safe `@motebit/crypto` primitive, so consumers already depending on this library can verify a human-consent decision client-side without adding a second dependency.
+  - `@motebit/verify`: README now documents the `approval-decision` subcommand, the governance triad (approve/deny/auto), the **browser path** (`import { verifyApprovalDecision } from "@motebit/crypto"`), and a `verify` vs `verifier` vs `crypto` disambiguation — plus the honest framing that a verified `ApprovalDecision` is signature-authentic against a _pinned_ approver key, not authority-bound (verifying against the embedded key alone is circular).
+
+  Paired with a non-published canonical `ApprovalDecision` fixture (+ published approver key) and a new `developer/governance-triad` doc page covering where a verified decision sits on the binding ladder.
+
+- Updated dependencies [53b9248]
+- Updated dependencies [8935905]
+- Updated dependencies [2a767e9]
+  - @motebit/verifier@1.3.0
+  - @motebit/crypto@3.2.0
+  - @motebit/crypto-android-keystore@1.1.9
+  - @motebit/crypto-appattest@1.0.11
+  - @motebit/crypto-tpm@1.1.10
+  - @motebit/crypto-webauthn@1.0.11
+  - @motebit/state-export-client@0.5.1
+
 ## 1.5.0
 
 ### Minor Changes
