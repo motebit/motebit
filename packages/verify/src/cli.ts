@@ -59,6 +59,7 @@ import { buildHardwareVerifiers } from "./adapters.js";
 const EXPECT_VALUES: readonly ArtifactType[] = [
   "identity",
   "receipt",
+  "tool-invocation",
   "credential",
   "presentation",
   "skill",

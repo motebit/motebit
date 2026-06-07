@@ -1370,6 +1370,17 @@ export function toBase64Url(data: Uint8Array): string;
 export const TOOL_INVOCATION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public (undocumented)
+export interface ToolInvocationVerifyResult extends BaseResult {
+    keySource?: "embedded";
+    // (undocumented)
+    signer?: string;
+    // (undocumented)
+    toolInvocation: SignableToolInvocationReceipt | null;
+    // (undocumented)
+    type: "tool-invocation";
+}
+
+// @public (undocumented)
 export interface TrustCredentialSubject {
     // (undocumented)
     failed_tasks: number;
@@ -1594,7 +1605,7 @@ export function verifyReceiptSequence(chain: ReceiptChainEntry[]): Promise<{
 export function verifyRelayMetadata(metadata: RelayMetadata, publicKey: Uint8Array): Promise<boolean>;
 
 // @public (undocumented)
-export type VerifyResult = IdentityVerifyResult | ReceiptVerifyResult | CredentialVerifyResult | PresentationVerifyResult | SkillVerifyResult;
+export type VerifyResult = IdentityVerifyResult | ReceiptVerifyResult | ToolInvocationVerifyResult | CredentialVerifyResult | PresentationVerifyResult | SkillVerifyResult;
 
 // @public
 export function verifyRetentionManifest(manifest: RetentionManifest, operatorPublicKey: Uint8Array): Promise<RetentionManifestVerifyResult>;

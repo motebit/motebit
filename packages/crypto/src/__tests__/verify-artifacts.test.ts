@@ -30,6 +30,7 @@ import type {
 } from "@motebit/protocol";
 import {
   generateKeypair,
+  verify,
   ed25519Sign,
   ed25519Verify,
   createSignedToken,
@@ -2562,5 +2563,76 @@ describe("verifyRelayMetadata", () => {
     ).toBe(false);
     const other = await generateKeypair();
     expect(await verifyRelayMetadata(meta, other.publicKey)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() auto-detect dispatch for ToolInvocationReceipt
+// (regression: a genuine tool-invocation receipt used to fall through to a
+//  "valid:false identity" verdict — a true receipt reading as forged)
+// ---------------------------------------------------------------------------
+
+describe("verify() — ToolInvocationReceipt dispatch", () => {
+  async function makeToolReceipt(kp: { privateKey: Uint8Array; publicKey: Uint8Array }) {
+    const unsigned = {
+      invocation_id: "tc-1",
+      task_id: "task-1",
+      motebit_id: "motebit-x",
+      device_id: "device-1",
+      tool_name: "send_email",
+      started_at: 1000,
+      completed_at: 2000,
+      status: "completed" as const,
+      args_hash: await hashToolPayload({ to: "x@example.com" }),
+      result_hash: await hashToolPayload("sent"),
+    };
+    return signToolInvocationReceipt(
+      unsigned as Parameters<typeof signToolInvocationReceipt>[0],
+      kp.privateKey,
+      kp.publicKey,
+    );
+  }
+
+  it("detects + verifies a genuine ToolInvocationReceipt (not a failed identity)", async () => {
+    const kp = await generateKeypair();
+    const signed = await makeToolReceipt(kp);
+    const r = await verify(JSON.stringify(signed));
+    expect(r.type).toBe("tool-invocation");
+    expect(r.valid).toBe(true);
+  });
+
+  it("rejects a tampered ToolInvocationReceipt", async () => {
+    const kp = await generateKeypair();
+    const signed = await makeToolReceipt(kp);
+    const tampered = { ...signed, args_hash: "b".repeat(64) };
+    const r = await verify(JSON.stringify(tampered));
+    expect(r.type).toBe("tool-invocation");
+    expect(r.valid).toBe(false);
+  });
+
+  it("does NOT cross-classify with ExecutionReceipt (disjoint markers)", async () => {
+    const kp = await generateKeypair();
+    // A ToolInvocationReceipt (has invocation_id, no prompt_hash) → tool-invocation
+    const tool = await makeToolReceipt(kp);
+    expect((await verify(JSON.stringify(tool))).type).toBe("tool-invocation");
+    // An ExecutionReceipt (has prompt_hash, no invocation_id) → receipt
+    const exec = await signExecutionReceipt(
+      {
+        task_id: "task-2",
+        motebit_id: "motebit-x",
+        device_id: "device-1",
+        submitted_at: 1000,
+        completed_at: 2000,
+        status: "completed",
+        result: "ok",
+        tools_used: [],
+        memories_formed: 0,
+        prompt_hash: "0".repeat(64),
+        result_hash: "1".repeat(64),
+      } as unknown as Parameters<typeof signExecutionReceipt>[0],
+      kp.privateKey,
+      kp.publicKey,
+    );
+    expect((await verify(JSON.stringify(exec))).type).toBe("receipt");
   });
 });

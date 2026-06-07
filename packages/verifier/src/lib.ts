@@ -297,6 +297,16 @@ export async function verifyArtifact(
       typeof pk === "string" ? await verifySovereignBinding(result.receipt.motebit_id, pk) : false;
     return { ...result, sovereign };
   }
+  // ToolInvocationReceipts carry the same motebit_id → public_key commitment, so
+  // the sovereign rung is checkable offline from the artifact alone, identically.
+  if (result.valid && result.type === "tool-invocation" && result.toolInvocation) {
+    const pk = result.toolInvocation.public_key;
+    const sovereign =
+      typeof pk === "string"
+        ? await verifySovereignBinding(result.toolInvocation.motebit_id, pk)
+        : false;
+    return { ...result, sovereign };
+  }
   return result;
 }
 
@@ -359,6 +369,22 @@ function summarizeValid(result: VerifyResultWithBinding): ReadonlyArray<readonly
       out.push(["motebit:", result.receipt.motebit_id]);
       if (result.signer) out.push(["signer:", result.signer]);
       // Binding rung — checkable offline from the receipt alone.
+      out.push([
+        "binding:",
+        result.sovereign
+          ? "sovereign · motebit_id commits to the key (offline, no operator)"
+          : "integrity-only · signature valid; identity not bound",
+      ]);
+      return out;
+    }
+    case "tool-invocation": {
+      if (!result.toolInvocation) return [];
+      const out: Array<readonly [string, string]> = [];
+      out.push(["tool:", result.toolInvocation.tool_name]);
+      out.push(["invocation:", result.toolInvocation.invocation_id]);
+      out.push(["task:", result.toolInvocation.task_id]);
+      out.push(["motebit:", result.toolInvocation.motebit_id]);
+      if (result.signer) out.push(["signer:", result.signer]);
       out.push([
         "binding:",
         result.sovereign
