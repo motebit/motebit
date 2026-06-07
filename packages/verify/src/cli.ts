@@ -44,8 +44,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ArtifactType, ContentArtifactManifest } from "@motebit/crypto";
-import { verifyContentArtifact } from "@motebit/crypto";
+import type { ArtifactType, ContentArtifactManifest, ApprovalDecision } from "@motebit/crypto";
+import { verifyContentArtifact, verifyApprovalDecision, hexToBytes } from "@motebit/crypto";
 import type { ContentArtifactType } from "@motebit/protocol";
 import { ALL_CONTENT_ARTIFACT_TYPES, isContentArtifactType } from "@motebit/protocol";
 import {
@@ -75,8 +75,25 @@ const EXPECT_VALUES: readonly ArtifactType[] = [
  */
 const CONTENT_ARTIFACT_SUBCOMMAND = "content-artifact";
 
+/**
+ * First positional that switches the CLI into approval-decision mode — the
+ * consumer-side primitive for the "approve" governance band. Verifies a signed
+ * human-consent `ApprovalDecision` (proof of permission before a gated act)
+ * against its embedded `public_key` (or a pinned `--producer-key`). A
+ * subcommand rather than auto-detection so the new artifact stays contained in
+ * this aggregator (Rule 1: wiring only) without expanding `@motebit/crypto`'s
+ * core artifact-detector union. See `docs/doctrine/receipts-unified.md`
+ * § "the verifiable governance triad."
+ */
+const APPROVAL_DECISION_SUBCOMMAND = "approval-decision";
+
 interface ParsedArgs {
-  readonly mode: "verify" | "verify-content-artifact" | "help" | "version";
+  readonly mode:
+    | "verify"
+    | "verify-content-artifact"
+    | "verify-approval-decision"
+    | "help"
+    | "version";
   readonly file?: string;
   readonly json: boolean;
   readonly expectedType?: ArtifactType;
@@ -86,10 +103,12 @@ interface ParsedArgs {
   readonly rpId?: string;
   /** Content-artifact mode: manifest input — either base64url header value or path to JSON file. */
   readonly manifest?: string;
-  /** Content-artifact mode: optional pinned producer key (hex, 64 chars). */
+  /** Content-artifact + approval-decision modes: optional pinned producer/approver key (hex, 64 chars). */
   readonly expectedProducerKey?: string;
   /** Content-artifact mode: optional expected artifact-type from the closed registry. */
   readonly expectedArtifactType?: ContentArtifactType;
+  /** Approval-decision mode: optional expected verdict to assert. */
+  readonly expectedVerdict?: "approved" | "denied";
   readonly usageError?: string;
 }
 
@@ -100,6 +119,9 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   // overrides) plus content-artifact-specific flags.
   if (argv[0] === CONTENT_ARTIFACT_SUBCOMMAND) {
     return parseContentArtifactArgs(argv.slice(1));
+  }
+  if (argv[0] === APPROVAL_DECISION_SUBCOMMAND) {
+    return parseApprovalDecisionArgs(argv.slice(1));
   }
 
   let file: string | undefined;
@@ -320,6 +342,89 @@ function parseContentArtifactArgs(argv: readonly string[]): ParsedArgs {
   };
 }
 
+/**
+ * Parse args for the `approval-decision` subcommand. Accepts:
+ *
+ *   motebit-verify approval-decision <decision-file>
+ *                                    [--producer-key <hex>]
+ *                                    [--expect-verdict approved|denied]
+ *                                    [--json]
+ *
+ * The decision JSON carries its own `public_key` (the approver's, embedded at
+ * sign time), so verification is self-contained offline — no key argument is
+ * required. `--producer-key` (optional) pins the expected approver's hex public
+ * key and rejects with `producer_key_mismatch` if the embedded key differs (the
+ * offline trust-anchor move: a consumer who knows which device should have
+ * approved confirms it did). `--expect-verdict` (optional) asserts the verdict,
+ * so a caller checking "was this denied?" fails loud on the wrong value rather
+ * than silently reading a field.
+ */
+function parseApprovalDecisionArgs(argv: readonly string[]): ParsedArgs {
+  let file: string | undefined;
+  let expectedProducerKey: string | undefined;
+  let expectedVerdict: "approved" | "denied" | undefined;
+  let json = false;
+  let help = false;
+
+  let i = 0;
+  while (i < argv.length) {
+    const arg = argv[i]!;
+    switch (arg) {
+      case "-h":
+      case "--help":
+        help = true;
+        i++;
+        break;
+      case "--json":
+        json = true;
+        i++;
+        break;
+      case "--producer-key": {
+        const value = argv[i + 1];
+        if (value === undefined) return usage("--producer-key requires a hex value");
+        if (!/^[0-9a-fA-F]{64}$/.test(value)) {
+          return usage("--producer-key must be 64 hex characters (32-byte Ed25519 public key)");
+        }
+        expectedProducerKey = value.toLowerCase();
+        i += 2;
+        break;
+      }
+      case "--expect-verdict": {
+        const value = argv[i + 1];
+        if (value === undefined)
+          return usage("--expect-verdict requires a value (approved|denied)");
+        if (value !== "approved" && value !== "denied") {
+          return usage(`--expect-verdict must be "approved" or "denied" (got "${value}")`);
+        }
+        expectedVerdict = value;
+        i += 2;
+        break;
+      }
+      default:
+        if (arg.startsWith("-")) return usage(`unknown flag: ${arg}`);
+        if (file !== undefined) {
+          return usage(
+            `expected exactly one decision-file argument, got a second: "${arg}" (after "${file}")`,
+          );
+        }
+        file = arg;
+        i++;
+        break;
+    }
+  }
+
+  if (help) return { mode: "help", json };
+  if (file === undefined) return usage("approval-decision: missing decision-file argument");
+
+  return {
+    mode: "verify-approval-decision",
+    file,
+    json,
+    ...(expectedProducerKey !== undefined && { expectedProducerKey }),
+    ...(expectedVerdict !== undefined && { expectedVerdict }),
+  };
+}
+
 function renderHelp(): string {
   return [
     "motebit-verify — verify any signed Motebit artifact offline.",
@@ -327,6 +432,7 @@ function renderHelp(): string {
     "USAGE",
     "  motebit-verify <path> [options]",
     "  motebit-verify content-artifact <body-file> --manifest <header-or-path> [options]",
+    "  motebit-verify approval-decision <decision-file> [options]",
     "",
     "  <path> may be a single file (identity, receipt, credential, presentation,",
     "  or a skill envelope JSON) OR a skill directory containing SKILL.md +",
@@ -342,6 +448,16 @@ function renderHelp(): string {
     "  Ed25519 signature verification against the manifest's declared",
     "  producer key. Offline by design; pin the producer key with",
     `  --producer-key from /.well-known/motebit-transparency.json.`,
+    "",
+    "  `approval-decision` mode verifies a signed human-consent decision —",
+    "  the 'approve' band of the governance triad (auto / approve / deny),",
+    "  proof of permission before a gated act. The decision carries the",
+    "  approver's embedded public_key, so verification is self-contained",
+    "  offline; pin --producer-key to confirm WHICH approver, and",
+    "  --expect-verdict to assert approved vs denied. The auto band is a",
+    "  ToolInvocationReceipt and the deny band an ExecutionReceipt with",
+    '  status:"denied" — both verify as ordinary receipts (run motebit-verify',
+    "  <receipt.json>).",
     "",
     "OPTIONS",
     "  --json                    Print structured JSON instead of human-readable.",
@@ -378,6 +494,13 @@ function renderHelp(): string {
     "  --expect <artifact-type>  In content-artifact mode, narrows to a member",
     "                            of the ContentArtifactType registry",
     `                            (${ALL_CONTENT_ARTIFACT_TYPES.length} types today; see @motebit/protocol).`,
+    "",
+    "  APPROVAL-DECISION MODE — `motebit-verify approval-decision <decision> ...`",
+    "  --producer-key <hex>      Pin the expected approver's Ed25519 public key",
+    "                            (64 hex chars). Rejects with producer_key_mismatch",
+    "                            if the decision's embedded public_key differs.",
+    "  --expect-verdict <v>      Assert the verdict is `approved` or `denied`;",
+    "                            fails loud (verdict_mismatch) on the other value.",
     "",
     "  -h, --help                Show this help.",
     "  -V, --version             Print version.",
@@ -484,6 +607,145 @@ export function describeContentArtifactReason(reason: string): string {
     default:
       return reason;
   }
+}
+
+/** Failure-reason → human phrase for approval-decision mode. */
+export function describeApprovalDecisionReason(reason: string): string {
+  switch (reason) {
+    case "signature_invalid":
+      return "signature does not verify against the approver's key (decision tampered, OR signed by a different key than the one declared)";
+    case "no_verifying_key":
+      return "decision carries no embedded public_key and no --producer-key was supplied — nothing to verify the signature against";
+    case "malformed_public_key":
+      return "the approver public key (embedded public_key or --producer-key) is not 64 hex characters (32-byte Ed25519)";
+    case "producer_key_mismatch":
+      return "the decision's embedded public_key does not match the value pinned via --producer-key";
+    case "verdict_mismatch":
+      return "the decision's verdict does not match the value required via --expect-verdict";
+    case "malformed_decision":
+      return "the file is not a well-formed ApprovalDecision JSON object";
+    default:
+      return reason;
+  }
+}
+
+async function verifyApprovalDecisionCli(args: ParsedArgs, json: boolean): Promise<number> {
+  if (args.file === undefined) {
+    process.stderr.write(`motebit-verify: approval-decision missing decision-file argument\n`);
+    return 2;
+  }
+
+  // Parse the decision JSON.
+  let decision: ApprovalDecision;
+  try {
+    decision = JSON.parse(readFileSync(args.file, "utf-8")) as ApprovalDecision;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`motebit-verify: cannot read approval-decision ${args.file}: ${msg}\n`);
+    return 2;
+  }
+
+  const fail = (reason: string, extra?: Record<string, unknown>): number => {
+    if (json) {
+      process.stdout.write(`${JSON.stringify({ valid: false, reason, ...extra }, null, 2)}\n`);
+    } else {
+      process.stdout.write(
+        `✗ approval-decision INVALID — ${describeApprovalDecisionReason(reason)}\n`,
+      );
+    }
+    return 1;
+  };
+
+  if (typeof decision !== "object" || decision === null || typeof decision.verdict !== "string") {
+    return fail("malformed_decision");
+  }
+
+  // Resolve the verifying key: the embedded public_key is the self-contained
+  // path; --producer-key pins it. Pure byte/string comparison + hex decode —
+  // no crypto logic in this aggregator (Rule 1), the signature check itself is
+  // @motebit/crypto's verifyApprovalDecision.
+  const embedded = decision.public_key?.toLowerCase();
+  if (
+    embedded !== undefined &&
+    args.expectedProducerKey !== undefined &&
+    embedded !== args.expectedProducerKey
+  ) {
+    return fail("producer_key_mismatch", {
+      expected_public_key: args.expectedProducerKey,
+      actual_public_key: embedded,
+    });
+  }
+  const keyHex = embedded ?? args.expectedProducerKey;
+  if (keyHex === undefined) {
+    return fail("no_verifying_key");
+  }
+  let keyBytes: Uint8Array;
+  try {
+    keyBytes = hexToBytes(keyHex);
+  } catch {
+    return fail("malformed_public_key");
+  }
+
+  // Optional verdict assertion (pre-crypto policy check).
+  if (args.expectedVerdict !== undefined && decision.verdict !== args.expectedVerdict) {
+    return fail("verdict_mismatch", {
+      expected_verdict: args.expectedVerdict,
+      actual_verdict: decision.verdict,
+    });
+  }
+
+  const valid = await verifyApprovalDecision(decision, keyBytes);
+  if (!valid) {
+    return fail("signature_invalid");
+  }
+
+  if (json) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          valid: true,
+          decision: {
+            approval_id: decision.approval_id,
+            motebit_id: decision.motebit_id,
+            device_id: decision.device_id,
+            tool_name: decision.tool_name,
+            args_hash: decision.args_hash,
+            risk_level: decision.risk_level,
+            verdict: decision.verdict,
+            requested_at: decision.requested_at,
+            resolved_at: decision.resolved_at,
+            ...(decision.denied_reason !== undefined && { denied_reason: decision.denied_reason }),
+            ...(decision.run_id !== undefined && { run_id: decision.run_id }),
+            public_key: decision.public_key,
+            suite: decision.suite,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } else {
+    process.stdout.write(
+      [
+        `✓ approval-decision VERIFIED`,
+        `  verdict          ${decision.verdict.toUpperCase()}`,
+        `  approval_id      ${decision.approval_id}`,
+        `  tool_name        ${decision.tool_name}`,
+        `  risk_level       ${decision.risk_level}`,
+        `  args_hash        ${decision.args_hash}`,
+        `  approver_device  ${decision.device_id}`,
+        `  motebit_id       ${decision.motebit_id}`,
+        `  resolved_at      ${decision.resolved_at}`,
+        ...(decision.denied_reason !== undefined
+          ? [`  denied_reason    ${decision.denied_reason}`]
+          : []),
+        `  approver_key     ${decision.public_key ?? keyHex}`,
+        `  suite            ${decision.suite}`,
+        ``,
+      ].join("\n"),
+    );
+  }
+  return 0;
 }
 
 async function verifyContentArtifactCli(args: ParsedArgs, json: boolean): Promise<number> {
@@ -665,6 +927,10 @@ async function main(): Promise<number> {
 
   if (args.mode === "verify-content-artifact") {
     return verifyContentArtifactCli(args, args.json);
+  }
+
+  if (args.mode === "verify-approval-decision") {
+    return verifyApprovalDecisionCli(args, args.json);
   }
 
   if (args.file === undefined) {
