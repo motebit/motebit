@@ -1002,6 +1002,75 @@ export interface ToolInvocationReceipt {
 }
 
 /**
+ * Signed human-consent decision over a tool call that governance gated for
+ * approval (the middle band: `require_approval_above < risk <= deny_above`).
+ *
+ * The third governance band made verifiable. The auto band proves itself with
+ * a `ToolInvocationReceipt`; the deny band proves itself with an agent-signed
+ * `ExecutionReceipt{status:"denied"}` (the delegation policy refusal path). The
+ * approve band was the only one whose decision was unsigned — a plaintext DB
+ * row + event. This artifact closes that asymmetry: when a human approves (or
+ * denies) a gated act, the verdict becomes a self-verifiable fact — "this
+ * approver consented to THIS tool call with THESE args at THIS time" — that any
+ * third party can check offline with the approver's public key, no relay
+ * contact required.
+ *
+ * Signed by the APPROVER's device key (the human consenting), mirroring how the
+ * worker signs its own refusal: consent is the approver's assertion, not the
+ * system's word for it. Prior art for signed approval votes: the key-rotation
+ * guardian quorum (`relay_approval_votes.signature`) — this lifts that shape
+ * from the narrow key-rotation case to the general agentic tool-consent path.
+ *
+ * Privacy: commits to `args_hash` (SHA-256 of the canonical args), never the
+ * raw args — same discipline as `ToolInvocationReceipt`. A verifier holding the
+ * raw args recomputes and matches; one holding only the decision still proves a
+ * verdict was rendered over *some* call at *some* time.
+ *
+ * Member of the JCS + Ed25519 + suite-dispatch signed-artifact family
+ * (`docs/doctrine/receipts-unified.md`). Verify with `verifyApprovalDecision`.
+ */
+export interface ApprovalDecision {
+  /**
+   * Binds the decision to the specific gated call — the `tool_call_id` from the
+   * `approval_request`. Part of the signed body, so a verdict cannot be
+   * replayed onto a different call (the binding breaks the signature).
+   */
+  approval_id: string;
+  /** The motebit whose governance gated the call (the executor being approved). */
+  motebit_id: MotebitId;
+  /** Signer's (approver's) Ed25519 public key (hex). Enables offline verification without a key lookup. */
+  public_key?: string;
+  /** The approver's device that rendered the verdict and holds the signing key. */
+  device_id: DeviceId;
+  /** Tool the verdict authorizes (or refuses). */
+  tool_name: string;
+  /**
+   * SHA-256 hex of the canonical JSON of the tool's arguments — never the raw
+   * args. Binds consent to the exact call shape the approver saw.
+   */
+  args_hash: string;
+  /** The `RiskLevel` numeric that triggered the approval gate. */
+  risk_level: number;
+  /** The human's verdict. `denied` carries an optional `denied_reason`. */
+  verdict: "approved" | "denied";
+  /** Unix ms when the approval was requested (the gate fired). */
+  requested_at: number;
+  /** Unix ms when the human rendered the verdict. */
+  resolved_at: number;
+  /** Free-text reason, present only on `denied`. */
+  denied_reason?: string;
+  /** The turn/run the gated call belongs to, when known. */
+  run_id?: string;
+  /**
+   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` today.
+   * Widening requires a `SuiteId` registry change + a new dispatch arm in
+   * `@motebit/crypto`, not a wire-format break.
+   */
+  suite: "motebit-jcs-ed25519-b64-v1";
+  signature: string;
+}
+
+/**
  * Signed proof that the motebit performed a consolidation cycle. The
  * receipt commits to structural facts only — counts of memories merged,
  * promoted, pruned, and the cycle's identity / timestamps — never to

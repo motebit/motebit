@@ -543,6 +543,10 @@ export class MotebitRuntime {
    * persist the payload beyond the call.
    */
   private _onToolActivity: ((event: import("./streaming.js").ToolActivityEvent) => void) | null;
+  /** Surface sink for signed human-consent decisions (the "approve" band artifact). */
+  private _onApprovalDecision:
+    | ((decision: import("@motebit/crypto").ApprovalDecision) => void)
+    | null;
   /**
    * receipts-1 — in-memory buffer of recent signed
    * `ToolInvocationReceipt`s, capped at `RECEIPTS_BUFFER_CAP`.
@@ -566,6 +570,8 @@ export class MotebitRuntime {
    */
   private _recentReceipts: import("@motebit/crypto").SignableToolInvocationReceipt[] = [];
   private static readonly RECEIPTS_BUFFER_CAP = 50;
+  /** In-session buffer of signed human-consent decisions (newest last), same cap + contract as `_recentReceipts`. */
+  private _recentApprovalDecisions: import("@motebit/crypto").ApprovalDecision[] = [];
 
   constructor(config: RuntimeConfig, adapters: PlatformAdapters) {
     // Defense-in-depth: trip the species-constraint tamper detection as
@@ -607,6 +613,7 @@ export class MotebitRuntime {
       }
     };
     this._onToolActivity = config.onToolActivity ?? null;
+    this._onApprovalDecision = config.onApprovalDecision ?? null;
     this.compactionThreshold = config.compactionThreshold ?? 1000;
     this.mcpConfigs = config.mcpServers ?? [];
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
@@ -1069,9 +1076,38 @@ export class MotebitRuntime {
         ? (receipt) => this._onToolInvocation?.(receipt)
         : undefined,
       onToolActivity: this._onToolActivity ? (event) => this._onToolActivity?.(event) : undefined,
+      onApprovalDecision: (decision) => this.recordApprovalDecision(decision),
     });
 
     this.wireLoopDeps();
+  }
+
+  /**
+   * Buffer a signed human-consent decision and forward it to the surface sink —
+   * the exact shape as `_onToolInvocation`: push to the in-session buffer FIRST
+   * (so `getRecentApprovalDecisions()` is correct regardless of whether a
+   * surface listener throws), then fan out. Deliberately does NOT append an
+   * event-log entry: the daemon/goal path already records its own
+   * `ApprovalApproved`/`ApprovalDenied` goal-audit event (`apps/cli` scheduler),
+   * so a runtime append would double-emit; and durable cross-restart archival of
+   * the signed artifact is a separate, consumer-shaped concern (a dedicated
+   * retrieval surface), deferred until a consumer forces its shape — the same
+   * sequencing the delegation refusal path used for receipt retrieval.
+   */
+  private recordApprovalDecision(decision: import("@motebit/crypto").ApprovalDecision): void {
+    this._recentApprovalDecisions.push(decision);
+    if (this._recentApprovalDecisions.length > MotebitRuntime.RECEIPTS_BUFFER_CAP) {
+      this._recentApprovalDecisions.shift();
+    }
+    if (this._onApprovalDecision) {
+      try {
+        this._onApprovalDecision(decision);
+      } catch (err: unknown) {
+        this._logger.warn(
+          `[runtime] surface onApprovalDecision threw: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   // === Lifecycle ===
@@ -3571,6 +3607,19 @@ export class MotebitRuntime {
    */
   getRecentReceipts(): ReadonlyArray<import("@motebit/crypto").SignableToolInvocationReceipt> {
     return this._recentReceipts;
+  }
+
+  /**
+   * Recent signed human-consent decisions (`ApprovalDecision`), newest last,
+   * capped at `RECEIPTS_BUFFER_CAP`. The "approve" governance band's
+   * counterpart to `getRecentReceipts()`: each entry is the approver's signed,
+   * offline-verifiable verdict over a gated tool call. Empty when no decisions
+   * were rendered this session, or when no signing key was wired (fail-closed —
+   * the runtime emits nothing rather than an unsigned decision). Durable
+   * cross-restart archival is a deferred, consumer-shaped concern.
+   */
+  getRecentApprovalDecisions(): ReadonlyArray<import("@motebit/crypto").ApprovalDecision> {
+    return this._recentApprovalDecisions;
   }
 
   /**

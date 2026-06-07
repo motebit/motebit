@@ -106,6 +106,7 @@ export const REGISTRY: Record<string, Classification> = {
   ComputerSessionReceipt: { kind: "verifier", verifier: "verifyComputerSessionReceipt" },
   CredentialAnchorProof: { kind: "verifier", verifier: "verifyCredentialAnchor" },
   AdjudicatorVote: { kind: "verifier", verifier: "verifyAdjudicatorVote" },
+  ApprovalDecision: { kind: "verifier", verifier: "verifyApprovalDecision" },
   DisputeAppeal: { kind: "verifier", verifier: "verifyDisputeAppeal" },
   DisputeEvidence: { kind: "verifier", verifier: "verifyDisputeEvidence" },
   DisputeRequest: { kind: "verifier", verifier: "verifyDisputeRequest" },

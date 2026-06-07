@@ -112,6 +112,17 @@ export interface RuntimeConfig {
    */
   onToolInvocation?: (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void;
   /**
+   * Optional sink for a signed human-consent decision over a
+   * governance-gated tool call (the "approve" governance band made
+   * verifiable). Fires once per final approval verdict with the
+   * `ApprovalDecision` already signed by the approver's device key. The
+   * runtime ALSO appends a durable `ApprovalApproved`/`ApprovalDenied`
+   * audit event carrying the signed decision regardless of this sink;
+   * this callback is for surfaces that want the artifact live (e.g. to
+   * render or anchor it). See `docs/doctrine/receipts-unified.md`.
+   */
+  onApprovalDecision?: (decision: import("@motebit/crypto").ApprovalDecision) => void;
+  /**
    * Optional live-activity sink for tool calls — delivers the raw args
    * + result bytes alongside the structured event at the same moment
    * the receipt is signed. Intended for surfaces that render *what the

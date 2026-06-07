@@ -317,6 +317,25 @@ export const ALL_TOKEN_AUDIENCES: readonly TokenAudience[];
 export type AllocationId = Brand<string, "AllocationId">;
 
 // @public
+export interface ApprovalDecision {
+    approval_id: string;
+    args_hash: string;
+    denied_reason?: string;
+    device_id: DeviceId;
+    motebit_id: MotebitId;
+    public_key?: string;
+    requested_at: number;
+    resolved_at: number;
+    risk_level: number;
+    run_id?: string;
+    // (undocumented)
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    tool_name: string;
+    verdict: "approved" | "denied";
+}
+
+// @public
 export interface ApprovalQuorum {
     approvers: string[];
     risk_floor?: string;

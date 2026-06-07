@@ -5,6 +5,7 @@
 ```ts
 
 import type { AdjudicatorVote } from '@motebit/protocol';
+import type { ApprovalDecision } from '@motebit/protocol';
 import type { BalanceWaiver } from '@motebit/protocol';
 import type { ComputerSessionActionRecord } from '@motebit/protocol';
 import type { ConsolidationReceipt } from '@motebit/protocol';
@@ -94,6 +95,11 @@ export interface AgentSettlementAnchorVerifyResult {
     };
     valid: boolean;
 }
+
+// @public
+export const APPROVAL_DECISION_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+export { ApprovalDecision }
 
 // @public (undocumented)
 export type ArtifactType = VerifyResult["type"];
@@ -1070,6 +1076,12 @@ export interface SignableToolInvocationReceipt {
 export function signAdjudicatorVote(vote: Omit<AdjudicatorVote, "signature" | "suite">, peerPrivateKey: Uint8Array): Promise<AdjudicatorVote>;
 
 // @public
+export function signApprovalDecision<T extends Omit<ApprovalDecision, "signature" | "suite">>(decision: T, approverPrivateKey: Uint8Array, publicKey?: Uint8Array): Promise<T & {
+    suite: typeof APPROVAL_DECISION_SUITE;
+    signature: string;
+}>;
+
+// @public
 export function signBalanceWaiver(waiver: Omit<BalanceWaiver, "signature" | "suite">, agentPrivateKey: Uint8Array): Promise<BalanceWaiver>;
 
 // @public
@@ -1431,6 +1443,9 @@ export function verifyAdjudicatorVote(vote: AdjudicatorVote, peerPublicKey: Uint
 
 // @public
 export function verifyAgentSettlementAnchor(settlement: Record<string, unknown>, proof: AgentSettlementAnchorProofFields, chainVerifier?: ChainAnchorVerifier): Promise<AgentSettlementAnchorVerifyResult>;
+
+// @public
+export function verifyApprovalDecision(decision: ApprovalDecision, approverPublicKey: Uint8Array): Promise<boolean>;
 
 // @public
 export function verifyBalanceWaiver(waiver: BalanceWaiver, agentPublicKey: Uint8Array): Promise<boolean>;
