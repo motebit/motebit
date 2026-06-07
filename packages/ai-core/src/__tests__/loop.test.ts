@@ -392,6 +392,95 @@ describe("runTurn", () => {
     expect(result.stateAfter).toBeDefined();
   });
 
+  it("counts a hard policy denial into TurnResult.toolCallsDenied (not just toolCallsBlocked)", async () => {
+    // A minimal duck-typed PolicyGate that hard-denies one tool — mirrors the
+    // real gate's `deny_above` band (allowed:false, requiresApproval:false)
+    // without dragging @motebit/policy into ai-core (the gate is injected). The
+    // real band logic is covered by packages/policy tests; this locks that the
+    // LOOP routes a `!decision.allowed` into the denial counter so the
+    // delegated-task handler can mint a signed `denied` receipt.
+    const denyingGate = {
+      filterTools: (t: ToolDefinition[]) => t,
+      createTurnContext: () => ({
+        turnId: "t",
+        toolCallCount: 0,
+        turnStartMs: 0,
+        costAccumulated: 0,
+      }),
+      validate: (tool: ToolDefinition) =>
+        tool.name === "send_money"
+          ? { allowed: false, requiresApproval: false, reason: "risk R4_MONEY exceeds deny_above" }
+          : { allowed: true, requiresApproval: false },
+      classify: () => ({
+        risk: 4,
+        dataClass: "private",
+        sideEffect: "irreversible",
+        requiresApproval: true,
+      }),
+      recordToolCall: (ctx: unknown) => ctx,
+      sanitizeAndCheck: (result: ToolResult) => ({
+        result,
+        injectionDetected: false,
+        injectionPatterns: [],
+      }),
+      sanitizeResult: (result: ToolResult) => result,
+      logInjection: () => undefined,
+    };
+
+    const toolRegistry = makeMockToolRegistry(
+      new Map([
+        [
+          "send_money",
+          {
+            def: {
+              name: "send_money",
+              description: "Send money",
+              inputSchema: { type: "object", properties: { to: { type: "string" } } },
+            },
+            result: { ok: true },
+          },
+        ],
+      ]),
+    );
+
+    const provider = makeMockProvider([
+      {
+        text: "I'll send that.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        tool_calls: [{ id: "tc_deny", name: "send_money", args: { to: "x" } }],
+      },
+    ]);
+
+    const deps = {
+      ...makeDepsWithProvider(provider, toolRegistry),
+      policyGate: denyingGate,
+    } as unknown as SensitivityCleared<MotebitLoopDependencies>;
+
+    let resultChunk:
+      | {
+          type: "result";
+          result: {
+            toolCallsDenied?: number;
+            toolCallsSucceeded: number;
+            toolCallsBlocked: number;
+          };
+        }
+      | undefined;
+    for await (const chunk of runTurnStreaming(deps, "send money to x")) {
+      if (chunk.type === "result") {
+        resultChunk = chunk as typeof resultChunk;
+      }
+    }
+
+    expect(resultChunk).toBeDefined();
+    // The hard deny is counted distinctly AND remains a subset of blocked.
+    expect(resultChunk!.result.toolCallsDenied).toBe(1);
+    expect(resultChunk!.result.toolCallsSucceeded).toBe(0);
+    expect(resultChunk!.result.toolCallsBlocked).toBeGreaterThanOrEqual(1);
+  });
+
   it("version clocks increment across turns", async () => {
     const deps = makeDeps();
 

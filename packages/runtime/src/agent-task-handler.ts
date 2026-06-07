@@ -96,6 +96,13 @@ export async function* handleAgentTask(
   const toolsUsed: string[] = [];
   let memoriesFormed = 0;
   let status: "completed" | "failed" | "denied" = "completed";
+  // Governance-refusal signal from the loop's terminal result. A delegated task
+  // that completed zero successful tool calls but was hard-denied by policy at
+  // least once is a refusal, not a completion — we mint an agent-signed
+  // `status:"denied"` receipt for it below. Approval-gates / injection /
+  // tool-not-found are NOT counted here (see TurnResult.toolCallsDenied).
+  let toolCallsSucceeded = 0;
+  let toolCallsDenied = 0;
 
   try {
     const stream = deps.sendMessageStreaming(task.prompt, undefined, {
@@ -118,6 +125,10 @@ export async function* handleAgentTask(
       } else if (chunk.type === "result") {
         responseText = chunk.result.response;
         memoriesFormed = chunk.result.memoriesFormed.length;
+        toolCallsSucceeded = chunk.result.toolCallsSucceeded;
+        // Optional + additive on TurnResult — absent on legacy producers ⇒ 0 ⇒
+        // never spuriously denies.
+        toolCallsDenied = chunk.result.toolCallsDenied ?? 0;
       }
 
       yield chunk;
@@ -130,6 +141,23 @@ export async function* handleAgentTask(
 
     // Restore user conversation context
     deps.restoreConversationContext(savedCtx);
+  }
+
+  // Delegation policy refusal path. A task that did NO successful work and was
+  // hard-denied by governance at least once is a refusal — surface it as an
+  // agent-signed `status:"denied"` receipt instead of a misleading `completed`.
+  // Only downgrades from `completed` (never overrides a `failed` from a thrown
+  // provider error / timeout): a crash is a failure, a policy block is a denial,
+  // and the two must not be confused on the signed record. The agent signs its
+  // OWN refusal here (the relay cannot — it holds no agent key), which is what
+  // makes "the agent refuses itself" a verifiable fact rather than the relay's
+  // word for it. See docs/doctrine/delegation.md.
+  if (status === "completed" && toolCallsSucceeded === 0 && toolCallsDenied > 0) {
+    status = "denied";
+    responseText =
+      `Task refused by governance: ${toolCallsDenied} action(s) exceeded this motebit's policy ` +
+      `(deny_above / denylist / delegated scope) and no permitted action completed.` +
+      (responseText ? ` Model note: ${responseText}` : "");
   }
 
   // Drain delegation receipts from motebit MCP adapters + interactive delegation tool
