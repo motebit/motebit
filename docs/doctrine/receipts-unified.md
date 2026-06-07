@@ -72,6 +72,18 @@ The trigger for shipping `@motebit/receipts` as a facade package: a third-party 
 
 Until then, this doctrine memo IS the unification surface. Future contributors searching for "receipts" find this memo via `grep` in `docs/doctrine/`, follow the table to the canonical owners, and read the verification path. That's the lightweight fix the audit identified.
 
+## Sibling: the verifiable governance triad
+
+The three receipts are the family's core, but the same JCS + Ed25519 + suite-dispatch shape extends to governance _decisions_ — so each of the three governance bands a motebit can apply to an act is a self-verifiable fact, not the system's plaintext word for it:
+
+| Band        | Trigger                                      | Verifiable artifact                                                  | Signed by                     |
+| ----------- | -------------------------------------------- | -------------------------------------------------------------------- | ----------------------------- |
+| **auto**    | risk ≤ `require_approval_above`              | `ToolInvocationReceipt`                                              | agent                         |
+| **approve** | `require_approval_above < risk ≤ deny_above` | `ApprovalDecision`                                                   | **approver (human's device)** |
+| **deny**    | risk > `deny_above`                          | `ExecutionReceipt{status:"denied"}` (delegation policy refusal path) | agent                         |
+
+`ApprovalDecision` (`@motebit/protocol`; `signApprovalDecision`/`verifyApprovalDecision` in `@motebit/crypto`) closes the band that was previously a plaintext DB row + event. It commits to `args_hash` (never raw args — same privacy discipline as `ToolInvocationReceipt`), binds the gated `approval_id` so a verdict is non-portable across calls, and is signed by the **approver's** key — consent is the approver's own assertion, mirroring how the worker signs its own refusal. Produced at the verdict locus in `streaming.ts`'s `resumeAfterApproval` (covering single-approver, deny, and quorum-met paths), delivered via the `onApprovalDecision` sink and buffered in `getRecentApprovalDecisions()` — the exact buffer + forward shape as `onToolInvocation` (no runtime event-log append: the daemon already records its own goal-audit event, and durable archival is a separate consumer-shaped concern). Prior art for the shape: the key-rotation guardian quorum (`relay_approval_votes.signature`). Structurally locked by `check-signed-artifact-verifiers`. Deferred (consumer-forced shape): durable cross-restart archival + a dedicated retrieval surface, per-quorum-vote signing, and signing the timeout-expiry auto-deny.
+
 ## Cross-cuts
 
 - [`self-attesting-system.md`](self-attesting-system.md) — every claim is user-verifiable; receipts are the structural implementation of that principle.

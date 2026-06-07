@@ -49,6 +49,8 @@ import {
   verifyConsolidationReceipt,
   signAdjudicatorVote,
   verifyAdjudicatorVote,
+  signApprovalDecision,
+  verifyApprovalDecision,
   signDisputeResolution,
   verifyDisputeResolution,
   signDisputeRequest,
@@ -908,6 +910,85 @@ describe("signAdjudicatorVote / verifyAdjudicatorVote", () => {
     const signed = await signAdjudicatorVote(makeVote(), kp.privateKey);
     const wrongSuite = { ...signed, suite: "motebit-future-pqc-v7" as never };
     expect(await verifyAdjudicatorVote(wrongSuite, kp.publicKey)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signApprovalDecision / verifyApprovalDecision  (the "approve" governance band)
+// ---------------------------------------------------------------------------
+
+describe("signApprovalDecision / verifyApprovalDecision", () => {
+  function makeDecision(overrides?: {
+    approval_id?: string;
+    args_hash?: string;
+    verdict?: "approved" | "denied";
+  }) {
+    return {
+      approval_id: overrides?.approval_id ?? "tc-alpha",
+      motebit_id: "motebit-executor",
+      device_id: "device-approver",
+      tool_name: "send_money",
+      args_hash: overrides?.args_hash ?? "a".repeat(64),
+      risk_level: 4,
+      verdict: overrides?.verdict ?? ("approved" as const),
+      requested_at: 1000,
+      resolved_at: 2000,
+    };
+  }
+
+  it("round-trips and stamps suite; embeds public_key for offline verify", async () => {
+    const kp = await generateKeypair();
+    const signed = await signApprovalDecision(makeDecision(), kp.privateKey, kp.publicKey);
+    expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(signed.signature).toBeTruthy();
+    expect(signed.public_key).toBeTruthy();
+    expect(await verifyApprovalDecision(signed, kp.publicKey)).toBe(true);
+  });
+
+  it("verifies without an embedded public_key (caller supplies the key)", async () => {
+    const kp = await generateKeypair();
+    const signed = await signApprovalDecision(makeDecision(), kp.privateKey);
+    expect(signed.public_key).toBeUndefined();
+    expect(await verifyApprovalDecision(signed, kp.publicKey)).toBe(true);
+  });
+
+  // The non-portability invariant: the signature covers approval_id, so a
+  // verdict rendered for one gated call cannot be replayed onto another.
+  it("signature binds to approval_id — a verdict for call A fails on call B's bytes", async () => {
+    const kp = await generateKeypair();
+    const forA = await signApprovalDecision(makeDecision({ approval_id: "tc-A" }), kp.privateKey);
+    const replayedToB = { ...forA, approval_id: "tc-B" };
+    expect(await verifyApprovalDecision(replayedToB, kp.publicKey)).toBe(false);
+  });
+
+  // Consent binds to the exact call shape: tampering args_hash (a different
+  // call than the human saw) breaks the signature.
+  it("signature binds to args_hash — swapped args break verification", async () => {
+    const kp = await generateKeypair();
+    const signed = await signApprovalDecision(makeDecision(), kp.privateKey);
+    const swapped = { ...signed, args_hash: "b".repeat(64) };
+    expect(await verifyApprovalDecision(swapped, kp.publicKey)).toBe(false);
+  });
+
+  it("detects verdict tampering — approved flipped to denied fails", async () => {
+    const kp = await generateKeypair();
+    const signed = await signApprovalDecision(makeDecision({ verdict: "approved" }), kp.privateKey);
+    const flipped = { ...signed, verdict: "denied" as const };
+    expect(await verifyApprovalDecision(flipped, kp.publicKey)).toBe(false);
+  });
+
+  it("rejects the wrong key", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const signed = await signApprovalDecision(makeDecision(), kpA.privateKey);
+    expect(await verifyApprovalDecision(signed, kpB.publicKey)).toBe(false);
+  });
+
+  it("rejects unknown suite (no legacy-no-suite path)", async () => {
+    const kp = await generateKeypair();
+    const signed = await signApprovalDecision(makeDecision(), kp.privateKey);
+    const wrongSuite = { ...signed, suite: "motebit-future-pqc-v7" as never };
+    expect(await verifyApprovalDecision(wrongSuite, kp.publicKey)).toBe(false);
   });
 });
 

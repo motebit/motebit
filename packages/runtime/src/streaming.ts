@@ -18,7 +18,8 @@ import type { AgenticChunk, TurnResult } from "@motebit/ai-core";
 import { extractStateTags, runTurnStreaming } from "@motebit/ai-core";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
 import type { SignableToolInvocationReceipt } from "@motebit/crypto";
-import { signToolInvocationReceipt, hashToolPayload } from "@motebit/crypto";
+import { signToolInvocationReceipt, hashToolPayload, signApprovalDecision } from "@motebit/crypto";
+import type { ApprovalDecision } from "@motebit/crypto";
 import type { StreamChunk } from "./runtime-config.js";
 
 // Re-import the helper — it's file-local in index.ts, so we duplicate it here.
@@ -150,6 +151,18 @@ export interface StreamingDeps {
    */
   onToolInvocation?: (receipt: SignableToolInvocationReceipt) => void;
   /**
+   * Sink for a signed human-consent decision over a governance-gated tool call.
+   * Fires once per FINAL approval verdict (single-approver, deny, or quorum-met)
+   * at the resolution point in `resumeAfterApproval`, with the
+   * `ApprovalDecision` already signed by the approver's device key via
+   * `signApprovalDecision`. This is the "approve" governance band made
+   * verifiable — the sibling of the `ToolInvocationReceipt` (auto band) and the
+   * agent-signed denied `ExecutionReceipt` (deny band). The runtime wires this
+   * to a durable audit record; subscribers MUST NOT mutate the decision (frozen
+   * by the signer) or block the generator — fire-and-forget, exceptions logged.
+   */
+  onApprovalDecision?: (decision: ApprovalDecision) => void;
+  /**
    * Sink for live tool-invocation activity — the raw args + result
    * bytes the receipt's `args_hash` / `result_hash` commit to. Fires
    * at the same point as `onToolInvocation`, with a payload shaped
@@ -199,6 +212,10 @@ interface PendingApproval {
   userMessage: string;
   runId?: string;
   quorum?: { required: number; approvers: string[]; collected: string[] };
+  /** RiskLevel numeric that triggered the gate — bound into the signed consent decision. */
+  riskLevel?: number;
+  /** Unix ms when the gate fired (the approval was requested). */
+  requestedAt: number;
 }
 
 export class StreamingManager {
@@ -418,6 +435,8 @@ export class StreamingManager {
           userMessage,
           runId,
           quorum: chunk.quorum,
+          riskLevel: chunk.risk_level,
+          requestedAt: Date.now(),
         };
 
         // Persist quorum metadata to the approval store (source of truth)
@@ -507,6 +526,12 @@ export class StreamingManager {
     this.deps.setSpeaking(true);
 
     try {
+      // Record the human's consent as a signed, offline-verifiable decision
+      // BEFORE acting on it — the "approve" governance band made provable, the
+      // sibling of the agent-signed refusal receipt. Best-effort: a signing
+      // failure must never block the actual resume.
+      await this.signAndEmitApprovalDecision(pending, approved);
+
       if (approved) {
         // Execute the tool directly
         yield { type: "tool_status" as const, name: pending.toolName, status: "calling" as const };
@@ -565,6 +590,60 @@ export class StreamingManager {
       this.deps.setSpeaking(false);
       this.deps.pushStateUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
+    }
+  }
+
+  /**
+   * Build, sign, and emit the human-consent decision for a resolved approval.
+   * Signed by the APPROVER's device key — consent is the approver's own
+   * assertion, mirroring how the worker signs its own refusal. Commits to
+   * `args_hash` (never raw args), the gated `approval_id` (= tool_call_id), the
+   * verdict, and the requested/resolved timestamps, so a third party can verify
+   * offline that this approver consented to THIS call at THIS time.
+   *
+   * Best-effort and fail-open on the AUDIT side only: if the signing material
+   * is absent (no device key wired) or signing throws, the resume still
+   * proceeds — the decision artifact is an audit record layered on top of the
+   * already-enforced gate, not the gate itself. Mirrors `onToolInvocation`.
+   */
+  private async signAndEmitApprovalDecision(
+    pending: PendingApproval,
+    approved: boolean,
+  ): Promise<void> {
+    const sink = this.deps.onApprovalDecision;
+    if (!sink) return;
+    const deviceId = this.deps.getDeviceId?.() ?? null;
+    const privateKey = this.deps.getSigningPrivateKey?.() ?? null;
+    const publicKey = this.deps.getSigningPublicKey?.() ?? null;
+    if (!deviceId || !privateKey || !this.deps.motebitId) return;
+
+    try {
+      const argsHash = await hashToolPayload(pending.args);
+      const unsigned: Omit<ApprovalDecision, "signature" | "suite"> = {
+        approval_id: pending.toolCallId,
+        motebit_id: this.deps.motebitId,
+        device_id: deviceId,
+        tool_name: pending.toolName,
+        args_hash: argsHash,
+        risk_level: pending.riskLevel ?? 0,
+        verdict: approved ? "approved" : "denied",
+        requested_at: pending.requestedAt,
+        resolved_at: Date.now(),
+        ...(approved ? {} : { denied_reason: "User denied this tool call." }),
+        ...(pending.runId != null ? { run_id: pending.runId } : {}),
+      };
+      const signed = await signApprovalDecision(unsigned, privateKey, publicKey ?? undefined);
+      try {
+        sink(signed);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console -- diagnostic on consumer fault
+        console.warn(`[streaming] onApprovalDecision sink threw: ${msg}`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console -- diagnostic on signing fault
+      console.warn(`[streaming] failed to sign approval decision: ${msg}`);
     }
   }
 

@@ -909,6 +909,69 @@ export async function verifyAdjudicatorVote(
   }
 }
 
+// === Approval Decisions (human-consent over a governance-gated tool call) ===
+
+// prettier-ignore
+import type { ApprovalDecision } from "@motebit/protocol";
+export type { ApprovalDecision };
+
+/** The one suite ApprovalDecisions sign under today. */
+export const APPROVAL_DECISION_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/**
+ * Sign a human-consent decision over a governance-gated tool call. Signed by
+ * the APPROVER's key — consent is the approver's own assertion, the same way the
+ * worker signs its own refusal. The `approval_id` (the gated call's
+ * `tool_call_id`) and `args_hash` are part of the signed body, so a verdict is
+ * non-portable: it cannot be replayed onto a different call or different args
+ * without breaking the signature.
+ *
+ * Callers pass the body without `signature` or `suite`; the signer owns both.
+ * When `publicKey` is supplied it is embedded as `public_key` (hex) so a third
+ * party can verify offline without a separate key lookup — same portability
+ * contract as `signExecutionReceipt`.
+ */
+export async function signApprovalDecision<T extends Omit<ApprovalDecision, "signature" | "suite">>(
+  decision: T,
+  approverPrivateKey: Uint8Array,
+  publicKey?: Uint8Array,
+): Promise<T & { suite: typeof APPROVAL_DECISION_SUITE; signature: string }> {
+  const withKey = publicKey ? { ...decision, public_key: bytesToHex(publicKey) } : decision;
+  const body = { ...withKey, suite: APPROVAL_DECISION_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(APPROVAL_DECISION_SUITE, message, approverPrivateKey);
+  const signed = { ...body, signature: toBase64Url(sig) } as T & {
+    suite: typeof APPROVAL_DECISION_SUITE;
+    signature: string;
+  };
+  // Immutable evidence by contract — freeze so any post-sign mutation throws at
+  // the producer rather than surfacing as wire corruption downstream.
+  return Object.freeze(signed);
+}
+
+/**
+ * Verify an approval decision against the approver's public key. Reconstructs
+ * the canonical JSON from every field except `signature` (the suite IS part of
+ * the signed body, so tampering with it breaks verification). Fail-closed on
+ * unknown suite, base64url decode error, and primitive verification failure.
+ */
+export async function verifyApprovalDecision(
+  decision: ApprovalDecision,
+  approverPublicKey: Uint8Array,
+): Promise<boolean> {
+  if (decision.suite !== APPROVAL_DECISION_SUITE) return false;
+  const { signature, ...body } = decision;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(decision.suite, message, sig, approverPublicKey);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Sign a dispute resolution. For single-relay adjudication
  * (`adjudicator_votes: []`) the relay signs with its own identity key.

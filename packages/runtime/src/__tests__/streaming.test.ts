@@ -4,6 +4,8 @@ import type { PlatformAdapters, StreamChunk, ConversationStoreAdapter } from "..
 import type { StreamingProvider, AgenticChunk, TurnResult } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ToolHandler } from "@motebit/sdk";
 import { TrustMode, BatteryMode, EventType, SensitivityLevel } from "@motebit/sdk";
+// eslint-disable-next-line no-restricted-imports -- test verifies the signed consent artifact directly
+import { generateKeypair, verifyApprovalDecision, type ApprovalDecision } from "@motebit/crypto";
 
 // === Mock ai-core: override runTurnStreaming and reflect, keep everything else real ===
 
@@ -963,6 +965,88 @@ describe("processStream side effects", () => {
 
     // Should extract *smiles* action and convert to state delta without error
     await collectChunks(runtime.sendMessageStreaming("hello"));
+  });
+});
+
+// === signed approval/consent decision (the "approve" governance band) ===
+
+describe("resumeAfterApproval — signed consent decision", () => {
+  let runtime: MotebitRuntime;
+  let keypair: { publicKey: Uint8Array; privateKey: Uint8Array };
+  let decisions: ApprovalDecision[];
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    keypair = await generateKeypair();
+    decisions = [];
+    runtime = new MotebitRuntime(
+      {
+        motebitId: "consent-test",
+        tickRateHz: 0,
+        deviceId: "device-approver",
+        signingKeys: { privateKey: keypair.privateKey, publicKey: keypair.publicKey },
+        onApprovalDecision: (d) => decisions.push(d),
+      },
+      createAdapters(createMockProvider()),
+    );
+  });
+
+  async function enterPendingApproval(
+    toolCallId: string,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<void> {
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        { type: "approval_request", tool_call_id: toolCallId, name, args, risk_level: 4 },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    await collectChunks(runtime.sendMessageStreaming("do the thing"));
+    expect(runtime.hasPendingApproval).toBe(true);
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks({ type: "result", result: makeTurnResult() }),
+    );
+  }
+
+  it("an APPROVED verdict emits a signed consent decision that verifies offline", async () => {
+    await enterPendingApproval("tc-approve", "send_money", { to: "x", amount: 5 });
+    await collectChunks(runtime.resumeAfterApproval(true));
+
+    expect(decisions).toHaveLength(1);
+    const d = decisions[0]!;
+    expect(d.verdict).toBe("approved");
+    expect(d.approval_id).toBe("tc-approve");
+    expect(d.tool_name).toBe("send_money");
+    expect(d.risk_level).toBe(4);
+    expect(d.device_id).toBe("device-approver");
+    // args_hash commits to the call — never the raw args.
+    expect(d.args_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(d).not.toHaveProperty("args");
+    // The approver's own signature verifies with no relay contact.
+    expect(await verifyApprovalDecision(d, keypair.publicKey)).toBe(true);
+  });
+
+  it("a DENIED verdict also emits a signed decision (consent refusal is provable too)", async () => {
+    await enterPendingApproval("tc-deny", "delete_account", {});
+    await collectChunks(runtime.resumeAfterApproval(false));
+
+    expect(decisions).toHaveLength(1);
+    const d = decisions[0]!;
+    expect(d.verdict).toBe("denied");
+    expect(d.denied_reason).toBeTruthy();
+    expect(await verifyApprovalDecision(d, keypair.publicKey)).toBe(true);
+  });
+
+  it("buffers the decision in getRecentApprovalDecisions(), verifiable, same contract as getRecentReceipts()", async () => {
+    await enterPendingApproval("tc-buffer", "transfer", { amt: 1 });
+    await collectChunks(runtime.resumeAfterApproval(true));
+
+    const buffered = runtime.getRecentApprovalDecisions();
+    expect(buffered).toHaveLength(1);
+    expect(buffered[0]!.approval_id).toBe("tc-buffer");
+    // The buffered artifact reverifies offline — self-attesting consent.
+    expect(await verifyApprovalDecision(buffered[0]!, keypair.publicKey)).toBe(true);
   });
 });
 
