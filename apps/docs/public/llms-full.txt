@@ -3328,7 +3328,18 @@ It reports the signature's validity and binding rung. A `denied` receipt that ve
 
 ## Verify a consent decision (approve band)
 
-An `ApprovalDecision` carries the approver's embedded `public_key`, so it verifies self-contained, offline:
+Two real, signed fixtures to verify — one per verdict (both reproducible from [`mint-approval-decision-fixture.mjs`](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/fixtures/mint-approval-decision-fixture.mjs)):
+
+- [`approval-decision-approved.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/approval-decision-approved.json)
+- [`approval-decision-denied.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/approval-decision-denied.json)
+
+**Canonical demo approver public key** (pin this — see [What a verified `ApprovalDecision` proves](#what-a-verified-approvaldecision-proves) for why you must not trust the embedded key alone):
+
+```
+e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0
+```
+
+### Command line
 
 ```bash
 motebit-verify approval-decision decision.json
@@ -3358,13 +3369,50 @@ motebit-verify approval-decision decision.json --producer-key 6f1c8e2b...
 motebit-verify approval-decision decision.json --expect-verdict approved
 ```
 
+Exit codes match the rest of the CLI: `0` verified, `1` detected-but-invalid, `2` usage/IO.
+
+### In the browser (no server)
+
+`ApprovalDecision` verifies client-side with **`@motebit/crypto`** — zero dependencies, no `node:` imports, browser-safe (the same permissive-floor primitive that backs sovereign-receipt verification). There is no server in this path:
+
+```ts
+import { verifyApprovalDecision, hexToBytes } from "@motebit/crypto";
+
+// Pin the CANONICAL approver key — do NOT verify against decision.public_key
+// alone (that is circular; see below). For the demo fixtures, the canonical key
+// is published above.
+const CANONICAL_APPROVER_KEY =
+  "e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0";
+
+const ok = await verifyApprovalDecision(decision, hexToBytes(CANONICAL_APPROVER_KEY));
+// ok === true  → signature-authentic against the canonical approver key
+```
+
+> `@motebit/verify` (the CLI) and `@motebit/verifier` (the file/format library) are sibling packages; the low-level `verifyApprovalDecision` primitive lives in `@motebit/crypto` and is what both build on. For a browser, import from `@motebit/crypto` directly.
+
 What the signature commits to — and why it can't be replayed:
 
 - **`approval_id`** is the gated call's id, inside the signed body. A verdict can't be lifted onto a different call without breaking the signature.
 - **`args_hash`** is the SHA-256 of the canonical arguments — never the raw args. Consent binds to the exact call the human saw; a verifier who holds the raw args recomputes and matches, and one who holds only the decision still proves a verdict was rendered over *some* call at *some* time. (No sensitive argument data sits in the signed artifact.)
 - **`verdict`** (`approved` / `denied`) is signed; flipping it fails verification.
 
-Exit codes match the rest of the CLI: `0` verified, `1` detected-but-invalid, `2` usage/IO.
+### What a verified `ApprovalDecision` proves
+
+Read this before you render an `ApprovalDecision` as a trust signal — it does **not** carry the same authority a sovereign `ExecutionReceipt` does.
+
+`verifyApprovalDecision(decision, key)` proves the decision was **signed by whoever holds `key`, untampered** — *signature-authentic*. It does **not** prove that `key` has any authority to approve. Unlike a sovereign `ExecutionReceipt` — where `motebit_id` is *derived from* the signing key, so the key's authority is self-proving offline — an `ApprovalDecision` carries **no `motebit_id → key` commitment**. The approver is a separate party (the human/owner's device), and nothing inside the artifact binds that device to a legitimate role.
+
+The consequence, and the rule: **verifying against the decision's own embedded `public_key` is circular** — the decision says "I'm signed by K" and you confirm it's signed by K, which proves nothing about who K is. To get a real signal, **pin an independently-known approver key** (the canonical demo key above; in production, a device key from the motebit's identity file) via `--producer-key` / the `key` argument, and confirm the decision verifies against *that*.
+
+Where a verified `ApprovalDecision` sits on the [binding ladder](/docs/developer/choosing-a-verify-surface):
+
+| Check | Rung | Honest label |
+| --- | --- | --- |
+| verifies against its embedded key only | **integrity-only** | "signature valid" (says nothing about the approver) |
+| verifies against an independently-pinned approver key | **pinned** | "approver-signed ✓ (offline)" |
+| approver device proven a registered device of the motebit | *future rung* | requires the motebit's identity file — not wired today |
+
+So: render a pinned `ApprovalDecision` as **"approver-signed ✓ (offline)"**, never as **"sovereign."** Authority-binding the approver device to the motebit's registered devices is a future rung; today the honest claim is signature-authenticity against a key you pinned.
 
 ## Verify an auto-band proof (auto band)
 

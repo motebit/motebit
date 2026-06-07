@@ -34,9 +34,17 @@
 
 export { verifyFile, verifyArtifact, verifySkillDirectory, formatHuman } from "./lib.js";
 export type { VerifyFileOptions, VerifyResultWithBinding } from "./lib.js";
+// Re-exported from the browser-safe `@motebit/crypto` primitive so consumers
+// already depending on this library can verify a human-consent decision (the
+// "approve" governance band) without adding a second dependency. `ApprovalDecision`
+// is NOT an auto-detected artifact type (it has no `motebit_id → key` binding
+// ladder — see docs/developer/governance-triad.mdx); it is verified explicitly
+// against a pinned approver key, never against its own embedded key alone.
+export { verifyApprovalDecision } from "@motebit/crypto";
 export type {
   VerifyResult,
   ArtifactType,
   SkillVerifyResult,
   SkillFileVerifyResult,
+  ApprovalDecision,
 } from "@motebit/crypto";
