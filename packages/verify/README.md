@@ -52,7 +52,18 @@ motebit-verify <file> \
   --bundle-id com.example.app \
   --android-attestation-application-id ./app-id.bin \
   --rp-id example.com
+
+# Governance triad — verify a human-consent decision (the "approve" band)
+motebit-verify approval-decision decision.json
+motebit-verify approval-decision decision.json --producer-key <hex>   # pin the approver
+motebit-verify approval-decision decision.json --expect-verdict approved
 ```
+
+### The governance triad — approve / deny / auto
+
+`motebit-verify approval-decision <file>` verifies a signed `ApprovalDecision` — **proof of permission before a gated act** (the "approve" band). The deny band (`ExecutionReceipt{status:"denied"}`) and auto band (`ToolInvocationReceipt`) verify through the ordinary receipt path. A verified `ApprovalDecision` is **signature-authentic against a key you pin, not authority-bound** — pin the approver with `--producer-key`; verifying against the embedded key alone is circular. Full model, the binding-ladder placement, and the **browser path** (`import { verifyApprovalDecision } from "@motebit/crypto"` — zero-dep, no server): see [the governance-triad guide](https://docs.motebit.com/docs/developer/governance-triad).
+
+> **`@motebit/verify` vs `@motebit/verifier` vs `@motebit/crypto`.** This package (`verify`) is the **CLI binary** a human installs. [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) is the **browser-safe library** (file I/O + formatting; also re-exports `verifyApprovalDecision`). [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) is the **zero-dependency primitive** that carries the actual verify/sign functions — import it directly for browser/client-side verification.
 
 **Verifying `android_keystore` credentials requires `--android-attestation-application-id`.** The flag's value is a path to a binary file containing the raw bytes of the leaf cert's `attestationApplicationId` extension — operators capture this once at build time (deterministic from the registered Android package name + signing-cert SHA-256) and commit the file alongside other pinned config. Without the flag, the Android Keystore arm is intentionally unwired (passing a placeholder would false-reject every real claim); the dispatcher reports `"verifier not wired"`.
 

@@ -45,6 +45,8 @@ The unified `verify()` dispatcher in [`@motebit/crypto`](https://www.npmjs.com/p
 
 This package wraps the dispatcher with `verifyFile` (path → result), `verifyArtifact` (string → result), `verifySkillDirectory` (path-to-a-skill-directory → result, for skill bundles shipped as a tree rather than a single file), and `formatHuman` (result → printable banner).
 
+It also re-exports **`verifyApprovalDecision`** from `@motebit/crypto` — the "approve" governance band's signed human-consent artifact (`ApprovalDecision`). Unlike the auto-detected artifact types above, an `ApprovalDecision` is verified explicitly against a **pinned approver key** (it carries no `motebit_id → key` binding, so verifying against its own embedded key is circular). See [the governance-triad guide](https://docs.motebit.com/docs/developer/governance-triad) for where a verified decision sits on the binding ladder.
+
 ## Guarantees
 
 - **No network.** Verification runs entirely offline. No relay calls, no DID resolution over the wire.

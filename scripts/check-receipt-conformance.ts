@@ -49,12 +49,31 @@ async function main(): Promise<void> {
   const failures: string[] = [];
   const note = (m: string) => console.log(`  ${m}`);
 
-  const fixtures = readdirSync(fixturesDir)
-    .filter((f) => f.endsWith(".json"))
-    .sort();
+  // Scope to ExecutionReceipt fixtures only — this gate checks cross-impl
+  // RECEIPT conformance. The fixtures dir also holds other signed-artifact
+  // vectors (e.g. approval-decision-*.json, the "approve" governance band),
+  // which are a different shape verified by their own primitive
+  // (verifyApprovalDecision against a pinned approver key), not the receipt
+  // verifiers swept here. Shape-detect (task_id + result_hash) rather than
+  // name-match so a future non-receipt fixture can't silently re-break this gate.
+  const isReceiptFixture = (f: string): boolean => {
+    if (!f.endsWith(".json")) return false;
+    try {
+      const o = JSON.parse(readFileSync(join(fixturesDir, f), "utf8")) as Record<string, unknown>;
+      return typeof o.task_id === "string" && typeof o.result_hash === "string";
+    } catch {
+      return false;
+    }
+  };
+  const allJson = readdirSync(fixturesDir).filter((f) => f.endsWith(".json"));
+  const fixtures = allJson.filter(isReceiptFixture).sort();
+  const skipped = allJson.length - fixtures.length;
 
   console.log(
-    `▸ check-receipt-conformance — ${fixtures.length} vectors × {verifier, crypto, state-export-client, python}`,
+    `▸ check-receipt-conformance — ${fixtures.length} receipt vectors × {verifier, crypto, state-export-client, python}` +
+      (skipped > 0
+        ? ` (${skipped} non-receipt fixture(s) excluded — verified by their own primitives)`
+        : ""),
   );
 
   // Python availability (best-effort unless REQUIRE_PYTHON=1).
