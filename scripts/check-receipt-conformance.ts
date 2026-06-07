@@ -42,25 +42,35 @@ async function main(): Promise<void> {
   const sec = await import(join(repoRoot, "packages/state-export-client/dist/index.js"));
 
   // Expected offline sovereign rung per fixture (verifier's `result.sovereign`).
-  // `example-receipt.json` is integrity-only (random motebit_id); every
-  // `sovereign-*.json` vector binds the key, so it must read sovereign.
-  const expectSovereign = (file: string): boolean => file.startsWith("sovereign-receipt");
+  // `example-receipt.json` is the one integrity-only vector (random motebit_id,
+  // not key-committed); EVERY other ExecutionReceipt fixture here binds the key
+  // (sovereign-receipt*, triad-*), so it must read sovereign. Expectation is
+  // "sovereign unless it's the known integrity-only fixture" — named-allowlist
+  // would silently expect the wrong rung for a future sovereign vector.
+  const INTEGRITY_ONLY = new Set(["example-receipt.json"]);
+  const expectSovereign = (file: string): boolean => !INTEGRITY_ONLY.has(file);
 
   const failures: string[] = [];
   const note = (m: string) => console.log(`  ${m}`);
 
   // Scope to ExecutionReceipt fixtures only — this gate checks cross-impl
   // RECEIPT conformance. The fixtures dir also holds other signed-artifact
-  // vectors (e.g. approval-decision-*.json, the "approve" governance band),
-  // which are a different shape verified by their own primitive
-  // (verifyApprovalDecision against a pinned approver key), not the receipt
-  // verifiers swept here. Shape-detect (task_id + result_hash) rather than
-  // name-match so a future non-receipt fixture can't silently re-break this gate.
+  // vectors: ApprovalDecisions (`approval_id` + `verdict`, no `task_id`) and
+  // ToolInvocationReceipts (`invocation_id` + `args_hash`, no `tools_used`),
+  // each verified by its own primitive — not the ExecutionReceipt verifiers
+  // swept here. Shape-detect on the markers UNIQUE to ExecutionReceipt
+  // (`task_id` + the `tools_used` array — ToolInvocationReceipt has neither
+  // `tools_used` nor an absent `invocation_id`) rather than name-match, so a
+  // future non-receipt fixture can't silently re-break this gate.
   const isReceiptFixture = (f: string): boolean => {
     if (!f.endsWith(".json")) return false;
     try {
       const o = JSON.parse(readFileSync(join(fixturesDir, f), "utf8")) as Record<string, unknown>;
-      return typeof o.task_id === "string" && typeof o.result_hash === "string";
+      return (
+        typeof o.task_id === "string" &&
+        Array.isArray(o.tools_used) &&
+        o.invocation_id === undefined
+      );
     } catch {
       return false;
     }

@@ -3426,6 +3426,45 @@ const ok = await verifyToolInvocationReceipt(receipt, signerPublicKeyBytes);
 
 Like the others it commits to `args_hash` / `result_hash` rather than raw bytes, so the proof is independently checkable without exposing tool inputs or outputs.
 
+## The full triad, as one linked story
+
+The individual fixtures above each prove one band. A **paired set** proves the bands *connect* — that the human's consent and the agent's execution are the same act, not two unrelated cards. One sovereign demo agent (`motebit_id` commits to its key) and the canonical approver, with real correlators (reproducible from [`mint-triad-fixture.mjs`](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/fixtures/mint-triad-fixture.mjs)):
+
+| Fixture | Band | Signed by | Links by |
+| --- | --- | --- | --- |
+| [`triad-approval-decision.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-approval-decision.json) | approve (consent) | approver key | `run_id` = T, `args_hash` = H, `approval_id` = C |
+| [`triad-tool-invocation-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-tool-invocation-receipt.json) | approve (executed call) | agent (sovereign) | `task_id` = T, `args_hash` = H, `invocation_id` = C |
+| [`triad-execution-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-execution-receipt.json) | approve (task) | agent (sovereign) | `task_id` = T |
+| [`triad-deny-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-deny-receipt.json) | deny | agent (sovereign) | distinct `task_id` = D, `status: "denied"` |
+
+The linkage is the point, and it is **cryptographic, not asserted**:
+
+- **`args_hash` (H)** is identical on the `ApprovalDecision` and the `ToolInvocationReceipt` — the human consented to the *exact* call that ran. Different bytes → different hash → no link.
+- **`run_id` (T) on the decision = `task_id` (T)** on both receipts — consent → execution, same task.
+- **`approval_id` (C) = `invocation_id` (C)** — the gated call and the executed call are one.
+
+Verify the whole story offline — pin the approver key for consent (it is not authority-bound; see above), and the receipts are sovereign (the agent's `motebit_id` commits to its key):
+
+```ts
+import { verifyApprovalDecision, verifyExecutionReceipt, verifyToolInvocationReceipt, hexToBytes } from "@motebit/crypto";
+
+const APPROVER = hexToBytes("e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0");
+const AGENT = hexToBytes("79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664");
+
+const consentOk  = await verifyApprovalDecision(approval, APPROVER);       // pinned approver
+const callOk     = await verifyToolInvocationReceipt(toolReceipt, AGENT);  // sovereign agent
+const taskOk     = await verifyExecutionReceipt(execReceipt, AGENT);       // sovereign agent
+
+// The link — assert it; never assume it:
+const linked =
+  approval.run_id === execReceipt.task_id &&
+  approval.run_id === toolReceipt.task_id &&
+  approval.args_hash === toolReceipt.args_hash &&
+  approval.approval_id === toolReceipt.invocation_id;
+```
+
+All four signatures verify, and `linked` is true, with no server and no relay. That is the full governance triad — *the human approved this exact call, the agent ran it, and refused a separate over-policy one* — proven end to end.
+
 ## Why this matters
 
 Generating signed artifacts internally is not the claim. The claim is: **a third party can verify what a motebit was permitted to do, what a human consented to, and what was refused — without trusting the application.** The triad makes all three governance outcomes provable with the same public packages and the signer's public key. Nothing here is gated behind a subscription; it is a baseline property of every motebit identity.
