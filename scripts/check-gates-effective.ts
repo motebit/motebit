@@ -42,8 +42,8 @@
 
 import { spawnSync } from "node:child_process";
 import { writeFileSync, unlinkSync, existsSync, readFileSync, readdirSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve, dirname, relative } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -76,11 +76,41 @@ interface Probe {
 }
 
 /**
+ * Perturbations currently written to disk: absolute path → the exact bytes the
+ * probe wrote. This gate mutates real files in place to inject a known
+ * violation, so its verdict is only meaningful if those bytes are still on disk
+ * when the gate runs. If something external (a concurrent build / typecheck /
+ * formatter / a second invocation) rewrites a probe target mid-run, the gate
+ * sees content it didn't inject and a "pass" means nothing — it would otherwise
+ * be misreported as "the gate failed to catch a known violation." This registry
+ * lets the runner detect that race and abort with an honest message instead.
+ */
+const activePerturbations = new Map<string, string>();
+
+/**
+ * Probe targets whose on-disk bytes no longer match what the probe wrote —
+ * i.e. clobbered out from under the run. Empty in the normal isolated case.
+ */
+export function findClobberedPerturbations(): string[] {
+  const clobbered: string[] = [];
+  for (const [absolute, expected] of activePerturbations) {
+    let actual: string | null = null;
+    try {
+      actual = readFileSync(absolute, "utf-8");
+    } catch {
+      actual = null; // deleted underneath us also counts as clobbered
+    }
+    if (actual !== expected) clobbered.push(relative(ROOT, absolute));
+  }
+  return clobbered;
+}
+
+/**
  * Write a fixture file and return a cleanup that removes it. If the file
  * already exists (unlikely — prefix guards against this), refuse to
  * clobber.
  */
-function writeFixture(relativePath: string, content: string): () => void {
+export function writeFixture(relativePath: string, content: string): () => void {
   const absolute = resolve(ROOT, relativePath);
   if (existsSync(absolute)) {
     throw new Error(
@@ -88,7 +118,9 @@ function writeFixture(relativePath: string, content: string): () => void {
     );
   }
   writeFileSync(absolute, content);
+  activePerturbations.set(absolute, content);
   return () => {
+    activePerturbations.delete(absolute);
     if (existsSync(absolute)) unlinkSync(absolute);
   };
 }
@@ -101,8 +133,13 @@ function writeFixture(relativePath: string, content: string): () => void {
 function mutateFile(relativePath: string, mutate: (src: string) => string): () => void {
   const absolute = resolve(ROOT, relativePath);
   const original = readFileSync(absolute, "utf-8");
-  writeFileSync(absolute, mutate(original));
-  return () => writeFileSync(absolute, original);
+  const mutated = mutate(original);
+  writeFileSync(absolute, mutated);
+  activePerturbations.set(absolute, mutated);
+  return () => {
+    activePerturbations.delete(absolute);
+    writeFileSync(absolute, original);
+  };
 }
 
 const PROBES: ReadonlyArray<Probe> = [
@@ -2308,6 +2345,12 @@ function main(): void {
     process.exit(143);
   });
 
+  // Set if a probe target is clobbered out from under the run (concurrent
+  // build/typecheck/formatter/second-invocation). When this happens a gate
+  // "passing" is meaningless — abort with an honest message rather than
+  // misreport the gate as ineffective.
+  let concurrentModification: string[] | null = null;
+
   for (const probe of PROBES) {
     process.stderr.write(`\n▸ ${probe.script} — ${probe.proves}\n`);
     // Escape-hatch check. If a gate has a documented escape hatch currently
@@ -2346,6 +2389,14 @@ function main(): void {
       });
       gateExitCode = result.status;
       ok = gateExitCode !== null && gateExitCode !== 0;
+      // A gate "passing" (exit 0) is only meaningful if the perturbation was
+      // actually on disk when the gate read it. If it was clobbered mid-run,
+      // the apparent pass is an artifact of a non-isolated environment, not a
+      // dead gate — distinguish the two before we accuse the gate.
+      if (!ok) {
+        const clobbered = findClobberedPerturbations();
+        if (clobbered.length > 0) concurrentModification = clobbered;
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -2359,6 +2410,18 @@ function main(): void {
       activeCleanup = null;
     }
     results.push({ probe, gateExitCode, ok, error });
+    if (concurrentModification) break; // tree is unstable — remaining probes are unreliable too
+  }
+
+  if (concurrentModification) {
+    process.stderr.write(
+      `\n⚠ Concurrent modification detected — probe target(s) changed underneath the run:\n` +
+        concurrentModification.map((p) => `    ${p}`).join("\n") +
+        `\n\ncheck-gates-effective mutates files in place to inject probes, so it MUST run in isolation. ` +
+        `Something rewrote a probe target mid-run (a concurrent build, typecheck, formatter, or a second ` +
+        `invocation). This is NOT a gate failure — re-run it alone.\n`,
+    );
+    process.exit(2);
   }
 
   // Summary
@@ -2393,4 +2456,8 @@ function main(): void {
   process.stderr.write(`\n${provenCount} of ${PROBES.length} gates proven effective${skipNote}.\n`);
 }
 
-main();
+// Run only when invoked directly (pnpm check-gates-effective / tsx). Guarded so
+// the module can be imported by its own unit test without executing all probes.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main();
+}
