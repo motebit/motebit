@@ -61,7 +61,18 @@ Three doc surfaces drift in step here. All must move:
 
 If wraps in `<ReferenceExample>` referenced this package, unwrap them now. Replace with plain `import` statements naming the now-public package. Run `pnpm check-doc-private-imports` and `pnpm tsx scripts/audit-doc-imports-vs-sdk.ts` to confirm both report clean.
 
-### 7. Land a `major` changeset
+### 7. Reconcile the `ignore`-era changeset pile-up, then land a `major` changeset
+
+**First, clear the accumulated changesets.** While a package sits in `.changeset/config.json`'s `ignore` list, `changeset version` never consumes the changesets that bump it — they accumulate indefinitely (the day this was written, ignored libs carried up to ~9 lingering changesets each; apps far more). The moment you remove the package from `ignore`, the **next** `changeset version` consumes **all** of them at once: a first published changelog polluted with stale entries describing private-era churn, and a bump level derived from changes made before anyone could install it. So before promoting:
+
+```bash
+# Find every pending changeset that bumps the package being promoted.
+grep -l '"@motebit/<pkg>"' .changeset/*.md
+```
+
+Delete or rewrite them deliberately. The honest default is to **delete** the private-era ones (the `## Migration` "you couldn't install it → you can" in the `major` below is the real v1.0.0 changelog entry; the private churn is not a public-version event). Keep one only if it describes a change a v1.0.0 consumer genuinely needs to know. This is the step the playbook is easy to skip — `changeset version` won't warn you; it will just silently fold the pile-up into the first release.
+
+**Then land the `major`:**
 
 ```bash
 pnpm changeset
