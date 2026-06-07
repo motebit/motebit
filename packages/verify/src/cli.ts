@@ -983,6 +983,10 @@ async function main(): Promise<number> {
   } else {
     process.stdout.write(`${formatHuman(result)}\n`);
   }
+  // Exit-code contract (CLAUDE.md Rule 5): 0 verified / 1 invalid-but-detected /
+  // 2 usage-or-unrecognized. An unrecognized artifact is NOT a failed signature —
+  // it maps to 2, so a caller can tell "I can't process this" from "bad sig."
+  if (result.type === "unknown") return 2;
   return result.valid ? 0 : 1;
 }
 

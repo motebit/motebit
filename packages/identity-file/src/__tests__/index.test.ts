@@ -28,7 +28,14 @@ import {
 async function standaloneVerify(content: string) {
   const r = await canonicalVerify(content, { expectedType: "identity" });
   if (r.type !== "identity") {
-    return { valid: false, identity: null, error: "not an identity file" };
+    // Non-identity input now resolves to a distinct `type:"unknown"` (the
+    // honesty floor) rather than the old `type:"identity"` fallback — surface
+    // the canonical reason rather than a hardcoded string.
+    return {
+      valid: false,
+      identity: null,
+      error: r.errors?.[0]?.message ?? "not an identity file",
+    };
   }
   const error = r.errors?.[0]?.message;
   return {
@@ -223,12 +230,12 @@ describe("missing or malformed signature", () => {
 
     const result = await verify(content);
     expect(result.valid).toBe(false);
-    // Canonical `verify()` path: the dispatcher fails to recognize a
-    // string without `---` as any signed artifact type, returning the
-    // generic format error. Callers that want identity-specific error
-    // detail can fall back to `parse(content)` which still throws
-    // "Missing frontmatter opening ---".
-    expect(result.error).toBe("Unrecognized artifact format");
+    // Canonical `verify()` path: the dispatcher fails to recognize a string
+    // without `---` as any signed artifact type, returning a distinct
+    // `type:"unknown"` whose error carries the generic format reason. Callers
+    // that want identity-specific error detail can fall back to `parse(content)`
+    // which still throws "Missing frontmatter opening ---".
+    expect(result.error).toContain("Unrecognized artifact format");
   });
 
   it("parse throws on missing closing ---", () => {

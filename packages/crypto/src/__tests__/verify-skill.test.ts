@@ -105,9 +105,11 @@ describe("verify() — skill arm", () => {
     expect(result.steps.envelope.reason).toBe("ed25519_mismatch");
   });
 
-  it("--expectedType skill is honored when input is a non-skill", async () => {
-    const result = (await verify({} as unknown, { expectedType: "skill" })) as SkillVerifyResult;
-    expect(result.type).toBe("skill");
+  it("an unrecognized input with --expectedType skill reports unknown, not a fake skill", async () => {
+    // Post honesty-floor: expectedType no longer fabricates a degenerate
+    // `type:"skill"` for unrecognized input — it is reported as unknown.
+    const result = await verify({} as unknown, { expectedType: "skill" });
+    expect(result.type).toBe("unknown");
     expect(result.valid).toBe(false);
     expect(result.errors?.[0]?.message).toMatch(/Unrecognized/);
   });

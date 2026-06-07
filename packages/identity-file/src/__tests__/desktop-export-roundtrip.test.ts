@@ -19,7 +19,13 @@ import { verify as canonicalVerify } from "@motebit/crypto";
 async function verify(content: string) {
   const r = await canonicalVerify(content, { expectedType: "identity" });
   if (r.type !== "identity") {
-    return { valid: false, identity: null, error: "not an identity file" };
+    // Non-identity input now resolves to `type:"unknown"` (the honesty floor),
+    // not the old `type:"identity"` fallback — surface the canonical reason.
+    return {
+      valid: false,
+      identity: null,
+      error: r.errors?.[0]?.message ?? "not an identity file",
+    };
   }
   return {
     valid: r.valid,

@@ -1399,6 +1399,16 @@ export interface TrustCredentialSubject {
     trust_level: string;
 }
 
+// @public
+export interface UnknownVerifyResult extends BaseResult {
+    // (undocumented)
+    reason: "unrecognized_artifact_type";
+    // (undocumented)
+    type: "unknown";
+    // (undocumented)
+    valid: false;
+}
+
 // @public (undocumented)
 export interface VerifiableCredential<T = Record<string, unknown>> {
     // (undocumented)
@@ -1605,7 +1615,7 @@ export function verifyReceiptSequence(chain: ReceiptChainEntry[]): Promise<{
 export function verifyRelayMetadata(metadata: RelayMetadata, publicKey: Uint8Array): Promise<boolean>;
 
 // @public (undocumented)
-export type VerifyResult = IdentityVerifyResult | ReceiptVerifyResult | ToolInvocationVerifyResult | CredentialVerifyResult | PresentationVerifyResult | SkillVerifyResult;
+export type VerifyResult = IdentityVerifyResult | ReceiptVerifyResult | ToolInvocationVerifyResult | CredentialVerifyResult | PresentationVerifyResult | SkillVerifyResult | UnknownVerifyResult;
 
 // @public
 export function verifyRetentionManifest(manifest: RetentionManifest, operatorPublicKey: Uint8Array): Promise<RetentionManifestVerifyResult>;

@@ -167,6 +167,22 @@ describe("verifyArtifact — ToolInvocationReceipt dispatch + binding rung", () 
   });
 });
 
+describe("verifyArtifact — unrecognized artifacts read as 'unknown', not invalid", () => {
+  it("reports type 'unknown' for an unrecognized object (not a forged identity)", async () => {
+    const result = await verifyArtifact(JSON.stringify({ foo: "bar" }));
+    expect(result.type).toBe("unknown");
+    expect(result.valid).toBe(false);
+    expect(result.type).not.toBe("identity");
+  });
+
+  it("formatHuman renders UNRECOGNIZED, not INVALID, for an unknown artifact", async () => {
+    const result = await verifyArtifact(JSON.stringify({ foo: "bar" }));
+    const human = formatHuman(result);
+    expect(human.split("\n")[0]).toBe("UNRECOGNIZED (unknown)");
+    expect(human).not.toContain("INVALID");
+  });
+});
+
 describe("verifyArtifact — receipt binding rung (offline, receipt-alone)", () => {
   it("reports sovereign:true when motebit_id commits to the key", async () => {
     const r = await sovereignReceipt();
@@ -263,7 +279,14 @@ describe("formatHuman", () => {
   });
 
   it("renders INVALID header + per-error lines", async () => {
-    const result = await verifyArtifact({ not: "a real artifact" });
+    // A recognized-but-failed artifact (here: a receipt that didn't verify) —
+    // distinct from UNRECOGNIZED, which an unrecognized blob now renders instead.
+    const result = {
+      type: "receipt" as const,
+      valid: false,
+      receipt: null,
+      errors: [{ message: "§11.2 violation: Ed25519 signature did not verify" }],
+    };
     const out = formatHuman(result);
     expect(out.split("\n")[0]).toMatch(/^INVALID /);
     // Every subsequent line starts with 2 spaces + "-" for error items.

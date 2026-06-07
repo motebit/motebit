@@ -3390,6 +3390,8 @@ const ok = await verifyApprovalDecision(decision, hexToBytes(CANONICAL_APPROVER_
 
 > `@motebit/verify` (the CLI) and `@motebit/verifier` (the file/format library) are sibling packages; the low-level `verifyApprovalDecision` primitive lives in `@motebit/crypto` and is what both build on. For a browser, import from `@motebit/crypto` directly.
 
+> **Use `verifyApprovalDecision`, not the auto-detecting `verifyArtifact`/`verify`, for an `ApprovalDecision`.** Unlike receipts, an `ApprovalDecision` is verified against a *pinned approver key*, not auto-detected — so `verifyArtifact` reports it as `{ type: "unknown", valid: false, reason: "unrecognized_artifact_type" }`. That's the verifier being honest ("I don't recognize this type"), not a verdict that the decision is forged. Route `ApprovalDecision`s to `verifyApprovalDecision`; auto-detect handles the receipt family (`ExecutionReceipt`, `ToolInvocationReceipt`).
+
 What the signature commits to — and why it can't be replayed:
 
 - **`approval_id`** is the gated call's id, inside the signed body. A verdict can't be lifted onto a different call without breaking the signature.

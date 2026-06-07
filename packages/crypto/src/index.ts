@@ -313,13 +313,30 @@ export interface SkillVerifyResult extends BaseResult {
   };
 }
 
+/**
+ * The artifact is not a recognized Motebit type — `detectArtifactType` matched
+ * no branch. This is distinct from `valid: false` on a *recognized* type
+ * (which means "a known artifact whose signature/structure failed"). A consumer
+ * MUST be able to tell "I don't know what this is" apart from "this is a forged
+ * receipt/identity/credential" — conflating the two reads an unrecognized blob
+ * as a forgery. `valid` is always `false` (nothing was verified). Artifacts that
+ * verify through a type-specific primitive rather than auto-detect (e.g. a flat
+ * `ApprovalDecision` → `verifyApprovalDecision`) land here under `verify()`.
+ */
+export interface UnknownVerifyResult extends BaseResult {
+  type: "unknown";
+  valid: false;
+  reason: "unrecognized_artifact_type";
+}
+
 export type VerifyResult =
   | IdentityVerifyResult
   | ReceiptVerifyResult
   | ToolInvocationVerifyResult
   | CredentialVerifyResult
   | PresentationVerifyResult
-  | SkillVerifyResult;
+  | SkillVerifyResult
+  | UnknownVerifyResult;
 
 export type ArtifactType = VerifyResult["type"];
 
@@ -622,7 +639,11 @@ const SIG_SUFFIX = " -->";
 // Artifact detection
 // ===========================================================================
 
-function detectArtifactType(artifact: unknown): ArtifactType | null {
+// Detection yields a concrete artifact type or `null` (unrecognized). It never
+// yields "unknown" — that is a verify *result* the dispatcher synthesizes from
+// the `null` case, not a detectable input shape. Excluding it keeps `verify()`'s
+// dispatch switch exhaustive over exactly the detectable types.
+function detectArtifactType(artifact: unknown): Exclude<ArtifactType, "unknown"> | null {
   // String → JSON artifact OR YAML-frontmatter identity file. The
   // identity-file format is YAML frontmatter wrapped in `---` delimiters
   // and is structurally never JSON-parseable, so JSON-parse first; only
@@ -1939,28 +1960,25 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
   const detected = detectArtifactType(artifact);
 
   if (detected === null) {
-    // Return a generic failure — use identity as the default type for backward compat
-    const fallbackType = options?.expectedType ?? "identity";
+    // Unrecognized artifact type — distinct from "valid:false on a known type."
+    // Previously this returned a degenerate `type:"identity", valid:false`
+    // ("backward compat"), which made an unrecognized blob indistinguishable
+    // from a forged identity file. An honest verifier reports "I don't know
+    // what this is" as its own result so a consumer never reads unrecognized as
+    // forged. `valid` stays false (nothing was verified).
+    const expected = options?.expectedType;
     return {
-      type: fallbackType,
+      type: "unknown",
       valid: false,
-      ...(fallbackType === "identity" ? { identity: null } : {}),
-      ...(fallbackType === "receipt" ? { receipt: null } : {}),
-      ...(fallbackType === "tool-invocation" ? { toolInvocation: null } : {}),
-      ...(fallbackType === "credential" ? { credential: null } : {}),
-      ...(fallbackType === "presentation" ? { presentation: null } : {}),
-      ...(fallbackType === "skill"
-        ? {
-            envelope: null,
-            steps: {
-              envelope: { valid: false, reason: "wrong_suite" as SkillVerifyReason },
-              body_hash: null,
-              files: [],
-            },
-          }
-        : {}),
-      errors: [{ message: "Unrecognized artifact format" }],
-    } as VerifyResult;
+      reason: "unrecognized_artifact_type",
+      errors: [
+        {
+          message: expected
+            ? `Unrecognized artifact format (expected "${expected}")`
+            : "Unrecognized artifact format",
+        },
+      ],
+    };
   }
 
   if (options?.expectedType && options.expectedType !== detected) {
