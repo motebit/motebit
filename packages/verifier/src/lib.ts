@@ -328,7 +328,13 @@ export async function verifyArtifact(
  *   ```
  */
 export function formatHuman(result: VerifyResultWithBinding): string {
-  const header = `${result.valid ? "VALID" : "INVALID"} (${result.type})`;
+  // "unknown" is unrecognized, NOT a failed-signature verdict — render it
+  // distinctly so a reader never mistakes "I don't know this artifact" for
+  // "this known artifact is forged."
+  const header =
+    result.type === "unknown"
+      ? "UNRECOGNIZED (unknown)"
+      : `${result.valid ? "VALID" : "INVALID"} (${result.type})`;
   const lines: string[] = [header];
 
   if (result.valid) {
@@ -443,5 +449,9 @@ function summarizeValid(result: VerifyResultWithBinding): ReadonlyArray<readonly
       }
       return out;
     }
+    case "unknown":
+      // Never reached — summarizeValid runs only for valid results, and an
+      // "unknown" is always valid:false (its detail renders via the error path).
+      return [];
   }
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import * as ed from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha2.js";
-import { parse, verify } from "../index";
+import { parse, verify, generateKeypair, signApprovalDecision } from "../index";
 
 // @noble/ed25519 v3 requires explicit SHA-512 binding
 if (!ed.hashes.sha512) {
@@ -765,28 +765,32 @@ describe("verify — JSON string dispatch", () => {
     // since they use the same JSON.parse. So this path is essentially dead code
     // for valid detection. Let's verify the type mismatch paths instead.
     const result = await verify(42, { expectedType: "receipt" });
+    expect(result.type).toBe("unknown");
     expect(result.valid).toBe(false);
-    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
+    expect(result.errors![0]!.message).toBe('Unrecognized artifact format (expected "receipt")');
   });
 
-  it("returns unrecognized format for non-object non-string input", async () => {
+  it("returns unknown for non-object non-string input", async () => {
     const result = await verify(null);
+    expect(result.type).toBe("unknown");
     expect(result.valid).toBe(false);
     expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
   });
 
-  it("returns unrecognized format with credential fallback type", async () => {
+  it("returns unknown (not a fake credential) for unrecognized input with expectedType", async () => {
     const result = await verify(42, { expectedType: "credential" });
+    expect(result.type).toBe("unknown");
     expect(result.valid).toBe(false);
-    expect((result as { credential: unknown }).credential).toBeNull();
-    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
+    expect(result.errors![0]!.message).toBe('Unrecognized artifact format (expected "credential")');
   });
 
-  it("returns unrecognized format with presentation fallback type", async () => {
+  it("returns unknown (not a fake presentation) for unrecognized input with expectedType", async () => {
     const result = await verify(42, { expectedType: "presentation" });
+    expect(result.type).toBe("unknown");
     expect(result.valid).toBe(false);
-    expect((result as { presentation: unknown }).presentation).toBeNull();
-    expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
+    expect(result.errors![0]!.message).toBe(
+      'Unrecognized artifact format (expected "presentation")',
+    );
   });
 
   it("dispatches identity string to verifyIdentity", async () => {
@@ -997,14 +1001,51 @@ describe("verify — identity edge cases", () => {
 describe("verify — unrecognized object formats", () => {
   it("returns null detection for an object without known fields", async () => {
     const result = await verify({ foo: "bar", baz: 42 });
+    expect(result.type).toBe("unknown");
     expect(result.valid).toBe(false);
     expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
   });
 
   it("returns null detection for an empty object", async () => {
     const result = await verify({});
+    expect(result.type).toBe("unknown");
     expect(result.valid).toBe(false);
     expect(result.errors![0]!.message).toBe("Unrecognized artifact format");
+  });
+
+  it("reports type 'unknown' with a distinct reason — NOT a forged known type", async () => {
+    const result = await verify({ foo: "bar" });
+    expect(result.type).toBe("unknown");
+    // The honesty floor: an unrecognized artifact is its own outcome, never a
+    // degenerate `type:"identity", valid:false` (which would read as a forgery).
+    expect(result.type).not.toBe("identity");
+    if (result.type === "unknown") {
+      expect(result.reason).toBe("unrecognized_artifact_type");
+    }
+  });
+
+  it("reports a non-auto-detected signed artifact (ApprovalDecision) as unknown, not invalid", async () => {
+    // ApprovalDecision verifies via verifyApprovalDecision, not auto-detect — so
+    // through verify() it is genuinely unrecognized, reported honestly as such.
+    const kp = await generateKeypair();
+    const decision = await signApprovalDecision(
+      {
+        approval_id: "ad-1",
+        motebit_id: "motebit-x",
+        device_id: "dev-1",
+        tool_name: "send_email",
+        args_hash: "a".repeat(64),
+        risk_level: 2,
+        verdict: "approved",
+        requested_at: 1000,
+        resolved_at: 2000,
+      } as Parameters<typeof signApprovalDecision>[0],
+      kp.privateKey,
+      kp.publicKey,
+    );
+    const result = await verify(JSON.stringify(decision));
+    expect(result.type).toBe("unknown");
+    expect(result.valid).toBe(false);
   });
 });
 
