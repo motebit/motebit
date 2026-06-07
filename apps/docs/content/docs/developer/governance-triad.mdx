@@ -1,0 +1,88 @@
+---
+title: The Governance Triad
+description: Proof of permission before action — verify offline what a motebit was allowed to do (auto), what a human consented to (approve), and what governance refused (deny).
+---
+
+A motebit gates every risky act against its owner's policy. Three governance bands, set by two thresholds in the signed `motebit.md` identity file (`require_approval_above` and `deny_above`):
+
+- **auto** — risk at or below `require_approval_above`: the motebit acts on its own.
+- **approve** — between the thresholds: a human must consent before the act runs.
+- **deny** — above `deny_above`: the motebit refuses, no human can wave it through.
+
+The point of motebit is that you don't have to trust the app's word for any of this. **Each band's decision is a signed artifact you can verify offline, with no relay and no account** — proof of permission before action. This page shows the artifact for each band and how to check it.
+
+## The triad
+
+| Band | What it means | Signed artifact | Signed by |
+| --- | --- | --- | --- |
+| **auto** | the motebit was permitted to act unattended | [`ToolInvocationReceipt`](/docs/developer/execution-ledger) | the agent (motebit identity) |
+| **approve** | a human consented to a gated act | `ApprovalDecision` | **the approver's device** |
+| **deny** | governance refused the act | `ExecutionReceipt` with `status: "denied"` | the agent (motebit identity) |
+
+The approve band is signed by the **approver's** key, not the agent's — consent is the human's own assertion, the same way the agent signs its own refusal. All three share one cryptographic shape: JCS (RFC 8785) canonicalization, Ed25519, suite-dispatched verification. See [Receipts — one family](/docs/developer/verify-a-receipt) for the shared verification path.
+
+## Verify a denied decision (deny band)
+
+A refusal is an ordinary `ExecutionReceipt` with `status: "denied"` — verify it exactly like any receipt:
+
+```bash
+npx @motebit/verify receipt.json    # binary is `motebit-verify`
+```
+
+It reports the signature's validity and binding rung. A `denied` receipt that verifies is cryptographic proof the motebit refused the task under its own key — not the relay's claim that it did. (See [Verify a Receipt](/docs/developer/verify-a-receipt).)
+
+## Verify a consent decision (approve band)
+
+An `ApprovalDecision` carries the approver's embedded `public_key`, so it verifies self-contained, offline:
+
+```bash
+motebit-verify approval-decision decision.json
+```
+
+```
+✓ approval-decision VERIFIED
+  verdict          APPROVED
+  approval_id      tc-9f2a…           # binds to the exact gated call
+  tool_name        send_money
+  risk_level       4
+  args_hash        e3b0c442…          # SHA-256 of the args — never the raw args
+  approver_device  device-7c1e…
+  resolved_at      1733527…
+  approver_key     6f1c8e2b…
+  suite            motebit-jcs-ed25519-b64-v1
+```
+
+Two optional checks turn discovery into enforcement:
+
+```bash
+# Confirm WHICH approver — pin the device key you expect (e.g. from the
+# owner's identity file). Mismatch fails with producer_key_mismatch.
+motebit-verify approval-decision decision.json --producer-key 6f1c8e2b...
+
+# Assert the verdict — fail loud if it isn't what you require.
+motebit-verify approval-decision decision.json --expect-verdict approved
+```
+
+What the signature commits to — and why it can't be replayed:
+
+- **`approval_id`** is the gated call's id, inside the signed body. A verdict can't be lifted onto a different call without breaking the signature.
+- **`args_hash`** is the SHA-256 of the canonical arguments — never the raw args. Consent binds to the exact call the human saw; a verifier who holds the raw args recomputes and matches, and one who holds only the decision still proves a verdict was rendered over *some* call at *some* time. (No sensitive argument data sits in the signed artifact.)
+- **`verdict`** (`approved` / `denied`) is signed; flipping it fails verification.
+
+Exit codes match the rest of the CLI: `0` verified, `1` detected-but-invalid, `2` usage/IO.
+
+## Verify an auto-band proof (auto band)
+
+The auto band's per-call proof is a `ToolInvocationReceipt`, agent-signed, verifiable with the permissive-floor library:
+
+```ts
+import { verifyToolInvocationReceipt } from "@motebit/crypto";
+
+const ok = await verifyToolInvocationReceipt(receipt, signerPublicKeyBytes);
+```
+
+Like the others it commits to `args_hash` / `result_hash` rather than raw bytes, so the proof is independently checkable without exposing tool inputs or outputs.
+
+## Why this matters
+
+Generating signed artifacts internally is not the claim. The claim is: **a third party can verify what a motebit was permitted to do, what a human consented to, and what was refused — without trusting the application.** The triad makes all three governance outcomes provable with the same public packages and the signer's public key. Nothing here is gated behind a subscription; it is a baseline property of every motebit identity.
