@@ -8,7 +8,7 @@
     "apps/spatial",
     "apps/docs"
   ],
-  "ignoreDependencies": ["@motebit/*", "@changesets/changelog-github"],
+  "ignoreDependencies": ["@motebit/*", "@changesets/changelog-github", "better-sqlite3", "motebit"],
   "ignoreBinaries": ["tauri"],
   "ignore": [
     "examples/**",
@@ -26,11 +26,23 @@
     },
     "apps/cli": {
       "project": ["src/**/*.ts"],
-      "ignoreDependencies": ["@modelcontextprotocol/sdk", "sql.js", "ws"]
+      "comment": "apps/cli is an esbuild bundle that EXTERNALIZES node_modules; deps imported only by the bundled @motebit/* runtime closure (not by apps/cli/src) must stay direct deps for the dist binary to boot (check-dist-smoke), so knip can't see them in src.",
+      "ignoreDependencies": [
+        "@modelcontextprotocol/sdk",
+        "sql.js",
+        "ws",
+        "stripe",
+        "@noble/curves",
+        "@solana/web3.js",
+        "@solana/spl-token",
+        "@x402/core",
+        "@x402/hono",
+        "@hono/node-ws"
+      ]
     },
     "apps/web": {
       "project": ["src/**/*.ts"],
-      "ignoreDependencies": ["three", "@types/three"]
+      "ignoreDependencies": ["three", "@types/three", "buffer"]
     },
     "apps/identity": {
       "project": ["src/**/*.{ts,tsx}"]

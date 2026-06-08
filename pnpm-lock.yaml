@@ -131,7 +131,7 @@ importers:
         version: 2.11.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
       '@x402/hono':
         specifier: ^2.11.0
-        version: 2.11.0(bufferutil@4.1.0)(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(hono@4.12.9)(typescript@5.9.3)(utf-8-validate@6.0.6)
+        version: 2.14.0(bufferutil@4.1.0)(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(hono@4.12.9)(typescript@5.9.3)(utf-8-validate@6.0.6)
       better-sqlite3:
         specifier: ^12.0.0
         version: 12.8.0
@@ -964,9 +964,6 @@ importers:
         specifier: ^0.170.0
         version: 0.170.0
     devDependencies:
-      '@noble/curves':
-        specifier: ^2.2.0
-        version: 2.2.0
       '@noble/ed25519':
         specifier: ~3.1.0
         version: 3.1.0
@@ -1187,19 +1184,10 @@ importers:
       '@motebit/protocol':
         specifier: workspace:*
         version: link:../protocol
-      '@peculiar/asn1-schema':
-        specifier: ^2.6.0
-        version: 2.6.0
       '@peculiar/x509':
         specifier: ^1.12.0
         version: 1.14.3
     devDependencies:
-      '@noble/curves':
-        specifier: ^2.2.0
-        version: 2.2.0
-      '@noble/hashes':
-        specifier: ^2.2.0
-        version: 2.2.0
       '@peculiar/webcrypto':
         specifier: ^1.7.1
         version: 1.7.1
@@ -1231,12 +1219,6 @@ importers:
         specifier: ^1.9.0
         version: 1.12.0
     devDependencies:
-      '@noble/curves':
-        specifier: ^2.2.0
-        version: 2.2.0
-      '@noble/hashes':
-        specifier: ^2.2.0
-        version: 2.2.0
       '@peculiar/webcrypto':
         specifier: ^1.7.1
         version: 1.7.1
@@ -1265,12 +1247,6 @@ importers:
         specifier: ^1.12.0
         version: 1.14.3
     devDependencies:
-      '@noble/curves':
-        specifier: ^2.2.0
-        version: 2.2.0
-      '@noble/hashes':
-        specifier: ^2.2.0
-        version: 2.2.0
       '@peculiar/webcrypto':
         specifier: ^1.7.1
         version: 1.7.1
@@ -1353,9 +1329,6 @@ importers:
       '@noble/ed25519':
         specifier: ~3.1.0
         version: 3.1.0
-      '@noble/hashes':
-        specifier: ^2.2.0
-        version: 2.2.0
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -1969,9 +1942,6 @@ importers:
       yaml:
         specifier: ^2.6.0
         version: 2.8.3
-      zod:
-        specifier: ^3.25.0
-        version: 3.25.76
     devDependencies:
       '@noble/ed25519':
         specifier: ~3.1.0
@@ -2159,21 +2129,6 @@ importers:
         specifier: workspace:*
         version: link:../verifier
     devDependencies:
-      '@noble/curves':
-        specifier: ^2.2.0
-        version: 2.2.0
-      '@noble/ed25519':
-        specifier: ~3.1.0
-        version: 3.1.0
-      '@noble/hashes':
-        specifier: ^2.2.0
-        version: 2.2.0
-      '@peculiar/webcrypto':
-        specifier: ^1.7.1
-        version: 1.7.1
-      '@peculiar/x509':
-        specifier: ^1.12.0
-        version: 1.14.3
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
@@ -6531,6 +6486,9 @@ packages:
   '@x402/core@2.11.0':
     resolution: {integrity: sha512-aqTfZc/BULrlWnd3I0lsqRQaH4gjJd8CsPcL16XqK2Lx5c6QDm+zCljgUVS1yj9BGJoZeQWTzI5hE+SVFkqMTw==}
 
+  '@x402/core@2.14.0':
+    resolution: {integrity: sha512-+xTM6hfGduYvFcQ7QwKvCwommL6+zqzqmr5IuPojbt+RZjo4QUjSkHW+arMtPoIKRLxWAI+e6P4UJMMblwG+Dw==}
+
   '@x402/core@2.6.0':
     resolution: {integrity: sha512-ISC/JeVss6xlKvor2rp18tJf9K5OQlIDDfZW1VZJQGDI2F4gy+HWxxkFfcQalCsPp4YUlwqh0YOkUxP+LTZWVg==}
 
@@ -6540,8 +6498,8 @@ packages:
   '@x402/evm@2.6.0':
     resolution: {integrity: sha512-wPkNHf483gie1Up2sJSvERnW+VIEvMoT1KRXr09wSoSWgelglsJm+ug3gPPXKnT3C6AcmNAKZ12rBnu9Paff7g==}
 
-  '@x402/extensions@2.11.0':
-    resolution: {integrity: sha512-S0SOoUsx4WtWqiWZuqslSzhopW/JcrEbnEC5l2sIQH/TABWzR0DgJLy36C43tD6TOJc0tEPN9bHuD+V8DYWomA==}
+  '@x402/extensions@2.14.0':
+    resolution: {integrity: sha512-2zu8hxf0j4BRvSWNPRKziQLdubnQpzzmU9xopKK5ZyXa434hvmGEUPMBOA2NIYvaTkyZjQH3JZ3GPDyzjBvFqA==}
 
   '@x402/extensions@2.6.0':
     resolution: {integrity: sha512-aLY9xAOOiRLKDN9HT2r9TYUXbD+IsoBces9qPZNVJGO2TBi2rfmbIBc3pcKCtWKn3iTvG2QFr3gpOFdpJRzqww==}
@@ -6549,10 +6507,10 @@ packages:
   '@x402/fetch@2.11.0':
     resolution: {integrity: sha512-sDkoq1ZZt10/UVa75bCXTbWkXMbPOOQpkdSxWB0ybHtlmqT7PM6hU4DVCov4iL792W1Oi38VtxfUw5EkvdvYtw==}
 
-  '@x402/hono@2.11.0':
-    resolution: {integrity: sha512-myPsDNMeCLqQgk0O1Rbdx2kdpVNRumnnwiV3fTgSbiQzxiTWDc5IU/7fEWPSsXNbLtt9kB6eXWT9VxEkcJJolg==}
+  '@x402/hono@2.14.0':
+    resolution: {integrity: sha512-0R2gUah8euTR1OfgYwCf+ho3HSKe0Qijb2SBwyVXvO5bgDmy4ncdEv+lUcF+SvX+Fh2/NVAqQFL7JP7STGsPBA==}
     peerDependencies:
-      '@x402/paywall': ^2.11.0
+      '@x402/paywall': ^2.14.0
       hono: '>=4.12.4 <5.0.0'
     peerDependenciesMeta:
       '@x402/paywall':
@@ -9961,6 +9919,14 @@ packages:
       typescript:
         optional: true
 
+  ox@0.14.29:
+    resolution: {integrity: sha512-M5j87Ec4V99MQdRct/g09eWXW60g6zhHTUs1lr4deUtrPDnezBdCJTgKd7pxqTpSZBFveV0ALi9jMMuT1qKyNg==}
+    peerDependencies:
+      typescript: '>=5.4.0'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   oxc-parser@0.133.0:
     resolution: {integrity: sha512-661RSx+ZcjBmjBYid+Fpp/2F5EbtildpeoZh5HdgnGs+jZ03nqQEQW8yGkt4BGyOC3OMPDQQRl8M5kqD2/g6jw==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -11532,6 +11498,14 @@ packages:
       typescript:
         optional: true
 
+  viem@2.52.2:
+    resolution: {integrity: sha512-HSU12p5aD/kAPZfrlbCUqdiP4P/c6hQ9AhfTS51VbLUQIjkWd1d5EjrCx/SCxZ0zhZVRn4Iv5X5WDqXPG8Ubew==}
+    peerDependencies:
+      typescript: '>=5.0.4'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   vite-plugin-static-copy@3.2.0:
     resolution: {integrity: sha512-g2k9z8B/1Bx7D4wnFjPLx9dyYGrqWMLTpwTtPHhcU+ElNZP2O4+4OsyaficiDClus0dzVhdGvoGFYMJxoXZ12Q==}
     engines: {node: ^18.0.0 || >=20.0.0}
@@ -11786,6 +11760,18 @@ packages:
 
   ws@8.20.0:
     resolution: {integrity: sha512-sAt8BhgNbzCtgGbt2OxmpuryO63ZoDk/sqaB/znQm94T4fCEsy/yV+7CdC1kJhOU9lboAEU7R3kquuycDoibVA==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
+  ws@8.20.1:
+    resolution: {integrity: sha512-It4dO0K5v//JtTXuPkfEOaI3uUN87iYPnqo/ZzqCoG3g8uhA66QUMs/SrM0YK7/NAu+r4LMh/9dq2A7k+rHs+w==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -12702,7 +12688,7 @@ snapshots:
       jose: 6.2.3
       md5: 2.3.0
       uncrypto: 0.1.3
-      viem: 2.47.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
+      viem: 2.48.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
       zod: 3.25.76
     transitivePeerDependencies:
       - bufferutil
@@ -14924,12 +14910,12 @@ snapshots:
       '@noble/hashes': 1.8.0
       apg-js: 4.4.0
 
-  '@signinwithethereum/siwe@4.2.0(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(viem@2.48.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76))':
+  '@signinwithethereum/siwe@4.2.0(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(viem@2.52.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76))':
     dependencies:
       '@signinwithethereum/siwe-parser': 4.2.0
     optionalDependencies:
       ethers: 6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)
-      viem: 2.48.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
+      viem: 2.52.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
 
   '@sinclair/typebox@0.27.10': {}
 
@@ -16076,7 +16062,7 @@ snapshots:
       obug: 2.1.1
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.8(@types/node@22.19.11)(@vitest/coverage-v8@4.1.8)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@6.4.1(@types/node@22.19.11)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.22.4)(yaml@2.8.3))
+      vitest: 4.1.8(@types/node@25.9.1)(@vitest/coverage-v8@4.1.8)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@6.4.1(@types/node@25.9.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.22.4)(yaml@2.9.0))
 
   '@vitest/expect@4.1.8':
     dependencies:
@@ -16141,6 +16127,10 @@ snapshots:
     dependencies:
       zod: 3.25.76
 
+  '@x402/core@2.14.0':
+    dependencies:
+      zod: 3.25.76
+
   '@x402/core@2.6.0':
     dependencies:
       zod: 3.25.76
@@ -16167,16 +16157,16 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@x402/extensions@2.11.0(bufferutil@4.1.0)(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(typescript@5.9.3)(utf-8-validate@6.0.6)':
+  '@x402/extensions@2.14.0(bufferutil@4.1.0)(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(typescript@5.9.3)(utf-8-validate@6.0.6)':
     dependencies:
       '@noble/curves': 1.9.7
       '@scure/base': 1.2.6
-      '@signinwithethereum/siwe': 4.2.0(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(viem@2.48.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76))
-      '@x402/core': 2.11.0
+      '@signinwithethereum/siwe': 4.2.0(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(viem@2.52.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76))
+      '@x402/core': 2.14.0
       ajv: 8.18.0
       jose: 5.10.0
       tweetnacl: 1.0.3
-      viem: 2.48.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
+      viem: 2.52.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
       zod: 3.25.76
     transitivePeerDependencies:
       - bufferutil
@@ -16209,12 +16199,11 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@x402/hono@2.11.0(bufferutil@4.1.0)(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(hono@4.12.9)(typescript@5.9.3)(utf-8-validate@6.0.6)':
+  '@x402/hono@2.14.0(bufferutil@4.1.0)(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(hono@4.12.9)(typescript@5.9.3)(utf-8-validate@6.0.6)':
     dependencies:
-      '@x402/core': 2.11.0
-      '@x402/extensions': 2.11.0(bufferutil@4.1.0)(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(typescript@5.9.3)(utf-8-validate@6.0.6)
+      '@x402/core': 2.14.0
+      '@x402/extensions': 2.14.0(bufferutil@4.1.0)(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(typescript@5.9.3)(utf-8-validate@6.0.6)
       hono: 4.12.9
-      zod: 3.25.76
     transitivePeerDependencies:
       - bufferutil
       - ethers
@@ -18935,6 +18924,10 @@ snapshots:
     dependencies:
       ws: 8.18.3(bufferutil@4.1.0)(utf-8-validate@6.0.6)
 
+  isows@1.0.7(ws@8.20.1(bufferutil@4.1.0)(utf-8-validate@6.0.6)):
+    dependencies:
+      ws: 8.20.1(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+
   istanbul-lib-coverage@3.2.2: {}
 
   istanbul-lib-instrument@5.2.1:
@@ -20338,6 +20331,21 @@ snapshots:
       - zod
 
   ox@0.14.20(typescript@5.9.3)(zod@3.25.76):
+    dependencies:
+      '@adraffy/ens-normalize': 1.11.1
+      '@noble/ciphers': 1.3.0
+      '@noble/curves': 1.9.1
+      '@noble/hashes': 1.8.0
+      '@scure/bip32': 1.7.0
+      '@scure/bip39': 1.6.0
+      abitype: 1.2.3(typescript@5.9.3)(zod@3.25.76)
+      eventemitter3: 5.0.1
+    optionalDependencies:
+      typescript: 5.9.3
+    transitivePeerDependencies:
+      - zod
+
+  ox@0.14.29(typescript@5.9.3)(zod@3.25.76):
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
       '@noble/ciphers': 1.3.0
@@ -22285,6 +22293,23 @@ snapshots:
       - utf-8-validate
       - zod
 
+  viem@2.52.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76):
+    dependencies:
+      '@noble/curves': 1.9.1
+      '@noble/hashes': 1.8.0
+      '@scure/bip32': 1.7.0
+      '@scure/bip39': 1.6.0
+      abitype: 1.2.3(typescript@5.9.3)(zod@3.25.76)
+      isows: 1.0.7(ws@8.20.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))
+      ox: 0.14.29(typescript@5.9.3)(zod@3.25.76)
+      ws: 8.20.1(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+    optionalDependencies:
+      typescript: 5.9.3
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+      - zod
+
   vite-plugin-static-copy@3.2.0(vite@6.4.1(@types/node@25.9.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.22.4)(yaml@2.9.0)):
     dependencies:
       chokidar: 3.6.0
@@ -22599,6 +22624,11 @@ snapshots:
       utf-8-validate: 6.0.6
 
   ws@8.20.0(bufferutil@4.1.0)(utf-8-validate@6.0.6):
+    optionalDependencies:
+      bufferutil: 4.1.0
+      utf-8-validate: 6.0.6
+
+  ws@8.20.1(bufferutil@4.1.0)(utf-8-validate@6.0.6):
     optionalDependencies:
       bufferutil: 4.1.0
       utf-8-validate: 6.0.6
