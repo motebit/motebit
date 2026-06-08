@@ -107,11 +107,15 @@ The `motebit_task` synthetic tool is the delegation entry point. It accepts a pr
   result: string;         // The result, as a string (you choose the encoding; result_hash commits to these exact bytes)
   tools_used: string[];   // Which tools were invoked
   memories_formed: number; // How many memories the service formed
+  public_key?: string;    // signer's Ed25519 public key, HEX (embed it → offline sovereign verify)
   prompt_hash: string;    // hex(SHA-256(UTF-8(prompt))) — plain SHA-256 of the prompt string
   result_hash: string;    // hex(SHA-256(UTF-8(result))) — plain SHA-256 of the result string (NOT canonicalized)
+  suite: "motebit-jcs-ed25519-b64-v1"; // REQUIRED, signed — omit it and verification fails
   signature: string;      // Ed25519 signature (base64url)
 }
 ```
+
+> **`suite` is required and signed.** `signExecutionReceipt` stamps it for you; if you hand-build a receipt you MUST include `suite: "motebit-jcs-ed25519-b64-v1"` in the body before signing, or the verifier reconstructs a different body and the signature won't match. Use the published `signExecutionReceipt` rather than assembling the body yourself — see [Produce a receipt](/docs/developer/produce-a-receipt).
 
 The signature covers the canonical JSON serialization of all fields except `signature` itself. Keys are sorted recursively to ensure deterministic output regardless of insertion order.
 
@@ -180,14 +184,16 @@ A `DelegationToken` is a signed authorization from one agent (the delegator) to 
 ### Signing a delegation
 
 ```typescript
-import { signDelegation, toBase64Url } from "@motebit/crypto";
+import { signDelegation, bytesToHex } from "@motebit/crypto";
 
 const token = await signDelegation(
   {
     delegator_id: "motebit-abc",
-    delegator_public_key: toBase64Url(delegatorKeypair.publicKey),
+    // Embedded public keys are HEX (64 chars) — like a receipt's `public_key`
+    // field. base64url is used only for signatures, never for embedded keys.
+    delegator_public_key: bytesToHex(delegatorKeypair.publicKey),
     delegate_id: "motebit-xyz",
-    delegate_public_key: toBase64Url(delegateKeypair.publicKey),
+    delegate_public_key: bytesToHex(delegateKeypair.publicKey),
     scope: "web_search",
     issued_at: Date.now(),
     expires_at: Date.now() + 3600_000, // 1 hour
@@ -196,7 +202,7 @@ const token = await signDelegation(
 );
 ```
 
-The signature covers all fields except `signature` itself, using the same canonical JSON serialization as execution receipts.
+The signature covers all fields except `signature` itself: the body is JCS-canonicalized (RFC 8785) to UTF-8 bytes and Ed25519-signed directly — the same recipe as execution receipts (sign the canonical bytes, not a hash of them).
 
 ### Verifying a single token
 
@@ -206,7 +212,7 @@ import { verifyDelegation } from "@motebit/crypto";
 const valid = await verifyDelegation(token);
 ```
 
-Verifies the Ed25519 signature using the `delegator_public_key` embedded in the token. Does not check expiration — the caller should compare `expires_at` against the current time.
+Verifies the Ed25519 signature using the `delegator_public_key` (hex) embedded in the token, **and checks expiration by default** — it returns `false` when `token.expires_at < Date.now()`. Pass `verifyDelegation(token, { checkExpiry: false })` to verify the signature only (e.g. auditing a historical chain), and `{ now }` to pin the clock.
 
 ### Verifying a delegation chain
 

@@ -112,7 +112,8 @@ interface ExecutionReceipt {
   result_hash: string; // hex(SHA-256(UTF-8(result))) — plain SHA-256 of the result string (NOT canonicalized)
   relay_task_id?: string; // binds receipt to the relay's economic identity
   delegation_receipts?: ExecutionReceipt[]; // nested sub-delegation proofs
-  signature: string; // Ed25519 over canonical JSON of all other fields
+  suite: "motebit-jcs-ed25519-b64-v1"; // REQUIRED, signed — stamped by signExecutionReceipt
+  signature: string; // Ed25519 over the JCS-canonical UTF-8 bytes of all other fields (not a hash of them)
 }
 ```
 
@@ -147,9 +148,11 @@ A two-hop chain looks like this:
       "result_hash": "j0k1l2...",
       "relay_task_id": "task-bob-charlie",
       "delegation_receipts": [],
+      "suite": "motebit-jcs-ed25519-b64-v1",
       "signature": "charlie-ed25519-sig..."
     }
   ],
+  "suite": "motebit-jcs-ed25519-b64-v1",
   "signature": "bob-ed25519-sig..."
 }
 ```

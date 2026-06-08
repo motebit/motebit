@@ -34,10 +34,10 @@ The signature covers the canonical JCS (RFC 8785) JSON serialization of the pars
 
 A single motebit identity spans multiple devices. Each device has its own Ed25519 keypair — there is no shared private key.
 
-| Step | What happens |
-|------|-------------|
-| **Device registration** | The device generates a keypair and registers its public key with the `IdentityManager`. The device receives a `device_id` and `device_token`. |
-| **Pairing** | A 6-character code exchange, relay-mediated, with no shared secrets. The new device proves it holds a valid keypair. |
+| Step                    | What happens                                                                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Device registration** | The device generates a keypair and registers its public key with the `IdentityManager`. The device receives a `device_id` and `device_token`.                      |
+| **Pairing**             | A 6-character code exchange, relay-mediated, with no shared secrets. The new device proves it holds a valid keypair.                                               |
 | **Sync authentication** | To communicate with the sync relay, the device signs a short-lived token with its private key. The relay verifies the signature against the registered public key. |
 
 Devices are listed in the `motebit.md` file under the `devices` array, each with its own `device_id`, `name`, `public_key`, and `registered_at` timestamp.
@@ -50,24 +50,29 @@ Signed tokens authenticate sync requests between a device and the relay server. 
 
 **Payload fields:**
 
-| Field | Description |
-|-------|-------------|
-| `mid` | The `motebit_id` |
-| `did` | The `device_id` |
-| `iat` | Issued-at timestamp (milliseconds since epoch) |
-| `exp` | Expiration timestamp (default: 5 minutes from `iat`) |
+All fields below are **required** — a verifier MUST reject a token missing any of them (spec `auth-token@1.0` §3). Build the token with `createSignedToken`, which sets them for you; do not hand-assemble a `{mid,did,iat,exp}` payload — it will be rejected for missing `jti`/`aud`/`suite`.
 
-The device signs the JSON-serialized payload with its Ed25519 private key. The relay verifies in two steps: (1) parse the base64url payload without crypto to extract the `device_id` — O(1) lookup; (2) verify the Ed25519 signature against the device's registered public key. Expired tokens are rejected.
+| Field   | Required | Description                                                                                                    |
+| ------- | -------- | -------------------------------------------------------------------------------------------------------------- |
+| `mid`   | yes      | The `motebit_id`                                                                                               |
+| `did`   | yes      | The `device_id`                                                                                                |
+| `iat`   | yes      | Issued-at timestamp (milliseconds since epoch)                                                                 |
+| `exp`   | yes      | Expiration timestamp (default: 5 minutes from `iat`)                                                           |
+| `jti`   | yes      | Unique token nonce (UUID v4 recommended) — prevents replay. Must be unique per token.                          |
+| `aud`   | yes      | Audience — the endpoint/operation the token authorizes (e.g. `"task:submit"`). Prevents cross-endpoint replay. |
+| `suite` | yes      | Cryptosuite, always `"motebit-jwt-ed25519-v1"` today. Signed; missing/unknown is rejected fail-closed.         |
+
+The device signs the **raw UTF-8 bytes of the JSON payload** (not the base64url form) with its Ed25519 private key. The relay verifies in two steps: (1) parse the base64url payload without crypto to extract the `device_id` — O(1) lookup; (2) verify the Ed25519 signature against the device's registered public key. Expired tokens, and tokens missing `jti`/`aud`, are rejected.
 
 ## Encryption at rest
 
 Sensitive data is encrypted before leaving the agent boundary:
 
-| Context | Mechanism |
-|---------|-----------|
-| **Sync payloads** | AES-256-GCM with a 256-bit random key and 12-byte nonce. The 16-byte authentication tag is appended to the ciphertext. |
-| **CLI private key** | PBKDF2 key derivation (600,000 iterations, SHA-256) from a user passphrase, then AES-256-GCM encryption. |
-| **Desktop/mobile** | Private key stored in OS keyring (hardware-backed where available). No application-layer encryption needed. |
+| Context             | Mechanism                                                                                                              |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Sync payloads**   | AES-256-GCM with a 256-bit random key and 12-byte nonce. The 16-byte authentication tag is appended to the ciphertext. |
+| **CLI private key** | PBKDF2 key derivation (600,000 iterations, SHA-256) from a user passphrase, then AES-256-GCM encryption.               |
+| **Desktop/mobile**  | Private key stored in OS keyring (hardware-backed where available). No application-layer encryption needed.            |
 
 All cryptographic operations use Web Crypto API or `@noble/hashes` and `@noble/ciphers` — zero-dependency, audited implementations. Sensitive byte arrays are securely erased (overwritten with random data, then zeroed) after use.
 
@@ -103,10 +108,10 @@ A valid signature proves the holder has the private key. It does not prove the h
 
 ## Key management
 
-| Concern | Approach |
-|---------|----------|
-| **Key storage** | OS keychain (desktop/mobile) or PBKDF2-encrypted file (CLI). Never plaintext. |
-| **Key rotation** | Signed succession records (spec §3.8). The old keypair signs a tombstone declaring the new keypair as successor — both keys sign the canonical payload. The `motebit_id` persists across rotations. Rotate via `motebit rotate` (CLI) or `npx create-motebit rotate` (scaffolder). No centralized revocation — succession chains are verifiable by anyone. |
-| **Guardian recovery** | Enterprise agents can declare an organizational guardian (spec §3.3). If the primary key is compromised, the guardian signs a recovery succession record — rotating to a new key without the compromised key. Guardian revocation requires dual authorization (both keys sign). |
-| **Secure erasure** | `secureErase()` overwrites byte arrays with random data then zeros before garbage collection. |
-| **Private key scope** | The private key never appears in `motebit.md`, never crosses the network, and never enters a config file. |
+| Concern               | Approach                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Key storage**       | OS keychain (desktop/mobile) or PBKDF2-encrypted file (CLI). Never plaintext.                                                                                                                                                                                                                                                                              |
+| **Key rotation**      | Signed succession records (spec §3.8). The old keypair signs a tombstone declaring the new keypair as successor — both keys sign the canonical payload. The `motebit_id` persists across rotations. Rotate via `motebit rotate` (CLI) or `npx create-motebit rotate` (scaffolder). No centralized revocation — succession chains are verifiable by anyone. |
+| **Guardian recovery** | Enterprise agents can declare an organizational guardian (spec §3.3). If the primary key is compromised, the guardian signs a recovery succession record — rotating to a new key without the compromised key. Guardian revocation requires dual authorization (both keys sign).                                                                            |
+| **Secure erasure**    | `secureErase()` overwrites byte arrays with random data then zeros before garbage collection.                                                                                                                                                                                                                                                              |
+| **Private key scope** | The private key never appears in `motebit.md`, never crosses the network, and never enters a config file.                                                                                                                                                                                                                                                  |

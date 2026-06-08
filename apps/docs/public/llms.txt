@@ -31,6 +31,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 
 ## Developer Guide
 
+- [Quickstart: Sign & Verify a Receipt](https://docs.motebit.com/docs/developer/quickstart): The shortest correct Motebit integration — mint a signed ExecutionReceipt and verify it offline. No relay, no account, no LLM.
 - [Your First Service Agent](https://docs.motebit.com/docs/developer/first-service-agent): Build a service agent that provides a custom tool to other agents via the motebit delegation protocol.
 - [Local Testing](https://docs.motebit.com/docs/developer/local-testing): Run a local relay, register agents, submit tasks, and test the full delegation loop on your machine.
 - [Identity Standard](https://docs.motebit.com/docs/developer/identity-standard): Create and verify motebit.md agent identity files — the motebit/identity@1.0 specification.
@@ -39,6 +40,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 - [Agent-to-Agent Delegation](https://docs.motebit.com/docs/developer/delegation): Discover, verify, delegate, and prove — the cryptographic protocol for agent collaboration.
 - [Multi-Hop Delegation](https://docs.motebit.com/docs/developer/multi-hop): Chain agents together — receipts nest, budgets propagate, trust accumulates at every hop.
 - [Execution Ledger](https://docs.motebit.com/docs/developer/execution-ledger): A cryptographically signed timeline of goal execution — what happened, in what order, provably.
+- [Produce a Receipt](https://docs.motebit.com/docs/developer/produce-a-receipt): Mint a sovereign ExecutionReceipt with the published @motebit/crypto signing primitives — including the two hash recipes that are easy to get wrong.
 - [Verify a Receipt](https://docs.motebit.com/docs/developer/verify-a-receipt): The fastest correct path to verify a motebit ExecutionReceipt — install the published verifier, do not reimplement it.
 - [Choosing a Verify Surface](https://docs.motebit.com/docs/developer/choosing-a-verify-surface): Three packages verify motebit receipts — crypto, verifier, state-export-client. Which one you import depends on the deepest binding rung you need and whether you can use the network.
 - [The Governance Triad](https://docs.motebit.com/docs/developer/governance-triad): Proof of permission before action — verify offline what a motebit was allowed to do (auto), what a human consented to (approve), and what governance refused (deny).

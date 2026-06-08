@@ -7,6 +7,16 @@ description: Mint a sovereign ExecutionReceipt with the published @motebit/crypt
 
 The rule is the same in both directions: **consume the primitives, never reimplement them.** Do not hand-roll Ed25519, JCS canonicalization, or the hash recipes — call `@motebit/crypto`'s `sign*` functions. The wire format is fixed by [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11.
 
+> New here? The [Quickstart](/docs/developer/quickstart) is the shortest runnable mint→verify in one file. This page is the depth behind it.
+
+## Install
+
+```bash
+npm install @motebit/crypto@3 @motebit/verifier@1
+```
+
+`@motebit/crypto` mints; `@motebit/verifier` is used in the self-check step below. `strictHashBinding` requires `@motebit/crypto@3.3.0+` / `@motebit/verifier@1.4.0+`.
+
 ## The signing identity
 
 A receipt is signed by a sovereign motebit identity — an Ed25519 keypair whose `motebit_id` is a cryptographic commitment to the public key. That commitment is what lets a verifier compute `sovereign: true` offline, with no directory lookup.

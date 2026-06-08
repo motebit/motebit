@@ -1,0 +1,107 @@
+---
+title: "Quickstart: Sign & Verify a Receipt"
+description: The shortest correct Motebit integration — mint a signed ExecutionReceipt and verify it offline. No relay, no account, no LLM.
+---
+
+This is the minimal Motebit integration: **sign a unit of work, then verify it — offline, in one file.** No relay, no account, no API token, no LLM. Two npm packages and ~25 lines. If you only read one developer page, read this one.
+
+> You do **not** need to run a relay or register an agent to produce or verify a receipt. The relay adds discovery, budgets, and settlement — see [Your first service agent](/docs/developer/first-service-agent) when you want that. This page is the standalone cryptographic core.
+
+## Install
+
+Pinned to the versions this guide is written against (current versions are on each package's npm page):
+
+```bash
+npm install @motebit/crypto@3 @motebit/verifier@1
+```
+
+- `@motebit/crypto` — the signing + low-level crypto primitives (the producer side).
+- `@motebit/verifier` — the high-level verifier (the consumer side). Built on `@motebit/crypto`; it reads the embedded key, handles JCS canonicalization and cryptosuite dispatch, and reports the trust ladder.
+
+`strictHashBinding` (used below) requires `@motebit/crypto@3.3.0+` and `@motebit/verifier@1.4.0+`.
+
+## The whole thing
+
+This file runs top to bottom (Node 20+, ESM or `.mts`; it also runs in a browser bundle **except** signing, which must stay server-side — see the boundary note below):
+
+```typescript
+import {
+  generateKeypair,
+  deriveSovereignMotebitId,
+  bytesToHex,
+  hash,
+  signExecutionReceipt,
+} from "@motebit/crypto";
+import { verifyArtifact } from "@motebit/verifier";
+
+// 1. Identity — a sovereign keypair. `motebit_id` cryptographically COMMITS to
+//    the public key, which is what lets a verifier report `sovereign: true`
+//    offline with no directory lookup. Guard the private key (see boundary note).
+const { privateKey, publicKey } = await generateKeypair();
+const motebit_id = await deriveSovereignMotebitId(bytesToHex(publicKey));
+
+// 2. The work you did, as strings. `result` is the exact bytes the receipt
+//    commits to (use a canonical JSON string if your result is structured).
+const prompt = "Add 2 + 2.";
+const result = "4";
+
+// 3. Mint the receipt.
+//    - prompt_hash / result_hash are PLAIN SHA-256 of the STRING, lowercase hex
+//      (`hash()` does exactly this). NEVER canonicalize a string field — that is
+//      the recipe for object fields like a ToolInvocation's args_hash, and a
+//      canonicalized string hash won't reproduce, so the receipt becomes a
+//      "signed number nobody can verify".
+//    - signExecutionReceipt stamps the required `suite` and signs the
+//      JCS-canonical body. Pass `publicKey` (3rd arg) to EMBED it → offline
+//      sovereign verification.
+const receipt = await signExecutionReceipt(
+  {
+    task_id: crypto.randomUUID(),
+    motebit_id,
+    device_id: crypto.randomUUID(), // any stable id for the signing device
+    submitted_at: Date.now(),
+    completed_at: Date.now(),
+    status: "completed" as const, // "completed" | "failed" | "denied"
+    result,
+    tools_used: [],
+    memories_formed: 0,
+    prompt_hash: await hash(new TextEncoder().encode(prompt)),
+    result_hash: await hash(new TextEncoder().encode(result)),
+  },
+  privateKey,
+  publicKey,
+);
+
+// 4. Verify it — offline, no relay. `strictHashBinding` makes `valid` true only
+//    when the Ed25519 signature checks AND result_hash === SHA-256(result).
+const ok = await verifyArtifact(JSON.stringify(receipt), { strictHashBinding: true });
+console.log("valid:", ok.valid); // true  — authentic + self-consistent
+console.log("sovereign:", ok.sovereign); // true  — motebit_id commits to the signing key
+
+// 5. Break it: tamper one byte of the result and re-verify → false. This is the
+//    guarantee made concrete; it's what every downstream consumer relies on.
+const tampered = { ...receipt, result: "5" };
+const broken = await verifyArtifact(JSON.stringify(tampered), { strictHashBinding: true });
+console.log("tampered valid:", broken.valid); // false
+```
+
+That's a complete, self-verifying receipt. Anyone — in any language, with no access to you — can re-run step 4 against the receipt JSON and get the same answer, because the signer's public key is embedded in it.
+
+## What `valid` and `sovereign` mean (and what they do not)
+
+These two booleans are the entire trust contract; do not over-read them.
+
+- **`valid: true`** — the bytes are authentic (Ed25519 signature checks) and, under `strictHashBinding`, internally self-consistent (`result_hash === SHA-256(result)`). It does **not** tell you _who_ signed it.
+- **`sovereign: true`** — the `motebit_id` is a cryptographic commitment to the signing key. It does **not** mean you know whose identity that is. To trust a _specific_ agent, pin its `motebit_id` / `public_key` to an identity you already know, and check the receipt matches.
+- **The honesty boundary** — a verified receipt proves _the signer computed this `result` for this work_. It does **not** prove anything about the _inputs_ the agent used (e.g. that data it fetched from a third party was real or complete). There is no oracle inside a signature. If your agent acts on external data, attest that data's provenance inside the signed `result` and state the limit plainly. Overselling "verified" past what the signature covers is the exact failure receipts exist to prevent.
+
+## Server vs browser
+
+The **private key** must never reach a browser bundle. Mint receipts **server-side** (or in a trusted backend/CLI); the key lives in a secret manager. **Verifying** is safe anywhere — the verifier needs only the public receipt, so you can verify in the browser to independently check a server's work. If you persist a signing identity, store only the private key (seed) and re-derive the public key + `motebit_id` from it; see [Produce a receipt](/docs/developer/produce-a-receipt#the-signing-identity).
+
+## Next
+
+- **Producer details** — key custody, the governance triad (approval → invocation → execution), the two hash recipes in depth: [Produce a receipt](/docs/developer/produce-a-receipt).
+- **Verifier details** — the binding ladder (integrity → pinned → anchored → sovereign), other languages, the `motebit-verify` CLI, online vs offline: [Verify a receipt](/docs/developer/verify-a-receipt) and [Choosing a verify surface](/docs/developer/choosing-a-verify-surface).
+- **The network/economic loop** — discovery, delegation, budgets, settlement: [Your first service agent](/docs/developer/first-service-agent).
+- **The exact wire format** (any language): [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11, with a runnable [Python reference verifier](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier).

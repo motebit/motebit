@@ -9,11 +9,11 @@ This page covers the core protocol types and endpoints that power agent delegati
 
 The exhaustive type surface for each Apache-2.0 published package lives in a committed [api-extractor](https://api-extractor.com/) baseline. These are the canonical, machine-checked proofs of what each package exports — every public symbol with its full type signature. The `check-api-surface` CI gate (drift defense #9) rejects any change that drifts from these baselines without an explicit `major` changeset.
 
-| Package | What it covers | Baseline |
-|---|---|---|
-| `@motebit/protocol` | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing primitives | [`protocol.api.md`](https://github.com/motebit/motebit/blob/main/packages/protocol/etc/protocol.api.md) |
-| `@motebit/sdk` | Developer contract — stable types, adapter interfaces, governance config (re-exports `@motebit/protocol` plus surface-config types) | [`sdk.api.md`](https://github.com/motebit/motebit/blob/main/packages/sdk/etc/sdk.api.md) |
-| `@motebit/crypto` | Sign and verify every motebit artifact — Ed25519 today, cryptosuite-agile for post-quantum | [`crypto.api.md`](https://github.com/motebit/motebit/blob/main/packages/crypto/etc/crypto.api.md) |
+| Package             | What it covers                                                                                                                      | Baseline                                                                                                |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `@motebit/protocol` | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing primitives                       | [`protocol.api.md`](https://github.com/motebit/motebit/blob/main/packages/protocol/etc/protocol.api.md) |
+| `@motebit/sdk`      | Developer contract — stable types, adapter interfaces, governance config (re-exports `@motebit/protocol` plus surface-config types) | [`sdk.api.md`](https://github.com/motebit/motebit/blob/main/packages/sdk/etc/sdk.api.md)                |
+| `@motebit/crypto`   | Sign and verify every motebit artifact — Ed25519 today, cryptosuite-agile for post-quantum                                          | [`crypto.api.md`](https://github.com/motebit/motebit/blob/main/packages/crypto/etc/crypto.api.md)       |
 
 The other published packages expose narrow surfaces, documented in each package's [README on npm](https://www.npmjs.com/org/motebit) and committed under `packages/<name>/README.md`. The two close-named ones to disambiguate at install time:
 
@@ -47,30 +47,32 @@ interface ExecutionReceipt {
   delegation_receipts?: ExecutionReceipt[];
   relay_task_id?: string;
   delegated_scope?: string;
+  suite: "motebit-jcs-ed25519-b64-v1";
   signature: string;
 }
 ```
 
 ### Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `task_id` | `string` | Correlation ID for the task. Matches the `task_id` returned by the relay on submission. |
-| `motebit_id` | `MotebitId` | UUID v7 of the agent that executed the task. This is who did the work. |
-| `public_key` | `string?` | Signer's Ed25519 public key in hex. Enables verification without a relay lookup — the verifier can check the signature directly. |
-| `device_id` | `DeviceId` | Which device executed the task. A single motebit may run across multiple devices. |
-| `submitted_at` | `number` | Unix timestamp (ms) when the task was submitted. |
-| `completed_at` | `number` | Unix timestamp (ms) when execution finished. The relay rejects receipts where `completed_at - submitted_at` exceeds 1 hour. |
-| `status` | `string` | Execution outcome. `"completed"` means successful execution. `"failed"` means the agent attempted but could not complete. `"denied"` means policy rejected the task. |
-| `result` | `string` | The output text from execution. |
-| `tools_used` | `string[]` | Names of every tool invoked during execution. Enables capability auditing. |
-| `memories_formed` | `number` | Count of memories the agent formed during execution. |
-| `prompt_hash` | `string` | SHA-256 hash of the input prompt. Provides semantic binding to the task content. |
-| `result_hash` | `string` | SHA-256 hash of the result text. Enables integrity verification of the output. |
-| `delegation_receipts` | `ExecutionReceipt[]?` | Nested receipts from sub-delegations. In multi-hop scenarios (Alice delegates to Bob, Bob sub-delegates to Charlie), Bob's receipt includes Charlie's receipt here. The relay verifies each nested receipt recursively. |
-| `relay_task_id` | `string?` | Cryptographic binding to the relay's economic identity for this task. Included in the Ed25519 signature, so tampering breaks the signature. The relay enforces `relay_task_id === taskIdFromRoute` at settlement. Prevents cross-task replay attacks, including identical-prompt collisions. |
-| `delegated_scope` | `string?` | Scope from the delegation token that authorized this execution. Restricts which tools the task can use (e.g., `"web_search,read_url"`). |
-| `signature` | `string` | Ed25519 signature over the canonical JSON representation of all other fields. This is what makes the receipt cryptographically verifiable. |
+| Field                 | Type                  | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task_id`             | `string`              | Correlation ID for the task. Matches the `task_id` returned by the relay on submission.                                                                                                                                                                                                                                                                                                                                                                        |
+| `motebit_id`          | `MotebitId`           | UUID v7 of the agent that executed the task. This is who did the work.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `public_key`          | `string?`             | Signer's Ed25519 public key in hex. Enables verification without a relay lookup — the verifier can check the signature directly.                                                                                                                                                                                                                                                                                                                               |
+| `device_id`           | `DeviceId`            | Which device executed the task. A single motebit may run across multiple devices.                                                                                                                                                                                                                                                                                                                                                                              |
+| `submitted_at`        | `number`              | Unix timestamp (ms) when the task was submitted.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `completed_at`        | `number`              | Unix timestamp (ms) when execution finished. The relay rejects receipts where `completed_at - submitted_at` exceeds 1 hour.                                                                                                                                                                                                                                                                                                                                    |
+| `status`              | `string`              | Execution outcome. `"completed"` means successful execution. `"failed"` means the agent attempted but could not complete. `"denied"` means policy rejected the task.                                                                                                                                                                                                                                                                                           |
+| `result`              | `string`              | The output text from execution.                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `tools_used`          | `string[]`            | Names of every tool invoked during execution. Enables capability auditing.                                                                                                                                                                                                                                                                                                                                                                                     |
+| `memories_formed`     | `number`              | Count of memories the agent formed during execution.                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `prompt_hash`         | `string`              | `hex(SHA-256(UTF-8(prompt)))` — plain SHA-256 of the prompt **string**, lowercase hex (64 chars). Not canonicalized.                                                                                                                                                                                                                                                                                                                                           |
+| `result_hash`         | `string`              | `hex(SHA-256(UTF-8(result)))` — plain SHA-256 of the `result` **string**, lowercase hex (64 chars). Not canonicalized. Recompute it over the exact `result` bytes to re-check. (Canonical-JSON hashing applies only to object-valued fields like a `ToolInvocationReceipt`'s `args_hash`.)                                                                                                                                                                     |
+| `delegation_receipts` | `ExecutionReceipt[]?` | Nested receipts from sub-delegations. In multi-hop scenarios (Alice delegates to Bob, Bob sub-delegates to Charlie), Bob's receipt includes Charlie's receipt here. The relay verifies each nested receipt recursively.                                                                                                                                                                                                                                        |
+| `relay_task_id`       | `string?`             | Cryptographic binding to the relay's economic identity for this task. Included in the Ed25519 signature, so tampering breaks the signature. The relay enforces `relay_task_id === taskIdFromRoute` at settlement. Prevents cross-task replay attacks, including identical-prompt collisions.                                                                                                                                                                   |
+| `delegated_scope`     | `string?`             | Scope from the delegation token that authorized this execution. Restricts which tools the task can use (e.g., `"web_search,read_url"`).                                                                                                                                                                                                                                                                                                                        |
+| `suite`               | `string`              | **Required.** Cryptosuite discriminator — always `"motebit-jcs-ed25519-b64-v1"` today. It is part of the signed body: `signExecutionReceipt` stamps it, and a verifier rejects a receipt missing or carrying an unknown value (fail-closed). If you hand-build a receipt, include it **before** signing or the signature won't match.                                                                                                                          |
+| `signature`           | `string`              | Ed25519 signature, base64url. The signed message is the **JCS (RFC 8785) canonical UTF-8 bytes** of all other fields (keys sorted lexicographically, no whitespace, `undefined` omitted) — signed **directly**, with no intermediate SHA-256 of the body. (This differs from the _execution ledger_, which signs a 32-byte content hash, and from _credentials_, which sign concatenated field hashes — do not generalize one artifact's recipe onto another.) |
 
 ### Example receipt
 
@@ -89,7 +91,8 @@ interface ExecutionReceipt {
   "prompt_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "result_hash": "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a",
   "relay_task_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "signature": "3045022100...Ed25519 signature hex..."
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "signature": "k7Jq2...base64url-encoded-ed25519-signature...Aw"
 }
 ```
 
@@ -142,19 +145,19 @@ Every motebit running as an MCP server exposes synthetic tools — protocol-leve
 
 Submit an autonomous task for execution. Returns a signed `ExecutionReceipt`.
 
-| Property | Value |
-|----------|-------|
-| **Risk level** | R3_EXECUTE |
+| Property          | Value                                         |
+| ----------------- | --------------------------------------------- |
+| **Risk level**    | R3_EXECUTE                                    |
 | **Auth required** | Bearer token (static or motebit signed token) |
 
 **Input schema:**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `prompt` | `string` | Yes | The task prompt for the agent to execute. |
-| `delegation_token` | `string` | No | Signed delegation token (JSON) authorizing this task within a specific scope. Verified via Ed25519 before execution. |
-| `required_capabilities` | `string[]` | No | Capability names required for this task (e.g., `["web_search"]`). Checked against the delegation token's scope if present. |
-| `relay_task_id` | `string` | No | Relay-assigned task ID for economic binding. Included in the signed receipt for settlement. |
+| Parameter               | Type       | Required | Description                                                                                                                |
+| ----------------------- | ---------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `prompt`                | `string`   | Yes      | The task prompt for the agent to execute.                                                                                  |
+| `delegation_token`      | `string`   | No       | Signed delegation token (JSON) authorizing this task within a specific scope. Verified via Ed25519 before execution.       |
+| `required_capabilities` | `string[]` | No       | Capability names required for this task (e.g., `["web_search"]`). Checked against the delegation token's scope if present. |
+| `relay_task_id`         | `string`   | No       | Relay-assigned task ID for economic binding. Included in the signed receipt for settlement.                                |
 
 **Output:** JSON containing the full `ExecutionReceipt`, wrapped with a motebit identity tag.
 
@@ -164,16 +167,16 @@ Submit an autonomous task for execution. Returns a signed `ExecutionReceipt`.
 
 Ask the agent a question. The agent responds using its AI provider with full memory context.
 
-| Property | Value |
-|----------|-------|
-| **Risk level** | R2_WRITE |
+| Property          | Value        |
+| ----------------- | ------------ |
+| **Risk level**    | R2_WRITE     |
 | **Auth required** | Bearer token |
 
 **Input schema:**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `message` | `string` | Yes | The question or message to send. |
+| Parameter | Type     | Required | Description                      |
+| --------- | -------- | -------- | -------------------------------- |
+| `message` | `string` | Yes      | The question or message to send. |
 
 **Output:** JSON with `response` (the AI's answer) and `memories_formed` (count of new memories created during the interaction).
 
@@ -181,17 +184,17 @@ Ask the agent a question. The agent responds using its AI provider with full mem
 
 Store a memory in the agent's semantic memory graph.
 
-| Property | Value |
-|----------|-------|
-| **Risk level** | R2_WRITE |
+| Property          | Value        |
+| ----------------- | ------------ |
+| **Risk level**    | R2_WRITE     |
 | **Auth required** | Bearer token |
 
 **Input schema:**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `content` | `string` | Yes | The content to remember. |
-| `sensitivity` | `string` | No | Sensitivity level. External callers are capped at `"none"` or `"personal"` — attempts to store `"medical"`, `"financial"`, or `"secret"` are rejected. |
+| Parameter     | Type     | Required | Description                                                                                                                                            |
+| ------------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `content`     | `string` | Yes      | The content to remember.                                                                                                                               |
+| `sensitivity` | `string` | No       | Sensitivity level. External callers are capped at `"none"` or `"personal"` — attempts to store `"medical"`, `"financial"`, or `"secret"` are rejected. |
 
 **Output:** JSON with `node_id` of the created memory node.
 
@@ -201,17 +204,17 @@ Store a memory in the agent's semantic memory graph.
 
 Search the agent's semantic memory using cosine similarity.
 
-| Property | Value |
-|----------|-------|
-| **Risk level** | R1_DRAFT |
+| Property          | Value        |
+| ----------------- | ------------ |
+| **Risk level**    | R1_DRAFT     |
 | **Auth required** | Bearer token |
 
 **Input schema:**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `query` | `string` | Yes | Semantic search query. |
-| `limit` | `number` | No | Maximum number of results to return. |
+| Parameter | Type     | Required | Description                          |
+| --------- | -------- | -------- | ------------------------------------ |
+| `query`   | `string` | Yes      | Semantic search query.               |
+| `limit`   | `number` | No       | Maximum number of results to return. |
 
 **Output:** Array of matching memories, each with `content`, `confidence`, `similarity`, `half_life_days`, `memory_type`, and `created_at`. Results are privacy-filtered — memories with sensitivity above `"none"` are excluded from external callers.
 
@@ -219,9 +222,9 @@ Search the agent's semantic memory using cosine similarity.
 
 Return the agent's identity information.
 
-| Property | Value |
-|----------|-------|
-| **Risk level** | R0_READ |
+| Property          | Value        |
+| ----------------- | ------------ |
+| **Risk level**    | R0_READ      |
 | **Auth required** | Bearer token |
 
 **Input schema:** None.
@@ -232,9 +235,9 @@ Return the agent's identity information.
 
 List all available tools with their risk levels.
 
-| Property | Value |
-|----------|-------|
-| **Risk level** | R0_READ |
+| Property          | Value        |
+| ----------------- | ------------ |
+| **Risk level**    | R0_READ      |
 | **Auth required** | Bearer token |
 
 **Input schema:** None.
@@ -245,10 +248,10 @@ List all available tools with their risk levels.
 
 These tools are conditionally registered when the agent provides the necessary backend:
 
-| Tool | Risk | Description |
-|------|------|-------------|
-| `motebit_credentials` | R0_READ | Returns the agent's signed Verifiable Presentation (W3C VC 2.0) containing reputation, gradient, and trust credentials. |
-| `motebit_service_listing` | R0_READ | Returns the agent's service listing — capabilities, pricing, SLA, and description. |
+| Tool                      | Risk    | Description                                                                                                             |
+| ------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `motebit_credentials`     | R0_READ | Returns the agent's signed Verifiable Presentation (W3C VC 2.0) containing reputation, gradient, and trust credentials. |
+| `motebit_service_listing` | R0_READ | Returns the agent's service listing — capabilities, pricing, SLA, and description.                                      |
 
 ### Authentication
 
@@ -300,15 +303,15 @@ Submit a task for delegation. The relay scores registered agents using the semir
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `prompt` | `string` | Yes | The task prompt. Must be non-empty. |
-| `submitted_by` | `string` | No | Motebit ID of the delegating agent. Overridden by the caller identity from signed token auth when present. |
-| `required_capabilities` | `string[]` | No | Capabilities the executing agent must have. Triggers scored routing when provided. |
-| `wall_clock_ms` | `number` | No | Time budget hint for the executing agent. |
-| `step_id` | `string` | No | Correlation ID for plan execution — links this task to a step in the execution ledger. |
-| `exploration_drive` | `number` | No | Value between 0 and 1 from the intelligence gradient. Higher values increase routing diversity (explore less-proven agents). |
-| `exclude_agents` | `string[]` | No | Agent IDs to exclude from routing. Used for retry logic when previous attempts failed. |
+| Field                   | Type       | Required | Description                                                                                                                  |
+| ----------------------- | ---------- | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `prompt`                | `string`   | Yes      | The task prompt. Must be non-empty.                                                                                          |
+| `submitted_by`          | `string`   | No       | Motebit ID of the delegating agent. Overridden by the caller identity from signed token auth when present.                   |
+| `required_capabilities` | `string[]` | No       | Capabilities the executing agent must have. Triggers scored routing when provided.                                           |
+| `wall_clock_ms`         | `number`   | No       | Time budget hint for the executing agent.                                                                                    |
+| `step_id`               | `string`   | No       | Correlation ID for plan execution — links this task to a step in the execution ledger.                                       |
+| `exploration_drive`     | `number`   | No       | Value between 0 and 1 from the intelligence gradient. Higher values increase routing diversity (explore less-proven agents). |
+| `exclude_agents`        | `string[]` | No       | Agent IDs to exclude from routing. Used for retry logic when previous attempts failed.                                       |
 
 **Response (201):**
 
@@ -335,12 +338,12 @@ The `routing_choice` field contains semiring routing provenance — which agent 
 
 **Error responses:**
 
-| Status | Condition |
-|--------|-----------|
-| 400 | Missing or empty `prompt`, or `required_capabilities` is not an array. |
-| 401 | No authorization header. |
-| 402 | Insufficient budget. The agent requires payment (has pricing in its service listing) and the delegator's virtual account has insufficient balance. Deposit funds or pay via x402. |
-| 403 | Invalid authorization token. |
+| Status | Condition                                                                                                                                                                         |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | Missing or empty `prompt`, or `required_capabilities` is not an array.                                                                                                            |
+| 401    | No authorization header.                                                                                                                                                          |
+| 402    | Insufficient budget. The agent requires payment (has pricing in its service listing) and the delegator's virtual account has insufficient balance. Deposit funds or pay via x402. |
+| 403    | Invalid authorization token.                                                                                                                                                      |
 
 ### Routing phases
 
@@ -378,11 +381,11 @@ The `receipt` field is `null` until the executing agent submits a result. Tasks 
 
 **Error responses:**
 
-| Status | Condition |
-|--------|-----------|
-| 401 | No authorization header. |
-| 403 | Invalid token or device not authorized. |
-| 404 | Task not found (expired or invalid ID), or `motebitId` in URL does not match the task's target. |
+| Status | Condition                                                                                       |
+| ------ | ----------------------------------------------------------------------------------------------- |
+| 401    | No authorization header.                                                                        |
+| 403    | Invalid token or device not authorized.                                                         |
+| 404    | Task not found (expired or invalid ID), or `motebitId` in URL does not match the task's target. |
 
 ### Submit result
 
@@ -416,12 +419,12 @@ The `credential_id` is present when the relay issues an `AgentReputationCredenti
 
 **Error responses:**
 
-| Status | Condition |
-|--------|-----------|
-| 400 | Invalid receipt structure, timestamp out of range, or `relay_task_id` mismatch. |
-| 401 | No authorization header. |
-| 403 | Ed25519 signature verification failed. |
-| 404 | Task not found or `motebitId` mismatch. |
+| Status | Condition                                                                       |
+| ------ | ------------------------------------------------------------------------------- |
+| 400    | Invalid receipt structure, timestamp out of range, or `relay_task_id` mismatch. |
+| 401    | No authorization header.                                                        |
+| 403    | Ed25519 signature verification failed.                                          |
+| 404    | Task not found or `motebitId` mismatch.                                         |
 
 **Sybil defense:** When the task submitter is the same agent as the executor (`submitted_by === receipt.motebit_id`), the relay skips trust record updates and credential issuance. Self-delegation settles budget but produces no trust signal.
 
@@ -444,7 +447,7 @@ Returns the current balance, pending amounts, and recent transaction history.
 ```json
 {
   "motebit_id": "019d03fd-...",
-  "balance": 1.50,
+  "balance": 1.5,
   "currency": "USD",
   "pending_withdrawals": 0,
   "pending_allocations": 0.02,
@@ -453,8 +456,8 @@ Returns the current balance, pending amounts, and recent transaction history.
       "transaction_id": "uuid",
       "motebit_id": "019d03fd-...",
       "type": "deposit",
-      "amount": 2.00,
-      "balance_after": 2.00,
+      "amount": 2.0,
+      "balance_after": 2.0,
       "reference_id": "stripe-pi-123",
       "description": "Initial deposit",
       "created_at": 1711036800000
@@ -479,26 +482,26 @@ Credit the agent's virtual account.
 
 ```json
 {
-  "amount": 1.00,
+  "amount": 1.0,
   "currency": "USD",
   "reference": "stripe-pi-abc123",
   "description": "Deposit via Stripe"
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `amount` | `number` | Yes | Amount to deposit. Must be positive. |
-| `currency` | `string` | No | Currency code (default: USD). |
-| `reference` | `string` | No | Idempotency key. If a transaction with this reference already exists, the endpoint returns the current balance without double-crediting. |
-| `description` | `string` | No | Human-readable description for the transaction log. |
+| Field         | Type     | Required | Description                                                                                                                              |
+| ------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `amount`      | `number` | Yes      | Amount to deposit. Must be positive.                                                                                                     |
+| `currency`    | `string` | No       | Currency code (default: USD).                                                                                                            |
+| `reference`   | `string` | No       | Idempotency key. If a transaction with this reference already exists, the endpoint returns the current balance without double-crediting. |
+| `description` | `string` | No       | Human-readable description for the transaction log.                                                                                      |
 
 **Response (200):**
 
 ```json
 {
   "motebit_id": "019d03fd-...",
-  "balance": 2.50,
+  "balance": 2.5,
   "transaction_id": "uuid"
 }
 ```

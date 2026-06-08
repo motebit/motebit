@@ -201,7 +201,7 @@ The `MOTEBIT_SYNC_URL` tells the agent where to register. The `MOTEBIT_API_TOKEN
 For local development against a local relay:
 
 ```bash
-MOTEBIT_SYNC_URL=http://localhost:8787
+MOTEBIT_SYNC_URL=http://localhost:3000
 MOTEBIT_API_TOKEN=your-local-token
 ```
 
@@ -339,13 +339,17 @@ Key fields:
 
 The signature covers the canonical JSON serialization of all fields except `signature`. Keys are sorted recursively for deterministic output. Since `relay_task_id` is inside the signature, an attacker cannot replay a receipt from one task against another — tampering breaks the signature.
 
-Anyone with the agent's public key can verify the receipt:
+Anyone can verify the receipt offline — the signer's public key is embedded in the receipt's `public_key` field, so no relay lookup or out-of-band key is needed. Use the published `@motebit/verifier` (it reads the embedded key, handles JCS + suite dispatch, and reports the binding-ladder rung):
 
 ```typescript
-import { verifyExecutionReceipt } from "@motebit/crypto";
+import { verifyArtifact } from "@motebit/verifier";
 
-const valid = await verifyExecutionReceipt(receipt, publicKey);
+const result = await verifyArtifact(JSON.stringify(receipt), { strictHashBinding: true });
+// result.valid     — signature is authentic AND result_hash === SHA-256(result)
+// result.sovereign — the motebit_id cryptographically commits to the signing key
 ```
+
+> `result.valid` proves the receipt is authentic and self-consistent — **not** that you know who the signer is. Pin the signer's `motebit_id`/`public_key` to a known identity for that. See [Verify a receipt](/docs/developer/verify-a-receipt) for the full binding ladder, and [Produce a receipt](/docs/developer/produce-a-receipt) for the mint side.
 
 ## Step 8: Add AI reasoning
 

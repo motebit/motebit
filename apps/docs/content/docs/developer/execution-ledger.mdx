@@ -11,19 +11,19 @@ The ledger records structure, not content. Tool arguments are SHA-256 hashed. Pr
 
 The ledger tracks the lifecycle of goal execution through typed timeline events:
 
-| Event Type | What It Captures |
-|------------|-----------------|
-| `goal_started` | Goal execution begins. Records `goal_id`. |
-| `plan_created` | A plan was generated. Records `plan_id`, `title`, `total_steps`. |
-| `step_started` | A plan step begins. Records `step_id`, `ordinal`, `description`. |
-| `tool_invoked` | A tool was called. Records `tool` name, `args_hash` (SHA-256 of canonical JSON arguments), `call_id`. |
-| `tool_result` | Tool returned. Records `tool` name, `ok` (boolean), `duration_ms`, `call_id`. |
-| `step_completed` | Step finished successfully. Records `tool_calls_made` count. |
-| `step_failed` | Step finished with an error. Records `error` message. |
-| `step_delegated` | Step was delegated to another agent. Records `task_id`. |
-| `plan_completed` | All steps completed. |
-| `plan_failed` | Plan execution failed. Records `reason`. |
-| `goal_completed` | Goal execution ended. Records final `status`. |
+| Event Type       | What It Captures                                                                                      |
+| ---------------- | ----------------------------------------------------------------------------------------------------- |
+| `goal_started`   | Goal execution begins. Records `goal_id`.                                                             |
+| `plan_created`   | A plan was generated. Records `plan_id`, `title`, `total_steps`.                                      |
+| `step_started`   | A plan step begins. Records `step_id`, `ordinal`, `description`.                                      |
+| `tool_invoked`   | A tool was called. Records `tool` name, `args_hash` (SHA-256 of canonical JSON arguments), `call_id`. |
+| `tool_result`    | Tool returned. Records `tool` name, `ok` (boolean), `duration_ms`, `call_id`.                         |
+| `step_completed` | Step finished successfully. Records `tool_calls_made` count.                                          |
+| `step_failed`    | Step finished with an error. Records `error` message.                                                 |
+| `step_delegated` | Step was delegated to another agent. Records `task_id`.                                               |
+| `plan_completed` | All steps completed.                                                                                  |
+| `plan_failed`    | Plan execution failed. Records `reason`.                                                              |
+| `goal_completed` | Goal execution ended. Records final `status`.                                                         |
 
 Events are ordered by timestamp. The timeline is an append-only sequence — events cannot be reordered or removed after the ledger is signed.
 
@@ -46,6 +46,8 @@ The ledger is signed in three steps:
 3. **Signature** — Ed25519 signature over the raw 32-byte content hash (not the hex string), encoded as base64url.
 
 The signature proves the timeline is authentic (signed by the agent's keypair) and untampered (any modification invalidates the content hash).
+
+> **This hash-then-sign recipe is specific to the ledger.** An `ExecutionReceipt` is signed differently: Ed25519 over the JCS-canonical UTF-8 **body bytes directly**, with no intermediate SHA-256. Do not apply the ledger's "sign the 32-byte content hash" recipe to receipts — use the published `signExecutionReceipt` / `verifyExecutionReceipt`, which encode the correct recipe for you.
 
 **Unsigned ledgers** are also valid. The sync relay can reconstruct a ledger from synced events, but it does not hold the agent's private key. Unsigned ledgers can be verified for content integrity (the hash matches the timeline) but not for authenticity (no signature to check).
 
@@ -154,7 +156,7 @@ To verify a ledger:
 2. Recompute the content hash from the timeline using canonical JSON serialization.
 3. Compare the recomputed hash against `content_hash`. If they differ, the timeline has been tampered with.
 4. If `signature` is present, decode it from base64url and verify the Ed25519 signature over the raw content hash bytes using the agent's public key.
-5. For each delegation receipt, verify using the embedded public key (receipts are self-verifiable). Fall back to a known-keys lookup for legacy receipts without embedded keys.
+5. **Do not try to Ed25519-verify the entries in a v1.0 ledger's `delegation_receipts[]`** — they are `DelegationReceiptSummary` objects (§4.2) whose `signature_prefix` is the _first 16 characters_ of the signature, for linkage/display only (not a verifiable signature, and there is no embedded public key). To independently verify a delegated hop, retrieve the **full signed `ExecutionReceipt`** as a separate edge artifact (from the relay or the delegating agent) and verify _that_ with `verifyExecutionReceipt` / `verifyArtifact`. The ledger proves _its own_ timeline is authentic; verifying the delegated work is a separate step against the full receipts.
 
 ## Security considerations
 

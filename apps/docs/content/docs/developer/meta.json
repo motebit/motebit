@@ -1,6 +1,7 @@
 {
   "title": "Developer Guide",
   "pages": [
+    "quickstart",
     "first-service-agent",
     "local-testing",
     "identity-standard",

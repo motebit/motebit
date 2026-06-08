@@ -30,7 +30,7 @@ The body changes. The identity persists.
 Four sections plus a release log. Pick by what you're trying to do.
 
 - **[Concepts](/docs/concepts/identity)** — the mental model. What identity, memory, receipts, trust, and governance mean in motebit, and how they fit together. Read this first if you've never seen motebit before.
-- **[Developer guide](/docs/developer/identity-standard)** — for people building on motebit. The `motebit.md` identity standard, federation protocol, MCP server scaffolding, delegation and credentials, the routing semiring. The "I want to integrate with motebit, or build a service agent on top of it" section.
+- **[Developer guide](/docs/developer/quickstart)** — for people building on motebit. Start with the [Quickstart](/docs/developer/quickstart) (sign and verify a receipt in one file, no relay), then the `motebit.md` identity standard, federation protocol, MCP server scaffolding, delegation and credentials, the routing semiring. The "I want to integrate with motebit, or build a service agent on top of it" section.
 - **[App reference](/docs/apps/cli)** — per-surface reference for the shipped runtime: CLI, desktop, mobile, spatial, and shared configuration. The "what does this surface actually do?" section.
 - **[Operator guide](/docs/operator/architecture)** — for people running motebit. Architecture, daemon mode and approvals, sync between devices, troubleshooting a relay. The "I have it installed; how do I use it?" section.
 
@@ -43,8 +43,24 @@ For the boundary between motebit's published packages and its workspace-internal
 ## Next steps
 
 <Cards>
-  <Card title="Get Your Agent" href="/docs/get-your-agent" description="Download the desktop app or create an identity from the command line." />
-  <Card title="The Droplet" href="/docs/concepts/the-droplet" description="Why the form is a liquescent sphere — the physics derivation." />
-  <Card title="Identity" href="/docs/concepts/identity" description="How cryptographic identity works under the hood." />
-  <Card title="Identity Standard" href="/docs/developer/identity-standard" description="The motebit.md specification for developers." />
+  <Card
+    title="Developer Quickstart"
+    href="/docs/developer/quickstart"
+    description="The shortest correct integration — sign a receipt and verify it offline, in one file. No relay, no account. Start here to build on motebit."
+  />
+  <Card
+    title="Get Your Agent"
+    href="/docs/get-your-agent"
+    description="Download the desktop app or create an identity from the command line."
+  />
+  <Card
+    title="The Droplet"
+    href="/docs/concepts/the-droplet"
+    description="Why the form is a liquescent sphere — the physics derivation."
+  />
+  <Card
+    title="Identity"
+    href="/docs/concepts/identity"
+    description="How cryptographic identity works under the hood."
+  />
 </Cards>
