@@ -30,11 +30,11 @@ _motebit.search.example.com TXT "v=motebit1 url=https://search.example.com/.well
 
 Fields:
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `v=motebit1` | Yes | Protocol version identifier |
-| `url=` | Yes | URL to the signed `motebit.md` identity file |
-| `endpoint=` | No | MCP server endpoint URL |
+| Field        | Required | Description                                  |
+| ------------ | -------- | -------------------------------------------- |
+| `v=motebit1` | Yes      | Protocol version identifier                  |
+| `url=`       | Yes      | URL to the signed `motebit.md` identity file |
+| `endpoint=`  | No       | MCP server endpoint URL                      |
 
 ### Well-known fallback
 
@@ -89,7 +89,7 @@ The `motebit_task` synthetic tool is the delegation entry point. It accepts a pr
 
 1. Receives the prompt via MCP tool call.
 2. Executes the task using its own tools (e.g., `web_search`, `read_url`). The service may use AI reasoning or execute tools directly — the protocol does not prescribe how the work is done.
-3. Hashes the prompt and the canonicalized result with SHA-256.
+3. Hashes the prompt and result strings with SHA-256 (`hex(SHA-256(UTF-8(string)))` — the raw bytes, not canonicalized).
 4. Constructs an `ExecutionReceipt` with task metadata.
 5. Signs the receipt with its Ed25519 private key.
 6. Returns the signed receipt to the caller.
@@ -104,11 +104,11 @@ The `motebit_task` synthetic tool is the delegation entry point. It accepts a pr
   submitted_at: number;   // Timestamp (ms since epoch)
   completed_at: number;   // Timestamp (ms since epoch)
   status: "completed" | "failed";
-  result: string;         // Canonicalized result data
+  result: string;         // The result, as a string (you choose the encoding; result_hash commits to these exact bytes)
   tools_used: string[];   // Which tools were invoked
   memories_formed: number; // How many memories the service formed
-  prompt_hash: string;    // SHA-256 of the original prompt
-  result_hash: string;    // SHA-256 of the canonicalized result
+  prompt_hash: string;    // hex(SHA-256(UTF-8(prompt))) — plain SHA-256 of the prompt string
+  result_hash: string;    // hex(SHA-256(UTF-8(result))) — plain SHA-256 of the result string (NOT canonicalized)
   signature: string;      // Ed25519 signature (base64url)
 }
 ```
@@ -254,7 +254,7 @@ const deps = wireServerDeps(runtime, {
   identityFileContent,
   embedText,
   verifySignedToken,
-  handleAgentTask,  // Your async generator that yields receipts
+  handleAgentTask, // Your async generator that yields receipts
 });
 
 // 3. Start the server
@@ -318,4 +318,4 @@ When connecting with `--motebit`, the client creates a short-lived signed token 
 
 ### Receipt integrity
 
-Execution receipts use canonical JSON serialization (sorted keys, recursive) before signing. This ensures the same receipt always produces the same signature regardless of JSON key ordering. The `prompt_hash` and `result_hash` fields allow independent verification that the prompt wasn't modified and the result matches what was signed.
+Execution receipts use canonical JSON serialization (sorted keys, recursive) over the **body** before signing — this ensures the same receipt always produces the same signature regardless of JSON key ordering. Note the two are different operations: the _body_ is JCS-canonicalized for the signature, but `prompt_hash` and `result_hash` are plain `hex(SHA-256(UTF-8(string)))` over the raw `prompt`/`result` strings — **not** canonicalized (canonicalization is only for object-valued hashes like a `ToolInvocationReceipt`'s `args_hash`). These two fields allow independent verification that the prompt wasn't modified and the result matches what was signed: recompute `SHA-256` over the exact `result` bytes and compare.

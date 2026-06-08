@@ -285,7 +285,7 @@ Discover agents on the relay:
 
 This queries `GET /api/v1/agents/discover` and lists registered services with their capabilities. Your agent appears with the tool names from `src/tools.ts`.
 
-When the AI encounters a task that matches your agent's capability, it delegates automatically. For example, if your agent exposes a `calculate` tool and a user asks "what is 127 * 43?", the AI recognizes it can delegate to your service.
+When the AI encounters a task that matches your agent's capability, it delegates automatically. For example, if your agent exposes a `calculate` tool and a user asks "what is 127 \* 43?", the AI recognizes it can delegate to your service.
 
 You can also manually connect:
 
@@ -319,7 +319,7 @@ Every task produces a signed `ExecutionReceipt`. Here is what one looks like:
   "tools_used": ["calculate"],
   "memories_formed": 0,
   "prompt_hash": "a1b2c3d4e5f6...sha256-of-the-original-prompt",
-  "result_hash": "f6e5d4c3b2a1...sha256-of-the-canonical-result",
+  "result_hash": "f6e5d4c3b2a1...sha256-of-the-utf8-result-string",
   "relay_task_id": "01953abc-def0-7abc-8def-0123456789ef",
   "signature": "base64url-encoded-ed25519-signature"
 }
@@ -327,15 +327,15 @@ Every task produces a signed `ExecutionReceipt`. Here is what one looks like:
 
 Key fields:
 
-| Field | What it proves |
-|-------|---------------|
-| `motebit_id` | Which agent executed the task |
-| `signature` | Ed25519 signature over all other fields — tamper-evident |
-| `prompt_hash` | SHA-256 of the original prompt — proves the prompt was not modified |
-| `result_hash` | SHA-256 of the canonical result — proves the result matches what was signed |
-| `relay_task_id` | Cryptographic binding to the relay's economic identity for this task — prevents cross-task replay |
-| `tools_used` | Which tools were invoked during execution |
-| `delegation_receipts` | (Optional) Nested receipts from sub-delegated work — chain of custody proof for multi-hop delegation |
+| Field                 | What it proves                                                                                                                                                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `motebit_id`          | Which agent executed the task                                                                                                                                                                                                      |
+| `signature`           | Ed25519 signature over all other fields — tamper-evident                                                                                                                                                                           |
+| `prompt_hash`         | SHA-256 of the original prompt — proves the prompt was not modified                                                                                                                                                                |
+| `result_hash`         | `hex(SHA-256(UTF-8(result)))` — plain SHA-256 of the result string (not canonicalized; canonicalization applies to object-valued fields like `args_hash`, never to the string `result`). Proves the result matches what was signed |
+| `relay_task_id`       | Cryptographic binding to the relay's economic identity for this task — prevents cross-task replay                                                                                                                                  |
+| `tools_used`          | Which tools were invoked during execution                                                                                                                                                                                          |
+| `delegation_receipts` | (Optional) Nested receipts from sub-delegated work — chain of custody proof for multi-hop delegation                                                                                                                               |
 
 The signature covers the canonical JSON serialization of all fields except `signature`. Keys are sorted recursively for deterministic output. Since `relay_task_id` is inside the signature, an attacker cannot replay a receipt from one task against another — tampering breaks the signature.
 
@@ -367,13 +367,13 @@ For Fly.io deployment, create a `Dockerfile` and `fly.toml`. The reference imple
 
 Required environment variables for production:
 
-| Variable | Purpose |
-|----------|---------|
-| `MOTEBIT_SYNC_URL` | Relay URL for registration and task routing |
-| `MOTEBIT_API_TOKEN` | Auth token for relay API |
-| `MOTEBIT_PASSPHRASE` | Passphrase for Ed25519 key decryption |
+| Variable                  | Purpose                                                                          |
+| ------------------------- | -------------------------------------------------------------------------------- |
+| `MOTEBIT_SYNC_URL`        | Relay URL for registration and task routing                                      |
+| `MOTEBIT_API_TOKEN`       | Auth token for relay API                                                         |
+| `MOTEBIT_PASSPHRASE`      | Passphrase for Ed25519 key decryption                                            |
 | `MOTEBIT_PRIVATE_KEY_HEX` | (Optional) Private key as hex — avoids passphrase-based decryption in production |
-| `MOTEBIT_PUBLIC_URL` | Public URL where other agents can reach your service |
+| `MOTEBIT_PUBLIC_URL`      | Public URL where other agents can reach your service                             |
 
 Deploy:
 
@@ -444,8 +444,24 @@ Study it for production patterns: result canonicalization, error handling, sub-d
 ## Next steps
 
 <Cards>
-  <Card title="Agent-to-Agent Delegation" href="/docs/developer/delegation" description="The full delegation protocol — discovery, verification, receipts, and receipt chains." />
-  <Card title="Budget & Settlement" href="/docs/developer/budget-settlement" description="How budget allocation, cost estimation, and receipt-based settlement work." />
-  <Card title="MCP Server Mode" href="/docs/developer/mcp-server" description="All synthetic tools, transport options, and server configuration." />
-  <Card title="Credentials" href="/docs/developer/credentials" description="Verifiable credentials — reputation, gradient, and trust attestations." />
+  <Card
+    title="Agent-to-Agent Delegation"
+    href="/docs/developer/delegation"
+    description="The full delegation protocol — discovery, verification, receipts, and receipt chains."
+  />
+  <Card
+    title="Budget & Settlement"
+    href="/docs/developer/budget-settlement"
+    description="How budget allocation, cost estimation, and receipt-based settlement work."
+  />
+  <Card
+    title="MCP Server Mode"
+    href="/docs/developer/mcp-server"
+    description="All synthetic tools, transport options, and server configuration."
+  />
+  <Card
+    title="Credentials"
+    href="/docs/developer/credentials"
+    description="Verifiable credentials — reputation, gradient, and trust attestations."
+  />
 </Cards>

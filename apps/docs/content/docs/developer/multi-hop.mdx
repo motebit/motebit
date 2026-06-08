@@ -60,12 +60,12 @@ Bob's `tools_used` array records `"read_url(delegated)"` — an explicit signal 
 
 ### Environment variables
 
-| Variable | Service | Purpose |
-|----------|---------|---------|
-| `MOTEBIT_DELEGATE_READ_URL` | Bob | Charlie's MCP endpoint URL (e.g., `https://charlie.fly.dev/mcp`) |
-| `MOTEBIT_DELEGATE_TARGET_ID` | Bob | Charlie's `motebit_id` for relay task submission |
-| `MOTEBIT_SYNC_URL` | Both | Relay URL for budget allocation and settlement |
-| `MOTEBIT_PRIVATE_KEY_HEX` | Both | Ed25519 private key for receipt signing |
+| Variable                     | Service | Purpose                                                          |
+| ---------------------------- | ------- | ---------------------------------------------------------------- |
+| `MOTEBIT_DELEGATE_READ_URL`  | Bob     | Charlie's MCP endpoint URL (e.g., `https://charlie.fly.dev/mcp`) |
+| `MOTEBIT_DELEGATE_TARGET_ID` | Bob     | Charlie's `motebit_id` for relay task submission                 |
+| `MOTEBIT_SYNC_URL`           | Both    | Relay URL for budget allocation and settlement                   |
+| `MOTEBIT_PRIVATE_KEY_HEX`    | Both    | Ed25519 private key for receipt signing                          |
 
 ## Budget flow
 
@@ -100,7 +100,7 @@ The `ExecutionReceipt` type (from `@motebit/sdk`) includes an optional `delegati
 interface ExecutionReceipt {
   task_id: string;
   motebit_id: MotebitId;
-  public_key?: string;         // signer's Ed25519 public key (hex)
+  public_key?: string; // signer's Ed25519 public key (hex)
   device_id: DeviceId;
   submitted_at: number;
   completed_at: number;
@@ -108,11 +108,11 @@ interface ExecutionReceipt {
   result: string;
   tools_used: string[];
   memories_formed: number;
-  prompt_hash: string;         // SHA-256 of the original prompt
-  result_hash: string;         // SHA-256 of the canonicalized result
-  relay_task_id?: string;      // binds receipt to the relay's economic identity
-  delegation_receipts?: ExecutionReceipt[];  // nested sub-delegation proofs
-  signature: string;           // Ed25519 over canonical JSON of all other fields
+  prompt_hash: string; // hex(SHA-256(UTF-8(prompt))) — plain SHA-256 of the prompt string
+  result_hash: string; // hex(SHA-256(UTF-8(result))) — plain SHA-256 of the result string (NOT canonicalized)
+  relay_task_id?: string; // binds receipt to the relay's economic identity
+  delegation_receipts?: ExecutionReceipt[]; // nested sub-delegation proofs
+  signature: string; // Ed25519 over canonical JSON of all other fields
 }
 ```
 
@@ -231,8 +231,14 @@ const { task_id: subRelayTaskId } = await taskResp.json();
 ```typescript
 // Authenticate with a signed token
 const token = await createSignedToken(
-  { mid: myMotebitId, did: myDeviceId, iat: Date.now(), exp: Date.now() + 300_000,
-    jti: crypto.randomUUID(), aud: "task:submit" },
+  {
+    mid: myMotebitId,
+    did: myDeviceId,
+    iat: Date.now(),
+    exp: Date.now() + 300_000,
+    jti: crypto.randomUUID(),
+    aud: "task:submit",
+  },
   myPrivateKey,
 );
 
