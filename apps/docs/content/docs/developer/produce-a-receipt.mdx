@@ -1,0 +1,122 @@
+---
+title: Produce a Receipt
+description: Mint a sovereign ExecutionReceipt with the published @motebit/crypto signing primitives — including the two hash recipes that are easy to get wrong.
+---
+
+[Verify a receipt](/docs/developer/verify-a-receipt) is the consumer side. This is the producer side: how to **mint** an `ExecutionReceipt` that any third party can verify offline, using the same published `@motebit/crypto` package the verifier is built on.
+
+The rule is the same in both directions: **consume the primitives, never reimplement them.** Do not hand-roll Ed25519, JCS canonicalization, or the hash recipes — call `@motebit/crypto`'s `sign*` functions. The wire format is fixed by [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11.
+
+## The signing identity
+
+A receipt is signed by a sovereign motebit identity — an Ed25519 keypair whose `motebit_id` is a cryptographic commitment to the public key. That commitment is what lets a verifier compute `sovereign: true` offline, with no directory lookup.
+
+```typescript
+import { generateKeypair, deriveSovereignMotebitId, bytesToHex } from "@motebit/crypto";
+
+const { privateKey, publicKey } = await generateKeypair();
+const motebit_id = await deriveSovereignMotebitId(bytesToHex(publicKey));
+```
+
+**The private key is the identity — store only the seed.** Persist the private key in a secret manager (env var, KMS); never the public key as a separate stored value. Re-derive the public key and `motebit_id` from the seed on load, so there is no second input that can silently disagree with the private key:
+
+```typescript
+import { getPublicKeyBySuite, EXECUTION_RECEIPT_SUITE } from "@motebit/crypto";
+
+// On the server, from the stored seed:
+const publicKey = await getPublicKeyBySuite(privateKey, EXECUTION_RECEIPT_SUITE);
+const motebit_id = await deriveSovereignMotebitId(bytesToHex(publicKey));
+```
+
+If you also pin a committed public identity, assert the derived key matches it at startup — a misconfigured seed then fails loudly instead of minting receipts under the wrong identity. Keep the private key server-side only; signing code must never reach a browser bundle.
+
+## The two hash recipes
+
+This is the one place producers reliably get wrong. There are **two different hash recipes**, and which one you use depends on whether the field holds a **string** or an **object**.
+
+> **The trap.** `result_hash` and `prompt_hash` are **plain SHA-256 of the UTF-8 string** — **not** canonicalized. `args_hash` (on a `ToolInvocationReceipt`) is `canonicalSha256` of an object. Using `canonicalSha256` on a string adds JSON quotes (`canonicalSha256("x")` hashes `"x"` _with_ the quotes), so it does **not** equal `SHA-256("x")` — and a third party recomputing per spec gets a mismatch. A signed receipt whose `result_hash` nobody can reproduce from its own `result` is a signed number, not a proof.
+
+From the spec (§ Hash fields), verbatim:
+
+```
+prompt_hash = hex(SHA-256(UTF-8(prompt_string)))   // plain SHA-256 of the STRING
+result_hash = hex(SHA-256(UTF-8(result_string)))   // plain SHA-256 of the STRING
+args_hash   = hex(SHA-256(canonical-JSON(args)))   // JCS — args is an OBJECT
+```
+
+In code:
+
+```typescript
+import { hash, hashToolPayload } from "@motebit/crypto";
+
+// String fields — plain SHA-256 of the exact bytes:
+const result_hash = await hash(new TextEncoder().encode(result));
+const prompt_hash = await hash(new TextEncoder().encode(prompt));
+
+// Object field (ToolInvocationReceipt only) — canonical JSON, then SHA-256:
+const args_hash = await hashToolPayload(args); // === canonicalSha256(args)
+```
+
+**`result_hash` commits to the exact bytes in the `result` field.** If you want the receipt to commit to a structured result (not just a summary), make `result` the **canonical JSON string** of that structure and hash _those_ bytes — then `result` is recomputable straight from the receipt, and a skeptic can re-derive your data and re-check the hash with no knowledge of how you serialized it.
+
+## Mint the receipt
+
+`signExecutionReceipt` stamps the suite, canonicalizes the body (JCS), signs with Ed25519, and base64url-encodes the signature. Pass the public key as the third argument so it is **embedded** in the receipt — that is what makes it self-verifiable offline.
+
+```typescript
+import { signExecutionReceipt, hash } from "@motebit/crypto";
+
+const prompt = "Reconcile May 2026 payouts against the ledger.";
+const result = JSON.stringify(reconciliationResult); // the exact bytes you commit to
+
+const receipt = await signExecutionReceipt(
+  {
+    task_id,
+    motebit_id,
+    device_id,
+    submitted_at,
+    completed_at,
+    status: "completed", // "completed" | "failed" | "denied"
+    result,
+    tools_used: ["stripe.payouts.read", "ledger.read"],
+    memories_formed: 0,
+    prompt_hash: await hash(new TextEncoder().encode(prompt)),
+    result_hash: await hash(new TextEncoder().encode(result)),
+  },
+  privateKey,
+  publicKey, // embed the public key → sovereign-verifiable, no relay lookup
+);
+```
+
+The signature covers every field except `signature` itself. Tampering with any byte — the result, a timestamp, the tool list — invalidates it.
+
+## Self-check before you ship
+
+A valid signature proves authenticity, not internal consistency. Before you hand a receipt to anyone, verify it yourself in **strict** mode (`@motebit/verifier@1.4.0+`, `@motebit/crypto@3.3.0+`): strict re-computes `SHA-256(result)` and rejects a mismatch, so it catches a receipt whose `result_hash` doesn't bind its own `result`.
+
+```typescript
+import { verifyArtifact } from "@motebit/verifier";
+
+const v = await verifyArtifact(JSON.stringify(receipt), { strictHashBinding: true });
+if (!v.valid) {
+  // A receipt you minted that doesn't pass strict is a producer bug — most
+  // often result_hash computed with the wrong recipe. Do not ship it.
+  throw new Error("minted a receipt that fails strict verification");
+}
+```
+
+Make this assertion a test in your minting code. It is the cheapest guard against the recipe trap above.
+
+## The governance triad
+
+`ExecutionReceipt` is one of three signed artifacts. To bind an approval decision and a tool invocation to an execution (the [governance triad](/docs/developer/governance-triad)), use `signApprovalDecision` and `signToolInvocationReceipt` and link them by their correlators — `approval.run_id == toolReceipt.task_id == execReceipt.task_id`, `approval.approval_id == toolReceipt.invocation_id`, `approval.args_hash == toolReceipt.args_hash`. There is no single "bind the triad" call; you set the correlators yourself. The reference assembly — sign, then self-verify and assert the linkage before writing — is [`mint-triad-fixture.mjs`](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/fixtures/mint-triad-fixture.mjs).
+
+## The honesty boundary
+
+A receipt proves the agent **computed this result over the inputs it attested** — it does not prove those inputs match some external source of truth. There is no oracle inside the signature. If your agent fetched data from a third party, the receipt commits to what the agent claims it fetched; attest input provenance and completeness inside the signed `result` payload, and state the boundary plainly in any UI. Overselling "verified" past what the signature covers is the exact dishonesty receipts exist to prevent.
+
+## Reference
+
+- Working producer example: [`mint-sovereign-fixture.mjs`](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/fixtures/mint-sovereign-fixture.mjs)
+- Wire format and hash recipes: [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11
+- The consumer side: [Verify a receipt](/docs/developer/verify-a-receipt)

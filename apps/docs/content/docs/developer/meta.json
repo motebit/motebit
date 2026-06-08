@@ -9,6 +9,7 @@
     "delegation",
     "multi-hop",
     "execution-ledger",
+    "produce-a-receipt",
     "verify-a-receipt",
     "choosing-a-verify-surface",
     "governance-triad",
