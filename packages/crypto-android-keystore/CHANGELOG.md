@@ -1,5 +1,13 @@
 # @motebit/crypto-android-keystore
 
+## 1.1.10
+
+### Patch Changes
+
+- 820784d: Remove the redundant direct `@peculiar/asn1-schema` dependency — it resolves transitively through `@peculiar/x509`, which the verifier actually imports. No runtime or API change (lighter manifest only).
+- Updated dependencies [5180ec1]
+  - @motebit/crypto@3.3.0
+
 ## 1.1.9
 
 ### Patch Changes
