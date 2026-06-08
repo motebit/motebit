@@ -29,7 +29,7 @@
     "@motebit/sdk": "workspace:*",
     "@motebit/encryption": "workspace:*",
     "@motebit/policy-invariants": "workspace:*",
-    "three": "^0.170.0"
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
