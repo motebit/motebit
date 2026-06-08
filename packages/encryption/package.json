@@ -24,8 +24,7 @@
     "@motebit/protocol": "workspace:*",
     "@motebit/crypto": "workspace:*",
     "@noble/curves": "^2.2.0",
-    "@noble/ed25519": "~3.1.0",
-    "@noble/hashes": "^2.2.0"
+    "@noble/ed25519": "~3.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

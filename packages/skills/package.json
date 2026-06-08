@@ -33,8 +33,7 @@
     "@motebit/crypto": "workspace:*",
     "@motebit/protocol": "workspace:*",
     "@motebit/wire-schemas": "workspace:*",
-    "yaml": "^2.6.0",
-    "zod": "^3.25.0"
+    "yaml": "^2.6.0"
   },
   "devDependencies": {
     "@noble/ed25519": "~3.1.0",
