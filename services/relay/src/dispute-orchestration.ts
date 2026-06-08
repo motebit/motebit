@@ -41,9 +41,6 @@ const logger = createLogger({ service: "relay", module: "dispute-orchestration" 
 /** §6.6 adjudication window — the orchestrator's deferred attempt deadline. */
 export const ORCHESTRATION_DEADLINE_MS = 72 * 60 * 60 * 1000;
 
-/** Per-attempt timeout — the per-request fan-out deadline (one attempt). */
-export const ORCHESTRATION_PER_ATTEMPT_TIMEOUT_MS = 10_000;
-
 /** Backoff cap — no single inter-attempt gap exceeds this. */
 const ORCHESTRATION_BACKOFF_CAP_MS = 30 * 60 * 1000;
 
