@@ -193,16 +193,6 @@ export async function applyMotebitYaml(opts: ApplyOptions): Promise<ApplyResult>
   }
 }
 
-/** True if the plan would write nothing (regardless of prune flag). */
-export function isPlanEmpty(plan: Plan): boolean {
-  return (
-    plan.add.length === 0 &&
-    plan.update.length === 0 &&
-    plan.prune.length === 0 &&
-    plan.configUnchanged
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Pure diffPlan — no IO. Exported for tests.
 // ---------------------------------------------------------------------------
