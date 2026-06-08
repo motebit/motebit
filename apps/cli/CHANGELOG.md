@@ -1,5 +1,12 @@
 # motebit CLI Changelog
 
+## 1.4.3
+
+### Patch Changes
+
+- e584b76: Remove the dead internal `isPlanEmpty` helper from the `up` subcommand — it was exported but had zero callers (not a CLI command or public API). No behavior change.
+- d9a9476: Remove the unused `listArchivedReceipts` helper — it listed an in-memory per-REPL session archive (not a durable store) and had zero callers; the by-id `getArchivedReceipt` (used within a single `invoke` run) stays. No behavior change.
+
 ## 1.4.2
 
 ### Patch Changes
