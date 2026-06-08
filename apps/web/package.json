@@ -46,7 +46,7 @@
     "@motebit/voice": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
     "buffer": "^6.0.3",
-    "three": "^0.170.0"
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@noble/ed25519": "~3.1.0",

@@ -34,8 +34,8 @@
     "@motebit/verify": "workspace:*",
     "@motebit/voice": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
-    "@ricky0123/vad-web": "^0.0.22",
-    "three": "^0.170.0"
+    "@ricky0123/vad-web": "^0.0.30",
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@types/three": "^0.170.0",
