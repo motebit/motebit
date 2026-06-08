@@ -48,11 +48,6 @@ export function getArchivedReceipt(taskId: string): ExecutionReceipt | undefined
   return ARCHIVE.get(taskId);
 }
 
-/** List archived task_ids in insertion order. */
-export function listArchivedReceipts(): ExecutionReceipt[] {
-  return Array.from(ARCHIVE.values());
-}
-
 /** Clear the session archive. Used by tests. */
 export function clearReceiptArchive(): void {
   ARCHIVE.clear();

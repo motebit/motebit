@@ -161,6 +161,7 @@ import { startBatchWithdrawalLoop, getPendingWithdrawalsSummary } from "./batch-
 import { registerAgentRoutes } from "./agents.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
 import { registerTaskRoutes } from "./tasks.js";
+import { ExpoPushAdapter } from "./push-adapter.js";
 import { TaskQueue } from "./task-queue.js";
 import { registerCommandRoutes, handleCommandResponse } from "./command-route.js";
 import Stripe from "stripe";
@@ -1594,6 +1595,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     getEmergencyFreeze(),
   );
 
+  // Mobile push-wake adapter — env-gated like the Solana/x402 capabilities.
+  // The full chain is already live (mobile registers Expo tokens via
+  // POST /api/v1/agents/push-token → relay_push_tokens; attemptPushWake reads
+  // them); this is the one construction that activates it. Absent token →
+  // undefined → attemptPushWake cleanly no-ops (no push, no dishonest claim).
+  const pushAdapter = process.env.EXPO_ACCESS_TOKEN
+    ? new ExpoPushAdapter({ accessToken: process.env.EXPO_ACCESS_TOKEN })
+    : undefined;
+  logger.info("relay.push_wake", { enabled: pushAdapter !== undefined });
+
   // --- Task routes (submission, polling, receipt settlement) ---
   await registerTaskRoutes({
     app,
@@ -1615,6 +1626,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     isAgentRevoked,
     platformFeeRate,
     railRegistry,
+    pushAdapter,
   });
 
   // --- Helper: count all connected WebSocket clients ---

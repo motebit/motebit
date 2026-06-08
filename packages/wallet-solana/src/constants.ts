@@ -8,9 +8,6 @@ export const USDC_MINT_MAINNET = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 /** Devnet USDC mint (base58). Useful for tests and development. */
 export const USDC_MINT_DEVNET = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 
-/** USDC has 6 decimals on Solana — same as motebit micro-units. */
-export const USDC_DECIMALS = 6;
-
 /**
  * Thrown when a USDC transfer is attempted but the agent's wallet
  * holds less than the requested amount. Distinct from RPC failures
