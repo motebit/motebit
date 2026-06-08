@@ -2146,50 +2146,6 @@ interface ProbeResult {
   skipped?: { reason: string };
 }
 
-function runProbe(probe: Probe): ProbeResult {
-  // Escape-hatch check — run before perturbation so we don't touch the tree
-  // for a probe we're going to skip.
-  if (probe.skipWhen) {
-    const decision = probe.skipWhen();
-    if (decision.skip) {
-      return { probe, gateExitCode: null, ok: true, skipped: { reason: decision.reason } };
-    }
-  }
-
-  let cleanup: (() => void) | null = null;
-  try {
-    cleanup = probe.perturb();
-
-    const result = spawnSync("pnpm", ["--silent", "run", probe.script], {
-      stdio: "pipe",
-      encoding: "utf-8",
-    });
-
-    const gateExitCode = result.status;
-    // A gate that "works" MUST exit non-zero when given a known violation.
-    // Zero = the gate didn't catch the injected drift = the gate is
-    // decoration, not defense.
-    const ok = gateExitCode !== null && gateExitCode !== 0;
-
-    return { probe, gateExitCode, ok };
-  } catch (err) {
-    return {
-      probe,
-      gateExitCode: null,
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  } finally {
-    if (cleanup) {
-      try {
-        cleanup();
-      } catch (err) {
-        console.error(`  cleanup failed for ${probe.script}: ${String(err)}`);
-      }
-    }
-  }
-}
-
 /**
  * Assert every entry in scripts/check.ts's GATES list has a matching probe.
  * The drift this defends against: someone adds a new gate to GATES but
@@ -2370,8 +2326,8 @@ function main(): void {
         continue;
       }
     }
-    // Patch runProbe's cleanup into activeCleanup so the signal handler sees it.
-    // (Small duplication of runProbe's logic for this reason.)
+    // Track the active cleanup so the SIGINT/SIGTERM handler can revert an
+    // in-flight perturbation if the run is interrupted.
     let cleanup: (() => void) | null = null;
     let gateExitCode: number | null = null;
     let ok = false;
