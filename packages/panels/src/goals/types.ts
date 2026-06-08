@@ -8,12 +8,12 @@
 //
 // This file hosts the canonical shape every surface agrees on:
 //
-//   - `ScheduledGoal` — the client-facing projection. Desktop + mobile read
-//     it via `GoalsController` (daemon-backed). Web reads and writes it via
-//     `GoalsRunner` — web IS the daemon, so its runner owns the tick loop.
-//
-//   - `GoalRunRecord` + `GoalFireResult` — runner-only, for surfaces that
-//     ARE the daemon and track in-memory run history.
+//   - `ScheduledGoal` — the client-facing projection. ALL surfaces read it
+//     via `GoalsController` over a surface-specific adapter: desktop (Tauri
+//     IPC), mobile (expo-sqlite), web (a shim over its in-process goals
+//     engine — web IS the daemon, but the panel binds to the same controller
+//     as the others). Run records + the fire contract are web-daemon-only and
+//     live in `apps/web/src/goal-engine.ts`, not here.
 //
 // The persistence + protocol layers have their own richer / more signed
 // shapes (`persistence.Goal`, `GoalCreatedPayload`); `ScheduledGoal` is a
@@ -163,70 +163,8 @@ export interface ScheduledGoal {
   spent_tokens?: number;
 }
 
-// ── Run records (runner-only) ─────────────────────────────────────────────
-
-/**
- * A single fire of a goal by the web runner. Daemon-backed surfaces log
- * runs server-side and don't populate this client-side.
- */
-export interface GoalRunRecord {
-  run_id: string;
-  goal_id: string;
-  started_at: number;
-  finished_at: number | null;
-  status: "running" | "fired" | "skipped" | "error";
-  response_preview?: string | null;
-  error_message?: string | null;
-}
-
-/**
- * Result of a single fire() call. The runner reconciles its state based on
- * the outcome: `fired` advances next_run_at and writes a success run;
- * `skipped` leaves next_run_at alone (next tick retries); `error` advances
- * next_run_at and records the failure.
- *
- * `tokensUsed` rides on `fired` / `error` outcomes so the runner can roll
- * up `spent_tokens` per goal for the v1 axis of the bounded-commitment
- * envelope. Omitted means "this fire didn't report token usage" — legacy
- * adapters, plan-mode goals before plan-side token tracking lands, etc.
- * The runner adds nothing when omitted (same behavior as zero); the
- * doctrine cares about monotonic accumulation, not perfect attribution.
- * See `docs/doctrine/panel-temporal-registers.md` §"Bounded commitment is
- * multi-dimensional" and `ScheduledGoal.spent_tokens`.
- */
-export type GoalFireResult =
-  | {
-      outcome: "fired";
-      responsePreview?: string | null;
-      /** Full result content — the artifact. Untruncated text the
-       *  adapter accumulated during the fire. Runner stores as
-       *  `goal.last_response_full`. See `docs/doctrine/goal-results.md`
-       *  §"The three categories" for the architectural intent
-       *  (Phase 2 content preservation; Phase 3 routes to the slab
-       *  as a `mind`-mode slab item with `ContentArtifactManifest`
-       *  signing). Omit when the adapter doesn't (yet) carry the
-       *  full content. */
-      responseFull?: string;
-      /** Slab turn id for this fire — the navigational anchor the
-       *  goal card uses to open the resting `stream`/`mind` slab item
-       *  the runtime created during the fire. Computed by the
-       *  adapter via `slabTurnIdForRun(runId)` from
-       *  `@motebit/runtime` when the adapter passed an explicit
-       *  `runId` to `sendMessageStreaming`. Runner stores as
-       *  `goal.last_turn_id`. Adapters that don't yet thread the id
-       *  (legacy / plan-mode pre-step-id-attribution) omit; the
-       *  runner falls back to no affordance, which is the correct
-       *  calm-software degradation. */
-      turnId?: string;
-      /** Whether the adapter wrapped this fire's artifact as a signed
-       *  `ContentArtifactManifest` (web: localStorage manifest written;
-       *  desktop / mobile: `signed_manifest` column populated on the
-       *  outcome row). Runner stores as `goal.last_manifest_signed`.
-       *  Omit on adapters that don't yet wire signing — runner stores
-       *  `null` and the renderer omits the indicator. Doctrine:
-       *  `docs/doctrine/goal-results.md` §"The three categories". */
-      manifestSigned?: boolean;
-      tokensUsed?: number;
-    }
-  | { outcome: "skipped" }
-  | { outcome: "error"; error: string; tokensUsed?: number };
+// Run records (`GoalRunRecord`) and the fire contract (`GoalFireResult`)
+// used to live here. They moved to `apps/web/src/goal-engine.ts` (2026-06-08)
+// because they describe a web-daemon-only concept — desktop / mobile log
+// runs server-side and never populate them. `ScheduledGoal` stays here as
+// the cross-surface projection shape every controller agrees on.

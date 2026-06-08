@@ -13,7 +13,7 @@
  * The Phase-3 close (2026-05-14: commits 2428248a → 347b8461 →
  * 8b547f3f → 714d7e38) wired this call on all three flat surfaces:
  *
- *   - `apps/web/src/goals-runner.ts`
+ *   - `apps/web/src/goal-scheduler.ts`
  *   - `apps/desktop/src/goal-scheduler.ts`
  *   - `apps/mobile/src/goal-scheduler.ts`
  *
@@ -56,7 +56,7 @@ const REGISTERED_GOAL_RUNNERS: ReadonlyArray<{
   /** Short label for error messages. */
   readonly surface: string;
 }> = [
-  { path: "apps/web/src/goals-runner.ts", surface: "web" },
+  { path: "apps/web/src/goal-scheduler.ts", surface: "web" },
   { path: "apps/desktop/src/goal-scheduler.ts", surface: "desktop" },
   { path: "apps/mobile/src/goal-scheduler.ts", surface: "mobile" },
 ];

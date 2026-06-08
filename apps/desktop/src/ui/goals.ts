@@ -6,6 +6,7 @@ import { addMessage } from "./chat";
 import {
   createGoalsController,
   formatCountdownUntil,
+  formatTokens,
   type GoalsFetchAdapter,
   type GoalsState,
   type ScheduledGoal,
@@ -34,17 +35,15 @@ export interface GoalsAPI {
   onGoalExecuting(executing: boolean): void;
 }
 
+// Duration renderer for the meta row ("2h", "30s"). Distinct from mobile's
+// cadence-word formatInterval and web's cadenceLabel — desktop's register is
+// a compact duration, not a cadence noun. `formatTokens` is the shared
+// axis-native value formatter from @motebit/panels (single source of truth).
 function formatInterval(ms: number): string {
   if (ms >= 86400000) return `${Math.round(ms / 86400000)}d`;
   if (ms >= 3600000) return `${Math.round(ms / 3600000)}h`;
   if (ms >= 60000) return `${Math.round(ms / 60000)}m`;
   return `${Math.round(ms / 1000)}s`;
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}k`;
-  return String(n);
 }
 
 export function initGoals(ctx: DesktopContext): GoalsAPI {

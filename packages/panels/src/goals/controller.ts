@@ -2,8 +2,9 @@
 //
 // This controller reads goal state through an adapter — the adapter
 // implementation decides whether that's a Rust daemon (desktop), SQLite +
-// expo store (mobile), or relay fetch. Surfaces that ARE the daemon (web)
-// use the sibling `createGoalsRunner` instead, which owns fire + run state.
+// expo store (mobile), or web's in-process goals engine (web IS the daemon,
+// but its adapter is a thin shim over the engine so the panel binds to this
+// same controller — see `apps/web/src/goals-adapter.ts`).
 //
 // Shared state lifted here:
 //   - goal list (fetched via adapter)

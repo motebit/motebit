@@ -1,9 +1,10 @@
 // === Gated HUD Panels ===
 // Memory panel is functional (IDB-backed via runtime).
 // Sync popup is functional (connects to relay via signed tokens).
-// Goals panel is functional — reads/writes the shared GoalsRunner in
-// @motebit/panels, filtered to one-shot goals (mode: "once"). Recurring
-// goals execute via GoalsRunner and surface through the slab.
+// Goals panel is functional — binds to the shared `GoalsController` from
+// @motebit/panels (uniform with desktop/mobile) over web's in-process goals
+// engine. Recurring goals tick in the engine; once goals execute on demand,
+// streaming plan progress inline; results surface through the slab.
 
 import type { WebContext } from "../types";
 import type { WebSyncStatus } from "../web-app";
@@ -33,9 +34,9 @@ import {
   type AgentRecord,
   type AgentsFetchAdapter,
   formatCountdownUntil,
+  formatTokens,
   type AgentsState,
   type DiscoveredAgent,
-  type GoalRunRecord,
   type MemoryFetchAdapter,
   type MemoryState,
   type PricingEntry,
@@ -44,6 +45,9 @@ import {
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import { deriveAgentSigil } from "@motebit/sdk";
 import { sigilToSvg } from "../identity-sigil-svg.js";
+// Run records are a web-daemon-only concept owned by the in-process goals
+// engine (web's daemon); the controller's projection state has no `runs`.
+import type { GoalRunRecord } from "../goal-engine.js";
 import {
   verifiedSettlementSummaryFetch,
   fetchTransparencyAnchor,
@@ -350,11 +354,9 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
     }
   }
 
-  function formatTokens(n: number): string {
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
-    if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}k`;
-    return String(n);
-  }
+  // `formatTokens` (axis-native value formatter) and cadenceLabel differ in
+  // role: cadenceLabel is web's lowercase cadence noun ("hourly"/"once"/
+  // "custom"), formatTokens is the shared @motebit/panels value formatter.
 
   // The pulse class drives both color and breathing animation.
   // Recurring + active = breathing at 0.3Hz (Liquescentia rate, so
@@ -381,13 +383,17 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
   const formatCountdown = formatCountdownUntil;
 
   function renderGoals(): void {
-    const runner = ctx.app.getGoalsRunner?.();
-    if (!runner) {
+    const ctrl = ctx.app.getGoalsController?.();
+    if (!ctrl) {
       goalList.innerHTML = "";
       goalEmpty.style.display = "";
       return;
     }
-    const state = runner.getState();
+    // Goals (the commitment projection) come from the controller — uniform
+    // with desktop/mobile. Run records (the "running" pulse) come from the
+    // engine directly; the projection controller doesn't carry them.
+    const state = ctrl.getState();
+    const runs = ctx.app.getGoalsScheduler?.()?.getState().runs ?? [];
     const panelGoals = state.goals
       .slice()
       .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
@@ -421,7 +427,7 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
       headerRow.className = "goal-card-row";
 
       const pulse = document.createElement("span");
-      pulse.className = `goal-pulse ${pulseClass(goal, state.runs)}`;
+      pulse.className = `goal-pulse ${pulseClass(goal, runs)}`;
       headerRow.appendChild(pulse);
 
       const promptText = document.createElement("span");
@@ -640,7 +646,7 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
         raiseBtn.textContent = `Raise to ${formatTokens(cap * 2)}`;
         raiseBtn.addEventListener("click", (e) => {
           e.stopPropagation();
-          runner.setBudgetTokens(goal.goal_id, cap * 2);
+          void ctrl.setBudgetTokens?.(goal.goal_id, cap * 2);
         });
         actions.appendChild(raiseBtn);
       }
@@ -666,7 +672,10 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
         toggleBtn.textContent = paused ? "Resume" : "Pause";
         toggleBtn.addEventListener("click", (e) => {
           e.stopPropagation();
-          runner.setPaused(goal.goal_id, !paused);
+          // `paused` is the current state; toggling means the new desired
+          // enabled state equals the current `paused` value (currently
+          // paused → enable; currently active → disable).
+          void ctrl.setEnabled(goal.goal_id, paused);
         });
         actions.appendChild(toggleBtn);
 
@@ -675,7 +684,7 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
           runBtn.textContent = "Run now";
           runBtn.addEventListener("click", (e) => {
             e.stopPropagation();
-            void runner.runNow(goal.goal_id);
+            void ctrl.runNow?.(goal.goal_id);
           });
           actions.appendChild(runBtn);
         }
@@ -689,7 +698,7 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
         e.stopPropagation();
         if (removeBtn.classList.contains("confirming")) {
           if (confirmTimer != null) clearTimeout(confirmTimer);
-          runner.removeGoal(goal.goal_id);
+          void ctrl.removeGoal(goal.goal_id);
         } else {
           removeBtn.classList.add("confirming");
           removeBtn.textContent = "Confirm";
@@ -726,8 +735,12 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
   }
 
   async function executeGoal(goalId: string): Promise<void> {
-    const runner = ctx.app.getGoalsRunner?.();
-    if (!runner) return;
+    // Once-goal live plan progress is a web-daemon concern: fire through the
+    // engine directly so the onChunk stream renders into the card. The
+    // controller's pure-projection runNow carries no chunk stream; the
+    // engine's emit → debounced controller.refresh keeps the list in sync.
+    const scheduler = ctx.app.getGoalsScheduler?.();
+    if (!scheduler) return;
     if (!ctx.app.isProviderConnected) {
       ctx.showToast("Connect an AI provider first");
       return;
@@ -741,7 +754,7 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
     renderGoals();
 
     try {
-      await runner.runNow(goalId, (chunk) => {
+      await scheduler.runNow(goalId, (chunk) => {
         const stepsEl = document.getElementById(`goal-steps-${goalId}`);
         if (!stepsEl) return;
         if (chunk && typeof chunk === "object" && "type" in chunk) {
@@ -832,18 +845,33 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
     goalCommitBudgetField.classList.remove("is-custom");
   }
 
+  // Cadence chip → interval_ms. The controller's NewGoalInput takes
+  // interval_ms (uniform across surfaces — desktop/mobile pass ms too);
+  // the cadence vocabulary is a web-panel affordance, mapped at the call
+  // site rather than carried into the shared contract.
+  const CADENCE_MS: Record<"hourly" | "daily" | "weekly", number> = {
+    hourly: 3_600_000,
+    daily: 86_400_000,
+    weekly: 604_800_000,
+  };
+
   goalCommitSubmit.addEventListener("click", () => {
-    const runner = ctx.app.getGoalsRunner?.();
-    if (!runner) return;
+    const ctrl = ctx.app.getGoalsController?.();
+    if (!ctrl) return;
     const prompt = goalCommitPrompt.value.trim();
     if (!prompt) return;
     if (commitCadence === "once") {
-      runner.addGoal({ prompt, mode: "once", budget_tokens: commitBudgetTokens });
-    } else {
-      runner.addGoal({
+      void ctrl.addGoal({
         prompt,
+        interval_ms: 0,
+        mode: "once",
+        budget_tokens: commitBudgetTokens,
+      });
+    } else {
+      void ctrl.addGoal({
+        prompt,
+        interval_ms: CADENCE_MS[commitCadence],
         mode: "recurring",
-        cadence: commitCadence,
         budget_tokens: commitBudgetTokens,
       });
     }
@@ -855,15 +883,24 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
 
   function openGoals(): void {
     closeAll();
-    // Lazy-attach the runner subscription on first open — the runner is
-    // constructed during `app.bootstrap()`, which runs AFTER
+    // Lazy-attach the controller subscription on first open — the
+    // controller is constructed during `app.bootstrap()`, which runs AFTER
     // `initGatedPanels`, so an init-time subscription would see null.
     // Also starts a 30s countdown refresh so recurring-goal "in 12m"
     // labels tick down without waiting for a fire event.
     if (!goalsSubscribed) {
-      const runner = ctx.app.getGoalsRunner?.();
-      if (runner) {
-        runner.subscribe(() => renderGoals());
+      const ctrl = ctx.app.getGoalsController?.();
+      if (ctrl) {
+        // Re-render on controller emits, but only while the panel is open —
+        // background-tick fires emit continuously; rebuilding a closed
+        // panel's DOM is wasted work (matches the countdown timer's guard).
+        ctrl.subscribe(() => {
+          if (goalsPanel.classList.contains("open")) renderGoals();
+        });
+        // Populate the list once now that the controller exists (the
+        // engine loaded goals from localStorage at construction; refresh
+        // pulls them into the controller's projection state).
+        void ctrl.refresh();
         setInterval(() => {
           if (goalsPanel.classList.contains("open")) renderGoals();
         }, 30_000);

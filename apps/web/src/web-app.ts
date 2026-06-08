@@ -130,8 +130,10 @@ import {
 } from "./storage.js";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
 import { EncryptedKeyStore } from "./encrypted-keystore";
-import { createWebGoalsRunner } from "./goals-runner";
-import type { GoalsRunner } from "@motebit/panels";
+import { createWebGoalsScheduler } from "./goal-scheduler";
+import { createWebGoalsAdapter } from "./goals-adapter";
+import type { GoalsEngine } from "./goal-engine";
+import { createGoalsController, type GoalsController } from "@motebit/panels";
 
 // Re-export shared presets for color-picker and settings modules
 import {
@@ -477,12 +479,20 @@ export class UnbootedWebApp {
   private _toolActivityListeners = new Set<
     (event: import("@motebit/runtime").ToolActivityEvent) => void
   >();
-  // Goals runner — user-declared outcomes the motebit pursues on
-  // cadence (recurring) or on demand (once). Started in bootstrap()
-  // after runtime is ready. Fires drive the normal chat pipeline so
-  // runs produce signed ExecutionReceipts via the existing seam. See
-  // `docs/doctrine/goals-vs-tasks.md` for the goal/task distinction.
-  private _goalsRunner: GoalsRunner | null = null;
+  // Web's goals daemon — user-declared outcomes the motebit pursues on
+  // cadence (recurring) or on demand (once). The in-process engine owns
+  // the tick/fire loop + localStorage; started in bootstrap() after the
+  // runtime is ready. Fires drive the normal chat pipeline so runs produce
+  // signed ExecutionReceipts via the existing seam. The Goals panel binds
+  // to `_goalsController` (uniform with desktop/mobile); the engine
+  // surfaces only for run records (the "running" pulse) and the once-goal
+  // live-progress runNow path. See `docs/doctrine/goals-vs-tasks.md`.
+  private _scheduler: GoalsEngine | null = null;
+  private _goalsController: GoalsController | null = null;
+  // Microtask-coalesce engine emits into one controller.refresh so a
+  // single fire (appendRun → updateRun → updateGoal = 3 emits) doesn't
+  // thrash the panel through 3 list re-reads.
+  private _goalsRefreshQueued = false;
 
   async init(canvas: HTMLCanvasElement): Promise<void> {
     try {
@@ -839,15 +849,30 @@ export class UnbootedWebApp {
     // Reconnect saved MCP servers
     void this.reconnectMcpServers();
 
-    // Start the goals runner. Fires tab-local; recurring goals fire on
+    // Start the goals daemon. Fires tab-local; recurring goals fire on
     // cadence, once goals fire on explicit runNow. Each fire drives the
     // normal chat pipeline (plan stream for once goals, single turn for
     // recurring) with suppressHistory so scheduled runs don't land in
     // the user's chat transcript. Pipeline emits signed
     // ExecutionReceipts regardless — audit trail verifiable the same
-    // way user-typed runs are.
-    this._goalsRunner = createWebGoalsRunner(this);
-    this._goalsRunner.start();
+    // way user-typed runs are. The panel binds to the controller below;
+    // the engine surfaces only run records + the once-goal progress path.
+    const scheduler = createWebGoalsScheduler(this);
+    this._scheduler = scheduler;
+    this._goalsController = createGoalsController(createWebGoalsAdapter(scheduler));
+    // Background-tick fires mutate the engine directly; nudge the
+    // controller to re-read so the panel's list state stays in sync
+    // (mirrors desktop, whose scheduler calls ctrl.refresh on complete).
+    // Microtask-debounced so one fire's burst of emits = one refresh.
+    scheduler.subscribe(() => {
+      if (this._goalsRefreshQueued) return;
+      this._goalsRefreshQueued = true;
+      queueMicrotask(() => {
+        this._goalsRefreshQueued = false;
+        void this._goalsController?.refresh();
+      });
+    });
+    scheduler.start();
   }
 
   /**
@@ -1378,6 +1403,11 @@ export class UnbootedWebApp {
       void this.computerRegistration.dispose();
       this.computerRegistration = null;
     }
+    // Stop the goals daemon's tick loop and tear down its subscription +
+    // the controller's listeners (previously leaked — the runner was never
+    // stopped on app teardown).
+    this._scheduler?.dispose();
+    this._goalsController?.dispose();
     this.runtime?.stop();
     this.renderer.dispose();
   }
@@ -1899,11 +1929,22 @@ export class UnbootedWebApp {
   }
 
   /**
-   * Access to the goals runner — the Goals panel reads / mutates via
-   * this. Null if bootstrap hasn't finished yet.
+   * Access to the goals controller — the Goals panel reads list state +
+   * runs CRUD through this, uniform with desktop / mobile. Null if
+   * bootstrap hasn't finished yet.
    */
-  getGoalsRunner(): GoalsRunner | null {
-    return this._goalsRunner;
+  getGoalsController(): GoalsController | null {
+    return this._goalsController;
+  }
+
+  /**
+   * Access to the in-process goals engine (web's daemon). The panel
+   * reaches this only for the web-daemon-only concerns the projection
+   * controller doesn't carry: run records (the "running" pulse) and the
+   * once-goal `runNow(onChunk)` live-progress path. Null pre-bootstrap.
+   */
+  getGoalsScheduler(): GoalsEngine | null {
+    return this._scheduler;
   }
 
   /**
@@ -2048,7 +2089,7 @@ export class UnbootedWebApp {
 
   /**
    * Locally-known goal execution rows — the Sovereign Ledger's
-   * substrate-alive source of truth. Reads from the GoalsRunner state
+   * substrate-alive source of truth. Reads from the goals engine state
    * (the local source of scheduled goals + their fire timestamps),
    * filters to goals with execution history (terminal status OR
    * `last_run_at` set), and maps to the canonical `GoalRow` wire
@@ -2068,9 +2109,9 @@ export class UnbootedWebApp {
     status: string;
     created_at: number;
   }> {
-    const runner = this._goalsRunner;
-    if (!runner) return [];
-    const { goals } = runner.getState();
+    const scheduler = this._scheduler;
+    if (!scheduler) return [];
+    const { goals } = scheduler.getState();
     return goals
       .filter((g) => g.last_run_at != null || g.status === "completed" || g.status === "failed")
       .map((g) => ({

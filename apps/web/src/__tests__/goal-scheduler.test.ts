@@ -1,15 +1,21 @@
 /**
- * goals-runner tests — covers the web-surface adapter for
- * `@motebit/panels/goals`. Tests both the localStorage I/O helpers
- * (via their observable effect on the runner) and the fire() routing
- * per mode / strategy / error path.
+ * goal-scheduler tests — cover the web-surface daemon
+ * (`createWebGoalsScheduler`): the localStorage I/O helpers (via their
+ * observable effect on the engine state) and the fire() routing per mode /
+ * strategy / error path. The engine's reconciliation logic is covered
+ * separately in `goal-engine.test.ts`; here we exercise the web wiring.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { GoalRunRecord, ScheduledGoal } from "@motebit/panels";
+import type { ScheduledGoal } from "@motebit/panels";
 
-import { createWebGoalsRunner, formatCountdownUntil } from "../goals-runner.js";
+import type { GoalRunRecord } from "../goal-engine.js";
+import { createWebGoalsScheduler } from "../goal-scheduler.js";
 import type { WebApp } from "../web-app.js";
+
+const HOURLY = 3_600_000;
+const DAILY = 86_400_000;
+const WEEKLY = 604_800_000;
 
 interface MockApp {
   isProcessing: boolean;
@@ -49,42 +55,17 @@ afterEach(() => {
   globalThis.localStorage.clear();
 });
 
-describe("formatCountdownUntil", () => {
-  it('returns "any moment" when target already passed', () => {
-    expect(formatCountdownUntil(1000, 2000)).toBe("any moment");
-    expect(formatCountdownUntil(1000, 1000)).toBe("any moment");
-  });
-
-  it("seconds bucket for sub-minute windows", () => {
-    expect(formatCountdownUntil(1000 + 30_000, 1000)).toBe("in 30s");
-  });
-
-  it("minutes bucket for sub-hour windows", () => {
-    expect(formatCountdownUntil(1000 + 5 * 60_000, 1000)).toBe("in 5m");
-  });
-
-  it("hours bucket, round hour and with minutes remainder", () => {
-    expect(formatCountdownUntil(1000 + 3 * 3_600_000, 1000)).toBe("in 3h");
-    expect(formatCountdownUntil(1000 + 3 * 3_600_000 + 15 * 60_000, 1000)).toBe("in 3h 15m");
-  });
-
-  it("days bucket, round day and with hours remainder", () => {
-    expect(formatCountdownUntil(1000 + 2 * 86_400_000, 1000)).toBe("in 2d");
-    expect(formatCountdownUntil(1000 + 2 * 86_400_000 + 5 * 3_600_000, 1000)).toBe("in 2d 5h");
-  });
-});
-
-describe("createWebGoalsRunner — storage adapter", () => {
+describe("createWebGoalsScheduler — storage adapter", () => {
   it("loads empty arrays on first-ever run (no stored data)", () => {
-    const runner = createWebGoalsRunner(makeApp() as unknown as WebApp);
-    expect(runner.getState().goals).toEqual([]);
-    expect(runner.getState().runs).toEqual([]);
+    const engine = createWebGoalsScheduler(makeApp() as unknown as WebApp);
+    expect(engine.getState().goals).toEqual([]);
+    expect(engine.getState().runs).toEqual([]);
   });
 
   it("round-trips addGoal through localStorage (save on write, load on read)", () => {
-    const runner = createWebGoalsRunner(makeApp() as unknown as WebApp);
-    runner.addGoal({ prompt: "hourly brief", mode: "recurring", cadence: "hourly" });
-    expect(runner.getState().goals).toHaveLength(1);
+    const engine = createWebGoalsScheduler(makeApp() as unknown as WebApp);
+    engine.addGoal({ prompt: "hourly brief", mode: "recurring", interval_ms: HOURLY });
+    expect(engine.getState().goals).toHaveLength(1);
 
     const raw = globalThis.localStorage.getItem("motebit.goals");
     expect(raw).not.toBeNull();
@@ -92,24 +73,24 @@ describe("createWebGoalsRunner — storage adapter", () => {
     expect(parsed).toHaveLength(1);
     expect(parsed[0]?.prompt).toBe("hourly brief");
 
-    const fresh = createWebGoalsRunner(makeApp() as unknown as WebApp);
+    const fresh = createWebGoalsScheduler(makeApp() as unknown as WebApp);
     expect(fresh.getState().goals).toHaveLength(1);
     expect(fresh.getState().goals[0]?.prompt).toBe("hourly brief");
   });
 
   it("tolerates corrupted localStorage JSON (returns empty)", () => {
     globalThis.localStorage.setItem("motebit.goals", "not-valid-json{");
-    const runner = createWebGoalsRunner(makeApp() as unknown as WebApp);
-    expect(runner.getState().goals).toEqual([]);
+    const engine = createWebGoalsScheduler(makeApp() as unknown as WebApp);
+    expect(engine.getState().goals).toEqual([]);
   });
 });
 
-describe("createWebGoalsRunner — fire() routing by mode", () => {
+describe("createWebGoalsScheduler — fire() routing by mode", () => {
   it("skipped when app.isProcessing is true", async () => {
-    const runner = createWebGoalsRunner(makeApp({ isProcessing: true }) as unknown as WebApp);
-    runner.addGoal({ prompt: "x", mode: "once" });
-    const goal = runner.getState().goals[0]!;
-    const result = await runner.runNow(goal.goal_id);
+    const engine = createWebGoalsScheduler(makeApp({ isProcessing: true }) as unknown as WebApp);
+    engine.addGoal({ prompt: "x", interval_ms: 0, mode: "once" });
+    const goal = engine.getState().goals[0]!;
+    const result = await engine.runNow(goal.goal_id);
     expect(result.outcome).toBe("skipped");
   });
 
@@ -128,10 +109,10 @@ describe("createWebGoalsRunner — fire() routing by mode", () => {
         for (const chunk of planChunks) yield chunk;
       },
     });
-    const runner = createWebGoalsRunner(app as unknown as WebApp);
-    runner.addGoal({ prompt: "Draft itinerary", mode: "once" });
-    const goal = runner.getState().goals[0]!;
-    const result = await runner.runNow(goal.goal_id, (c) => seen.push(c));
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "Draft itinerary", interval_ms: 0, mode: "once" });
+    const goal = engine.getState().goals[0]!;
+    const result = await engine.runNow(goal.goal_id, (c) => seen.push(c));
     expect(result.outcome).toBe("fired");
     expect(seen).toHaveLength(3);
     if (result.outcome === "fired") {
@@ -147,10 +128,10 @@ describe("createWebGoalsRunner — fire() routing by mode", () => {
         yield { type: "plan_failed", reason: "step 1 failed" };
       },
     });
-    const runner = createWebGoalsRunner(app as unknown as WebApp);
-    runner.addGoal({ prompt: "x", mode: "once" });
-    const goal = runner.getState().goals[0]!;
-    const result = await runner.runNow(goal.goal_id);
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "x", interval_ms: 0, mode: "once" });
+    const goal = engine.getState().goals[0]!;
+    const result = await engine.runNow(goal.goal_id);
     expect(result.outcome).toBe("error");
     if (result.outcome === "error") expect(result.error).toBe("step 1 failed");
   });
@@ -161,10 +142,10 @@ describe("createWebGoalsRunner — fire() routing by mode", () => {
         throw new Error("executeGoal blew up");
       },
     });
-    const runner = createWebGoalsRunner(app as unknown as WebApp);
-    runner.addGoal({ prompt: "x", mode: "once" });
-    const goal = runner.getState().goals[0]!;
-    const result = await runner.runNow(goal.goal_id);
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "x", interval_ms: 0, mode: "once" });
+    const goal = engine.getState().goals[0]!;
+    const result = await engine.runNow(goal.goal_id);
     expect(result.outcome).toBe("error");
     if (result.outcome === "error") expect(result.error).toContain("executeGoal blew up");
   });
@@ -177,10 +158,10 @@ describe("createWebGoalsRunner — fire() routing by mode", () => {
         yield { type: "other" };
       },
     });
-    const runner = createWebGoalsRunner(app as unknown as WebApp);
-    runner.addGoal({ prompt: "brief me", mode: "recurring", cadence: "hourly" });
-    const goal = runner.getState().goals[0]!;
-    const result = await runner.runNow(goal.goal_id);
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "brief me", mode: "recurring", interval_ms: HOURLY });
+    const goal = engine.getState().goals[0]!;
+    const result = await engine.runNow(goal.goal_id);
     expect(result.outcome).toBe("fired");
     if (result.outcome === "fired") {
       expect(result.responsePreview).toBe("Hello world");
@@ -193,10 +174,10 @@ describe("createWebGoalsRunner — fire() routing by mode", () => {
         throw new Error("streaming failed");
       },
     });
-    const runner = createWebGoalsRunner(app as unknown as WebApp);
-    runner.addGoal({ prompt: "x", mode: "recurring", cadence: "daily" });
-    const goal = runner.getState().goals[0]!;
-    const result = await runner.runNow(goal.goal_id);
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "x", mode: "recurring", interval_ms: DAILY });
+    const goal = engine.getState().goals[0]!;
+    const result = await engine.runNow(goal.goal_id);
     expect(result.outcome).toBe("error");
     if (result.outcome === "error") expect(result.error).toContain("streaming failed");
   });
@@ -207,10 +188,10 @@ describe("createWebGoalsRunner — fire() routing by mode", () => {
         // no text chunks
       },
     });
-    const runner = createWebGoalsRunner(app as unknown as WebApp);
-    runner.addGoal({ prompt: "x", mode: "recurring", cadence: "weekly" });
-    const goal = runner.getState().goals[0]!;
-    const result = await runner.runNow(goal.goal_id);
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "x", mode: "recurring", interval_ms: WEEKLY });
+    const goal = engine.getState().goals[0]!;
+    const result = await engine.runNow(goal.goal_id);
     expect(result.outcome).toBe("fired");
     if (result.outcome === "fired") {
       expect(result.responsePreview).toBeNull();
@@ -223,10 +204,10 @@ describe("createWebGoalsRunner — fire() routing by mode", () => {
         yield { type: "text", text: "ok" };
       },
     });
-    const runner = createWebGoalsRunner(app as unknown as WebApp);
-    runner.addGoal({ prompt: "x", mode: "recurring", cadence: "hourly" });
-    const goal = runner.getState().goals[0]!;
-    await runner.runNow(goal.goal_id);
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "x", mode: "recurring", interval_ms: HOURLY });
+    const goal = engine.getState().goals[0]!;
+    await engine.runNow(goal.goal_id);
 
     const raw = globalThis.localStorage.getItem("motebit.goals_runs");
     expect(raw).not.toBeNull();
@@ -237,14 +218,16 @@ describe("createWebGoalsRunner — fire() routing by mode", () => {
 
   it("saveGoals tolerates localStorage quota errors without crashing", () => {
     const app = makeApp();
-    const runner = createWebGoalsRunner(app as unknown as WebApp);
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
     const original = globalThis.localStorage.setItem.bind(globalThis.localStorage);
     const spy = vi.spyOn(globalThis.localStorage, "setItem").mockImplementation(() => {
       throw new Error("QuotaExceeded");
     });
     // Should not throw:
-    expect(() => runner.addGoal({ prompt: "will not persist", mode: "once" })).not.toThrow();
-    expect(runner.getState().goals).toHaveLength(1);
+    expect(() =>
+      engine.addGoal({ prompt: "will not persist", interval_ms: 0, mode: "once" }),
+    ).not.toThrow();
+    expect(engine.getState().goals).toHaveLength(1);
     spy.mockRestore();
     // Smoke — original storage still usable after restore.
     original("check", "ok");

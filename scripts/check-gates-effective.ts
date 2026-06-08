@@ -2000,13 +2000,13 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-goal-artifact-signing",
     proves:
-      "flags a per-surface goal-runner that has stopped calling `runtime.signGoalArtifact` — the silent regression that would let goal-fire artifacts persist without a signed `ContentArtifactManifest` envelope. The drift class: a refactor that renames or removes the signing call on one surface (`apps/web/src/goals-runner.ts`, `apps/desktop/src/goal-scheduler.ts`, or `apps/mobile/src/goal-scheduler.ts`) passes typecheck because `signGoalArtifact` is optional from the runtime's perspective; the gate is the only catch. Probe rewrites `signGoalArtifact(` to `signGoalArtifactDisabled(` on the web surface; the gate's identifier scan must surface the missing-call violation.",
+      "flags a per-surface goal-runner that has stopped calling `runtime.signGoalArtifact` — the silent regression that would let goal-fire artifacts persist without a signed `ContentArtifactManifest` envelope. The drift class: a refactor that renames or removes the signing call on one surface (`apps/web/src/goal-scheduler.ts`, `apps/desktop/src/goal-scheduler.ts`, or `apps/mobile/src/goal-scheduler.ts`) passes typecheck because `signGoalArtifact` is optional from the runtime's perspective; the gate is the only catch. Probe rewrites `signGoalArtifact(` to `signGoalArtifactDisabled(` on the web surface; the gate's identifier scan must surface the missing-call violation.",
     perturb: () =>
       // Rename the signing call on web so the literal scan fails. The
       // gate's contains-check looks for `signGoalArtifact(` so the
       // disabled-suffix mutation breaks the match while leaving every
       // sibling surface untouched.
-      mutateFile("apps/web/src/goals-runner.ts", (src) =>
+      mutateFile("apps/web/src/goal-scheduler.ts", (src) =>
         src.replace(/signGoalArtifact\(/g, "signGoalArtifactDisabled("),
       ),
   },

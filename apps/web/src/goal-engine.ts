@@ -1,47 +1,111 @@
-// Goals runner — the daemon-role primitive for surfaces that ARE the daemon.
+// Goals engine — the daemon-role reconciliation core for web.
 //
-// Web does not delegate goal execution to a Rust process; the browser tab
-// is the daemon. This runner holds the in-memory source of truth for the
-// goal list + run records, ticks on a 30s cadence, and fires due recurring
-// goals through the adapter's `fire` contract. Once goals require explicit
-// runNow — the tick skips them by design so Goals-panel UX ("click Execute")
-// still works.
+// Web does not delegate goal execution to a Rust process (desktop) or an
+// expo-sqlite store + background scheduler (mobile); the browser tab IS the
+// daemon. This engine holds the in-memory source of truth for the goal
+// list + run records, ticks on a 30s cadence, and fires due recurring goals
+// through the injected `fire` contract. Once goals require explicit runNow —
+// the tick skips them by design so Goals-panel UX ("click Execute") works.
+//
+// This was previously `createGoalsRunner` in `@motebit/panels`. It moved here
+// (2026-06-08) because daemon logic is platform-specific — desktop and mobile
+// own their schedulers in-app (`apps/desktop/src/goal-scheduler.ts`,
+// `apps/mobile/src/goal-scheduler.ts`); web's daemon belongs in apps/web too.
+// The shared `@motebit/panels` package keeps only the projection controller.
+// `apps/web/src/goal-scheduler.ts` composes this engine with the localStorage
+// adapter + fire(); the Goals panel binds to `createGoalsController` over a
+// thin adapter shim, exactly like desktop and mobile.
 //
 // Concurrency:
 //   - One fire in flight at a time. A second due goal waits for the first.
-//     The adapter's fire() may return `skipped` (e.g. user turn is in
-//     flight) — the runner leaves next_run_at alone and retries next tick.
+//     The injected fire() may return `skipped` (e.g. user turn is in
+//     flight) — the engine leaves next_run_at alone and retries next tick.
 //   - Ticks are re-entrant-safe: an overlapping tick queues behind the
 //     previous via the tickInFlight guard.
 //
 // Persistence:
 //   - Goals + runs persist through the adapter on every mutation. The
-//     adapter owns the storage medium (localStorage, SQLite, etc).
-//
-// Migration:
-//   - Outside this file — see `migrations.ts`. Callers migrate legacy
-//     records into `ScheduledGoal` before the adapter's loadGoals() returns.
+//     adapter owns the storage medium (localStorage).
 
-import type { GoalFireResult, GoalMode, GoalRunRecord, ScheduledGoal } from "./types.js";
+import type { NewGoalInput, ScheduledGoal } from "@motebit/panels";
 
 const TICK_INTERVAL_MS = 30_000;
 const MAX_RUN_RECORDS = 50;
 
-const CADENCE_DEFAULTS = {
-  hourly: 3_600_000,
-  daily: 86_400_000,
-  weekly: 604_800_000,
-} as const;
+// ── Web-daemon-only types ──────────────────────────────────────────────────
+// These describe the web scheduler's in-memory run history + fire contract.
+// They lived in `@motebit/panels/goals/types` while the runner did; they
+// moved here with the engine because they're a web-daemon-only concept
+// (desktop / mobile log runs server-side and never populate these).
 
 /**
- * Runner adapter. Synchronous load/save keeps the hot path simple — every
- * known consumer (web localStorage) can satisfy this without buffering.
- * `fire` is the only async method: it performs the actual motebit
- * execution. The optional `onChunk` forwards streaming output (plan chunks
- * for once goals, text chunks for recurring) opaquely so renderers show
- * live progress without the package knowing runtime chunk types.
+ * A single fire of a goal by the web engine. Daemon-backed surfaces log
+ * runs server-side and don't populate this client-side.
  */
-export interface GoalsRunnerAdapter {
+export interface GoalRunRecord {
+  run_id: string;
+  goal_id: string;
+  started_at: number;
+  finished_at: number | null;
+  status: "running" | "fired" | "skipped" | "error";
+  response_preview?: string | null;
+  error_message?: string | null;
+}
+
+/**
+ * Result of a single fire() call. The engine reconciles its state based on
+ * the outcome: `fired` advances next_run_at and writes a success run;
+ * `skipped` leaves next_run_at alone (next tick retries); `error` advances
+ * next_run_at and records the failure.
+ *
+ * `tokensUsed` rides on `fired` / `error` outcomes so the engine can roll
+ * up `spent_tokens` per goal for the v1 axis of the bounded-commitment
+ * envelope. Omitted means "this fire didn't report token usage" — legacy
+ * adapters, plan-mode goals before plan-side token tracking lands, etc.
+ * The engine adds nothing when omitted (same behavior as zero); the
+ * doctrine cares about monotonic accumulation, not perfect attribution.
+ * See `docs/doctrine/panel-temporal-registers.md` §"Bounded commitment is
+ * multi-dimensional" and `ScheduledGoal.spent_tokens`.
+ */
+export type GoalFireResult =
+  | {
+      outcome: "fired";
+      responsePreview?: string | null;
+      /** Full result content — the artifact. Untruncated text the
+       *  adapter accumulated during the fire. Engine stores as
+       *  `goal.last_response_full`. See `docs/doctrine/goal-results.md`
+       *  §"The three categories". Omit when the adapter doesn't (yet)
+       *  carry the full content. */
+      responseFull?: string;
+      /** Slab turn id for this fire — the navigational anchor the
+       *  goal card uses to open the resting `stream`/`mind` slab item
+       *  the runtime created during the fire. Computed by the adapter
+       *  via `slabTurnIdForRun(runId)`. Engine stores as
+       *  `goal.last_turn_id`. Adapters that don't yet thread the id
+       *  omit; the engine falls back to no affordance. */
+      turnId?: string;
+      /** Whether the adapter wrapped this fire's artifact as a signed
+       *  `ContentArtifactManifest`. Engine stores as
+       *  `goal.last_manifest_signed`. Omit on adapters that don't yet
+       *  wire signing — engine stores `null` and the renderer omits
+       *  the indicator. Doctrine: `docs/doctrine/goal-results.md`. */
+      manifestSigned?: boolean;
+      tokensUsed?: number;
+    }
+  | { outcome: "skipped" }
+  | { outcome: "error"; error: string; tokensUsed?: number };
+
+// ── Engine ──────────────────────────────────────────────────────────────────
+
+/**
+ * Engine adapter. Synchronous load/save keeps the hot path simple — the web
+ * consumer (localStorage) satisfies this without buffering. `fire` is the
+ * only async method: it performs the actual motebit execution. The optional
+ * `onChunk` forwards streaming output (plan chunks for once goals, text
+ * chunks for recurring) opaquely so renderers show live progress without
+ * the engine knowing runtime chunk types.
+ */
+export interface GoalsEngineAdapter {
   loadGoals(): ScheduledGoal[];
   saveGoals(goals: ScheduledGoal[]): void;
   loadRuns(): GoalRunRecord[];
@@ -49,29 +113,12 @@ export interface GoalsRunnerAdapter {
   fire(goal: ScheduledGoal, onChunk?: (chunk: unknown) => void): Promise<GoalFireResult>;
 }
 
-export interface GoalsRunnerState {
+export interface GoalsEngineState {
   goals: ScheduledGoal[];
   runs: GoalRunRecord[];
 }
 
-export interface NewGoalRunnerInput {
-  prompt: string;
-  mode: GoalMode;
-  /** Named cadence for recurring goals; ignored when mode === "once". */
-  cadence?: "hourly" | "daily" | "weekly" | "custom";
-  /** Explicit interval in ms — used when cadence === "custom". */
-  interval_ms?: number;
-  /**
-   * v1 axis of the bounded-commitment envelope per
-   * `docs/doctrine/panel-temporal-registers.md` §"Bounded commitment is
-   * multi-dimensional." Token cap on inference work, summed across runs.
-   * `null` or absent = no cap on this axis. Future axes (voice_seconds,
-   * tool_calls, wall_clock_ms, ...) land as additive sibling fields.
-   */
-  budget_tokens?: number | null;
-}
-
-export interface GoalsRunnerDeps {
+export interface GoalsEngineDeps {
   /** Injected for testability. */
   now?: () => number;
   setInterval?: (handler: () => void, ms: number) => ReturnType<typeof setInterval>;
@@ -79,12 +126,17 @@ export interface GoalsRunnerDeps {
   generateId?: () => string;
 }
 
-export interface GoalsRunner {
-  getState(): GoalsRunnerState;
-  subscribe(listener: (state: GoalsRunnerState) => void): () => void;
-  addGoal(input: NewGoalRunnerInput): ScheduledGoal;
-  setPaused(goalId: string, paused: boolean): void;
-  removeGoal(goalId: string): void;
+export interface GoalsEngine {
+  getState(): GoalsEngineState;
+  subscribe(listener: (state: GoalsEngineState) => void): () => void;
+  addGoal(input: NewGoalInput): ScheduledGoal;
+  /**
+   * Set the goal's enabled state. `enabled: false` pauses, `true` resumes.
+   * Re-evaluated against terminal states (completed / failed stay put).
+   * Matches the `GoalsController` / `GoalsFetchAdapter` verb so the web
+   * panel binds to the same contract as desktop + mobile.
+   */
+  setEnabled(goalId: string, enabled: boolean): void;
   /**
    * Raise / lower / clear the token cap on a goal. Pass `null` to remove
    * the cap entirely. Re-evaluates `budget_exhausted` synchronously so a
@@ -93,6 +145,7 @@ export interface GoalsRunner {
    * happens via the adapter's saveGoals on the next emit.
    */
   setBudgetTokens(goalId: string, budgetTokens: number | null): void;
+  removeGoal(goalId: string): void;
   /**
    * Trigger a goal run explicitly. Works for any goal regardless of mode —
    * once goals require this call to execute at all (the background tick
@@ -110,21 +163,21 @@ function defaultGenerateId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function createGoalsRunner(
-  adapter: GoalsRunnerAdapter,
-  deps: GoalsRunnerDeps = {},
-): GoalsRunner {
+export function createGoalsEngine(
+  adapter: GoalsEngineAdapter,
+  deps: GoalsEngineDeps = {},
+): GoalsEngine {
   const now = deps.now ?? (() => Date.now());
   const generateId = deps.generateId ?? defaultGenerateId;
   const scheduleTick = deps.setInterval ?? ((h, ms) => setInterval(h, ms));
   const cancelTick = deps.clearInterval ?? ((h) => clearInterval(h));
 
-  let state: GoalsRunnerState = {
+  let state: GoalsEngineState = {
     goals: adapter.loadGoals(),
     runs: adapter.loadRuns(),
   };
 
-  const listeners = new Set<(state: GoalsRunnerState) => void>();
+  const listeners = new Set<(state: GoalsEngineState) => void>();
   let tickHandle: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
   let tickInFlight = false;
@@ -162,20 +215,9 @@ export function createGoalsRunner(
     emit();
   }
 
-  function computeIntervalMs(input: NewGoalRunnerInput): number {
-    if (input.mode === "once") return 0;
-    if (input.cadence === "custom" && typeof input.interval_ms === "number") {
-      return Math.max(0, input.interval_ms);
-    }
-    if (input.cadence === "hourly") return CADENCE_DEFAULTS.hourly;
-    if (input.cadence === "daily") return CADENCE_DEFAULTS.daily;
-    if (input.cadence === "weekly") return CADENCE_DEFAULTS.weekly;
-    return CADENCE_DEFAULTS.daily;
-  }
-
-  function addGoal(input: NewGoalRunnerInput): ScheduledGoal {
+  function addGoal(input: NewGoalInput): ScheduledGoal {
     const createdAt = now();
-    const interval = computeIntervalMs(input);
+    const interval = Math.max(0, input.interval_ms);
     const goal: ScheduledGoal = {
       goal_id: generateId(),
       prompt: input.prompt,
@@ -204,12 +246,12 @@ export function createGoalsRunner(
    * Inline cap-check on the tokens axis. Mirrors `checkGoalBudget` in
    * `@motebit/runtime/goals.ts` for the v1 single-axis case; the
    * runtime helper is the canonical multi-axis primitive for
-   * cli/desktop/mobile schedulers. Inlined here because `@motebit/panels`
-   * cannot import `@motebit/runtime` (sibling L5 BSL — would force a
-   * layer promotion per packages/panels/CLAUDE.md rule 2). When the axis
-   * union grows, extend this helper additively. Re-evaluated every tick
-   * so raising the cap auto-resumes the goal next fire — pause is a
-   * synthesized state, never sticky.
+   * cli/desktop/mobile schedulers. Inlined here because web's engine
+   * is a self-contained app module and `@motebit/panels` (whose
+   * controller this engine feeds) cannot import `@motebit/runtime`.
+   * When the axis union grows, extend this helper additively.
+   * Re-evaluated every tick so raising the cap auto-resumes the goal
+   * next fire — pause is a synthesized state, never sticky.
    */
   function tokensExhausted(goal: ScheduledGoal): boolean {
     if (goal.budget_tokens == null) return false;
@@ -233,14 +275,14 @@ export function createGoalsRunner(
     emit();
   }
 
-  function setPaused(goalId: string, paused: boolean): void {
+  function setEnabled(goalId: string, enabled: boolean): void {
     const goal = state.goals.find((g) => g.goal_id === goalId);
     if (!goal) return;
     // Terminal states are immune. Completed / failed goals stay put.
     if (goal.status === "completed" || goal.status === "failed") return;
     updateGoal(goalId, {
-      status: paused ? "paused" : "active",
-      enabled: !paused,
+      status: enabled ? "active" : "paused",
+      enabled,
     });
   }
 
@@ -298,25 +340,13 @@ export function createGoalsRunner(
       patch.last_response_preview = result.responsePreview ?? null;
       // Preserve the full artifact content per
       // `docs/doctrine/goal-results.md` §"The three categories" Phase 2.
-      // Adapters that don't yet carry the full content (legacy, plan-
-      // mode pre-token-attribution, etc.) omit `responseFull` —
-      // `?? null` keeps the field present-but-null so renderers can
-      // fall back to `last_response_preview` cleanly.
       patch.last_response_full = result.responseFull ?? null;
-      // Slab navigational anchor per
-      // `docs/doctrine/goal-results.md` §"The three categories" Phase 3.
-      // Adapters that thread an explicit `runId` to
-      // `sendMessageStreaming` compute the slab item id via
-      // `slabTurnIdForRun(runId)` and return it here; absence
-      // degrades to no "View result" affordance, which is the
-      // correct calm-software fallback — better than a stale link.
+      // Slab navigational anchor per goal-results.md Phase 3. Absence
+      // degrades to no "View result" affordance — the correct
+      // calm-software fallback, better than a stale link.
       patch.last_turn_id = result.turnId ?? null;
-      // Signed-manifest receipt indicator per
-      // `docs/doctrine/goal-results.md` §"The three categories".
-      // Adapters that wrap the artifact as a `ContentArtifactManifest`
-      // pass `manifestSigned: true`; identity-load-pending or empty-
-      // content fires pass `false`; legacy adapters omit and we
-      // store `null` so the renderer omits the indicator entirely.
+      // Signed-manifest receipt indicator per goal-results.md. Legacy
+      // adapters omit and we store `null` so the renderer omits it.
       patch.last_manifest_signed = result.manifestSigned ?? null;
       patch.last_error = null;
       if (goal.mode === "once") {
@@ -326,24 +356,16 @@ export function createGoalsRunner(
       }
     } else if (result.outcome === "error") {
       patch.last_error = result.error;
-      // Clear any prior success preview so the surfaced "latest
-      // outcome" reflects the error, not a stale earlier success.
-      // Renderers prefer `last_response_preview` over `last_error`
-      // when both are set; clearing the preview makes the error the
-      // most-recent visible signal. A subsequent successful fire
-      // repopulates `last_response_preview` and clears `last_error`
-      // above, so the toggle is symmetric. Same clear-on-error
-      // semantic applies to `last_response_full` (the artifact) AND
-      // `last_turn_id` (the slab navigational anchor — a failed
-      // turn's slab item dissolves rather than rests, so a stale
-      // link would 404 the renderer's id lookup).
+      // Clear-on-error symmetry: a stale prior-success preview /
+      // artifact / slab anchor / signed indicator would all be
+      // misleading once this fire errored. Clearing makes the error
+      // the most-recent visible signal; a subsequent success
+      // repopulates them above. The slab anchor especially must clear —
+      // a failed turn's slab item dissolves rather than rests, so a
+      // stale link would 404 the renderer's id lookup.
       patch.last_response_preview = null;
       patch.last_response_full = null;
       patch.last_turn_id = null;
-      // Clear the signed-manifest indicator on error fires for the
-      // same reason `last_response_full` is cleared: the indicator
-      // attests an artifact that no longer exists on this goal
-      // record. A subsequent success repopulates it.
       patch.last_manifest_signed = null;
       if (goal.mode === "once") {
         patch.status = "failed";
@@ -421,14 +443,14 @@ export function createGoalsRunner(
     tickHandle = null;
   }
 
-  function subscribe(listener: (state: GoalsRunnerState) => void): () => void {
+  function subscribe(listener: (state: GoalsEngineState) => void): () => void {
     listeners.add(listener);
     return () => {
       listeners.delete(listener);
     };
   }
 
-  function getState(): GoalsRunnerState {
+  function getState(): GoalsEngineState {
     return state;
   }
 
@@ -442,7 +464,7 @@ export function createGoalsRunner(
     getState,
     subscribe,
     addGoal,
-    setPaused,
+    setEnabled,
     setBudgetTokens,
     removeGoal,
     runNow,

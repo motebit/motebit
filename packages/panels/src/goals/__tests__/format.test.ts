@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCountdownUntil } from "../format.js";
+import { formatCountdownUntil, formatTokens } from "../format.js";
 
 describe("formatCountdownUntil", () => {
   it("returns 'any moment' when target is in the past or present", () => {
@@ -38,5 +38,24 @@ describe("formatCountdownUntil", () => {
     const target = Date.now() + 30_000;
     const result = formatCountdownUntil(target);
     expect(result).toMatch(/^in \d+s$/);
+  });
+});
+
+describe("formatTokens", () => {
+  it("renders sub-1000 counts verbatim", () => {
+    expect(formatTokens(0)).toBe("0");
+    expect(formatTokens(999)).toBe("999");
+  });
+
+  it("renders thousands with a k suffix, decimal only when not clean", () => {
+    expect(formatTokens(1_000)).toBe("1k");
+    expect(formatTokens(50_000)).toBe("50k");
+    expect(formatTokens(1_500)).toBe("1.5k");
+    expect(formatTokens(200_000)).toBe("200k");
+  });
+
+  it("renders millions with an M suffix, decimal only when not clean", () => {
+    expect(formatTokens(1_000_000)).toBe("1M");
+    expect(formatTokens(2_500_000)).toBe("2.5M");
   });
 });

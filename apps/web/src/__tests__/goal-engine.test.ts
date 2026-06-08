@@ -1,10 +1,14 @@
 /**
- * GoalsRunner unit tests. Covers the daemon-role primitive used by web.
+ * Goals engine unit tests. Covers the daemon-role reconciliation core used
+ * by web (was `createGoalsRunner` in `@motebit/panels`; moved to
+ * `apps/web/src/goal-engine.ts` when web's daemon logic was extracted from
+ * the shared package). Drives an injected in-memory adapter + fake fire.
  */
 import { describe, it, expect, vi } from "vitest";
 
-import { createGoalsRunner } from "../runner.js";
-import type { GoalFireResult, GoalRunRecord, ScheduledGoal } from "../types.js";
+import { createGoalsEngine } from "../goal-engine.js";
+import type { GoalFireResult, GoalRunRecord } from "../goal-engine.js";
+import type { ScheduledGoal } from "@motebit/panels";
 
 interface Stores {
   goals: ScheduledGoal[];
@@ -15,7 +19,7 @@ function makeAdapter(
   fire: (goal: ScheduledGoal) => Promise<GoalFireResult>,
   initial: Partial<Stores> = {},
 ): {
-  adapter: Parameters<typeof createGoalsRunner>[0];
+  adapter: Parameters<typeof createGoalsEngine>[0];
   stores: Stores;
   fireCalls: ScheduledGoal[];
 } {
@@ -44,17 +48,17 @@ function makeAdapter(
   };
 }
 
-describe("createGoalsRunner — addGoal", () => {
+describe("createGoalsEngine — addGoal", () => {
   it("creates a recurring goal with next_run_at = created_at + interval", () => {
     const { adapter, stores } = makeAdapter(async () => ({ outcome: "fired" }));
-    const runner = createGoalsRunner(adapter, {
+    const engine = createGoalsEngine(adapter, {
       now: () => 1_000,
       generateId: () => "g1",
     });
-    const goal = runner.addGoal({
+    const goal = engine.addGoal({
       prompt: "hi",
       mode: "recurring",
-      cadence: "hourly",
+      interval_ms: 3_600_000,
     });
     expect(goal.mode).toBe("recurring");
     expect(goal.interval_ms).toBe(3_600_000);
@@ -64,45 +68,44 @@ describe("createGoalsRunner — addGoal", () => {
 
   it("creates a once goal without next_run_at (requires explicit runNow)", () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
-    const runner = createGoalsRunner(adapter, {
+    const engine = createGoalsEngine(adapter, {
       now: () => 5_000,
       generateId: () => "g2",
     });
-    const goal = runner.addGoal({ prompt: "summarize", mode: "once" });
+    const goal = engine.addGoal({ prompt: "summarize", interval_ms: 0, mode: "once" });
     expect(goal.mode).toBe("once");
     expect(goal.interval_ms).toBe(0);
     expect(goal.next_run_at).toBeUndefined();
     expect(goal.status).toBe("active");
   });
 
-  it("accepts custom interval for recurring", () => {
+  it("accepts an arbitrary interval_ms for recurring", () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g3" });
-    const goal = runner.addGoal({
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g3" });
+    const goal = engine.addGoal({
       prompt: "x",
       mode: "recurring",
-      cadence: "custom",
       interval_ms: 42_000,
     });
     expect(goal.interval_ms).toBe(42_000);
   });
 });
 
-describe("createGoalsRunner — setPaused", () => {
+describe("createGoalsEngine — setEnabled", () => {
   it("toggles status and enabled together", () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    const goal = runner.addGoal({
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const goal = engine.addGoal({
       prompt: "x",
       mode: "recurring",
-      cadence: "daily",
+      interval_ms: 86_400_000,
     });
-    runner.setPaused(goal.goal_id, true);
-    expect(runner.getState().goals[0]?.status).toBe("paused");
-    expect(runner.getState().goals[0]?.enabled).toBe(false);
-    runner.setPaused(goal.goal_id, false);
-    expect(runner.getState().goals[0]?.status).toBe("active");
-    expect(runner.getState().goals[0]?.enabled).toBe(true);
+    engine.setEnabled(goal.goal_id, false);
+    expect(engine.getState().goals[0]?.status).toBe("paused");
+    expect(engine.getState().goals[0]?.enabled).toBe(false);
+    engine.setEnabled(goal.goal_id, true);
+    expect(engine.getState().goals[0]?.status).toBe("active");
+    expect(engine.getState().goals[0]?.enabled).toBe(true);
   });
 
   it("is a no-op on terminal states", () => {
@@ -118,13 +121,13 @@ describe("createGoalsRunner — setPaused", () => {
       ],
     };
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }), initial);
-    const runner = createGoalsRunner(adapter);
-    runner.setPaused("done", true);
-    expect(runner.getState().goals[0]?.status).toBe("completed");
+    const engine = createGoalsEngine(adapter);
+    engine.setEnabled("done", false);
+    expect(engine.getState().goals[0]?.status).toBe("completed");
   });
 });
 
-describe("createGoalsRunner — runNow + fire reconciliation", () => {
+describe("createGoalsEngine — runNow + fire reconciliation", () => {
   it("recurring fired: advances next_run_at, writes last_response_preview", async () => {
     const { adapter, fireCalls } = makeAdapter(async () => ({
       outcome: "fired",
@@ -133,16 +136,16 @@ describe("createGoalsRunner — runNow + fire reconciliation", () => {
     let n = 100;
     const ids = ["g1", "run1"];
     let i = 0;
-    const runner = createGoalsRunner(adapter, {
+    const engine = createGoalsEngine(adapter, {
       now: () => n,
       generateId: () => ids[i++] ?? "x",
     });
-    runner.addGoal({ prompt: "hi", mode: "recurring", cadence: "hourly" });
+    engine.addGoal({ prompt: "hi", mode: "recurring", interval_ms: 3_600_000 });
     n = 4_000_000;
-    const result = await runner.runNow("g1");
+    const result = await engine.runNow("g1");
     expect(result.outcome).toBe("fired");
     expect(fireCalls).toHaveLength(1);
-    const state = runner.getState();
+    const state = engine.getState();
     expect(state.goals[0]?.last_response_preview).toBe("ok");
     expect(state.goals[0]?.last_run_at).toBe(4_000_000);
     expect(state.goals[0]?.next_run_at).toBe(4_000_000 + 3_600_000);
@@ -155,18 +158,18 @@ describe("createGoalsRunner — runNow + fire reconciliation", () => {
       outcome: "fired",
       responsePreview: "done",
     }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "p", mode: "once" });
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.status).toBe("completed");
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "p", interval_ms: 0, mode: "once" });
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.status).toBe("completed");
   });
 
   it("once goal error: status reaches failed and last_error populated", async () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "error", error: "oops" }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "p", mode: "once" });
-    await runner.runNow("g1");
-    const goal = runner.getState().goals[0];
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "p", interval_ms: 0, mode: "once" });
+    await engine.runNow("g1");
+    const goal = engine.getState().goals[0];
     expect(goal?.status).toBe("failed");
     expect(goal?.last_error).toBe("oops");
   });
@@ -174,7 +177,7 @@ describe("createGoalsRunner — runNow + fire reconciliation", () => {
   it("recurring error after a prior success clears last_response_preview", async () => {
     // The latest-outcome semantic: when a recurring goal errors after
     // previously succeeding, the prior success preview is stale and
-    // misleading. Runner clears it so renderers surface the error as
+    // misleading. Engine clears it so renderers surface the error as
     // the most-recent visible signal, not a stale earlier success.
     let nextResult: GoalFireResult = {
       outcome: "fired",
@@ -187,16 +190,16 @@ describe("createGoalsRunner — runNow + fire reconciliation", () => {
       saveRuns: (): void => {},
       fire: async (): Promise<GoalFireResult> => nextResult,
     };
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
 
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.last_response_preview).toBe("earlier success");
-    expect(runner.getState().goals[0]?.last_error).toBeNull();
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.last_response_preview).toBe("earlier success");
+    expect(engine.getState().goals[0]?.last_error).toBeNull();
 
     nextResult = { outcome: "error", error: "boom" };
-    await runner.runNow("g1");
-    const after = runner.getState().goals[0];
+    await engine.runNow("g1");
+    const after = engine.getState().goals[0];
     expect(after?.last_error).toBe("boom");
     // Stale success preview must be cleared so the error is what
     // surfaces in the renderer's expanded card.
@@ -208,49 +211,36 @@ describe("createGoalsRunner — runNow + fire reconciliation", () => {
   });
 
   it("fired with responseFull preserves the full artifact on the goal record", async () => {
-    // Phase 2 of the goal-results arc: artifacts (full result
-    // content) are preserved alongside the truncated preview. The
-    // doctrine (`docs/doctrine/goal-results.md`) distinguishes
-    // commitment / receipt / artifact as three categories; this
-    // assertion locks the artifact's storage shape.
+    // Phase 2 of the goal-results arc: artifacts (full result content) are
+    // preserved alongside the truncated preview.
     const full = "A very long synthesized result that motebit produced for the goal. ".repeat(20);
     const { adapter } = makeAdapter(async () => ({
       outcome: "fired",
       responsePreview: full.slice(0, 160),
       responseFull: full,
     }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
-    await runner.runNow("g1");
-    const goal = runner.getState().goals[0];
-    // Both fields populated; renderers prefer `_full` for longer
-    // previews and the eventual slab handoff (Phase 3).
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
+    await engine.runNow("g1");
+    const goal = engine.getState().goals[0];
     expect(goal?.last_response_preview).toBe(full.slice(0, 160));
     expect(goal?.last_response_full).toBe(full);
   });
 
   it("fired without responseFull stores null (adapters can opt in incrementally)", async () => {
-    // Backward-compat: adapters that don't carry the full content
-    // (legacy / plan-mode pre-token-attribution) omit `responseFull`.
-    // The runner stores null so renderers can fall back to
-    // `last_response_preview` cleanly.
     const { adapter } = makeAdapter(async () => ({
       outcome: "fired",
       responsePreview: "preview only",
     }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
-    await runner.runNow("g1");
-    const goal = runner.getState().goals[0];
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
+    await engine.runNow("g1");
+    const goal = engine.getState().goals[0];
     expect(goal?.last_response_preview).toBe("preview only");
     expect(goal?.last_response_full).toBeNull();
   });
 
   it("error clears last_response_full symmetrically with last_response_preview", async () => {
-    // The latest-outcome semantic applies to the artifact too — a
-    // stale prior-success artifact would be just as misleading as a
-    // stale prior-success preview. Both fields clear on error so
-    // the renderer's expanded card surfaces the error consistently.
     let nextResult: GoalFireResult = {
       outcome: "fired",
       responsePreview: "preview",
@@ -263,46 +253,34 @@ describe("createGoalsRunner — runNow + fire reconciliation", () => {
       saveRuns: (): void => {},
       fire: async (): Promise<GoalFireResult> => nextResult,
     };
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
 
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.last_response_full).toBe("full artifact content");
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.last_response_full).toBe("full artifact content");
 
     nextResult = { outcome: "error", error: "boom" };
-    await runner.runNow("g1");
-    const after = runner.getState().goals[0];
+    await engine.runNow("g1");
+    const after = engine.getState().goals[0];
     expect(after?.last_error).toBe("boom");
     expect(after?.last_response_preview).toBeNull();
     expect(after?.last_response_full).toBeNull();
   });
 
   it("fired with turnId persists last_turn_id (slab navigational anchor)", async () => {
-    // Phase 3 of the goal-results arc: the runtime already lands every
-    // goal fire as a resting `stream`/`mind` slab item via
-    // `projectSlabForTurn`. Adapters compute the slab item's id via
-    // `slabTurnIdForRun(runId)` and pass it back as `turnId` on the
-    // fire result so the card can render a "View result" affordance
-    // that opens / scrolls to that slab item. The runner persists it
-    // on the goal record.
     const { adapter } = makeAdapter(async () => ({
       outcome: "fired",
       responsePreview: "preview",
       responseFull: "full artifact",
       turnId: "slab-turn-abc-123",
     }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.last_turn_id).toBe("slab-turn-abc-123");
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.last_turn_id).toBe("slab-turn-abc-123");
   });
 
   it("error clears last_turn_id symmetrically (stale anchor would 404 the renderer)", async () => {
-    // The slab navigational anchor obeys the same latest-outcome
-    // semantic as the preview + artifact: a failed turn's slab item
-    // dissolves rather than rests, so a stale `last_turn_id` would
-    // resolve to a missing item in the renderer's id lookup. Clear
-    // symmetrically so the card simply hides the affordance instead.
     let nextResult: GoalFireResult = {
       outcome: "fired",
       responsePreview: "preview",
@@ -316,62 +294,43 @@ describe("createGoalsRunner — runNow + fire reconciliation", () => {
       saveRuns: (): void => {},
       fire: async (): Promise<GoalFireResult> => nextResult,
     };
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
 
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.last_turn_id).toBe("slab-turn-xyz-789");
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.last_turn_id).toBe("slab-turn-xyz-789");
 
     nextResult = { outcome: "error", error: "boom" };
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.last_turn_id).toBeNull();
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.last_turn_id).toBeNull();
   });
 
   it("fired with manifestSigned persists last_manifest_signed (receipt indicator)", async () => {
-    // Phase-3-deferral close: the goal card surfaces a "signed"
-    // indicator next to "ran Xm ago" when the fire's artifact was
-    // wrapped as a `ContentArtifactManifest`. The adapter reports
-    // signing success via `manifestSigned: true` on the fire result;
-    // runner persists it so the renderer can decide per-card.
-    // Doctrine: `docs/doctrine/goal-results.md` §"The three
-    // categories".
     const { adapter } = makeAdapter(async () => ({
       outcome: "fired",
       responsePreview: "preview",
       responseFull: "full",
       manifestSigned: true,
     }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.last_manifest_signed).toBe(true);
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.last_manifest_signed).toBe(true);
   });
 
   it("fired with manifestSigned=false persists false (signing skipped, not unknown)", async () => {
-    // Signing-skipped is a meaningful state — identity not loaded,
-    // empty content, or the signer threw. Distinct from
-    // "adapter doesn't yet wire signing" (which omits and stores
-    // null). The renderer can render the row WITHOUT the indicator
-    // in both cases; downstream tooling (verifier export, drift
-    // detection) reads `false` as "intentionally unsigned this fire"
-    // and `null` as "this surface doesn't sign at all yet."
     const { adapter } = makeAdapter(async () => ({
       outcome: "fired",
       responsePreview: "preview",
       manifestSigned: false,
     }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.last_manifest_signed).toBe(false);
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.last_manifest_signed).toBe(false);
   });
 
   it("error clears last_manifest_signed symmetrically (indicator must not outlive artifact)", async () => {
-    // Same latest-outcome semantic as `last_response_full` and
-    // `last_turn_id`: an error fire clears the prior-success
-    // artifact, so the "signed" indicator (which attested THAT
-    // artifact) must also clear. A stale `true` would falsely
-    // suggest the error's failed fire produced a signed result.
     let nextResult: GoalFireResult = {
       outcome: "fired",
       responsePreview: "p",
@@ -385,44 +344,44 @@ describe("createGoalsRunner — runNow + fire reconciliation", () => {
       saveRuns: (): void => {},
       fire: async (): Promise<GoalFireResult> => nextResult,
     };
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
 
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.last_manifest_signed).toBe(true);
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.last_manifest_signed).toBe(true);
 
     nextResult = { outcome: "error", error: "boom" };
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.last_manifest_signed).toBeNull();
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.last_manifest_signed).toBeNull();
   });
 
   it("skipped: next_run_at unchanged (retried on next tick)", async () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "skipped" }));
     let n = 100;
-    const runner = createGoalsRunner(adapter, { now: () => n, generateId: () => "g1" });
-    const goal = runner.addGoal({ prompt: "p", mode: "recurring", cadence: "hourly" });
+    const engine = createGoalsEngine(adapter, { now: () => n, generateId: () => "g1" });
+    const goal = engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
     const originalNext = goal.next_run_at;
     n = 5_000_000;
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.next_run_at).toBe(originalNext);
-    expect(runner.getState().runs[0]?.status).toBe("skipped");
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.next_run_at).toBe(originalNext);
+    expect(engine.getState().runs[0]?.status).toBe("skipped");
   });
 
   it("wraps adapter.fire() throws as error outcome", async () => {
     const { adapter } = makeAdapter(async () => {
       throw new Error("boom");
     });
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "p", mode: "once" });
-    const result = await runner.runNow("g1");
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "p", interval_ms: 0, mode: "once" });
+    const result = await engine.runNow("g1");
     expect(result.outcome).toBe("error");
     if (result.outcome === "error") expect(result.error).toBe("boom");
   });
 
   it("runNow for missing goal returns error without side effects", async () => {
     const { adapter, fireCalls } = makeAdapter(async () => ({ outcome: "fired" }));
-    const runner = createGoalsRunner(adapter);
-    const result = await runner.runNow("nope");
+    const engine = createGoalsEngine(adapter);
+    const result = await engine.runNow("nope");
     expect(result.outcome).toBe("error");
     expect(fireCalls).toHaveLength(0);
   });
@@ -444,14 +403,14 @@ describe("createGoalsRunner — runNow + fire reconciliation", () => {
         return { outcome: "fired", responsePreview: "done" };
       },
     };
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "p", mode: "once" });
-    await runner.runNow("g1", (c) => seenChunks.push(c));
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "p", interval_ms: 0, mode: "once" });
+    await engine.runNow("g1", (c) => seenChunks.push(c));
     expect(seenChunks).toHaveLength(1);
   });
 });
 
-describe("createGoalsRunner — tick", () => {
+describe("createGoalsEngine — tick", () => {
   it("tick skips once goals — they only fire via runNow", async () => {
     const fired: string[] = [];
     const { adapter } = makeAdapter(async (g) => {
@@ -459,7 +418,7 @@ describe("createGoalsRunner — tick", () => {
       return { outcome: "fired" };
     });
     const tickHolder: { fn: (() => void) | null } = { fn: null };
-    const runner = createGoalsRunner(adapter, {
+    const engine = createGoalsEngine(adapter, {
       now: () => 10_000_000,
       generateId: () => "once-1",
       setInterval: (h) => {
@@ -468,8 +427,8 @@ describe("createGoalsRunner — tick", () => {
       },
       clearInterval: () => {},
     });
-    runner.addGoal({ prompt: "x", mode: "once" });
-    runner.start();
+    engine.addGoal({ prompt: "x", interval_ms: 0, mode: "once" });
+    engine.start();
     tickHolder.fn?.();
     await Promise.resolve();
     await Promise.resolve();
@@ -477,14 +436,14 @@ describe("createGoalsRunner — tick", () => {
   });
 });
 
-describe("createGoalsRunner — budget envelope (tokens axis)", () => {
+describe("createGoalsEngine — budget envelope (tokens axis)", () => {
   it("addGoal persists budget_tokens and zeroes spent_tokens", () => {
     const { adapter, stores } = makeAdapter(async () => ({ outcome: "fired" }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    const goal = runner.addGoal({
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const goal = engine.addGoal({
       prompt: "x",
       mode: "recurring",
-      cadence: "hourly",
+      interval_ms: 3_600_000,
       budget_tokens: 50_000,
     });
     expect(goal.budget_tokens).toBe(50_000);
@@ -498,20 +457,30 @@ describe("createGoalsRunner — budget envelope (tokens axis)", () => {
       responsePreview: "ok",
       tokensUsed: 7_500,
     }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "x", mode: "recurring", cadence: "hourly", budget_tokens: 50_000 });
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.spent_tokens).toBe(7_500);
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.spent_tokens).toBe(15_000);
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({
+      prompt: "x",
+      mode: "recurring",
+      interval_ms: 3_600_000,
+      budget_tokens: 50_000,
+    });
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.spent_tokens).toBe(7_500);
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.spent_tokens).toBe(15_000);
   });
 
   it("fired without tokensUsed leaves spent_tokens monotonic (no NaN)", async () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "x", mode: "recurring", cadence: "hourly", budget_tokens: 50_000 });
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.spent_tokens).toBe(0);
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({
+      prompt: "x",
+      mode: "recurring",
+      interval_ms: 3_600_000,
+      budget_tokens: 50_000,
+    });
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.spent_tokens).toBe(0);
   });
 
   it("crossing the cap on a recurring fire transitions to budget_exhausted", async () => {
@@ -520,10 +489,15 @@ describe("createGoalsRunner — budget envelope (tokens axis)", () => {
       responsePreview: "ok",
       tokensUsed: 60_000,
     }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "x", mode: "recurring", cadence: "hourly", budget_tokens: 50_000 });
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.status).toBe("budget_exhausted");
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({
+      prompt: "x",
+      mode: "recurring",
+      interval_ms: 3_600_000,
+      budget_tokens: 50_000,
+    });
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.status).toBe("budget_exhausted");
   });
 
   it("budget_exhausted goals are skipped by the tick (auto-pause synthesis)", async () => {
@@ -534,7 +508,7 @@ describe("createGoalsRunner — budget envelope (tokens axis)", () => {
     });
     const tickHolder: { fn: (() => void) | null } = { fn: null };
     let nowMs = 0;
-    const runner = createGoalsRunner(adapter, {
+    const engine = createGoalsEngine(adapter, {
       now: () => nowMs,
       generateId: () => "g1",
       setInterval: (h) => {
@@ -543,17 +517,17 @@ describe("createGoalsRunner — budget envelope (tokens axis)", () => {
       },
       clearInterval: () => {},
     });
-    const goal = runner.addGoal({
+    const goal = engine.addGoal({
       prompt: "x",
       mode: "recurring",
-      cadence: "hourly",
+      interval_ms: 3_600_000,
       budget_tokens: 100,
     });
     // Force the goal into budget_exhausted by spending past the cap.
-    runner.setBudgetTokens(goal.goal_id, 0);
-    expect(runner.getState().goals[0]?.status).toBe("budget_exhausted");
+    engine.setBudgetTokens(goal.goal_id, 0);
+    expect(engine.getState().goals[0]?.status).toBe("budget_exhausted");
     nowMs = 10_000_000;
-    runner.start();
+    engine.start();
     tickHolder.fn?.();
     await Promise.resolve();
     await Promise.resolve();
@@ -562,25 +536,25 @@ describe("createGoalsRunner — budget envelope (tokens axis)", () => {
 
   it("setBudgetTokens raises cap and flips budget_exhausted back to active", () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "x", mode: "recurring", cadence: "hourly", budget_tokens: 100 });
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "x", mode: "recurring", interval_ms: 3_600_000, budget_tokens: 100 });
     // Synthesize exhaustion via setBudgetTokens(0) — same shape as a
     // real exhausted goal after a high-token fire.
-    runner.setBudgetTokens("g1", 0);
-    expect(runner.getState().goals[0]?.status).toBe("budget_exhausted");
-    runner.setBudgetTokens("g1", 50_000);
-    expect(runner.getState().goals[0]?.status).toBe("active");
+    engine.setBudgetTokens("g1", 0);
+    expect(engine.getState().goals[0]?.status).toBe("budget_exhausted");
+    engine.setBudgetTokens("g1", 50_000);
+    expect(engine.getState().goals[0]?.status).toBe("active");
   });
 
   it("setBudgetTokens(null) clears the cap and returns to active", () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "x", mode: "recurring", cadence: "hourly", budget_tokens: 100 });
-    runner.setBudgetTokens("g1", 0);
-    expect(runner.getState().goals[0]?.status).toBe("budget_exhausted");
-    runner.setBudgetTokens("g1", null);
-    expect(runner.getState().goals[0]?.budget_tokens).toBeNull();
-    expect(runner.getState().goals[0]?.status).toBe("active");
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "x", mode: "recurring", interval_ms: 3_600_000, budget_tokens: 100 });
+    engine.setBudgetTokens("g1", 0);
+    expect(engine.getState().goals[0]?.status).toBe("budget_exhausted");
+    engine.setBudgetTokens("g1", null);
+    expect(engine.getState().goals[0]?.budget_tokens).toBeNull();
+    expect(engine.getState().goals[0]?.status).toBe("active");
   });
 
   it("terminal status (completed/failed) is immune to cap re-evaluation", async () => {
@@ -589,38 +563,38 @@ describe("createGoalsRunner — budget envelope (tokens axis)", () => {
       responsePreview: "done",
       tokensUsed: 25,
     }));
-    const runner = createGoalsRunner(adapter, { now: () => 0, generateId: () => "g1" });
-    runner.addGoal({ prompt: "x", mode: "once", budget_tokens: 50 });
-    await runner.runNow("g1");
-    expect(runner.getState().goals[0]?.status).toBe("completed");
-    runner.setBudgetTokens("g1", 0);
-    expect(runner.getState().goals[0]?.status).toBe("completed");
+    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    engine.addGoal({ prompt: "x", interval_ms: 0, mode: "once", budget_tokens: 50 });
+    await engine.runNow("g1");
+    expect(engine.getState().goals[0]?.status).toBe("completed");
+    engine.setBudgetTokens("g1", 0);
+    expect(engine.getState().goals[0]?.status).toBe("completed");
   });
 });
 
-describe("createGoalsRunner — dispose + start/stop", () => {
+describe("createGoalsEngine — dispose + start/stop", () => {
   it("dispose stops the tick and blocks emissions", () => {
     const clearCalls: unknown[] = [];
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
-    const runner = createGoalsRunner(adapter, {
+    const engine = createGoalsEngine(adapter, {
       setInterval: () => 42 as unknown as ReturnType<typeof setInterval>,
       clearInterval: (h) => {
         clearCalls.push(h);
       },
     });
-    runner.start();
-    runner.dispose();
+    engine.start();
+    engine.dispose();
     expect(clearCalls).toEqual([42]);
     const listener = vi.fn();
-    runner.subscribe(listener);
-    runner.addGoal({ prompt: "x", mode: "once" });
+    engine.subscribe(listener);
+    engine.addGoal({ prompt: "x", interval_ms: 0, mode: "once" });
     expect(listener).toHaveBeenCalled();
   });
 
   it("start is idempotent", () => {
     const calls: number[] = [];
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
-    const runner = createGoalsRunner(adapter, {
+    const engine = createGoalsEngine(adapter, {
       setInterval: () => {
         const handle = calls.length;
         calls.push(handle);
@@ -628,8 +602,8 @@ describe("createGoalsRunner — dispose + start/stop", () => {
       },
       clearInterval: () => {},
     });
-    runner.start();
-    runner.start();
+    engine.start();
+    engine.start();
     expect(calls).toHaveLength(1);
   });
 });

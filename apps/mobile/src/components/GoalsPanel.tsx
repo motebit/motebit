@@ -17,6 +17,7 @@ import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
 import {
   createGoalsController,
+  formatTokens,
   type GoalsFetchAdapter,
   type GoalsState,
   type GoalMode,
@@ -41,17 +42,15 @@ const BUDGET_OPTIONS: { label: string; tokens: number | null }[] = [
   { label: "No cap", tokens: null },
 ];
 
+// Cadence-word renderer for the meta row ("Hourly"/"Daily"/"Weekly").
+// Mobile's friendly-noun register, distinct from desktop's duration
+// formatInterval and web's lowercase cadenceLabel. `formatTokens` is the
+// shared axis-native value formatter from @motebit/panels.
 function formatInterval(ms: number): string {
   if (ms <= 3_600_000) return "Hourly";
   if (ms <= 86_400_000) return "Daily";
   if (ms <= 604_800_000) return "Weekly";
   return `${Math.round(ms / 86_400_000)}d`;
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}k`;
-  return String(n);
 }
 
 function formatTimeAgo(ts: number): string {

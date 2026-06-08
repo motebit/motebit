@@ -57,7 +57,7 @@ interface PanelMountSite {
    * proves the panel is mounted on this surface. Conventions:
    *   - web/desktop: the controller initializer name
    *     (`initSovereignPanels`, `initCapabilities`) or controller
-   *     factory (`createMemoryController`, `getGoalsRunner`).
+   *     factory (`createMemoryController`, `getGoalsController`).
    *   - mobile: the panel component name as imported
    *     (`SovereignPanel`, `CapabilitiesPanel`).
    */
@@ -105,10 +105,12 @@ const PANEL_MOUNT_SITES: Record<string, ReadonlyArray<PanelMountSite>> = {
     { surface: "mobile", file: "apps/mobile/src/App.tsx", fingerprint: "CapabilitiesPanel" },
   ],
   goals: [
-    // Web's Goals is hosted in gated-panels.ts; the fingerprint
-    // is the runner accessor the panel binds to (`getGoalsRunner`
-    // pulls the shared `@motebit/panels` GoalsRunner).
-    { surface: "web", file: "apps/web/src/ui/gated-panels.ts", fingerprint: "getGoalsRunner" },
+    // Web's Goals is hosted in gated-panels.ts; the fingerprint is the
+    // controller accessor the panel binds to (`getGoalsController` returns
+    // the shared `@motebit/panels` GoalsController over web's in-process
+    // goals-engine adapter — uniform with desktop/mobile since 2026-06-08,
+    // when web's daemon logic moved out of the shared package).
+    { surface: "web", file: "apps/web/src/ui/gated-panels.ts", fingerprint: "getGoalsController" },
     { surface: "desktop", file: "apps/desktop/src/main.ts", fingerprint: "initGoals" },
     { surface: "mobile", file: "apps/mobile/src/App.tsx", fingerprint: "GoalsPanel" },
   ],
