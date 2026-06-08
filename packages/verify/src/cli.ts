@@ -99,6 +99,7 @@ interface ParsedArgs {
   readonly json: boolean;
   readonly expectedType?: ArtifactType;
   readonly clockSkewSeconds?: number;
+  readonly strictHashBinding?: boolean;
   readonly bundleId?: string;
   readonly androidAttestationApplicationIdPath?: string;
   readonly rpId?: string;
@@ -129,6 +130,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   let json = false;
   let expectedType: ArtifactType | undefined;
   let clockSkewSeconds: number | undefined;
+  let strictHashBinding = false;
   let bundleId: string | undefined;
   let androidAttestationApplicationIdPath: string | undefined;
   let rpId: string | undefined;
@@ -151,6 +153,10 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         break;
       case "--json":
         json = true;
+        i++;
+        break;
+      case "--strict":
+        strictHashBinding = true;
         i++;
         break;
       case "--expect":
@@ -228,6 +234,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     json,
     ...(expectedType !== undefined && { expectedType }),
     ...(clockSkewSeconds !== undefined && { clockSkewSeconds }),
+    ...(strictHashBinding && { strictHashBinding }),
     ...(bundleId !== undefined && { bundleId }),
     ...(androidAttestationApplicationIdPath !== undefined && {
       androidAttestationApplicationIdPath,
@@ -464,6 +471,9 @@ function renderHelp(): string {
     "  --json                    Print structured JSON instead of human-readable.",
     "  --expect <type>           Require the artifact to be of the named type.",
     "  --clock-skew <seconds>    Allow N seconds of clock skew.",
+    "  --strict                  Also verify an ExecutionReceipt's result_hash",
+    "                            equals SHA-256(result) — reject a signed receipt",
+    "                            whose hash doesn't bind its own result.",
     "  --bundle-id <id>          Override the expected iOS bundle ID for App Attest",
     "                            (default: com.motebit.mobile).",
     "  --android-attestation-application-id <path>",
@@ -970,6 +980,7 @@ async function main(): Promise<number> {
     result = await verifyFile(args.file, {
       ...(args.expectedType !== undefined && { expectedType: args.expectedType }),
       ...(args.clockSkewSeconds !== undefined && { clockSkewSeconds: args.clockSkewSeconds }),
+      ...(args.strictHashBinding && { strictHashBinding: true }),
       hardwareAttestation,
     });
   } catch (err) {

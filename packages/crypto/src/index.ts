@@ -26,6 +26,7 @@ import type { MerkleTreeVersion } from "@motebit/protocol";
 import { verifyBySuite } from "./suite-dispatch.js";
 import { verifyMerkleInclusion, canonicalLeaf, resolveTreeHashVersion } from "./merkle.js";
 import { verifyToolInvocationReceipt, type SignableToolInvocationReceipt } from "./artifacts.js";
+import { hash } from "./signing.js";
 // The @noble/ed25519 SHA-512 binding is performed in suite-dispatch.ts
 // as a side effect of module load. Importing verifyBySuite here is
 // enough to guarantee that the primitive is ready before any verify
@@ -355,6 +356,22 @@ export interface VerifyOptions {
    * `hardware-attestation.ts::HardwareAttestationVerifiers`.
    */
   hardwareAttestation?: HardwareAttestationVerifiers;
+  /**
+   * When `true`, additionally verify that an `ExecutionReceipt`'s `result_hash`
+   * equals `hex(SHA-256(UTF-8(result)))` — the spec formula
+   * (`spec/execution-ledger-v1.md` § Hash fields). Default `false`
+   * (signature-only), for backward compatibility AND because a valid signature
+   * proves the bytes are authentic, NOT that the receipt is internally
+   * self-consistent. Strict mode catches a receipt whose committed
+   * `result_hash` does not bind its own `result` field — a mis-minted receipt
+   * that would otherwise read `valid:true` yet be unrecomputable by a third
+   * party (the "signed number nobody can reproduce" failure). On mismatch the
+   * receipt verifies `valid:false` with a `result_hash`-path error. Only
+   * `ExecutionReceipt` carries a raw `result` to check; other artifact types
+   * (incl. `ToolInvocationReceipt`, which commits args/result by hash only) are
+   * unaffected.
+   */
+  strictHashBinding?: boolean;
 }
 
 // ===========================================================================
@@ -1402,7 +1419,10 @@ async function verifyReceiptSignature(
  * directly against motebit X's own public key, without trusting the
  * relay's word.
  */
-export async function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptVerifyResult> {
+export async function verifyReceipt(
+  receipt: ExecutionReceipt,
+  options?: VerifyOptions,
+): Promise<ReceiptVerifyResult> {
   // Resolve public key: embedded in receipt, or fail
   let publicKey: Uint8Array | null = null;
   let signerDid: string | undefined;
@@ -1455,9 +1475,25 @@ export async function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptV
     });
   }
 
+  // Strict mode: the signature proves authenticity, NOT that result_hash binds
+  // the result field. Recompute it per spec and reject a self-inconsistent
+  // receipt (one whose result_hash a third party can't reproduce from result).
+  let resultHashOk = true;
+  if (options?.strictHashBinding) {
+    const expected = await hash(new TextEncoder().encode(receipt.result));
+    resultHashOk = expected === receipt.result_hash;
+    if (!resultHashOk) {
+      errors.push({
+        message:
+          "result_hash does not equal hex(SHA-256(result)) — receipt is not self-consistent (strict mode)",
+        path: "result_hash",
+      });
+    }
+  }
+
   return {
     type: "receipt",
-    valid: sigResult.valid && delegationErrors.length === 0,
+    valid: sigResult.valid && delegationErrors.length === 0 && resultHashOk,
     receipt,
     signer: signerDid,
     keySource: "embedded",
@@ -2036,7 +2072,7 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
     case "identity":
       return verifyIdentity(resolved as string);
     case "receipt":
-      return verifyReceipt(resolved as ExecutionReceipt);
+      return verifyReceipt(resolved as ExecutionReceipt, options);
     case "tool-invocation":
       return verifyToolInvocation(resolved as SignableToolInvocationReceipt);
     case "credential":

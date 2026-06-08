@@ -18,7 +18,9 @@ import type { ExecutionReceipt } from "@motebit/crypto";
 import {
   deriveSovereignMotebitId,
   signToolInvocationReceipt,
+  signExecutionReceipt,
   hashToolPayload,
+  hash,
 } from "@motebit/crypto";
 
 import { formatHuman, verifyArtifact, verifyFile } from "../lib.js";
@@ -508,5 +510,41 @@ describe("formatHuman", () => {
     const synthetic = { type: "presentation" as const, valid: true, presentation: null };
     const out = formatHuman(synthetic);
     expect(out.split("\n")[0]).toBe("VALID (presentation)");
+  });
+});
+
+describe("verifyArtifact — strictHashBinding forwards to crypto", () => {
+  async function signedReceipt(resultHash: string, result: string) {
+    const sk = ed.utils.randomSecretKey();
+    const pk = await ed.getPublicKeyAsync(sk);
+    return signExecutionReceipt(
+      {
+        task_id: "t1",
+        motebit_id: await deriveSovereignMotebitId(toHex(pk)),
+        public_key: toHex(pk),
+        device_id: "d1",
+        submitted_at: 1,
+        completed_at: 2,
+        status: "completed",
+        result,
+        tools_used: [],
+        memories_formed: 0,
+        prompt_hash: "a".repeat(64),
+        result_hash: resultHash,
+      } as unknown as Parameters<typeof signExecutionReceipt>[0],
+      sk,
+      pk,
+    );
+  }
+
+  it("a signed-but-self-inconsistent receipt is valid+sovereign by default, rejected under strict", async () => {
+    const result = "reconciled 1,284 payouts; 3 flagged";
+    const wrong = await hash(new TextEncoder().encode(`"${result}"`)); // the canonicalSha256-of-string trap
+    const r = await signedReceipt(wrong, result);
+    const def = await verifyArtifact(JSON.stringify(r));
+    expect(def.valid).toBe(true);
+    expect(def.sovereign).toBe(true); // the green badge passes — exactly why strict is needed
+    const strict = await verifyArtifact(JSON.stringify(r), { strictHashBinding: true });
+    expect(strict.valid).toBe(false);
   });
 });

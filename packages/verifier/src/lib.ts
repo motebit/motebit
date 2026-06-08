@@ -71,6 +71,15 @@ export interface VerifyFileOptions {
    * `@motebit/verify` wires all four leaves automatically.
    */
   readonly hardwareAttestation?: HardwareAttestationVerifiers;
+  /**
+   * When `true`, additionally verify an `ExecutionReceipt`'s `result_hash`
+   * equals `hex(SHA-256(UTF-8(result)))` (the spec formula). A valid signature
+   * proves the bytes are authentic but NOT that `result_hash` binds the
+   * `result` field; strict mode rejects a self-inconsistent receipt — one whose
+   * committed hash a third party can't reproduce from its own `result`.
+   * Forwarded to `@motebit/crypto::verify`. Default `false`.
+   */
+  readonly strictHashBinding?: boolean;
 }
 
 /**
@@ -276,7 +285,8 @@ export async function verifyArtifact(
   const cryptoOpts: VerifyOptions | undefined =
     opts?.expectedType !== undefined ||
     opts?.clockSkewSeconds !== undefined ||
-    opts?.hardwareAttestation !== undefined
+    opts?.hardwareAttestation !== undefined ||
+    opts?.strictHashBinding !== undefined
       ? {
           ...(opts.expectedType !== undefined && { expectedType: opts.expectedType }),
           ...(opts.clockSkewSeconds !== undefined && {
@@ -284,6 +294,9 @@ export async function verifyArtifact(
           }),
           ...(opts.hardwareAttestation !== undefined && {
             hardwareAttestation: opts.hardwareAttestation,
+          }),
+          ...(opts.strictHashBinding !== undefined && {
+            strictHashBinding: opts.strictHashBinding,
           }),
         }
       : undefined;
