@@ -10,6 +10,12 @@
   ],
   "ignoreDependencies": ["@motebit/*", "@changesets/changelog-github"],
   "ignoreBinaries": ["tauri"],
+  "ignore": [
+    "examples/**",
+    "packages/wire-schemas/src/__parity/**",
+    "scripts/__tests__/affordance-routing-fixture/**",
+    "packages/sdk/src/credential-types-doc.ts"
+  ],
   "workspaces": {
     ".": {
       "entry": ["scripts/*.{ts,mjs}"]
