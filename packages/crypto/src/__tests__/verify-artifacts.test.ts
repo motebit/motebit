@@ -31,6 +31,7 @@ import type {
 import {
   generateKeypair,
   verify,
+  hash,
   ed25519Sign,
   ed25519Verify,
   createSignedToken,
@@ -2634,5 +2635,61 @@ describe("verify() — ToolInvocationReceipt dispatch", () => {
       kp.publicKey,
     );
     expect((await verify(JSON.stringify(exec))).type).toBe("receipt");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify() — strict hash binding (result_hash must equal SHA-256(result))
+// A valid signature proves authenticity, NOT self-consistency. Strict mode
+// catches a signed-but-mis-minted receipt whose result_hash a third party
+// can't reproduce from result — the "signed number nobody can reproduce" bug.
+// ---------------------------------------------------------------------------
+
+describe("verify() — strictHashBinding", () => {
+  async function signedReceipt(resultHash: string, result = "did the thing") {
+    const kp = await generateKeypair();
+    return signExecutionReceipt(
+      {
+        task_id: "t1",
+        motebit_id: "m",
+        device_id: "d1",
+        submitted_at: 1,
+        completed_at: 2,
+        status: "completed",
+        result,
+        tools_used: [],
+        memories_formed: 0,
+        prompt_hash: "a".repeat(64),
+        result_hash: resultHash,
+      } as unknown as Parameters<typeof signExecutionReceipt>[0],
+      kp.privateKey,
+      kp.publicKey,
+    );
+  }
+
+  it("a spec-correct receipt (result_hash == sha256(result)) passes strict", async () => {
+    const result = "reconciled 1,284 payouts; 3 flagged";
+    const r = await signedReceipt(await hash(new TextEncoder().encode(result)), result);
+    expect((await verify(JSON.stringify(r))).valid).toBe(true); // default
+    expect((await verify(JSON.stringify(r), { strictHashBinding: true })).valid).toBe(true);
+  });
+
+  it("a signed-but-self-inconsistent receipt passes default but FAILS strict", async () => {
+    const result = "reconciled 1,284 payouts; 3 flagged";
+    // result_hash binds the JSON-quoted string (the canonicalSha256-of-a-string trap),
+    // not the raw result — the signature is still valid over this body.
+    const wrong = await hash(new TextEncoder().encode(`"${result}"`));
+    const r = await signedReceipt(wrong, result);
+    const def = await verify(JSON.stringify(r));
+    expect(def.valid).toBe(true); // signature is authentic
+    const strict = await verify(JSON.stringify(r), { strictHashBinding: true });
+    expect(strict.valid).toBe(false);
+    expect(strict.errors?.[0]?.message).toMatch(/result_hash does not equal/);
+  });
+
+  it("default (no strict) is unchanged — only checks the signature", async () => {
+    const r = await signedReceipt("f".repeat(64), "anything"); // result_hash unrelated to result
+    expect((await verify(JSON.stringify(r))).valid).toBe(true);
+    expect((await verify(JSON.stringify(r), { strictHashBinding: true })).valid).toBe(false);
   });
 });

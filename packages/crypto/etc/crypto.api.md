@@ -1596,10 +1596,11 @@ export interface VerifyOptions {
     // (undocumented)
     expectedType?: ArtifactType;
     hardwareAttestation?: HardwareAttestationVerifiers;
+    strictHashBinding?: boolean;
 }
 
 // @public
-export function verifyReceipt(receipt: ExecutionReceipt): Promise<ReceiptVerifyResult>;
+export function verifyReceipt(receipt: ExecutionReceipt, options?: VerifyOptions): Promise<ReceiptVerifyResult>;
 
 // @public
 export function verifyReceiptChain(receipt: SignableReceipt, knownKeys: KnownKeys): Promise<ReceiptVerification>;
