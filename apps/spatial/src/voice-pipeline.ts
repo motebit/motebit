@@ -363,16 +363,23 @@ export class SpatialVoicePipeline {
         return;
       }
 
-      // MicVAD uses a static factory method .new()
+      const stream = this.mediaStream; // narrowed non-null by the guard above
+
+      // MicVAD uses a static factory method .new(). vad-web 0.0.30 replaced the
+      // `stream` option with getStream/pauseStream/resumeStream — we hand it our
+      // existing mic stream and keep that stream's lifecycle ours (no-op
+      // pause/resume), the same shape apps/desktop uses.
       const vad = await MicVAD.new({
-        stream: this.mediaStream,
+        getStream: () => Promise.resolve(stream),
+        pauseStream: () => Promise.resolve(),
+        resumeStream: () => Promise.resolve(stream),
         positiveSpeechThreshold: 0.6 - this.config.vadSensitivity * 0.3,
         negativeSpeechThreshold: 0.3 - this.config.vadSensitivity * 0.1,
         onSpeechStart: () => this.onVADSpeechStart(),
         onSpeechEnd: () => this.onVADSpeechEnd(),
       });
 
-      vad.start();
+      await vad.start(); // 0.0.30: start() is async
       this.vadInstance = vad;
     } catch {
       this.sileroFailed = true;
