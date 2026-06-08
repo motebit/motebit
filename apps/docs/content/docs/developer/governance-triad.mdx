@@ -120,6 +120,16 @@ Where a verified `ApprovalDecision` sits on the [binding ladder](/docs/developer
 
 So: render a pinned `ApprovalDecision` as **"approver-signed ✓ (offline)"**, never as **"sovereign."** Authority-binding the approver device to the motebit's registered devices is a future rung; today the honest claim is signature-authenticity against a key you pinned.
 
+### When the approver is an external party (two-party approval)
+
+The examples above are **single-party**: the approver is the gated motebit's own owner-device, pinned from its identity file. But the approver and the agent are often **different parties** — an end-user or reviewer approving an action by a _service_ agent they don't own (e.g. a SaaS agent whose governance requires the customer's sign-off). The field assignment does not change, and getting it right matters:
+
+- **`motebit_id` is still the gated agent (the subject), not the approver.** This matches the producer — motebit's runtime sets `motebit_id` to the agent whose call is gated and signs with the approver's (separate) key. `motebit_id` names _what was approved_, not _who approved_; it carries no commitment to the signing key (that's why an `ApprovalDecision` is never "sovereign").
+- **The approver is identified solely by the signing key — so pinning is the whole game, and it must be an _externally-known_ key.** In the single-party case you pin a device key from the agent's own identity file. In the two-party case the approver is **not** in the agent's device list, so you pin **the approver's own independently-known identity** — their registered key, KMS-held key, or passkey. Never the embedded `public_key` (circular), and never a freshly-generated per-session/per-browser key (that proves only "signed by a key I just made", which is no authority signal at all).
+- **Link the consent to the exact execution.** Set `run_id` to the gated `ExecutionReceipt`'s `task_id` (the canonical correlator), and optionally bind `args_hash` to that receipt's `result_hash` so the verdict is content-specific to that exact result and can't be replayed onto another. (Note: the standard auto-band correlator is `approval.args_hash == toolInvocationReceipt.args_hash` — the hash of the _call's args_; binding to an `ExecutionReceipt`'s `result_hash` instead is a deliberate "approve this result" adaptation, so state it where a generic triad verifier would otherwise look for a matching `ToolInvocationReceipt`.)
+
+A self-custodied, browser-held approver key is a legitimate **v1 ownership** posture — but it is only honest with the explicit caveat that the "pin" is the key the browser holds: it proves _the signature against that key_, not _who holds it_ or _that they have authority_. Render it as **"approver-signed"**, never "verified by `<name>`", until an external identity (KMS / passkey / registered device) backs the key — at which point the same artifact upgrades to a real **pinned** signal with no schema change.
+
 ## Verify an auto-band proof (auto band)
 
 The auto band's per-call proof is a `ToolInvocationReceipt`, agent-signed, verifiable with the permissive-floor library:

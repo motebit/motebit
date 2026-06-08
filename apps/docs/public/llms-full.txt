@@ -54,10 +54,26 @@ For the boundary between motebit's published packages and its workspace-internal
 ## Next steps
 
 <Cards>
-  <Card title="Developer Quickstart" href="/docs/developer/quickstart" description="The shortest correct integration — sign a receipt and verify it offline, in one file. No relay, no account. Start here to build on motebit." />
-  <Card title="Get Your Agent" href="/docs/get-your-agent" description="Download the desktop app or create an identity from the command line." />
-  <Card title="The Droplet" href="/docs/concepts/the-droplet" description="Why the form is a liquescent sphere — the physics derivation." />
-  <Card title="Identity" href="/docs/concepts/identity" description="How cryptographic identity works under the hood." />
+  <Card
+    title="Developer Quickstart"
+    href="/docs/developer/quickstart"
+    description="The shortest correct integration — sign a receipt and verify it offline, in one file. No relay, no account. Start here to build on motebit."
+  />
+  <Card
+    title="Get Your Agent"
+    href="/docs/get-your-agent"
+    description="Download the desktop app or create an identity from the command line."
+  />
+  <Card
+    title="The Droplet"
+    href="/docs/concepts/the-droplet"
+    description="Why the form is a liquescent sphere — the physics derivation."
+  />
+  <Card
+    title="Identity"
+    href="/docs/concepts/identity"
+    description="How cryptographic identity works under the hood."
+  />
 </Cards>
 
 ---
@@ -737,7 +753,7 @@ A receipt that doesn't verify is treated as if the work didn't happen. That is t
 
 To see this for yourself with no install, paste any receipt into [receipt.computer](https://receipt.computer): a public, login-free verifier that checks the signature and reports where the receipt sits on the identity-binding ladder — `integrity-only → pinned → anchored → sovereign`. A sovereign receipt proves its own authorship offline, because the `motebit_id` is the commitment to the signing key; no relay and no account sit in the trust root. The `motebit-verify` CLI prints the same ladder rung.
 
-To build with receipts in your own code, install the published libraries — don't reimplement them. The [Developer Quickstart](/docs/developer/quickstart) shows the whole loop — mint a signed receipt and verify it offline — in one runnable file with no relay. To *verify* in JavaScript or TypeScript, `npm install @motebit/verifier` and call `verifyArtifact(receipt)`; it handles JCS canonicalization and cryptosuite dispatch for you and reports the binding-ladder rung. See [Produce a receipt](/docs/developer/produce-a-receipt) for the mint side and [Verify a receipt](/docs/developer/verify-a-receipt) for the verify side. For other languages, the recipe is fixed by [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11, with a working [Python reference verifier](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier).
+To build with receipts in your own code, install the published libraries — don't reimplement them. The [Developer Quickstart](/docs/developer/quickstart) shows the whole loop — mint a signed receipt and verify it offline — in one runnable file with no relay. To _verify_ in JavaScript or TypeScript, `npm install @motebit/verifier` and call `verifyArtifact(receipt)`; it handles JCS canonicalization and cryptosuite dispatch for you and reports the binding-ladder rung. See [Produce a receipt](/docs/developer/produce-a-receipt) for the mint side and [Verify a receipt](/docs/developer/verify-a-receipt) for the verify side. For other languages, the recipe is fixed by [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11, with a working [Python reference verifier](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier).
 
 ---
 
@@ -1115,9 +1131,9 @@ That's a complete, self-verifying receipt. Anyone — in any language, with no a
 
 These two booleans are the entire trust contract; do not over-read them.
 
-- **`valid: true`** — the bytes are authentic (Ed25519 signature checks) and, under `strictHashBinding`, internally self-consistent (`result_hash === SHA-256(result)`). It does **not** tell you *who* signed it.
-- **`sovereign: true`** — the `motebit_id` is a cryptographic commitment to the signing key. It does **not** mean you know whose identity that is. To trust a *specific* agent, pin its `motebit_id` / `public_key` to an identity you already know, and check the receipt matches.
-- **The honesty boundary** — a verified receipt proves *the signer computed this `result` for this work*. It does **not** prove anything about the *inputs* the agent used (e.g. that data it fetched from a third party was real or complete). There is no oracle inside a signature. If your agent acts on external data, attest that data's provenance inside the signed `result` and state the limit plainly. Overselling "verified" past what the signature covers is the exact failure receipts exist to prevent.
+- **`valid: true`** — the bytes are authentic (Ed25519 signature checks) and, under `strictHashBinding`, internally self-consistent (`result_hash === SHA-256(result)`). It does **not** tell you _who_ signed it.
+- **`sovereign: true`** — the `motebit_id` is a cryptographic commitment to the signing key. It does **not** mean you know whose identity that is. To trust a _specific_ agent, pin its `motebit_id` / `public_key` to an identity you already know, and check the receipt matches.
+- **The honesty boundary** — a verified receipt proves _the signer computed this `result` for this work_. It does **not** prove anything about the _inputs_ the agent used (e.g. that data it fetched from a third party was real or complete). There is no oracle inside a signature. If your agent acts on external data, attest that data's provenance inside the signed `result` and state the limit plainly. Overselling "verified" past what the signature covers is the exact failure receipts exist to prevent.
 
 ## Server vs browser
 
@@ -1641,10 +1657,10 @@ This starts the relay on `http://localhost:3000` with hot reload via `tsx watch`
 
 ### What the environment variables do
 
-| Variable | Purpose | Local value |
-|----------|---------|-------------|
-| `MOTEBIT_API_TOKEN` | Master/admin token for authenticated endpoints | Any string (e.g. `test-token`) |
-| `X402_PAY_TO_ADDRESS` | Wallet address for x402 payment settlement | Use the zero address to disable real payments |
+| Variable              | Purpose                                        | Local value                                   |
+| --------------------- | ---------------------------------------------- | --------------------------------------------- |
+| `MOTEBIT_API_TOKEN`   | Master/admin token for authenticated endpoints | Any string (e.g. `test-token`)                |
+| `X402_PAY_TO_ADDRESS` | Wallet address for x402 payment settlement     | Use the zero address to disable real payments |
 
 The relay creates an in-memory SQLite database by default (no `MOTEBIT_DB_PATH`), which is fine for testing — data resets on restart. Set `MOTEBIT_DB_PATH=./relay.db` if you want persistence across restarts.
 
@@ -1659,12 +1675,12 @@ The relay creates an in-memory SQLite database by default (no `MOTEBIT_DB_PATH`)
 
 ### Optional environment variables
 
-| Variable | Purpose |
-|----------|---------|
-| `MOTEBIT_DB_PATH` | SQLite file path for persistent storage |
+| Variable                          | Purpose                                          |
+| --------------------------------- | ------------------------------------------------ |
+| `MOTEBIT_DB_PATH`                 | SQLite file path for persistent storage          |
 | `MOTEBIT_RELAY_ISSUE_CREDENTIALS` | Set to `true` to enable relay-issued credentials |
-| `MOTEBIT_CORS_ORIGIN` | CORS origin (default: `*`) |
-| `PORT` | Listen port (default: `3000`) |
+| `MOTEBIT_CORS_ORIGIN`             | CORS origin (default: `*`)                       |
+| `PORT`                            | Listen port (default: `3000`)                    |
 
 ## Registering a test agent
 
@@ -1855,6 +1871,7 @@ pnpm tsx src/index.ts
 ```
 
 This enters the interactive REPL. The CLI automatically:
+
 1. Bootstraps an Ed25519 identity
 2. Registers with the relay
 3. Enables `delegate_to_agent` as a tool (when relay + signing keys are available)
@@ -1884,6 +1901,7 @@ motebit serve --tools src/tools.ts --direct --self-test
 ```
 
 What it validates:
+
 1. **Registration** — The agent bootstrapped and registered with the relay
 2. **Task routing** — The relay accepted and routed the task back to the same agent
 3. **Execution** — The agent's tools executed the task
@@ -1911,14 +1929,14 @@ pnpm run dev
 
 The dashboard polls the relay API every 2 seconds. Relevant tabs for testing delegation:
 
-| Tab | What to look for |
-|-----|-----------------|
+| Tab             | What to look for                                                                    |
+| --------------- | ----------------------------------------------------------------------------------- |
 | **Agent Trust** | D3-force graph of trust relationships between agents. Nodes colored by trust level. |
-| **Credentials** | Verifiable credentials issued after successful delegations |
-| **Goals** | Active and completed goals with execution status |
-| **Event Log** | Raw event stream — task submissions, receipt verifications, trust transitions |
-| **Devices** | Registered devices and their public keys |
-| **Federation** | Relay identity and peer connections (for multi-relay testing) |
+| **Credentials** | Verifiable credentials issued after successful delegations                          |
+| **Goals**       | Active and completed goals with execution status                                    |
+| **Event Log**   | Raw event stream — task submissions, receipt verifications, trust transitions       |
+| **Devices**     | Registered devices and their public keys                                            |
+| **Federation**  | Relay identity and peer connections (for multi-relay testing)                       |
 
 ## Common issues
 
@@ -1929,6 +1947,7 @@ The relay is not running. Start it with `pnpm run dev` in `services/relay/`.
 ### "402 Payment Required"
 
 The delegating agent's budget account has insufficient funds. Either:
+
 - Fund the account with `POST /api/v1/agents/:id/deposit`
 - Remove pricing from the service listing (free agents do not require budget locks)
 - Set `X402_PAY_TO_ADDRESS` to the zero address (disables real payment settlement, but virtual budget accounting still applies)
@@ -1936,6 +1955,7 @@ The delegating agent's budget account has insufficient funds. Either:
 ### "Signature verification failed"
 
 The public key registered with the relay does not match the key that signed the receipt. Check:
+
 - The agent bootstrapped with the correct public key
 - The agent is using the same keypair for signing receipts
 - Key rotation has not happened without a succession record
@@ -1943,6 +1963,7 @@ The public key registered with the relay does not match the key that signed the 
 ### "Task timeout" or task stuck in pending
 
 The target agent is not connected to the relay. Verify:
+
 - The agent is running and registered (`/api/v1/agents/register`)
 - The agent is connected via WebSocket (check relay logs for `ws.connected` events)
 - The agent's capabilities match the task's `required_capabilities`
@@ -1951,6 +1972,7 @@ The target agent is not connected to the relay. Verify:
 ### "409 Conflict" on bootstrap
 
 The `motebit_id` is already registered with a different public key. Either:
+
 - Use the same public key as the original registration
 - Provide a signed succession record for key rotation
 - Use a different `motebit_id` for testing
@@ -1959,10 +1981,10 @@ The `motebit_id` is already registered with a different public key. Either:
 
 The relay enforces per-IP rate limits. For local testing this rarely triggers, but if you are scripting rapid requests:
 
-| Tier | Limit |
-|------|-------|
-| Auth (bootstrap, register) | 30/min |
-| Read (discover, task poll) | 60/min |
+| Tier                         | Limit  |
+| ---------------------------- | ------ |
+| Auth (bootstrap, register)   | 30/min |
+| Read (discover, task poll)   | 60/min |
 | Write (task submit, listing) | 30/min |
 
 Wait a minute or restart the relay (in-memory rate limit state resets).
@@ -2036,7 +2058,7 @@ if (result.type === "identity" && result.valid) {
 // Execution receipt — self-verifiable via embedded public key
 const r = await verify(receipt, { expectedType: "receipt" });
 if (r.type === "receipt" && r.valid) {
-  console.log("Signer:", r.signer);   // did:key of the executing agent
+  console.log("Signer:", r.signer); // did:key of the executing agent
 }
 
 // Verifiable credential (W3C VC 2.0, eddsa-jcs-2022)
@@ -2107,14 +2129,14 @@ succession:
 
 ### Key sections
 
-| Section | Purpose |
-|---------|---------|
-| **identity** | Ed25519 public key — proves who signed the file |
-| **governance** | Risk thresholds that gate tool execution (see [Governance](/docs/concepts/governance)) |
-| **privacy** | Sensitivity levels and retention rules (see [Governance](/docs/concepts/governance)) |
-| **memory** | Decay parameters for semantic memory (see [Memory](/docs/concepts/memory)) |
-| **devices** | Registered device public keys for multi-device identity |
-| **guardian** | Optional organizational custody key for enterprise recovery ([spec](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) §3.3) |
+| Section        | Purpose                                                                                                                                              |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **identity**   | Ed25519 public key — proves who signed the file                                                                                                      |
+| **governance** | Risk thresholds that gate tool execution (see [Governance](/docs/concepts/governance))                                                               |
+| **privacy**    | Sensitivity levels and retention rules (see [Governance](/docs/concepts/governance))                                                                 |
+| **memory**     | Decay parameters for semantic memory (see [Memory](/docs/concepts/memory))                                                                           |
+| **devices**    | Registered device public keys for multi-device identity                                                                                              |
+| **guardian**   | Optional organizational custody key for enterprise recovery ([spec](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) §3.3)          |
 | **succession** | Key rotation history — dual-signed chain from genesis to current key ([spec](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) §3.8) |
 
 ### Signature
@@ -2125,15 +2147,15 @@ The signature is stored as a hex-encoded value in an HTML comment after the clos
 
 ## Threat model
 
-| Threat | Mitigation |
-|--------|-----------|
-| Frontmatter tampering | Ed25519 signature — any change invalidates |
-| Private key theft | Encrypted at rest (PBKDF2 + AES-256-GCM) in config or OS keychain; never in the identity file |
-| Identity impersonation | Public key is self-certifying; verification requires the matching keypair |
-| Key compromise (with succession) | Old key signs succession record delegating to new key; chain is verifiable end-to-end |
-| Key compromise (guardian recovery) | Guardian signs recovery succession; `motebit_id` and trust preserved |
-| Key compromise (no succession) | Generate new keypair + new `motebit_id`; old identity is abandoned |
-| YAML injection | Restricted parser; no anchors/aliases/tags |
+| Threat                             | Mitigation                                                                                    |
+| ---------------------------------- | --------------------------------------------------------------------------------------------- |
+| Frontmatter tampering              | Ed25519 signature — any change invalidates                                                    |
+| Private key theft                  | Encrypted at rest (PBKDF2 + AES-256-GCM) in config or OS keychain; never in the identity file |
+| Identity impersonation             | Public key is self-certifying; verification requires the matching keypair                     |
+| Key compromise (with succession)   | Old key signs succession record delegating to new key; chain is verifiable end-to-end         |
+| Key compromise (guardian recovery) | Guardian signs recovery succession; `motebit_id` and trust preserved                          |
+| Key compromise (no succession)     | Generate new keypair + new `motebit_id`; old identity is abandoned                            |
+| YAML injection                     | Restricted parser; no anchors/aliases/tags                                                    |
 
 A valid signature proves the holder has the private key. It does **not** prove the holder is trustworthy. Trust is accumulated at the application layer through history, governance, and memory — not by the identity file alone.
 
@@ -2196,10 +2218,10 @@ The signature covers the canonical JCS (RFC 8785) JSON serialization of the pars
 
 A single motebit identity spans multiple devices. Each device has its own Ed25519 keypair — there is no shared private key.
 
-| Step | What happens |
-|------|-------------|
-| **Device registration** | The device generates a keypair and registers its public key with the `IdentityManager`. The device receives a `device_id` and `device_token`. |
-| **Pairing** | A 6-character code exchange, relay-mediated, with no shared secrets. The new device proves it holds a valid keypair. |
+| Step                    | What happens                                                                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Device registration** | The device generates a keypair and registers its public key with the `IdentityManager`. The device receives a `device_id` and `device_token`.                      |
+| **Pairing**             | A 6-character code exchange, relay-mediated, with no shared secrets. The new device proves it holds a valid keypair.                                               |
 | **Sync authentication** | To communicate with the sync relay, the device signs a short-lived token with its private key. The relay verifies the signature against the registered public key. |
 
 Devices are listed in the `motebit.md` file under the `devices` array, each with its own `device_id`, `name`, `public_key`, and `registered_at` timestamp.
@@ -2214,15 +2236,15 @@ Signed tokens authenticate sync requests between a device and the relay server. 
 
 All fields below are **required** — a verifier MUST reject a token missing any of them (spec `auth-token@1.0` §3). Build the token with `createSignedToken`, which sets them for you; do not hand-assemble a `{mid,did,iat,exp}` payload — it will be rejected for missing `jti`/`aud`/`suite`.
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `mid` | yes | The `motebit_id` |
-| `did` | yes | The `device_id` |
-| `iat` | yes | Issued-at timestamp (milliseconds since epoch) |
-| `exp` | yes | Expiration timestamp (default: 5 minutes from `iat`) |
-| `jti` | yes | Unique token nonce (UUID v4 recommended) — prevents replay. Must be unique per token. |
-| `aud` | yes | Audience — the endpoint/operation the token authorizes (e.g. `"task:submit"`). Prevents cross-endpoint replay. |
-| `suite` | yes | Cryptosuite, always `"motebit-jwt-ed25519-v1"` today. Signed; missing/unknown is rejected fail-closed. |
+| Field   | Required | Description                                                                                                    |
+| ------- | -------- | -------------------------------------------------------------------------------------------------------------- |
+| `mid`   | yes      | The `motebit_id`                                                                                               |
+| `did`   | yes      | The `device_id`                                                                                                |
+| `iat`   | yes      | Issued-at timestamp (milliseconds since epoch)                                                                 |
+| `exp`   | yes      | Expiration timestamp (default: 5 minutes from `iat`)                                                           |
+| `jti`   | yes      | Unique token nonce (UUID v4 recommended) — prevents replay. Must be unique per token.                          |
+| `aud`   | yes      | Audience — the endpoint/operation the token authorizes (e.g. `"task:submit"`). Prevents cross-endpoint replay. |
+| `suite` | yes      | Cryptosuite, always `"motebit-jwt-ed25519-v1"` today. Signed; missing/unknown is rejected fail-closed.         |
 
 The device signs the **raw UTF-8 bytes of the JSON payload** (not the base64url form) with its Ed25519 private key. The relay verifies in two steps: (1) parse the base64url payload without crypto to extract the `device_id` — O(1) lookup; (2) verify the Ed25519 signature against the device's registered public key. Expired tokens, and tokens missing `jti`/`aud`, are rejected.
 
@@ -2230,11 +2252,11 @@ The device signs the **raw UTF-8 bytes of the JSON payload** (not the base64url 
 
 Sensitive data is encrypted before leaving the agent boundary:
 
-| Context | Mechanism |
-|---------|-----------|
-| **Sync payloads** | AES-256-GCM with a 256-bit random key and 12-byte nonce. The 16-byte authentication tag is appended to the ciphertext. |
-| **CLI private key** | PBKDF2 key derivation (600,000 iterations, SHA-256) from a user passphrase, then AES-256-GCM encryption. |
-| **Desktop/mobile** | Private key stored in OS keyring (hardware-backed where available). No application-layer encryption needed. |
+| Context             | Mechanism                                                                                                              |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Sync payloads**   | AES-256-GCM with a 256-bit random key and 12-byte nonce. The 16-byte authentication tag is appended to the ciphertext. |
+| **CLI private key** | PBKDF2 key derivation (600,000 iterations, SHA-256) from a user passphrase, then AES-256-GCM encryption.               |
+| **Desktop/mobile**  | Private key stored in OS keyring (hardware-backed where available). No application-layer encryption needed.            |
 
 All cryptographic operations use Web Crypto API or `@noble/hashes` and `@noble/ciphers` — zero-dependency, audited implementations. Sensitive byte arrays are securely erased (overwritten with random data, then zeroed) after use.
 
@@ -2270,13 +2292,13 @@ A valid signature proves the holder has the private key. It does not prove the h
 
 ## Key management
 
-| Concern | Approach |
-|---------|----------|
-| **Key storage** | OS keychain (desktop/mobile) or PBKDF2-encrypted file (CLI). Never plaintext. |
-| **Key rotation** | Signed succession records (spec §3.8). The old keypair signs a tombstone declaring the new keypair as successor — both keys sign the canonical payload. The `motebit_id` persists across rotations. Rotate via `motebit rotate` (CLI) or `npx create-motebit rotate` (scaffolder). No centralized revocation — succession chains are verifiable by anyone. |
-| **Guardian recovery** | Enterprise agents can declare an organizational guardian (spec §3.3). If the primary key is compromised, the guardian signs a recovery succession record — rotating to a new key without the compromised key. Guardian revocation requires dual authorization (both keys sign). |
-| **Secure erasure** | `secureErase()` overwrites byte arrays with random data then zeros before garbage collection. |
-| **Private key scope** | The private key never appears in `motebit.md`, never crosses the network, and never enters a config file. |
+| Concern               | Approach                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Key storage**       | OS keychain (desktop/mobile) or PBKDF2-encrypted file (CLI). Never plaintext.                                                                                                                                                                                                                                                                              |
+| **Key rotation**      | Signed succession records (spec §3.8). The old keypair signs a tombstone declaring the new keypair as successor — both keys sign the canonical payload. The `motebit_id` persists across rotations. Rotate via `motebit rotate` (CLI) or `npx create-motebit rotate` (scaffolder). No centralized revocation — succession chains are verifiable by anyone. |
+| **Guardian recovery** | Enterprise agents can declare an organizational guardian (spec §3.3). If the primary key is compromised, the guardian signs a recovery succession record — rotating to a new key without the compromised key. Guardian revocation requires dual authorization (both keys sign).                                                                            |
+| **Secure erasure**    | `secureErase()` overwrites byte arrays with random data then zeros before garbage collection.                                                                                                                                                                                                                                                              |
+| **Private key scope** | The private key never appears in `motebit.md`, never crosses the network, and never enters a config file.                                                                                                                                                                                                                                                  |
 
 ---
 
@@ -2297,15 +2319,15 @@ Three credential types capture different facets of an agent's history.
 
 Peer-issued by the delegating agent after verified task completion. Summarizes the agent's operational track record. The relay may optionally co-sign when `MOTEBIT_RELAY_ISSUE_CREDENTIALS=true`.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `success_rate` | number | Fraction of tasks completed successfully (0-1) |
-| `avg_latency_ms` | number | Average task completion time |
-| `task_count` | number | Total tasks completed |
-| `trust_score` | number | Issuer-computed trust score |
-| `availability` | number | Uptime fraction (0-1) |
-| `sample_size` | number | Number of tasks in the sample |
-| `measured_at` | number | Epoch milliseconds |
+| Field            | Type   | Description                                    |
+| ---------------- | ------ | ---------------------------------------------- |
+| `success_rate`   | number | Fraction of tasks completed successfully (0-1) |
+| `avg_latency_ms` | number | Average task completion time                   |
+| `task_count`     | number | Total tasks completed                          |
+| `trust_score`    | number | Issuer-computed trust score                    |
+| `availability`   | number | Uptime fraction (0-1)                          |
+| `sample_size`    | number | Number of tasks in the sample                  |
+| `measured_at`    | number | Epoch milliseconds                             |
 
 The delegating agent issues these credentials because it directly observed the task execution and verified the receipt. This peer attestation model grounds trust in direct interaction rather than a central authority. The relay can optionally co-sign for additional assurance, but the primary attestation is peer-to-peer — enabling credential portability across relays.
 
@@ -2313,18 +2335,18 @@ The delegating agent issues these credentials because it directly observed the t
 
 Self-issued during housekeeping. Captures the agent's intelligence gradient — a composite score measuring how effectively the agent uses its accumulated knowledge.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `gradient` | number | Composite intelligence score (0-1) |
-| `knowledge_density` | number | Memory nodes per interaction |
-| `knowledge_quality` | number | Average memory relevance score |
-| `graph_connectivity` | number | How interconnected the memory graph is |
-| `temporal_stability` | number | Consistency of performance over time |
-| `retrieval_quality` | number | Average cosine similarity of memory retrievals |
-| `interaction_efficiency` | number | Task completion efficiency |
-| `tool_efficiency` | number | Tool usage effectiveness |
-| `curiosity_pressure` | number | Active exploration drive |
-| `measured_at` | number | Epoch milliseconds |
+| Field                    | Type   | Description                                    |
+| ------------------------ | ------ | ---------------------------------------------- |
+| `gradient`               | number | Composite intelligence score (0-1)             |
+| `knowledge_density`      | number | Memory nodes per interaction                   |
+| `knowledge_quality`      | number | Average memory relevance score                 |
+| `graph_connectivity`     | number | How interconnected the memory graph is         |
+| `temporal_stability`     | number | Consistency of performance over time           |
+| `retrieval_quality`      | number | Average cosine similarity of memory retrievals |
+| `interaction_efficiency` | number | Task completion efficiency                     |
+| `tool_efficiency`        | number | Tool usage effectiveness                       |
+| `curiosity_pressure`     | number | Active exploration drive                       |
+| `measured_at`            | number | Epoch milliseconds                             |
 
 These are self-issued (the agent signs its own gradient snapshot), which means they prove _the agent claims these metrics_ — not that an external party verified them. A verifier can check the signature is authentic and the data is untampered, but should weigh self-issued credentials accordingly.
 
@@ -2332,14 +2354,14 @@ These are self-issued (the agent signs its own gradient snapshot), which means t
 
 Peer-issued when one agent changes another's trust level. Records the trust relationship between two agents.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `trust_level` | string | Current trust level (e.g., `"verified"`, `"trusted"`, `"blocked"`) |
-| `interaction_count` | number | Total interactions between the two agents |
-| `successful_tasks` | number | Tasks the subject completed successfully for the issuer |
-| `failed_tasks` | number | Tasks the subject failed for the issuer |
-| `first_seen_at` | number | First interaction timestamp |
-| `last_seen_at` | number | Most recent interaction timestamp |
+| Field               | Type   | Description                                                        |
+| ------------------- | ------ | ------------------------------------------------------------------ |
+| `trust_level`       | string | Current trust level (e.g., `"verified"`, `"trusted"`, `"blocked"`) |
+| `interaction_count` | number | Total interactions between the two agents                          |
+| `successful_tasks`  | number | Tasks the subject completed successfully for the issuer            |
+| `failed_tasks`      | number | Tasks the subject failed for the issuer                            |
+| `first_seen_at`     | number | First interaction timestamp                                        |
+| `last_seen_at`      | number | Most recent interaction timestamp                                  |
 
 Trust credentials are the most valuable because they require two agents to have interacted. A web of trust credentials from multiple issuers builds a reputation that no single agent controls.
 
@@ -2471,10 +2493,7 @@ This endpoint verifies the `eddsa-jcs-2022` proof by extracting the public key f
 ## Programmatic verification
 
 ```typescript
-import {
-  verifyVerifiableCredential,
-  verifyVerifiablePresentation,
-} from "@motebit/crypto";
+import { verifyVerifiableCredential, verifyVerifiablePresentation } from "@motebit/crypto";
 
 // Verify a single credential
 const valid = await verifyVerifiableCredential(credential);
@@ -3126,19 +3145,19 @@ The ledger records structure, not content. Tool arguments are SHA-256 hashed. Pr
 
 The ledger tracks the lifecycle of goal execution through typed timeline events:
 
-| Event Type | What It Captures |
-|------------|-----------------|
-| `goal_started` | Goal execution begins. Records `goal_id`. |
-| `plan_created` | A plan was generated. Records `plan_id`, `title`, `total_steps`. |
-| `step_started` | A plan step begins. Records `step_id`, `ordinal`, `description`. |
-| `tool_invoked` | A tool was called. Records `tool` name, `args_hash` (SHA-256 of canonical JSON arguments), `call_id`. |
-| `tool_result` | Tool returned. Records `tool` name, `ok` (boolean), `duration_ms`, `call_id`. |
-| `step_completed` | Step finished successfully. Records `tool_calls_made` count. |
-| `step_failed` | Step finished with an error. Records `error` message. |
-| `step_delegated` | Step was delegated to another agent. Records `task_id`. |
-| `plan_completed` | All steps completed. |
-| `plan_failed` | Plan execution failed. Records `reason`. |
-| `goal_completed` | Goal execution ended. Records final `status`. |
+| Event Type       | What It Captures                                                                                      |
+| ---------------- | ----------------------------------------------------------------------------------------------------- |
+| `goal_started`   | Goal execution begins. Records `goal_id`.                                                             |
+| `plan_created`   | A plan was generated. Records `plan_id`, `title`, `total_steps`.                                      |
+| `step_started`   | A plan step begins. Records `step_id`, `ordinal`, `description`.                                      |
+| `tool_invoked`   | A tool was called. Records `tool` name, `args_hash` (SHA-256 of canonical JSON arguments), `call_id`. |
+| `tool_result`    | Tool returned. Records `tool` name, `ok` (boolean), `duration_ms`, `call_id`.                         |
+| `step_completed` | Step finished successfully. Records `tool_calls_made` count.                                          |
+| `step_failed`    | Step finished with an error. Records `error` message.                                                 |
+| `step_delegated` | Step was delegated to another agent. Records `task_id`.                                               |
+| `plan_completed` | All steps completed.                                                                                  |
+| `plan_failed`    | Plan execution failed. Records `reason`.                                                              |
+| `goal_completed` | Goal execution ended. Records final `status`.                                                         |
 
 Events are ordered by timestamp. The timeline is an append-only sequence — events cannot be reordered or removed after the ledger is signed.
 
@@ -3271,7 +3290,7 @@ To verify a ledger:
 2. Recompute the content hash from the timeline using canonical JSON serialization.
 3. Compare the recomputed hash against `content_hash`. If they differ, the timeline has been tampered with.
 4. If `signature` is present, decode it from base64url and verify the Ed25519 signature over the raw content hash bytes using the agent's public key.
-5. **Do not try to Ed25519-verify the entries in a v1.0 ledger's `delegation_receipts[]`** — they are `DelegationReceiptSummary` objects (§4.2) whose `signature_prefix` is the *first 16 characters* of the signature, for linkage/display only (not a verifiable signature, and there is no embedded public key). To independently verify a delegated hop, retrieve the **full signed `ExecutionReceipt`** as a separate edge artifact (from the relay or the delegating agent) and verify *that* with `verifyExecutionReceipt` / `verifyArtifact`. The ledger proves *its own* timeline is authentic; verifying the delegated work is a separate step against the full receipts.
+5. **Do not try to Ed25519-verify the entries in a v1.0 ledger's `delegation_receipts[]`** — they are `DelegationReceiptSummary` objects (§4.2) whose `signature_prefix` is the _first 16 characters_ of the signature, for linkage/display only (not a verifiable signature, and there is no embedded public key). To independently verify a delegated hop, retrieve the **full signed `ExecutionReceipt`** as a separate edge artifact (from the relay or the delegating agent) and verify _that_ with `verifyExecutionReceipt` / `verifyArtifact`. The ledger proves _its own_ timeline is authentic; verifying the delegated work is a separate step against the full receipts.
 
 ## Security considerations
 
@@ -3595,11 +3614,11 @@ The point of motebit is that you don't have to trust the app's word for any of t
 
 ## The triad
 
-| Band | What it means | Signed artifact | Signed by |
-| --- | --- | --- | --- |
-| **auto** | the motebit was permitted to act unattended | [`ToolInvocationReceipt`](/docs/developer/execution-ledger) | the agent (motebit identity) |
-| **approve** | a human consented to a gated act | `ApprovalDecision` | **the approver's device** |
-| **deny** | governance refused the act | `ExecutionReceipt` with `status: "denied"` | the agent (motebit identity) |
+| Band        | What it means                               | Signed artifact                                             | Signed by                    |
+| ----------- | ------------------------------------------- | ----------------------------------------------------------- | ---------------------------- |
+| **auto**    | the motebit was permitted to act unattended | [`ToolInvocationReceipt`](/docs/developer/execution-ledger) | the agent (motebit identity) |
+| **approve** | a human consented to a gated act            | `ApprovalDecision`                                          | **the approver's device**    |
+| **deny**    | governance refused the act                  | `ExecutionReceipt` with `status: "denied"`                  | the agent (motebit identity) |
 
 The approve band is signed by the **approver's** key, not the agent's — consent is the human's own assertion, the same way the agent signs its own refusal. All three share one cryptographic shape: JCS (RFC 8785) canonicalization, Ed25519, suite-dispatched verification. See [Receipts — one family](/docs/developer/verify-a-receipt) for the shared verification path.
 
@@ -3668,8 +3687,7 @@ import { verifyApprovalDecision, hexToBytes } from "@motebit/crypto";
 // Pin the CANONICAL approver key — do NOT verify against decision.public_key
 // alone (that is circular; see below). For the demo fixtures, the canonical key
 // is published above.
-const CANONICAL_APPROVER_KEY =
-  "e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0";
+const CANONICAL_APPROVER_KEY = "e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0";
 
 const ok = await verifyApprovalDecision(decision, hexToBytes(CANONICAL_APPROVER_KEY));
 // ok === true  → signature-authentic against the canonical approver key
@@ -3677,31 +3695,41 @@ const ok = await verifyApprovalDecision(decision, hexToBytes(CANONICAL_APPROVER_
 
 > `@motebit/verify` (the CLI) and `@motebit/verifier` (the file/format library) are sibling packages; the low-level `verifyApprovalDecision` primitive lives in `@motebit/crypto` and is what both build on. For a browser, import from `@motebit/crypto` directly.
 
-> **Use `verifyApprovalDecision`, not the auto-detecting `verifyArtifact`/`verify`, for an `ApprovalDecision`.** Unlike receipts, an `ApprovalDecision` is verified against a *pinned approver key*, not auto-detected — so `verifyArtifact` reports it as `{ type: "unknown", valid: false, reason: "unrecognized_artifact_type" }`. That's the verifier being honest ("I don't recognize this type"), not a verdict that the decision is forged. Route `ApprovalDecision`s to `verifyApprovalDecision`; auto-detect handles the receipt family (`ExecutionReceipt`, `ToolInvocationReceipt`).
+> **Use `verifyApprovalDecision`, not the auto-detecting `verifyArtifact`/`verify`, for an `ApprovalDecision`.** Unlike receipts, an `ApprovalDecision` is verified against a _pinned approver key_, not auto-detected — so `verifyArtifact` reports it as `{ type: "unknown", valid: false, reason: "unrecognized_artifact_type" }`. That's the verifier being honest ("I don't recognize this type"), not a verdict that the decision is forged. Route `ApprovalDecision`s to `verifyApprovalDecision`; auto-detect handles the receipt family (`ExecutionReceipt`, `ToolInvocationReceipt`).
 
 What the signature commits to — and why it can't be replayed:
 
 - **`approval_id`** is the gated call's id, inside the signed body. A verdict can't be lifted onto a different call without breaking the signature.
-- **`args_hash`** is the SHA-256 of the canonical arguments — never the raw args. Consent binds to the exact call the human saw; a verifier who holds the raw args recomputes and matches, and one who holds only the decision still proves a verdict was rendered over *some* call at *some* time. (No sensitive argument data sits in the signed artifact.)
+- **`args_hash`** is the SHA-256 of the canonical arguments — never the raw args. Consent binds to the exact call the human saw; a verifier who holds the raw args recomputes and matches, and one who holds only the decision still proves a verdict was rendered over _some_ call at _some_ time. (No sensitive argument data sits in the signed artifact.)
 - **`verdict`** (`approved` / `denied`) is signed; flipping it fails verification.
 
 ### What a verified `ApprovalDecision` proves
 
 Read this before you render an `ApprovalDecision` as a trust signal — it does **not** carry the same authority a sovereign `ExecutionReceipt` does.
 
-`verifyApprovalDecision(decision, key)` proves the decision was **signed by whoever holds `key`, untampered** — *signature-authentic*. It does **not** prove that `key` has any authority to approve. Unlike a sovereign `ExecutionReceipt` — where `motebit_id` is *derived from* the signing key, so the key's authority is self-proving offline — an `ApprovalDecision` carries **no `motebit_id → key` commitment**. The approver is a separate party (the human/owner's device), and nothing inside the artifact binds that device to a legitimate role.
+`verifyApprovalDecision(decision, key)` proves the decision was **signed by whoever holds `key`, untampered** — _signature-authentic_. It does **not** prove that `key` has any authority to approve. Unlike a sovereign `ExecutionReceipt` — where `motebit_id` is _derived from_ the signing key, so the key's authority is self-proving offline — an `ApprovalDecision` carries **no `motebit_id → key` commitment**. The approver is a separate party (the human/owner's device), and nothing inside the artifact binds that device to a legitimate role.
 
-The consequence, and the rule: **verifying against the decision's own embedded `public_key` is circular** — the decision says "I'm signed by K" and you confirm it's signed by K, which proves nothing about who K is. To get a real signal, **pin an independently-known approver key** (the canonical demo key above; in production, a device key from the motebit's identity file) via `--producer-key` / the `key` argument, and confirm the decision verifies against *that*.
+The consequence, and the rule: **verifying against the decision's own embedded `public_key` is circular** — the decision says "I'm signed by K" and you confirm it's signed by K, which proves nothing about who K is. To get a real signal, **pin an independently-known approver key** (the canonical demo key above; in production, a device key from the motebit's identity file) via `--producer-key` / the `key` argument, and confirm the decision verifies against _that_.
 
 Where a verified `ApprovalDecision` sits on the [binding ladder](/docs/developer/choosing-a-verify-surface):
 
-| Check | Rung | Honest label |
-| --- | --- | --- |
-| verifies against its embedded key only | **integrity-only** | "signature valid" (says nothing about the approver) |
-| verifies against an independently-pinned approver key | **pinned** | "approver-signed ✓ (offline)" |
-| approver device proven a registered device of the motebit | *future rung* | requires the motebit's identity file — not wired today |
+| Check                                                     | Rung               | Honest label                                           |
+| --------------------------------------------------------- | ------------------ | ------------------------------------------------------ |
+| verifies against its embedded key only                    | **integrity-only** | "signature valid" (says nothing about the approver)    |
+| verifies against an independently-pinned approver key     | **pinned**         | "approver-signed ✓ (offline)"                          |
+| approver device proven a registered device of the motebit | _future rung_      | requires the motebit's identity file — not wired today |
 
 So: render a pinned `ApprovalDecision` as **"approver-signed ✓ (offline)"**, never as **"sovereign."** Authority-binding the approver device to the motebit's registered devices is a future rung; today the honest claim is signature-authenticity against a key you pinned.
+
+### When the approver is an external party (two-party approval)
+
+The examples above are **single-party**: the approver is the gated motebit's own owner-device, pinned from its identity file. But the approver and the agent are often **different parties** — an end-user or reviewer approving an action by a _service_ agent they don't own (e.g. a SaaS agent whose governance requires the customer's sign-off). The field assignment does not change, and getting it right matters:
+
+- **`motebit_id` is still the gated agent (the subject), not the approver.** This matches the producer — motebit's runtime sets `motebit_id` to the agent whose call is gated and signs with the approver's (separate) key. `motebit_id` names _what was approved_, not _who approved_; it carries no commitment to the signing key (that's why an `ApprovalDecision` is never "sovereign").
+- **The approver is identified solely by the signing key — so pinning is the whole game, and it must be an _externally-known_ key.** In the single-party case you pin a device key from the agent's own identity file. In the two-party case the approver is **not** in the agent's device list, so you pin **the approver's own independently-known identity** — their registered key, KMS-held key, or passkey. Never the embedded `public_key` (circular), and never a freshly-generated per-session/per-browser key (that proves only "signed by a key I just made", which is no authority signal at all).
+- **Link the consent to the exact execution.** Set `run_id` to the gated `ExecutionReceipt`'s `task_id` (the canonical correlator), and optionally bind `args_hash` to that receipt's `result_hash` so the verdict is content-specific to that exact result and can't be replayed onto another. (Note: the standard auto-band correlator is `approval.args_hash == toolInvocationReceipt.args_hash` — the hash of the _call's args_; binding to an `ExecutionReceipt`'s `result_hash` instead is a deliberate "approve this result" adaptation, so state it where a generic triad verifier would otherwise look for a matching `ToolInvocationReceipt`.)
+
+A self-custodied, browser-held approver key is a legitimate **v1 ownership** posture — but it is only honest with the explicit caveat that the "pin" is the key the browser holds: it proves _the signature against that key_, not _who holds it_ or _that they have authority_. Render it as **"approver-signed"**, never "verified by `<name>`", until an external identity (KMS / passkey / registered device) backs the key — at which point the same artifact upgrades to a real **pinned** signal with no schema change.
 
 ## Verify an auto-band proof (auto band)
 
@@ -3717,32 +3745,37 @@ Like the others it commits to `args_hash` / `result_hash` rather than raw bytes,
 
 ## The full triad, as one linked story
 
-The individual fixtures above each prove one band. A **paired set** proves the bands *connect* — that the human's consent and the agent's execution are the same act, not two unrelated cards. One sovereign demo agent (`motebit_id` commits to its key) and the canonical approver, with real correlators (reproducible from [`mint-triad-fixture.mjs`](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/fixtures/mint-triad-fixture.mjs)):
+The individual fixtures above each prove one band. A **paired set** proves the bands _connect_ — that the human's consent and the agent's execution are the same act, not two unrelated cards. One sovereign demo agent (`motebit_id` commits to its key) and the canonical approver, with real correlators (reproducible from [`mint-triad-fixture.mjs`](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/fixtures/mint-triad-fixture.mjs)):
 
-| Fixture | Band | Signed by | Links by |
-| --- | --- | --- | --- |
-| [`triad-approval-decision.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-approval-decision.json) | approve (consent) | approver key | `run_id` = T, `args_hash` = H, `approval_id` = C |
+| Fixture                                                                                                                                                                     | Band                    | Signed by         | Links by                                            |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ----------------- | --------------------------------------------------- |
+| [`triad-approval-decision.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-approval-decision.json)             | approve (consent)       | approver key      | `run_id` = T, `args_hash` = H, `approval_id` = C    |
 | [`triad-tool-invocation-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-tool-invocation-receipt.json) | approve (executed call) | agent (sovereign) | `task_id` = T, `args_hash` = H, `invocation_id` = C |
-| [`triad-execution-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-execution-receipt.json) | approve (task) | agent (sovereign) | `task_id` = T |
-| [`triad-deny-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-deny-receipt.json) | deny | agent (sovereign) | distinct `task_id` = D, `status: "denied"` |
+| [`triad-execution-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-execution-receipt.json)             | approve (task)          | agent (sovereign) | `task_id` = T                                       |
+| [`triad-deny-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-deny-receipt.json)                       | deny                    | agent (sovereign) | distinct `task_id` = D, `status: "denied"`          |
 
 The linkage is the point, and it is **cryptographic, not asserted**:
 
-- **`args_hash` (H)** is identical on the `ApprovalDecision` and the `ToolInvocationReceipt` — the human consented to the *exact* call that ran. Different bytes → different hash → no link.
+- **`args_hash` (H)** is identical on the `ApprovalDecision` and the `ToolInvocationReceipt` — the human consented to the _exact_ call that ran. Different bytes → different hash → no link.
 - **`run_id` (T) on the decision = `task_id` (T)** on both receipts — consent → execution, same task.
 - **`approval_id` (C) = `invocation_id` (C)** — the gated call and the executed call are one.
 
 Verify the whole story offline — pin the approver key for consent (it is not authority-bound; see above), and the receipts are sovereign (the agent's `motebit_id` commits to its key):
 
 ```ts
-import { verifyApprovalDecision, verifyExecutionReceipt, verifyToolInvocationReceipt, hexToBytes } from "@motebit/crypto";
+import {
+  verifyApprovalDecision,
+  verifyExecutionReceipt,
+  verifyToolInvocationReceipt,
+  hexToBytes,
+} from "@motebit/crypto";
 
 const APPROVER = hexToBytes("e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0");
 const AGENT = hexToBytes("79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664");
 
-const consentOk  = await verifyApprovalDecision(approval, APPROVER);       // pinned approver
-const callOk     = await verifyToolInvocationReceipt(toolReceipt, AGENT);  // sovereign agent
-const taskOk     = await verifyExecutionReceipt(execReceipt, AGENT);       // sovereign agent
+const consentOk = await verifyApprovalDecision(approval, APPROVER); // pinned approver
+const callOk = await verifyToolInvocationReceipt(toolReceipt, AGENT); // sovereign agent
+const taskOk = await verifyExecutionReceipt(execReceipt, AGENT); // sovereign agent
 
 // The link — assert it; never assume it:
 const linked =
@@ -3752,7 +3785,7 @@ const linked =
   approval.approval_id === toolReceipt.invocation_id;
 ```
 
-All four signatures verify, and `linked` is true, with no server and no relay. That is the full governance triad — *the human approved this exact call, the agent ran it, and refused a separate over-policy one* — proven end to end.
+All four signatures verify, and `linked` is true, with no server and no relay. That is the full governance triad — _the human approved this exact call, the agent ran it, and refused a separate over-policy one_ — proven end to end.
 
 ## Why this matters
 
@@ -3815,10 +3848,7 @@ Given a candidate's pricing and the capabilities needed for a task, `estimateCos
 ```typescript
 import { estimateCost } from "@motebit/market";
 
-const { amount, currency } = estimateCost(
-  candidate.listing.pricing,
-  ["web_search", "read_url"],
-);
+const { amount, currency } = estimateCost(candidate.listing.pricing, ["web_search", "read_url"]);
 // { amount: 0.015, currency: "USD" }
 ```
 
@@ -3843,7 +3873,7 @@ const allocation = allocateBudget(
     currency: "USD",
     risk_factor: 1.0,
   },
-  availableBudget,   // e.g. 1.00
+  availableBudget, // e.g. 1.00
   allocationId,
 );
 ```
@@ -3862,9 +3892,9 @@ For plans that involve multiple agents, `allocateCollaborativeBudget` distribute
 import { allocateCollaborativeBudget } from "@motebit/market";
 
 const allocations = allocateCollaborativeBudget(
-  steps,         // plan steps with assigned_motebit_id
-  participants,  // [{ motebit_id, assigned_steps: [0, 2, 4] }]
-  pricing,       // Map<motebit_id, CapabilityPrice[]>
+  steps, // plan steps with assigned_motebit_id
+  participants, // [{ motebit_id, assigned_steps: [0, 2, 4] }]
+  pricing, // Map<motebit_id, CapabilityPrice[]>
   availableBudget,
 );
 ```
@@ -3883,9 +3913,9 @@ After execution, `settleOnReceipt` determines the financial outcome:
 import { settleOnReceipt } from "@motebit/market";
 
 const record = settleOnReceipt(
-  allocation,    // the locked BudgetAllocation
-  receipt,       // the signed ExecutionReceipt
-  ledger,        // the GoalExecutionManifest (or null)
+  allocation, // the locked BudgetAllocation
+  receipt, // the signed ExecutionReceipt
+  ledger, // the GoalExecutionManifest (or null)
   settlementId,
 );
 ```
@@ -3894,11 +3924,11 @@ const record = settleOnReceipt(
 
 Three outcomes:
 
-| Receipt Status | Ledger | Settlement |
-|---------------|--------|------------|
-| `"completed"` | All steps completed (or no ledger) | **Full settlement** — locked amount is paid |
-| `"completed"` | Some steps completed, some failed | **Partial settlement** — proportional to completed steps |
-| `"failed"` or `"denied"` | Any | **Refund** — locked amount returned, `amount_settled: 0` |
+| Receipt Status           | Ledger                             | Settlement                                               |
+| ------------------------ | ---------------------------------- | -------------------------------------------------------- |
+| `"completed"`            | All steps completed (or no ledger) | **Full settlement** — locked amount is paid              |
+| `"completed"`            | Some steps completed, some failed  | **Partial settlement** — proportional to completed steps |
+| `"failed"` or `"denied"` | Any                                | **Refund** — locked amount returned, `amount_settled: 0` |
 
 The settlement record includes:
 
@@ -3906,7 +3936,7 @@ The settlement record includes:
 {
   settlement_id: string;
   allocation_id: string;
-  receipt_hash: string;      // links to the execution receipt
+  receipt_hash: string; // links to the execution receipt
   ledger_hash: string | null; // links to the execution ledger
   amount_settled: number;
   status: "completed" | "partial" | "refunded";
@@ -3920,14 +3950,14 @@ Partial settlement uses the execution ledger to determine the proportion: `compl
 
 When multiple agents can perform a task, the market scores and ranks them. Six weighted factors determine the composite score:
 
-| Factor | Default Weight | What It Measures |
-|--------|---------------|-----------------|
-| Trust | 0.25 | Trust level from interaction history (or chain trust from delegation tree) |
-| Success rate | 0.25 | Fraction of tasks completed successfully |
-| Latency | 0.15 | Average response time, normalized via `1 - avg_ms / (avg_ms + k)` |
-| Price efficiency | 0.15 | How much of the budget the candidate would consume |
-| Capability match | 0.10 | Whether the candidate has all required capabilities |
-| Availability | 0.10 | Whether the candidate is currently online |
+| Factor           | Default Weight | What It Measures                                                           |
+| ---------------- | -------------- | -------------------------------------------------------------------------- |
+| Trust            | 0.25           | Trust level from interaction history (or chain trust from delegation tree) |
+| Success rate     | 0.25           | Fraction of tasks completed successfully                                   |
+| Latency          | 0.15           | Average response time, normalized via `1 - avg_ms / (avg_ms + k)`          |
+| Price efficiency | 0.15           | How much of the budget the candidate would consume                         |
+| Capability match | 0.10           | Whether the candidate has all required capabilities                        |
+| Availability     | 0.10           | Whether the candidate is currently online                                  |
 
 Blocked agents and candidates missing required capabilities score zero regardless of other factors.
 
@@ -3938,7 +3968,7 @@ import { rankCandidates } from "@motebit/market";
 
 const scores = rankCandidates(candidates, {
   required_capabilities: ["web_search"],
-  max_budget: 0.10,
+  max_budget: 0.1,
   currency: "USD",
 });
 // Sorted by composite score, top N marked as selected
@@ -3985,7 +4015,7 @@ Agent network routing is algebraic, not ad-hoc. The `@motebit/protocol` package 
 A semiring `(S, +, *, 0, 1)` is an algebraic structure with two operations:
 
 - **`add` (+)** — aggregates parallel alternatives. Commutative, associative. "Which of these routes is better?"
-- **`mul` (*)** — composes sequential edges. Associative. "What happens when I chain these two edges?"
+- **`mul` (\*)** — composes sequential edges. Associative. "What happens when I chain these two edges?"
 - **`zero`** — additive identity. The "worst" or "impossible" value. No route.
 - **`one`** — multiplicative identity. Passthrough edge. No effect on composition.
 
@@ -3995,16 +4025,16 @@ The key property: `mul` distributes over `add`. This means the graph traversal a
 
 Each semiring models a different routing concern over the same graph:
 
-| Semiring | `(add, mul, zero, one)` | What it computes |
-|----------|------------------------|-----------------|
-| `TrustSemiring` | `(max, *, 0, 1)` | Most trusted delegation chain |
-| `CostSemiring` | `(min, +, Inf, 0)` | Cheapest agent pipeline |
-| `LatencySemiring` | `(min, +, Inf, 0)` | Fastest sequential path |
-| `ReliabilitySemiring` | `(max, *, 0, 1)` | Most reliable chain (probability product) |
-| `BottleneckSemiring` | `(max, min, 0, Inf)` | Widest bottleneck path (capacity) |
-| `BooleanSemiring` | `(or, and, false, true)` | Reachability |
-| `RegulatoryRiskSemiring` | `(min, +, Inf, 0)` | Lowest regulatory risk path |
-| `MaxProductLogSemiring` | `(max, +, -Inf, 0)` | Most likely path in log space (avoids underflow on long chains) |
+| Semiring                 | `(add, mul, zero, one)`  | What it computes                                                |
+| ------------------------ | ------------------------ | --------------------------------------------------------------- |
+| `TrustSemiring`          | `(max, *, 0, 1)`         | Most trusted delegation chain                                   |
+| `CostSemiring`           | `(min, +, Inf, 0)`       | Cheapest agent pipeline                                         |
+| `LatencySemiring`        | `(min, +, Inf, 0)`       | Fastest sequential path                                         |
+| `ReliabilitySemiring`    | `(max, *, 0, 1)`         | Most reliable chain (probability product)                       |
+| `BottleneckSemiring`     | `(max, min, 0, Inf)`     | Widest bottleneck path (capacity)                               |
+| `BooleanSemiring`        | `(or, and, false, true)` | Reachability                                                    |
+| `RegulatoryRiskSemiring` | `(min, +, Inf, 0)`       | Lowest regulatory risk path                                     |
+| `MaxProductLogSemiring`  | `(max, +, -Inf, 0)`      | Most likely path in log space (avoids underflow on long chains) |
 
 Trust and reliability compose multiplicatively — chaining two 80% trust edges yields 64% effective trust. Cost, latency, and regulatory risk compose additively — chaining a $0.01 edge and a $0.02 edge costs $0.03. Bottleneck composes via `min` — the capacity of a chain is its weakest link.
 
@@ -4017,16 +4047,16 @@ import {
 } from "@motebit/protocol";
 
 // Trust: best alternative (max), chains multiply
-TrustSemiring.add(0.8, 0.6);  // 0.8  (max — pick the better route)
-TrustSemiring.mul(0.8, 0.9);  // 0.72 (product — trust degrades along chains)
+TrustSemiring.add(0.8, 0.6); // 0.8  (max — pick the better route)
+TrustSemiring.mul(0.8, 0.9); // 0.72 (product — trust degrades along chains)
 
 // Cost: cheapest alternative (min), chains add
-CostSemiring.add(5, 3);       // 3    (min — pick the cheaper route)
-CostSemiring.mul(5, 3);       // 8    (sum — costs accumulate along chains)
+CostSemiring.add(5, 3); // 3    (min — pick the cheaper route)
+CostSemiring.mul(5, 3); // 8    (sum — costs accumulate along chains)
 
 // Boolean: reachability
-BooleanSemiring.add(true, false);  // true  (either route works)
-BooleanSemiring.mul(true, false);  // false (both edges must exist)
+BooleanSemiring.add(true, false); // true  (either route works)
+BooleanSemiring.mul(true, false); // false (both edges must exist)
 ```
 
 ## Product and record combinators
@@ -4043,8 +4073,8 @@ import { productSemiring, TrustSemiring, CostSemiring } from "@motebit/protocol"
 const TrustCost = productSemiring(TrustSemiring, CostSemiring);
 // Semiring<readonly [number, number]>
 
-TrustCost.mul([0.8, 5], [0.9, 3]);  // [0.72, 8] — trust * trust, cost + cost
-TrustCost.add([0.8, 5], [0.6, 3]);  // [0.8, 3]  — max trust, min cost
+TrustCost.mul([0.8, 5], [0.9, 3]); // [0.72, 8] — trust * trust, cost + cost
+TrustCost.add([0.8, 5], [0.6, 3]); // [0.8, 3]  — max trust, min cost
 ```
 
 ### Record semiring
@@ -4082,8 +4112,8 @@ import { mappedSemiring, CostSemiring } from "@motebit/protocol";
 
 const CentsSemiring = mappedSemiring(
   CostSemiring,
-  (dollars) => Math.round(dollars * 100),  // to cents
-  (cents) => cents / 100,                   // from cents
+  (dollars) => Math.round(dollars * 100), // to cents
+  (cents) => cents / 100, // from cents
 );
 ```
 
@@ -4101,9 +4131,9 @@ graph.addNode("alice");
 graph.addNode("bob");
 graph.addNode("carol");
 
-graph.setEdge("alice", "bob", 0.9);    // Alice trusts Bob at 0.9
-graph.setEdge("bob", "carol", 0.8);    // Bob trusts Carol at 0.8
-graph.setEdge("alice", "carol", 0.5);  // Alice trusts Carol directly at 0.5
+graph.setEdge("alice", "bob", 0.9); // Alice trusts Bob at 0.9
+graph.setEdge("bob", "carol", 0.8); // Bob trusts Carol at 0.8
+graph.setEdge("alice", "carol", 0.5); // Alice trusts Carol directly at 0.5
 ```
 
 ### Bellman-Ford: single-source optimal paths
@@ -4120,7 +4150,7 @@ const paths = optimalPaths(graph, "alice");
 
 Over `TrustSemiring`, this finds the most trusted delegation chain. Over `CostSemiring`, the cheapest pipeline. Over `BooleanSemiring`, the reachable set. Same algorithm, different semiring, different answer.
 
-Complexity: O(V * E). Early termination when no values change.
+Complexity: O(V \* E). Early termination when no values change.
 
 ### Floyd-Warshall: all-pairs transitive closure
 
@@ -4226,10 +4256,10 @@ The multi-dimensional edge weight used for agent routing:
 
 ```typescript
 interface RouteWeight {
-  trust: number;         // [0,1] — multiplicative composition
-  cost: number;          // [0,Inf) — additive composition
-  latency: number;       // [0,Inf) — additive composition (ms)
-  reliability: number;   // [0,1] — multiplicative composition
+  trust: number; // [0,1] — multiplicative composition
+  cost: number; // [0,Inf) — additive composition
+  latency: number; // [0,Inf) — additive composition (ms)
+  reliability: number; // [0,1] — multiplicative composition
   regulatory_risk: number; // [0,Inf) — additive composition
 }
 ```
@@ -4241,7 +4271,12 @@ interface RouteWeight {
 <ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/agent-graph.ts">
 
 ```typescript
-import { buildAgentGraph, mostTrustedPath, cheapestPath, rankReachableAgents } from "@motebit/semiring";
+import {
+  buildAgentGraph,
+  mostTrustedPath,
+  cheapestPath,
+  rankReachableAgents,
+} from "@motebit/semiring";
 
 const graph = buildAgentGraph(selfId, agents);
 
@@ -4254,7 +4289,11 @@ const cheap = cheapestPath(graph, selfId, targetId);
 
 // Multi-dimensional ranking
 const ranked = rankReachableAgents(graph, selfId, {
-  trust: 0.3, cost: 0.2, latency: 0.15, reliability: 0.15, regulatory_risk: 0.2,
+  trust: 0.3,
+  cost: 0.2,
+  latency: 0.15,
+  reliability: 0.15,
+  regulatory_risk: 0.2,
 });
 // [{ motebit_id, score, route }, ...]
 ```
@@ -4297,15 +4336,20 @@ The `@motebit/market` package's `graphRankCandidates` function is the primary ro
 ```typescript
 import { graphRankCandidates } from "@motebit/market";
 
-const scores = graphRankCandidates(selfId, candidates, {
-  required_capabilities: ["web_search"],
-  max_budget: 0.10,
-  currency: "USD",
-}, {
-  weights: { trust: 0.3, cost: 0.2, latency: 0.15, reliability: 0.15, regulatory_risk: 0.2 },
-  maxCandidates: 5,
-  explorationWeight: 0.1,
-});
+const scores = graphRankCandidates(
+  selfId,
+  candidates,
+  {
+    required_capabilities: ["web_search"],
+    max_budget: 0.1,
+    currency: "USD",
+  },
+  {
+    weights: { trust: 0.3, cost: 0.2, latency: 0.15, reliability: 0.15, regulatory_risk: 0.2 },
+    maxCandidates: 5,
+    explorationWeight: 0.1,
+  },
+);
 ```
 
 </ReferenceExample>
@@ -4401,12 +4445,12 @@ Federation deploys incrementally across five phases. Each phase is independently
 
 Each relay has a persistent cryptographic identity, independent of the agents it hosts.
 
-| Property | Value |
-|----------|-------|
-| Algorithm | Ed25519 |
-| Key size | 32-byte public key, 64-byte private key |
-| Storage | AES-256-GCM encrypted at rest (PBKDF2, 100k iterations) when `MOTEBIT_RELAY_KEY_PASSPHRASE` is set. Plaintext hex for dev mode. |
-| Identifier | `motebit_id` (UUID v7), distinct from any agent's identity |
+| Property   | Value                                                                                                                           |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Algorithm  | Ed25519                                                                                                                         |
+| Key size   | 32-byte public key, 64-byte private key                                                                                         |
+| Storage    | AES-256-GCM encrypted at rest (PBKDF2, 100k iterations) when `MOTEBIT_RELAY_KEY_PASSPHRASE` is set. Plaintext hex for dev mode. |
+| Identifier | `motebit_id` (UUID v7), distinct from any agent's identity                                                                      |
 
 The relay's identity is generated on first startup and persists across restarts. The public key and `motebit_id` are published to peers during the peering handshake.
 
@@ -4456,24 +4500,24 @@ If any verification fails, the handshake is aborted and the peer record is disca
 
 Active peers exchange heartbeats to confirm liveness:
 
-| Parameter | Value |
-|-----------|-------|
-| Interval | 60 seconds |
-| Endpoint | `POST /federation/v1/peer/heartbeat` |
-| Payload | `{ relay_id, timestamp, agent_count, signature }` |
-| Suspend threshold | 3 consecutive missed heartbeats |
-| Remove threshold | 5 consecutive missed heartbeats |
+| Parameter         | Value                                             |
+| ----------------- | ------------------------------------------------- |
+| Interval          | 60 seconds                                        |
+| Endpoint          | `POST /federation/v1/peer/heartbeat`              |
+| Payload           | `{ relay_id, timestamp, agent_count, signature }` |
+| Suspend threshold | 3 consecutive missed heartbeats                   |
+| Remove threshold  | 5 consecutive missed heartbeats                   |
 
 The signature covers `relay_id || timestamp` to prevent replay. A suspended peer is excluded from discovery and routing. A single successful heartbeat reactivates a suspended peer. After 5 misses, the peer is removed and requires a full handshake to re-establish.
 
 ### Peer states
 
-| State | Description |
-|-------|-------------|
-| `pending` | Handshake initiated, awaiting confirmation |
-| `active` | Fully authenticated, participating in federation |
-| `suspended` | 3+ missed heartbeats, excluded from routing |
-| `removed` | 5+ missed heartbeats or explicit removal, requires new handshake |
+| State       | Description                                                      |
+| ----------- | ---------------------------------------------------------------- |
+| `pending`   | Handshake initiated, awaiting confirmation                       |
+| `active`    | Fully authenticated, participating in federation                 |
+| `suspended` | 3+ missed heartbeats, excluded from routing                      |
+| `removed`   | 5+ missed heartbeats or explicit removal, requires new handshake |
 
 Either relay can unilaterally remove a peer via `POST /federation/v1/peer/remove` with a signed removal notice.
 
@@ -4504,12 +4548,12 @@ When `/api/v1/agents/discover` receives a query, the relay:
 
 The forwarding request includes:
 
-| Field | Description |
-|-------|-------------|
-| `hop_count` | Current depth, starts at 0 |
-| `max_hops` | Maximum forwarding depth, hard ceiling of 3 |
-| `visited` | Array of `relay_id` values already visited |
-| `query_id` | UUID v7 for deduplication (30-second TTL) |
+| Field       | Description                                 |
+| ----------- | ------------------------------------------- |
+| `hop_count` | Current depth, starts at 0                  |
+| `max_hops`  | Maximum forwarding depth, hard ceiling of 3 |
+| `visited`   | Array of `relay_id` values already visited  |
+| `query_id`  | UUID v7 for deduplication (30-second TTL)   |
 
 A relay will not forward a query if its own `relay_id` is in the `visited` set, if `hop_count >= max_hops`, or if it has already processed the `query_id`. This bounds the amplification factor to _p^3_ where _p_ is the maximum peer count per relay.
 
@@ -4559,7 +4603,7 @@ When the optimal path crosses a relay boundary, the local relay forwards the tas
   "origin_relay": "relay-abc",
   "target_agent": "motebit-xyz",
   "task_payload": { "prompt": "Search for..." },
-  "budget": { "amount": 0.10, "currency": "USD" },
+  "budget": { "amount": 0.1, "currency": "USD" },
   "routing_choice": { "composite": 0.82, "path": ["relay-abc", "relay-def", "motebit-xyz"] },
   "signature": "..."
 }
@@ -4588,13 +4632,13 @@ Federation introduces multi-relay settlement. Each relay in the forwarding chain
 
 Each relay applies its own `PLATFORM_FEE_RATE` (default: 5%) to the budget it receives:
 
-| Step | Amount | Recipient |
-|------|--------|-----------|
-| Task budget | $1.00 | -- |
-| Relay A fee (5%) | $0.05 | Relay A |
-| Forwarded to Relay B | $0.95 | -- |
-| Relay B fee (5% of $0.95) | $0.0475 | Relay B |
-| Agent receives | $0.9025 | Agent |
+| Step                      | Amount  | Recipient |
+| ------------------------- | ------- | --------- |
+| Task budget               | $1.00   | --        |
+| Relay A fee (5%)          | $0.05   | Relay A   |
+| Forwarded to Relay B      | $0.95   | --        |
+| Relay B fee (5% of $0.95) | $0.0475 | Relay B   |
+| Agent receives            | $0.9025 | Agent     |
 
 ### Settlement forwarding
 
@@ -4606,11 +4650,11 @@ Settlement records may include optional on-chain payment proof fields (`x402_tx_
 
 When a settlement forward fails, the originating relay queues it for exponential backoff retry:
 
-| Parameter | Value |
-|-----------|-------|
-| Max attempts | 5 |
-| Backoff | 30s, 2min, 8min, 32min, 2h |
-| Status | `pending` -> `completed` or `failed` |
+| Parameter    | Value                                |
+| ------------ | ------------------------------------ |
+| Max attempts | 5                                    |
+| Backoff      | 30s, 2min, 8min, 32min, 2h           |
+| Status       | `pending` -> `completed` or `failed` |
 
 After 5 failed attempts, the settlement requires manual intervention.
 
@@ -4626,9 +4670,9 @@ Trust is isolated per-subject. If a peer relay is demoted, only routes through t
 
 Every request to a federation endpoint must include:
 
-| Header | Value |
-|--------|-------|
-| `X-Relay-Id` | The sending relay's `motebit_id` |
+| Header              | Value                                                          |
+| ------------------- | -------------------------------------------------------------- |
+| `X-Relay-Id`        | The sending relay's `motebit_id`                               |
 | `X-Relay-Signature` | Base64url Ed25519 signature of the canonical JSON request body |
 | `X-Relay-Timestamp` | ISO 8601 timestamp; requests older than 5 minutes are rejected |
 
@@ -4642,33 +4686,33 @@ Federated responses include only the information necessary for routing: `motebit
 
 ## API reference
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/federation/v1/identity` | Relay's public identity |
-| POST | `/federation/v1/peer/propose` | Initiate peering handshake |
-| POST | `/federation/v1/peer/confirm` | Complete peering handshake |
-| POST | `/federation/v1/peer/heartbeat` | Send heartbeat |
-| POST | `/federation/v1/peer/remove` | Remove peer |
-| GET | `/federation/v1/peers` | List peers |
-| POST | `/federation/v1/discover` | Forward discovery query |
-| POST | `/federation/v1/task/forward` | Forward task to peer |
-| POST | `/federation/v1/task/result` | Return task result |
-| POST | `/federation/v1/settlement/forward` | Forward settlement |
-| GET | `/federation/v1/settlements` | List settlement records |
+| Method | Path                                | Description                |
+| ------ | ----------------------------------- | -------------------------- |
+| GET    | `/federation/v1/identity`           | Relay's public identity    |
+| POST   | `/federation/v1/peer/propose`       | Initiate peering handshake |
+| POST   | `/federation/v1/peer/confirm`       | Complete peering handshake |
+| POST   | `/federation/v1/peer/heartbeat`     | Send heartbeat             |
+| POST   | `/federation/v1/peer/remove`        | Remove peer                |
+| GET    | `/federation/v1/peers`              | List peers                 |
+| POST   | `/federation/v1/discover`           | Forward discovery query    |
+| POST   | `/federation/v1/task/forward`       | Forward task to peer       |
+| POST   | `/federation/v1/task/result`        | Return task result         |
+| POST   | `/federation/v1/settlement/forward` | Forward settlement         |
+| GET    | `/federation/v1/settlements`        | List settlement records    |
 
 ## Configuration
 
 Federation is opt-in. All settings have sensible defaults.
 
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `federation.enabled` | boolean | `false` | Whether federation is active |
-| `federation.max_peers` | number | `10` | Maximum active peer relationships |
-| `federation.heartbeat_interval` | number | `60000` | Heartbeat interval (ms) |
-| `federation.max_hops` | number | `3` | Maximum query forwarding depth |
-| `federation.platform_fee_rate` | number | `0.05` | Fee rate on forwarded tasks |
-| `federation.auto_accept_peers` | boolean | `false` | Auto-accept incoming proposals |
-| `federation.allowed_peers` | string[] | `[]` | Allowlist of permitted peer relay IDs |
+| Setting                         | Type     | Default | Description                           |
+| ------------------------------- | -------- | ------- | ------------------------------------- |
+| `federation.enabled`            | boolean  | `false` | Whether federation is active          |
+| `federation.max_peers`          | number   | `10`    | Maximum active peer relationships     |
+| `federation.heartbeat_interval` | number   | `60000` | Heartbeat interval (ms)               |
+| `federation.max_hops`           | number   | `3`     | Maximum query forwarding depth        |
+| `federation.platform_fee_rate`  | number   | `0.05`  | Fee rate on forwarded tasks           |
+| `federation.auto_accept_peers`  | boolean  | `false` | Auto-accept incoming proposals        |
+| `federation.allowed_peers`      | string[] | `[]`    | Allowlist of permitted peer relay IDs |
 
 When `federation.enabled` is `false`, all `/federation/v1/` endpoints return HTTP 404.
 
@@ -4740,14 +4784,14 @@ Auth tokens are configured via the config file (`authToken` field), not via CLI 
 
 Six tools are registered automatically when the server starts. Four are conditional — they only appear when the runtime provides their backend (which the CLI always does).
 
-| Tool | Input | Description |
-|---|---|---|
-| `motebit_query` | `{ message }` | Ask the agent a question — full AI response with memory context |
-| `motebit_remember` | `{ content, sensitivity? }` | Store a memory (sensitivity capped for external callers) |
-| `motebit_recall` | `{ query, limit? }` | Semantic memory search, privacy-filtered |
-| `motebit_task` | `{ prompt }` | Submit an autonomous task — returns a signed `ExecutionReceipt` |
-| `motebit_identity` | none | Return the motebit's identity (motebit.md content or JSON summary) |
-| `motebit_tools` | none | List all available tools with risk levels |
+| Tool               | Input                       | Description                                                        |
+| ------------------ | --------------------------- | ------------------------------------------------------------------ |
+| `motebit_query`    | `{ message }`               | Ask the agent a question — full AI response with memory context    |
+| `motebit_remember` | `{ content, sensitivity? }` | Store a memory (sensitivity capped for external callers)           |
+| `motebit_recall`   | `{ query, limit? }`         | Semantic memory search, privacy-filtered                           |
+| `motebit_task`     | `{ prompt }`                | Submit an autonomous task — returns a signed `ExecutionReceipt`    |
+| `motebit_identity` | none                        | Return the motebit's identity (motebit.md content or JSON summary) |
+| `motebit_tools`    | none                        | List all available tools with risk levels                          |
 
 ### motebit_query
 
@@ -4775,14 +4819,14 @@ Searches the motebit's memory graph by semantic similarity. Results are privacy-
 
 Each result includes:
 
-| Field | Type | Description |
-|---|---|---|
-| `content` | string | Memory text |
-| `confidence` | number | Current confidence (0–1) |
-| `similarity` | number | Cosine similarity to query |
+| Field            | Type   | Description                                                                  |
+| ---------------- | ------ | ---------------------------------------------------------------------------- |
+| `content`        | string | Memory text                                                                  |
+| `confidence`     | number | Current confidence (0–1)                                                     |
+| `similarity`     | number | Cosine similarity to query                                                   |
 | `half_life_days` | number | Decay half-life in days (default 30, increases with reinforcement up to 365) |
-| `memory_type` | string | `"semantic"` or `"episodic"` |
-| `created_at` | number | Creation timestamp (ms since epoch) |
+| `memory_type`    | string | `"semantic"` or `"episodic"`                                                 |
+| `created_at`     | number | Creation timestamp (ms since epoch)                                          |
 
 ### motebit_task
 
@@ -4819,16 +4863,16 @@ In addition to the six synthetic tools, the server exposes all tools from the mo
 
 The server also exposes MCP resources and prompts:
 
-| Resource | URI | Description |
-|---|---|---|
-| `identity` | `motebit://identity` | Motebit ID and public key |
-| `state` | `motebit://state` | Current state vector (attention, processing, etc.) |
-| `memories` | `motebit://memories` | Privacy-filtered memory snapshot |
+| Resource   | URI                  | Description                                        |
+| ---------- | -------------------- | -------------------------------------------------- |
+| `identity` | `motebit://identity` | Motebit ID and public key                          |
+| `state`    | `motebit://state`    | Current state vector (attention, processing, etc.) |
+| `memories` | `motebit://memories` | Privacy-filtered memory snapshot                   |
 
-| Prompt | Description |
-|---|---|
-| `chat` | Send a message (wraps into user message format) |
-| `recall` | Search semantic memory by query |
+| Prompt    | Description                                     |
+| --------- | ----------------------------------------------- |
+| `chat`    | Send a message (wraps into user message format) |
+| `recall`  | Search semantic memory by query                 |
 | `reflect` | Trigger agent reflection on recent interactions |
 
 ## HTTP bearer auth
@@ -4868,14 +4912,14 @@ Tools give the motebit agency — the ability to read files, search the web, exe
 
 Motebit registers six tools by default:
 
-| Tool | Risk | Description |
-|---|---|---|
-| `read_file` | Read | Read a file from allowed paths |
-| `web_search` | Read | Search the web (Brave → DuckDuckGo fallback) |
-| `read_url` | Read | Fetch and read a URL |
-| `recall_memories` | Read | Query the agent's memory graph |
-| `list_events` | Read | Browse the agent's event log |
-| `delegate_to_agent` | Read | Delegate a task to a remote agent via relay |
+| Tool                | Risk | Description                                  |
+| ------------------- | ---- | -------------------------------------------- |
+| `read_file`         | Read | Read a file from allowed paths               |
+| `web_search`        | Read | Search the web (Brave → DuckDuckGo fallback) |
+| `read_url`          | Read | Fetch and read a URL                         |
+| `recall_memories`   | Read | Query the agent's memory graph               |
+| `list_events`       | Read | Browse the agent's event log                 |
+| `delegate_to_agent` | Read | Delegate a task to a remote agent via relay  |
 
 Additional tools (`write_file`, `shell_exec`) exist in `@motebit/tools` but are not registered by default. They require operator mode and explicit per-call approval — see [Daemon Mode & Approvals](/docs/operator/daemon-approvals) for the three-band governance thresholds that gate them.
 
@@ -4905,14 +4949,14 @@ Additional tools (`write_file`, `shell_exec`) exist in `@motebit/tools` but are 
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | Server identifier (used in tool namespacing) |
-| `transport` | `"stdio"` | Transport type (stdio only for now) |
-| `command` | string | Command to launch the server |
-| `args` | string[] | Command arguments |
-| `env` | object | Environment variables for the server process |
-| `trusted` | boolean | If false, all tools require per-call approval |
+| Field       | Type      | Description                                   |
+| ----------- | --------- | --------------------------------------------- |
+| `name`      | string    | Server identifier (used in tool namespacing)  |
+| `transport` | `"stdio"` | Transport type (stdio only for now)           |
+| `command`   | string    | Command to launch the server                  |
+| `args`      | string[]  | Command arguments                             |
+| `env`       | object    | Environment variables for the server process  |
+| `trusted`   | boolean   | If false, all tools require per-call approval |
 
 MCP tools are namespaced to avoid collisions — format: `{serverName}__{toolName}` (e.g., `filesystem__read_file`, `github__create_issue`).
 
@@ -4952,11 +4996,11 @@ This page covers the core protocol types and endpoints that power agent delegati
 
 The exhaustive type surface for each Apache-2.0 published package lives in a committed [api-extractor](https://api-extractor.com/) baseline. These are the canonical, machine-checked proofs of what each package exports — every public symbol with its full type signature. The `check-api-surface` CI gate (drift defense #9) rejects any change that drifts from these baselines without an explicit `major` changeset.
 
-| Package | What it covers | Baseline |
-|---|---|---|
-| `@motebit/protocol` | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing primitives | [`protocol.api.md`](https://github.com/motebit/motebit/blob/main/packages/protocol/etc/protocol.api.md) |
-| `@motebit/sdk` | Developer contract — stable types, adapter interfaces, governance config (re-exports `@motebit/protocol` plus surface-config types) | [`sdk.api.md`](https://github.com/motebit/motebit/blob/main/packages/sdk/etc/sdk.api.md) |
-| `@motebit/crypto` | Sign and verify every motebit artifact — Ed25519 today, cryptosuite-agile for post-quantum | [`crypto.api.md`](https://github.com/motebit/motebit/blob/main/packages/crypto/etc/crypto.api.md) |
+| Package             | What it covers                                                                                                                      | Baseline                                                                                                |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `@motebit/protocol` | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing primitives                       | [`protocol.api.md`](https://github.com/motebit/motebit/blob/main/packages/protocol/etc/protocol.api.md) |
+| `@motebit/sdk`      | Developer contract — stable types, adapter interfaces, governance config (re-exports `@motebit/protocol` plus surface-config types) | [`sdk.api.md`](https://github.com/motebit/motebit/blob/main/packages/sdk/etc/sdk.api.md)                |
+| `@motebit/crypto`   | Sign and verify every motebit artifact — Ed25519 today, cryptosuite-agile for post-quantum                                          | [`crypto.api.md`](https://github.com/motebit/motebit/blob/main/packages/crypto/etc/crypto.api.md)       |
 
 The other published packages expose narrow surfaces, documented in each package's [README on npm](https://www.npmjs.com/org/motebit) and committed under `packages/<name>/README.md`. The two close-named ones to disambiguate at install time:
 
@@ -4997,25 +5041,25 @@ interface ExecutionReceipt {
 
 ### Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `task_id` | `string` | Correlation ID for the task. Matches the `task_id` returned by the relay on submission. |
-| `motebit_id` | `MotebitId` | UUID v7 of the agent that executed the task. This is who did the work. |
-| `public_key` | `string?` | Signer's Ed25519 public key in hex. Enables verification without a relay lookup — the verifier can check the signature directly. |
-| `device_id` | `DeviceId` | Which device executed the task. A single motebit may run across multiple devices. |
-| `submitted_at` | `number` | Unix timestamp (ms) when the task was submitted. |
-| `completed_at` | `number` | Unix timestamp (ms) when execution finished. The relay rejects receipts where `completed_at - submitted_at` exceeds 1 hour. |
-| `status` | `string` | Execution outcome. `"completed"` means successful execution. `"failed"` means the agent attempted but could not complete. `"denied"` means policy rejected the task. |
-| `result` | `string` | The output text from execution. |
-| `tools_used` | `string[]` | Names of every tool invoked during execution. Enables capability auditing. |
-| `memories_formed` | `number` | Count of memories the agent formed during execution. |
-| `prompt_hash` | `string` | `hex(SHA-256(UTF-8(prompt)))` — plain SHA-256 of the prompt **string**, lowercase hex (64 chars). Not canonicalized. |
-| `result_hash` | `string` | `hex(SHA-256(UTF-8(result)))` — plain SHA-256 of the `result` **string**, lowercase hex (64 chars). Not canonicalized. Recompute it over the exact `result` bytes to re-check. (Canonical-JSON hashing applies only to object-valued fields like a `ToolInvocationReceipt`'s `args_hash`.) |
-| `delegation_receipts` | `ExecutionReceipt[]?` | Nested receipts from sub-delegations. In multi-hop scenarios (Alice delegates to Bob, Bob sub-delegates to Charlie), Bob's receipt includes Charlie's receipt here. The relay verifies each nested receipt recursively. |
-| `relay_task_id` | `string?` | Cryptographic binding to the relay's economic identity for this task. Included in the Ed25519 signature, so tampering breaks the signature. The relay enforces `relay_task_id === taskIdFromRoute` at settlement. Prevents cross-task replay attacks, including identical-prompt collisions. |
-| `delegated_scope` | `string?` | Scope from the delegation token that authorized this execution. Restricts which tools the task can use (e.g., `"web_search,read_url"`). |
-| `suite` | `string` | **Required.** Cryptosuite discriminator — always `"motebit-jcs-ed25519-b64-v1"` today. It is part of the signed body: `signExecutionReceipt` stamps it, and a verifier rejects a receipt missing or carrying an unknown value (fail-closed). If you hand-build a receipt, include it **before** signing or the signature won't match. |
-| `signature` | `string` | Ed25519 signature, base64url. The signed message is the **JCS (RFC 8785) canonical UTF-8 bytes** of all other fields (keys sorted lexicographically, no whitespace, `undefined` omitted) — signed **directly**, with no intermediate SHA-256 of the body. (This differs from the *execution ledger*, which signs a 32-byte content hash, and from *credentials*, which sign concatenated field hashes — do not generalize one artifact's recipe onto another.) |
+| Field                 | Type                  | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task_id`             | `string`              | Correlation ID for the task. Matches the `task_id` returned by the relay on submission.                                                                                                                                                                                                                                                                                                                                                                        |
+| `motebit_id`          | `MotebitId`           | UUID v7 of the agent that executed the task. This is who did the work.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `public_key`          | `string?`             | Signer's Ed25519 public key in hex. Enables verification without a relay lookup — the verifier can check the signature directly.                                                                                                                                                                                                                                                                                                                               |
+| `device_id`           | `DeviceId`            | Which device executed the task. A single motebit may run across multiple devices.                                                                                                                                                                                                                                                                                                                                                                              |
+| `submitted_at`        | `number`              | Unix timestamp (ms) when the task was submitted.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `completed_at`        | `number`              | Unix timestamp (ms) when execution finished. The relay rejects receipts where `completed_at - submitted_at` exceeds 1 hour.                                                                                                                                                                                                                                                                                                                                    |
+| `status`              | `string`              | Execution outcome. `"completed"` means successful execution. `"failed"` means the agent attempted but could not complete. `"denied"` means policy rejected the task.                                                                                                                                                                                                                                                                                           |
+| `result`              | `string`              | The output text from execution.                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `tools_used`          | `string[]`            | Names of every tool invoked during execution. Enables capability auditing.                                                                                                                                                                                                                                                                                                                                                                                     |
+| `memories_formed`     | `number`              | Count of memories the agent formed during execution.                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `prompt_hash`         | `string`              | `hex(SHA-256(UTF-8(prompt)))` — plain SHA-256 of the prompt **string**, lowercase hex (64 chars). Not canonicalized.                                                                                                                                                                                                                                                                                                                                           |
+| `result_hash`         | `string`              | `hex(SHA-256(UTF-8(result)))` — plain SHA-256 of the `result` **string**, lowercase hex (64 chars). Not canonicalized. Recompute it over the exact `result` bytes to re-check. (Canonical-JSON hashing applies only to object-valued fields like a `ToolInvocationReceipt`'s `args_hash`.)                                                                                                                                                                     |
+| `delegation_receipts` | `ExecutionReceipt[]?` | Nested receipts from sub-delegations. In multi-hop scenarios (Alice delegates to Bob, Bob sub-delegates to Charlie), Bob's receipt includes Charlie's receipt here. The relay verifies each nested receipt recursively.                                                                                                                                                                                                                                        |
+| `relay_task_id`       | `string?`             | Cryptographic binding to the relay's economic identity for this task. Included in the Ed25519 signature, so tampering breaks the signature. The relay enforces `relay_task_id === taskIdFromRoute` at settlement. Prevents cross-task replay attacks, including identical-prompt collisions.                                                                                                                                                                   |
+| `delegated_scope`     | `string?`             | Scope from the delegation token that authorized this execution. Restricts which tools the task can use (e.g., `"web_search,read_url"`).                                                                                                                                                                                                                                                                                                                        |
+| `suite`               | `string`              | **Required.** Cryptosuite discriminator — always `"motebit-jcs-ed25519-b64-v1"` today. It is part of the signed body: `signExecutionReceipt` stamps it, and a verifier rejects a receipt missing or carrying an unknown value (fail-closed). If you hand-build a receipt, include it **before** signing or the signature won't match.                                                                                                                          |
+| `signature`           | `string`              | Ed25519 signature, base64url. The signed message is the **JCS (RFC 8785) canonical UTF-8 bytes** of all other fields (keys sorted lexicographically, no whitespace, `undefined` omitted) — signed **directly**, with no intermediate SHA-256 of the body. (This differs from the _execution ledger_, which signs a 32-byte content hash, and from _credentials_, which sign concatenated field hashes — do not generalize one artifact's recipe onto another.) |
 
 ### Example receipt
 
@@ -5088,19 +5132,19 @@ Every motebit running as an MCP server exposes synthetic tools — protocol-leve
 
 Submit an autonomous task for execution. Returns a signed `ExecutionReceipt`.
 
-| Property | Value |
-|----------|-------|
-| **Risk level** | R3_EXECUTE |
+| Property          | Value                                         |
+| ----------------- | --------------------------------------------- |
+| **Risk level**    | R3_EXECUTE                                    |
 | **Auth required** | Bearer token (static or motebit signed token) |
 
 **Input schema:**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `prompt` | `string` | Yes | The task prompt for the agent to execute. |
-| `delegation_token` | `string` | No | Signed delegation token (JSON) authorizing this task within a specific scope. Verified via Ed25519 before execution. |
-| `required_capabilities` | `string[]` | No | Capability names required for this task (e.g., `["web_search"]`). Checked against the delegation token's scope if present. |
-| `relay_task_id` | `string` | No | Relay-assigned task ID for economic binding. Included in the signed receipt for settlement. |
+| Parameter               | Type       | Required | Description                                                                                                                |
+| ----------------------- | ---------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `prompt`                | `string`   | Yes      | The task prompt for the agent to execute.                                                                                  |
+| `delegation_token`      | `string`   | No       | Signed delegation token (JSON) authorizing this task within a specific scope. Verified via Ed25519 before execution.       |
+| `required_capabilities` | `string[]` | No       | Capability names required for this task (e.g., `["web_search"]`). Checked against the delegation token's scope if present. |
+| `relay_task_id`         | `string`   | No       | Relay-assigned task ID for economic binding. Included in the signed receipt for settlement.                                |
 
 **Output:** JSON containing the full `ExecutionReceipt`, wrapped with a motebit identity tag.
 
@@ -5110,16 +5154,16 @@ Submit an autonomous task for execution. Returns a signed `ExecutionReceipt`.
 
 Ask the agent a question. The agent responds using its AI provider with full memory context.
 
-| Property | Value |
-|----------|-------|
-| **Risk level** | R2_WRITE |
+| Property          | Value        |
+| ----------------- | ------------ |
+| **Risk level**    | R2_WRITE     |
 | **Auth required** | Bearer token |
 
 **Input schema:**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `message` | `string` | Yes | The question or message to send. |
+| Parameter | Type     | Required | Description                      |
+| --------- | -------- | -------- | -------------------------------- |
+| `message` | `string` | Yes      | The question or message to send. |
 
 **Output:** JSON with `response` (the AI's answer) and `memories_formed` (count of new memories created during the interaction).
 
@@ -5127,17 +5171,17 @@ Ask the agent a question. The agent responds using its AI provider with full mem
 
 Store a memory in the agent's semantic memory graph.
 
-| Property | Value |
-|----------|-------|
-| **Risk level** | R2_WRITE |
+| Property          | Value        |
+| ----------------- | ------------ |
+| **Risk level**    | R2_WRITE     |
 | **Auth required** | Bearer token |
 
 **Input schema:**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `content` | `string` | Yes | The content to remember. |
-| `sensitivity` | `string` | No | Sensitivity level. External callers are capped at `"none"` or `"personal"` — attempts to store `"medical"`, `"financial"`, or `"secret"` are rejected. |
+| Parameter     | Type     | Required | Description                                                                                                                                            |
+| ------------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `content`     | `string` | Yes      | The content to remember.                                                                                                                               |
+| `sensitivity` | `string` | No       | Sensitivity level. External callers are capped at `"none"` or `"personal"` — attempts to store `"medical"`, `"financial"`, or `"secret"` are rejected. |
 
 **Output:** JSON with `node_id` of the created memory node.
 
@@ -5147,17 +5191,17 @@ Store a memory in the agent's semantic memory graph.
 
 Search the agent's semantic memory using cosine similarity.
 
-| Property | Value |
-|----------|-------|
-| **Risk level** | R1_DRAFT |
+| Property          | Value        |
+| ----------------- | ------------ |
+| **Risk level**    | R1_DRAFT     |
 | **Auth required** | Bearer token |
 
 **Input schema:**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `query` | `string` | Yes | Semantic search query. |
-| `limit` | `number` | No | Maximum number of results to return. |
+| Parameter | Type     | Required | Description                          |
+| --------- | -------- | -------- | ------------------------------------ |
+| `query`   | `string` | Yes      | Semantic search query.               |
+| `limit`   | `number` | No       | Maximum number of results to return. |
 
 **Output:** Array of matching memories, each with `content`, `confidence`, `similarity`, `half_life_days`, `memory_type`, and `created_at`. Results are privacy-filtered — memories with sensitivity above `"none"` are excluded from external callers.
 
@@ -5165,9 +5209,9 @@ Search the agent's semantic memory using cosine similarity.
 
 Return the agent's identity information.
 
-| Property | Value |
-|----------|-------|
-| **Risk level** | R0_READ |
+| Property          | Value        |
+| ----------------- | ------------ |
+| **Risk level**    | R0_READ      |
 | **Auth required** | Bearer token |
 
 **Input schema:** None.
@@ -5178,9 +5222,9 @@ Return the agent's identity information.
 
 List all available tools with their risk levels.
 
-| Property | Value |
-|----------|-------|
-| **Risk level** | R0_READ |
+| Property          | Value        |
+| ----------------- | ------------ |
+| **Risk level**    | R0_READ      |
 | **Auth required** | Bearer token |
 
 **Input schema:** None.
@@ -5191,10 +5235,10 @@ List all available tools with their risk levels.
 
 These tools are conditionally registered when the agent provides the necessary backend:
 
-| Tool | Risk | Description |
-|------|------|-------------|
-| `motebit_credentials` | R0_READ | Returns the agent's signed Verifiable Presentation (W3C VC 2.0) containing reputation, gradient, and trust credentials. |
-| `motebit_service_listing` | R0_READ | Returns the agent's service listing — capabilities, pricing, SLA, and description. |
+| Tool                      | Risk    | Description                                                                                                             |
+| ------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `motebit_credentials`     | R0_READ | Returns the agent's signed Verifiable Presentation (W3C VC 2.0) containing reputation, gradient, and trust credentials. |
+| `motebit_service_listing` | R0_READ | Returns the agent's service listing — capabilities, pricing, SLA, and description.                                      |
 
 ### Authentication
 
@@ -5246,15 +5290,15 @@ Submit a task for delegation. The relay scores registered agents using the semir
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `prompt` | `string` | Yes | The task prompt. Must be non-empty. |
-| `submitted_by` | `string` | No | Motebit ID of the delegating agent. Overridden by the caller identity from signed token auth when present. |
-| `required_capabilities` | `string[]` | No | Capabilities the executing agent must have. Triggers scored routing when provided. |
-| `wall_clock_ms` | `number` | No | Time budget hint for the executing agent. |
-| `step_id` | `string` | No | Correlation ID for plan execution — links this task to a step in the execution ledger. |
-| `exploration_drive` | `number` | No | Value between 0 and 1 from the intelligence gradient. Higher values increase routing diversity (explore less-proven agents). |
-| `exclude_agents` | `string[]` | No | Agent IDs to exclude from routing. Used for retry logic when previous attempts failed. |
+| Field                   | Type       | Required | Description                                                                                                                  |
+| ----------------------- | ---------- | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `prompt`                | `string`   | Yes      | The task prompt. Must be non-empty.                                                                                          |
+| `submitted_by`          | `string`   | No       | Motebit ID of the delegating agent. Overridden by the caller identity from signed token auth when present.                   |
+| `required_capabilities` | `string[]` | No       | Capabilities the executing agent must have. Triggers scored routing when provided.                                           |
+| `wall_clock_ms`         | `number`   | No       | Time budget hint for the executing agent.                                                                                    |
+| `step_id`               | `string`   | No       | Correlation ID for plan execution — links this task to a step in the execution ledger.                                       |
+| `exploration_drive`     | `number`   | No       | Value between 0 and 1 from the intelligence gradient. Higher values increase routing diversity (explore less-proven agents). |
+| `exclude_agents`        | `string[]` | No       | Agent IDs to exclude from routing. Used for retry logic when previous attempts failed.                                       |
 
 **Response (201):**
 
@@ -5281,12 +5325,12 @@ The `routing_choice` field contains semiring routing provenance — which agent 
 
 **Error responses:**
 
-| Status | Condition |
-|--------|-----------|
-| 400 | Missing or empty `prompt`, or `required_capabilities` is not an array. |
-| 401 | No authorization header. |
-| 402 | Insufficient budget. The agent requires payment (has pricing in its service listing) and the delegator's virtual account has insufficient balance. Deposit funds or pay via x402. |
-| 403 | Invalid authorization token. |
+| Status | Condition                                                                                                                                                                         |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | Missing or empty `prompt`, or `required_capabilities` is not an array.                                                                                                            |
+| 401    | No authorization header.                                                                                                                                                          |
+| 402    | Insufficient budget. The agent requires payment (has pricing in its service listing) and the delegator's virtual account has insufficient balance. Deposit funds or pay via x402. |
+| 403    | Invalid authorization token.                                                                                                                                                      |
 
 ### Routing phases
 
@@ -5324,11 +5368,11 @@ The `receipt` field is `null` until the executing agent submits a result. Tasks 
 
 **Error responses:**
 
-| Status | Condition |
-|--------|-----------|
-| 401 | No authorization header. |
-| 403 | Invalid token or device not authorized. |
-| 404 | Task not found (expired or invalid ID), or `motebitId` in URL does not match the task's target. |
+| Status | Condition                                                                                       |
+| ------ | ----------------------------------------------------------------------------------------------- |
+| 401    | No authorization header.                                                                        |
+| 403    | Invalid token or device not authorized.                                                         |
+| 404    | Task not found (expired or invalid ID), or `motebitId` in URL does not match the task's target. |
 
 ### Submit result
 
@@ -5362,12 +5406,12 @@ The `credential_id` is present when the relay issues an `AgentReputationCredenti
 
 **Error responses:**
 
-| Status | Condition |
-|--------|-----------|
-| 400 | Invalid receipt structure, timestamp out of range, or `relay_task_id` mismatch. |
-| 401 | No authorization header. |
-| 403 | Ed25519 signature verification failed. |
-| 404 | Task not found or `motebitId` mismatch. |
+| Status | Condition                                                                       |
+| ------ | ------------------------------------------------------------------------------- |
+| 400    | Invalid receipt structure, timestamp out of range, or `relay_task_id` mismatch. |
+| 401    | No authorization header.                                                        |
+| 403    | Ed25519 signature verification failed.                                          |
+| 404    | Task not found or `motebitId` mismatch.                                         |
 
 **Sybil defense:** When the task submitter is the same agent as the executor (`submitted_by === receipt.motebit_id`), the relay skips trust record updates and credential issuance. Self-delegation settles budget but produces no trust signal.
 
@@ -5390,7 +5434,7 @@ Returns the current balance, pending amounts, and recent transaction history.
 ```json
 {
   "motebit_id": "019d03fd-...",
-  "balance": 1.50,
+  "balance": 1.5,
   "currency": "USD",
   "pending_withdrawals": 0,
   "pending_allocations": 0.02,
@@ -5399,8 +5443,8 @@ Returns the current balance, pending amounts, and recent transaction history.
       "transaction_id": "uuid",
       "motebit_id": "019d03fd-...",
       "type": "deposit",
-      "amount": 2.00,
-      "balance_after": 2.00,
+      "amount": 2.0,
+      "balance_after": 2.0,
       "reference_id": "stripe-pi-123",
       "description": "Initial deposit",
       "created_at": 1711036800000
@@ -5425,26 +5469,26 @@ Credit the agent's virtual account.
 
 ```json
 {
-  "amount": 1.00,
+  "amount": 1.0,
   "currency": "USD",
   "reference": "stripe-pi-abc123",
   "description": "Deposit via Stripe"
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `amount` | `number` | Yes | Amount to deposit. Must be positive. |
-| `currency` | `string` | No | Currency code (default: USD). |
-| `reference` | `string` | No | Idempotency key. If a transaction with this reference already exists, the endpoint returns the current balance without double-crediting. |
-| `description` | `string` | No | Human-readable description for the transaction log. |
+| Field         | Type     | Required | Description                                                                                                                              |
+| ------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `amount`      | `number` | Yes      | Amount to deposit. Must be positive.                                                                                                     |
+| `currency`    | `string` | No       | Currency code (default: USD).                                                                                                            |
+| `reference`   | `string` | No       | Idempotency key. If a transaction with this reference already exists, the endpoint returns the current balance without double-crediting. |
+| `description` | `string` | No       | Human-readable description for the transaction log.                                                                                      |
 
 **Response (200):**
 
 ```json
 {
   "motebit_id": "019d03fd-...",
-  "balance": 2.50,
+  "balance": 2.5,
   "transaction_id": "uuid"
 }
 ```
