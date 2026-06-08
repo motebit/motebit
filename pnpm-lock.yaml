@@ -817,8 +817,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/wallet-solana
       '@ricky0123/vad-web':
-        specifier: ^0.0.22
-        version: 0.0.22
+        specifier: ^0.0.30
+        version: 0.0.30
       three:
         specifier: ^0.170.0
         version: 0.170.0
@@ -5161,9 +5161,6 @@ packages:
 
   '@react-navigation/routers@7.5.3':
     resolution: {integrity: sha512-1tJHg4KKRJuQ1/EvJxatrMef3NZXEPzwUIUZ3n1yJ2t7Q97siwRtbynRpQG9/69ebbtiZ8W3ScOZF/OmhvM4Rg==}
-
-  '@ricky0123/vad-web@0.0.22':
-    resolution: {integrity: sha512-679R6sfwXx4jkquK+FJ9RC2W29oulWC+9ZINK6LVpuy90IBV7UaTGNN79oQXufpJTJs5z4X/22nw1DQ4+Rh8CA==}
 
   '@ricky0123/vad-web@0.0.30':
     resolution: {integrity: sha512-cJyYrh4YeeUBJcbR9Bic/bFDyB9qBkAepvpuWM3vLxnAi7bC3VHzf51UeNdT+OtY4D7MLAgV8iJMc4z41ZnaWg==}
@@ -14673,10 +14670,6 @@ snapshots:
   '@react-navigation/routers@7.5.3':
     dependencies:
       nanoid: 3.3.12
-
-  '@ricky0123/vad-web@0.0.22':
-    dependencies:
-      onnxruntime-web: 1.14.0
 
   '@ricky0123/vad-web@0.0.30':
     dependencies:
