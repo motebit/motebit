@@ -53,10 +53,7 @@ Given a candidate's pricing and the capabilities needed for a task, `estimateCos
 ```typescript
 import { estimateCost } from "@motebit/market";
 
-const { amount, currency } = estimateCost(
-  candidate.listing.pricing,
-  ["web_search", "read_url"],
-);
+const { amount, currency } = estimateCost(candidate.listing.pricing, ["web_search", "read_url"]);
 // { amount: 0.015, currency: "USD" }
 ```
 
@@ -81,7 +78,7 @@ const allocation = allocateBudget(
     currency: "USD",
     risk_factor: 1.0,
   },
-  availableBudget,   // e.g. 1.00
+  availableBudget, // e.g. 1.00
   allocationId,
 );
 ```
@@ -100,9 +97,9 @@ For plans that involve multiple agents, `allocateCollaborativeBudget` distribute
 import { allocateCollaborativeBudget } from "@motebit/market";
 
 const allocations = allocateCollaborativeBudget(
-  steps,         // plan steps with assigned_motebit_id
-  participants,  // [{ motebit_id, assigned_steps: [0, 2, 4] }]
-  pricing,       // Map<motebit_id, CapabilityPrice[]>
+  steps, // plan steps with assigned_motebit_id
+  participants, // [{ motebit_id, assigned_steps: [0, 2, 4] }]
+  pricing, // Map<motebit_id, CapabilityPrice[]>
   availableBudget,
 );
 ```
@@ -121,9 +118,9 @@ After execution, `settleOnReceipt` determines the financial outcome:
 import { settleOnReceipt } from "@motebit/market";
 
 const record = settleOnReceipt(
-  allocation,    // the locked BudgetAllocation
-  receipt,       // the signed ExecutionReceipt
-  ledger,        // the GoalExecutionManifest (or null)
+  allocation, // the locked BudgetAllocation
+  receipt, // the signed ExecutionReceipt
+  ledger, // the GoalExecutionManifest (or null)
   settlementId,
 );
 ```
@@ -132,11 +129,11 @@ const record = settleOnReceipt(
 
 Three outcomes:
 
-| Receipt Status | Ledger | Settlement |
-|---------------|--------|------------|
-| `"completed"` | All steps completed (or no ledger) | **Full settlement** — locked amount is paid |
-| `"completed"` | Some steps completed, some failed | **Partial settlement** — proportional to completed steps |
-| `"failed"` or `"denied"` | Any | **Refund** — locked amount returned, `amount_settled: 0` |
+| Receipt Status           | Ledger                             | Settlement                                               |
+| ------------------------ | ---------------------------------- | -------------------------------------------------------- |
+| `"completed"`            | All steps completed (or no ledger) | **Full settlement** — locked amount is paid              |
+| `"completed"`            | Some steps completed, some failed  | **Partial settlement** — proportional to completed steps |
+| `"failed"` or `"denied"` | Any                                | **Refund** — locked amount returned, `amount_settled: 0` |
 
 The settlement record includes:
 
@@ -144,7 +141,7 @@ The settlement record includes:
 {
   settlement_id: string;
   allocation_id: string;
-  receipt_hash: string;      // links to the execution receipt
+  receipt_hash: string; // links to the execution receipt
   ledger_hash: string | null; // links to the execution ledger
   amount_settled: number;
   status: "completed" | "partial" | "refunded";
@@ -158,14 +155,14 @@ Partial settlement uses the execution ledger to determine the proportion: `compl
 
 When multiple agents can perform a task, the market scores and ranks them. Six weighted factors determine the composite score:
 
-| Factor | Default Weight | What It Measures |
-|--------|---------------|-----------------|
-| Trust | 0.25 | Trust level from interaction history (or chain trust from delegation tree) |
-| Success rate | 0.25 | Fraction of tasks completed successfully |
-| Latency | 0.15 | Average response time, normalized via `1 - avg_ms / (avg_ms + k)` |
-| Price efficiency | 0.15 | How much of the budget the candidate would consume |
-| Capability match | 0.10 | Whether the candidate has all required capabilities |
-| Availability | 0.10 | Whether the candidate is currently online |
+| Factor           | Default Weight | What It Measures                                                           |
+| ---------------- | -------------- | -------------------------------------------------------------------------- |
+| Trust            | 0.25           | Trust level from interaction history (or chain trust from delegation tree) |
+| Success rate     | 0.25           | Fraction of tasks completed successfully                                   |
+| Latency          | 0.15           | Average response time, normalized via `1 - avg_ms / (avg_ms + k)`          |
+| Price efficiency | 0.15           | How much of the budget the candidate would consume                         |
+| Capability match | 0.10           | Whether the candidate has all required capabilities                        |
+| Availability     | 0.10           | Whether the candidate is currently online                                  |
 
 Blocked agents and candidates missing required capabilities score zero regardless of other factors.
 
@@ -176,7 +173,7 @@ import { rankCandidates } from "@motebit/market";
 
 const scores = rankCandidates(candidates, {
   required_capabilities: ["web_search"],
-  max_budget: 0.10,
+  max_budget: 0.1,
   currency: "USD",
 });
 // Sorted by composite score, top N marked as selected

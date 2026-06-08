@@ -21,12 +21,12 @@ Federation deploys incrementally across five phases. Each phase is independently
 
 Each relay has a persistent cryptographic identity, independent of the agents it hosts.
 
-| Property | Value |
-|----------|-------|
-| Algorithm | Ed25519 |
-| Key size | 32-byte public key, 64-byte private key |
-| Storage | AES-256-GCM encrypted at rest (PBKDF2, 100k iterations) when `MOTEBIT_RELAY_KEY_PASSPHRASE` is set. Plaintext hex for dev mode. |
-| Identifier | `motebit_id` (UUID v7), distinct from any agent's identity |
+| Property   | Value                                                                                                                           |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Algorithm  | Ed25519                                                                                                                         |
+| Key size   | 32-byte public key, 64-byte private key                                                                                         |
+| Storage    | AES-256-GCM encrypted at rest (PBKDF2, 100k iterations) when `MOTEBIT_RELAY_KEY_PASSPHRASE` is set. Plaintext hex for dev mode. |
+| Identifier | `motebit_id` (UUID v7), distinct from any agent's identity                                                                      |
 
 The relay's identity is generated on first startup and persists across restarts. The public key and `motebit_id` are published to peers during the peering handshake.
 
@@ -76,24 +76,24 @@ If any verification fails, the handshake is aborted and the peer record is disca
 
 Active peers exchange heartbeats to confirm liveness:
 
-| Parameter | Value |
-|-----------|-------|
-| Interval | 60 seconds |
-| Endpoint | `POST /federation/v1/peer/heartbeat` |
-| Payload | `{ relay_id, timestamp, agent_count, signature }` |
-| Suspend threshold | 3 consecutive missed heartbeats |
-| Remove threshold | 5 consecutive missed heartbeats |
+| Parameter         | Value                                             |
+| ----------------- | ------------------------------------------------- |
+| Interval          | 60 seconds                                        |
+| Endpoint          | `POST /federation/v1/peer/heartbeat`              |
+| Payload           | `{ relay_id, timestamp, agent_count, signature }` |
+| Suspend threshold | 3 consecutive missed heartbeats                   |
+| Remove threshold  | 5 consecutive missed heartbeats                   |
 
 The signature covers `relay_id || timestamp` to prevent replay. A suspended peer is excluded from discovery and routing. A single successful heartbeat reactivates a suspended peer. After 5 misses, the peer is removed and requires a full handshake to re-establish.
 
 ### Peer states
 
-| State | Description |
-|-------|-------------|
-| `pending` | Handshake initiated, awaiting confirmation |
-| `active` | Fully authenticated, participating in federation |
-| `suspended` | 3+ missed heartbeats, excluded from routing |
-| `removed` | 5+ missed heartbeats or explicit removal, requires new handshake |
+| State       | Description                                                      |
+| ----------- | ---------------------------------------------------------------- |
+| `pending`   | Handshake initiated, awaiting confirmation                       |
+| `active`    | Fully authenticated, participating in federation                 |
+| `suspended` | 3+ missed heartbeats, excluded from routing                      |
+| `removed`   | 5+ missed heartbeats or explicit removal, requires new handshake |
 
 Either relay can unilaterally remove a peer via `POST /federation/v1/peer/remove` with a signed removal notice.
 
@@ -124,12 +124,12 @@ When `/api/v1/agents/discover` receives a query, the relay:
 
 The forwarding request includes:
 
-| Field | Description |
-|-------|-------------|
-| `hop_count` | Current depth, starts at 0 |
-| `max_hops` | Maximum forwarding depth, hard ceiling of 3 |
-| `visited` | Array of `relay_id` values already visited |
-| `query_id` | UUID v7 for deduplication (30-second TTL) |
+| Field       | Description                                 |
+| ----------- | ------------------------------------------- |
+| `hop_count` | Current depth, starts at 0                  |
+| `max_hops`  | Maximum forwarding depth, hard ceiling of 3 |
+| `visited`   | Array of `relay_id` values already visited  |
+| `query_id`  | UUID v7 for deduplication (30-second TTL)   |
 
 A relay will not forward a query if its own `relay_id` is in the `visited` set, if `hop_count >= max_hops`, or if it has already processed the `query_id`. This bounds the amplification factor to _p^3_ where _p_ is the maximum peer count per relay.
 
@@ -179,7 +179,7 @@ When the optimal path crosses a relay boundary, the local relay forwards the tas
   "origin_relay": "relay-abc",
   "target_agent": "motebit-xyz",
   "task_payload": { "prompt": "Search for..." },
-  "budget": { "amount": 0.10, "currency": "USD" },
+  "budget": { "amount": 0.1, "currency": "USD" },
   "routing_choice": { "composite": 0.82, "path": ["relay-abc", "relay-def", "motebit-xyz"] },
   "signature": "..."
 }
@@ -208,13 +208,13 @@ Federation introduces multi-relay settlement. Each relay in the forwarding chain
 
 Each relay applies its own `PLATFORM_FEE_RATE` (default: 5%) to the budget it receives:
 
-| Step | Amount | Recipient |
-|------|--------|-----------|
-| Task budget | $1.00 | -- |
-| Relay A fee (5%) | $0.05 | Relay A |
-| Forwarded to Relay B | $0.95 | -- |
-| Relay B fee (5% of $0.95) | $0.0475 | Relay B |
-| Agent receives | $0.9025 | Agent |
+| Step                      | Amount  | Recipient |
+| ------------------------- | ------- | --------- |
+| Task budget               | $1.00   | --        |
+| Relay A fee (5%)          | $0.05   | Relay A   |
+| Forwarded to Relay B      | $0.95   | --        |
+| Relay B fee (5% of $0.95) | $0.0475 | Relay B   |
+| Agent receives            | $0.9025 | Agent     |
 
 ### Settlement forwarding
 
@@ -226,11 +226,11 @@ Settlement records may include optional on-chain payment proof fields (`x402_tx_
 
 When a settlement forward fails, the originating relay queues it for exponential backoff retry:
 
-| Parameter | Value |
-|-----------|-------|
-| Max attempts | 5 |
-| Backoff | 30s, 2min, 8min, 32min, 2h |
-| Status | `pending` -> `completed` or `failed` |
+| Parameter    | Value                                |
+| ------------ | ------------------------------------ |
+| Max attempts | 5                                    |
+| Backoff      | 30s, 2min, 8min, 32min, 2h           |
+| Status       | `pending` -> `completed` or `failed` |
 
 After 5 failed attempts, the settlement requires manual intervention.
 
@@ -246,9 +246,9 @@ Trust is isolated per-subject. If a peer relay is demoted, only routes through t
 
 Every request to a federation endpoint must include:
 
-| Header | Value |
-|--------|-------|
-| `X-Relay-Id` | The sending relay's `motebit_id` |
+| Header              | Value                                                          |
+| ------------------- | -------------------------------------------------------------- |
+| `X-Relay-Id`        | The sending relay's `motebit_id`                               |
 | `X-Relay-Signature` | Base64url Ed25519 signature of the canonical JSON request body |
 | `X-Relay-Timestamp` | ISO 8601 timestamp; requests older than 5 minutes are rejected |
 
@@ -262,32 +262,32 @@ Federated responses include only the information necessary for routing: `motebit
 
 ## API reference
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/federation/v1/identity` | Relay's public identity |
-| POST | `/federation/v1/peer/propose` | Initiate peering handshake |
-| POST | `/federation/v1/peer/confirm` | Complete peering handshake |
-| POST | `/federation/v1/peer/heartbeat` | Send heartbeat |
-| POST | `/federation/v1/peer/remove` | Remove peer |
-| GET | `/federation/v1/peers` | List peers |
-| POST | `/federation/v1/discover` | Forward discovery query |
-| POST | `/federation/v1/task/forward` | Forward task to peer |
-| POST | `/federation/v1/task/result` | Return task result |
-| POST | `/federation/v1/settlement/forward` | Forward settlement |
-| GET | `/federation/v1/settlements` | List settlement records |
+| Method | Path                                | Description                |
+| ------ | ----------------------------------- | -------------------------- |
+| GET    | `/federation/v1/identity`           | Relay's public identity    |
+| POST   | `/federation/v1/peer/propose`       | Initiate peering handshake |
+| POST   | `/federation/v1/peer/confirm`       | Complete peering handshake |
+| POST   | `/federation/v1/peer/heartbeat`     | Send heartbeat             |
+| POST   | `/federation/v1/peer/remove`        | Remove peer                |
+| GET    | `/federation/v1/peers`              | List peers                 |
+| POST   | `/federation/v1/discover`           | Forward discovery query    |
+| POST   | `/federation/v1/task/forward`       | Forward task to peer       |
+| POST   | `/federation/v1/task/result`        | Return task result         |
+| POST   | `/federation/v1/settlement/forward` | Forward settlement         |
+| GET    | `/federation/v1/settlements`        | List settlement records    |
 
 ## Configuration
 
 Federation is opt-in. All settings have sensible defaults.
 
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `federation.enabled` | boolean | `false` | Whether federation is active |
-| `federation.max_peers` | number | `10` | Maximum active peer relationships |
-| `federation.heartbeat_interval` | number | `60000` | Heartbeat interval (ms) |
-| `federation.max_hops` | number | `3` | Maximum query forwarding depth |
-| `federation.platform_fee_rate` | number | `0.05` | Fee rate on forwarded tasks |
-| `federation.auto_accept_peers` | boolean | `false` | Auto-accept incoming proposals |
-| `federation.allowed_peers` | string[] | `[]` | Allowlist of permitted peer relay IDs |
+| Setting                         | Type     | Default | Description                           |
+| ------------------------------- | -------- | ------- | ------------------------------------- |
+| `federation.enabled`            | boolean  | `false` | Whether federation is active          |
+| `federation.max_peers`          | number   | `10`    | Maximum active peer relationships     |
+| `federation.heartbeat_interval` | number   | `60000` | Heartbeat interval (ms)               |
+| `federation.max_hops`           | number   | `3`     | Maximum query forwarding depth        |
+| `federation.platform_fee_rate`  | number   | `0.05`  | Fee rate on forwarded tasks           |
+| `federation.auto_accept_peers`  | boolean  | `false` | Auto-accept incoming proposals        |
+| `federation.allowed_peers`      | string[] | `[]`    | Allowlist of permitted peer relay IDs |
 
 When `federation.enabled` is `false`, all `/federation/v1/` endpoints return HTTP 404.

@@ -33,10 +33,10 @@ This starts the relay on `http://localhost:3000` with hot reload via `tsx watch`
 
 ### What the environment variables do
 
-| Variable | Purpose | Local value |
-|----------|---------|-------------|
-| `MOTEBIT_API_TOKEN` | Master/admin token for authenticated endpoints | Any string (e.g. `test-token`) |
-| `X402_PAY_TO_ADDRESS` | Wallet address for x402 payment settlement | Use the zero address to disable real payments |
+| Variable              | Purpose                                        | Local value                                   |
+| --------------------- | ---------------------------------------------- | --------------------------------------------- |
+| `MOTEBIT_API_TOKEN`   | Master/admin token for authenticated endpoints | Any string (e.g. `test-token`)                |
+| `X402_PAY_TO_ADDRESS` | Wallet address for x402 payment settlement     | Use the zero address to disable real payments |
 
 The relay creates an in-memory SQLite database by default (no `MOTEBIT_DB_PATH`), which is fine for testing — data resets on restart. Set `MOTEBIT_DB_PATH=./relay.db` if you want persistence across restarts.
 
@@ -51,12 +51,12 @@ The relay creates an in-memory SQLite database by default (no `MOTEBIT_DB_PATH`)
 
 ### Optional environment variables
 
-| Variable | Purpose |
-|----------|---------|
-| `MOTEBIT_DB_PATH` | SQLite file path for persistent storage |
+| Variable                          | Purpose                                          |
+| --------------------------------- | ------------------------------------------------ |
+| `MOTEBIT_DB_PATH`                 | SQLite file path for persistent storage          |
 | `MOTEBIT_RELAY_ISSUE_CREDENTIALS` | Set to `true` to enable relay-issued credentials |
-| `MOTEBIT_CORS_ORIGIN` | CORS origin (default: `*`) |
-| `PORT` | Listen port (default: `3000`) |
+| `MOTEBIT_CORS_ORIGIN`             | CORS origin (default: `*`)                       |
+| `PORT`                            | Listen port (default: `3000`)                    |
 
 ## Registering a test agent
 
@@ -247,6 +247,7 @@ pnpm tsx src/index.ts
 ```
 
 This enters the interactive REPL. The CLI automatically:
+
 1. Bootstraps an Ed25519 identity
 2. Registers with the relay
 3. Enables `delegate_to_agent` as a tool (when relay + signing keys are available)
@@ -276,6 +277,7 @@ motebit serve --tools src/tools.ts --direct --self-test
 ```
 
 What it validates:
+
 1. **Registration** — The agent bootstrapped and registered with the relay
 2. **Task routing** — The relay accepted and routed the task back to the same agent
 3. **Execution** — The agent's tools executed the task
@@ -303,14 +305,14 @@ pnpm run dev
 
 The dashboard polls the relay API every 2 seconds. Relevant tabs for testing delegation:
 
-| Tab | What to look for |
-|-----|-----------------|
+| Tab             | What to look for                                                                    |
+| --------------- | ----------------------------------------------------------------------------------- |
 | **Agent Trust** | D3-force graph of trust relationships between agents. Nodes colored by trust level. |
-| **Credentials** | Verifiable credentials issued after successful delegations |
-| **Goals** | Active and completed goals with execution status |
-| **Event Log** | Raw event stream — task submissions, receipt verifications, trust transitions |
-| **Devices** | Registered devices and their public keys |
-| **Federation** | Relay identity and peer connections (for multi-relay testing) |
+| **Credentials** | Verifiable credentials issued after successful delegations                          |
+| **Goals**       | Active and completed goals with execution status                                    |
+| **Event Log**   | Raw event stream — task submissions, receipt verifications, trust transitions       |
+| **Devices**     | Registered devices and their public keys                                            |
+| **Federation**  | Relay identity and peer connections (for multi-relay testing)                       |
 
 ## Common issues
 
@@ -321,6 +323,7 @@ The relay is not running. Start it with `pnpm run dev` in `services/relay/`.
 ### "402 Payment Required"
 
 The delegating agent's budget account has insufficient funds. Either:
+
 - Fund the account with `POST /api/v1/agents/:id/deposit`
 - Remove pricing from the service listing (free agents do not require budget locks)
 - Set `X402_PAY_TO_ADDRESS` to the zero address (disables real payment settlement, but virtual budget accounting still applies)
@@ -328,6 +331,7 @@ The delegating agent's budget account has insufficient funds. Either:
 ### "Signature verification failed"
 
 The public key registered with the relay does not match the key that signed the receipt. Check:
+
 - The agent bootstrapped with the correct public key
 - The agent is using the same keypair for signing receipts
 - Key rotation has not happened without a succession record
@@ -335,6 +339,7 @@ The public key registered with the relay does not match the key that signed the 
 ### "Task timeout" or task stuck in pending
 
 The target agent is not connected to the relay. Verify:
+
 - The agent is running and registered (`/api/v1/agents/register`)
 - The agent is connected via WebSocket (check relay logs for `ws.connected` events)
 - The agent's capabilities match the task's `required_capabilities`
@@ -343,6 +348,7 @@ The target agent is not connected to the relay. Verify:
 ### "409 Conflict" on bootstrap
 
 The `motebit_id` is already registered with a different public key. Either:
+
 - Use the same public key as the original registration
 - Provide a signed succession record for key rotation
 - Use a different `motebit_id` for testing
@@ -351,10 +357,10 @@ The `motebit_id` is already registered with a different public key. Either:
 
 The relay enforces per-IP rate limits. For local testing this rarely triggers, but if you are scripting rapid requests:
 
-| Tier | Limit |
-|------|-------|
-| Auth (bootstrap, register) | 30/min |
-| Read (discover, task poll) | 60/min |
+| Tier                         | Limit  |
+| ---------------------------- | ------ |
+| Auth (bootstrap, register)   | 30/min |
+| Read (discover, task poll)   | 60/min |
 | Write (task submit, listing) | 30/min |
 
 Wait a minute or restart the relay (in-memory rate limit state resets).

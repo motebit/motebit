@@ -13,11 +13,11 @@ The point of motebit is that you don't have to trust the app's word for any of t
 
 ## The triad
 
-| Band | What it means | Signed artifact | Signed by |
-| --- | --- | --- | --- |
-| **auto** | the motebit was permitted to act unattended | [`ToolInvocationReceipt`](/docs/developer/execution-ledger) | the agent (motebit identity) |
-| **approve** | a human consented to a gated act | `ApprovalDecision` | **the approver's device** |
-| **deny** | governance refused the act | `ExecutionReceipt` with `status: "denied"` | the agent (motebit identity) |
+| Band        | What it means                               | Signed artifact                                             | Signed by                    |
+| ----------- | ------------------------------------------- | ----------------------------------------------------------- | ---------------------------- |
+| **auto**    | the motebit was permitted to act unattended | [`ToolInvocationReceipt`](/docs/developer/execution-ledger) | the agent (motebit identity) |
+| **approve** | a human consented to a gated act            | `ApprovalDecision`                                          | **the approver's device**    |
+| **deny**    | governance refused the act                  | `ExecutionReceipt` with `status: "denied"`                  | the agent (motebit identity) |
 
 The approve band is signed by the **approver's** key, not the agent's — consent is the human's own assertion, the same way the agent signs its own refusal. All three share one cryptographic shape: JCS (RFC 8785) canonicalization, Ed25519, suite-dispatched verification. See [Receipts — one family](/docs/developer/verify-a-receipt) for the shared verification path.
 
@@ -86,8 +86,7 @@ import { verifyApprovalDecision, hexToBytes } from "@motebit/crypto";
 // Pin the CANONICAL approver key — do NOT verify against decision.public_key
 // alone (that is circular; see below). For the demo fixtures, the canonical key
 // is published above.
-const CANONICAL_APPROVER_KEY =
-  "e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0";
+const CANONICAL_APPROVER_KEY = "e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0";
 
 const ok = await verifyApprovalDecision(decision, hexToBytes(CANONICAL_APPROVER_KEY));
 // ok === true  → signature-authentic against the canonical approver key
@@ -95,29 +94,29 @@ const ok = await verifyApprovalDecision(decision, hexToBytes(CANONICAL_APPROVER_
 
 > `@motebit/verify` (the CLI) and `@motebit/verifier` (the file/format library) are sibling packages; the low-level `verifyApprovalDecision` primitive lives in `@motebit/crypto` and is what both build on. For a browser, import from `@motebit/crypto` directly.
 
-> **Use `verifyApprovalDecision`, not the auto-detecting `verifyArtifact`/`verify`, for an `ApprovalDecision`.** Unlike receipts, an `ApprovalDecision` is verified against a *pinned approver key*, not auto-detected — so `verifyArtifact` reports it as `{ type: "unknown", valid: false, reason: "unrecognized_artifact_type" }`. That's the verifier being honest ("I don't recognize this type"), not a verdict that the decision is forged. Route `ApprovalDecision`s to `verifyApprovalDecision`; auto-detect handles the receipt family (`ExecutionReceipt`, `ToolInvocationReceipt`).
+> **Use `verifyApprovalDecision`, not the auto-detecting `verifyArtifact`/`verify`, for an `ApprovalDecision`.** Unlike receipts, an `ApprovalDecision` is verified against a _pinned approver key_, not auto-detected — so `verifyArtifact` reports it as `{ type: "unknown", valid: false, reason: "unrecognized_artifact_type" }`. That's the verifier being honest ("I don't recognize this type"), not a verdict that the decision is forged. Route `ApprovalDecision`s to `verifyApprovalDecision`; auto-detect handles the receipt family (`ExecutionReceipt`, `ToolInvocationReceipt`).
 
 What the signature commits to — and why it can't be replayed:
 
 - **`approval_id`** is the gated call's id, inside the signed body. A verdict can't be lifted onto a different call without breaking the signature.
-- **`args_hash`** is the SHA-256 of the canonical arguments — never the raw args. Consent binds to the exact call the human saw; a verifier who holds the raw args recomputes and matches, and one who holds only the decision still proves a verdict was rendered over *some* call at *some* time. (No sensitive argument data sits in the signed artifact.)
+- **`args_hash`** is the SHA-256 of the canonical arguments — never the raw args. Consent binds to the exact call the human saw; a verifier who holds the raw args recomputes and matches, and one who holds only the decision still proves a verdict was rendered over _some_ call at _some_ time. (No sensitive argument data sits in the signed artifact.)
 - **`verdict`** (`approved` / `denied`) is signed; flipping it fails verification.
 
 ### What a verified `ApprovalDecision` proves
 
 Read this before you render an `ApprovalDecision` as a trust signal — it does **not** carry the same authority a sovereign `ExecutionReceipt` does.
 
-`verifyApprovalDecision(decision, key)` proves the decision was **signed by whoever holds `key`, untampered** — *signature-authentic*. It does **not** prove that `key` has any authority to approve. Unlike a sovereign `ExecutionReceipt` — where `motebit_id` is *derived from* the signing key, so the key's authority is self-proving offline — an `ApprovalDecision` carries **no `motebit_id → key` commitment**. The approver is a separate party (the human/owner's device), and nothing inside the artifact binds that device to a legitimate role.
+`verifyApprovalDecision(decision, key)` proves the decision was **signed by whoever holds `key`, untampered** — _signature-authentic_. It does **not** prove that `key` has any authority to approve. Unlike a sovereign `ExecutionReceipt` — where `motebit_id` is _derived from_ the signing key, so the key's authority is self-proving offline — an `ApprovalDecision` carries **no `motebit_id → key` commitment**. The approver is a separate party (the human/owner's device), and nothing inside the artifact binds that device to a legitimate role.
 
-The consequence, and the rule: **verifying against the decision's own embedded `public_key` is circular** — the decision says "I'm signed by K" and you confirm it's signed by K, which proves nothing about who K is. To get a real signal, **pin an independently-known approver key** (the canonical demo key above; in production, a device key from the motebit's identity file) via `--producer-key` / the `key` argument, and confirm the decision verifies against *that*.
+The consequence, and the rule: **verifying against the decision's own embedded `public_key` is circular** — the decision says "I'm signed by K" and you confirm it's signed by K, which proves nothing about who K is. To get a real signal, **pin an independently-known approver key** (the canonical demo key above; in production, a device key from the motebit's identity file) via `--producer-key` / the `key` argument, and confirm the decision verifies against _that_.
 
 Where a verified `ApprovalDecision` sits on the [binding ladder](/docs/developer/choosing-a-verify-surface):
 
-| Check | Rung | Honest label |
-| --- | --- | --- |
-| verifies against its embedded key only | **integrity-only** | "signature valid" (says nothing about the approver) |
-| verifies against an independently-pinned approver key | **pinned** | "approver-signed ✓ (offline)" |
-| approver device proven a registered device of the motebit | *future rung* | requires the motebit's identity file — not wired today |
+| Check                                                     | Rung               | Honest label                                           |
+| --------------------------------------------------------- | ------------------ | ------------------------------------------------------ |
+| verifies against its embedded key only                    | **integrity-only** | "signature valid" (says nothing about the approver)    |
+| verifies against an independently-pinned approver key     | **pinned**         | "approver-signed ✓ (offline)"                          |
+| approver device proven a registered device of the motebit | _future rung_      | requires the motebit's identity file — not wired today |
 
 So: render a pinned `ApprovalDecision` as **"approver-signed ✓ (offline)"**, never as **"sovereign."** Authority-binding the approver device to the motebit's registered devices is a future rung; today the honest claim is signature-authenticity against a key you pinned.
 
@@ -135,32 +134,37 @@ Like the others it commits to `args_hash` / `result_hash` rather than raw bytes,
 
 ## The full triad, as one linked story
 
-The individual fixtures above each prove one band. A **paired set** proves the bands *connect* — that the human's consent and the agent's execution are the same act, not two unrelated cards. One sovereign demo agent (`motebit_id` commits to its key) and the canonical approver, with real correlators (reproducible from [`mint-triad-fixture.mjs`](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/fixtures/mint-triad-fixture.mjs)):
+The individual fixtures above each prove one band. A **paired set** proves the bands _connect_ — that the human's consent and the agent's execution are the same act, not two unrelated cards. One sovereign demo agent (`motebit_id` commits to its key) and the canonical approver, with real correlators (reproducible from [`mint-triad-fixture.mjs`](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/fixtures/mint-triad-fixture.mjs)):
 
-| Fixture | Band | Signed by | Links by |
-| --- | --- | --- | --- |
-| [`triad-approval-decision.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-approval-decision.json) | approve (consent) | approver key | `run_id` = T, `args_hash` = H, `approval_id` = C |
+| Fixture                                                                                                                                                                     | Band                    | Signed by         | Links by                                            |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ----------------- | --------------------------------------------------- |
+| [`triad-approval-decision.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-approval-decision.json)             | approve (consent)       | approver key      | `run_id` = T, `args_hash` = H, `approval_id` = C    |
 | [`triad-tool-invocation-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-tool-invocation-receipt.json) | approve (executed call) | agent (sovereign) | `task_id` = T, `args_hash` = H, `invocation_id` = C |
-| [`triad-execution-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-execution-receipt.json) | approve (task) | agent (sovereign) | `task_id` = T |
-| [`triad-deny-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-deny-receipt.json) | deny | agent (sovereign) | distinct `task_id` = D, `status: "denied"` |
+| [`triad-execution-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-execution-receipt.json)             | approve (task)          | agent (sovereign) | `task_id` = T                                       |
+| [`triad-deny-receipt.json`](https://raw.githubusercontent.com/motebit/motebit/main/examples/python-receipt-verifier/fixtures/triad-deny-receipt.json)                       | deny                    | agent (sovereign) | distinct `task_id` = D, `status: "denied"`          |
 
 The linkage is the point, and it is **cryptographic, not asserted**:
 
-- **`args_hash` (H)** is identical on the `ApprovalDecision` and the `ToolInvocationReceipt` — the human consented to the *exact* call that ran. Different bytes → different hash → no link.
+- **`args_hash` (H)** is identical on the `ApprovalDecision` and the `ToolInvocationReceipt` — the human consented to the _exact_ call that ran. Different bytes → different hash → no link.
 - **`run_id` (T) on the decision = `task_id` (T)** on both receipts — consent → execution, same task.
 - **`approval_id` (C) = `invocation_id` (C)** — the gated call and the executed call are one.
 
 Verify the whole story offline — pin the approver key for consent (it is not authority-bound; see above), and the receipts are sovereign (the agent's `motebit_id` commits to its key):
 
 ```ts
-import { verifyApprovalDecision, verifyExecutionReceipt, verifyToolInvocationReceipt, hexToBytes } from "@motebit/crypto";
+import {
+  verifyApprovalDecision,
+  verifyExecutionReceipt,
+  verifyToolInvocationReceipt,
+  hexToBytes,
+} from "@motebit/crypto";
 
 const APPROVER = hexToBytes("e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0");
 const AGENT = hexToBytes("79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664");
 
-const consentOk  = await verifyApprovalDecision(approval, APPROVER);       // pinned approver
-const callOk     = await verifyToolInvocationReceipt(toolReceipt, AGENT);  // sovereign agent
-const taskOk     = await verifyExecutionReceipt(execReceipt, AGENT);       // sovereign agent
+const consentOk = await verifyApprovalDecision(approval, APPROVER); // pinned approver
+const callOk = await verifyToolInvocationReceipt(toolReceipt, AGENT); // sovereign agent
+const taskOk = await verifyExecutionReceipt(execReceipt, AGENT); // sovereign agent
 
 // The link — assert it; never assume it:
 const linked =
@@ -170,7 +174,7 @@ const linked =
   approval.approval_id === toolReceipt.invocation_id;
 ```
 
-All four signatures verify, and `linked` is true, with no server and no relay. That is the full governance triad — *the human approved this exact call, the agent ran it, and refused a separate over-policy one* — proven end to end.
+All four signatures verify, and `linked` is true, with no server and no relay. That is the full governance triad — _the human approved this exact call, the agent ran it, and refused a separate over-policy one_ — proven end to end.
 
 ## Why this matters
 

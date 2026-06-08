@@ -355,6 +355,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-docs-slash-claims",
   },
   {
+    name: "check-docs-quickstart-runs",
+    defends:
+      "the developer Quickstart (apps/docs/content/docs/developer/quickstart.mdx) is EXECUTABLE: the gate extracts the canonical mint→verify TypeScript block and runs it unmodified against the published @motebit/crypto + @motebit/verifier, asserting the documented result (receipt valid + sovereign; a tampered copy rejected). Docs-as-code for the cold-integrator front door — if the snippet a third-party AI agent copies stops compiling, stops running, or stops producing the claimed result, CI fails. Closes the prose-drifts-from-packages class structurally (the 'SHA-256 of the canonical result' ambiguity shipped a real consumer bug before this existed). Requires @motebit packages built first (the check job's build step provides this).",
+    script: "check-docs-quickstart-runs",
+  },
+  {
     name: "check-docs-default-models",
     defends:
       'every default-context Claude model literal in any README.md / CLAUDE.md / docs MDX page (`"default_model": "X"` JSON, `--model X` CLI flag, `Default model: X` / `Examples: ... \\`X\\`` prose) matches the canonical default extracted from the `defaultModel` ternary in apps/cli/src/args.ts; defends against the stale-model-literal class that drifted four places after the 2026-04 sonnet-4-5 → sonnet-4-6 bump (invariant #56, full history in docs/drift-defenses.md)',

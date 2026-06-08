@@ -41,7 +41,7 @@ The body changes. The identity persists.
 Four sections plus a release log. Pick by what you're trying to do.
 
 - **[Concepts](/docs/concepts/identity)** — the mental model. What identity, memory, receipts, trust, and governance mean in motebit, and how they fit together. Read this first if you've never seen motebit before.
-- **[Developer guide](/docs/developer/identity-standard)** — for people building on motebit. The `motebit.md` identity standard, federation protocol, MCP server scaffolding, delegation and credentials, the routing semiring. The "I want to integrate with motebit, or build a service agent on top of it" section.
+- **[Developer guide](/docs/developer/quickstart)** — for people building on motebit. Start with the [Quickstart](/docs/developer/quickstart) (sign and verify a receipt in one file, no relay), then the `motebit.md` identity standard, federation protocol, MCP server scaffolding, delegation and credentials, the routing semiring. The "I want to integrate with motebit, or build a service agent on top of it" section.
 - **[App reference](/docs/apps/cli)** — per-surface reference for the shipped runtime: CLI, desktop, mobile, spatial, and shared configuration. The "what does this surface actually do?" section.
 - **[Operator guide](/docs/operator/architecture)** — for people running motebit. Architecture, daemon mode and approvals, sync between devices, troubleshooting a relay. The "I have it installed; how do I use it?" section.
 
@@ -54,10 +54,10 @@ For the boundary between motebit's published packages and its workspace-internal
 ## Next steps
 
 <Cards>
+  <Card title="Developer Quickstart" href="/docs/developer/quickstart" description="The shortest correct integration — sign a receipt and verify it offline, in one file. No relay, no account. Start here to build on motebit." />
   <Card title="Get Your Agent" href="/docs/get-your-agent" description="Download the desktop app or create an identity from the command line." />
   <Card title="The Droplet" href="/docs/concepts/the-droplet" description="Why the form is a liquescent sphere — the physics derivation." />
   <Card title="Identity" href="/docs/concepts/identity" description="How cryptographic identity works under the hood." />
-  <Card title="Identity Standard" href="/docs/developer/identity-standard" description="The motebit.md specification for developers." />
 </Cards>
 
 ---
@@ -737,7 +737,7 @@ A receipt that doesn't verify is treated as if the work didn't happen. That is t
 
 To see this for yourself with no install, paste any receipt into [receipt.computer](https://receipt.computer): a public, login-free verifier that checks the signature and reports where the receipt sits on the identity-binding ladder — `integrity-only → pinned → anchored → sovereign`. A sovereign receipt proves its own authorship offline, because the `motebit_id` is the commitment to the signing key; no relay and no account sit in the trust root. The `motebit-verify` CLI prints the same ladder rung.
 
-To verify receipts in your own code, install the published library — don't reimplement it. In JavaScript or TypeScript, `npm install @motebit/verifier` and call `verifyArtifact(receipt)`; it handles JCS canonicalization and cryptosuite dispatch for you and reports the binding-ladder rung. See [Verify a receipt](/docs/developer/verify-a-receipt) for the three-line integration. For other languages, the recipe is fixed by [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11, with a working [Python reference verifier](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier).
+To build with receipts in your own code, install the published libraries — don't reimplement them. The [Developer Quickstart](/docs/developer/quickstart) shows the whole loop — mint a signed receipt and verify it offline — in one runnable file with no relay. To *verify* in JavaScript or TypeScript, `npm install @motebit/verifier` and call `verifyArtifact(receipt)`; it handles JCS canonicalization and cryptosuite dispatch for you and reports the binding-ladder rung. See [Produce a receipt](/docs/developer/produce-a-receipt) for the mint side and [Verify a receipt](/docs/developer/verify-a-receipt) for the verify side. For other languages, the recipe is fixed by [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11, with a working [Python reference verifier](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier).
 
 ---
 
@@ -1022,6 +1022,116 @@ For the implementation-detail-level documents under the [Developer guide](/docs/
 
 ---
 
+# Quickstart: Sign & Verify a Receipt
+Source: https://docs.motebit.com/docs/developer/quickstart
+
+> The shortest correct Motebit integration — mint a signed ExecutionReceipt and verify it offline. No relay, no account, no LLM.
+
+This is the minimal Motebit integration: **sign a unit of work, then verify it — offline, in one file.** No relay, no account, no API token, no LLM. Two npm packages and ~25 lines. If you only read one developer page, read this one.
+
+> You do **not** need to run a relay or register an agent to produce or verify a receipt. The relay adds discovery, budgets, and settlement — see [Your first service agent](/docs/developer/first-service-agent) when you want that. This page is the standalone cryptographic core.
+
+## Install
+
+Pinned to the versions this guide is written against (current versions are on each package's npm page):
+
+```bash
+npm install @motebit/crypto@3 @motebit/verifier@1
+```
+
+- `@motebit/crypto` — the signing + low-level crypto primitives (the producer side).
+- `@motebit/verifier` — the high-level verifier (the consumer side). Built on `@motebit/crypto`; it reads the embedded key, handles JCS canonicalization and cryptosuite dispatch, and reports the trust ladder.
+
+`strictHashBinding` (used below) requires `@motebit/crypto@3.3.0+` and `@motebit/verifier@1.4.0+`.
+
+## The whole thing
+
+This file runs top to bottom (Node 20+, ESM or `.mts`; it also runs in a browser bundle **except** signing, which must stay server-side — see the boundary note below):
+
+```typescript
+import {
+  generateKeypair,
+  deriveSovereignMotebitId,
+  bytesToHex,
+  hash,
+  signExecutionReceipt,
+} from "@motebit/crypto";
+import { verifyArtifact } from "@motebit/verifier";
+
+// 1. Identity — a sovereign keypair. `motebit_id` cryptographically COMMITS to
+//    the public key, which is what lets a verifier report `sovereign: true`
+//    offline with no directory lookup. Guard the private key (see boundary note).
+const { privateKey, publicKey } = await generateKeypair();
+const motebit_id = await deriveSovereignMotebitId(bytesToHex(publicKey));
+
+// 2. The work you did, as strings. `result` is the exact bytes the receipt
+//    commits to (use a canonical JSON string if your result is structured).
+const prompt = "Add 2 + 2.";
+const result = "4";
+
+// 3. Mint the receipt.
+//    - prompt_hash / result_hash are PLAIN SHA-256 of the STRING, lowercase hex
+//      (`hash()` does exactly this). NEVER canonicalize a string field — that is
+//      the recipe for object fields like a ToolInvocation's args_hash, and a
+//      canonicalized string hash won't reproduce, so the receipt becomes a
+//      "signed number nobody can verify".
+//    - signExecutionReceipt stamps the required `suite` and signs the
+//      JCS-canonical body. Pass `publicKey` (3rd arg) to EMBED it → offline
+//      sovereign verification.
+const receipt = await signExecutionReceipt(
+  {
+    task_id: crypto.randomUUID(),
+    motebit_id,
+    device_id: crypto.randomUUID(), // any stable id for the signing device
+    submitted_at: Date.now(),
+    completed_at: Date.now(),
+    status: "completed" as const, // "completed" | "failed" | "denied"
+    result,
+    tools_used: [],
+    memories_formed: 0,
+    prompt_hash: await hash(new TextEncoder().encode(prompt)),
+    result_hash: await hash(new TextEncoder().encode(result)),
+  },
+  privateKey,
+  publicKey,
+);
+
+// 4. Verify it — offline, no relay. `strictHashBinding` makes `valid` true only
+//    when the Ed25519 signature checks AND result_hash === SHA-256(result).
+const ok = await verifyArtifact(JSON.stringify(receipt), { strictHashBinding: true });
+console.log("valid:", ok.valid); // true  — authentic + self-consistent
+console.log("sovereign:", ok.sovereign); // true  — motebit_id commits to the signing key
+
+// 5. Break it: tamper one byte of the result and re-verify → false. This is the
+//    guarantee made concrete; it's what every downstream consumer relies on.
+const tampered = { ...receipt, result: "5" };
+const broken = await verifyArtifact(JSON.stringify(tampered), { strictHashBinding: true });
+console.log("tampered valid:", broken.valid); // false
+```
+
+That's a complete, self-verifying receipt. Anyone — in any language, with no access to you — can re-run step 4 against the receipt JSON and get the same answer, because the signer's public key is embedded in it.
+
+## What `valid` and `sovereign` mean (and what they do not)
+
+These two booleans are the entire trust contract; do not over-read them.
+
+- **`valid: true`** — the bytes are authentic (Ed25519 signature checks) and, under `strictHashBinding`, internally self-consistent (`result_hash === SHA-256(result)`). It does **not** tell you *who* signed it.
+- **`sovereign: true`** — the `motebit_id` is a cryptographic commitment to the signing key. It does **not** mean you know whose identity that is. To trust a *specific* agent, pin its `motebit_id` / `public_key` to an identity you already know, and check the receipt matches.
+- **The honesty boundary** — a verified receipt proves *the signer computed this `result` for this work*. It does **not** prove anything about the *inputs* the agent used (e.g. that data it fetched from a third party was real or complete). There is no oracle inside a signature. If your agent acts on external data, attest that data's provenance inside the signed `result` and state the limit plainly. Overselling "verified" past what the signature covers is the exact failure receipts exist to prevent.
+
+## Server vs browser
+
+The **private key** must never reach a browser bundle. Mint receipts **server-side** (or in a trusted backend/CLI); the key lives in a secret manager. **Verifying** is safe anywhere — the verifier needs only the public receipt, so you can verify in the browser to independently check a server's work. If you persist a signing identity, store only the private key (seed) and re-derive the public key + `motebit_id` from it; see [Produce a receipt](/docs/developer/produce-a-receipt#the-signing-identity).
+
+## Next
+
+- **Producer details** — key custody, the governance triad (approval → invocation → execution), the two hash recipes in depth: [Produce a receipt](/docs/developer/produce-a-receipt).
+- **Verifier details** — the binding ladder (integrity → pinned → anchored → sovereign), other languages, the `motebit-verify` CLI, online vs offline: [Verify a receipt](/docs/developer/verify-a-receipt) and [Choosing a verify surface](/docs/developer/choosing-a-verify-surface).
+- **The network/economic loop** — discovery, delegation, budgets, settlement: [Your first service agent](/docs/developer/first-service-agent).
+- **The exact wire format** (any language): [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11, with a runnable [Python reference verifier](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier).
+
+---
+
 # Your First Service Agent
 Source: https://docs.motebit.com/docs/developer/first-service-agent
 
@@ -1225,7 +1335,7 @@ The `MOTEBIT_SYNC_URL` tells the agent where to register. The `MOTEBIT_API_TOKEN
 For local development against a local relay:
 
 ```bash
-MOTEBIT_SYNC_URL=http://localhost:8787
+MOTEBIT_SYNC_URL=http://localhost:3000
 MOTEBIT_API_TOKEN=your-local-token
 ```
 
@@ -1309,7 +1419,7 @@ Discover agents on the relay:
 
 This queries `GET /api/v1/agents/discover` and lists registered services with their capabilities. Your agent appears with the tool names from `src/tools.ts`.
 
-When the AI encounters a task that matches your agent's capability, it delegates automatically. For example, if your agent exposes a `calculate` tool and a user asks "what is 127 * 43?", the AI recognizes it can delegate to your service.
+When the AI encounters a task that matches your agent's capability, it delegates automatically. For example, if your agent exposes a `calculate` tool and a user asks "what is 127 \* 43?", the AI recognizes it can delegate to your service.
 
 You can also manually connect:
 
@@ -1343,7 +1453,7 @@ Every task produces a signed `ExecutionReceipt`. Here is what one looks like:
   "tools_used": ["calculate"],
   "memories_formed": 0,
   "prompt_hash": "a1b2c3d4e5f6...sha256-of-the-original-prompt",
-  "result_hash": "f6e5d4c3b2a1...sha256-of-the-canonical-result",
+  "result_hash": "f6e5d4c3b2a1...sha256-of-the-utf8-result-string",
   "relay_task_id": "01953abc-def0-7abc-8def-0123456789ef",
   "signature": "base64url-encoded-ed25519-signature"
 }
@@ -1351,25 +1461,29 @@ Every task produces a signed `ExecutionReceipt`. Here is what one looks like:
 
 Key fields:
 
-| Field | What it proves |
-|-------|---------------|
-| `motebit_id` | Which agent executed the task |
-| `signature` | Ed25519 signature over all other fields — tamper-evident |
-| `prompt_hash` | SHA-256 of the original prompt — proves the prompt was not modified |
-| `result_hash` | SHA-256 of the canonical result — proves the result matches what was signed |
-| `relay_task_id` | Cryptographic binding to the relay's economic identity for this task — prevents cross-task replay |
-| `tools_used` | Which tools were invoked during execution |
-| `delegation_receipts` | (Optional) Nested receipts from sub-delegated work — chain of custody proof for multi-hop delegation |
+| Field                 | What it proves                                                                                                                                                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `motebit_id`          | Which agent executed the task                                                                                                                                                                                                      |
+| `signature`           | Ed25519 signature over all other fields — tamper-evident                                                                                                                                                                           |
+| `prompt_hash`         | SHA-256 of the original prompt — proves the prompt was not modified                                                                                                                                                                |
+| `result_hash`         | `hex(SHA-256(UTF-8(result)))` — plain SHA-256 of the result string (not canonicalized; canonicalization applies to object-valued fields like `args_hash`, never to the string `result`). Proves the result matches what was signed |
+| `relay_task_id`       | Cryptographic binding to the relay's economic identity for this task — prevents cross-task replay                                                                                                                                  |
+| `tools_used`          | Which tools were invoked during execution                                                                                                                                                                                          |
+| `delegation_receipts` | (Optional) Nested receipts from sub-delegated work — chain of custody proof for multi-hop delegation                                                                                                                               |
 
 The signature covers the canonical JSON serialization of all fields except `signature`. Keys are sorted recursively for deterministic output. Since `relay_task_id` is inside the signature, an attacker cannot replay a receipt from one task against another — tampering breaks the signature.
 
-Anyone with the agent's public key can verify the receipt:
+Anyone can verify the receipt offline — the signer's public key is embedded in the receipt's `public_key` field, so no relay lookup or out-of-band key is needed. Use the published `@motebit/verifier` (it reads the embedded key, handles JCS + suite dispatch, and reports the binding-ladder rung):
 
 ```typescript
-import { verifyExecutionReceipt } from "@motebit/crypto";
+import { verifyArtifact } from "@motebit/verifier";
 
-const valid = await verifyExecutionReceipt(receipt, publicKey);
+const result = await verifyArtifact(JSON.stringify(receipt), { strictHashBinding: true });
+// result.valid     — signature is authentic AND result_hash === SHA-256(result)
+// result.sovereign — the motebit_id cryptographically commits to the signing key
 ```
+
+> `result.valid` proves the receipt is authentic and self-consistent — **not** that you know who the signer is. Pin the signer's `motebit_id`/`public_key` to a known identity for that. See [Verify a receipt](/docs/developer/verify-a-receipt) for the full binding ladder, and [Produce a receipt](/docs/developer/produce-a-receipt) for the mint side.
 
 ## Step 8: Add AI reasoning
 
@@ -1391,13 +1505,13 @@ For Fly.io deployment, create a `Dockerfile` and `fly.toml`. The reference imple
 
 Required environment variables for production:
 
-| Variable | Purpose |
-|----------|---------|
-| `MOTEBIT_SYNC_URL` | Relay URL for registration and task routing |
-| `MOTEBIT_API_TOKEN` | Auth token for relay API |
-| `MOTEBIT_PASSPHRASE` | Passphrase for Ed25519 key decryption |
+| Variable                  | Purpose                                                                          |
+| ------------------------- | -------------------------------------------------------------------------------- |
+| `MOTEBIT_SYNC_URL`        | Relay URL for registration and task routing                                      |
+| `MOTEBIT_API_TOKEN`       | Auth token for relay API                                                         |
+| `MOTEBIT_PASSPHRASE`      | Passphrase for Ed25519 key decryption                                            |
 | `MOTEBIT_PRIVATE_KEY_HEX` | (Optional) Private key as hex — avoids passphrase-based decryption in production |
-| `MOTEBIT_PUBLIC_URL` | Public URL where other agents can reach your service |
+| `MOTEBIT_PUBLIC_URL`      | Public URL where other agents can reach your service                             |
 
 Deploy:
 
@@ -1468,10 +1582,26 @@ Study it for production patterns: result canonicalization, error handling, sub-d
 ## Next steps
 
 <Cards>
-  <Card title="Agent-to-Agent Delegation" href="/docs/developer/delegation" description="The full delegation protocol — discovery, verification, receipts, and receipt chains." />
-  <Card title="Budget & Settlement" href="/docs/developer/budget-settlement" description="How budget allocation, cost estimation, and receipt-based settlement work." />
-  <Card title="MCP Server Mode" href="/docs/developer/mcp-server" description="All synthetic tools, transport options, and server configuration." />
-  <Card title="Credentials" href="/docs/developer/credentials" description="Verifiable credentials — reputation, gradient, and trust attestations." />
+  <Card
+    title="Agent-to-Agent Delegation"
+    href="/docs/developer/delegation"
+    description="The full delegation protocol — discovery, verification, receipts, and receipt chains."
+  />
+  <Card
+    title="Budget & Settlement"
+    href="/docs/developer/budget-settlement"
+    description="How budget allocation, cost estimation, and receipt-based settlement work."
+  />
+  <Card
+    title="MCP Server Mode"
+    href="/docs/developer/mcp-server"
+    description="All synthetic tools, transport options, and server configuration."
+  />
+  <Card
+    title="Credentials"
+    href="/docs/developer/credentials"
+    description="Verifiable credentials — reputation, gradient, and trust attestations."
+  />
 </Cards>
 
 ---
@@ -2082,14 +2212,19 @@ Signed tokens authenticate sync requests between a device and the relay server. 
 
 **Payload fields:**
 
-| Field | Description |
-|-------|-------------|
-| `mid` | The `motebit_id` |
-| `did` | The `device_id` |
-| `iat` | Issued-at timestamp (milliseconds since epoch) |
-| `exp` | Expiration timestamp (default: 5 minutes from `iat`) |
+All fields below are **required** — a verifier MUST reject a token missing any of them (spec `auth-token@1.0` §3). Build the token with `createSignedToken`, which sets them for you; do not hand-assemble a `{mid,did,iat,exp}` payload — it will be rejected for missing `jti`/`aud`/`suite`.
 
-The device signs the JSON-serialized payload with its Ed25519 private key. The relay verifies in two steps: (1) parse the base64url payload without crypto to extract the `device_id` — O(1) lookup; (2) verify the Ed25519 signature against the device's registered public key. Expired tokens are rejected.
+| Field | Required | Description |
+|-------|----------|-------------|
+| `mid` | yes | The `motebit_id` |
+| `did` | yes | The `device_id` |
+| `iat` | yes | Issued-at timestamp (milliseconds since epoch) |
+| `exp` | yes | Expiration timestamp (default: 5 minutes from `iat`) |
+| `jti` | yes | Unique token nonce (UUID v4 recommended) — prevents replay. Must be unique per token. |
+| `aud` | yes | Audience — the endpoint/operation the token authorizes (e.g. `"task:submit"`). Prevents cross-endpoint replay. |
+| `suite` | yes | Cryptosuite, always `"motebit-jwt-ed25519-v1"` today. Signed; missing/unknown is rejected fail-closed. |
+
+The device signs the **raw UTF-8 bytes of the JSON payload** (not the base64url form) with its Ed25519 private key. The relay verifies in two steps: (1) parse the base64url payload without crypto to extract the `device_id` — O(1) lookup; (2) verify the Ed25519 signature against the device's registered public key. Expired tokens, and tokens missing `jti`/`aud`, are rejected.
 
 ## Encryption at rest
 
@@ -2386,11 +2521,11 @@ _motebit.search.example.com TXT "v=motebit1 url=https://search.example.com/.well
 
 Fields:
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `v=motebit1` | Yes | Protocol version identifier |
-| `url=` | Yes | URL to the signed `motebit.md` identity file |
-| `endpoint=` | No | MCP server endpoint URL |
+| Field        | Required | Description                                  |
+| ------------ | -------- | -------------------------------------------- |
+| `v=motebit1` | Yes      | Protocol version identifier                  |
+| `url=`       | Yes      | URL to the signed `motebit.md` identity file |
+| `endpoint=`  | No       | MCP server endpoint URL                      |
 
 ### Well-known fallback
 
@@ -2445,7 +2580,7 @@ The `motebit_task` synthetic tool is the delegation entry point. It accepts a pr
 
 1. Receives the prompt via MCP tool call.
 2. Executes the task using its own tools (e.g., `web_search`, `read_url`). The service may use AI reasoning or execute tools directly — the protocol does not prescribe how the work is done.
-3. Hashes the prompt and the canonicalized result with SHA-256.
+3. Hashes the prompt and result strings with SHA-256 (`hex(SHA-256(UTF-8(string)))` — the raw bytes, not canonicalized).
 4. Constructs an `ExecutionReceipt` with task metadata.
 5. Signs the receipt with its Ed25519 private key.
 6. Returns the signed receipt to the caller.
@@ -2460,14 +2595,18 @@ The `motebit_task` synthetic tool is the delegation entry point. It accepts a pr
   submitted_at: number;   // Timestamp (ms since epoch)
   completed_at: number;   // Timestamp (ms since epoch)
   status: "completed" | "failed";
-  result: string;         // Canonicalized result data
+  result: string;         // The result, as a string (you choose the encoding; result_hash commits to these exact bytes)
   tools_used: string[];   // Which tools were invoked
   memories_formed: number; // How many memories the service formed
-  prompt_hash: string;    // SHA-256 of the original prompt
-  result_hash: string;    // SHA-256 of the canonicalized result
+  public_key?: string;    // signer's Ed25519 public key, HEX (embed it → offline sovereign verify)
+  prompt_hash: string;    // hex(SHA-256(UTF-8(prompt))) — plain SHA-256 of the prompt string
+  result_hash: string;    // hex(SHA-256(UTF-8(result))) — plain SHA-256 of the result string (NOT canonicalized)
+  suite: "motebit-jcs-ed25519-b64-v1"; // REQUIRED, signed — omit it and verification fails
   signature: string;      // Ed25519 signature (base64url)
 }
 ```
+
+> **`suite` is required and signed.** `signExecutionReceipt` stamps it for you; if you hand-build a receipt you MUST include `suite: "motebit-jcs-ed25519-b64-v1"` in the body before signing, or the verifier reconstructs a different body and the signature won't match. Use the published `signExecutionReceipt` rather than assembling the body yourself — see [Produce a receipt](/docs/developer/produce-a-receipt).
 
 The signature covers the canonical JSON serialization of all fields except `signature` itself. Keys are sorted recursively to ensure deterministic output regardless of insertion order.
 
@@ -2536,14 +2675,16 @@ A `DelegationToken` is a signed authorization from one agent (the delegator) to 
 ### Signing a delegation
 
 ```typescript
-import { signDelegation, toBase64Url } from "@motebit/crypto";
+import { signDelegation, bytesToHex } from "@motebit/crypto";
 
 const token = await signDelegation(
   {
     delegator_id: "motebit-abc",
-    delegator_public_key: toBase64Url(delegatorKeypair.publicKey),
+    // Embedded public keys are HEX (64 chars) — like a receipt's `public_key`
+    // field. base64url is used only for signatures, never for embedded keys.
+    delegator_public_key: bytesToHex(delegatorKeypair.publicKey),
     delegate_id: "motebit-xyz",
-    delegate_public_key: toBase64Url(delegateKeypair.publicKey),
+    delegate_public_key: bytesToHex(delegateKeypair.publicKey),
     scope: "web_search",
     issued_at: Date.now(),
     expires_at: Date.now() + 3600_000, // 1 hour
@@ -2552,7 +2693,7 @@ const token = await signDelegation(
 );
 ```
 
-The signature covers all fields except `signature` itself, using the same canonical JSON serialization as execution receipts.
+The signature covers all fields except `signature` itself: the body is JCS-canonicalized (RFC 8785) to UTF-8 bytes and Ed25519-signed directly — the same recipe as execution receipts (sign the canonical bytes, not a hash of them).
 
 ### Verifying a single token
 
@@ -2562,7 +2703,7 @@ import { verifyDelegation } from "@motebit/crypto";
 const valid = await verifyDelegation(token);
 ```
 
-Verifies the Ed25519 signature using the `delegator_public_key` embedded in the token. Does not check expiration — the caller should compare `expires_at` against the current time.
+Verifies the Ed25519 signature using the `delegator_public_key` (hex) embedded in the token, **and checks expiration by default** — it returns `false` when `token.expires_at < Date.now()`. Pass `verifyDelegation(token, { checkExpiry: false })` to verify the signature only (e.g. auditing a historical chain), and `{ now }` to pin the clock.
 
 ### Verifying a delegation chain
 
@@ -2610,7 +2751,7 @@ const deps = wireServerDeps(runtime, {
   identityFileContent,
   embedText,
   verifySignedToken,
-  handleAgentTask,  // Your async generator that yields receipts
+  handleAgentTask, // Your async generator that yields receipts
 });
 
 // 3. Start the server
@@ -2674,7 +2815,7 @@ When connecting with `--motebit`, the client creates a short-lived signed token 
 
 ### Receipt integrity
 
-Execution receipts use canonical JSON serialization (sorted keys, recursive) before signing. This ensures the same receipt always produces the same signature regardless of JSON key ordering. The `prompt_hash` and `result_hash` fields allow independent verification that the prompt wasn't modified and the result matches what was signed.
+Execution receipts use canonical JSON serialization (sorted keys, recursive) over the **body** before signing — this ensures the same receipt always produces the same signature regardless of JSON key ordering. Note the two are different operations: the _body_ is JCS-canonicalized for the signature, but `prompt_hash` and `result_hash` are plain `hex(SHA-256(UTF-8(string)))` over the raw `prompt`/`result` strings — **not** canonicalized (canonicalization is only for object-valued hashes like a `ToolInvocationReceipt`'s `args_hash`). These two fields allow independent verification that the prompt wasn't modified and the result matches what was signed: recompute `SHA-256` over the exact `result` bytes and compare.
 
 ---
 
@@ -2740,12 +2881,12 @@ Bob's `tools_used` array records `"read_url(delegated)"` — an explicit signal 
 
 ### Environment variables
 
-| Variable | Service | Purpose |
-|----------|---------|---------|
-| `MOTEBIT_DELEGATE_READ_URL` | Bob | Charlie's MCP endpoint URL (e.g., `https://charlie.fly.dev/mcp`) |
-| `MOTEBIT_DELEGATE_TARGET_ID` | Bob | Charlie's `motebit_id` for relay task submission |
-| `MOTEBIT_SYNC_URL` | Both | Relay URL for budget allocation and settlement |
-| `MOTEBIT_PRIVATE_KEY_HEX` | Both | Ed25519 private key for receipt signing |
+| Variable                     | Service | Purpose                                                          |
+| ---------------------------- | ------- | ---------------------------------------------------------------- |
+| `MOTEBIT_DELEGATE_READ_URL`  | Bob     | Charlie's MCP endpoint URL (e.g., `https://charlie.fly.dev/mcp`) |
+| `MOTEBIT_DELEGATE_TARGET_ID` | Bob     | Charlie's `motebit_id` for relay task submission                 |
+| `MOTEBIT_SYNC_URL`           | Both    | Relay URL for budget allocation and settlement                   |
+| `MOTEBIT_PRIVATE_KEY_HEX`    | Both    | Ed25519 private key for receipt signing                          |
 
 ## Budget flow
 
@@ -2780,7 +2921,7 @@ The `ExecutionReceipt` type (from `@motebit/sdk`) includes an optional `delegati
 interface ExecutionReceipt {
   task_id: string;
   motebit_id: MotebitId;
-  public_key?: string;         // signer's Ed25519 public key (hex)
+  public_key?: string; // signer's Ed25519 public key (hex)
   device_id: DeviceId;
   submitted_at: number;
   completed_at: number;
@@ -2788,11 +2929,12 @@ interface ExecutionReceipt {
   result: string;
   tools_used: string[];
   memories_formed: number;
-  prompt_hash: string;         // SHA-256 of the original prompt
-  result_hash: string;         // SHA-256 of the canonicalized result
-  relay_task_id?: string;      // binds receipt to the relay's economic identity
-  delegation_receipts?: ExecutionReceipt[];  // nested sub-delegation proofs
-  signature: string;           // Ed25519 over canonical JSON of all other fields
+  prompt_hash: string; // hex(SHA-256(UTF-8(prompt))) — plain SHA-256 of the prompt string
+  result_hash: string; // hex(SHA-256(UTF-8(result))) — plain SHA-256 of the result string (NOT canonicalized)
+  relay_task_id?: string; // binds receipt to the relay's economic identity
+  delegation_receipts?: ExecutionReceipt[]; // nested sub-delegation proofs
+  suite: "motebit-jcs-ed25519-b64-v1"; // REQUIRED, signed — stamped by signExecutionReceipt
+  signature: string; // Ed25519 over the JCS-canonical UTF-8 bytes of all other fields (not a hash of them)
 }
 ```
 
@@ -2827,9 +2969,11 @@ A two-hop chain looks like this:
       "result_hash": "j0k1l2...",
       "relay_task_id": "task-bob-charlie",
       "delegation_receipts": [],
+      "suite": "motebit-jcs-ed25519-b64-v1",
       "signature": "charlie-ed25519-sig..."
     }
   ],
+  "suite": "motebit-jcs-ed25519-b64-v1",
   "signature": "bob-ed25519-sig..."
 }
 ```
@@ -2911,8 +3055,14 @@ const { task_id: subRelayTaskId } = await taskResp.json();
 ```typescript
 // Authenticate with a signed token
 const token = await createSignedToken(
-  { mid: myMotebitId, did: myDeviceId, iat: Date.now(), exp: Date.now() + 300_000,
-    jti: crypto.randomUUID(), aud: "task:submit" },
+  {
+    mid: myMotebitId,
+    did: myDeviceId,
+    iat: Date.now(),
+    exp: Date.now() + 300_000,
+    jti: crypto.randomUUID(),
+    aud: "task:submit",
+  },
   myPrivateKey,
 );
 
@@ -3011,6 +3161,8 @@ The ledger is signed in three steps:
 3. **Signature** — Ed25519 signature over the raw 32-byte content hash (not the hex string), encoded as base64url.
 
 The signature proves the timeline is authentic (signed by the agent's keypair) and untampered (any modification invalidates the content hash).
+
+> **This hash-then-sign recipe is specific to the ledger.** An `ExecutionReceipt` is signed differently: Ed25519 over the JCS-canonical UTF-8 **body bytes directly**, with no intermediate SHA-256. Do not apply the ledger's "sign the 32-byte content hash" recipe to receipts — use the published `signExecutionReceipt` / `verifyExecutionReceipt`, which encode the correct recipe for you.
 
 **Unsigned ledgers** are also valid. The sync relay can reconstruct a ledger from synced events, but it does not hold the agent's private key. Unsigned ledgers can be verified for content integrity (the hash matches the timeline) but not for authenticity (no signature to check).
 
@@ -3119,7 +3271,7 @@ To verify a ledger:
 2. Recompute the content hash from the timeline using canonical JSON serialization.
 3. Compare the recomputed hash against `content_hash`. If they differ, the timeline has been tampered with.
 4. If `signature` is present, decode it from base64url and verify the Ed25519 signature over the raw content hash bytes using the agent's public key.
-5. For each delegation receipt, verify using the embedded public key (receipts are self-verifiable). Fall back to a known-keys lookup for legacy receipts without embedded keys.
+5. **Do not try to Ed25519-verify the entries in a v1.0 ledger's `delegation_receipts[]`** — they are `DelegationReceiptSummary` objects (§4.2) whose `signature_prefix` is the *first 16 characters* of the signature, for linkage/display only (not a verifiable signature, and there is no embedded public key). To independently verify a delegated hop, retrieve the **full signed `ExecutionReceipt`** as a separate edge artifact (from the relay or the delegating agent) and verify *that* with `verifyExecutionReceipt` / `verifyArtifact`. The ledger proves *its own* timeline is authentic; verifying the delegated work is a separate step against the full receipts.
 
 ## Security considerations
 
@@ -3130,6 +3282,141 @@ The ledger provides strong guarantees about integrity and authenticity, with exp
 - **Low-entropy arguments may be recoverable.** Tool arguments with small value spaces (booleans, short enumerations) could potentially be brute-forced from the `args_hash`. The hash is one-way under SHA-256, but entropy matters.
 
 For the full specification including the canonical serialization algorithm, signing details, and threat model, see the [motebit/execution-ledger@1.0 spec](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md).
+
+---
+
+# Produce a Receipt
+Source: https://docs.motebit.com/docs/developer/produce-a-receipt
+
+> Mint a sovereign ExecutionReceipt with the published @motebit/crypto signing primitives — including the two hash recipes that are easy to get wrong.
+
+[Verify a receipt](/docs/developer/verify-a-receipt) is the consumer side. This is the producer side: how to **mint** an `ExecutionReceipt` that any third party can verify offline, using the same published `@motebit/crypto` package the verifier is built on.
+
+The rule is the same in both directions: **consume the primitives, never reimplement them.** Do not hand-roll Ed25519, JCS canonicalization, or the hash recipes — call `@motebit/crypto`'s `sign*` functions. The wire format is fixed by [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11.
+
+> New here? The [Quickstart](/docs/developer/quickstart) is the shortest runnable mint→verify in one file. This page is the depth behind it.
+
+## Install
+
+```bash
+npm install @motebit/crypto@3 @motebit/verifier@1
+```
+
+`@motebit/crypto` mints; `@motebit/verifier` is used in the self-check step below. `strictHashBinding` requires `@motebit/crypto@3.3.0+` / `@motebit/verifier@1.4.0+`.
+
+## The signing identity
+
+A receipt is signed by a sovereign motebit identity — an Ed25519 keypair whose `motebit_id` is a cryptographic commitment to the public key. That commitment is what lets a verifier compute `sovereign: true` offline, with no directory lookup.
+
+```typescript
+import { generateKeypair, deriveSovereignMotebitId, bytesToHex } from "@motebit/crypto";
+
+const { privateKey, publicKey } = await generateKeypair();
+const motebit_id = await deriveSovereignMotebitId(bytesToHex(publicKey));
+```
+
+**The private key is the identity — store only the seed.** Persist the private key in a secret manager (env var, KMS); never the public key as a separate stored value. Re-derive the public key and `motebit_id` from the seed on load, so there is no second input that can silently disagree with the private key:
+
+```typescript
+import { getPublicKeyBySuite, EXECUTION_RECEIPT_SUITE } from "@motebit/crypto";
+
+// On the server, from the stored seed:
+const publicKey = await getPublicKeyBySuite(privateKey, EXECUTION_RECEIPT_SUITE);
+const motebit_id = await deriveSovereignMotebitId(bytesToHex(publicKey));
+```
+
+If you also pin a committed public identity, assert the derived key matches it at startup — a misconfigured seed then fails loudly instead of minting receipts under the wrong identity. Keep the private key server-side only; signing code must never reach a browser bundle.
+
+## The two hash recipes
+
+This is the one place producers reliably get wrong. There are **two different hash recipes**, and which one you use depends on whether the field holds a **string** or an **object**.
+
+> **The trap.** `result_hash` and `prompt_hash` are **plain SHA-256 of the UTF-8 string** — **not** canonicalized. `args_hash` (on a `ToolInvocationReceipt`) is `canonicalSha256` of an object. Using `canonicalSha256` on a string adds JSON quotes (`canonicalSha256("x")` hashes `"x"` _with_ the quotes), so it does **not** equal `SHA-256("x")` — and a third party recomputing per spec gets a mismatch. A signed receipt whose `result_hash` nobody can reproduce from its own `result` is a signed number, not a proof.
+
+From the spec (§ Hash fields), verbatim:
+
+```
+prompt_hash = hex(SHA-256(UTF-8(prompt_string)))   // plain SHA-256 of the STRING
+result_hash = hex(SHA-256(UTF-8(result_string)))   // plain SHA-256 of the STRING
+args_hash   = hex(SHA-256(canonical-JSON(args)))   // JCS — args is an OBJECT
+```
+
+In code:
+
+```typescript
+import { hash, hashToolPayload } from "@motebit/crypto";
+
+// String fields — plain SHA-256 of the exact bytes:
+const result_hash = await hash(new TextEncoder().encode(result));
+const prompt_hash = await hash(new TextEncoder().encode(prompt));
+
+// Object field (ToolInvocationReceipt only) — canonical JSON, then SHA-256:
+const args_hash = await hashToolPayload(args); // === canonicalSha256(args)
+```
+
+**`result_hash` commits to the exact bytes in the `result` field.** If you want the receipt to commit to a structured result (not just a summary), make `result` the **canonical JSON string** of that structure and hash _those_ bytes — then `result` is recomputable straight from the receipt, and a skeptic can re-derive your data and re-check the hash with no knowledge of how you serialized it.
+
+## Mint the receipt
+
+`signExecutionReceipt` stamps the suite, canonicalizes the body (JCS), signs with Ed25519, and base64url-encodes the signature. Pass the public key as the third argument so it is **embedded** in the receipt — that is what makes it self-verifiable offline.
+
+```typescript
+import { signExecutionReceipt, hash } from "@motebit/crypto";
+
+const prompt = "Reconcile May 2026 payouts against the ledger.";
+const result = JSON.stringify(reconciliationResult); // the exact bytes you commit to
+
+const receipt = await signExecutionReceipt(
+  {
+    task_id,
+    motebit_id,
+    device_id,
+    submitted_at,
+    completed_at,
+    status: "completed", // "completed" | "failed" | "denied"
+    result,
+    tools_used: ["stripe.payouts.read", "ledger.read"],
+    memories_formed: 0,
+    prompt_hash: await hash(new TextEncoder().encode(prompt)),
+    result_hash: await hash(new TextEncoder().encode(result)),
+  },
+  privateKey,
+  publicKey, // embed the public key → sovereign-verifiable, no relay lookup
+);
+```
+
+The signature covers every field except `signature` itself. Tampering with any byte — the result, a timestamp, the tool list — invalidates it.
+
+## Self-check before you ship
+
+A valid signature proves authenticity, not internal consistency. Before you hand a receipt to anyone, verify it yourself in **strict** mode (`@motebit/verifier@1.4.0+`, `@motebit/crypto@3.3.0+`): strict re-computes `SHA-256(result)` and rejects a mismatch, so it catches a receipt whose `result_hash` doesn't bind its own `result`.
+
+```typescript
+import { verifyArtifact } from "@motebit/verifier";
+
+const v = await verifyArtifact(JSON.stringify(receipt), { strictHashBinding: true });
+if (!v.valid) {
+  // A receipt you minted that doesn't pass strict is a producer bug — most
+  // often result_hash computed with the wrong recipe. Do not ship it.
+  throw new Error("minted a receipt that fails strict verification");
+}
+```
+
+Make this assertion a test in your minting code. It is the cheapest guard against the recipe trap above.
+
+## The governance triad
+
+`ExecutionReceipt` is one of three signed artifacts. To bind an approval decision and a tool invocation to an execution (the [governance triad](/docs/developer/governance-triad)), use `signApprovalDecision` and `signToolInvocationReceipt` and link them by their correlators — `approval.run_id == toolReceipt.task_id == execReceipt.task_id`, `approval.approval_id == toolReceipt.invocation_id`, `approval.args_hash == toolReceipt.args_hash`. There is no single "bind the triad" call; you set the correlators yourself. The reference assembly — sign, then self-verify and assert the linkage before writing — is [`mint-triad-fixture.mjs`](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/fixtures/mint-triad-fixture.mjs).
+
+## The honesty boundary
+
+A receipt proves the agent **computed this result over the inputs it attested** — it does not prove those inputs match some external source of truth. There is no oracle inside the signature. If your agent fetched data from a third party, the receipt commits to what the agent claims it fetched; attest input provenance and completeness inside the signed `result` payload, and state the boundary plainly in any UI. Overselling "verified" past what the signature covers is the exact dishonesty receipts exist to prevent.
+
+## Reference
+
+- Working producer example: [`mint-sovereign-fixture.mjs`](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/fixtures/mint-sovereign-fixture.mjs)
+- Wire format and hash recipes: [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11
+- The consumer side: [Verify a receipt](/docs/developer/verify-a-receipt)
 
 ---
 
@@ -4703,6 +4990,7 @@ interface ExecutionReceipt {
   delegation_receipts?: ExecutionReceipt[];
   relay_task_id?: string;
   delegated_scope?: string;
+  suite: "motebit-jcs-ed25519-b64-v1";
   signature: string;
 }
 ```
@@ -4721,12 +5009,13 @@ interface ExecutionReceipt {
 | `result` | `string` | The output text from execution. |
 | `tools_used` | `string[]` | Names of every tool invoked during execution. Enables capability auditing. |
 | `memories_formed` | `number` | Count of memories the agent formed during execution. |
-| `prompt_hash` | `string` | SHA-256 hash of the input prompt. Provides semantic binding to the task content. |
-| `result_hash` | `string` | SHA-256 hash of the result text. Enables integrity verification of the output. |
+| `prompt_hash` | `string` | `hex(SHA-256(UTF-8(prompt)))` — plain SHA-256 of the prompt **string**, lowercase hex (64 chars). Not canonicalized. |
+| `result_hash` | `string` | `hex(SHA-256(UTF-8(result)))` — plain SHA-256 of the `result` **string**, lowercase hex (64 chars). Not canonicalized. Recompute it over the exact `result` bytes to re-check. (Canonical-JSON hashing applies only to object-valued fields like a `ToolInvocationReceipt`'s `args_hash`.) |
 | `delegation_receipts` | `ExecutionReceipt[]?` | Nested receipts from sub-delegations. In multi-hop scenarios (Alice delegates to Bob, Bob sub-delegates to Charlie), Bob's receipt includes Charlie's receipt here. The relay verifies each nested receipt recursively. |
 | `relay_task_id` | `string?` | Cryptographic binding to the relay's economic identity for this task. Included in the Ed25519 signature, so tampering breaks the signature. The relay enforces `relay_task_id === taskIdFromRoute` at settlement. Prevents cross-task replay attacks, including identical-prompt collisions. |
 | `delegated_scope` | `string?` | Scope from the delegation token that authorized this execution. Restricts which tools the task can use (e.g., `"web_search,read_url"`). |
-| `signature` | `string` | Ed25519 signature over the canonical JSON representation of all other fields. This is what makes the receipt cryptographically verifiable. |
+| `suite` | `string` | **Required.** Cryptosuite discriminator — always `"motebit-jcs-ed25519-b64-v1"` today. It is part of the signed body: `signExecutionReceipt` stamps it, and a verifier rejects a receipt missing or carrying an unknown value (fail-closed). If you hand-build a receipt, include it **before** signing or the signature won't match. |
+| `signature` | `string` | Ed25519 signature, base64url. The signed message is the **JCS (RFC 8785) canonical UTF-8 bytes** of all other fields (keys sorted lexicographically, no whitespace, `undefined` omitted) — signed **directly**, with no intermediate SHA-256 of the body. (This differs from the *execution ledger*, which signs a 32-byte content hash, and from *credentials*, which sign concatenated field hashes — do not generalize one artifact's recipe onto another.) |
 
 ### Example receipt
 
@@ -4745,7 +5034,8 @@ interface ExecutionReceipt {
   "prompt_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "result_hash": "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a",
   "relay_task_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "signature": "3045022100...Ed25519 signature hex..."
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "signature": "k7Jq2...base64url-encoded-ed25519-signature...Aw"
 }
 ```
 

@@ -695,6 +695,24 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-docs-quickstart-runs",
+    proves:
+      "flags a Quickstart snippet that runs but no longer produces the documented result — here the EXACT historical bug: computing result_hash over the JSON-quoted result (the canonicalSha256-of-a-string trap) instead of the raw string, so under strictHashBinding the receipt verifies `valid: false` and the gate's required `valid: true` line is absent. The receipt-is-a-signed-lie failure the executable gate exists to catch",
+    perturb: () =>
+      // Mutate the canonical Quickstart's result_hash to hash JSON.stringify(result)
+      // (adds quotes → result_hash !== SHA-256(result)) — the literal recipe bug
+      // that shipped to a cold integrator. The snippet still runs, but strict
+      // verification now fails, so the gate no longer sees "valid: true" and fires.
+      // Only the result_hash call is targeted (encode(result)), not prompt_hash
+      // (encode(prompt)). mutateFile restores quickstart.mdx verbatim.
+      mutateFile("apps/docs/content/docs/developer/quickstart.mdx", (src) =>
+        src.replace(
+          "await hash(new TextEncoder().encode(result))",
+          "await hash(new TextEncoder().encode(JSON.stringify(result)))",
+        ),
+      ),
+  },
+  {
     script: "check-docs-default-models",
     proves:
       "flags a stale Claude default-model literal in any in-scope doc — the exact 2026-04-27 incident where docs pinned `claude-sonnet-4-5-20250929` after the production default in apps/cli/src/args.ts moved to `claude-sonnet-4-6`",
