@@ -380,34 +380,6 @@ export function setTTSKey(vendor: TTSVendorKey, key: string | null): void {
   setVendorKey(vendor, key);
 }
 
-/**
- * @deprecated Use `VendorKey` and `getVendorKey` / `setVendorKey`.
- *
- * Reason: see `TTSVendorKey` above — STT keys share the unified
- * `VendorKey` namespace because every supported vendor is dual-purpose.
- */
-export type STTVendorKey = VendorKey;
-
-/**
- * @deprecated Use `getVendorKey`.
- *
- * Reason: see `TTSVendorKey` above — direction-tagged accessor is a
- * legacy shape from the Whisper-cloud-STT-only era.
- */
-export function getSTTKey(vendor: STTVendorKey): string | null {
-  return getVendorKey(vendor);
-}
-
-/**
- * @deprecated Use `setVendorKey`.
- *
- * Reason: see `TTSVendorKey` above — direction-tagged accessor is a
- * legacy shape from the Whisper-cloud-STT-only era.
- */
-export function setSTTKey(vendor: STTVendorKey, key: string | null): void {
-  setVendorKey(vendor, key);
-}
-
 // === Sovereignty Ceiling CTA ===
 
 const CEILING_KEY = "motebit-ceiling-shown";
