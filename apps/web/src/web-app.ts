@@ -130,6 +130,7 @@ import {
   loadProviderConfig,
   loadSyncUrl,
   DEFAULT_RELAY_URL,
+  isAnnounced,
   markAnnounced,
 } from "./storage.js";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
@@ -400,13 +401,6 @@ export class UnbootedWebApp {
   private _deviceId = "";
   private _publicKeyHex = "";
   /**
-   * True when this launch minted a fresh sovereign identity (no prior config).
-   * Drives the one-time "Your motebit is ready" onboarding moment. Set once at
-   * bootstrap; the moment + its announce intent persist in localStorage, so a
-   * returning user (isFirstLaunch=false) never re-sees it.
-   */
-  private _isFirstLaunch = false;
-  /**
    * The orphaned motebit_id when bootstrap detected divergent state on
    * launch (config claimed an identity but the keystore probe came back
    * empty). `null` for the common path. Surfaces the field for the UI
@@ -573,7 +567,6 @@ export class UnbootedWebApp {
     this._motebitId = result.motebitId;
     this._deviceId = result.deviceId;
     this._publicKeyHex = result.publicKeyHex;
-    this._isFirstLaunch = result.isFirstLaunch;
     this._divergedFromMotebitId = result.divergedFromMotebitId ?? null;
     this._localEventStore = storage.eventStore;
     this._identityStorage = storage.identityStorage;
@@ -2180,23 +2173,22 @@ export class UnbootedWebApp {
     return this._publicKeyHex;
   }
 
-  /** True when this launch minted a fresh sovereign identity — drives the onboarding moment. */
-  get isFirstLaunch(): boolean {
-    return this._isFirstLaunch;
-  }
-
   // === Sovereign-funnel intake ===
 
   /**
    * Announce this motebit to the canonical relay's durable intake ledger — the
-   * consented metabolic intake of the sovereign funnel. Direct, deterministic
-   * relay action (like {@link startSync}); NOT routed through the AI loop.
+   * metabolic intake of the sovereign funnel. Fired silently on the first
+   * network action (see {@link startSync}), never via a launch-time prompt: a
+   * purely-local motebit that never touches the relay is never announced and
+   * stays uncounted, and a benign "none"-sensitivity existence announcement is
+   * not something to make the user decide. Calm software — no interstitial.
    *
-   * Signs with the genesis key (on a first-launch sovereign mint the device key
-   * IS the genesis key, so the relay's id↔key binding check passes) and POSTs
-   * to {@link DEFAULT_RELAY_URL} — independent of whether the user has enabled
-   * sync. Best-effort: returns a typed result, never throws; marks the motebit
-   * announced only on confirmation so a failed attempt retries on next launch.
+   * Signs with the genesis key (on a sovereign mint the first device key IS the
+   * genesis key, so the relay's id↔key binding check passes) and POSTs to
+   * {@link DEFAULT_RELAY_URL}. Best-effort: returns a typed result, never
+   * throws; marks the motebit announced only on confirmation, so callers can
+   * gate on {@link isAnnounced} and a failed attempt retries on the next
+   * network action.
    */
   async announceMotebit(): Promise<AnnounceMotebitResult> {
     if (!this._motebitId || !this._publicKeyHex) {
@@ -3448,6 +3440,16 @@ export class UnbootedWebApp {
         "[motebit] device self-registration threw:",
         err instanceof Error ? err.message : String(err),
       );
+    }
+
+    // First network action → announce to the intake ledger, silently. Enabling
+    // sync is the motebit's first relay presence; that's the calm, consent-free
+    // moment to be counted (a purely-local motebit never reaches here and stays
+    // uncounted). Best-effort + idempotent: gated on `isAnnounced` so it runs
+    // only until the relay first confirms, never re-announces, never blocks
+    // sync, and retries on the next connect if it fails.
+    if (!isAnnounced()) {
+      void this.announceMotebit();
     }
 
     // Derive deterministic encryption key, then erase raw key bytes.
