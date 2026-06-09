@@ -4,6 +4,7 @@ import { sha512 } from "@noble/hashes/sha2.js";
 import {
   signMotebitAnnouncement,
   verifyMotebitAnnouncement,
+  isAnnouncementSurface,
   MOTEBIT_ANNOUNCEMENT_SUITE,
   MOTEBIT_ANNOUNCEMENT_MAX_AGE_MS,
   type SignableMotebitAnnouncement,
@@ -155,6 +156,25 @@ describe("signMotebitAnnouncement / verifyMotebitAnnouncement", () => {
       now: stamp + 10 * 60 * 1000,
     });
     expect(outOfWindow).toEqual({ valid: false, reason: "stale" });
+  });
+
+  it("rejects an unknown surface as malformed (not just typeof string)", async () => {
+    const { privateKey, publicKeyHex } = await freshKeys();
+    const signed = await signMotebitAnnouncement(
+      baseBody(publicKeyHex, { surface: "hacker" }),
+      privateKey,
+    );
+    const result = await verifyMotebitAnnouncement(signed, { expectedAudience: RELAY_ID });
+    expect(result).toEqual({ valid: false, reason: "malformed" });
+  });
+
+  it("isAnnouncementSurface guards the closed set", () => {
+    for (const s of ["web", "desktop", "mobile", "cli", "spatial"]) {
+      expect(isAnnouncementSurface(s)).toBe(true);
+    }
+    for (const s of ["", "Web", "hacker", 1, null, undefined, {}]) {
+      expect(isAnnouncementSurface(s)).toBe(false);
+    }
   });
 
   it("each surface arm round-trips", async () => {

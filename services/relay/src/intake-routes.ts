@@ -23,6 +23,7 @@ import {
   verifyMotebitAnnouncement,
   type SignableMotebitAnnouncement,
 } from "@motebit/encryption";
+import { verifySovereignBinding } from "@motebit/crypto";
 import type { RelayIdentity } from "./federation.js";
 import { FixedWindowLimiter } from "./rate-limiter.js";
 import { getClientIp } from "./middleware.js";
@@ -86,9 +87,41 @@ export function registerIntakeRoutes(deps: IntakeRoutesDeps): void {
       );
     }
 
+    // Binding check (orthogonal to the signature): the announced `motebit_id`
+    // MUST be the sovereign commitment to the signing key — i.e. the signer
+    // holds the genesis key the id derives from. Without this, the signature
+    // only proves "someone holds *a* key," so a caller could announce an
+    // arbitrary id (and, because the ledger is write-once, permanently squat a
+    // known victim's id with a forged key). Requiring the binding makes every
+    // counted row a self-certifying sovereign identity and costs a forger a
+    // ~2^122 grind instead of one keypair. Announcement is sovereign-only by
+    // construction — legacy random (UUIDv7) ids can never equal a v8 commitment.
+    // This does NOT make the count sybil-proof: minting fresh sovereign
+    // identities is permissionless and free, so total_announced is inflatable
+    // by mass-minting. Sybil-resistance lives in the first-person trust graph
+    // (docs/doctrine/agents-as-first-person-trust-graph.md), not in this count.
+    if (!(await verifySovereignBinding(body.motebit_id, body.public_key))) {
+      logger.warn("motebit.announce.rejected", {
+        motebitId: body.motebit_id,
+        reason: "unbound_identity",
+      });
+      return c.json(
+        {
+          error: "motebit_id is not the sovereign commitment to the signing key",
+          code: "MOTEBIT_ANNOUNCEMENT_REJECTED",
+          reason: "unbound_identity",
+        },
+        400,
+      );
+    }
+
     // Determine first-seen, then record. The ledger is write-once per
     // motebit_id: a re-announce (another device, a retried tab) keeps the
-    // original `announced_at` and is a no-op for the count.
+    // original `announced_at` and is a no-op for the count. The SELECT-then-
+    // INSERT is safe here: better-sqlite3 is synchronous and there is no
+    // `await` between the read and the write, so a single relay process cannot
+    // interleave another announce for the same id; the `ON CONFLICT DO NOTHING`
+    // is the backstop for the (non-deployed) multi-process case.
     const existing = db
       .prepare("SELECT announced_at FROM relay_motebit_intake WHERE motebit_id = ?")
       .get(body.motebit_id) as { announced_at: number } | undefined;

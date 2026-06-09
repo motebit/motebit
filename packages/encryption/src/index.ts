@@ -114,6 +114,7 @@ export {
   type DeviceRegistrationVerifyResult,
   signMotebitAnnouncement,
   verifyMotebitAnnouncement,
+  isAnnouncementSurface,
   MOTEBIT_ANNOUNCEMENT_SUITE,
   MOTEBIT_ANNOUNCEMENT_MAX_AGE_MS,
   type SignableMotebitAnnouncement,

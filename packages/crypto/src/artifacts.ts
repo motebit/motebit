@@ -2008,6 +2008,20 @@ export const MOTEBIT_ANNOUNCEMENT_MAX_AGE_MS = 5 * 60 * 1000;
 /** The intake source a motebit announces from — one arm per client surface. */
 export type AnnouncementSurface = "web" | "desktop" | "mobile" | "cli" | "spatial";
 
+/** The closed set of valid surfaces, for runtime validation on the auth-less endpoint. */
+const ANNOUNCEMENT_SURFACES: ReadonlySet<string> = new Set([
+  "web",
+  "desktop",
+  "mobile",
+  "cli",
+  "spatial",
+]);
+
+/** Runtime guard: is `s` a known `AnnouncementSurface`? Keeps the wire validation and the type from drifting. */
+export function isAnnouncementSurface(s: unknown): s is AnnouncementSurface {
+  return typeof s === "string" && ANNOUNCEMENT_SURFACES.has(s);
+}
+
 /**
  * Shape of a motebit announcement for signing/verification.
  *
@@ -2059,6 +2073,13 @@ export async function signMotebitAnnouncement<
  * wire-level status. `wrong_audience` is its own arm: a structurally valid,
  * correctly-signed announcement that was bound to a different relay — the
  * cross-relay replay this binding exists to reject.
+ *
+ * This is the *integrity* check (the signing key controls the body). It does
+ * NOT establish that `public_key` is the genesis key `motebit_id` commits to —
+ * that is the orthogonal *binding* check (`verifySovereignBinding`), which the
+ * relay runs separately before recording intake. Both are portable and offline;
+ * a third party verifying a stored announcement runs both. See
+ * `docs/doctrine/identity-binding-verification.md` (integrity vs binding).
  */
 export type MotebitAnnouncementVerifyResult =
   | { valid: true }
@@ -2077,7 +2098,10 @@ export async function verifyMotebitAnnouncement(
     typeof body.motebit_id !== "string" ||
     typeof body.public_key !== "string" ||
     !/^[0-9a-f]{64}$/i.test(body.public_key) ||
-    typeof body.surface !== "string" ||
+    // Surface is validated against its closed set, not just `typeof string`:
+    // the endpoint is auth-less, and an unconstrained value would let a caller
+    // store arbitrary text (data poisoning / bloat) in the intake ledger.
+    !isAnnouncementSurface(body.surface) ||
     typeof body.audience !== "string" ||
     typeof body.timestamp !== "number" ||
     typeof body.suite !== "string" ||

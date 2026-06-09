@@ -49,12 +49,20 @@ export interface HealthMotebits {
   active_30d: number;
   /**
    * Lifetime count of motebits that have announced themselves to this relay —
-   * the cumulative, monotonic userbase number. Sourced from the append-only
+   * the cumulative, monotonic acquisition figure. Sourced from the append-only
    * `relay_motebit_intake` ledger (never reaped), NOT from `agent_registry`
    * (which records *serving* agents and is garbage-collected 90 days after a
    * motebit stops heartbeating). `total_registered` answers "how many agents
    * are currently in the serving registry"; `total_announced` answers "how
-   * many motebits have we ever onboarded" — the headline acquisition figure.
+   * many motebits have we ever onboarded."
+   *
+   * Each row is a self-certifying sovereign identity: the announce endpoint
+   * requires `motebit_id` to be the sovereign commitment to the signing key
+   * (`verifySovereignBinding`), so an entry can't be a forged or squatted id.
+   * It is NOT sybil-proof, though — minting fresh sovereign identities is
+   * permissionless and free, so a determined actor can inflate this. Read it as
+   * "self-certifying identities onboarded," not "distinct humans"; sybil-
+   * resistance lives in the first-person trust graph, not in this count.
    */
   total_announced: number;
   /**

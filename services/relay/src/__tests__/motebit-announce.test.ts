@@ -19,6 +19,7 @@ import {
   generateKeypair,
   type SignableMotebitAnnouncement,
 } from "@motebit/encryption";
+import { deriveSovereignMotebitId } from "@motebit/crypto";
 
 const API_TOKEN = "test-token";
 
@@ -58,24 +59,40 @@ describe("POST /api/v1/motebits/announce — self-attesting intake", () => {
     await relay.close();
   });
 
-  async function signFor(motebitId: string, overrides: Partial<SignableMotebitAnnouncement> = {}) {
+  // A sovereign mint: the signing key IS the genesis key, so motebit_id is its
+  // sovereign commitment — exactly what bootstrapIdentity produces on first
+  // launch, and what the relay's binding check requires.
+  async function freshSovereign() {
     const kp = await generateKeypair();
+    const publicKey = bytesToHex(kp.publicKey);
+    const motebitId = await deriveSovereignMotebitId(publicKey);
+    return { kp, publicKey, motebitId };
+  }
+
+  function signAnnouncement(
+    s: {
+      kp: { publicKey: Uint8Array; privateKey: Uint8Array };
+      publicKey: string;
+      motebitId: string;
+    },
+    overrides: Partial<SignableMotebitAnnouncement> = {},
+  ) {
     return signMotebitAnnouncement(
       {
-        motebit_id: motebitId,
-        public_key: bytesToHex(kp.publicKey),
+        motebit_id: s.motebitId,
+        public_key: s.publicKey,
         surface: "web",
         audience,
         timestamp: Date.now(),
         ...overrides,
       },
-      kp.privateKey,
+      s.kp.privateKey,
     );
   }
 
   it("accepts a properly signed first announcement (201, first_seen=true) and records intake", async () => {
-    const motebitId = crypto.randomUUID();
-    const res = await postAnnounce(relay, await signFor(motebitId));
+    const s = await freshSovereign();
+    const res = await postAnnounce(relay, await signAnnouncement(s));
     expect(res.status).toBe(201);
     const parsed = (await res.json()) as { ok: boolean; first_seen: boolean; announced_at: number };
     expect(parsed.ok).toBe(true);
@@ -89,25 +106,16 @@ describe("POST /api/v1/motebits/announce — self-attesting intake", () => {
   });
 
   it("returns 200 (first_seen=false) on idempotent re-announce, no duplicate row", async () => {
-    const kp = await generateKeypair();
-    const motebitId = crypto.randomUUID();
-    const sign = (ts: number) =>
-      signMotebitAnnouncement(
-        {
-          motebit_id: motebitId,
-          public_key: bytesToHex(kp.publicKey),
-          surface: "web",
-          audience,
-          timestamp: ts,
-        },
-        kp.privateKey,
-      );
+    const s = await freshSovereign();
 
-    const first = await postAnnounce(relay, await sign(Date.now()));
+    const first = await postAnnounce(relay, await signAnnouncement(s, { timestamp: Date.now() }));
     expect(first.status).toBe(201);
     const firstBody = (await first.json()) as { announced_at: number };
 
-    const second = await postAnnounce(relay, await sign(Date.now() + 1000));
+    const second = await postAnnounce(
+      relay,
+      await signAnnouncement(s, { timestamp: Date.now() + 1000 }),
+    );
     expect(second.status).toBe(200);
     const secondBody = (await second.json()) as { first_seen: boolean; announced_at: number };
     expect(secondBody.first_seen).toBe(false);
@@ -118,9 +126,24 @@ describe("POST /api/v1/motebits/announce — self-attesting intake", () => {
     expect(aggregateHealthSummary(relay.moteDb.db).motebits.total_announced).toBe(1);
   });
 
+  it("rejects an announcement whose motebit_id is not the sovereign commitment to the key (400, unbound_identity)", async () => {
+    // Validly signed by the key, correct audience — but the id is a random
+    // UUID, not the sovereign commitment. This is the squat/forge vector: the
+    // signature proves key possession, the binding check proves the id is the
+    // signer's own sovereign identity.
+    const s = await freshSovereign();
+    const forged = await signAnnouncement(s, { motebit_id: crypto.randomUUID() });
+    const res = await postAnnounce(relay, forged);
+    expect(res.status).toBe(400);
+    const parsed = (await res.json()) as { code: string; reason: string };
+    expect(parsed.code).toBe("MOTEBIT_ANNOUNCEMENT_REJECTED");
+    expect(parsed.reason).toBe("unbound_identity");
+    expect(aggregateHealthSummary(relay.moteDb.db).motebits.total_announced).toBe(0);
+  });
+
   it("rejects an announcement bound to a different relay (400, wrong_audience)", async () => {
-    const motebitId = crypto.randomUUID();
-    const wrong = await signFor(motebitId, { audience: crypto.randomUUID() });
+    const s = await freshSovereign();
+    const wrong = await signAnnouncement(s, { audience: crypto.randomUUID() });
     const res = await postAnnounce(relay, wrong);
     expect(res.status).toBe(400);
     const parsed = (await res.json()) as { code: string; reason: string };
@@ -130,9 +153,23 @@ describe("POST /api/v1/motebits/announce — self-attesting intake", () => {
     expect(aggregateHealthSummary(relay.moteDb.db).motebits.total_announced).toBe(0);
   });
 
+  it("rejects an unknown surface (400, malformed)", async () => {
+    const s = await freshSovereign();
+    const bad = await signAnnouncement(s, {
+      surface: "hacker" as SignableMotebitAnnouncement["surface"],
+    });
+    const res = await postAnnounce(relay, bad);
+    expect(res.status).toBe(400);
+    const parsed = (await res.json()) as { reason: string };
+    expect(parsed.reason).toBe("malformed");
+  });
+
   it("returns 400 (reason=bad_signature) when the body is tampered after signing", async () => {
-    const motebitId = crypto.randomUUID();
-    const body = await signFor(motebitId);
+    // Tamper motebit_id: it's part of the signed body but isn't checked before
+    // the signature step, so verification fails at the signature (not audience
+    // or binding). Proves the signature actually covers the body.
+    const s = await freshSovereign();
+    const body = await signAnnouncement(s);
     const tampered = { ...body, motebit_id: crypto.randomUUID() };
     const res = await postAnnounce(relay, tampered);
     expect(res.status).toBe(400);
@@ -141,8 +178,8 @@ describe("POST /api/v1/motebits/announce — self-attesting intake", () => {
   });
 
   it("returns 400 (reason=stale) when timestamp is outside the ±5 minute window", async () => {
-    const motebitId = crypto.randomUUID();
-    const body = await signFor(motebitId, { timestamp: Date.now() - 10 * 60 * 1000 });
+    const s = await freshSovereign();
+    const body = await signAnnouncement(s, { timestamp: Date.now() - 10 * 60 * 1000 });
     const res = await postAnnounce(relay, body);
     expect(res.status).toBe(400);
     const parsed = (await res.json()) as { reason: string };
@@ -150,11 +187,11 @@ describe("POST /api/v1/motebits/announce — self-attesting intake", () => {
   });
 
   it("requires no Authorization header — signature is the auth", async () => {
-    const motebitId = crypto.randomUUID();
+    const s = await freshSovereign();
     const res = await relay.app.request("/api/v1/motebits/announce", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(await signFor(motebitId)),
+      body: JSON.stringify(await signAnnouncement(s)),
     });
     expect(res.status).toBe(201);
   });

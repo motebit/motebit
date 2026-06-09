@@ -682,6 +682,9 @@ export interface IdentityVerifyResult extends BaseResult {
 }
 
 // @public
+export function isAnnouncementSurface(s: unknown): s is AnnouncementSurface;
+
+// @public
 export function isScopeNarrowed(parentScope: string, childScope: string): boolean;
 
 // @public (undocumented)
