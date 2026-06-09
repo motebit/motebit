@@ -601,6 +601,13 @@ export interface ChatCallbacks {
   openSettings(): void;
   /** Open Settings straight to the provider/model (Intelligence) tab — the deferred-setup landing. */
   openProviderSettings?(): void;
+  /**
+   * Attempt the free "first taste" on motebit cloud — fetch a proxy-token (the
+   * relay grants the one-time free credit if enabled) and connect. Resolves true
+   * if a provider got connected. Called on the first message of a fresh motebit
+   * with no provider, before falling back to the setup guide.
+   */
+  tryFreeCloud?(): Promise<boolean>;
   openConversations?(): void;
   openShortcuts?(): void;
 }
@@ -653,15 +660,27 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     }
 
     if (!ctx.app.isProviderConnected) {
-      // Deferred setup: the user expressed intent, so now is the moment to pick
-      // a brain — not an uninvited prompt on load. Guide them and open Settings
-      // to the provider tab.
-      addMessage(
-        "system",
-        "I need a model to think. Choose one in Settings — on-device, your own key, or motebit cloud.",
-      );
-      (callbacks.openProviderSettings ?? callbacks.openSettings)();
-      return;
+      // Activation: the user expressed intent, so try the free "first taste" on
+      // motebit cloud before asking them to set anything up. Show the thinking
+      // dots so the connect isn't a dead pause; on success we fall through and
+      // send. Only guide to Settings if the free cloud isn't available (disabled
+      // / exhausted / offline). This is the first (and only, until they sync)
+      // moment a fresh motebit contacts the relay — on intent, never on load.
+      const connecting = showThinkingIndicator();
+      let connected = false;
+      try {
+        connected = (await callbacks.tryFreeCloud?.()) ?? false;
+      } finally {
+        connecting.remove();
+      }
+      if (!connected) {
+        addMessage(
+          "system",
+          "I need a model to think. Choose one in Settings — on-device, your own key, or motebit cloud.",
+        );
+        (callbacks.openProviderSettings ?? callbacks.openSettings)();
+        return;
+      }
     }
 
     addMessage("user", text);

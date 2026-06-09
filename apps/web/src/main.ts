@@ -10,6 +10,7 @@ import {
   saveProxyToken,
   clearProxyToken,
   saveBalance,
+  DEFAULT_RELAY_URL,
 } from "./storage";
 import { ProxySession } from "@motebit/runtime";
 import type { ProxyProviderConfig } from "@motebit/runtime";
@@ -80,6 +81,11 @@ const colorPicker = initColorPicker(ctx, () => {
 const chatAPI = initChat(ctx, {
   openSettings: () => settings.open(),
   openProviderSettings: () => settings.openToTab("intelligence"),
+  // First-message activation: attempt the free "first taste" on motebit cloud
+  // (fetches a proxy-token from the relay, which grants the one-time free credit
+  // if enabled). Resolves true if a provider got connected. This is the only
+  // moment a fresh, sync-less motebit contacts the relay — on intent.
+  tryFreeCloud: () => autoInitProxy(),
   openConversations: () => conversations.open(),
   openShortcuts: () => openShortcutDialog(),
 });
@@ -323,7 +329,11 @@ const DEFAULT_WEBLLM_MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
 /** Shared proxy session — handles token lifecycle across all surfaces. */
 const proxySession = new ProxySession(
   {
-    getSyncUrl: () => loadSyncUrl(),
+    // Fall back to the canonical relay so a fresh motebit (no saved sync URL)
+    // can still fetch a proxy-token — that's where the free "first taste" credit
+    // is granted. Bootstrap is only CALLED on intent (first message), never on
+    // load, so this never phones home for a purely-local user.
+    getSyncUrl: () => loadSyncUrl() ?? DEFAULT_RELAY_URL,
     getMotebitId: () => localStorage.getItem("motebit:motebit_id"),
     loadToken: () => loadProxyToken(),
     saveToken: (data) => {
@@ -477,13 +487,12 @@ async function bootstrap(): Promise<void> {
       }
     }
   } else {
-    // First visit — nothing inference-y on load. Setup is deferred to the first
-    // message (chat.ts), so the first run is just the creature + the calm
-    // welcome: no localhost probe, no auto-download, no occluding "connect a
-    // model" overlay. A subscriber proxy still auto-connects if one exists.
-    void autoInitProxy().then(() => {
-      settings.updateConnectPrompt();
-    });
+    // First visit — nothing inference-y on load, and crucially NO relay contact:
+    // we don't fetch a proxy-token on boot (that would phone home + spend free
+    // credit on bounces). The free cloud is attempted only on the first message
+    // (chat.ts → tryFreeCloud), on intent. First run is just the creature + the
+    // calm welcome. Nothing to connect yet; reflect the no-provider state.
+    settings.updateConnectPrompt();
   }
 
   // For returning users with saved config, update prompt immediately
