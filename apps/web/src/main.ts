@@ -16,12 +16,7 @@ import type { ProxyProviderConfig } from "@motebit/runtime";
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
 import { checkWebGPU, WebLLMProvider, PROXY_BASE_URL } from "./providers";
-import {
-  probeLocalModels,
-  pickBestModel,
-  cleanConversationHistory,
-  DEFAULT_LOCAL_ENDPOINTS,
-} from "./bootstrap";
+import { cleanConversationHistory } from "./bootstrap";
 import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
 import { initRestoreIdentity } from "./ui/restore-identity";
@@ -357,37 +352,13 @@ async function autoInitProxy(): Promise<boolean> {
   return proxySession.bootstrap();
 }
 
-async function autoInitLocalInference(): Promise<boolean> {
-  // Race all probes — first to find models wins
-  const probes = DEFAULT_LOCAL_ENDPOINTS.map((ep) => probeLocalModels(ep.url, ep.type));
-  const results = await Promise.allSettled(probes);
-
-  // Find the first ok outcome. Non-ok kinds (unreachable / cors_blocked /
-  // server_up_no_models) don't bootstrap the auto-connect path; settings
-  // surfaces the kind-specific remediation when the user opens it.
-  for (const result of results) {
-    if (result.status === "fulfilled" && result.value.kind === "ok") {
-      const { baseUrl, models } = result.value;
-      const model = pickBestModel(models);
-      // Both "ollama" and generic OpenAI-compat local servers collapse to the
-      // same user-intent mode: on-device via local-server. createProvider()
-      // picks the concrete transport from the endpoint shape.
-      const config: ProviderConfig = {
-        mode: "on-device",
-        backend: "local-server",
-        model,
-        endpoint: baseUrl,
-      };
-      app.connectProvider(config);
-      currentConfig = config;
-      saveProviderConfig(config);
-      settings.updateModelIndicator();
-      settings.updateConnectPrompt();
-      return true;
-    }
-  }
-  return false;
-}
+// NOTE: local-inference auto-detection deliberately does NOT run on load.
+// Probing http://localhost:* from the HTTPS origin triggers Chrome's
+// "motebit.com wants to access other apps and services on this device"
+// (Private Network Access) permission — a scary, context-free system prompt on
+// the very first visit, for a feature ~no one uses uninvited. Local-server
+// detection lives entirely in Settings → On-Device → server (settings.ts),
+// where the user has explicitly asked for it and the permission is in-context.
 
 /** Fallback: load a language model into the browser via WebLLM. */
 async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<void> {
@@ -483,7 +454,6 @@ async function bootstrap(): Promise<void> {
     if (savedConfig.mode === "motebit-cloud") {
       // For cloud users, always go through autoInitProxy to handle token refresh
       void autoInitProxy().then(async (ok) => {
-        if (!ok) ok = await autoInitLocalInference();
         if (!ok && checkWebGPU()) await autoInitWebLLM();
         settings.updateConnectPrompt();
       });
@@ -500,11 +470,11 @@ async function bootstrap(): Promise<void> {
       }
     }
   } else {
-    // First visit — no subscription yet. Try local inference first (zero API cost).
-    // Proxy is for paying subscribers only per metabolic principle.
-    // Boot sequence: subscriber proxy → Ollama (local) → WebLLM (browser) → upgrade prompt.
+    // First visit — no subscription yet. Boot sequence: subscriber proxy →
+    // WebLLM (in-browser, zero-config, no permission) → connect prompt. Local
+    // server inference is opt-in via Settings (never probed on load — see the
+    // note on autoInitLocalInference's removal above).
     void autoInitProxy().then(async (ok) => {
-      if (!ok) ok = await autoInitLocalInference();
       if (!ok && checkWebGPU()) await autoInitWebLLM();
       settings.updateConnectPrompt();
     });
