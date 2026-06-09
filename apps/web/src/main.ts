@@ -10,7 +10,11 @@ import {
   saveProxyToken,
   clearProxyToken,
   saveBalance,
+  getAnnounceIntent,
+  setAnnounceIntent,
+  isAnnounced,
 } from "./storage";
+import { wordFingerprint } from "@motebit/sdk";
 import { ProxySession } from "@motebit/runtime";
 import type { ProxyProviderConfig } from "@motebit/runtime";
 import { deriveInteriorColor } from "./ui/color-picker";
@@ -432,6 +436,73 @@ async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<voi
   }
 }
 
+/**
+ * The first-launch onboarding moment — the consented metabolic intake of the
+ * sovereign funnel. On a fresh sovereign mint it surfaces the new identity (its
+ * word-fingerprint) and offers to join the relay: "Begin" announces the motebit
+ * (default), "Stay private" keeps it fully local. Both are one-time decisions;
+ * a returning user never re-sees it.
+ *
+ * The mint itself already happened silently in `app.bootstrap()` — this moment
+ * is the first conscious encounter with the identity plus the network-join
+ * choice, not a gate on minting. Announce is best-effort: a tapped "Begin" that
+ * can't reach the relay (offline) retries silently on a later launch.
+ */
+function runOnboardingMoment(): void {
+  const el = document.getElementById("welcome-overlay");
+  if (!el) return;
+
+  const intent = getAnnounceIntent();
+
+  // Retry a prior "Begin" whose announce never reached the relay — silent, no
+  // re-show. Once the relay confirms intake (`isAnnounced`), this stops firing.
+  if (intent === "yes" && !isAnnounced()) {
+    void app.announceMotebit();
+  }
+
+  // Show the moment once: only a fresh sovereign mint that hasn't yet decided.
+  if (!app.isFirstLaunch || intent !== null) {
+    el.remove();
+    return;
+  }
+
+  const fp = document.getElementById("welcome-fingerprint");
+  if (fp && app.publicKeyHex) {
+    try {
+      fp.textContent = wordFingerprint(app.publicKeyHex, { words: 3 });
+    } catch {
+      // Non-fatal — leave the recognition aid empty.
+    }
+  }
+
+  const beginBtn = document.getElementById("welcome-begin");
+  const stayBtn = document.getElementById("welcome-stay");
+
+  const dismiss = (): void => {
+    el.classList.remove("show");
+    el.addEventListener("transitionend", () => el.remove(), { once: true });
+  };
+
+  beginBtn?.addEventListener("click", () => {
+    // Optimistic + calm: record intent, enter the app immediately, announce in
+    // the background. The user shouldn't wait on a network outcome they can't
+    // observe; failure is silent and retries next launch.
+    setAnnounceIntent("yes");
+    void app.announceMotebit();
+    dismiss();
+  });
+
+  stayBtn?.addEventListener("click", () => {
+    setAnnounceIntent("no");
+    dismiss();
+  });
+
+  // Let the creature breathe before the moment fades in.
+  requestAnimationFrame(() => {
+    setTimeout(() => el.classList.add("show"), 1000);
+  });
+}
+
 async function bootstrap(): Promise<void> {
   await app.init(canvas!);
 
@@ -455,6 +526,9 @@ async function bootstrap(): Promise<void> {
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);
+
+  // First-launch onboarding moment (the sovereign funnel's front door).
+  runOnboardingMoment();
 
   // Restore soul color from localStorage
   const soulColor = loadSoulColor();

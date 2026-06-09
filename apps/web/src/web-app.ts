@@ -73,9 +73,11 @@ import {
   bootstrapIdentity,
   rotateIdentityKeys,
   registerDeviceWithRelay,
+  announceMotebit,
   writeRestoredIdentity,
   type BootstrapConfigStore,
   type IdentityStorage,
+  type AnnounceMotebitResult,
 } from "@motebit/core-identity";
 import {
   createSignedToken,
@@ -127,6 +129,8 @@ import {
   loadColdStartOptIn,
   loadProviderConfig,
   loadSyncUrl,
+  DEFAULT_RELAY_URL,
+  markAnnounced,
 } from "./storage.js";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
 import { EncryptedKeyStore } from "./encrypted-keystore";
@@ -396,6 +400,13 @@ export class UnbootedWebApp {
   private _deviceId = "";
   private _publicKeyHex = "";
   /**
+   * True when this launch minted a fresh sovereign identity (no prior config).
+   * Drives the one-time "Your motebit is ready" onboarding moment. Set once at
+   * bootstrap; the moment + its announce intent persist in localStorage, so a
+   * returning user (isFirstLaunch=false) never re-sees it.
+   */
+  private _isFirstLaunch = false;
+  /**
    * The orphaned motebit_id when bootstrap detected divergent state on
    * launch (config claimed an identity but the keystore probe came back
    * empty). `null` for the common path. Surfaces the field for the UI
@@ -562,6 +573,7 @@ export class UnbootedWebApp {
     this._motebitId = result.motebitId;
     this._deviceId = result.deviceId;
     this._publicKeyHex = result.publicKeyHex;
+    this._isFirstLaunch = result.isFirstLaunch;
     this._divergedFromMotebitId = result.divergedFromMotebitId ?? null;
     this._localEventStore = storage.eventStore;
     this._identityStorage = storage.identityStorage;
@@ -2166,6 +2178,47 @@ export class UnbootedWebApp {
 
   get publicKeyHex(): string {
     return this._publicKeyHex;
+  }
+
+  /** True when this launch minted a fresh sovereign identity — drives the onboarding moment. */
+  get isFirstLaunch(): boolean {
+    return this._isFirstLaunch;
+  }
+
+  // === Sovereign-funnel intake ===
+
+  /**
+   * Announce this motebit to the canonical relay's durable intake ledger — the
+   * consented metabolic intake of the sovereign funnel. Direct, deterministic
+   * relay action (like {@link startSync}); NOT routed through the AI loop.
+   *
+   * Signs with the genesis key (on a first-launch sovereign mint the device key
+   * IS the genesis key, so the relay's id↔key binding check passes) and POSTs
+   * to {@link DEFAULT_RELAY_URL} — independent of whether the user has enabled
+   * sync. Best-effort: returns a typed result, never throws; marks the motebit
+   * announced only on confirmation so a failed attempt retries on next launch.
+   */
+  async announceMotebit(): Promise<AnnounceMotebitResult> {
+    if (!this._motebitId || !this._publicKeyHex) {
+      return { ok: false, code: "unknown", message: "Identity not bootstrapped" };
+    }
+    const privateKeyHex = await this.keyStore.loadPrivateKey();
+    if (privateKeyHex == null || privateKeyHex === "") {
+      return { ok: false, code: "unknown", message: "No signing key available" };
+    }
+    const privKeyBytes = new Uint8Array(privateKeyHex.length / 2);
+    for (let i = 0; i < privateKeyHex.length; i += 2) {
+      privKeyBytes[i / 2] = parseInt(privateKeyHex.slice(i, i + 2), 16);
+    }
+    const result = await announceMotebit({
+      motebitId: this._motebitId,
+      publicKey: this._publicKeyHex,
+      privateKey: privKeyBytes,
+      surface: "web",
+      relayUrl: DEFAULT_RELAY_URL,
+    });
+    if (result.ok) markAnnounced();
+    return result;
   }
 
   // === Key Rotation ===

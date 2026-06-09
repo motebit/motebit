@@ -578,26 +578,69 @@
         pointer-events: auto;
         transform: translateX(-50%) translateY(0);
       }
-      .welcome-name {
-        font-size: 14px;
+      .welcome-headline {
+        font-size: 15px;
         font-weight: 600;
         color: var(--text-primary);
         letter-spacing: 0.04em;
       }
-      .welcome-tagline {
+      .welcome-subcopy {
         font-size: 12px;
         color: var(--text-muted);
         text-align: center;
+        max-width: 320px;
+        line-height: 1.5;
+        margin-top: 2px;
       }
-      .welcome-link {
-        font-size: 11px;
+      /* The motebit's word-fingerprint — a recognition aid for the new identity. */
+      .welcome-fingerprint {
+        font-family: "SF Mono", "Menlo", monospace;
+        font-size: 12px;
+        color: var(--accent-text);
+        letter-spacing: 0.02em;
+        margin-top: 8px;
+      }
+      .welcome-actions {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-top: 14px;
+      }
+      .welcome-begin {
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        color: #fff;
+        background: var(--accent);
+        border: none;
+        border-radius: 18px;
+        padding: 8px 22px;
+        cursor: pointer;
+        transition:
+          opacity 0.2s ease,
+          transform 0.1s ease;
+      }
+      .welcome-begin:hover {
+        opacity: 0.9;
+      }
+      .welcome-begin:active {
+        transform: scale(0.97);
+      }
+      .welcome-begin:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .welcome-stay {
+        font-size: 12px;
         color: var(--text-ghost);
-        text-decoration: none;
-        margin-top: 6px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-family: inherit;
         transition: color 0.2s ease;
       }
-      .welcome-link:hover {
-        color: var(--accent-text);
+      .welcome-stay:hover {
+        color: var(--text-muted);
       }
 
       /* Toast notifications */
@@ -9805,48 +9848,22 @@
       </div>
     </div>
 
-    <!-- First-visit welcome — no card, just floating text below the creature -->
+    <!-- First-launch onboarding moment — the sovereign funnel's front door.
+         Runtime-driven: main.ts shows it only on a fresh sovereign mint, fills
+         the word-fingerprint, and wires Begin (announce) / Stay private. Hidden
+         and inert until then. -->
     <div id="welcome-overlay">
-      <span class="welcome-name">motebit</span>
-      <span class="welcome-tagline">A droplet of intelligence under surface tension</span>
-      <a class="welcome-link" href="https://docs.motebit.com" target="_blank" rel="noopener"
-        >Learn more &rarr;</a
+      <span class="welcome-headline">Your motebit is ready</span>
+      <span class="welcome-subcopy"
+        >This device created a private identity for your agent. You can join the Motebit relay now,
+        or stay local.</span
       >
+      <span class="welcome-fingerprint" id="welcome-fingerprint"></span>
+      <div class="welcome-actions">
+        <button class="welcome-begin" id="welcome-begin" type="button">Begin</button>
+        <button class="welcome-stay" id="welcome-stay" type="button">Stay private</button>
+      </div>
     </div>
-    <script>
-      (function () {
-        var el = document.getElementById("welcome-overlay");
-        if (!el) return;
-        if (localStorage.getItem("motebit_welcome_dismissed")) {
-          el.remove();
-          return;
-        }
-        // Let the creature breathe for a moment before the text fades in
-        requestAnimationFrame(function () {
-          setTimeout(function () {
-            el.classList.add("show");
-          }, 1200);
-        });
-        function dismiss() {
-          if (!el.parentNode) return;
-          el.classList.remove("show");
-          localStorage.setItem("motebit_welcome_dismissed", "1");
-          el.addEventListener("transitionend", function () {
-            el.remove();
-          });
-        }
-        el.addEventListener("click", function (e) {
-          if (e.target.classList.contains("welcome-link")) return;
-          dismiss();
-        });
-        // Dismiss when user starts interacting
-        document.getElementById("chat-input")?.addEventListener("focus", dismiss, { once: true });
-        // Also dismiss after a while — it's context, not a gate
-        setTimeout(function () {
-          if (el.parentNode) dismiss();
-        }, 12000);
-      })();
-    </script>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

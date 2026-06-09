@@ -138,6 +138,56 @@ export function clearSyncUrl(): void {
   }
 }
 
+// === Onboarding moment (sovereign-funnel intake) ===
+//
+// Two pieces of state drive the first-launch "Your motebit is ready" moment:
+//   - announce intent: "yes" (the user tapped Begin — wants to join the relay)
+//     or "no" (Stay private — never announce). Its presence ALSO means the
+//     moment has been shown + decided, so it never shows twice.
+//   - announced: the relay confirmed intake. Lets a "yes" intent retry silently
+//     on later launches if the first announce failed (offline), without ever
+//     re-announcing once it has landed.
+
+const ANNOUNCE_INTENT_KEY = "motebit-announce-intent";
+const ANNOUNCED_KEY = "motebit-announced";
+
+export type AnnounceIntent = "yes" | "no";
+
+/** The user's announce decision, or null if the moment hasn't been decided yet. */
+export function getAnnounceIntent(): AnnounceIntent | null {
+  try {
+    const v = localStorage.getItem(ANNOUNCE_INTENT_KEY);
+    return v === "yes" || v === "no" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setAnnounceIntent(intent: AnnounceIntent): void {
+  try {
+    localStorage.setItem(ANNOUNCE_INTENT_KEY, intent);
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+/** True once the relay has recorded this motebit's intake — gates retry. */
+export function isAnnounced(): boolean {
+  try {
+    return localStorage.getItem(ANNOUNCED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function markAnnounced(): void {
+  try {
+    localStorage.setItem(ANNOUNCED_KEY, "1");
+  } catch {
+    // localStorage unavailable
+  }
+}
+
 // === Governance Config ===
 
 import { DEFAULT_GOVERNANCE_CONFIG, type GovernanceConfig } from "@motebit/sdk";
