@@ -10,6 +10,14 @@ kill_timeout = 5
   NODE_ENV = "production"
   PORT = "3000"
   MOTEBIT_DB_PATH = "/data/motebit.db"
+  # Free "first taste" cloud credit — the activation unlock (see free-credit.ts).
+  # A brand-new motebit gets this one-time balance so it can just talk on motebit
+  # cloud, then meets the upgrade prompt when it runs out. Tunable money knobs —
+  # change here (committed, auditable) and the relay redeploys. Worst-case daily
+  # exposure is bounded by the daily budget regardless of sybil/IP rotation.
+  MOTEBIT_FREE_CREDIT_USD = "0.10"
+  MOTEBIT_FREE_CREDIT_IP_DAILY_CAP = "10"
+  MOTEBIT_FREE_CREDIT_DAILY_BUDGET_USD = "25"
   # Litestream S3 replication (optional — set via `fly secrets set`):
   #   LITESTREAM_REPLICA_BUCKET   — S3 bucket name (required to enable)
   #   LITESTREAM_REPLICA_PATH     — S3 prefix (default: motebit-sync)
