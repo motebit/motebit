@@ -232,6 +232,7 @@ export const REGISTRY: Record<string, Classification> = {
     canonical: "DeviceRegistrationRequest",
     note: "crypto signing-input mirror of DeviceRegistrationRequest; verified by verifyDeviceRegistration",
   },
+  SignableMotebitAnnouncement: { kind: "verifier", verifier: "verifyMotebitAnnouncement" },
   SignableCollaborativeReceipt: {
     kind: "precursor",
     canonical: "CollaborativeReceipt",

@@ -17,9 +17,7 @@ function insertAgent(
   db: import("@motebit/persistence").DatabaseDriver,
   motebitId: string,
   lastHeartbeatMs: number,
-  // Defaults to the heartbeat time (the common "registered == last seen" case);
-  // pass distinct to model a veteran motebit that registered long ago but is
-  // still active — the case that proves new_* keys on registration, not liveness.
+  // Defaults to the heartbeat time (the common "registered == last seen" case).
   registeredAtMs: number = lastHeartbeatMs,
 ) {
   db.prepare(
@@ -34,6 +32,31 @@ function insertAgent(
     registeredAtMs,
     lastHeartbeatMs,
     lastHeartbeatMs + 15 * 60_000,
+  );
+}
+
+// Acquisition is recorded in the append-only `relay_motebit_intake` ledger,
+// which is independent of `agent_registry` — a motebit can be announced
+// (counted) without ever serving, and a serving agent reaped from the
+// registry stays counted here forever.
+function insertIntake(
+  db: import("@motebit/persistence").DatabaseDriver,
+  motebitId: string,
+  announcedAtMs: number,
+) {
+  db.prepare(
+    `INSERT OR IGNORE INTO relay_motebit_intake
+     (motebit_id, public_key, surface, audience, announced_at, suite, signature, record_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    motebitId,
+    "pk",
+    "web",
+    "relay-id",
+    announcedAtMs,
+    "motebit-jcs-ed25519-b64-v1",
+    "sig",
+    "{}",
   );
 }
 
@@ -92,6 +115,7 @@ describe("aggregateHealthSummary", () => {
     expect(out.motebits.active_24h).toBe(0);
     expect(out.motebits.active_7d).toBe(0);
     expect(out.motebits.active_30d).toBe(0);
+    expect(out.motebits.total_announced).toBe(0);
     expect(out.motebits.new_24h).toBe(0);
     expect(out.motebits.new_7d).toBe(0);
     expect(out.motebits.new_30d).toBe(0);
@@ -108,7 +132,7 @@ describe("aggregateHealthSummary", () => {
     expect(out.generated_at).toBe(now);
   });
 
-  it("counts motebits by activity window", () => {
+  it("counts agent activity windows from the serving registry", () => {
     const now = Date.UTC(2026, 3, 15, 12, 0, 0);
     insertAgent(relay.moteDb.db, "fresh", now - 1 * 60 * 60 * 1000); // 1h ago
     insertAgent(relay.moteDb.db, "yesterday", now - 23 * 60 * 60 * 1000); // 23h ago
@@ -121,32 +145,45 @@ describe("aggregateHealthSummary", () => {
     expect(out.motebits.active_24h).toBe(2); // fresh + yesterday
     expect(out.motebits.active_7d).toBe(3); // + this-week
     expect(out.motebits.active_30d).toBe(4); // + this-month (stale excluded)
-    // registered_at == heartbeat here, so acquisition mirrors activity.
-    expect(out.motebits.new_24h).toBe(2);
-    expect(out.motebits.new_7d).toBe(3);
-    expect(out.motebits.new_30d).toBe(4);
+    // No announcements → acquisition is zero even though agents are serving.
+    expect(out.motebits.total_announced).toBe(0);
+    expect(out.motebits.new_24h).toBe(0);
   });
 
-  it("counts acquisition by registration window, independent of activity", () => {
+  it("counts acquisition by announcement window from the intake ledger", () => {
     const now = Date.UTC(2026, 3, 15, 12, 0, 0);
-    // Veteran: registered 60d ago, still active 1h ago. Active, NOT newly minted.
-    insertAgent(relay.moteDb.db, "veteran", now - 1 * 60 * 60 * 1000, now - 60 * DAY_MS);
-    // Newcomer: registered AND active 1h ago. Both active and new.
-    insertAgent(relay.moteDb.db, "newcomer", now - 1 * 60 * 60 * 1000, now - 1 * 60 * 60 * 1000);
-    // Dormant newcomer: registered 2d ago, but silent since (heartbeat 2d ago).
-    // New within 7d, but not active in 24h — proves the two axes are orthogonal.
-    insertAgent(relay.moteDb.db, "dormant-new", now - 2 * DAY_MS, now - 2 * DAY_MS);
+    insertIntake(relay.moteDb.db, "just-now", now - 1 * 60 * 60 * 1000); // 1h ago
+    insertIntake(relay.moteDb.db, "yesterday", now - 23 * 60 * 60 * 1000); // 23h ago
+    insertIntake(relay.moteDb.db, "this-week", now - 5 * DAY_MS);
+    insertIntake(relay.moteDb.db, "this-month", now - 20 * DAY_MS);
+    insertIntake(relay.moteDb.db, "old-timer", now - 200 * DAY_MS); // long ago, still counts
 
     const out = aggregateHealthSummary(relay.moteDb.db, now);
-    // Activity (last_heartbeat): veteran + newcomer in 24h; + dormant-new in 7d.
+    expect(out.motebits.total_announced).toBe(5); // lifetime, monotonic
+    expect(out.motebits.new_24h).toBe(2); // just-now + yesterday
+    expect(out.motebits.new_7d).toBe(3); // + this-week
+    expect(out.motebits.new_30d).toBe(4); // + this-month (old-timer outside 30d)
+  });
+
+  it("acquisition is independent of the serving registry (the leak-fix)", () => {
+    const now = Date.UTC(2026, 3, 15, 12, 0, 0);
+    // Announced but never served (no agent_registry row) — counts as acquired.
+    insertIntake(relay.moteDb.db, "announced-only", now - 2 * DAY_MS);
+    // Serving but never announced (registry row only) — does NOT count as acquired.
+    insertAgent(relay.moteDb.db, "serving-only", now - 1 * 60 * 60 * 1000);
+    // Both announced (10d ago) and still serving — the normal case.
+    insertIntake(relay.moteDb.db, "both", now - 10 * DAY_MS);
+    insertAgent(relay.moteDb.db, "both", now - 1 * 60 * 60 * 1000);
+
+    const out = aggregateHealthSummary(relay.moteDb.db, now);
+    // Serving registry: serving-only + both are active.
+    expect(out.motebits.total_registered).toBe(2);
     expect(out.motebits.active_24h).toBe(2);
-    expect(out.motebits.active_7d).toBe(3);
-    // Acquisition (registered_at): only newcomer in 24h; + dormant-new in 7d;
-    // veteran registered 60d ago so it counts in neither — active but not new.
-    expect(out.motebits.new_24h).toBe(1);
-    expect(out.motebits.new_7d).toBe(2);
-    expect(out.motebits.new_30d).toBe(2);
-    expect(out.motebits.total_registered).toBe(3);
+    // Intake ledger: announced-only + both. serving-only is NOT acquired;
+    // an agent reaped from the registry would still leave its intake row.
+    expect(out.motebits.total_announced).toBe(2); // lifetime: announced-only + both
+    expect(out.motebits.new_7d).toBe(1); // only announced-only (2d); both is 10d → outside 7d
+    expect(out.motebits.new_30d).toBe(2); // + both (10d)
   });
 
   it("sums settlements + fees over 7d / 30d windows", () => {

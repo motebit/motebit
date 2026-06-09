@@ -97,6 +97,9 @@ export interface AgentSettlementAnchorVerifyResult {
 }
 
 // @public
+export type AnnouncementSurface = "web" | "desktop" | "mobile" | "cli" | "spatial";
+
+// @public
 export const APPROVAL_DECISION_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 export { ApprovalDecision }
@@ -679,6 +682,9 @@ export interface IdentityVerifyResult extends BaseResult {
 }
 
 // @public
+export function isAnnouncementSurface(s: unknown): s is AnnouncementSurface;
+
+// @public
 export function isScopeNarrowed(parentScope: string, childScope: string): boolean;
 
 // @public (undocumented)
@@ -770,6 +776,20 @@ export function mintSecureEnclaveReceiptForTest(input: {
     claim: HardwareAttestationClaim;
     sePublicKeyHex: string;
 }>;
+
+// @public
+export const MOTEBIT_ANNOUNCEMENT_MAX_AGE_MS: number;
+
+// @public
+export const MOTEBIT_ANNOUNCEMENT_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export type MotebitAnnouncementVerifyResult = {
+    valid: true;
+} | {
+    valid: false;
+    reason: "malformed" | "stale" | "unsupported_suite" | "wrong_audience" | "bad_signature";
+};
 
 // @public (undocumented)
 export interface MotebitIdentityFile {
@@ -1008,6 +1028,24 @@ export interface SignableDeviceRegistration {
 }
 
 // @public
+export interface SignableMotebitAnnouncement {
+    // (undocumented)
+    audience: string;
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    public_key: string;
+    // (undocumented)
+    signature: string;
+    // (undocumented)
+    suite: typeof MOTEBIT_ANNOUNCEMENT_SUITE;
+    // (undocumented)
+    surface: AnnouncementSurface;
+    // (undocumented)
+    timestamp: number;
+}
+
+// @public
 export interface SignableReceipt {
     // (undocumented)
     completed_at: number;
@@ -1221,6 +1259,12 @@ export function signKeySuccession(oldPrivateKey: Uint8Array, newPrivateKey: Uint
 
 // @public
 export function signMigrationRequest(request: Omit<MigrationRequest, "signature">, privateKey: Uint8Array): Promise<MigrationRequest>;
+
+// @public
+export function signMotebitAnnouncement<T extends Omit<SignableMotebitAnnouncement, "signature" | "suite">>(body: T, privateKey: Uint8Array): Promise<T & {
+    suite: typeof MOTEBIT_ANNOUNCEMENT_SUITE;
+    signature: string;
+}>;
 
 // @public
 export function signSettlement(settlement: Omit<SettlementRecord, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<SettlementRecord>;
@@ -1589,6 +1633,12 @@ export function verifyMigrationRequest(request: MigrationRequest, publicKey: Uin
 
 // @public
 export function verifyMigrationToken(token: MigrationToken, publicKey: Uint8Array): Promise<boolean>;
+
+// @public (undocumented)
+export function verifyMotebitAnnouncement(body: SignableMotebitAnnouncement, opts: {
+    expectedAudience: string;
+    now?: number;
+}): Promise<MotebitAnnouncementVerifyResult>;
 
 // @public (undocumented)
 export interface VerifyOptions {

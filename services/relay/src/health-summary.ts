@@ -8,12 +8,16 @@
  *
  * Four classes of signal:
  *
- *   1. Motebit registry — total registered, activity windows
- *      (last-heartbeat within 24h / 7d / 30d), and acquisition windows
- *      (newly registered within 24h / 7d / 30d). Activity proves
- *      registered identities are doing work; acquisition is the funnel's
- *      intake — "are we minting new motebits, and is it growing" — the
- *      sovereign-userbase signal motebit Inc had no number for.
+ *   1. Motebits — two distinct axes. Serving liveness comes from
+ *      `agent_registry`: total registered + activity windows (last-heartbeat
+ *      within 24h / 7d / 30d), proving registered agents are doing work.
+ *      Acquisition comes from the append-only `relay_motebit_intake` ledger
+ *      (never reaped): `total_announced` (lifetime cumulative userbase) +
+ *      newly announced within 24h / 7d / 30d. Acquisition is the funnel's
+ *      intake — "are we onboarding new motebits, and is it growing" — the
+ *      sovereign-userbase signal motebit Inc had no number for. The two are
+ *      kept separate on purpose: an agent reaped from the registry still
+ *      counts as acquired; a serving agent that never announced does not.
  *   2. Federation — peer count by state, federation-settlement volume
  *      over the trailing 7d. The federation-settlement count is the
  *      sharpest external-traffic signal: cross-relay settlements only
@@ -44,12 +48,30 @@ export interface HealthMotebits {
   active_7d: number;
   active_30d: number;
   /**
-   * Newly minted motebits within the window — the acquisition curve, i.e. the
-   * funnel's intake. Keyed on `registered_at`, which the registration upsert
-   * leaves untouched on re-registration (`ON CONFLICT … DO UPDATE` omits it),
-   * so this counts *first* registrations (new identities), never heartbeats.
-   * `active_*` answers "are registered motebits doing work"; `new_*` answers
-   * "are we acquiring new ones, and is it growing" — the sovereign-userbase
+   * Lifetime count of motebits that have announced themselves to this relay —
+   * the cumulative, monotonic acquisition figure. Sourced from the append-only
+   * `relay_motebit_intake` ledger (never reaped), NOT from `agent_registry`
+   * (which records *serving* agents and is garbage-collected 90 days after a
+   * motebit stops heartbeating). `total_registered` answers "how many agents
+   * are currently in the serving registry"; `total_announced` answers "how
+   * many motebits have we ever onboarded."
+   *
+   * Each row is a self-certifying sovereign identity: the announce endpoint
+   * requires `motebit_id` to be the sovereign commitment to the signing key
+   * (`verifySovereignBinding`), so an entry can't be a forged or squatted id.
+   * It is NOT sybil-proof, though — minting fresh sovereign identities is
+   * permissionless and free, so a determined actor can inflate this. Read it as
+   * "self-certifying identities onboarded," not "distinct humans"; sybil-
+   * resistance lives in the first-person trust graph, not in this count.
+   */
+  total_announced: number;
+  /**
+   * Newly announced motebits within the window — the acquisition curve, the
+   * funnel's intake. Keyed on `announced_at` in the write-once
+   * `relay_motebit_intake` ledger, so this counts *first* announcements (new
+   * identities), never heartbeats, and never drops as agents go dormant.
+   * `active_*` answers "are registered agents doing work"; `new_*` answers
+   * "are we acquiring new motebits, and is it growing" — the sovereign-userbase
    * sibling of the subscribers block's `created_7d` / `created_30d`.
    */
   new_24h: number;
@@ -129,21 +151,24 @@ export function aggregateHealthSummary(
       "SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?",
       cutoff30d,
     ),
-    // Acquisition — first-registration windows (registered_at is write-once;
-    // see the field doc). Counts new motebits minted, not heartbeats.
+    // Acquisition — the durable intake ledger (append-only, never reaped),
+    // keyed on the write-once `announced_at`. Counts motebits that announced
+    // themselves, independent of whether they're still serving. See the field
+    // docs for why this is NOT `agent_registry.registered_at`.
+    total_announced: count(db, "SELECT COUNT(*) AS n FROM relay_motebit_intake"),
     new_24h: count(
       db,
-      "SELECT COUNT(*) AS n FROM agent_registry WHERE registered_at >= ?",
+      "SELECT COUNT(*) AS n FROM relay_motebit_intake WHERE announced_at >= ?",
       cutoff24h,
     ),
     new_7d: count(
       db,
-      "SELECT COUNT(*) AS n FROM agent_registry WHERE registered_at >= ?",
+      "SELECT COUNT(*) AS n FROM relay_motebit_intake WHERE announced_at >= ?",
       cutoff7d,
     ),
     new_30d: count(
       db,
-      "SELECT COUNT(*) AS n FROM agent_registry WHERE registered_at >= ?",
+      "SELECT COUNT(*) AS n FROM relay_motebit_intake WHERE announced_at >= ?",
       cutoff30d,
     ),
   };

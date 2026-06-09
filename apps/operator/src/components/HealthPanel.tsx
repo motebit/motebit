@@ -133,6 +133,40 @@ export function HealthPanel(): React.ReactElement {
         React.createElement("div", { className: "value" }, String(motebits.active_30d)),
       ),
     ),
+    React.createElement("h3", null, "Acquisition"),
+    React.createElement(
+      "p",
+      { className: "count" },
+      "Durable intake ledger (relay_motebit_intake, append-only, never reaped). Counts motebits that announced themselves — the cumulative userbase, independent of whether they're still serving.",
+    ),
+    React.createElement(
+      "div",
+      { className: "stat-grid" },
+      React.createElement(
+        "div",
+        { className: "stat-card" },
+        React.createElement("div", { className: "label" }, "Total onboarded"),
+        React.createElement("div", { className: "value" }, String(motebits.total_announced)),
+      ),
+      React.createElement(
+        "div",
+        { className: "stat-card" },
+        React.createElement("div", { className: "label" }, "New 24h"),
+        React.createElement("div", { className: "value" }, String(motebits.new_24h)),
+      ),
+      React.createElement(
+        "div",
+        { className: "stat-card" },
+        React.createElement("div", { className: "label" }, "New 7d"),
+        React.createElement("div", { className: "value" }, String(motebits.new_7d)),
+      ),
+      React.createElement(
+        "div",
+        { className: "stat-card" },
+        React.createElement("div", { className: "label" }, "New 30d"),
+        React.createElement("div", { className: "value" }, String(motebits.new_30d)),
+      ),
+    ),
     React.createElement("h3", null, "Subscribers"),
     React.createElement(
       "p",

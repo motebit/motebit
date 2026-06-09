@@ -1416,4 +1416,42 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 32,
+    name: "motebit_intake_ledger",
+    up: (db) => {
+      // The relay's durable acquisition/intake ledger — the metabolic-intake
+      // half of the boundary, and the only honest source for "how many
+      // motebits have we onboarded."
+      //
+      // Deliberately NOT `agent_registry`: that table records *serving*
+      // agents and is reaped 90 days after a motebit stops heartbeating (the
+      // janitor in index.ts), so a registered_at count there can go *down*
+      // and conflates "minted" with "currently serving delegations." This
+      // ledger is append-only and the janitor never touches it: a motebit
+      // announced today still counts in a year even if it never serves. One
+      // row per identity (`motebit_id` PK + `ON CONFLICT DO NOTHING`), so
+      // `announced_at` is write-once and `COUNT(*)` is monotonic.
+      //
+      // The signature IS the auth (no bearer token); `audience` binds the
+      // signed record to this relay's `relay_id` so an announcement made to
+      // one relay is not replayable as intake on another. `record_json` holds
+      // the byte-identical canonical signed payload (same append-only-verbatim
+      // discipline as `relay_receipts.receipt_json`, CLAUDE.md rule 11).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_motebit_intake (
+          motebit_id   TEXT PRIMARY KEY,
+          public_key   TEXT NOT NULL,
+          surface      TEXT NOT NULL,
+          audience     TEXT NOT NULL,
+          announced_at INTEGER NOT NULL,
+          suite        TEXT NOT NULL,
+          signature    TEXT NOT NULL,
+          record_json  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_motebit_intake_announced_at
+          ON relay_motebit_intake(announced_at);
+      `);
+    },
+  },
 ];

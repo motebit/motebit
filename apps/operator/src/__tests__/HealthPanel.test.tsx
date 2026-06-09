@@ -21,7 +21,16 @@ function mockHealth(body: unknown) {
 }
 
 const ZERO_SUMMARY = {
-  motebits: { total_registered: 0, active_24h: 0, active_7d: 0, active_30d: 0 },
+  motebits: {
+    total_registered: 0,
+    active_24h: 0,
+    active_7d: 0,
+    active_30d: 0,
+    total_announced: 0,
+    new_24h: 0,
+    new_7d: 0,
+    new_30d: 0,
+  },
   federation: {
     peer_count: 0,
     active_peers: 0,
@@ -72,6 +81,10 @@ describe("HealthPanel", () => {
         active_24h: 3,
         active_7d: 7,
         active_30d: 12,
+        total_announced: 40,
+        new_24h: 2,
+        new_7d: 9,
+        new_30d: 25,
       },
       federation: {
         peer_count: 4,
@@ -95,6 +108,7 @@ describe("HealthPanel", () => {
     });
     expect(screen.getByText("18 / 65")).toBeTruthy(); // settlements 7d / 30d
     expect(screen.getAllByText("12").length).toBeGreaterThanOrEqual(2); // total + active_30d
+    expect(screen.getByText("40")).toBeTruthy(); // total_announced — the acquisition headline
     // Partnership signal MUST NOT appear when there's real activity
     expect(screen.queryByText(/Signal: zero motebit activity/)).toBeNull();
   });
