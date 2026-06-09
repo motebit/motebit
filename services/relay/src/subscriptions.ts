@@ -15,6 +15,8 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import { canonicalJson, sign, toBase64Url } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import { grantFreeCreditIfEligible } from "./free-credit.js";
+import { getClientIp } from "./middleware.js";
 import {
   getAccountBalance,
   getOrCreateAccount,
@@ -144,6 +146,13 @@ export function registerProxyTokenRoutes(
   /** @internal */
   app.post("/api/v1/agents/:motebitId/proxy-token", async (c) => {
     const motebitId = c.req.param("motebitId");
+
+    // Activation: grant a fresh motebit its one-time free "first taste" credit
+    // (inert unless MOTEBIT_FREE_CREDIT_USD is set; one-time + per-IP + global-
+    // budget capped — see free-credit.ts). This is the moment a brand-new
+    // motebit first reaches for cloud inference, so it's where the credit lands;
+    // the balance read below then includes it and the token carries it.
+    grantFreeCreditIfEligible(db, motebitId, getClientIp(c));
 
     const account = getAccountBalance(db, motebitId);
     const balance = account?.balance ?? 0;

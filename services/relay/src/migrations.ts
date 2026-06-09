@@ -1454,4 +1454,24 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 33,
+    name: "free_credit_ip_grants",
+    up: (db) => {
+      // Per-IP daily counter for the "free first taste" credit grant — the
+      // casual-abuse cap on free cloud inference (a fresh motebit can be minted
+      // for free, so the per-motebit grant alone is sybil-drainable; this bounds
+      // grants per source IP per day). The global daily budget cap and the
+      // one-time-per-motebit check live in free-credit.ts (the latter keyed on
+      // the `free-credit:<motebit_id>` ledger reference, so no column here).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_free_grants (
+          ip    TEXT NOT NULL,
+          day   TEXT NOT NULL,
+          count INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (ip, day)
+        );
+      `);
+    },
+  },
 ];
