@@ -599,6 +599,8 @@ function failureCopy(code: string, retryAfterSeconds?: number): string {
 
 export interface ChatCallbacks {
   openSettings(): void;
+  /** Open Settings straight to the provider/model (Intelligence) tab — the deferred-setup landing. */
+  openProviderSettings?(): void;
   openConversations?(): void;
   openShortcuts?(): void;
 }
@@ -651,7 +653,14 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     }
 
     if (!ctx.app.isProviderConnected) {
-      addMessage("system", "No provider connected. Open settings to configure one.");
+      // Deferred setup: the user expressed intent, so now is the moment to pick
+      // a brain — not an uninvited prompt on load. Guide them and open Settings
+      // to the provider tab.
+      addMessage(
+        "system",
+        "I need a model to think. Choose one in Settings — on-device, your own key, or motebit cloud.",
+      );
+      (callbacks.openProviderSettings ?? callbacks.openSettings)();
       return;
     }
 
@@ -882,7 +891,11 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
   /** Execute a multi-step plan and stream progress into chat. */
   async function executePlanInChat(goal: string): Promise<void> {
     if (!ctx.app.isProviderConnected) {
-      addMessage("system", "No provider connected. Open settings to configure one.");
+      addMessage(
+        "system",
+        "I need a model to think. Choose one in Settings — on-device, your own key, or motebit cloud.",
+      );
+      (callbacks.openProviderSettings ?? callbacks.openSettings)();
       return;
     }
 

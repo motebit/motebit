@@ -15,7 +15,7 @@ import { ProxySession } from "@motebit/runtime";
 import type { ProxyProviderConfig } from "@motebit/runtime";
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
-import { checkWebGPU, WebLLMProvider, PROXY_BASE_URL } from "./providers";
+import { WebLLMProvider, PROXY_BASE_URL } from "./providers";
 import { cleanConversationHistory } from "./bootstrap";
 import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
@@ -79,6 +79,7 @@ const colorPicker = initColorPicker(ctx, () => {
 
 const chatAPI = initChat(ctx, {
   openSettings: () => settings.open(),
+  openProviderSettings: () => settings.openToTab("intelligence"),
   openConversations: () => conversations.open(),
   openShortcuts: () => openShortcutDialog(),
 });
@@ -362,12 +363,18 @@ async function autoInitProxy(): Promise<boolean> {
 
 /** Fallback: load a language model into the browser via WebLLM. */
 async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<void> {
+  const prompt = document.getElementById("connect-prompt");
   const heading = document.getElementById("connect-prompt-heading");
   const text = document.getElementById("connect-prompt-text");
   const btn = document.getElementById("connect-prompt-btn");
   const progress = document.getElementById("connect-prompt-progress");
   const fill = document.getElementById("connect-prompt-progress-fill");
 
+  // The empty-state overlay is retired (updateConnectPrompt only hides), so this
+  // progress path un-hides the node itself. Only reached for a returning user
+  // who already chose on-device WebLLM — legitimate "waking up" feedback they
+  // opted into, never an uninvited first-run prompt.
+  if (prompt) prompt.classList.remove("hidden");
   if (heading) heading.textContent = "Waking up";
   if (text) text.textContent = "Preparing...";
   if (btn) btn.style.display = "none";
@@ -394,12 +401,11 @@ async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<voi
     settings.updateModelIndicator();
     settings.updateConnectPrompt();
   } catch {
-    if (heading) heading.textContent = "Connect a model";
-    if (text)
-      text.textContent =
-        "Open Settings to choose a provider — on-device, your own key, or motebit cloud.";
-    if (btn) btn.style.display = "";
-    if (progress) progress.style.display = "none";
+    // Don't fall back to the occluding empty-state overlay — hide it and nudge
+    // via a calm toast. The user can reconnect from Settings; the first-message
+    // path (chat.ts) will also guide them if they just try to talk.
+    if (prompt) prompt.classList.add("hidden");
+    showToast("Couldn't load the on-device model — reconnect in Settings.");
   }
 }
 
@@ -452,9 +458,10 @@ async function bootstrap(): Promise<void> {
   const savedConfig = loadProviderConfig();
   if (savedConfig != null) {
     if (savedConfig.mode === "motebit-cloud") {
-      // For cloud users, always go through autoInitProxy to handle token refresh
-      void autoInitProxy().then(async (ok) => {
-        if (!ok && checkWebGPU()) await autoInitWebLLM();
+      // For cloud users, always go through autoInitProxy to handle token refresh.
+      // No WebLLM fallback on load — if the token's stale, the first message
+      // guides them to reconnect (deferred setup), never an uninvited download.
+      void autoInitProxy().then(() => {
         settings.updateConnectPrompt();
       });
     } else if (savedConfig.mode === "on-device" && savedConfig.backend === "webllm") {
@@ -470,12 +477,11 @@ async function bootstrap(): Promise<void> {
       }
     }
   } else {
-    // First visit — no subscription yet. Boot sequence: subscriber proxy →
-    // WebLLM (in-browser, zero-config, no permission) → connect prompt. Local
-    // server inference is opt-in via Settings (never probed on load — see the
-    // note on autoInitLocalInference's removal above).
-    void autoInitProxy().then(async (ok) => {
-      if (!ok && checkWebGPU()) await autoInitWebLLM();
+    // First visit — nothing inference-y on load. Setup is deferred to the first
+    // message (chat.ts), so the first run is just the creature + the calm
+    // welcome: no localhost probe, no auto-download, no occluding "connect a
+    // model" overlay. A subscriber proxy still auto-connects if one exists.
+    void autoInitProxy().then(() => {
       settings.updateConnectPrompt();
     });
   }

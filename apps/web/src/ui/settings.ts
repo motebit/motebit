@@ -1581,11 +1581,13 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   }
 
   function updateConnectPrompt(): void {
-    if (ctx.app.isProviderConnected) {
-      connectPrompt.classList.add("hidden");
-    } else {
-      connectPrompt.classList.remove("hidden");
-    }
+    // Calm first-run: the "Connect a model" empty-state overlay is retired — it
+    // occluded the creature and demanded setup before the user expressed any
+    // intent. Setup is deferred to the first message (chat.ts guides the user
+    // into Settings then). So this only ever HIDES the element; the connect-
+    // prompt node now serves solely as the boot-time WebLLM progress surface,
+    // which un-hides itself in autoInitWebLLM. Never un-hide as an empty state.
+    connectPrompt.classList.add("hidden");
   }
 
   return { open, openToTab, close, updateModelIndicator, updateConnectPrompt };
