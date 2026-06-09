@@ -21,7 +21,7 @@ import {
   getAccountBalance,
   getOrCreateAccount,
   creditAccount,
-  debitAccount,
+  debitSpendableAccount,
   toMicro,
   fromMicro,
 } from "./accounts.js";
@@ -205,7 +205,11 @@ export function registerProxyTokenRoutes(
       return c.json({ error: "amount must be a positive number (micro-units)" }, 400);
     }
 
-    const newBalance = debitAccount(
+    // Spend-side debit: a worker's recent/disputed settlement earnings are
+    // under the escrow hold and MUST NOT fund their own cloud usage until they
+    // clear (true escrow — see dispute-v1.md §7.5). Deposited / cleared funds
+    // spend normally; only held earnings are blocked.
+    const newBalance = debitSpendableAccount(
       db,
       motebitId,
       body.amount,
@@ -215,7 +219,8 @@ export function registerProxyTokenRoutes(
     );
 
     if (newBalance === null) {
-      // Insufficient balance — the message was already served (fire-and-forget)
+      // Insufficient SPENDABLE balance (raw balance may be higher but under
+      // the escrow hold) — the message was already served (fire-and-forget).
       // Log but don't error — the 20% margin absorbs occasional overruns
       logger.warn("proxy-debit.insufficient", {
         motebitId,

@@ -56,8 +56,9 @@ import { computeP2pFeeMicro, computeFederatedFeeSplit } from "@motebit/protocol"
 import {
   getAccountBalance,
   creditAccount,
-  debitAccount,
+  debitSpendableAccount,
   getAllocationHoldRemaining,
+  computeDisputeWindowHold,
   toMicro,
 } from "./accounts.js";
 import { attemptPushWake } from "./push-adapter.js";
@@ -2155,9 +2156,16 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           }
         }
 
-        // Try to hold funds from virtual account
+        // Try to hold funds from virtual account. SPENDABLE balance only —
+        // the delegator's own recent/disputed settlement earnings are under
+        // the escrow hold and cannot fund a new delegation (true escrow;
+        // closes the collusion drain where a disputed worker delegates held
+        // earnings to a confederate before claw-back). Deposited/cleared
+        // funds are unaffected (hold = 0 → spendable = balance).
         const account = getAccountBalance(moteDb.db, delegatorId);
-        const virtualBalance = account?.balance ?? 0;
+        const rawBalance = account?.balance ?? 0;
+        const escrowHold = computeDisputeWindowHold(moteDb.db, delegatorId);
+        const virtualBalance = Math.max(0, rawBalance - escrowHold);
 
         // Use allocateBudget to compute lock amount with risk buffer
         const allocation = allocateBudget(
@@ -2178,7 +2186,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           // Lock the risk-buffered amount
           moteDb.db.exec("BEGIN");
           try {
-            debitAccount(
+            debitSpendableAccount(
               moteDb.db,
               delegatorId,
               allocation.amount_locked, // Uses risk-buffered amount (rounded to micro-unit)

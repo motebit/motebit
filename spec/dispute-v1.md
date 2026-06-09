@@ -248,6 +248,11 @@ Clients SHOULD poll `POST /api/v1/disputes/:disputeId/resolve` (idempotent — r
 
 When a dispute is opened, the referenced `BudgetAllocation` transitions to `disputed` (delegation@1.0 §6.1). Funds are locked for the duration of the dispute lifecycle — from `opened` through `resolved` (or `final`, if appealed).
 
+**Two funding regimes — the lock means different things depending on when the dispute is filed:**
+
+- **Pre-settlement dispute** (no settlement has credited the worker yet): the funds are genuinely held in escrow — the delegator was debited `amount_locked` at submission and nothing has been paid out. Resolution distributes the locked escrow to the winner. No claw-back.
+- **Post-settlement dispute** (the §7.5 window flow — a settlement already credited the worker `amount_settled`): the funds are **not** held in a separate pool; they are in the worker's balance, credited at settlement and held only in the sense of being **non-spendable and non-withdrawable** (§7.5). "Locked" here is an accounting state, not an escrow account. Resolution therefore **reclaims** the worker's net credit (a `settlement_debit` claw-back) before crediting the winner — see §7.3. A resolution that credited the winner _without_ reclaiming the worker's credit would mint money (refund/split) or double-pay (release).
+
 ### 7.2 Resolution Actions
 
 | Resolution   | Fund Action              | Effect                                                                   |
@@ -270,27 +275,31 @@ When a dispute is opened, the referenced `BudgetAllocation` transitions to `disp
 
 ### 7.3 Foundation Law
 
-- Funds must remain locked from `opened` through resolution. No partial release during the dispute.
+- Funds must remain locked from `opened` through resolution. No partial release during the dispute. For a post-settlement dispute, "locked" is enforced as the §7.5 hold (non-spendable + non-withdrawable), not a separate escrow.
 - Fund release must exactly match the `fund_action` in the signed `DisputeResolution`.
-- Split arithmetic uses integer micro-units. `worker_amount = floor(locked * split_ratio)`, `delegator_amount = locked - worker_amount`. No rounding error. No floating-point.
+- **Resolution MUST conserve total funds — it redistributes, never mints.** For a post-settlement dispute the redistribution base is the worker's `amount_settled` (the net already credited): resolution debits the worker `delegator_share = net - floor(net * split_ratio)` and credits the delegator the same amount (`refund` → full net; `release` → zero, the original settlement stands; `split` → the divided remainder). The worker/delegator identities are the authoritative `relay_settlements.motebit_id` / `delegator_id`, **not** the dispute's `filed_by`/`respondent` (which are filer/counterparty and do not map to worker/delegator for a worker-filed dispute). For a pre-settlement dispute the base is the still-escrowed `amount_locked` and no claw-back is needed.
+- The claw-back debit relies on the §7.5 hold making the funds present; if the worker's balance is nonetheless below the reclaimed amount, the relay fails closed (no partial credit to the winner) rather than crediting from funds it could not reclaim.
+- Split arithmetic uses integer micro-units. `worker_amount = floor(base * split_ratio)`, `delegator_amount = base - worker_amount`. No rounding error. No floating-point.
 
 ### 7.4 Convention
 
-- Platform fee is not re-extracted on dispute resolution. The fee was already computed at original settlement; dispute resolution redistributes the net amount only.
+- Platform fee is not re-extracted on dispute resolution. The fee was already computed at original settlement; dispute resolution redistributes the net amount only (the worker's `amount_settled`), never the gross or the risk-buffered `amount_locked`.
 
-### 7.5 Withdrawal Hold (Dispute Window)
+### 7.5 Escrow Hold (Dispute Window)
 
-Funds from relay-mediated settlements are held back from withdrawal for 24 hours after settlement. During this window, a dispute can be filed. If no dispute is filed within 24 hours, the funds become freely withdrawable.
+Funds from relay-mediated settlements are held — **non-withdrawable AND non-spendable** — for 24 hours after settlement, and for as long as any dispute that references them is active. During the window a dispute can be filed; if none is filed within 24 hours and no dispute is active, the funds clear.
 
-The hold is computed as: sum of `amount_settled` from `relay_settlements` where `settled_at > (now - 24h)` AND the settlement's `task_id` does not have an active dispute. Once a dispute is filed, the dispute's own fund locking (allocation status = `disputed`) takes over — the withdrawal hold only protects undisputed recent settlements.
+The hold is computed as: sum of `amount_settled` from `relay_settlements` for the worker where `status IN ('completed','partial')` and `settlement_mode = 'relay'` and **either** `settled_at > (now - 24h)` **or** the settlement's `task_id` has an active dispute (`state NOT IN ('final','expired')`). The two conditions are a **union**: filing a dispute does NOT release the funds — it extends the hold past the window so resolution can claw them back. (The pre-2026-06 predicate used `task_id NOT IN (active disputes)`, an exclusion that dropped disputed settlements out of the hold the instant a dispute was filed, making them withdrawable/spendable mid-dispute and defeating the claw-back.)
+
+The hold makes funds **non-spendable**, not merely non-withdrawable: a worker cannot route its held earnings into cloud-AI usage fees or into funding a new delegation (which would otherwise let a colluding worker drain disputed funds before resolution). Deposited / cleared funds are unaffected. This is what guarantees the §7.3 claw-back always finds the funds present.
 
 The hold is visible in the balance response as `dispute_window_hold` and `available_for_withdrawal`.
 
 **Foundation Law:**
 
-- Relay-mediated settlement funds MUST NOT be withdrawable during the dispute window.
+- Relay-mediated settlement funds MUST NOT be withdrawable or spendable during the dispute window or while a dispute referencing them is active.
 - The dispute window is 24 hours after `settled_at` (convention; relay-configurable).
-- P2P settlements (settlement_mode = `"p2p"`) are excluded from the withdrawal hold — funds moved onchain, not through the relay.
+- P2P settlements (settlement_mode = `"p2p"`) are excluded from the hold — funds moved onchain, not through the relay.
 
 ### 7.6 P2P Trust-Layer Disputes
 

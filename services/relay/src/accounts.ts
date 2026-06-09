@@ -136,6 +136,33 @@ export function debitAccount(
   return newBalance;
 }
 
+export function debitSpendableAccount(
+  db: DatabaseDriver,
+  motebitId: string,
+  amount: number,
+  type: TransactionType,
+  referenceId: string | null,
+  description: string | null,
+): number | null {
+  const newBalance = sqliteAccountStoreFor(db).debitSpendable(
+    motebitId,
+    amount,
+    type,
+    referenceId,
+    description,
+  );
+  if (newBalance !== null) {
+    logger.info("account.debit_spendable", {
+      motebitId,
+      amount,
+      type,
+      balanceAfter: newBalance,
+      referenceId,
+    });
+  }
+  return newBalance;
+}
+
 export function getTransactions(
   db: DatabaseDriver,
   motebitId: string,

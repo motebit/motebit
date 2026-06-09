@@ -205,6 +205,46 @@ export class SqliteAccountStore implements AccountStore {
     return newBalance;
   }
 
+  debitSpendable(
+    motebitId: string,
+    amount: number,
+    type: TransactionType,
+    referenceId: string | null,
+    description: string | null,
+  ): number | null {
+    const now = Date.now();
+    const transactionId = crypto.randomUUID();
+
+    this.getOrCreateAccount(motebitId);
+
+    // Compute the escrow hold first (synchronous), then debit atomically with
+    // `balance >= amount + hold`. better-sqlite3 is synchronous, so nothing
+    // interleaves between the read and the conditional UPDATE — funds under
+    // the hold (recent-settlement window + active disputes) cannot be spent.
+    const hold = this.getUnwithdrawableHold(motebitId);
+    const info = this.db
+      .prepare(
+        "UPDATE relay_accounts SET balance = balance - ?, updated_at = ? WHERE motebit_id = ? AND balance >= ?",
+      )
+      .run(amount, now, motebitId, amount + hold);
+
+    if (info.changes === 0) return null;
+
+    const updated = this.db
+      .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+      .get(motebitId) as { balance: number } | undefined;
+    const newBalance = updated?.balance ?? 0;
+
+    this.db
+      .prepare(
+        `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(transactionId, motebitId, type, -amount, newBalance, referenceId, description, now);
+
+    return newBalance;
+  }
+
   getTransactions(motebitId: string, limit = 50): AccountTransaction[] {
     // Secondary sort on `rowid` (SQLite's monotonic insertion counter)
     // breaks `created_at` ties deterministically: two transactions in
@@ -412,18 +452,31 @@ export class SqliteAccountStore implements AccountStore {
     // as a refusal, not as "no hold applies."
     if (!this.hasTables("relay_settlements", "relay_disputes")) return 0;
 
+    // The escrow hold — non-withdrawable AND non-spendable (debitSpendable).
+    // A relay-settled credit to this worker is held while EITHER:
+    //   (a) the 24h dispute window is still open (a dispute may yet be filed), OR
+    //   (b) an active dispute references its task (resolution may claw it back).
+    // The two conditions are a UNION, not an exclusion: filing a dispute must
+    // NOT release the funds. (The pre-2026-06 predicate had `task_id NOT IN
+    // (active disputes)`, which dropped disputed settlements out of the hold —
+    // making them withdrawable/spendable mid-dispute and defeating the
+    // claw-back. See docs/doctrine/settlement-rails.md / dispute-v1.md §7.5.)
+    // Both `completed` and `partial` credit the worker `amount_settled`, so
+    // both are held.
     const cutoff = Date.now() - DISPUTE_WINDOW_MS;
     const row = this.db
       .prepare(
         `SELECT COALESCE(SUM(s.amount_settled), 0) as total
          FROM relay_settlements s
          WHERE s.motebit_id = ?
-           AND s.settled_at > ?
-           AND s.status = 'completed'
+           AND s.status IN ('completed', 'partial')
            AND COALESCE(s.settlement_mode, 'relay') = 'relay'
-           AND s.task_id NOT IN (
-             SELECT d.task_id FROM relay_disputes d
-             WHERE d.state NOT IN ('final', 'expired')
+           AND (
+             s.settled_at > ?
+             OR s.task_id IN (
+               SELECT d.task_id FROM relay_disputes d
+               WHERE d.state NOT IN ('final', 'expired')
+             )
            )`,
       )
       .get(motebitId, cutoff) as { total: number };

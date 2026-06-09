@@ -468,3 +468,33 @@ describe("InMemoryAccountStore — allocation hold remaining", () => {
     expect(store.getAllocationHoldRemaining("alloc-2")).toBe(2_000_000);
   });
 });
+
+describe("InMemoryAccountStore — debitSpendable (escrow hold)", () => {
+  it("blocks spending funds under the hold, allows the spendable remainder", () => {
+    // 700k of the 1M balance is held (recent/disputed settlement earnings).
+    const store = new InMemoryAccountStore({ unwithdrawableHold: () => 700_000 });
+    store.credit(ALICE, 1_000_000, "settlement_credit", "stl-1", null);
+
+    // Spendable = 1_000_000 - 700_000 = 300_000.
+    expect(store.debitSpendable(ALICE, 400_000, "fee", "use-1", null)).toBeNull();
+    expect(store.getOrCreateAccount(ALICE).balance).toBe(1_000_000); // untouched
+
+    const after = store.debitSpendable(ALICE, 300_000, "fee", "use-2", null);
+    expect(after).toBe(700_000);
+  });
+
+  it("with zero hold behaves like a plain debit", () => {
+    const store = new InMemoryAccountStore(); // default hold = 0
+    store.credit(ALICE, 1_000_000, "deposit", "dep-1", null);
+    expect(store.debitSpendable(ALICE, 1_000_000, "fee", "use-1", null)).toBe(0);
+  });
+
+  it("raw debit bypasses the hold (system reclaim path)", () => {
+    // The dispute claw-back reclaims the held funds themselves, so it must use
+    // raw debit, not debitSpendable.
+    const store = new InMemoryAccountStore({ unwithdrawableHold: () => 1_000_000 });
+    store.credit(ALICE, 1_000_000, "settlement_credit", "stl-1", null);
+    expect(store.debitSpendable(ALICE, 1, "fee", "x", null)).toBeNull(); // fully held
+    expect(store.debit(ALICE, 1_000_000, "settlement_debit", "clawback", null)).toBe(0); // reclaim succeeds
+  });
+});

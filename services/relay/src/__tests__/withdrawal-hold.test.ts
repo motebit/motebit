@@ -87,32 +87,54 @@ describe("computeDisputeWindowHold", () => {
     expect(hold).toBe(0);
   });
 
-  it("does not hold funds for settlements that have active disputes", () => {
-    // Create a recent settlement
-    createSettlement(relay.moteDb.db, "worker-hold", "disputed-task", 100000, Date.now());
+  it("KEEPS funds held while a dispute is active — even past the 24h window", () => {
+    // A settlement OLDER than the dispute window would normally be free, but an
+    // active dispute keeps it locked so resolution can claw it back. (Before
+    // the 2026-06 escrow fix the predicate EXCLUDED disputed settlements,
+    // dropping the hold to 0 the instant a dispute was filed — which released
+    // the funds for withdrawal/spending mid-dispute and defeated the claw-back.
+    // The hold is now `recent OR active-dispute`, a union, not an exclusion.)
+    createSettlement(
+      relay.moteDb.db,
+      "worker-hold",
+      "disputed-task",
+      100000,
+      Date.now() - 48 * 3600000, // well past the 24h window
+    );
 
-    // File a dispute on it
-    relay.moteDb.db
-      .prepare(
-        `INSERT INTO relay_disputes
-         (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'evidence', ?, 0, ?, ?)`,
-      )
-      .run(
-        "dsp-test",
-        "disputed-task",
-        "alloc-disputed-task",
-        "delegator",
-        "worker-hold",
-        "quality",
-        "Bad work",
-        100000,
-        Date.now(),
-        Date.now() + 48 * 3600000,
-      );
+    // No dispute yet → past-window settlement is free.
+    expect(computeDisputeWindowHold(relay.moteDb.db, "worker-hold")).toBe(0);
 
-    const hold = computeDisputeWindowHold(relay.moteDb.db, "worker-hold");
-    expect(hold).toBe(0); // Dispute owns the lock now
+    // File a dispute on it.
+    const fileDispute = (state: string) =>
+      relay.moteDb.db
+        .prepare(
+          `INSERT OR REPLACE INTO relay_disputes
+           (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+        )
+        .run(
+          "dsp-test",
+          "disputed-task",
+          "alloc-disputed-task",
+          "delegator",
+          "worker-hold",
+          "quality",
+          "Bad work",
+          state,
+          100000,
+          Date.now(),
+          Date.now() + 48 * 3600000,
+        );
+
+    fileDispute("evidence");
+    // Active dispute → funds held (claw-backable) despite being past the window.
+    expect(computeDisputeWindowHold(relay.moteDb.db, "worker-hold")).toBe(100000);
+
+    // Once the dispute is final, the lock releases (and the settlement is old,
+    // so the window no longer holds it either).
+    fileDispute("final");
+    expect(computeDisputeWindowHold(relay.moteDb.db, "worker-hold")).toBe(0);
   });
 
   it("sums multiple recent settlements", () => {

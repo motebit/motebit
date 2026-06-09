@@ -58,6 +58,30 @@ export interface AccountStore {
     description: string | null,
   ): number | null;
 
+  /**
+   * Spend-side debit: like `debit`, but enforces
+   * `balance - getUnwithdrawableHold(motebitId) >= amount` — funds under
+   * the escrow hold (recent-settlement dispute window + active disputes)
+   * are non-spendable, not merely non-withdrawable. Returns `null` (no
+   * state change) when the *spendable* balance is insufficient, even if
+   * the raw balance would cover it. Used for outflows that move a
+   * worker's earnings before they clear: cloud-usage fees and
+   * delegator allocation holds. The raw `debit` bypasses the hold and is
+   * reserved for system reclaim (dispute claw-back of the held funds
+   * themselves) and refunds.
+   *
+   * Atomic under concurrent callers (compute-then-conditional-debit runs
+   * without yielding; SQLite uses a single `balance >= amount + hold`
+   * guard).
+   */
+  debitSpendable(
+    motebitId: string,
+    amountMicro: number,
+    type: TransactionType,
+    referenceId: string | null,
+    description: string | null,
+  ): number | null;
+
   // ── Transaction ledger ──────────────────────────────────────────
   getTransactions(motebitId: string, limit?: number): AccountTransaction[];
   /**
@@ -291,6 +315,22 @@ export class InMemoryAccountStore implements AccountStore {
       created_at: now,
     });
     return row.balance;
+  }
+
+  debitSpendable(
+    motebitId: string,
+    amount: number,
+    type: TransactionType,
+    referenceId: string | null,
+    description: string | null,
+  ): number | null {
+    // Synchronous: hold computation and the balance check do not yield, so
+    // there is no TOCTOU window against another caller.
+    const hold = this._unwithdrawableHold(motebitId);
+    const row = this.accounts.get(motebitId);
+    const balance = row?.balance ?? 0;
+    if (balance - hold < amount) return null;
+    return this.debit(motebitId, amount, type, referenceId, description);
   }
 
   getTransactions(motebitId: string, limit = 50): AccountTransaction[] {

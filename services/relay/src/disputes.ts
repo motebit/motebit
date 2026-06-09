@@ -39,7 +39,10 @@ import {
 } from "@motebit/wire-schemas";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity } from "./federation.js";
-import { creditAccount as creditAccountCanonical } from "./accounts.js";
+import {
+  creditAccount as creditAccountCanonical,
+  debitAccount as debitCanonical,
+} from "./accounts.js";
 import { createLogger } from "./logger.js";
 import {
   finalizeFederationResolution,
@@ -1843,9 +1846,116 @@ function executeFundAction(
     });
     return;
   }
+  const disputeId = dispute.dispute_id as string;
+  const taskId = dispute.task_id as string;
+
+  // Funding-state split (the mint fix). A relay settlement that credited the
+  // worker `amount_settled` means the funds ALREADY left escrow into the
+  // worker's balance (held non-spendable/non-withdrawable, never re-pooled).
+  // Crediting the winner without reclaiming that credit would mint money
+  // (refund/split) or double-pay (release). So a POST-settlement dispute
+  // REDISTRIBUTES the worker's net by clawing it back; a PRE-settlement
+  // dispute releases the still-locked escrow. See dispute-v1.md §7.
+  const settlement = db
+    .prepare(
+      `SELECT amount_settled, motebit_id, delegator_id, status
+       FROM relay_settlements
+       WHERE task_id = ? AND COALESCE(settlement_mode, 'relay') = 'relay'
+         AND status IN ('completed', 'partial')`,
+    )
+    .get(taskId) as
+    | { amount_settled: number; motebit_id: string; delegator_id: string | null; status: string }
+    | undefined;
+
+  if (settlement && settlement.amount_settled > 0) {
+    // ── Case B: POST-SETTLEMENT. Worker already holds the net. Redistribute it. ──
+    // Authoritative identities from the settlement row — NOT the dispute's
+    // filed_by/respondent, which are filer/counterparty and do not reliably
+    // map to worker/delegator (e.g. a worker-filed dispute).
+    // §7.4: redistribute the NET only (the platform fee was already taken and
+    // is not re-extracted). split_ratio unifies all three fund actions:
+    //   refund→0.0, release→1.0, split→0.5  ⇒  workerShare = floor(net*ratio).
+    const net = settlement.amount_settled;
+    const worker = settlement.motebit_id;
+    const delegator = settlement.delegator_id;
+    const workerShare = Math.floor(net * splitRatio);
+    const delegatorShare = net - workerShare; // reclaimed from worker → delegator
+
+    if (delegatorShare <= 0) {
+      // release_to_worker (ratio 1.0): the original settlement stands. The
+      // worker keeps the net it already holds — no fund movement.
+      logger.info("dispute.fund_action.post_settlement_noop", {
+        disputeId,
+        fundAction,
+        worker,
+        net,
+      });
+      return;
+    }
+    if (delegator == null || delegator === "") {
+      // No recorded payer — cannot route the refund. Do NOT debit the worker
+      // (that would destroy money) and do NOT mint. Trust-layer outcome only.
+      logger.error("dispute.fund_action.no_delegator", {
+        disputeId,
+        taskId,
+        worker,
+        delegatorShare,
+        reason:
+          "settlement has no delegator_id — post-settlement refund unroutable; funds stay with worker",
+      });
+      return;
+    }
+    // Reclaim the disputed portion from the worker. Phase-1 escrow (the
+    // non-spendable + non-withdrawable hold over recent/disputed settlements)
+    // guarantees these funds are still present, so this raw debit — which
+    // bypasses the hold, since it reclaims the held funds themselves —
+    // succeeds. Both legs run inside the caller's BEGIN/COMMIT.
+    const after = debitCanonical(
+      db,
+      worker,
+      delegatorShare,
+      "settlement_debit",
+      disputeId,
+      `Dispute claw-back (${fundAction}): ${disputeId}`,
+    );
+    if (after === null) {
+      // Escrow invariant violated — should be unreachable after Phase 1. Fail
+      // closed: never credit the delegator from funds we could not reclaim.
+      logger.error("dispute.fund_action.clawback_insufficient", {
+        disputeId,
+        worker,
+        delegatorShare,
+        reason: "worker balance below disputed amount despite escrow hold — refund withheld",
+      });
+      return;
+    }
+    creditAccountCanonical(
+      db,
+      delegator,
+      delegatorShare,
+      "settlement_credit",
+      disputeId,
+      `Dispute refund (${fundAction}): ${disputeId}`,
+    );
+    logger.info("dispute.fund_action.post_settlement", {
+      disputeId,
+      fundAction,
+      worker,
+      delegator,
+      net,
+      workerShare,
+      delegatorShare,
+    });
+    return;
+  }
+
+  // ── Case A: PRE-SETTLEMENT. Escrow (amount_locked) still held; release it. ──
+  // The delegator was debited amount_locked at submission and the worker was
+  // never paid (no settlement row), so the funds sit in escrow — distribute
+  // them per fund_action with no claw-back. Uses the dispute parties; the
+  // (resolution, filer_role) → fund_action mapping already encodes direction.
   const filedBy = dispute.filed_by as string;
   const respondent = dispute.respondent as string;
-  const disputeId = dispute.dispute_id as string;
 
   switch (fundAction) {
     case "refund_to_delegator": {
