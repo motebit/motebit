@@ -1983,6 +1983,137 @@ export async function verifyDeviceRegistration(
   return ok ? { valid: true } : { valid: false, reason: "bad_signature" };
 }
 
+// === Motebit announcement (sovereign-funnel intake) ===
+//
+// A self-signed declaration that a freshly-minted motebit is announcing
+// itself to a specific relay's durable intake ledger — the metabolic-intake
+// half of the boundary. Distinct from device-registration: registration
+// makes a device serve under an identity; an announcement is the identity's
+// one-time "I exist, count me" against a named relay. Same JCS+Ed25519+
+// base64url suite and 5-minute replay window as device-registration.
+//
+// `audience` binds the signed record to the target relay's sovereign id
+// (`relay_id`) so an announcement signed for relay A cannot be replayed as
+// intake — i.e. as consent-to-join — on relay B. Token binding per
+// `docs/doctrine/security-boundaries.md`. The signature is the auth; there
+// is no bearer token. Trust posture: an announced motebit starts at trust
+// zero, exactly like a self-registered device.
+
+/** The one suite motebit announcements sign under today (shared with device-registration). */
+export const MOTEBIT_ANNOUNCEMENT_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/** Maximum drift between the signer's claimed timestamp and the verifier's clock. */
+export const MOTEBIT_ANNOUNCEMENT_MAX_AGE_MS = 5 * 60 * 1000;
+
+/** The intake source a motebit announces from — one arm per client surface. */
+export type AnnouncementSurface = "web" | "desktop" | "mobile" | "cli" | "spatial";
+
+/**
+ * Shape of a motebit announcement for signing/verification.
+ *
+ * `audience` is the target relay's `relay_id` (its `relayMotebitId`); the
+ * relay rejects an announcement whose `audience` is not its own id.
+ */
+export interface SignableMotebitAnnouncement {
+  motebit_id: string;
+  public_key: string;
+  surface: AnnouncementSurface;
+  audience: string;
+  timestamp: number;
+  suite: typeof MOTEBIT_ANNOUNCEMENT_SUITE;
+  signature: string;
+}
+
+/**
+ * Sign a motebit announcement. Stamps the cryptosuite into the body,
+ * canonicalizes with JCS, dispatches the primitive signature through
+ * `signBySuite`, and encodes as base64url per the suite's rules.
+ *
+ * Callers pass the body without `signature` and (optionally) without `suite`;
+ * the signer owns both. The returned object is a complete signed announcement
+ * ready to POST to a relay's `/api/v1/motebits/announce` endpoint.
+ */
+export async function signMotebitAnnouncement<
+  T extends Omit<SignableMotebitAnnouncement, "signature" | "suite">,
+>(
+  body: T,
+  privateKey: Uint8Array,
+): Promise<T & { suite: typeof MOTEBIT_ANNOUNCEMENT_SUITE; signature: string }> {
+  const withSuite = { ...body, suite: MOTEBIT_ANNOUNCEMENT_SUITE };
+  const canonical = canonicalJson(withSuite);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(MOTEBIT_ANNOUNCEMENT_SUITE, message, privateKey);
+  return { ...withSuite, signature: toBase64Url(sig) } as T & {
+    suite: typeof MOTEBIT_ANNOUNCEMENT_SUITE;
+    signature: string;
+  };
+}
+
+/**
+ * Verify a motebit announcement's signature against the public key carried
+ * in the announcement itself, AND that its `audience` matches the verifying
+ * relay's expected id. The `now` parameter (defaulting to `Date.now()`) lets
+ * tests pin the clock for replay-window assertions.
+ *
+ * Returns a discriminated reason on failure so the relay can map to a
+ * wire-level status. `wrong_audience` is its own arm: a structurally valid,
+ * correctly-signed announcement that was bound to a different relay — the
+ * cross-relay replay this binding exists to reject.
+ */
+export type MotebitAnnouncementVerifyResult =
+  | { valid: true }
+  | {
+      valid: false;
+      reason: "malformed" | "stale" | "unsupported_suite" | "wrong_audience" | "bad_signature";
+    };
+
+export async function verifyMotebitAnnouncement(
+  body: SignableMotebitAnnouncement,
+  opts: { expectedAudience: string; now?: number },
+): Promise<MotebitAnnouncementVerifyResult> {
+  const now = opts.now ?? Date.now();
+  // Step 1 — shape validation. Any missing / mistyped field is "malformed".
+  if (
+    typeof body.motebit_id !== "string" ||
+    typeof body.public_key !== "string" ||
+    !/^[0-9a-f]{64}$/i.test(body.public_key) ||
+    typeof body.surface !== "string" ||
+    typeof body.audience !== "string" ||
+    typeof body.timestamp !== "number" ||
+    typeof body.suite !== "string" ||
+    typeof body.signature !== "string"
+  ) {
+    return { valid: false, reason: "malformed" };
+  }
+  // Step 2 — replay window.
+  if (Math.abs(now - body.timestamp) > MOTEBIT_ANNOUNCEMENT_MAX_AGE_MS) {
+    return { valid: false, reason: "stale" };
+  }
+  // Step 3 — suite check. Only the registered suite is acceptable today.
+  if (body.suite !== MOTEBIT_ANNOUNCEMENT_SUITE) {
+    return { valid: false, reason: "unsupported_suite" };
+  }
+  // Step 4 — audience binding. Reject an announcement signed for another
+  // relay before spending a signature verification on it.
+  if (body.audience !== opts.expectedAudience) {
+    return { valid: false, reason: "wrong_audience" };
+  }
+  // Step 5–7 — canonicalize, decode, verify.
+  const { signature, ...bodyForSig } = body;
+  const canonical = canonicalJson(bodyForSig);
+  const message = new TextEncoder().encode(canonical);
+  let sigBytes: Uint8Array;
+  let pkBytes: Uint8Array;
+  try {
+    sigBytes = fromBase64Url(signature);
+    pkBytes = hexToBytes(body.public_key);
+  } catch {
+    return { valid: false, reason: "malformed" };
+  }
+  const ok = await verifyBySuite(body.suite, message, sigBytes, pkBytes);
+  return ok ? { valid: true } : { valid: false, reason: "bad_signature" };
+}
+
 // === Goal Execution Manifest (execution-ledger spec §6) ===
 
 import type { GoalExecutionManifest, ExecutionTimelineEntry } from "@motebit/protocol";

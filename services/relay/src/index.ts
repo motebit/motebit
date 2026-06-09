@@ -81,6 +81,7 @@ import { registerMiddleware, registerAuthMiddleware } from "./middleware.js";
 import { registerWebSocketRoutes } from "./websocket.js";
 import type { ConnectedDevice } from "./websocket.js";
 import { registerSyncRoutes, redactSensitiveEvents } from "./sync-routes.js";
+import { registerIntakeRoutes } from "./intake-routes.js";
 import { createIdempotencyTable, cleanupIdempotencyKeys } from "./idempotency.js";
 import {
   createFederationTables,
@@ -767,6 +768,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Sync routes (HTTP fallback, device registration, identity CRUD) ---
   registerSyncRoutes({ app, moteDb, eventStore, identityManager, connections });
+
+  // --- Intake routes (self-signed motebit announcement → durable intake ledger) ---
+  // Auth-less by design (signature is the auth); registered before the bearer-token
+  // auth middleware so it stays public, like register-self.
+  registerIntakeRoutes({ app, moteDb, relayIdentity });
 
   // --- Auth middleware for task/budget/admin routes (must run after registerMiddleware) ---
   registerAuthMiddleware({

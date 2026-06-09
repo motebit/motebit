@@ -315,6 +315,12 @@ export interface HealthMotebits {
   active_24h: number;
   active_7d: number;
   active_30d: number;
+  /** Lifetime cumulative motebits onboarded — the durable, monotonic userbase number. */
+  total_announced: number;
+  /** Newly announced (acquired) motebits within each window — the funnel's intake curve. */
+  new_24h: number;
+  new_7d: number;
+  new_30d: number;
 }
 
 export interface HealthFederation {

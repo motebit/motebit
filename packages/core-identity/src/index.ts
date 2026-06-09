@@ -677,3 +677,12 @@ export {
   type RegisterWithRelayResult,
   type RegisterWithRelayErrorCode,
 } from "./register-with-relay.js";
+
+// === Self-Attesting Motebit Announcement (sovereign-funnel intake) ===
+
+export {
+  announceMotebit,
+  type AnnounceMotebitParams,
+  type AnnounceMotebitResult,
+  type AnnounceMotebitErrorCode,
+} from "./announce-with-relay.js";

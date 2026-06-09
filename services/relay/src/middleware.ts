@@ -461,6 +461,12 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         // The handler verifies the signature against the public key carried
         // in the request body itself.
         c.req.path === "/api/v1/devices/register-self" ||
+        // Self-attesting motebit announcement (sovereign-funnel intake) is
+        // auth-less by design, same as register-self — the request's signature
+        // IS the auth, and the handler verifies it against the public key in
+        // the body and that `audience` is this relay's id. A first-launch
+        // motebit holds no relay-issued bearer token. See intake-routes.ts.
+        c.req.path === "/api/v1/motebits/announce" ||
         c.req.path.startsWith("/api/v1/credentials/verify") ||
         c.req.path.startsWith("/api/v1/credentials/batch-status") ||
         c.req.path.match(/\/api\/v1\/credentials\/[^/]+\/status/) ||
