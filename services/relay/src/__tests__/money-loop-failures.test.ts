@@ -97,6 +97,7 @@ async function buildSignedReceipt(
   taskId: string,
   workerMotebitId: string,
   workerPrivateKey: Uint8Array,
+  status: "completed" | "failed" = "completed",
 ): Promise<Record<string, unknown>> {
   const enc = new TextEncoder();
   const promptHash = await sha256(enc.encode("search for motebit sovereign agents"));
@@ -111,7 +112,7 @@ async function buildSignedReceipt(
     device_id: "web-search-service" as unknown as DeviceId,
     submitted_at: Date.now() - 1000,
     completed_at: Date.now(),
-    status: "completed" as const,
+    status,
     result: "Search results: motebit is a sovereign agent protocol",
     tools_used: ["web_search"],
     memories_formed: 0,
@@ -273,6 +274,122 @@ describe("Money Loop Failure Injection", () => {
 
     const reconciliation = reconcileLedger(relay.moteDb.db);
     expect(reconciliation.consistent).toBe(true);
+  });
+
+  it("failed receipt on a funded task — full hold refunded to delegator, no worker credit", async () => {
+    const workerKp = await generateKeypair();
+    const worker = await createAgent(relay, bytesToHex(workerKp.publicKey));
+
+    await registerWorker(relay, worker.motebitId);
+    await deposit(relay, worker.motebitId, 10.0);
+
+    const { taskId, status } = await submitTask(relay, worker.motebitId, worker.motebitId);
+    expect(status).toBe(201);
+
+    // The allocation hold debited the delegator
+    const midBalance = await getBalance(relay, worker.motebitId);
+    expect(midBalance).toBeLessThan(10.0);
+
+    // Worker fails the task
+    const receipt = await buildSignedReceipt(
+      taskId,
+      worker.motebitId,
+      workerKp.privateKey,
+      "failed",
+    );
+    const res = await submitReceipt(relay, worker.motebitId, taskId, receipt);
+    expect(res.status).toBe(200);
+
+    // The settlement RECORD carries zeros (nothing settled, no fee) ...
+    const row = relay.moteDb.db
+      .prepare(
+        "SELECT status, amount_settled, platform_fee FROM relay_settlements WHERE task_id = ?",
+      )
+      .get(taskId) as { status: string; amount_settled: number; platform_fee: number };
+    expect(row.status).toBe("refunded");
+    expect(row.amount_settled).toBe(0);
+    expect(row.platform_fee).toBe(0);
+
+    // ... but the MONEY is the full hold returned to the delegator. (This
+    // regressed silently when settleOnReceipt fixed refunded amounts at 0
+    // while the refund branch credited amount_settled + platform_fee — a
+    // failed paid task refunded only the risk-buffer surplus and stranded
+    // the principal in a 'settled' allocation.)
+    const finalBalance = await getBalance(relay, worker.motebitId);
+    expect(finalBalance).toBeCloseTo(10.0, 2);
+
+    // No worker payment happened
+    const credits = relay.moteDb.db
+      .prepare(
+        "SELECT COUNT(*) as count FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit'",
+      )
+      .get(worker.motebitId) as { count: number };
+    expect(credits.count).toBe(0);
+
+    const reconciliation = reconcileLedger(relay.moteDb.db);
+    expect(reconciliation.consistent).toBe(true);
+    expect(reconciliation.errors).toHaveLength(0);
+  });
+
+  it("receipt after the allocation was released — settlement skipped fail-closed, no double-credit", async () => {
+    const workerKp = await generateKeypair();
+    const worker = await createAgent(relay, bytesToHex(workerKp.publicKey));
+
+    await registerWorker(relay, worker.motebitId);
+    await deposit(relay, worker.motebitId, 10.0);
+
+    const { taskId } = await submitTask(relay, worker.motebitId, worker.motebitId);
+    expect(taskId).toBeTruthy();
+
+    // Simulate the stale-allocation sweep (or a dispute / retry-exhaustion
+    // refund) firing before the receipt arrives: refund the delegator and
+    // release the allocation, exactly as the janitor does.
+    const { creditAccount } = await import("../accounts.js");
+    const alloc = relay.moteDb.db
+      .prepare("SELECT allocation_id, amount_locked FROM relay_allocations WHERE task_id = ?")
+      .get(taskId) as { allocation_id: string; amount_locked: number };
+    relay.moteDb.db.exec("BEGIN");
+    creditAccount(
+      relay.moteDb.db,
+      worker.motebitId,
+      alloc.amount_locked,
+      "allocation_release",
+      alloc.allocation_id,
+      `Stale allocation release for task ${taskId}`,
+    );
+    relay.moteDb.db
+      .prepare(
+        "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE task_id = ?",
+      )
+      .run(Date.now(), taskId);
+    relay.moteDb.db.exec("COMMIT");
+    expect(await getBalance(relay, worker.motebitId)).toBeCloseTo(10.0, 2);
+
+    // The worker then submits a valid completed receipt. The receipt is
+    // accepted (work happened, trust updates), but the MONEY path must skip:
+    // the funds backing this task were already returned to the delegator.
+    const receipt = await buildSignedReceipt(taskId, worker.motebitId, workerKp.privateKey);
+    const res = await submitReceipt(relay, worker.motebitId, taskId, receipt);
+    expect(res.status).toBe(200);
+
+    // No settlement row, no worker credit, balance unchanged — the relay
+    // must not pay both parties for the same locked funds.
+    const settlementRow = relay.moteDb.db
+      .prepare("SELECT 1 FROM relay_settlements WHERE task_id = ?")
+      .get(taskId);
+    expect(settlementRow).toBeUndefined();
+    expect(await getBalance(relay, worker.motebitId)).toBeCloseTo(10.0, 2);
+
+    const credits = relay.moteDb.db
+      .prepare(
+        "SELECT COUNT(*) as count FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit'",
+      )
+      .get(worker.motebitId) as { count: number };
+    expect(credits.count).toBe(0);
+
+    const reconciliation = reconcileLedger(relay.moteDb.db);
+    expect(reconciliation.consistent).toBe(true);
+    expect(reconciliation.errors).toHaveLength(0);
   });
 
   it("receipt with invalid signature — 403, no settlement, no balance change", async () => {

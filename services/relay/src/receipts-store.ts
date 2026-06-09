@@ -60,6 +60,13 @@ function receiptTaskId(r: ExecutionReceipt): string {
  * Not wrapped in a transaction: each insert is its own commit so a
  * partial chain is still durable. The composite PK makes partial
  * retries safe.
+ *
+ * Returns whether the ROOT receipt row was newly inserted. `false`
+ * means this exact (motebit_id, task_id) was archived by a previous
+ * request — the caller uses this to make side effects that must be
+ * exactly-once per receipt (trust updates, credential issuance)
+ * replay-proof, independently of whether a settlement row exists.
+ * Settlement itself stays retryable on resubmission by design.
  */
 export function persistReceiptChain(
   db: DatabaseDriver,
@@ -67,7 +74,7 @@ export function persistReceiptChain(
   parentTaskId: string | null = null,
   depth = 0,
   receivedAt: number = Date.now(),
-): void {
+): boolean {
   if (depth > MAX_RECEIPT_DEPTH) {
     logger.warn("receipt.persist.depth_limit_exceeded", {
       motebitId: receipt.motebit_id,
@@ -75,7 +82,7 @@ export function persistReceiptChain(
       depth,
       maxDepth: MAX_RECEIPT_DEPTH,
     });
-    return;
+    return false;
   }
 
   const taskId = receiptTaskId(receipt);
@@ -86,24 +93,27 @@ export function persistReceiptChain(
   // verifies against `public_key` — offline, no relay required.
   const receiptJson = canonicalJson(receipt);
 
-  db.prepare(INSERT_SQL).run(
-    receipt.motebit_id,
-    taskId,
-    parentTaskId,
-    depth,
-    receipt.status,
-    receipt.suite,
-    receipt.public_key ?? "",
-    receipt.signature,
-    receipt.invocation_origin ?? null,
-    receiptJson,
-    receivedAt,
-  );
+  const info = db
+    .prepare(INSERT_SQL)
+    .run(
+      receipt.motebit_id,
+      taskId,
+      parentTaskId,
+      depth,
+      receipt.status,
+      receipt.suite,
+      receipt.public_key ?? "",
+      receipt.signature,
+      receipt.invocation_origin ?? null,
+      receiptJson,
+      receivedAt,
+    );
 
   const children = receipt.delegation_receipts ?? [];
   for (const child of children) {
     persistReceiptChain(db, child, taskId, depth + 1, receivedAt);
   }
+  return info.changes > 0;
 }
 
 /**

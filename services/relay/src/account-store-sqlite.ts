@@ -230,6 +230,19 @@ export class SqliteAccountStore implements AccountStore {
     return row !== undefined;
   }
 
+  getAllocationHoldRemaining(referenceId: string): number {
+    // Ledger amounts are signed (debits negative, credits positive), so the
+    // hold-minus-releases net for this reference is -SUM(amount). Floored at
+    // zero: over-release would surface as a negative net, never as new funds.
+    const row = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(amount), 0) as net FROM relay_transactions
+         WHERE reference_id = ? AND type IN ('allocation_hold', 'allocation_release')`,
+      )
+      .get(referenceId) as { net: number };
+    return Math.max(0, -row.net);
+  }
+
   insertWithdrawal(w: NewWithdrawal): WithdrawalRequest {
     this.db
       .prepare(

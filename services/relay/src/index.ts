@@ -161,7 +161,7 @@ import { startSweepLoop } from "./sweep.js";
 import { startBatchWithdrawalLoop, getPendingWithdrawalsSummary } from "./batch-withdrawals.js";
 import { registerAgentRoutes } from "./agents.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
-import { registerTaskRoutes } from "./tasks.js";
+import { registerTaskRoutes, TASK_TTL_MS } from "./tasks.js";
 import { ExpoPushAdapter } from "./push-adapter.js";
 import { TaskQueue } from "./task-queue.js";
 import { registerCommandRoutes, handleCommandResponse } from "./command-route.js";
@@ -582,7 +582,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Shared state ---
   const connections = new Map<string, ConnectedDevice[]>();
 
-  const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
+  // TASK_TTL_MS is imported from tasks.ts — one canonical task lifetime. (A
+  // local duplicate of the literal lived here until 2026-06, shadowing the
+  // canonical constant; the two could drift independently.)
   const MAX_TASK_QUEUE_SIZE = 100_000;
   const MAX_TASKS_PER_SUBMITTER = config.maxTasksPerSubmitter ?? 1_000;
   const taskQueue = new TaskQueue(moteDb.db);
@@ -650,6 +652,21 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Cleanup interval (task expiry, limiter cleanup, stale allocations) ---
   // Stays in index.ts because it touches the local taskQueue map and allLimiters array.
+  //
+  // Allocations still 'locked' this long after creation are presumed
+  // abandoned (no receipt arrived) and refunded to the delegator. The horizon
+  // MUST comfortably exceed the maximum task lifetime — TASK_TTL_MS plus the
+  // single receipt-time extension in tasks.ts — so a live task can never have
+  // its funding swept out from under it; the settlement-side allocation claim
+  // (`settlement.unfunded_skipped` in tasks.ts) fails closed if a receipt
+  // nevertheless arrives after release. The 3× factor encodes "initial TTL +
+  // one extension, with margin".
+  const STALE_ALLOCATION_HORIZON_MS = 3_600_000; // 1 hour
+  if (STALE_ALLOCATION_HORIZON_MS < 3 * TASK_TTL_MS) {
+    throw new Error(
+      `STALE_ALLOCATION_HORIZON_MS (${STALE_ALLOCATION_HORIZON_MS}ms) must be >= 3x TASK_TTL_MS (${TASK_TTL_MS}ms) — sweeping a live task's allocation opens a refund/settlement double-credit race`,
+    );
+  }
   const taskCleanupInterval = setInterval(() => {
     const now = Date.now();
     // Expire completed/failed tasks and tasks past their TTL
@@ -708,7 +725,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         .prepare(
           "SELECT allocation_id, task_id, motebit_id, amount_locked FROM relay_allocations WHERE status = 'locked' AND created_at < ?",
         )
-        .all(now - 3_600_000) as Array<{
+        .all(now - STALE_ALLOCATION_HORIZON_MS) as Array<{
         allocation_id: string;
         task_id: string;
         motebit_id: string;
@@ -734,7 +751,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             .prepare(
               "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE status = 'locked' AND created_at < ?",
             )
-            .run(now, now - 3_600_000);
+            .run(now, now - STALE_ALLOCATION_HORIZON_MS);
           moteDb.db.exec("COMMIT");
         } catch {
           moteDb.db.exec("ROLLBACK");

@@ -430,3 +430,41 @@ describe("InMemoryAccountStore — policy injection", () => {
     });
   });
 });
+
+describe("InMemoryAccountStore — allocation hold remaining", () => {
+  it("returns the hold amount after an allocation_hold debit", () => {
+    const store = new InMemoryAccountStore();
+    store.credit(ALICE, 10_000_000, "deposit", "dep-1", null);
+    store.debit(ALICE, 1_200_000, "allocation_hold", "alloc-1", null);
+    expect(store.getAllocationHoldRemaining("alloc-1")).toBe(1_200_000);
+  });
+
+  it("nets releases against the hold and floors at zero", () => {
+    const store = new InMemoryAccountStore();
+    store.credit(ALICE, 10_000_000, "deposit", "dep-1", null);
+    store.debit(ALICE, 1_200_000, "allocation_hold", "alloc-1", null);
+    store.credit(ALICE, 200_000, "allocation_release", "alloc-1", null);
+    expect(store.getAllocationHoldRemaining("alloc-1")).toBe(1_000_000);
+    store.credit(ALICE, 1_000_000, "allocation_release", "alloc-1", null);
+    expect(store.getAllocationHoldRemaining("alloc-1")).toBe(0);
+    // Over-release (operator error) must never surface as new funds.
+    store.credit(ALICE, 500_000, "allocation_release", "alloc-1", null);
+    expect(store.getAllocationHoldRemaining("alloc-1")).toBe(0);
+  });
+
+  it("returns zero for never-debited references (free-agent allocation rows)", () => {
+    const store = new InMemoryAccountStore();
+    store.credit(ALICE, 10_000_000, "deposit", "alloc-1", null);
+    expect(store.getAllocationHoldRemaining("alloc-1")).toBe(0);
+    expect(store.getAllocationHoldRemaining("alloc-never-seen")).toBe(0);
+  });
+
+  it("scopes by reference_id — sibling allocations do not bleed", () => {
+    const store = new InMemoryAccountStore();
+    store.credit(ALICE, 10_000_000, "deposit", "dep-1", null);
+    store.debit(ALICE, 1_000_000, "allocation_hold", "alloc-1", null);
+    store.debit(ALICE, 2_000_000, "allocation_hold", "alloc-2", null);
+    expect(store.getAllocationHoldRemaining("alloc-1")).toBe(1_000_000);
+    expect(store.getAllocationHoldRemaining("alloc-2")).toBe(2_000_000);
+  });
+});

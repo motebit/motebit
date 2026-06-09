@@ -1291,6 +1291,28 @@ describe("Sync Relay — agent protocol", () => {
       { ws: serviceWs as never, deviceId: serviceDeviceId, capabilities: ["web_search"] },
     ]);
 
+    // Price the TARGET motebit too: `price_snapshot` (and therefore the
+    // submission-time allocation hold) derives from the target's listing.
+    // Without it the task is unfunded and settlement skips fail-closed.
+    await relay.app.request(`/api/v1/agents/${MOTEBIT_ID}/listing`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        capabilities: ["web_search"],
+        pricing: [{ capability: "web_search", unit_cost: 1.0, currency: "USD", per: "task" }],
+      }),
+    });
+
+    // Fund the delegator's virtual account — stands in for the x402
+    // payment leg the test harness can't perform. Settlement credits are
+    // funded by the allocation hold this deposit backs; an unfunded task is
+    // (correctly) skipped fail-closed by the settlement funding claim.
+    await relay.app.request(`/api/v1/agents/${MOTEBIT_ID}/deposit`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({ amount: 5.0, reference: `deposit-${crypto.randomUUID()}` }),
+    });
+
     // Submit task — x402 handles payment at HTTP layer, no max_budget needed
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
@@ -1488,6 +1510,26 @@ describe("Sync Relay — agent protocol", () => {
       { ws: serviceWs as never, deviceId: refDeviceId, capabilities: ["web_search"] },
     ]);
 
+    // Price the TARGET motebit too: `price_snapshot` (and therefore the
+    // submission-time allocation hold) derives from the target's listing.
+    // Without it the task is unfunded and settlement skips fail-closed.
+    await relay.app.request(`/api/v1/agents/${MOTEBIT_ID}/listing`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        capabilities: ["web_search"],
+        pricing: [{ capability: "web_search", unit_cost: 1.0, currency: "USD", per: "task" }],
+      }),
+    });
+
+    // Fund the delegator — the refund path below must return this hold in
+    // full (unfunded tasks skip settlement entirely, fail-closed).
+    await relay.app.request(`/api/v1/agents/${MOTEBIT_ID}/deposit`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({ amount: 5.0, reference: `deposit-${crypto.randomUUID()}` }),
+    });
+
     // Submit task
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
@@ -1537,6 +1579,14 @@ describe("Sync Relay — agent protocol", () => {
     expect(refunded!.status).toBe("refunded");
     expect(refunded!.amount_settled).toBe(0);
     expect(refunded!.platform_fee).toBe(0);
+
+    // The settlement RECORD carries zeros; the refund MONEY is the full
+    // hold returned to the delegator's virtual account.
+    const balanceRes = await relay.app.request(`/api/v1/agents/${MOTEBIT_ID}/balance`, {
+      headers: AUTH_HEADER,
+    });
+    const balanceBody = (await balanceRes.json()) as { balance: number };
+    expect(balanceBody.balance).toBeCloseTo(5.0, 2);
   });
 
   it("POST/GET /sync/:id/plans pushes and pulls plans", async () => {

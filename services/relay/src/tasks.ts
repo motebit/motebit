@@ -53,7 +53,13 @@ import {
 } from "@motebit/market";
 import type { CandidateProfile, CompositeFunction } from "@motebit/market";
 import { computeP2pFeeMicro, computeFederatedFeeSplit } from "@motebit/protocol";
-import { getAccountBalance, creditAccount, debitAccount, toMicro } from "./accounts.js";
+import {
+  getAccountBalance,
+  creditAccount,
+  debitAccount,
+  getAllocationHoldRemaining,
+  toMicro,
+} from "./accounts.js";
 import { attemptPushWake } from "./push-adapter.js";
 import { getRelayKeypair } from "./credentials.js";
 import type { RelayIdentity } from "./federation.js";
@@ -86,7 +92,11 @@ import {
 const logger = createLogger({ service: "tasks" });
 
 // --- Constants ---
-const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
+// Exported so index.ts can assert the stale-allocation sweep horizon stays
+// safely above the maximum task lifetime (initial TTL + the single
+// receipt-time extension below) — sweeping a live task's allocation would
+// open a refund/settlement double-credit race.
+export const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_TASK_QUEUE_SIZE = 100_000; // Hard cap prevents memory exhaustion
 
 /** Shape of each entry in the in-memory task queue. */
@@ -398,7 +408,15 @@ export async function handleReceiptIngestion(
   // settlement duplicate short-circuit so re-submissions still
   // archive if the prior write failed; the composite PK keeps
   // double-writes safe. See services/relay/src/receipts-store.ts.
-  persistReceiptChain(moteDb.db, receipt);
+  //
+  // `newlyArchived === false` means this exact receipt was processed by a
+  // previous request. Trust updates and credential issuance below are gated
+  // on it so they are exactly-once per receipt: the settlement-row dedup
+  // alone cannot cover tasks whose settlement is skipped (unfunded
+  // allocations), where a worker could otherwise pump trust by resubmitting
+  // the same receipt. Settlement itself is NOT gated on this — resubmission
+  // is the documented recovery path for a transiently failed settlement.
+  const newlyArchived = persistReceiptChain(moteDb.db, receipt);
 
   // --- Idempotency: DB settlement check ---
   const existingSettlement = moteDb.db
@@ -421,7 +439,7 @@ export async function handleReceiptIngestion(
       reason: "submitter === executor — no trust signal or credential issued",
     });
   }
-  if (!isSelfDelegation) {
+  if (!isSelfDelegation && newlyArchived) {
     try {
       const executingAgentId = receipt.motebit_id;
       const taskSucceeded = receipt.status === "completed";
@@ -999,7 +1017,12 @@ export async function handleReceiptIngestion(
         issued_at: number;
       } | null = null;
 
-      if (issueCredentials && receipt.status === "completed" && !isSelfDelegation) {
+      if (
+        issueCredentials &&
+        receipt.status === "completed" &&
+        !isSelfDelegation &&
+        newlyArchived
+      ) {
         const latencyRows = moteDb.db
           .prepare(
             "SELECT latency_ms FROM relay_latency_stats WHERE remote_motebit_id = ? ORDER BY recorded_at DESC LIMIT 100",
@@ -1095,9 +1118,48 @@ export async function handleReceiptIngestion(
 
       moteDb.db.exec("BEGIN");
       try {
+        // Fail-closed funding claim — mirror of the retry-refund guard in
+        // index.ts's settlement retry loop (`UPDATE ... WHERE status =
+        // 'locked'`, then check `changes`). Every credit below (worker
+        // payment, refund, partial remainder, risk-buffer surplus) is funded
+        // by this task's locked allocation; claim it atomically before
+        // crediting. If the row is no longer 'locked' (stale-allocation
+        // sweep, dispute release, retry-exhaustion refund), the delegator
+        // has already been credited back and settling here would pay both
+        // parties for the same funds. The pre-transaction `persistentAlloc`
+        // read is advisory; this UPDATE is the authoritative check. It also
+        // keeps reconciliation invariant 3 (allocation 'settled' ⇔ settlement
+        // record exists) true: the claim and the INSERT below commit together
+        // or not at all.
+        const allocationClaimed =
+          !isP2pTask &&
+          signedSettlement != null &&
+          moteDb.db
+            .prepare(
+              "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ? AND status = 'locked'",
+            )
+            .run(Date.now(), taskId).changes > 0;
+        // What the delegator actually has at stake: allocation_hold debits
+        // minus allocation_release credits for this allocation, from the
+        // transaction ledger. NEVER `amount_locked` — allocation rows also
+        // exist for never-debited paths (free-agent best-effort holds), and
+        // releasing `amount_locked` there would mint unfunded balance.
+        const heldRemaining = allocationClaimed
+          ? getAllocationHoldRemaining(moteDb.db, allocationId)
+          : 0;
+        const settlementFunded = grossAmount === 0 || allocationClaimed;
+        if (!isP2pTask && signedSettlement != null && !settlementFunded) {
+          logger.error("settlement.unfunded_skipped", {
+            correlationId: taskId,
+            settlementId: settlement.settlement_id,
+            gross: settlement.amount_settled + settlement.platform_fee,
+            reason:
+              "allocation no longer locked — funds already released to the delegator; settlement skipped to prevent double-credit",
+          });
+        }
         // Relay settlement: INSERT record + credit/refund virtual accounts.
         // P2P tasks skip this — their audit record was inserted above.
-        if (!isP2pTask && signedSettlement != null) {
+        if (!isP2pTask && signedSettlement != null && settlementFunded) {
           moteDb.db
             .prepare(
               `INSERT OR IGNORE INTO relay_settlements
@@ -1133,27 +1195,26 @@ export async function handleReceiptIngestion(
               canonicalJson(signedSettlement),
             );
 
-          if (persistentAlloc) {
-            moteDb.db
-              .prepare(
-                "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ?",
-              )
-              .run(Date.now(), taskId);
-          }
-
           {
             const workerMotebitId = receipt.motebit_id;
 
             if (settlement.status === "refunded") {
-              const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
-              creditAccount(
-                moteDb.db,
-                delegatorId,
-                settlement.amount_settled + settlement.platform_fee,
-                "allocation_release",
-                settlement.settlement_id,
-                `Refund for task ${taskId} (${receipt.status})`,
-              );
+              // Full release of the funded hold. settleOnReceipt fixes
+              // amount_settled/platform_fee at 0 for refunded settlements —
+              // those fields are the RECORD of what settled (nothing). The
+              // refund AMOUNT is what was actually debited at hold time and
+              // not yet released, from the transaction ledger.
+              if (heldRemaining > 0) {
+                const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
+                creditAccount(
+                  moteDb.db,
+                  delegatorId,
+                  heldRemaining,
+                  "allocation_release",
+                  allocationId,
+                  `Refund for task ${taskId} (${receipt.status})`,
+                );
+              }
             } else {
               if (settlement.amount_settled > 0) {
                 creditAccount(
@@ -1166,9 +1227,11 @@ export async function handleReceiptIngestion(
                 );
               }
 
-              if (settlement.status === "partial" && persistentAlloc) {
+              if (settlement.status === "partial") {
+                // The unsettled remainder of the funded hold — including the
+                // risk buffer, so no separate surplus release below.
                 const grossSettled = settlement.amount_settled + settlement.platform_fee;
-                const remainder = persistentAlloc.amount_locked - grossSettled;
+                const remainder = heldRemaining - grossSettled;
                 if (remainder > 0) {
                   const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
                   creditAccount(
@@ -1176,10 +1239,34 @@ export async function handleReceiptIngestion(
                     delegatorId,
                     remainder,
                     "allocation_release",
-                    settlement.settlement_id,
+                    allocationId,
                     `Partial release for task ${taskId}`,
                   );
                 }
+              }
+
+              // Release risk-buffer surplus back to the delegator — atomic
+              // with the settlement that consumes the hold. (Previously ran
+              // after COMMIT as best-effort, which silently retained the
+              // surplus on failure, and ALSO fired on partial settlements
+              // whose remainder branch above already returns the buffer —
+              // double-crediting it.)
+              if (settlement.status === "completed" && heldRemaining > grossAmount) {
+                const surplus = heldRemaining - grossAmount;
+                const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
+                creditAccount(
+                  moteDb.db,
+                  delegatorId,
+                  surplus,
+                  "allocation_release",
+                  allocationId,
+                  `Risk buffer surplus release for task ${taskId}`,
+                );
+                logger.info("settlement.surplus_released", {
+                  correlationId: taskId,
+                  surplus,
+                  delegator: delegatorId,
+                });
               }
             }
           }
@@ -1203,29 +1290,6 @@ export async function handleReceiptIngestion(
         }
 
         moteDb.db.exec("COMMIT");
-
-        // Release surplus from risk buffer back to delegator
-        if (persistentAlloc && persistentAlloc.amount_locked > grossAmount) {
-          const surplus = persistentAlloc.amount_locked - grossAmount;
-          const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
-          try {
-            creditAccount(
-              moteDb.db,
-              delegatorId,
-              surplus,
-              "allocation_release",
-              settlement.settlement_id,
-              `Risk buffer surplus release for task ${taskId}`,
-            );
-            logger.info("settlement.surplus_released", {
-              correlationId: taskId,
-              surplus,
-              delegator: delegatorId,
-            });
-          } catch {
-            // Best-effort surplus release — don't block receipt delivery
-          }
-        }
 
         if (isFederatedExecutor) {
           // No local settlement was written — record why for the audit trail.

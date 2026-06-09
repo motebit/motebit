@@ -922,6 +922,26 @@ describe("Delegation E2E", () => {
       { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp"] },
     ]);
 
+    // Price the TARGET motebit too: `price_snapshot` (and therefore the
+    // submission-time allocation hold) derives from the target's listing.
+    // Without it the task is unfunded and settlement skips fail-closed.
+    await relay.app.request(`/api/v1/agents/${MOTEBIT_ID}/listing`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        capabilities: ["stdio_mcp"],
+        pricing: [{ capability: "stdio_mcp", unit_cost: 1.0, currency: "USD", per: "task" }],
+      }),
+    });
+
+    // Fund the delegator — stands in for the x402 payment leg the harness
+    // can't perform; unfunded tasks are skipped fail-closed at settlement.
+    await relay.app.request(`/api/v1/agents/${MOTEBIT_ID}/deposit`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({ amount: 5.0, reference: `deposit-${crypto.randomUUID()}` }),
+    });
+
     // Submit task — x402 handles payment at HTTP layer
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
@@ -991,6 +1011,25 @@ describe("Delegation E2E", () => {
     relay.connections.set(MOTEBIT_ID, [
       { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp"] },
     ]);
+
+    // Price the TARGET motebit too: `price_snapshot` (and therefore the
+    // submission-time allocation hold) derives from the target's listing.
+    // Without it the task is unfunded and settlement skips fail-closed.
+    await relay.app.request(`/api/v1/agents/${MOTEBIT_ID}/listing`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        capabilities: ["stdio_mcp"],
+        pricing: [{ capability: "stdio_mcp", unit_cost: 1.0, currency: "USD", per: "task" }],
+      }),
+    });
+
+    // Fund the delegator — see the settlement-audit test above.
+    await relay.app.request(`/api/v1/agents/${MOTEBIT_ID}/deposit`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({ amount: 5.0, reference: `deposit-${crypto.randomUUID()}` }),
+    });
 
     // Submit task
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {

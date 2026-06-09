@@ -66,6 +66,20 @@ export interface AccountStore {
    * filter matches the legacy `hasTransactionWithReference` shape.
    */
   hasDepositWithReference(motebitId: string, referenceId: string): boolean;
+  /**
+   * Remaining funded hold for an allocation reference: the sum of
+   * `allocation_hold` debits minus `allocation_release` credits recorded
+   * against this `reference_id`, floored at zero.
+   *
+   * This is the settlement path's funding source of truth. Refunds,
+   * partial releases, and risk-buffer surplus MUST derive from what was
+   * actually debited (and not yet released) — never from an allocation
+   * row's `amount_locked`: allocation rows also exist for never-debited
+   * paths (free-agent best-effort holds), where `amount_locked > 0` but
+   * no funds were taken, and releasing `amount_locked` there would mint
+   * unfunded balance.
+   */
+  getAllocationHoldRemaining(referenceId: string): number;
 
   // ── Withdrawal lifecycle ────────────────────────────────────────
   insertWithdrawal(w: NewWithdrawal): WithdrawalRequest;
@@ -296,6 +310,17 @@ export class InMemoryAccountStore implements AccountStore {
     return this.transactions.some(
       (t) => t.motebit_id === motebitId && t.reference_id === referenceId && t.type === "deposit",
     );
+  }
+
+  getAllocationHoldRemaining(referenceId: string): number {
+    // Ledger amounts are signed (debits negative, credits positive), so the
+    // hold-minus-releases net for this reference is simply -SUM(amount).
+    let net = 0;
+    for (const t of this.transactions) {
+      if (t.reference_id !== referenceId) continue;
+      if (t.type === "allocation_hold" || t.type === "allocation_release") net += t.amount;
+    }
+    return Math.max(0, -net);
   }
 
   insertWithdrawal(w: NewWithdrawal): WithdrawalRequest {

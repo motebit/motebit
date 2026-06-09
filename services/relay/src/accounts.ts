@@ -152,6 +152,10 @@ export function hasTransactionWithReference(
   return sqliteAccountStoreFor(db).hasDepositWithReference(motebitId, referenceId);
 }
 
+export function getAllocationHoldRemaining(db: DatabaseDriver, referenceId: string): number {
+  return sqliteAccountStoreFor(db).getAllocationHoldRemaining(referenceId);
+}
+
 export function requestWithdrawal(
   db: DatabaseDriver,
   motebitId: string,
