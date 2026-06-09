@@ -8,10 +8,12 @@
  *
  * Four classes of signal:
  *
- *   1. Motebit registry — total registered + activity windows
- *      (last-heartbeat within 24h / 7d / 30d). Activity is the proof
- *      that registered identities are doing work, not just sitting in
- *      the DB.
+ *   1. Motebit registry — total registered, activity windows
+ *      (last-heartbeat within 24h / 7d / 30d), and acquisition windows
+ *      (newly registered within 24h / 7d / 30d). Activity proves
+ *      registered identities are doing work; acquisition is the funnel's
+ *      intake — "are we minting new motebits, and is it growing" — the
+ *      sovereign-userbase signal motebit Inc had no number for.
  *   2. Federation — peer count by state, federation-settlement volume
  *      over the trailing 7d. The federation-settlement count is the
  *      sharpest external-traffic signal: cross-relay settlements only
@@ -41,6 +43,18 @@ export interface HealthMotebits {
   active_24h: number;
   active_7d: number;
   active_30d: number;
+  /**
+   * Newly minted motebits within the window — the acquisition curve, i.e. the
+   * funnel's intake. Keyed on `registered_at`, which the registration upsert
+   * leaves untouched on re-registration (`ON CONFLICT … DO UPDATE` omits it),
+   * so this counts *first* registrations (new identities), never heartbeats.
+   * `active_*` answers "are registered motebits doing work"; `new_*` answers
+   * "are we acquiring new ones, and is it growing" — the sovereign-userbase
+   * sibling of the subscribers block's `created_7d` / `created_30d`.
+   */
+  new_24h: number;
+  new_7d: number;
+  new_30d: number;
 }
 
 export interface HealthFederation {
@@ -113,6 +127,23 @@ export function aggregateHealthSummary(
     active_30d: count(
       db,
       "SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?",
+      cutoff30d,
+    ),
+    // Acquisition — first-registration windows (registered_at is write-once;
+    // see the field doc). Counts new motebits minted, not heartbeats.
+    new_24h: count(
+      db,
+      "SELECT COUNT(*) AS n FROM agent_registry WHERE registered_at >= ?",
+      cutoff24h,
+    ),
+    new_7d: count(
+      db,
+      "SELECT COUNT(*) AS n FROM agent_registry WHERE registered_at >= ?",
+      cutoff7d,
+    ),
+    new_30d: count(
+      db,
+      "SELECT COUNT(*) AS n FROM agent_registry WHERE registered_at >= ?",
       cutoff30d,
     ),
   };
