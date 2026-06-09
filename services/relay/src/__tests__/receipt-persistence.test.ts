@@ -340,6 +340,131 @@ describe("relay_receipts archive invariants", () => {
     });
   });
 
+  it("multihop settlement never mints a relay credit for a P2P sub-hop", async () => {
+    // A→B and B→C both settle P2P (paid, with payment_proof) — money moves
+    // onchain, so NEITHER sub-task books a relay-custody allocation. When B
+    // posts its receipt carrying C's nested sub-receipt, the multi-hop
+    // residual settlement path (settleSubReceipt) must NOT credit C's virtual
+    // account: that would be a phantom credit on top of C's onchain payment.
+    // Regression for the unfunded-credit class — the funding claim
+    // (`multihop.settlement.unfunded_skipped`) skips any sub-hop whose
+    // allocation is not 'locked'.
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const kpC = await generateKeypair();
+    const agentA = await createAgent(relay, bytesToHex(kpA.publicKey));
+    const agentB = await createAgent(relay, bytesToHex(kpB.publicKey));
+    const agentC = await createAgent(relay, bytesToHex(kpC.publicKey));
+
+    await registerWorker(relay, agentB.motebitId);
+    await registerWorker(relay, agentC.motebitId);
+    await deposit(relay, agentA.motebitId, 20.0);
+    await deposit(relay, agentB.motebitId, 20.0);
+
+    const resAB = await relay.app.request(`/agent/${agentB.motebitId}/task`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({
+        prompt: "outer",
+        submitted_by: agentA.motebitId,
+        target_agent: agentB.motebitId,
+        required_capabilities: ["web_search"],
+        delegator_acknowledges_no_history_risk: true,
+        payment_proof: buildP2pPaymentProof(relay, {
+          workerAddress: WORKER_ADDR,
+          unitCostMicro: 500_000,
+        }),
+      }),
+    });
+    const { task_id: taskAB } = (await resAB.json()) as { task_id: string };
+
+    const resBC = await relay.app.request(`/agent/${agentC.motebitId}/task`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({
+        prompt: "inner",
+        submitted_by: agentB.motebitId,
+        target_agent: agentC.motebitId,
+        required_capabilities: ["web_search"],
+        delegator_acknowledges_no_history_risk: true,
+        payment_proof: buildP2pPaymentProof(relay, {
+          workerAddress: WORKER_ADDR,
+          unitCostMicro: 500_000,
+        }),
+      }),
+    });
+    const { task_id: taskBC } = (await resBC.json()) as { task_id: string };
+
+    const enc = new TextEncoder();
+    const receiptC = await signExecutionReceipt(
+      {
+        task_id: taskBC,
+        relay_task_id: taskBC,
+        motebit_id: agentC.motebitId as unknown as MotebitId,
+        public_key: bytesToHex(kpC.publicKey),
+        device_id: "c-device" as unknown as DeviceId,
+        submitted_at: Date.now() - 1000,
+        completed_at: Date.now(),
+        status: "completed" as const,
+        result: "inner-result",
+        tools_used: ["web_search"],
+        memories_formed: 0,
+        prompt_hash: await sha256(enc.encode("inner")),
+        result_hash: await sha256(enc.encode("inner-result")),
+      },
+      kpC.privateKey,
+      kpC.publicKey,
+    );
+    const receiptB = await signExecutionReceipt(
+      {
+        task_id: taskAB,
+        relay_task_id: taskAB,
+        motebit_id: agentB.motebitId as unknown as MotebitId,
+        public_key: bytesToHex(kpB.publicKey),
+        device_id: "b-device" as unknown as DeviceId,
+        submitted_at: Date.now() - 2000,
+        completed_at: Date.now(),
+        status: "completed" as const,
+        result: "outer-result",
+        tools_used: ["web_search"],
+        memories_formed: 0,
+        prompt_hash: await sha256(enc.encode("outer")),
+        result_hash: await sha256(enc.encode("outer-result")),
+        delegation_receipts: [receiptC],
+      },
+      kpB.privateKey,
+      kpB.publicKey,
+    );
+
+    const submit = await relay.app.request(`/agent/${agentB.motebitId}/task/${taskAB}/result`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify(receiptB),
+    });
+    expect(submit.status).toBe(200);
+
+    // C was never deposited and its hop settled onchain — no relay credit and
+    // no relay settlement row may exist for the sub-task.
+    const credit = relay.moteDb.db
+      .prepare(
+        "SELECT COUNT(*) as n FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit'",
+      )
+      .get(agentC.motebitId) as { n: number };
+    expect(credit.n).toBe(0);
+
+    const subSettlement = relay.moteDb.db
+      .prepare(
+        "SELECT COUNT(*) as n FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'relay'",
+      )
+      .get(taskBC) as { n: number };
+    expect(subSettlement.n).toBe(0);
+
+    const cAccount = relay.moteDb.db
+      .prepare("SELECT COALESCE(balance, 0) as balance FROM relay_accounts WHERE motebit_id = ?")
+      .get(agentC.motebitId) as { balance: number } | undefined;
+    expect(cAccount?.balance ?? 0).toBe(0);
+  });
+
   it("is idempotent — a duplicate receipt submission does not double-write", async () => {
     const kpA = await generateKeypair();
     const kpB = await generateKeypair();

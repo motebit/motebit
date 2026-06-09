@@ -755,59 +755,85 @@ export async function handleReceiptIngestion(
 
         try {
           moteDb.db.exec("BEGIN");
-          moteDb.db
-            .prepare(
-              `INSERT OR IGNORE INTO relay_settlements
+
+          // Fail-closed funding claim — mirror of the canonical settlement
+          // site (handleReceiptIngestion). The sub-credit below is funded by
+          // the sub-task's relay-custody hold (`x402-<subRelayTaskId>`);
+          // claim it atomically before crediting. `changes === 0` means the
+          // allocation is not 'locked': it was never funded (a P2P-submitted
+          // sub-hop moves money onchain and books NO relay allocation, so
+          // crediting here would double-pay on top of the onchain leg), or it
+          // was already released by the stale-allocation sweep / a refund
+          // (crediting would double-pay a delegator who was already made
+          // whole). subGross > 0 is guaranteed above, so an unclaimable
+          // allocation always means skip. This is the multi-hop sibling of
+          // the `settlement.unfunded_skipped` guard on the direct path.
+          const subClaimed =
+            moteDb.db
+              .prepare(
+                "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ? AND status = 'locked'",
+              )
+              .run(Date.now(), subRelayTaskId).changes > 0;
+
+          if (!subClaimed) {
+            moteDb.db.exec("ROLLBACK");
+            logger.error("multihop.settlement.unfunded_skipped", {
+              correlationId: parentTaskId,
+              subTaskId: subRelayTaskId,
+              subAgent: sub.motebit_id,
+              gross: subGross,
+              reason:
+                "sub-allocation not locked — never funded (e.g. P2P sub-hop) or already released; relay credit skipped to prevent unfunded credit / double-pay",
+            });
+          } else {
+            moteDb.db
+              .prepare(
+                `INSERT OR IGNORE INTO relay_settlements
              (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, issuer_relay_id, suite, signature, record_json)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .run(
-              signedSubSettlement.settlement_id,
-              signedSubSettlement.allocation_id,
-              subRelayTaskId,
-              sub.motebit_id,
-              signedSubSettlement.receipt_hash,
-              signedSubSettlement.ledger_hash,
-              signedSubSettlement.amount_settled,
-              signedSubSettlement.platform_fee,
-              signedSubSettlement.platform_fee_rate,
-              signedSubSettlement.status,
-              signedSubSettlement.settled_at,
-              signedSubSettlement.settlement_mode,
-              signedSubSettlement.issuer_relay_id,
-              signedSubSettlement.suite,
-              signedSubSettlement.signature,
-              // Rule 11: store the exact canonical signed bytes. The anchor
-              // leaf is SHA-256 of THIS, so it equals the bytes the worker holds.
-              canonicalJson(signedSubSettlement),
-            );
+              )
+              .run(
+                signedSubSettlement.settlement_id,
+                signedSubSettlement.allocation_id,
+                subRelayTaskId,
+                sub.motebit_id,
+                signedSubSettlement.receipt_hash,
+                signedSubSettlement.ledger_hash,
+                signedSubSettlement.amount_settled,
+                signedSubSettlement.platform_fee,
+                signedSubSettlement.platform_fee_rate,
+                signedSubSettlement.status,
+                signedSubSettlement.settled_at,
+                signedSubSettlement.settlement_mode,
+                signedSubSettlement.issuer_relay_id,
+                signedSubSettlement.suite,
+                signedSubSettlement.signature,
+                // Rule 11: store the exact canonical signed bytes. The anchor
+                // leaf is SHA-256 of THIS, so it equals the bytes the worker holds.
+                canonicalJson(signedSubSettlement),
+              );
 
-          moteDb.db
-            .prepare(
-              "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ?",
-            )
-            .run(Date.now(), subRelayTaskId);
+            if (subSettlement.amount_settled > 0) {
+              creditAccount(
+                moteDb.db,
+                sub.motebit_id,
+                subSettlement.amount_settled,
+                "settlement_credit",
+                subSettlement.settlement_id,
+                `Payment for sub-delegated task ${subRelayTaskId}`,
+              );
+            }
 
-          if (subSettlement.amount_settled > 0) {
-            creditAccount(
-              moteDb.db,
-              sub.motebit_id,
-              subSettlement.amount_settled,
-              "settlement_credit",
-              subSettlement.settlement_id,
-              `Payment for sub-delegated task ${subRelayTaskId}`,
-            );
+            moteDb.db.exec("COMMIT");
+            logger.info("multihop.settlement.created", {
+              correlationId: parentTaskId,
+              subTaskId: subRelayTaskId,
+              subAgent: sub.motebit_id,
+              net: subSettlement.amount_settled,
+              fee: subSettlement.platform_fee,
+              depth,
+            });
           }
-
-          moteDb.db.exec("COMMIT");
-          logger.info("multihop.settlement.created", {
-            correlationId: parentTaskId,
-            subTaskId: subRelayTaskId,
-            subAgent: sub.motebit_id,
-            net: subSettlement.amount_settled,
-            fee: subSettlement.platform_fee,
-            depth,
-          });
         } catch (txnErr) {
           moteDb.db.exec("ROLLBACK");
           logger.warn("multihop.settlement.failed", {
