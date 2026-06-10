@@ -29,6 +29,7 @@
     "@motebit/core-identity": "workspace:*",
     "@motebit/browser-persistence": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
+    "@motebit/surface-kit": "workspace:*",
     "@motebit/tools": "workspace:*",
     "@motebit/sync-engine": "workspace:*",
     "@motebit/verify": "workspace:*",

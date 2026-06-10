@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **50 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 8 services · 25 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **51 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 8 services · 25 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -91,6 +91,7 @@ motebit/
 │   ├── privacy-layer/         [L3]          Retention rules, deletion certificates, export.
 │   ├── ai-core/               [L3]          Pluggable providers, agentic turn loop, context packing.
 │   ├── mcp-server/            [L3]          MCP server adapter, bearer auth, signed receipts.
+│   ├── surface-kit/           [L3]          Surface-agnostic controllers (MCP manager); surfaces inject platform ports.
 │   │
 │   │   # Layer 4 — Upper composites
 │   ├── persistence/           [L4]          SQLite (WAL), adapters for all storage types.

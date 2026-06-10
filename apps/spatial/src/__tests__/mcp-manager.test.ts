@@ -404,7 +404,7 @@ describe("SpatialMcpManager.dispose", () => {
     await mgr.addMcpServer({ name: "a", transport: "http", url: "https://a.test" } as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await mgr.addMcpServer({ name: "b", transport: "http", url: "https://b.test" } as any);
-    mgr.dispose();
+    void mgr.dispose();
     for (const inst of adapterInstances) {
       expect(inst.disconnect).toHaveBeenCalled();
     }

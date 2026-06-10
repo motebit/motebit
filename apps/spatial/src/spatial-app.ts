@@ -1275,8 +1275,9 @@ export class SpatialApp {
     this.slabBridgeUnsub = null;
     this.runtime?.stop();
 
-    // Clean up MCP adapters
-    this.mcp.dispose();
+    // Clean up MCP adapters — fire-and-forget; dispose() invokes every
+    // adapter.disconnect() synchronously before its first await.
+    void this.mcp.dispose();
 
     // Clean up proxy session
     this.disposeProxySession();

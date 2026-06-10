@@ -89,6 +89,7 @@
     "check-prompt-density": "npx tsx scripts/check-prompt-density.ts",
     "check-prompt-budget": "npx tsx scripts/check-prompt-budget.ts",
     "check-universal-slash-coverage": "npx tsx scripts/check-universal-slash-coverage.ts",
+    "check-surface-controller-adoption": "npx tsx scripts/check-surface-controller-adoption.ts",
     "check-property-test-floor": "npx tsx scripts/check-property-test-floor.ts",
     "check-money-boundary": "npx tsx scripts/check-money-boundary.ts",
     "check-multihop-depth-single-site": "npx tsx scripts/check-multihop-depth-single-site.ts",

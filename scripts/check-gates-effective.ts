@@ -144,6 +144,18 @@ function mutateFile(relativePath: string, mutate: (src: string) => string): () =
 
 const PROBES: ReadonlyArray<Probe> = [
   {
+    script: "check-surface-controller-adoption",
+    proves:
+      "flags a surface that re-forks an extracted controller locally instead of consuming it — here, the mobile MCP-manager adapter losing its `@motebit/surface-kit` import (the re-fork signature)",
+    perturb: () =>
+      // Rename the package specifier so the adapter no longer imports the
+      // canonical McpManager from @motebit/surface-kit. The gate scans
+      // textually, so no build is needed; cleanup restores verbatim.
+      mutateFile("apps/mobile/src/mcp-manager.ts", (src) =>
+        src.split("@motebit/surface-kit").join("@motebit/surface-kit-PROBE"),
+      ),
+  },
+  {
     script: "check-multihop-depth-single-site",
     proves:
       "flags a re-inlined settlement depth-limit comparison outside the canonical multihop-depth.ts (the recursion-safety invariant: the depth bound lives in exactly one place)",
@@ -1320,7 +1332,7 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       // perturbation" — so the probe self-rots are visible.
       mutateFile("README.md", (src) =>
         src.replace(
-          "**50 packages across 7 architectural layers",
+          "**51 packages across 7 architectural layers",
           "**37 packages across 7 architectural layers",
         ),
       ),

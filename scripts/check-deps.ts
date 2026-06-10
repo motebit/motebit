@@ -83,6 +83,7 @@ const LAYER: Record<string, number> = {
   "@motebit/privacy-layer": 3,
   "@motebit/ai-core": 3,
   "@motebit/mcp-server": 3,
+  "@motebit/surface-kit": 3,
 
   // Layer 4 — Upper composites (depend on Layer 0–3)
   "@motebit/persistence": 4,
