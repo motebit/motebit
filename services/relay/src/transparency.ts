@@ -312,6 +312,7 @@ export const DECLARATION_CONTENT = {
   honest_gaps: [
     "Fly.io and Vercel log retention windows are governed by their respective DPAs and are not separately enforced by motebit code.",
     "Before migration v34, memory_formed events above the personal sensitivity ceiling were stored unredacted at the relay (redaction ran only on read paths). v34 scrubbed those rows in place; database backups created during that window may retain unredacted copies until backup retention expires.",
+    "Before migration v35, a memory deleted by its subject (a synced DeleteRequested) did not erase the stored memory_formed content for deletions that predated deletion propagation — including none/personal-sensitivity nodes the v34 scrub skips. v35 backfills those historical deletions; database backups from before it may retain the content until backup retention expires.",
     "receipts verified before the relay_receipts archive landed (migration v10) retained only `receipt_hash` in `relay_settlements`; their full canonical JSON was not preserved and cannot be reconstructed. Receipts verified on and after v10 are archived byte-identically.",
   ],
 } as const;

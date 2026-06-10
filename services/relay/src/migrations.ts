@@ -1518,4 +1518,72 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 35,
+    name: "backfill_historical_memory_deletions",
+    up: (db) => {
+      // Deletion propagation (deletion-propagation.ts) erases the stored
+      // memory_formed content of a deleted node — but only for DeleteRequested
+      // events that arrive AFTER it shipped. Pre-deploy DeleteRequested events
+      // (including none/personal-sensitivity nodes the v34 scrub deliberately
+      // skips) left the formation content live, outliving the subject's signed
+      // deletion certificate and falsifying "forgotten means forgotten at the
+      // relay too" for historical deletions. Replay them once: for every
+      // memory-targeted DeleteRequested, redact the matching memory_formed
+      // payload(s) to the same shape propagation produces. Scoped by
+      // motebit_id so identical node_ids across tenants never cross-erase;
+      // skips encrypted (opaque) and already-redacted rows; idempotent.
+      const hasEvents = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+        .get() as { name: string } | undefined;
+      if (!hasEvents) return;
+      const deletes = db
+        .prepare("SELECT motebit_id, payload FROM events WHERE event_type = 'delete_requested'")
+        .all() as { motebit_id: string; payload: string }[];
+      const selectFormed = db.prepare(
+        "SELECT event_id, payload FROM events WHERE motebit_id = ? AND event_type = 'memory_formed' AND payload LIKE '%' || ? || '%'",
+      );
+      const update = db.prepare("UPDATE events SET payload = ? WHERE event_id = ?");
+      let redacted = 0;
+      for (const d of deletes) {
+        let dp: Record<string, unknown>;
+        try {
+          dp = JSON.parse(d.payload) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        if (dp.target_type !== "memory" || typeof dp.target_id !== "string" || dp.target_id === "")
+          continue;
+        const nodeId = dp.target_id;
+        const rows = selectFormed.all(d.motebit_id, nodeId) as {
+          event_id: string;
+          payload: string;
+        }[];
+        for (const row of rows) {
+          let p: Record<string, unknown>;
+          try {
+            p = JSON.parse(row.payload) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+          if (p._encrypted === true) continue;
+          if (p.node_id !== nodeId) continue;
+          if (p.content === "[REDACTED]" && p.redacted_reason === "deleted") continue;
+          update.run(
+            JSON.stringify({
+              ...p,
+              content: "[REDACTED]",
+              redacted: true,
+              redacted_reason: "deleted",
+            }),
+            row.event_id,
+          );
+          redacted++;
+        }
+      }
+      if (redacted > 0) {
+        logger.info("migration.backfill_historical_memory_deletions", { redacted });
+      }
+    },
+  },
 ];

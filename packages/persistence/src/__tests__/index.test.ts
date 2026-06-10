@@ -203,6 +203,56 @@ describe("SqliteEventStore", () => {
       expect(e.version_clock).toBeGreaterThanOrEqual(3);
     }
   });
+
+  it("redactMemoryContent erases matching memory_formed content, scoped + idempotent", async () => {
+    const target = makeEvent({
+      event_id: "rc-target",
+      version_clock: 1,
+      payload: { node_id: "n1", content: "secret detail", sensitivity: "personal" },
+    });
+    const otherNode = makeEvent({
+      event_id: "rc-other-node",
+      version_clock: 2,
+      payload: { node_id: "n2", content: "keep me", sensitivity: "none" },
+    });
+    const encrypted = makeEvent({
+      event_id: "rc-encrypted",
+      version_clock: 3,
+      payload: { _encrypted: true, _data: "ct" },
+    });
+    const nonMemory = makeEvent({
+      event_id: "rc-nonmem",
+      version_clock: 4,
+      event_type: EventType.StateUpdated,
+      payload: { node_id: "n1", content: "not a memory" },
+    });
+    const otherTenant = makeEvent({
+      event_id: "rc-tenant-b",
+      motebit_id: "motebit-2",
+      version_clock: 1,
+      payload: { node_id: "n1", content: "tenant-b fact", sensitivity: "none" },
+    });
+    for (const e of [target, otherNode, encrypted, nonMemory, otherTenant]) {
+      await mdb.eventStore.append(e);
+    }
+
+    const changed = await mdb.eventStore.redactMemoryContent("motebit-1", "n1");
+    expect(changed).toBe(1);
+
+    const get = async (id: string) =>
+      (
+        await mdb.eventStore.query({ motebit_id: id === "rc-tenant-b" ? "motebit-2" : "motebit-1" })
+      ).find((e) => e.event_id === id)!.payload as Record<string, unknown>;
+    expect((await get("rc-target")).content).toBe("[REDACTED]");
+    expect((await get("rc-target")).redacted_reason).toBe("deleted");
+    expect((await get("rc-other-node")).content).toBe("keep me");
+    expect((await get("rc-encrypted"))._data).toBe("ct");
+    expect((await get("rc-nonmem")).content).toBe("not a memory");
+    expect((await get("rc-tenant-b")).content).toBe("tenant-b fact");
+
+    // Idempotent — second call changes nothing.
+    expect(await mdb.eventStore.redactMemoryContent("motebit-1", "n1")).toBe(0);
+  });
 });
 
 // === MemoryStorage ===

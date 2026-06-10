@@ -284,3 +284,93 @@ describe("migration 34 — scrub_unredacted_memory_content", () => {
     expect(() => m34.up(db)).not.toThrow();
   });
 });
+
+describe("migration 35 — backfill_historical_memory_deletions", () => {
+  const m35 = relayMigrations.find((m) => m.version === 35)!;
+
+  function createEventsTable() {
+    db.exec(`CREATE TABLE events (
+      event_id TEXT PRIMARY KEY, motebit_id TEXT NOT NULL, device_id TEXT,
+      event_type TEXT NOT NULL, payload TEXT NOT NULL,
+      version_clock INTEGER NOT NULL, timestamp INTEGER NOT NULL,
+      tombstoned INTEGER DEFAULT 0
+    )`);
+  }
+  function insert(
+    eventId: string,
+    motebitId: string,
+    type: string,
+    payload: Record<string, unknown>,
+  ) {
+    db.prepare(
+      `INSERT INTO events (event_id, motebit_id, event_type, payload, version_clock, timestamp)
+       VALUES (?, ?, ?, ?, 1, 1)`,
+    ).run(eventId, motebitId, type, JSON.stringify(payload));
+  }
+  function payloadOf(eventId: string): Record<string, unknown> {
+    const row = db.prepare("SELECT payload FROM events WHERE event_id = ?").get(eventId) as {
+      payload: string;
+    };
+    return JSON.parse(row.payload) as Record<string, unknown>;
+  }
+
+  it("redacts memory_formed content for a historically-deleted node (incl. none/personal the scrub skips)", () => {
+    createEventsTable();
+    insert("formed", "mote-a", "memory_formed", {
+      node_id: "n1",
+      content: "home address",
+      sensitivity: "personal",
+    });
+    insert("del", "mote-a", "delete_requested", { target_type: "memory", target_id: "n1" });
+    m35.up(db);
+    const after = payloadOf("formed");
+    expect(after.content).toBe("[REDACTED]");
+    expect(after.redacted).toBe(true);
+    expect(after.redacted_reason).toBe("deleted");
+    // The DeleteRequested audit record survives.
+    expect(payloadOf("del").target_id).toBe("n1");
+  });
+
+  it("is tenant-scoped — a delete in tenant A never erases tenant B's identical node_id", () => {
+    createEventsTable();
+    insert("a-formed", "mote-a", "memory_formed", {
+      node_id: "shared",
+      content: "A fact",
+      sensitivity: "none",
+    });
+    insert("b-formed", "mote-b", "memory_formed", {
+      node_id: "shared",
+      content: "B fact",
+      sensitivity: "none",
+    });
+    insert("a-del", "mote-a", "delete_requested", { target_type: "memory", target_id: "shared" });
+    m35.up(db);
+    expect(payloadOf("a-formed").content).toBe("[REDACTED]");
+    expect(payloadOf("b-formed").content).toBe("B fact");
+  });
+
+  it("skips encrypted + non-memory DeleteRequested + already-redacted; idempotent", () => {
+    createEventsTable();
+    insert("enc", "mote-a", "memory_formed", { node_id: "n2", _encrypted: true, _data: "ct" });
+    insert("enc-del", "mote-a", "delete_requested", { target_type: "memory", target_id: "n2" });
+    insert("conv-del", "mote-a", "delete_requested", {
+      target_type: "conversation",
+      target_id: "n3",
+    });
+    insert("n3-formed", "mote-a", "memory_formed", {
+      node_id: "n3",
+      content: "still here",
+      sensitivity: "none",
+    });
+    const before = [payloadOf("enc"), payloadOf("n3-formed")];
+    m35.up(db);
+    expect([payloadOf("enc"), payloadOf("n3-formed")]).toEqual(before);
+    // Idempotent second run.
+    expect(() => m35.up(db)).not.toThrow();
+    expect(payloadOf("n3-formed").content).toBe("still here");
+  });
+
+  it("is a no-op (no throw) when the events table doesn't exist yet", () => {
+    expect(() => m35.up(db)).not.toThrow();
+  });
+});
