@@ -2263,6 +2263,7 @@ export interface MemoryFormedPayload {
     readonly content: string;
     readonly node_id: string;
     readonly redacted?: true;
+    readonly redacted_reason?: "deleted";
     readonly redacted_sensitivity?: SensitivityLevel;
     readonly sensitivity: SensitivityLevel;
     readonly source?: MemorySource;

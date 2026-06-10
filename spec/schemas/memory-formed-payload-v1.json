@@ -40,6 +40,11 @@
       "$ref": "#/definitions/MemoryFormedPayload/properties/sensitivity",
       "description": "Original sensitivity retained after redaction so downstream receivers honor policy without seeing content."
     },
+    "redacted_reason": {
+      "type": "string",
+      "const": "deleted",
+      "description": "Discriminates why `content` is \"[REDACTED]\". Absent ⇒ sync-forwarder sensitivity redaction (original re-requestable from the emitter). \"deleted\" ⇒ a deletion tombstone from the forget path — content gone for good; consumers MUST NOT re-form a node from it."
+    },
     "valid_from": {
       "type": "number",
       "description": "Validity-time start (Unix ms) — when the fact became true; MAY predate recording time (backdated). Absent ⇒ recording time. Spec §3.5."
@@ -88,6 +93,11 @@
         "redacted_sensitivity": {
           "$ref": "#/definitions/MemoryFormedPayload/properties/sensitivity",
           "description": "Original sensitivity retained after redaction so downstream receivers honor policy without seeing content."
+        },
+        "redacted_reason": {
+          "type": "string",
+          "const": "deleted",
+          "description": "Discriminates why `content` is \"[REDACTED]\". Absent ⇒ sync-forwarder sensitivity redaction (original re-requestable from the emitter). \"deleted\" ⇒ a deletion tombstone from the forget path — content gone for good; consumers MUST NOT re-form a node from it."
         },
         "valid_from": {
           "type": "number",

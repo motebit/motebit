@@ -60,6 +60,15 @@ export interface MemoryFormedPayload {
   /** Original sensitivity level retained after redaction so receiving
    *  peers can still honor policy without seeing the content. */
   readonly redacted_sensitivity?: SensitivityLevel;
+  /** Discriminates WHY `content` is the `"[REDACTED]"` sentinel.
+   *  Absent ⇒ sync-forwarder *sensitivity* redaction (`redacted: true` +
+   *  `redacted_sensitivity`): the original still exists on the emitter and
+   *  MAY be re-requested. `"deleted"` ⇒ a *deletion tombstone* propagated
+   *  by the forget path (`EventStoreAdapter.redactMemoryContent`): the
+   *  content is gone for good and a conforming consumer MUST NOT re-form a
+   *  node from it. The two mechanisms both blank `content`; this field is
+   *  the only thing that tells them apart. `docs/doctrine/retention-policy.md`. */
+  readonly redacted_reason?: "deleted";
   /** Validity-time start (Unix ms) — when the asserted fact became true
    *  in the world, which MAY predate the recording timestamp (backdated
    *  memory). Absent ⇒ the wrapping event's recording time. Bi-temporal

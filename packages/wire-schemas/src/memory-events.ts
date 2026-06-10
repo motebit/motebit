@@ -85,6 +85,12 @@ export const MemoryFormedPayloadSchema = z
     redacted_sensitivity: SensitivityLevelSchema.optional().describe(
       "Original sensitivity retained after redaction so downstream receivers honor policy without seeing content.",
     ),
+    redacted_reason: z
+      .literal("deleted")
+      .optional()
+      .describe(
+        'Discriminates why `content` is "[REDACTED]". Absent ⇒ sync-forwarder sensitivity redaction (original re-requestable from the emitter). "deleted" ⇒ a deletion tombstone from the forget path — content gone for good; consumers MUST NOT re-form a node from it.',
+      ),
     valid_from: z
       .number()
       .optional()
