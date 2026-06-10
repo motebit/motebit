@@ -12,12 +12,13 @@ import type { createNodeWebSocket } from "@hono/node-ws";
 import type { WSContext } from "hono/ws";
 import type { EventStore } from "@motebit/event-log";
 import type { IdentityManager } from "@motebit/core-identity";
-import type { DatabaseDriver } from "@motebit/persistence";
+import type { DatabaseDriver, MotebitDatabase } from "@motebit/persistence";
 import type { EventLogEntry, SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import { AgentTaskStatus, asMotebitId } from "@motebit/sdk";
 import type { FixedWindowLimiter } from "./rate-limiter.js";
 import { upsertSyncConversation, upsertSyncMessage } from "./data-sync.js";
 import { redactSensitiveEvents } from "./redaction.js";
+import { propagateDeletionForEvent } from "./deletion-propagation.js";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { createLogger } from "./logger.js";
 
@@ -35,6 +36,8 @@ export interface WebSocketDeps {
   eventStore: EventStore;
   identityManager: IdentityManager;
   db: DatabaseDriver;
+  /** Full database handle — deletion propagation needs memoryStorage. */
+  moteDb: MotebitDatabase;
   apiToken: string | undefined;
   enableDeviceAuth: boolean;
   wsLimiter: FixedWindowLimiter;
@@ -380,6 +383,19 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                 }
                 await eventStore.append(entry);
                 wsAccepted++;
+                // Deletion propagation — per-event best-effort on the WS
+                // path (a dropped propagation here is recovered by the
+                // HTTP DELETE route or any later duplicate push).
+                try {
+                  await propagateDeletionForEvent(
+                    { eventStore, moteDb: deps.moteDb },
+                    entry as EventLogEntry,
+                  );
+                } catch (err: unknown) {
+                  deps.logger.warn("ws deletion propagation failed", {
+                    error: err instanceof Error ? err.message : String(err),
+                  });
+                }
               }
 
               // Acknowledge

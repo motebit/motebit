@@ -26,6 +26,7 @@ import type { EventLogEntry, ToolAuditEntry } from "@motebit/sdk";
 import { asMotebitId, asNodeId, asConversationId, asPlanId } from "@motebit/sdk";
 import { canonicalJson, bytesToHex, toBase64Url } from "@motebit/encryption";
 import { signContentArtifact } from "@motebit/crypto";
+import { propagateMemoryDeletion } from "./deletion-propagation.js";
 import type {
   ContentArtifactType,
   SettlementSummaryPeer,
@@ -150,7 +151,21 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
       if (!deleted) {
         return c.json({ motebit_id: motebitId, node_id: nodeId, deleted: false }, 404);
       }
-      return c.json({ motebit_id: motebitId, node_id: nodeId, deleted: true });
+      // Converge with the sync-path deletion propagation: erase the
+      // stored memory_formed content for the node too — a tombstoned
+      // projection whose formation event still carries the content is
+      // not deletion.
+      const { redactedEvents } = await propagateMemoryDeletion(
+        { eventStore, moteDb },
+        motebitId,
+        nodeId,
+      );
+      return c.json({
+        motebit_id: motebitId,
+        node_id: nodeId,
+        deleted: true,
+        redacted_events: redactedEvents,
+      });
     } catch {
       return c.json({ motebit_id: motebitId, node_id: nodeId, deleted: false }, 404);
     }

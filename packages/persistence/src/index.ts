@@ -470,6 +470,49 @@ export class SqliteEventStore implements EventStoreAdapter {
       .get(motebitId) as { cnt: number };
     return row.cnt;
   }
+
+  async redactMemoryContent(motebitId: string, nodeId: string): Promise<number> {
+    // Deletion propagation: erase the content of stored memory_formed
+    // events for an erased node (see EventStoreAdapter doc). JS-parse
+    // rather than SQL JSON1 so the operation is driver-agnostic
+    // (better-sqlite3 and sql.js run it identically). Transactional —
+    // the select + rewrites land atomically. Encrypted payloads are
+    // opaque ciphertext and skipped by design.
+    let changed = 0;
+    this.db.transaction(() => {
+      const rows = this.db
+        .prepare(
+          "SELECT event_id, payload FROM events WHERE motebit_id = ? AND event_type = 'memory_formed'",
+        )
+        .all(motebitId) as {
+        event_id: string;
+        payload: string;
+      }[];
+      const update = this.db.prepare("UPDATE events SET payload = ? WHERE event_id = ?");
+      for (const row of rows) {
+        let payload: Record<string, unknown>;
+        try {
+          payload = JSON.parse(row.payload) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        if (payload._encrypted === true) continue;
+        if (payload.node_id !== nodeId) continue;
+        if (payload.content === "[REDACTED]" && payload.redacted_reason === "deleted") continue;
+        update.run(
+          JSON.stringify({
+            ...payload,
+            content: "[REDACTED]",
+            redacted: true,
+            redacted_reason: "deleted",
+          }),
+          row.event_id,
+        );
+        changed++;
+      }
+    });
+    return changed;
+  }
 }
 
 interface EventRow {

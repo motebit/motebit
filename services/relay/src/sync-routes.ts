@@ -10,6 +10,7 @@ import { HTTPException } from "hono/http-exception";
 import type { EventLogEntry } from "@motebit/sdk";
 import { asMotebitId } from "@motebit/sdk";
 import { redactSensitiveEvents } from "./redaction.js";
+import { propagateDeletionForEvent } from "./deletion-propagation.js";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { EventStore } from "@motebit/event-log";
 import type { IdentityManager } from "@motebit/core-identity";
@@ -88,6 +89,12 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       }
       await eventStore.append(event);
       accepted++;
+      // Deletion propagation: a synced DeleteRequested for a memory
+      // node erases the relay-stored memory_formed content for that
+      // node. An error surfaces as a 500 — the client retries, the
+      // event_id dedup makes the replay idempotent, and propagation
+      // re-runs.
+      await propagateDeletionForEvent({ eventStore, moteDb: deps.moteDb }, event);
     }
 
     // Fan out to WebSocket clients, skipping the sender device.

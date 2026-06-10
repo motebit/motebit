@@ -868,3 +868,72 @@ describe("EventStore.advanceHorizon (phase 4a — local-only)", () => {
     ).rejects.toThrow(/truncateBeforeHorizon/);
   });
 });
+
+describe("redactMemoryContent (deletion propagation)", () => {
+  it("erases matching memory_formed content, skips encrypted + other nodes, idempotent", async () => {
+    const adapter = new InMemoryEventStore();
+    const store = new EventStore(adapter);
+    const base = {
+      motebit_id: "m1",
+      timestamp: 1,
+      tombstoned: false,
+    };
+    await store.appendWithClock({
+      ...base,
+      event_id: "e-target",
+      event_type: "memory_formed" as never,
+      payload: { node_id: "n1", content: "secret detail", sensitivity: "personal" },
+    });
+    await store.appendWithClock({
+      ...base,
+      event_id: "e-other-node",
+      event_type: "memory_formed" as never,
+      payload: { node_id: "n2", content: "other", sensitivity: "none" },
+    });
+    await store.appendWithClock({
+      ...base,
+      event_id: "e-encrypted",
+      event_type: "memory_formed" as never,
+      payload: { _encrypted: true, _data: "ct" },
+    });
+    await store.appendWithClock({
+      ...base,
+      motebit_id: "m2",
+      event_id: "e-other-tenant",
+      event_type: "memory_formed" as never,
+      payload: { node_id: "n1", content: "tenant-b fact", sensitivity: "none" },
+    });
+
+    const first = await store.redactMemoryEvents("m1", "n1");
+    expect(first).toEqual({ supported: true, changed: 1 });
+
+    const events = await store.query({ motebit_id: "m1" });
+    const target = events.find((e) => e.event_id === "e-target")!;
+    expect(target.payload.content).toBe("[REDACTED]");
+    expect(target.payload.redacted).toBe(true);
+    expect(target.payload.redacted_reason).toBe("deleted");
+    expect(events.find((e) => e.event_id === "e-other-node")!.payload.content).toBe("other");
+    expect(events.find((e) => e.event_id === "e-encrypted")!.payload._data).toBe("ct");
+    const tenantB = await store.query({ motebit_id: "m2" });
+    expect(tenantB.find((e) => e.event_id === "e-other-tenant")!.payload.content).toBe(
+      "tenant-b fact",
+    );
+
+    const second = await store.redactMemoryEvents("m1", "n1");
+    expect(second.changed).toBe(0);
+  });
+
+  it("signals unsupported adapters instead of silently succeeding", async () => {
+    const bare = {
+      append: () => Promise.resolve(),
+      query: () => Promise.resolve([]),
+      getLatestClock: () => Promise.resolve(0),
+      tombstone: () => Promise.resolve(),
+    };
+    const store = new EventStore(bare as never);
+    expect(await store.redactMemoryEvents("m1", "n1")).toEqual({
+      supported: false,
+      changed: 0,
+    });
+  });
+});

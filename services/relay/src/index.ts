@@ -779,6 +779,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     eventStore,
     identityManager,
     db: moteDb.db,
+    moteDb,
     apiToken,
     enableDeviceAuth,
     wsLimiter,

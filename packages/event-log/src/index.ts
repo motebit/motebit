@@ -106,6 +106,31 @@ export class InMemoryEventStore implements EventStoreAdapter {
   countEvents(motebitId: string): Promise<number> {
     return Promise.resolve(this.events.filter((e) => e.motebit_id === motebitId).length);
   }
+
+  redactMemoryContent(motebitId: string, nodeId: string): Promise<number> {
+    // Deletion propagation: erase the content of stored memory_formed
+    // events for an erased node. Joins the sanctioned deletion-shaped
+    // mutation family (tombstone / compact / truncateBeforeHorizon);
+    // the DeleteRequested event is the surviving audit record.
+    // Encrypted payloads are opaque ciphertext — skipped by design.
+    let changed = 0;
+    for (const e of this.events) {
+      if (e.motebit_id !== motebitId) continue;
+      if (e.event_type !== "memory_formed") continue;
+      const payload = e.payload as Record<string, unknown> | undefined;
+      if (!payload || payload._encrypted === true) continue;
+      if (payload.node_id !== nodeId) continue;
+      if (payload.content === "[REDACTED]" && payload.redacted_reason === "deleted") continue;
+      e.payload = {
+        ...payload,
+        content: "[REDACTED]",
+        redacted: true,
+        redacted_reason: "deleted",
+      };
+      changed++;
+    }
+    return Promise.resolve(changed);
+  }
 }
 
 // === Event Store (high-level API) ===
@@ -133,6 +158,27 @@ export class EventStore {
 
   async tombstone(eventId: string, motebitId: string): Promise<void> {
     return this.adapter.tombstone(eventId, motebitId);
+  }
+
+  /**
+   * Erase the content of stored `memory_formed` events for a deleted
+   * node (deletion propagation; see `EventStoreAdapter.redactMemoryContent`).
+   * Returns rows changed, or 0 with a caller-visible `supported: false`
+   * signal when the adapter lacks the capability.
+   *
+   * Named distinctly from the adapter method on purpose: the richer
+   * return shape would otherwise break the structural
+   * EventStore-as-EventStoreAdapter assignment some consumers rely on.
+   */
+  async redactMemoryEvents(
+    motebitId: string,
+    nodeId: string,
+  ): Promise<{ supported: boolean; changed: number }> {
+    if (!this.adapter.redactMemoryContent) {
+      return { supported: false, changed: 0 };
+    }
+    const changed = await this.adapter.redactMemoryContent(motebitId, nodeId);
+    return { supported: true, changed };
   }
 
   /**

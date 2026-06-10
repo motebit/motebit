@@ -1482,6 +1482,7 @@ export interface EventStoreAdapter {
     getLatestClock(motebitId: string): Promise<number>;
     // (undocumented)
     query(filter: EventFilter): Promise<EventLogEntry[]>;
+    redactMemoryContent?(motebitId: string, nodeId: string): Promise<number>;
     // (undocumented)
     tombstone(eventId: string, motebitId: string): Promise<void>;
     truncateBeforeHorizon?(motebitId: string, horizonTs: number): Promise<number>;

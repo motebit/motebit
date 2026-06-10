@@ -128,7 +128,7 @@ export const DECLARATION_CONTENT = {
         "memory node projections for cross-device restore, subject to the same sensitivity ceiling",
       ],
       retention_window:
-        "while the motebit's sync data is active; memory content above the none/personal sensitivity ceiling is never stored (ingress-redacted before write); clients MAY end-to-end encrypt event payloads, in which case the relay stores ciphertext only",
+        "while the motebit's sync data is active; memory content above the none/personal sensitivity ceiling is never stored (ingress-redacted before write); a synced DeleteRequested for a memory node erases that node's stored memory_formed content from the relay's event store (deletion propagation — services/relay/src/deletion-propagation.ts); clients MAY end-to-end encrypt event payloads, in which case the relay stores ciphertext only and erasure is the client-side key lifecycle",
       enforcement:
         "three layers — agent-boundary gating in packages/privacy-layer, relay ingress redaction in services/relay/src/redaction.ts (applied on both the HTTP and WebSocket sync push paths before eventStore.append), and optional client-side E2E encryption in packages/sync-engine",
     },

@@ -2580,6 +2580,22 @@ export interface EventStoreAdapter {
    * every operator's event log is expected to support horizon advance.
    */
   truncateBeforeHorizon?(motebitId: string, horizonTs: number): Promise<number>;
+  /**
+   * Erase the content of stored `memory_formed` events whose payload
+   * `node_id` matches, replacing it with the `"[REDACTED]"` sentinel +
+   * `redacted: true` + `redacted_reason: "deleted"`. Returns rows
+   * changed. The storage operation behind deletion propagation: when a
+   * `DeleteRequested` for a memory node syncs to a relay, the relay's
+   * stored copy of that node's formation content must not outlive the
+   * subject's signed deletion certificate
+   * (docs/doctrine/retention-policy.md). Joins the sanctioned
+   * deletion-shaped mutation family (`tombstone` / `compact` /
+   * `truncateBeforeHorizon`); the `DeleteRequested` event itself is the
+   * surviving audit record. Encrypted payloads (`_encrypted: true`)
+   * are opaque and skipped by design — the client-side key lifecycle
+   * is the erasure mechanism for ciphertext.
+   */
+  redactMemoryContent?(motebitId: string, nodeId: string): Promise<number>;
   /** Count total events for a motebit. */
   countEvents?(motebitId: string): Promise<number>;
 }
