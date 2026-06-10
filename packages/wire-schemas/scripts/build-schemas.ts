@@ -20,6 +20,10 @@ import { buildAgentResolutionResultJsonSchema } from "../src/agent-resolution-re
 import { buildAgentServiceListingJsonSchema } from "../src/agent-service-listing.js";
 import { buildAgentTaskJsonSchema } from "../src/agent-task.js";
 import { buildDelegationTokenJsonSchema } from "../src/delegation-token.js";
+import {
+  buildStandingDelegationJsonSchema,
+  buildDelegationRevocationJsonSchema,
+} from "../src/standing-delegation.js";
 import { buildExecutionReceiptJsonSchema } from "../src/execution-receipt.js";
 import {
   buildCredentialAnchorBatchJsonSchema,
@@ -126,6 +130,8 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "agent-revocation-record-v1.json", build: buildAgentRevocationRecordJsonSchema },
   { filename: "agent-revocation-feed-v1.json", build: buildAgentRevocationFeedJsonSchema },
   { filename: "delegation-token-v1.json", build: buildDelegationTokenJsonSchema },
+  { filename: "standing-delegation-v1.json", build: buildStandingDelegationJsonSchema },
+  { filename: "delegation-revocation-v1.json", build: buildDelegationRevocationJsonSchema },
   { filename: "agent-service-listing-v1.json", build: buildAgentServiceListingJsonSchema },
   { filename: "agent-resolution-result-v1.json", build: buildAgentResolutionResultJsonSchema },
   { filename: "agent-task-v1.json", build: buildAgentTaskJsonSchema },

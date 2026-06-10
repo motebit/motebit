@@ -248,14 +248,14 @@ The 11 Apache-2.0 packages are the permissive floor: a third party can build an 
 - **Atoms** — stateless capability providers anyone can wrap: `web-search` ($0.05/request), `read-url`, `summarize`, `embed`
 - **Glue** — `proxy` (Vercel edge CORS for the web app)
 
-**Protocol** ([`spec/`](spec/)) — 25 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `relay-transparency`, `market`, `credential`, `settlement`, `auth-token`, `credential-anchor`, `delegation`, `discovery`, `migration`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`, `agent-mcp-surface`, `proposals`, `skills`, `skills-registry`, `agent-revocation`. All have a working reference implementation in this repo.
+**Protocol** ([`spec/`](spec/)) — 26 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `relay-transparency`, `market`, `credential`, `settlement`, `auth-token`, `credential-anchor`, `delegation`, `standing-delegation`, `discovery`, `migration`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`, `agent-mcp-surface`, `proposals`, `skills`, `skills-registry`, `agent-revocation`. All have a working reference implementation in this repo.
 
 → Full directory tree, package-by-package descriptions, layer-by-layer breakdown, and data flow: **[docs.motebit.com/docs/operator/architecture](https://docs.motebit.com/docs/operator/architecture)**.
 
 ## Specification
 
 > [!NOTE]
-> **Motebit is a protocol first.** All [25 specs](spec/) (Apache-2.0) have a working reference implementation in this repo, and a third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
+> **Motebit is a protocol first.** All [26 specs](spec/) (Apache-2.0) have a working reference implementation in this repo, and a third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
 
 A `motebit.md` is YAML frontmatter signed with Ed25519:
 
@@ -314,7 +314,7 @@ The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit
 
 The **permissive floor** is Apache-2.0 licensed — use it freely, build on it, implement the spec in any language, with an explicit patent grant from every contributor:
 
-- [`spec/`](spec/) — 25 open specs (full list in [Architecture](#architecture))
+- [`spec/`](spec/) — 26 open specs (full list in [Architecture](#architecture))
 - [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, delegation, settlement, trust algebra)
 - [`packages/crypto/`](packages/crypto/) — sign and verify every Motebit artifact, cryptosuite-agile (zero runtime dependencies)
 - [`packages/sdk/`](packages/sdk/) — developer contract (stable types, adapter interfaces, governance config)
@@ -344,7 +344,7 @@ The **state a relay accumulates** — trust graph, federation routing, signed ex
 
 - [motebit.com](https://motebit.com) — meet the creature
 - [Documentation](https://docs.motebit.com) — guides, architecture, API reference
-- [Specifications](spec/) — 25 open specs (Apache-2.0)
+- [Specifications](spec/) — 26 open specs (Apache-2.0)
 - [npm](https://www.npmjs.com/org/motebit) — published packages
 - [Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
 - [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml) — found something broken? let us know

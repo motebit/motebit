@@ -75,6 +75,12 @@ export const DelegationTokenSchema = z
       .describe(
         "Unix timestamp in milliseconds after which the token is invalid. Verifiers reject tokens where `now > expires_at`.",
       ),
+    grant_id: z
+      .string()
+      .optional()
+      .describe(
+        "Optional link to a StandingDelegation this token was minted under (standing-delegation@1.0 §3). Absent ⇒ a standalone single-act delegation (today's semantics). Present ⇒ one tick of a standing grant; verify with `verifyTokenAgainstGrant`. Backward compatible.",
+      ),
     suite: z
       .literal("motebit-jcs-ed25519-b64-v1")
       .describe(

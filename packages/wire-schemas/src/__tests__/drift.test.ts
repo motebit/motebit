@@ -104,6 +104,12 @@ import {
 } from "../settlement-record.js";
 import { DELEGATION_TOKEN_SCHEMA_ID, buildDelegationTokenJsonSchema } from "../delegation-token.js";
 import {
+  STANDING_DELEGATION_SCHEMA_ID,
+  DELEGATION_REVOCATION_SCHEMA_ID,
+  buildStandingDelegationJsonSchema,
+  buildDelegationRevocationJsonSchema,
+} from "../standing-delegation.js";
+import {
   EXECUTION_RECEIPT_SCHEMA_ID,
   buildExecutionReceiptJsonSchema,
 } from "../execution-receipt.js";
@@ -217,6 +223,18 @@ const CASES: SchemaCase[] = [
     filename: "delegation-token-v1.json",
     expectedId: DELEGATION_TOKEN_SCHEMA_ID,
     build: buildDelegationTokenJsonSchema,
+  },
+  {
+    name: "standing-delegation-v1",
+    filename: "standing-delegation-v1.json",
+    expectedId: STANDING_DELEGATION_SCHEMA_ID,
+    build: buildStandingDelegationJsonSchema,
+  },
+  {
+    name: "delegation-revocation-v1",
+    filename: "delegation-revocation-v1.json",
+    expectedId: DELEGATION_REVOCATION_SCHEMA_ID,
+    build: buildDelegationRevocationJsonSchema,
   },
   {
     name: "agent-service-listing-v1",

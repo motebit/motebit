@@ -1,0 +1,179 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/standing-delegation-v1.json",
+  "title": "StandingDelegation (v1)",
+  "description": "Signed, revocable standing grant authorizing minting short-lived per-tick DelegationTokens within a fixed scope ceiling and cadence. Canonicalization: JCS (RFC 8785). Signature: Ed25519 over canonicalJson(body minus signature), base64url. See spec/standing-delegation-v1.md.",
+  "type": "object",
+  "properties": {
+    "grant_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "UUIDv7 — the stable handle a DelegationRevocation targets. Per-tick tokens minted under this grant carry it as `grant_id`."
+    },
+    "delegator_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Delegator's motebit identity — the entity granting standing authority."
+    },
+    "delegator_public_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Delegator's Ed25519 public key, hex-encoded (64 lowercase). Verifies `signature`. Embedded so verification needs no relay lookup."
+    },
+    "delegate_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Delegate's motebit identity — the entity authorized to mint per-tick tokens."
+    },
+    "delegate_public_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Delegate's Ed25519 public key, hex-encoded (64 lowercase). Per-tick tokens must name this same delegate."
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Comma-separated capability CEILING, or `*`. Each minted per-tick token's scope must narrow within this. Same grammar as DelegationToken.scope (market-v1 §12.3)."
+    },
+    "subject": {
+      "type": "string",
+      "description": "Human-meaningful binding (e.g. `research:thesis=acme-q3`). Opaque to verification; carried for receipt-linkage and operator legibility."
+    },
+    "cadence_ms": {
+      "type": "number",
+      "description": "Authorized minimum firing interval, milliseconds. A per-tick rate limit enforced at mint/relay time — NOT a single-token verification rule."
+    },
+    "issued_at": {
+      "type": "number",
+      "description": "Unix timestamp in milliseconds when the grant was issued."
+    },
+    "not_before": {
+      "type": ["number", "null"],
+      "description": "Optional activation delay (Unix ms). Null ⇒ active from `issued_at`."
+    },
+    "expires_at": {
+      "type": "number",
+      "description": "Unix timestamp in milliseconds after which the grant is invalid. Long-but-finite and renewable — NOT open-ended; the delegate renews by re-signing. See standing-delegation-v1 §6 D1."
+    },
+    "max_token_ttl_ms": {
+      "type": "number",
+      "description": "Ceiling on each minted token's `(expires_at - issued_at)`. Keeps per-tick tokens short-lived even though the grant lives long."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-b64-v1",
+      "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1`: JCS (RFC 8785), Ed25519, base64url signature, hex public keys."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` (this object minus `signature`). Verify with `delegator_public_key`."
+    }
+  },
+  "required": [
+    "grant_id",
+    "delegator_id",
+    "delegator_public_key",
+    "delegate_id",
+    "delegate_public_key",
+    "scope",
+    "subject",
+    "cadence_ms",
+    "issued_at",
+    "not_before",
+    "expires_at",
+    "max_token_ttl_ms",
+    "suite",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "StandingDelegation": {
+      "type": "object",
+      "properties": {
+        "grant_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUIDv7 — the stable handle a DelegationRevocation targets. Per-tick tokens minted under this grant carry it as `grant_id`."
+        },
+        "delegator_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Delegator's motebit identity — the entity granting standing authority."
+        },
+        "delegator_public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Delegator's Ed25519 public key, hex-encoded (64 lowercase). Verifies `signature`. Embedded so verification needs no relay lookup."
+        },
+        "delegate_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Delegate's motebit identity — the entity authorized to mint per-tick tokens."
+        },
+        "delegate_public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Delegate's Ed25519 public key, hex-encoded (64 lowercase). Per-tick tokens must name this same delegate."
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Comma-separated capability CEILING, or `*`. Each minted per-tick token's scope must narrow within this. Same grammar as DelegationToken.scope (market-v1 §12.3)."
+        },
+        "subject": {
+          "type": "string",
+          "description": "Human-meaningful binding (e.g. `research:thesis=acme-q3`). Opaque to verification; carried for receipt-linkage and operator legibility."
+        },
+        "cadence_ms": {
+          "type": "number",
+          "description": "Authorized minimum firing interval, milliseconds. A per-tick rate limit enforced at mint/relay time — NOT a single-token verification rule."
+        },
+        "issued_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds when the grant was issued."
+        },
+        "not_before": {
+          "type": ["number", "null"],
+          "description": "Optional activation delay (Unix ms). Null ⇒ active from `issued_at`."
+        },
+        "expires_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds after which the grant is invalid. Long-but-finite and renewable — NOT open-ended; the delegate renews by re-signing. See standing-delegation-v1 §6 D1."
+        },
+        "max_token_ttl_ms": {
+          "type": "number",
+          "description": "Ceiling on each minted token's `(expires_at - issued_at)`. Keeps per-tick tokens short-lived even though the grant lives long."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1`: JCS (RFC 8785), Ed25519, base64url signature, hex public keys."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` (this object minus `signature`). Verify with `delegator_public_key`."
+        }
+      },
+      "required": [
+        "grant_id",
+        "delegator_id",
+        "delegator_public_key",
+        "delegate_id",
+        "delegate_public_key",
+        "scope",
+        "subject",
+        "cadence_ms",
+        "issued_at",
+        "not_before",
+        "expires_at",
+        "max_token_ttl_ms",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -39,6 +39,14 @@ export {
   buildDelegationTokenJsonSchema,
 } from "./delegation-token.js";
 export {
+  StandingDelegationSchema,
+  DelegationRevocationSchema,
+  STANDING_DELEGATION_SCHEMA_ID,
+  DELEGATION_REVOCATION_SCHEMA_ID,
+  buildStandingDelegationJsonSchema,
+  buildDelegationRevocationJsonSchema,
+} from "./standing-delegation.js";
+export {
   AgentServiceListingSchema,
   AGENT_SERVICE_LISTING_SCHEMA_ID,
   buildAgentServiceListingJsonSchema,
