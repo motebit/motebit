@@ -27,6 +27,7 @@
  */
 
 import type { SensitivityLevel } from "./index.js";
+import type { MemorySource } from "./memory-source.js";
 
 /** Reserved — declared in EventType for forward compatibility, no
  *  emitter today. Consumers must accept events of this type but MUST
@@ -46,6 +47,13 @@ export interface MemoryFormedPayload {
   /** Classification used by relays and sync engines to decide whether
    *  to forward the content or strip it. */
   readonly sensitivity: SensitivityLevel;
+  /** Provenance — who contributed the remembered fact. Emitter-authored
+   *  by the FORMING CODE PATH (never the model, never a peer's
+   *  self-declaration; `docs/doctrine/memory-provenance.md`). Absent ⇒
+   *  formed before provenance tracking; consumers validate inbound
+   *  values with `isMemorySource` and degrade unknown vocabulary to
+   *  absent — never to a trusted tier, never rejecting the event. */
+  readonly source?: MemorySource;
   /** Present only on the wire when content has been redacted by the
    *  sync path. Absent on the emitter's original event. */
   readonly redacted?: true;

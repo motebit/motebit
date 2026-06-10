@@ -2264,6 +2264,7 @@ export interface MemoryFormedPayload {
     readonly redacted?: true;
     readonly redacted_sensitivity?: SensitivityLevel;
     readonly sensitivity: SensitivityLevel;
+    readonly source?: MemorySource;
     readonly valid_from?: number;
     readonly valid_until?: number | null;
 }

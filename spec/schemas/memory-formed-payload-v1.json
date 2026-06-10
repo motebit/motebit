@@ -20,6 +20,17 @@
       "enum": ["none", "personal", "medical", "financial", "secret"],
       "description": "Sensitivity classification used by sync forwarders to decide whether to redact memory content before crossing a device boundary. Emitter-authored; not forwarder-mutable."
     },
+    "source": {
+      "type": "string",
+      "enum": [
+        "user_stated",
+        "agent_inferred",
+        "tool_derived",
+        "peer_agent",
+        "consolidation_derived"
+      ],
+      "description": "Provenance classification. Absent ⇒ formed before provenance tracking. Receivers validate with isMemorySource and degrade unknown vocabulary to absent — never to a trusted tier, never rejecting the event."
+    },
     "redacted": {
       "type": "boolean",
       "const": true,
@@ -57,6 +68,17 @@
           "type": "string",
           "enum": ["none", "personal", "medical", "financial", "secret"],
           "description": "Sensitivity classification used by sync forwarders to decide whether to redact memory content before crossing a device boundary. Emitter-authored; not forwarder-mutable."
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "user_stated",
+            "agent_inferred",
+            "tool_derived",
+            "peer_agent",
+            "consolidation_derived"
+          ],
+          "description": "Provenance classification. Absent ⇒ formed before provenance tracking. Receivers validate with isMemorySource and degrade unknown vocabulary to absent — never to a trusted tier, never rejecting the event."
         },
         "redacted": {
           "type": "boolean",

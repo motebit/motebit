@@ -49,6 +49,14 @@ const SensitivityLevelSchema = z
     "Sensitivity classification used by sync forwarders to decide whether to redact memory content before crossing a device boundary. Emitter-authored; not forwarder-mutable.",
   );
 
+// ── MemorySource (closed registry, tenth) ────────────────────────────
+
+const MemorySourceSchema = z
+  .enum(["user_stated", "agent_inferred", "tool_derived", "peer_agent", "consolidation_derived"])
+  .describe(
+    "Provenance of the memory — who contributed the fact. Emitter-authored by the forming code path; never model-authored (the <memory> tag carries no source attribute) and never a peer's self-declaration. docs/doctrine/memory-provenance.md.",
+  );
+
 // ── 5.1 MemoryFormedPayload ──────────────────────────────────────────
 
 export const MEMORY_FORMED_PAYLOAD_SCHEMA_ID = `${SCHEMA_BASE}/memory-formed-payload-v1.json`;
@@ -65,6 +73,9 @@ export const MemoryFormedPayloadSchema = z
         'Textual content. MAY be replaced with "[REDACTED]" by a sync forwarder when `sensitivity` exceeds the forwarder policy.',
       ),
     sensitivity: SensitivityLevelSchema,
+    source: MemorySourceSchema.optional().describe(
+      "Provenance classification. Absent ⇒ formed before provenance tracking. Receivers validate with isMemorySource and degrade unknown vocabulary to absent — never to a trusted tier, never rejecting the event.",
+    ),
     redacted: z
       .literal(true)
       .optional()
