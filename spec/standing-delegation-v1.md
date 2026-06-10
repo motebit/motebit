@@ -51,15 +51,20 @@ The `StandingDelegation` type in `@motebit/protocol` is the binding machine-read
 
 #### Verification (foundation law)
 
-A verifier MUST reject a `StandingDelegation` unless ALL hold:
+A complete verification has two parts: **intrinsic** validity (checkable from the grant alone) and the **revocation** check (requires the revocation set). A verifier MUST reject a `StandingDelegation` unless ALL hold:
+
+**Intrinsic (from the grant alone):**
 
 1. `suite == "motebit-jcs-ed25519-b64-v1"`.
 2. `not_before == null` OR `now >= not_before`.
 3. `now <= expires_at` (unless verifying historical context).
-4. The grant is not revoked — no valid `DelegationRevocation` for `grant_id` signed by `delegator_public_key`.
-5. The Ed25519 signature over `canonicalJson(body)` (everything except `signature`) verifies against `delegator_public_key`.
+4. The Ed25519 signature over `canonicalJson(body)` (everything except `signature`) verifies against `delegator_public_key`.
 
-`@motebit/crypto` exports `signStandingDelegation` and `verifyStandingDelegation`; the verifier takes an injected, I/O-free `isRevoked` seam — a `grant_id → boolean` callback the consumer wires to the revocation feed (same shape as the relay's existing agent-revocation lookup).
+**Revocation (requires the revocation set — the consumer's responsibility):**
+
+5. The grant is not revoked — no valid `DelegationRevocation` for `grant_id` signed by `delegator_public_key` (see §5 for what makes a revocation authoritative).
+
+`@motebit/crypto` `verifyStandingDelegation` performs items 1–4. It is I/O-free by contract and so **does not fetch the revocation feed**: item 5 is the caller's responsibility, performed by wiring the injected `isRevoked` seam — a `grant_id → boolean` lookup. **A verifier that omits `isRevoked` is incomplete: a revoked grant passes items 1–4 and verifies.** The canonical way to build the lookup is `findGrantRevocation(grant, revocations)`, which does the authoritative binding check (§5) over a revocation set; precompute the revoked set, then provide the sync lookup. The seam mirrors the relay's existing agent-revocation lookup.
 
 ## 4. Per-tick tokens
 
@@ -103,7 +108,7 @@ The `DelegationRevocation` type in `@motebit/protocol` is the binding machine-re
 
 #### Foundation Law
 
-- A `DelegationRevocation` is **authoritative over a grant** only when `grant_id` matches AND `delegator_public_key` equals that grant's `delegator_public_key`. A well-formed signature alone proves the statement, not the authority — `verifyDelegationRevocation` checks the signature; the caller checks the grant binding.
+- A `DelegationRevocation` is **authoritative over a grant** only when `grant_id` matches AND `delegator_public_key` equals that grant's `delegator_public_key`. A well-formed signature alone proves the statement, not the authority — `verifyDelegationRevocation` checks the signature; the caller checks the grant binding. `@motebit/crypto` `findGrantRevocation` does all three (grant_id match, key match, signature) over a candidate set and is the canonical consumer-side check; matching `grant_id` alone is the foot-gun it forecloses.
 - The signed revocation is the **canonical source of truth**. Relays MAY maintain a deny-list cache (analogous to the `auth-token-v1 §8.1` jti deny-list) and SHOULD propagate revocations on the same signed, append-only feed as agent/credential revocations, under the same revocation horizon — but a relay-asserted boolean is never the authority (self-attesting-system doctrine).
 
 ## 6. Conventions

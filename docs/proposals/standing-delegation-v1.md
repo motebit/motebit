@@ -80,6 +80,15 @@ RevocationEvent.type |= "delegation_revoked"
 - **D2 — revocation source of truth.** Signed feed (offline-verifiable, self-attesting — **my recommendation**) as canonical, relay deny-list as cache. Alternative: relay deny-list only (simpler, but reintroduces relay-trust for a security-critical check, violating "convenience layer, not trust root"). _Decide: confirm signed-feed-canonical._
 - **D3 — pause/resume.** Do standing grants need pause (unrevoke) like agent revocations, or is revoke terminal? Monitors arguably want pause. _Decide: support unrevoke for grants, or revoke-is-terminal v1._
 
+## 6b. Deferred-until-forced (with triggers)
+
+Two relay-side pieces are deliberately deferred — not because they're hard, but because nothing forces them at N=1, and building speculative relay surface violates the "crystallize when a real consumer forces the shape" discipline:
+
+- **The relay `delegation_revoked` feed.** D2 makes the signed `DelegationRevocation` the canonical source of truth; a relay-hosted feed is the _propagation_ layer for it. At N=1 self-delegation the grant issuer and the verifier are the same party (agency), so the consumer wires `isRevoked` to its own revocation set via `findGrantRevocation` — no shared feed needed. **Trigger:** a second party verifying grants it did not issue, or federation propagation of grant revocations. When forced, extend the existing `RevocationEvent` feed with a `delegation_revoked` type carrying `grant_id` (same append-only feed + horizon as agent/credential revocation), plus a submit endpoint authenticated to `revocation.delegator_id`.
+- **The relay scheduler** (durable monitor store + Gap-2 lease/heartbeat). Per D5. **Trigger:** a second consumer, or agency's volume. The seam (`scheduler-seam-v1.md`) guarantees the migration is a re-point.
+
+Until then the authorization primitive is complete and consumable: a consumer signs grants/revocations with `@motebit/crypto`, fires ticks on its own cron, and verifies the full chain (grant → per-tick token → revocation) offline through `@motebit/verifier`, building `isRevoked` from `findGrantRevocation`.
+
 ## 7. Out of scope (v1)
 
 The _scheduler_ that fires the cadence ticks is NOT this spec (that's the Q3 seam — see `scheduler-seam-v1.md`). This spec is the **authorization** layer only: it makes a standing monitor's authority a real, revocable, offline-verifiable protocol artifact, whether the ticks are fired by agency's cron today or a relay scheduler later.

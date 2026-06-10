@@ -8,8 +8,9 @@ import {
   verifyTokenAgainstGrant,
   signDelegationRevocation,
   verifyDelegationRevocation,
+  findGrantRevocation,
 } from "../index.js";
-import type { DelegationToken, StandingDelegation } from "@motebit/protocol";
+import type { DelegationToken, StandingDelegation, DelegationRevocation } from "@motebit/protocol";
 
 type Kp = { publicKey: Uint8Array; privateKey: Uint8Array };
 
@@ -264,5 +265,86 @@ describe("signDelegationRevocation / verifyDelegationRevocation", () => {
     const bindsGrant =
       rev.grant_id === grant.grant_id && rev.delegator_public_key === grant.delegator_public_key;
     expect(bindsGrant).toBe(true);
+  });
+});
+
+describe("findGrantRevocation — the consumer-side check done right", () => {
+  it("finds an authoritative revocation and builds a working isRevoked seam", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    const rev = await signDelegationRevocation(
+      {
+        grant_id: grant.grant_id,
+        delegator_id: grant.delegator_id,
+        delegator_public_key: grant.delegator_public_key,
+        revoked_at: Date.now(),
+      },
+      alice.privateKey,
+    );
+
+    expect(await findGrantRevocation(grant, [rev])).toEqual(rev);
+
+    // Compose it into the verify seam: precompute revoked set, pass a sync lookup.
+    const revoked = (await findGrantRevocation(grant, [rev])) !== null;
+    const revokedSet = new Set(revoked ? [grant.grant_id] : []);
+    expect(await verifyStandingDelegation(grant, { isRevoked: (id) => revokedSet.has(id) })).toBe(
+      false,
+    );
+  });
+
+  it("ignores a revocation with the right grant_id but the WRONG key (the foot-gun)", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const mallory = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    // Mallory signs a revocation naming HER key but targeting alice's grant_id.
+    const spoof = await signDelegationRevocation(
+      {
+        grant_id: grant.grant_id,
+        delegator_id: "did:motebit:mallory",
+        delegator_public_key: bytesToHex(mallory.publicKey),
+        revoked_at: Date.now(),
+      },
+      mallory.privateKey,
+    );
+    // It verifies as a well-formed signature...
+    expect(await verifyDelegationRevocation(spoof)).toBe(true);
+    // ...but is NOT authoritative over alice's grant (key does not match).
+    expect(await findGrantRevocation(grant, [spoof])).toBeNull();
+  });
+
+  it("ignores a revocation for a different grant, and an empty set", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    const otherRev = await signDelegationRevocation(
+      {
+        grant_id: "some-other-grant",
+        delegator_id: grant.delegator_id,
+        delegator_public_key: grant.delegator_public_key,
+        revoked_at: Date.now(),
+      },
+      alice.privateKey,
+    );
+    expect(await findGrantRevocation(grant, [otherRev])).toBeNull();
+    expect(await findGrantRevocation(grant, [])).toBeNull();
+  });
+
+  it("ignores a tampered (bad-signature) revocation that otherwise binds", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    const rev = await signDelegationRevocation(
+      {
+        grant_id: grant.grant_id,
+        delegator_id: grant.delegator_id,
+        delegator_public_key: grant.delegator_public_key,
+        revoked_at: Date.now(),
+      },
+      alice.privateKey,
+    );
+    const tampered: DelegationRevocation = { ...rev, revoked_at: rev.revoked_at + 1 };
+    expect(await findGrantRevocation(grant, [tampered])).toBeNull();
   });
 });

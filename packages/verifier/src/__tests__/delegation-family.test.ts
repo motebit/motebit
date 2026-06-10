@@ -18,6 +18,7 @@ import {
   verifyStandingDelegation,
   verifyTokenAgainstGrant,
   verifyDelegationRevocation,
+  findGrantRevocation,
 } from "../index.js";
 
 const HOUR = 3_600_000;
@@ -88,5 +89,10 @@ describe("@motebit/verifier — delegation family re-exports", () => {
     expect(await verifyDelegationRevocation(rev)).toBe(true);
     // A tampered grant_id breaks the signature.
     expect(await verifyDelegationRevocation({ ...rev, grant_id: "other" })).toBe(false);
+
+    // findGrantRevocation — the consumer-side revocation check — is consumable here too.
+    const grant = { grant_id: "grant-1", delegator_public_key: bytesToHex(alice.publicKey) };
+    expect(await findGrantRevocation(grant, [rev])).toEqual(rev);
+    expect(await findGrantRevocation({ ...grant, grant_id: "other" }, [rev])).toBeNull();
   });
 });

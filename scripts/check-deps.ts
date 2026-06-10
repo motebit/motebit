@@ -288,6 +288,7 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "verifyTokenAgainstGrant",
     "signDelegationRevocation",
     "verifyDelegationRevocation",
+    "findGrantRevocation",
     "signKeySuccession",
     "signGuardianRecoverySuccession",
     "verifyKeySuccession",

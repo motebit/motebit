@@ -863,15 +863,22 @@ export async function signStandingDelegation(
 }
 
 /**
- * Verify a `StandingDelegation`: signature (against `delegator_public_key`),
- * activation (`not_before`), expiry, and — when provided — revocation.
+ * Verify a `StandingDelegation`'s INTRINSIC validity: suite, signature (against
+ * `delegator_public_key`), activation (`not_before`), and expiry.
+ *
+ * REVOCATION IS NOT CHECKED unless you wire the `isRevoked` seam. This function
+ * is I/O-free by contract — it cannot fetch the revocation feed — so revocation
+ * is the caller's responsibility. **Omitting `isRevoked` means a revoked grant
+ * verifies as valid.** A complete verification (per spec/standing-delegation-v1
+ * §3.1, item 4) MUST include the revocation check: precompute the revoked set
+ * with `findGrantRevocation`, then pass a `(grant_id) => boolean` lookup.
  *
  * Fail-closed on: unknown suite, malformed key/sig, primitive failure, not-yet-
- * active, expired (unless `checkExpiry === false`), or revoked.
+ * active, expired (unless `checkExpiry === false`), and — when wired — revoked.
  *
  * @param options.isRevoked - Injected revocation lookup (the I/O-free seam,
- *   mirroring `isAgentRevoked`). The canonical source is the signed revocation
- *   feed; the consumer wires the lookup. Omit ⇒ revocation not checked.
+ *   mirroring `isAgentRevoked`). Build it from the signed revocation feed via
+ *   `findGrantRevocation`. Omit ⇒ revocation NOT checked (see above).
  */
 export async function verifyStandingDelegation(
   grant: StandingDelegation,
@@ -985,6 +992,31 @@ export async function verifyDelegationRevocation(
   } catch {
     return false;
   }
+}
+
+/**
+ * The consumer-side revocation check, done correctly. Returns the revocation
+ * that authoritatively revokes `grant` from a set of candidate revocations, or
+ * `null` if none does.
+ *
+ * A `DelegationRevocation` is authoritative over a grant ONLY when it (1) targets
+ * the grant's `grant_id`, (2) is signed by the grant's `delegator_public_key`,
+ * and (3) its signature verifies (spec/standing-delegation-v1 §5). Matching
+ * `grant_id` alone is the foot-gun — a revocation signed by any other key is not
+ * authoritative and is ignored here. Use this to build the `isRevoked` seam for
+ * `verifyStandingDelegation` / `verifyTokenAgainstGrant`: precompute the revoked
+ * set once, then provide the sync lookup. Pure and offline — no relay contact.
+ */
+export async function findGrantRevocation(
+  grant: Pick<StandingDelegation, "grant_id" | "delegator_public_key">,
+  revocations: readonly DelegationRevocation[],
+): Promise<DelegationRevocation | null> {
+  for (const rev of revocations) {
+    if (rev.grant_id !== grant.grant_id) continue;
+    if (rev.delegator_public_key !== grant.delegator_public_key) continue;
+    if (await verifyDelegationRevocation(rev)) return rev;
+  }
+  return null;
 }
 
 // === Dispute Resolution + Adjudicator Votes (dispute §6.4 + §6.5) ===

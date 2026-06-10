@@ -53,11 +53,13 @@ export { verifyApprovalDecision } from "@motebit/crypto";
 //   - verifyStandingDelegation  — the grant (signature, activation, expiry, injected revocation seam)
 //   - verifyTokenAgainstGrant   — a per-tick token IS a valid tick of its grant
 //   - verifyDelegationRevocation — a revocation's signature (caller binds it to the grant)
+//   - findGrantRevocation       — the consumer-side revocation check done right (binds revocation→grant; build `isRevoked` from it)
 export {
   verifyDelegation,
   verifyStandingDelegation,
   verifyTokenAgainstGrant,
   verifyDelegationRevocation,
+  findGrantRevocation,
 } from "@motebit/crypto";
 export type {
   VerifyResult,

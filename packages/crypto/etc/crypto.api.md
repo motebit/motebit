@@ -503,6 +503,9 @@ export interface FederationSettlementAnchorVerifyResult {
 
 export { FederationSettlementRecord }
 
+// @public
+export function findGrantRevocation(grant: Pick<StandingDelegation, "grant_id" | "delegator_public_key">, revocations: readonly DelegationRevocation[]): Promise<DelegationRevocation | null>;
+
 // @public (undocumented)
 export function fromBase64Url(str: string): Uint8Array;
 
