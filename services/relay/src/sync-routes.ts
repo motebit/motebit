@@ -8,7 +8,8 @@
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { EventLogEntry } from "@motebit/sdk";
-import { EventType, asMotebitId } from "@motebit/sdk";
+import { asMotebitId } from "@motebit/sdk";
+import { redactSensitiveEvents } from "./redaction.js";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { EventStore } from "@motebit/event-log";
 import type { IdentityManager } from "@motebit/core-identity";
@@ -41,30 +42,11 @@ export interface SyncRoutesDeps {
 }
 
 // ---------------------------------------------------------------------------
-// Sensitivity redaction (exported for state-export.ts)
+// Sensitivity redaction — implementation moved to redaction.ts; ingress +
+// egress both consume it. Re-exported for the existing index.ts import path.
 // ---------------------------------------------------------------------------
 
-const SYNC_SAFE_SENSITIVITY = new Set(["none", "personal"]);
-
-export function redactSensitiveEvents(events: EventLogEntry[]): EventLogEntry[] {
-  return events.map((e) => {
-    if (e.event_type !== EventType.MemoryFormed) return e;
-    const payload = e.payload as Record<string, unknown> | undefined;
-    if (!payload) return e;
-    const sensitivity = (payload.sensitivity as string) ?? "none";
-    if (SYNC_SAFE_SENSITIVITY.has(sensitivity)) return e;
-    // Redact: strip content, preserve node_id and metadata
-    return {
-      ...e,
-      payload: {
-        ...payload,
-        content: "[REDACTED]",
-        redacted: true,
-        redacted_sensitivity: sensitivity,
-      },
-    };
-  });
-}
+export { redactSensitiveEvents };
 
 // ---------------------------------------------------------------------------
 // Route registration
@@ -83,9 +65,14 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
         message: "Missing or invalid 'events' field (must be array)",
       });
     }
+    // Ingress redaction: memory content above the sync-safe ceiling must
+    // never reach the relay's event store (fail-closed privacy; transparency
+    // declaration). Redact once, then append + fan out the safe events.
+    const safeEvents = redactSensitiveEvents(body.events);
+
     let accepted = 0;
     let duplicates = 0;
-    for (const event of body.events) {
+    for (const event of safeEvents) {
       // Receipt idempotency: if this event carries a receipt, check for replay
       const receipt = event.payload?.receipt as Record<string, unknown> | undefined;
       if (receipt && typeof receipt.signature === "string" && receipt.signature !== "") {
@@ -104,11 +91,9 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
     }
 
     // Fan out to WebSocket clients, skipping the sender device.
-    // Redact sensitive memory content before fan-out.
     const senderDeviceId = c.req.header("x-device-id");
     const peers = connections.get(motebitId);
     if (peers) {
-      const safeEvents = redactSensitiveEvents(body.events);
       for (const event of safeEvents) {
         const payload = JSON.stringify({ type: "event", event });
         for (const peer of peers) {

@@ -17,6 +17,7 @@ import type { EventLogEntry, SyncConversation, SyncConversationMessage } from "@
 import { AgentTaskStatus, asMotebitId } from "@motebit/sdk";
 import type { FixedWindowLimiter } from "./rate-limiter.js";
 import { upsertSyncConversation, upsertSyncMessage } from "./data-sync.js";
+import { redactSensitiveEvents } from "./redaction.js";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { createLogger } from "./logger.js";
 
@@ -361,8 +362,12 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             }
 
             if (msg.type === "push" && Array.isArray(msg.events)) {
+              // Ingress redaction: memory content above the sync-safe ceiling
+              // must never reach the event store OR other connected devices
+              // unredacted (the previous fan-out below sent raw entries).
+              const safeEvents = redactSensitiveEvents(msg.events as EventLogEntry[]);
               let wsAccepted = 0;
-              for (const entry of msg.events) {
+              for (const entry of safeEvents) {
                 // Receipt idempotency: skip events with duplicate receipt signatures
                 const receipt = entry.payload?.receipt as Record<string, unknown> | undefined;
                 if (receipt && typeof receipt.signature === "string" && receipt.signature !== "") {
@@ -383,7 +388,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               // Fan out to other connected clients for the same motebitId
               const peers = connections.get(motebitId);
               if (peers) {
-                for (const entry of msg.events) {
+                for (const entry of safeEvents) {
                   const payload = JSON.stringify({ type: "event", event: entry });
                   for (const peer of peers) {
                     if (peer.ws !== ws && peer.ws.readyState === 1) {

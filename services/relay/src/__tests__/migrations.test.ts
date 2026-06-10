@@ -204,3 +204,83 @@ describe("migration 24 — relay_key_successions recovery/guardian_signature bac
     expect(() => m24.up(db)).not.toThrow();
   });
 });
+
+describe("migration 34 — scrub_unredacted_memory_content", () => {
+  const m34 = relayMigrations.find((m) => m.version === 34)!;
+
+  function createEventsTable() {
+    db.exec(`CREATE TABLE events (
+      event_id TEXT PRIMARY KEY, motebit_id TEXT NOT NULL, device_id TEXT,
+      event_type TEXT NOT NULL, payload TEXT NOT NULL,
+      version_clock INTEGER NOT NULL, timestamp INTEGER NOT NULL,
+      tombstoned INTEGER DEFAULT 0
+    )`);
+  }
+
+  function insertEvent(eventId: string, eventType: string, payload: Record<string, unknown>) {
+    db.prepare(
+      `INSERT INTO events (event_id, motebit_id, event_type, payload, version_clock, timestamp)
+       VALUES (?, 'mote-1', ?, ?, 1, 1)`,
+    ).run(eventId, eventType, JSON.stringify(payload));
+  }
+
+  function payloadOf(eventId: string): Record<string, unknown> {
+    const row = db.prepare("SELECT payload FROM events WHERE event_id = ?").get(eventId) as {
+      payload: string;
+    };
+    return JSON.parse(row.payload) as Record<string, unknown>;
+  }
+
+  it("scrubs historical unredacted sensitive memory_formed rows", () => {
+    createEventsTable();
+    insertEvent("e-med", "memory_formed", {
+      node_id: "n1",
+      content: "patient detail",
+      sensitivity: "medical",
+      valid_from: 5,
+    });
+    m34.up(db);
+    const scrubbed = payloadOf("e-med");
+    expect(scrubbed.content).toBe("[REDACTED]");
+    expect(scrubbed.redacted).toBe(true);
+    expect(scrubbed.redacted_sensitivity).toBe("medical");
+    expect(scrubbed.node_id).toBe("n1");
+    expect(scrubbed.valid_from).toBe(5);
+  });
+
+  it("leaves benign, encrypted, already-redacted, and non-memory rows untouched", () => {
+    createEventsTable();
+    insertEvent("e-safe", "memory_formed", {
+      node_id: "n2",
+      content: "ok",
+      sensitivity: "personal",
+    });
+    insertEvent("e-enc", "memory_formed", { _encrypted: true, _data: "ciphertext" });
+    insertEvent("e-already", "memory_formed", {
+      node_id: "n3",
+      content: "[REDACTED]",
+      sensitivity: "secret",
+      redacted: true,
+      redacted_sensitivity: "secret",
+    });
+    insertEvent("e-other", "state_updated", { content: "x", sensitivity: "secret" });
+
+    const before = ["e-safe", "e-enc", "e-already", "e-other"].map(payloadOf);
+    m34.up(db);
+    const after = ["e-safe", "e-enc", "e-already", "e-other"].map(payloadOf);
+    expect(after).toEqual(before);
+  });
+
+  it("is idempotent — second run changes nothing", () => {
+    createEventsTable();
+    insertEvent("e-sec", "memory_formed", { node_id: "n4", content: "s", sensitivity: "secret" });
+    m34.up(db);
+    const first = payloadOf("e-sec");
+    m34.up(db);
+    expect(payloadOf("e-sec")).toEqual(first);
+  });
+
+  it("is a no-op (no throw) when the events table doesn't exist yet", () => {
+    expect(() => m34.up(db)).not.toThrow();
+  });
+});

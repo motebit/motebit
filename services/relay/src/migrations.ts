@@ -8,6 +8,7 @@
 
 import type { DatabaseDriver } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
+import { redactMemoryFormedPayload } from "./redaction.js";
 
 const logger = createLogger({ service: "migrations" });
 
@@ -1472,6 +1473,49 @@ export const relayMigrations: Migration[] = [
           PRIMARY KEY (ip, day)
         );
       `);
+    },
+  },
+  {
+    version: 34,
+    name: "scrub_unredacted_memory_content",
+    up: (db) => {
+      // One-time scrub: before ingress redaction landed (redaction.ts), the
+      // sync push paths appended memory_formed events RAW, so content above
+      // the sync-safe sensitivity ceiling ({none, personal}) persisted in the
+      // events table unredacted — contradicting the transparency declaration.
+      // Rewrite historical rows to the exact shape ingress redaction now
+      // produces. JS-parse rather than SQL JSON1 so the scrub is
+      // driver-agnostic (better-sqlite3 and sql.js both run it identically).
+      // Skips encrypted payloads (opaque ciphertext), already-redacted rows,
+      // and sync-safe sensitivities — same predicate as redactMemoryFormedPayload.
+      //
+      // The events table belongs to @motebit/persistence's schema (created at
+      // boot before relay migrations run); guard for harnesses that run
+      // relayMigrations against a bare driver.
+      const hasEvents = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+        .get() as { name: string } | undefined;
+      if (!hasEvents) return;
+      const rows = db
+        .prepare("SELECT event_id, payload FROM events WHERE event_type = 'memory_formed'")
+        .all() as { event_id: string; payload: string }[];
+      const update = db.prepare("UPDATE events SET payload = ? WHERE event_id = ?");
+      let scrubbed = 0;
+      for (const row of rows) {
+        let payload: Record<string, unknown>;
+        try {
+          payload = JSON.parse(row.payload) as Record<string, unknown>;
+        } catch {
+          continue; // unparseable payload — leave untouched rather than destroy
+        }
+        const redacted = redactMemoryFormedPayload(payload);
+        if (!redacted) continue;
+        update.run(JSON.stringify(redacted), row.event_id);
+        scrubbed++;
+      }
+      if (scrubbed > 0) {
+        logger.info("migration.scrub_unredacted_memory_content", { scrubbed });
+      }
     },
   },
 ];

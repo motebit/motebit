@@ -121,11 +121,16 @@ export const DECLARATION_CONTENT = {
         "permanent ledger; required for audit, dispute, and settlement reconciliation",
     },
     content: {
-      tables: [],
-      observable: [],
+      tables: ["events", "sync_conversations", "sync_conversation_messages", "memory_nodes"],
+      observable: [
+        "synced event-log entries, including memory_formed payloads at sensitivity none/personal — content above that ceiling is replaced with [REDACTED] at ingress, before any write (services/relay/src/redaction.ts; historical rows scrubbed by migration v34)",
+        "conversation titles, summaries, and message content synced for multi-device continuity — protected by the agent-side outbound sensitivity gate, and stored as opaque ciphertext when the client enables end-to-end encrypted sync",
+        "memory node projections for cross-device restore, subject to the same sensitivity ceiling",
+      ],
       retention_window:
-        "none — content is gated at the agent boundary by @motebit/privacy-layer; medical/financial/secret memory categories never cross the surface to the relay",
-      enforcement: "see packages/privacy-layer for the sensitivity gating implementation",
+        "while the motebit's sync data is active; memory content above the none/personal sensitivity ceiling is never stored (ingress-redacted before write); clients MAY end-to-end encrypt event payloads, in which case the relay stores ciphertext only",
+      enforcement:
+        "three layers — agent-boundary gating in packages/privacy-layer, relay ingress redaction in services/relay/src/redaction.ts (applied on both the HTTP and WebSocket sync push paths before eventStore.append), and optional client-side E2E encryption in packages/sync-engine",
     },
     ip_addresses: {
       handling: "transient",
@@ -163,7 +168,7 @@ export const DECLARATION_CONTENT = {
     "physical addresses",
     "long-term IP address logs",
     "AI prompts at the relay layer (proxy at services/proxy passes them to providers without storage)",
-    "memory content of any sensitivity level above 'none'",
+    "memory content of any sensitivity level above 'personal' (ingress-redacted before storage)",
     "browser fingerprints, advertising identifiers, or cross-site identifiers",
   ],
   third_party_processors: [
@@ -306,6 +311,7 @@ export const DECLARATION_CONTENT = {
   },
   honest_gaps: [
     "Fly.io and Vercel log retention windows are governed by their respective DPAs and are not separately enforced by motebit code.",
+    "Before migration v34, memory_formed events above the personal sensitivity ceiling were stored unredacted at the relay (redaction ran only on read paths). v34 scrubbed those rows in place; database backups created during that window may retain unredacted copies until backup retention expires.",
     "receipts verified before the relay_receipts archive landed (migration v10) retained only `receipt_hash` in `relay_settlements`; their full canonical JSON was not preserved and cannot be reconstructed. Receipts verified on and after v10 are archived byte-identically.",
   ],
 } as const;
@@ -434,7 +440,12 @@ export function renderMarkdown(): string {
 
   lines.push("### Content");
   lines.push("");
-  lines.push(c.retention.content.retention_window);
+  lines.push(`Tables: ${c.retention.content.tables.map((t) => `\`${t}\``).join(", ")}.`);
+  lines.push("");
+  lines.push("Observable:");
+  for (const item of c.retention.content.observable) lines.push(`- ${item}`);
+  lines.push("");
+  lines.push(`Retention window: ${c.retention.content.retention_window}.`);
   lines.push("");
   lines.push(`Enforcement: ${c.retention.content.enforcement}.`);
   lines.push("");
