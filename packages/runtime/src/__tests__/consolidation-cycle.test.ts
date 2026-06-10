@@ -522,13 +522,11 @@ describe("consolidatePhase repair — taxonomy routing, sensitivity join, delimi
       SensitivityLevel.None,
     ]);
     const superseded = ids[0]!;
-    const classify = vi
-      .fn()
-      .mockResolvedValue({
-        action: "update",
-        existingNodeId: superseded,
-        reason: "belief changed",
-      });
+    const classify = vi.fn().mockResolvedValue({
+      action: "update",
+      existingNodeId: superseded,
+      reason: "belief changed",
+    });
     h.deps.getConsolidationProvider = () => ({ classify });
 
     const result = await runConsolidationCycle(h.deps, { phases: ["gather", "consolidate"] });
