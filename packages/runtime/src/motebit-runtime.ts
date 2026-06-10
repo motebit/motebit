@@ -2896,10 +2896,20 @@ export class MotebitRuntime {
       motebit_id: this.motebitId,
       event_types: [EventType.ConsolidationCycleRun],
     });
-    if (events.length === 0) return null;
+    // Write-ahead started markers (payload.status === "started") do NOT
+    // count as a completed run — a cycle that crashed after its marker
+    // must not suppress catch-up for the whole window (the exact bug
+    // class the marker exists to surface). Absent status ⇒ completed
+    // (every pre-WAL historical row).
     let max = 0;
-    for (const e of events) if (e.timestamp > max) max = e.timestamp;
-    return max;
+    let any = false;
+    for (const e of events) {
+      const status = (e.payload as { status?: string } | undefined)?.status;
+      if (status === "started") continue;
+      any = true;
+      if (e.timestamp > max) max = e.timestamp;
+    }
+    return any ? max : null;
   }
 
   /** AbortController for the in-flight cycle, or null when idle. The

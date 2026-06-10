@@ -249,6 +249,43 @@ export async function runConsolidationCycle(
     summary: {},
   };
 
+  // Write-ahead marker: emit the started event BEFORE any phase
+  // mutation, so a crash mid-cycle leaves a detectable open cycle
+  // (started without completed for the same cycle_id) instead of
+  // mutations with no audit record. Same EventType as the completion —
+  // discriminated by `status` ("started" | "completed"; absent ⇒
+  // completed, for every historical row) rather than a new registry
+  // value, since this is one artifact's lifecycle, not a new
+  // vocabulary. `lastConsolidationRunAtFromLog` filters started
+  // markers so a crashed cycle never suppresses catch-up.
+  //
+  // A failed started-append degrades, never wedges: blocking local
+  // memory hygiene on an event-log write would be the worse failure —
+  // this marker is crash ATTRIBUTION, not an authority boundary. The
+  // degradation is explicit (`wal_missing: true` on the completion).
+  let walMissing = false;
+  try {
+    await deps.events.appendWithClock({
+      event_id: crypto.randomUUID(),
+      motebit_id: deps.motebitId,
+      timestamp: startedAt,
+      event_type: EventType.ConsolidationCycleRun,
+      payload: {
+        cycle_id: cycleId,
+        status: "started",
+        started_at: startedAt,
+        phases_planned: [...phases],
+      },
+      tombstoned: false,
+    });
+  } catch (err: unknown) {
+    walMissing = true;
+    deps.logger.warn("consolidation cycle started-marker emission failed", {
+      cycleId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   // Empty memory state passed forward between phases.
   let gathered: GatheredState = {
     consolidationClusters: [],
@@ -354,12 +391,17 @@ export async function runConsolidationCycle(
       event_type: EventType.ConsolidationCycleRun,
       payload: {
         cycle_id: cycleId,
+        status: "completed",
         phases_run: result.phasesRun,
         phases_yielded: result.phasesYielded,
         phases_errored: result.phasesErrored,
         started_at: startedAt,
         finished_at: result.finishedAt,
         summary: result.summary,
+        // True when the write-ahead started marker failed to append —
+        // a crash before THIS event would have reverted to the
+        // pre-WAL blind spot for this cycle.
+        ...(walMissing ? { wal_missing: true } : {}),
       },
       tombstoned: false,
     });

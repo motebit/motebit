@@ -145,6 +145,33 @@ describe("Runtime — proactive interior wire-in", () => {
     expect(cycleSpy).not.toHaveBeenCalled();
   });
 
+  it("a crashed cycle's started marker does NOT suppress catch-up (WAL crash-sim)", async () => {
+    const rt = new MotebitRuntime(
+      {
+        motebitId: "catchup-crashed",
+        tickRateHz: 0,
+        proactiveTickMs: 1000,
+        proactiveAction: "consolidate",
+        proactiveCatchUpMaxAgeMs: 60 * 60 * 1000,
+      },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    // Crash simulation: only the write-ahead started marker landed —
+    // the process died before the completion event. Catch-up must run.
+    await rt.events.appendWithClock({
+      event_id: crypto.randomUUID(),
+      motebit_id: rt.motebitId,
+      timestamp: Date.now(),
+      event_type: EventType.ConsolidationCycleRun,
+      payload: { cycle_id: "crashed-cycle", status: "started", started_at: Date.now() },
+      tombstoned: false,
+    });
+    const cycleSpy = vi.spyOn(rt, "consolidationCycle");
+
+    expect(await rt.catchUpConsolidationIfOverdue()).toBe(true);
+    expect(cycleSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("catchUpConsolidationIfOverdue no-ops when consolidation isn't the proactive action", async () => {
     const rt = new MotebitRuntime(
       {

@@ -97,15 +97,65 @@ describe("runConsolidationCycle", () => {
     expect(result.finishedAt).toBeGreaterThanOrEqual(result.startedAt);
   });
 
-  it("emits a single ConsolidationCycleRun event per cycle", async () => {
-    await runConsolidationCycle(harness.deps);
+  it("emits a started marker before phase work and a completed event after, sharing cycle_id", async () => {
+    const result = await runConsolidationCycle(harness.deps);
     const events = await harness.runtime.events.query({
       motebit_id: harness.runtime.motebitId,
       event_types: [EventType.ConsolidationCycleRun],
     });
-    expect(events).toHaveLength(1);
-    const payload = events[0]!.payload as { phases_run: Phase[] };
-    expect(payload.phases_run).toEqual([...PHASES]);
+    expect(events).toHaveLength(2);
+    const payloads = events.map(
+      (e) => e.payload as { cycle_id: string; status?: string; phases_run?: Phase[] },
+    );
+    const started = payloads.find((p) => p.status === "started")!;
+    const completed = payloads.find((p) => p.status === "completed")!;
+    expect(started).toBeDefined();
+    expect(completed).toBeDefined();
+    expect(started.cycle_id).toBe(result.cycleId);
+    expect(completed.cycle_id).toBe(result.cycleId);
+    expect(completed.phases_run).toEqual([...PHASES]);
+  });
+
+  it("the started marker lands before the first memory mutation", async () => {
+    // Order proof: spy on the memory graph's formMemory; assert the
+    // started event exists in the log at the moment the first phase
+    // mutation would run. We use a seeded cluster so consolidate mutates.
+    const h = createHarness();
+    let startedPresentAtFirstMutation: boolean | null = null;
+    const originalForm = h.runtime.memory.formMemory.bind(h.runtime.memory);
+    vi.spyOn(h.runtime.memory, "formMemory").mockImplementation(async (...args) => {
+      if (startedPresentAtFirstMutation === null) {
+        const events = await h.runtime.events.query({
+          motebit_id: h.runtime.motebitId,
+          event_types: [EventType.ConsolidationCycleRun],
+        });
+        startedPresentAtFirstMutation = events.some(
+          (e) => (e.payload as { status?: string }).status === "started",
+        );
+      }
+      return originalForm(...(args as Parameters<typeof originalForm>));
+    });
+    const embedding = new Array(384).fill(0.1);
+    const fortyDaysAgo = Date.now() - 40 * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 3; i++) {
+      const node = await originalForm(
+        {
+          content: `Saw editor at ${i}am`,
+          confidence: 0.75,
+          sensitivity: SensitivityLevel.None,
+          memory_type: MemoryType.Episodic,
+          source: "agent_inferred",
+        },
+        embedding,
+        SEVEN_DAYS,
+      );
+      node.created_at = fortyDaysAgo;
+      node.last_accessed = fortyDaysAgo;
+      await h.memoryStorage.saveNode(node);
+    }
+
+    await runConsolidationCycle(h.deps, { phases: ["gather", "consolidate"] });
+    expect(startedPresentAtFirstMutation).toBe(true);
   });
 
   it("invokes performReflection during gather when provider available", async () => {
