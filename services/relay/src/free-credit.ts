@@ -30,8 +30,6 @@ import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "free-credit" });
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 export interface FreeCreditConfig {
   /** Amount granted per new motebit, in micro-units. 0 ⇒ feature off. */
   amountMicro: number;
@@ -95,17 +93,22 @@ export function grantFreeCreditIfEligible(
       .get(ref) as { n: number } | undefined;
     if (existing) return { granted: false, reason: "already_granted" };
 
-    const dayStart = nowMs - (nowMs % DAY_MS);
     const day = dayKey(nowMs);
 
-    // 2. Global daily budget — sum of today's free-credit grants.
-    const spentRow = db
-      .prepare(
-        `SELECT COALESCE(SUM(amount), 0) AS spent FROM relay_transactions
-         WHERE reference_id LIKE 'free-credit:%' AND created_at >= ?`,
-      )
-      .get(dayStart) as { spent: number } | undefined;
-    const spent = spentRow?.spent ?? 0;
+    // 2. Global daily budget — total of today's free-credit grants, counted
+    //    from `relay_free_grants` (keyed by the SAME logical `day` as the
+    //    per-IP cap below). Every grant is exactly `cfg.amountMicro`, so the
+    //    grant count × amount equals the dollars granted today. Counting by the
+    //    logical day (not the ledger's wall-clock `created_at`) keeps the
+    //    budget consistent with the day boundary even when an injected clock
+    //    (tests, replay) diverges from real time — the ledger's `created_at`
+    //    is real-wall-clock, so a `created_at >= dayStart` sum mis-attributed
+    //    a prior simulated day's grants whenever the real clock crossed a UTC
+    //    midnight relative to the injected `nowMs`.
+    const grantsRow = db
+      .prepare("SELECT COALESCE(SUM(count), 0) AS grants FROM relay_free_grants WHERE day = ?")
+      .get(day) as { grants: number } | undefined;
+    const spent = (grantsRow?.grants ?? 0) * cfg.amountMicro;
     if (spent + cfg.amountMicro > cfg.dailyBudgetMicro) {
       logger.warn("free-credit.daily_budget_reached", { spent, day });
       return { granted: false, reason: "daily_budget" };
