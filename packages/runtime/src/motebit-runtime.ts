@@ -2759,6 +2759,11 @@ export class MotebitRuntime {
           memoryGovernor: this.memoryGovernor,
           privacy: this.privacy,
           getProvider: () => this.provider,
+          // The same classify-provider the interactive turn path uses —
+          // routes idle-cycle cluster summaries through the
+          // ADD/UPDATE/REINFORCE/NOOP taxonomy (conflict resolution +
+          // supersession) instead of plain formation.
+          getConsolidationProvider: () => this.loopDeps?.consolidationProvider ?? null,
           // Fail-closed privacy floor for the `consolidate` phase's direct
           // `provider.generate(...)`: on a non-sovereign provider, ≥Medical
           // episodics are filtered out of LLM summarization in `gather`

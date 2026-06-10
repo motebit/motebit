@@ -1,5 +1,6 @@
 import type { MemoryNode, MemoryEdge, AttributedMemoryCandidate, RelationType } from "@motebit/sdk";
-import { EventType, MemoryType, RelationType as RT } from "@motebit/sdk";
+import { EventType, MemoryType, RelationType as RT, rankSensitivity } from "@motebit/sdk";
+import type { SensitivityLevel } from "@motebit/sdk";
 import { ConsolidationAction } from "./consolidation.js";
 import type { ConsolidationProvider, ConsolidationDecision } from "./consolidation.js";
 import { shouldPromote, buildPromotionPayload } from "./promotion.js";
@@ -802,9 +803,26 @@ export class MemoryGraph {
     embedding: number[],
     provider: ConsolidationProvider,
     halfLife?: number,
+    options?: {
+      /**
+       * When set, similar memories ABOVE this sensitivity tier are
+       * excluded from the provider's classify context. The classify
+       * call sends neighbor content to the provider — on a
+       * non-sovereign provider that is an egress surface, and the
+       * doctrine floor ("medical/financial/secret never reach external
+       * AI", CLAUDE.md) applies to neighbors exactly as it applies to
+       * the candidates themselves. Callers on a sovereign provider
+       * omit the ceiling.
+       */
+      sensitivityCeiling?: SensitivityLevel;
+    },
   ): Promise<{ node: MemoryNode | null; decision: ConsolidationDecision }> {
     // Retrieve top-5 similar existing memories
-    const similar = await this.recallRelevant(embedding, { limit: 5 });
+    let similar = await this.recallRelevant(embedding, { limit: 5 });
+    if (options?.sensitivityCeiling !== undefined) {
+      const maxRank = rankSensitivity(options.sensitivityCeiling);
+      similar = similar.filter((n) => rankSensitivity(n.sensitivity) <= maxRank);
+    }
 
     // No similar memories — skip LLM call, fall through to ADD
     if (similar.length === 0) {

@@ -572,3 +572,59 @@ describe("parseConsolidationResponse — JSON parse error catch", () => {
     expect(decision.reason).toContain("Failed to parse");
   });
 });
+
+describe("consolidateAndForm sensitivityCeiling", () => {
+  it("excludes neighbors above the ceiling from the classify context (egress floor)", async () => {
+    const storage = new InMemoryMemoryStorage();
+    const eventStore = new EventStore(new InMemoryEventStore());
+    const graph = new MemoryGraph(storage, eventStore, "ceil-test");
+    const emb = [1, 0, 0];
+
+    await graph.formMemory(
+      {
+        content: "patient takes medication X",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.Medical,
+        source: "user_stated",
+      },
+      emb,
+    );
+    await graph.formMemory(
+      {
+        content: "user prefers tea",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.Personal,
+        source: "user_stated",
+      },
+      emb,
+    );
+
+    const seen: string[][] = [];
+    const provider = {
+      classify: (
+        _content: string,
+        existing: Array<{ node_id: string; content: string; confidence: number }>,
+      ) => {
+        seen.push(existing.map((e) => e.content));
+        return Promise.resolve({ action: ConsolidationAction.ADD, reason: "new" });
+      },
+    };
+
+    await graph.consolidateAndForm(
+      {
+        content: "user drinks tea daily",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "consolidation_derived",
+      },
+      emb,
+      provider,
+      undefined,
+      { sensitivityCeiling: SensitivityLevel.Personal },
+    );
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.some((c) => c.includes("medication"))).toBe(false);
+    expect(seen[0]!.some((c) => c.includes("tea"))).toBe(true);
+  });
+});

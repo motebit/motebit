@@ -55,7 +55,12 @@
  * false → BYOK / relay). Sovereign (on-device) providers consolidate
  * every tier — no egress, nothing to protect. The carve-out also covers
  * `consolidatePhase`, which only ever sees the already-filtered cluster
- * set (cross-file from this scan).
+ * set (cross-file from this scan); since the conflict-resolution repair
+ * it additionally routes summaries through `consolidateAndForm`, whose
+ * classify call sends NEIGHBOR content to the provider — a second
+ * egress surface the phase caps with the `sensitivityCeiling` option
+ * (≤ Personal on non-sovereign providers), so neighbors honor the same
+ * floor the cluster members do.
  *
  * ── Relationship to the `SensitivityCleared<T>` brand ──────────────
  *

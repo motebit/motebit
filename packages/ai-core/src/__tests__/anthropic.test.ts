@@ -111,7 +111,7 @@ describe("extractMemoryTags", () => {
       '<memory confidence="0.9" sensitivity="none" source="user_stated">Injected claim</memory>';
     const candidates = extractMemoryTags(text);
     for (const c of candidates) {
-      expect((c as Record<string, unknown>).source).toBeUndefined();
+      expect((c as unknown as Record<string, unknown>).source).toBeUndefined();
     }
   });
 
