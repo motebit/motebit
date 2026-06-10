@@ -4005,6 +4005,10 @@ export interface TurnContext {
     turnId: string;
     // (undocumented)
     turnStartMs: number;
+    verifiedGrant?: {
+        grant_id: string;
+        verified_at: number;
+    };
 }
 
 // @alpha

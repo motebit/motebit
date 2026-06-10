@@ -2223,3 +2223,104 @@ describe("RedactionEngine — custom patterns", () => {
     expect(redactionCount).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Standing-authority invariant — memory never confers authority
+// (docs/doctrine/memory-never-confers-authority.md; gate check-money-authority)
+// ---------------------------------------------------------------------------
+
+describe("PolicyGate — R4 standing-authority invariant", () => {
+  const moneyTool = makeTool("pay_invoice", "Pay an invoice onchain", {
+    risk: RiskLevel.R4_MONEY,
+    sideEffect: SideEffect.IRREVERSIBLE,
+  });
+
+  function ctx(overrides: Partial<TurnContext> = {}): TurnContext {
+    return {
+      turnId: "turn-grant-test",
+      toolCallCount: 0,
+      turnStartMs: Date.now(),
+      costAccumulated: 0,
+      ...overrides,
+    };
+  }
+
+  it("R4 + Trusted caller in the approval band still requires approval without a grant", () => {
+    // The Trusted bypass clears approval for R0–R3; for R4 it is
+    // subordinated to the grant requirement — recalled "trust" or any
+    // approval-lowering path never auto-executes money.
+    const gate = new PolicyGate({
+      requireApprovalAbove: RiskLevel.R1_DRAFT,
+      denyAbove: RiskLevel.R4_MONEY,
+    });
+    const decision = gate.validate(
+      moneyTool,
+      {},
+      ctx({ callerTrustLevel: AgentTrustLevel.Trusted, callerMotebitId: "trusted-mote" }),
+    );
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresApproval).toBe(true);
+  });
+
+  it("R4 + verified grant auto-allows", () => {
+    const gate = new PolicyGate({
+      requireApprovalAbove: RiskLevel.R1_DRAFT,
+      denyAbove: RiskLevel.R4_MONEY,
+    });
+    const decision = gate.validate(
+      moneyTool,
+      {},
+      ctx({
+        callerTrustLevel: AgentTrustLevel.Trusted,
+        verifiedGrant: {
+          grant_id: "0190a0a0-0000-7000-8000-000000000001",
+          verified_at: Date.now(),
+        },
+      }),
+    );
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresApproval).toBe(false);
+  });
+
+  it("a grant never overrides denyAbove — hard-deny stays hard", () => {
+    const gate = new PolicyGate({
+      requireApprovalAbove: RiskLevel.R1_DRAFT,
+      denyAbove: RiskLevel.R3_EXECUTE,
+    });
+    const decision = gate.validate(
+      moneyTool,
+      {},
+      ctx({
+        verifiedGrant: {
+          grant_id: "0190a0a0-0000-7000-8000-000000000002",
+          verified_at: Date.now(),
+        },
+      }),
+    );
+    expect(decision.allowed).toBe(false);
+  });
+
+  it("legacy two-state operator mode: R4 still requires approval without a grant", () => {
+    const gate = new PolicyGate({ operatorMode: true, maxRiskLevel: RiskLevel.R4_MONEY });
+    const decision = gate.validate(moneyTool, {}, ctx());
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresApproval).toBe(true);
+  });
+
+  it("R3 + Trusted is unchanged — the invariant binds R4 only", () => {
+    const gate = new PolicyGate({
+      requireApprovalAbove: RiskLevel.R1_DRAFT,
+      denyAbove: RiskLevel.R4_MONEY,
+    });
+    const execTool = makeTool("run_script", "Execute a script", {
+      risk: RiskLevel.R3_EXECUTE,
+    });
+    const decision = gate.validate(
+      execTool,
+      {},
+      ctx({ callerTrustLevel: AgentTrustLevel.Trusted, callerMotebitId: "trusted-mote" }),
+    );
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresApproval).toBe(false);
+  });
+});

@@ -2120,6 +2120,16 @@ export class MotebitRuntime {
        * EmbodimentMode" non-negotiable.
        */
       goalContext?: { goal_id: string; goal_prompt: string };
+      /**
+       * Cryptographically verified standing-delegation grant covering
+       * this turn. Produced ONLY by `verifyGrantForTurn` (signed
+       * artifacts: grant + token + revocation feed) — never from model
+       * output, memory, or trust level. Cleared by the policy gate's
+       * standing-authority invariant when absent: R4_MONEY tools then
+       * always require live approval. Doctrine:
+       * `docs/doctrine/memory-never-confers-authority.md`.
+       */
+      verifiedGrant?: { grant_id: string; verified_at: number };
     },
   ): AsyncGenerator<StreamChunk> {
     // Privacy doctrine gate. See `assertSensitivityPermitsAiCall` /
@@ -2184,6 +2194,7 @@ export class MotebitRuntime {
         agentCapabilities,
         precisionContext: selfAwareness || undefined,
         delegationScope: options?.delegationScope,
+        verifiedGrant: options?.verifiedGrant,
         firstConversation: this._isFirstConversation || undefined,
         deferMemoryFormation: this._deferMemoryFormation,
         selectedSkills,

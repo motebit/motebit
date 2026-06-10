@@ -1979,6 +1979,15 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-money-authority",
+    proves:
+      "flags the R4 standing-authority block disappearing from policy-gate.ts — the invariant that an R4_MONEY tool call never auto-executes without a verified standing-delegation grant. Drift class: a refactor that deletes or inverts the grant check (or reorders it ahead of the trust-level switch) silently re-opens 'Trusted caller auto-executes money'. Probe inverts the null-check (`== null` → `!= null`) so the gate's ordered marker regex no longer matches; assertion 1 must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/policy/src/policy-gate.ts`, (src) =>
+        src.replace(/ctx\.verifiedGrant == null/g, "ctx.verifiedGrant != null"),
+      ),
+  },
+  {
     script: "check-memory-source-canonical",
     proves:
       'flags the MemorySource three-way lock breaking — a value rotated in `ALL_MEMORY_SOURCES` without updating the union (or the gate\'s reference). Drift class: single-file registry, same shape as the SettlementMode probe — union AND array live in `packages/protocol/src/memory-source.ts`, so the probe targets the comma-bearing array entry (`"user_stated",`); the union arm uses leading `| ` with no trailing comma and the MEMORY_SOURCE_MARKERS key form is unquoted (`user_stated:`), so neither is touched. Gate must surface the sibling-alignment violation. byte-identical restoration on cleanup via mutateFile.',

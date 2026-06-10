@@ -333,3 +333,11 @@ export type {
   InvokeCapabilityOptions,
   InvokeErrorChunk,
 } from "./invoke-capability.js";
+// The ONLY producer of `TurnContext.verifiedGrant` — the dispatch-layer
+// verification chain (grant + token + revocation feed via
+// @motebit/crypto's standing-delegation primitives) behind the policy
+// gate's standing-authority invariant. Memory may point at a grant_id;
+// only this verification IS authority. Gate: check-money-authority.
+// Doctrine: docs/doctrine/memory-never-confers-authority.md.
+export { verifyGrantForTurn } from "./grant-verifier.js";
+export type { VerifiedGrant } from "./grant-verifier.js";

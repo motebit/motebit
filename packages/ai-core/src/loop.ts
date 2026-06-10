@@ -512,6 +512,15 @@ export interface TurnOptions {
   precisionContext?: string;
   /** Delegation scope — restricts tool calls to tools within this scope set. */
   delegationScope?: string;
+  /**
+   * Cryptographically verified standing-delegation grant covering this
+   * turn. Produced ONLY by the runtime's grant verifier
+   * (`@motebit/runtime` `verifyGrantForTurn`) from signed artifacts;
+   * threaded onto the TurnContext so the policy gate's
+   * standing-authority invariant can clear R4 auto-execution.
+   * Doctrine: `docs/doctrine/memory-never-confers-authority.md`.
+   */
+  verifiedGrant?: { grant_id: string; verified_at: number };
   /** First conversation ever — no prior history exists. */
   firstConversation?: boolean;
   /** System-triggered generation — goes into system prompt, not user message. */
@@ -843,6 +852,9 @@ export async function* runTurnStreaming(
   let turnCtx = deps.policyGate?.createTurnContext(options?.runId);
   if (turnCtx && options?.delegationScope !== undefined) {
     turnCtx = { ...turnCtx, delegationScope: options.delegationScope };
+  }
+  if (turnCtx && options?.verifiedGrant !== undefined) {
+    turnCtx = { ...turnCtx, verifiedGrant: options.verifiedGrant };
   }
 
   const conversationHistory: ConversationMessage[] = [...(options?.conversationHistory ?? [])];

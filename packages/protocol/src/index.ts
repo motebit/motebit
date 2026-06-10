@@ -590,6 +590,24 @@ export interface TurnContext {
   remoteMotebitType?: string;
   /** Delegation scope — when set, only tools within this scope are allowed. */
   delegationScope?: string;
+  /**
+   * Cryptographically verified standing-delegation grant covering this
+   * turn. Populated EXCLUSIVELY by the runtime's dispatch-layer grant
+   * verifier after `verifyStandingDelegation` + `verifyTokenAgainstGrant`
+   * + a revocation check pass on signed artifacts — never from model
+   * output, recalled memory, trust level, or configuration. Its sole
+   * consumer is the policy gate's standing-authority invariant: an
+   * R4_MONEY tool call auto-executes only when this is present;
+   * otherwise it requires live human approval regardless of any
+   * approval-lowering path. Doctrine:
+   * `docs/doctrine/memory-never-confers-authority.md`.
+   */
+  verifiedGrant?: {
+    /** UUIDv7 grant id of the verified `StandingDelegation`. */
+    grant_id: string;
+    /** Unix ms at which verification completed. */
+    verified_at: number;
+  };
 }
 
 export interface InjectionWarning {

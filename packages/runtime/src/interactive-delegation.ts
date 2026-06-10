@@ -9,7 +9,7 @@
 import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
 
 import { selectAndRunDelegation, type DelegationSettlement } from "./relay-delegation.js";
-import { fromMicro } from "@motebit/protocol";
+import { fromMicro, RiskLevel, SideEffect } from "@motebit/protocol";
 import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 
 /**
@@ -203,6 +203,17 @@ export class InteractiveDelegationManager {
         // medical/financial/secret AND the configured provider is not
         // sovereign.
         outbound: true,
+        // Risk classification is explicit, never inferred: with a
+        // payment rail configured, a paid delegation settles real money
+        // onchain (R4_MONEY, irreversible) — the name/description
+        // patterns would otherwise classify this tool R0_READ and let
+        // it auto-execute as read-class. Without a rail, delegation is
+        // still an outbound side effect (R2_WRITE). Gate-enforced by
+        // check-money-authority; doctrine
+        // docs/doctrine/memory-never-confers-authority.md.
+        riskHint: config.buildP2pPayment
+          ? { risk: RiskLevel.R4_MONEY, sideEffect: SideEffect.IRREVERSIBLE }
+          : { risk: RiskLevel.R2_WRITE, sideEffect: SideEffect.REVERSIBLE },
       },
       async (args: Record<string, unknown>) => {
         const prompt = args.prompt as string;

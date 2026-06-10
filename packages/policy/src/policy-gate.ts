@@ -382,6 +382,25 @@ export class PolicyGate {
     }
     // collaborative: use standard policy (no adjustment), logged via normal audit
 
+    // 8b. Standing-authority invariant — memory never confers authority.
+    // An R4_MONEY tool call may auto-execute (no human approval) ONLY
+    // when the turn carries a cryptographically verified live
+    // standing-delegation grant (`ctx.verifiedGrant`, populated
+    // exclusively by the runtime's dispatch-layer grant verifier from
+    // signed artifacts — never from model output, recalled memory,
+    // trust level, or configuration). This deliberately subordinates
+    // every approval-lowering path above — the Trusted-caller bypass,
+    // the service-motebit adjustment, governance presets — for R4 only:
+    // they still clear R0–R3, but standing authority over money is a
+    // signed grant or a live human tap, never an inference. There is no
+    // config switch for this branch; that is what makes it an
+    // invariant (docs/doctrine/runtime-invariants-over-prompt-rules.md).
+    // Doctrine: docs/doctrine/memory-never-confers-authority.md.
+    // Gate: check-money-authority.
+    if (profile.risk >= RiskLevel.R4_MONEY && !needsApproval && ctx.verifiedGrant == null) {
+      needsApproval = true;
+    }
+
     // 9. Multi-party approval quorum — attach quorum metadata when configured
     const quorum = this.config.approvalQuorum;
     let quorumMeta: PolicyDecision["quorum"];
