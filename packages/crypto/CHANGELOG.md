@@ -1,5 +1,25 @@
 # @motebit/crypto Changelog
 
+## 3.5.0
+
+### Minor Changes
+
+- 8ec1140: Add the standing-delegation authorization primitive (standing-delegation@1.0): a `StandingDelegation` grant that authorizes minting short-lived per-tick `DelegationToken`s within a fixed scope ceiling and cadence, for a long-but-finite, revocable lifetime — the missing shape for cadence-scoped standing work ("daily research on subject S until revoked"). Unlike a `DelegationToken`, which authorizes one act and is short-lived by invariant, the standing authority lives only on the grant; each minted token stays 1h/task-scoped; revocation lives on the grant.
+
+  `@motebit/protocol` (Apache-2.0, types only): `StandingDelegation`, `DelegationRevocation`, and an optional `grant_id?` on `DelegationToken` (absent ⇒ today's standalone semantics — backward compatible).
+
+  `@motebit/crypto` (Apache-2.0): `signStandingDelegation` / `verifyStandingDelegation` (signature + `not_before` + expiry + an injected `isRevoked` seam mirroring `isAgentRevoked`), `verifyTokenAgainstGrant` (a per-tick token is a valid tick iff its own signature/expiry verify, `grant_id` matches, the grant verifies, parties match, scope narrows within the grant ceiling, and TTL ≤ `max_token_ttl_ms`), and `signDelegationRevocation` / `verifyDelegationRevocation`. Same suite (`motebit-jcs-ed25519-b64-v1`), JCS + Ed25519 + base64url conventions as `signDelegation`. Self-verifiable per crypto rule 4 — a third party verifies a standing monitor's authorization root, every per-tick token, and a revocation with only this package and the signer's public key, no relay contact.
+
+  Forced by a real external consumer (agency's standing-monitor vertical) and closes a gap that exists independently: delegation previously had no published revocation story. Revocation is terminal in v1; the canonical source of truth is the signed, offline-verifiable revocation (a relay deny-list is a cache, not the authority). Cadence is a mint/relay-side rate limit, not checked by single-token verify.
+
+  Follow-ups (separate): the committed `spec/standing-delegation-v1.md` + wire-schemas, `@motebit/verifier` integration, and the relay-side revocation feed + scheduler seam.
+
+- 0166f45: Make the standing-delegation revocation check safe by default, and re-export the delegation family through `@motebit/verifier`.
+
+  `@motebit/crypto` adds **`findGrantRevocation(grant, revocations)`** — the consumer-side revocation check done correctly. A `DelegationRevocation` is authoritative over a grant only when it targets the `grant_id` **and** is signed by the grant's `delegator_public_key` **and** its signature verifies; matching `grant_id` alone is a foot-gun (a revocation signed by any other key is not authoritative). The helper does all three over a candidate set so a consumer builds the `verifyStandingDelegation` `isRevoked` seam without hand-rolling the key-binding. The `verifyStandingDelegation` docs now state plainly that it checks intrinsic validity (suite, signature, activation, expiry) and that **omitting `isRevoked` means a revoked grant verifies** — revocation is the caller's wired responsibility, not automatic (spec `standing-delegation-v1` §3.1 reframed to match).
+
+  `@motebit/verifier` re-exports the full delegation family so a consumer pinning the verification package validates a standing monitor's authorization root, every per-tick token, a revocation, and the grant↔revocation binding through one package: `verifyDelegation`, `verifyStandingDelegation`, `verifyTokenAgainstGrant`, `verifyDelegationRevocation`, `findGrantRevocation` (plus the `DelegationToken`, `StandingDelegation`, `DelegationRevocation` types). Like the existing `verifyApprovalDecision` re-export, these are **explicit** verifiers — a delegation's authority is its scope/chain (and, for a standing grant, the signed revocation set), not a `motebit_id → key` binding ladder resolvable from the artifact alone — so they are not auto-detected `verifyArtifact` types.
+
 ## 3.4.0
 
 ### Minor Changes
