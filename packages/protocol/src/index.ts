@@ -2,6 +2,7 @@
 // below. Re-exported (with the rest of the registry surface) near the bottom of
 // this barrel; the local binding here is what lets the anchor type reference it.
 import type { MerkleTreeVersion } from "./merkle-tree-hash.js";
+import type { MemorySource } from "./memory-source.js";
 
 // === Branded ID Types ===
 //
@@ -460,6 +461,20 @@ export interface MemoryContent {
   memory_type?: MemoryType;
   valid_from?: number;
   valid_until?: number | null;
+  /**
+   * Provenance — who contributed this fact (see `MemorySource`).
+   * Optional on reads: nodes formed before provenance tracking (or
+   * synced from peers with unknown vocabularies) have no source and
+   * render as provenance `unknown` — honestly absent, never fabricated.
+   * Required at formation entry points via `AttributedMemoryCandidate`.
+   */
+  source?: MemorySource;
+  /**
+   * Local turn identifier of the conversation turn this memory formed
+   * in, when formation was turn-scoped. Local provenance only — never
+   * on the wire (turn ids have no cross-device meaning).
+   */
+  source_turn_id?: string;
 }
 
 export interface MemoryCandidate {
@@ -467,7 +482,28 @@ export interface MemoryCandidate {
   confidence: number;
   sensitivity: SensitivityLevel;
   memory_type?: MemoryType;
+  /**
+   * Provenance, assigned by the FORMING CODE PATH — never parsed from
+   * model output (`extractMemoryTags` has no source attribute) and
+   * never accepted from a peer's self-declaration. Optional here
+   * because tag extraction produces unattributed candidates; the
+   * formation boundary requires `AttributedMemoryCandidate`.
+   */
+  source?: MemorySource;
+  /** Local turn id stamped by the loop when formation is turn-scoped. */
+  source_turn_id?: string;
 }
+
+/**
+ * A `MemoryCandidate` whose provenance has been assigned. The formation
+ * entry points (`formMemory`, `consolidateAndForm`,
+ * `formMemoriesFromCandidates`) take THIS type, not `MemoryCandidate` —
+ * so every new formation call site is a compile error until it declares
+ * a source. Asymmetric-typing enforcement, same shape as
+ * `WritableSettlementMode`: reads stay open for legacy data; writes are
+ * structurally closed.
+ */
+export type AttributedMemoryCandidate = MemoryCandidate & { source: MemorySource };
 
 // === Event Log ===
 
@@ -2797,6 +2833,21 @@ export type {
   SolvencyProof,
 } from "./settlement-mode.js";
 export { ALL_SETTLEMENT_MODES, isSettlementMode } from "./settlement-mode.js";
+
+// ── Memory Source (protocol-level) ──────────────────────────────
+// Provenance classification for memory formation — who contributed a
+// remembered fact. Tenth registered registry; assignment rule (source
+// is forming-code-path-authored, never model- or peer-authored) is
+// enforced by `check-memory-source-canonical`. Doctrine:
+// `docs/doctrine/memory-provenance.md`.
+
+export type { MemorySource } from "./memory-source.js";
+export {
+  ALL_MEMORY_SOURCES,
+  isMemorySource,
+  MEMORY_SOURCE_MARKERS,
+  MEMORY_SOURCE_MARKER_UNKNOWN,
+} from "./memory-source.js";
 
 // ── Settlement Asset (protocol-level) ───────────────────────────
 // The closed vocabulary of stablecoin assets the protocol clears

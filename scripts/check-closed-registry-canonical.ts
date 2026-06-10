@@ -260,6 +260,28 @@ const REGISTERED_REGISTRIES: ReadonlyArray<RegisteredRegistry> = [
       "docs/doctrine/agents-as-first-person-trust-graph.md",
     ],
   },
+  {
+    name: "MemorySource",
+    // Tenth registered registry — provenance classification on every
+    // memory node: who contributed a remembered fact (user, reflection,
+    // tool result, peer agent, consolidation). The field that makes
+    // absorbed third-party content distinguishable from durable user
+    // intent. Single-file source = tooling, same shape as
+    // `SettlementMode`. Snake_case wire-format (like `EventType`). Its
+    // bespoke gate additionally carries the two load-bearing authorship
+    // scans (model cannot author source; MCP peers are `peer_agent` only).
+    sourceFile: "packages/protocol/src/memory-source.ts",
+    toolingFile: "packages/protocol/src/memory-source.ts",
+    typeName: "MemorySource",
+    arrayName: "ALL_MEMORY_SOURCES",
+    guardName: "isMemorySource",
+    gatePath: "scripts/check-memory-source-canonical.ts",
+    gateName: "check-memory-source-canonical",
+    doctrinePaths: [
+      "docs/doctrine/registry-pattern-canonical.md",
+      "docs/doctrine/memory-provenance.md",
+    ],
+  },
 ];
 
 function readFile(path: string): string | null {

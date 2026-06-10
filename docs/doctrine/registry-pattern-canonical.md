@@ -1,6 +1,6 @@
 # The registry pattern, canonical
 
-A motebit-shaped invariant. Five instances at land; the sixth (`EventType`, 2026-05-14) and seventh (`SettlementMode`, 2026-05-15) shipped as template growth on the same rails, with `REGISTERED_REGISTRIES` 5 → 6 → 7 in successive arcs — each addition mechanical, not new design.
+A motebit-shaped invariant. Five instances at land; the sixth (`EventType`, 2026-05-14), seventh (`SettlementMode`, 2026-05-15), eighth (`MerkleTreeVersion`, 2026-05-30), ninth (`AgentRevocationReason`, 2026-06-04), and tenth (`MemorySource`, 2026-06-10 — provenance vocabulary for memory formation, `docs/doctrine/memory-provenance.md`) shipped as template growth on the same rails, with `REGISTERED_REGISTRIES` growing 5 → 10 in successive arcs — each addition mechanical, not new design.
 
 ## The structure motebit has been building
 

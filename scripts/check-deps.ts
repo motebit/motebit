@@ -246,6 +246,11 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // closed registry per docs/doctrine/registry-pattern-canonical.md.
     // Same shape as `isSettlementMode`.
     "isAgentRevocationReason",
+    // Memory-source provenance vocabulary — pure type guard over the
+    // frozen `ALL_MEMORY_SOURCES` array. The tenth registered closed
+    // registry per docs/doctrine/registry-pattern-canonical.md.
+    // Same shape as `isSettlementMode`.
+    "isMemorySource",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)

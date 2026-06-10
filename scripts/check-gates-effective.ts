@@ -1979,6 +1979,18 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-memory-source-canonical",
+    proves:
+      'flags the MemorySource three-way lock breaking — a value rotated in `ALL_MEMORY_SOURCES` without updating the union (or the gate\'s reference). Drift class: single-file registry, same shape as the SettlementMode probe — union AND array live in `packages/protocol/src/memory-source.ts`, so the probe targets the comma-bearing array entry (`"user_stated",`); the union arm uses leading `| ` with no trailing comma and the MEMORY_SOURCE_MARKERS key form is unquoted (`user_stated:`), so neither is touched. Gate must surface the sibling-alignment violation. byte-identical restoration on cleanup via mutateFile.',
+    perturb: () =>
+      // Corrupt one value in ALL_MEMORY_SOURCES so it no longer matches
+      // the union. The quoted, comma-bearing form matches only the
+      // frozen-array entry.
+      mutateFile(`packages/protocol/src/memory-source.ts`, (src) =>
+        src.replace(/"user_stated",/g, '"user_statd",'),
+      ),
+  },
+  {
     script: "check-agent-revocation-reason-canonical",
     proves:
       'flags the AgentRevocationReason three-way lock breaking — a value rotated in `ALL_AGENT_REVOCATION_REASONS` without updating the union (or gate reference). Drift class: same shape as the SettlementMode probe — union AND array share one file (`packages/protocol/src/agent-revocation.ts`), so the probe targets the comma-bearing array entry (`"spam",`) which matches only the array (the union form uses ` | `). Gate must surface the sibling-alignment violation (union has `spam` but ALL_AGENT_REVOCATION_REASONS contains `spamm` instead). byte-identical restoration on cleanup via mutateFile.',
