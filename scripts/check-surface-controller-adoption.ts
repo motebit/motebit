@@ -18,6 +18,9 @@
  * Out of scope (documented forks, not silent ones): the desktop MCP manager
  * is the stdio superset and is reconciled in a follow-up; CLI has no MCP
  * manager. They are absent from ADOPTIONS by intent, not omission.
+ *
+ * When to add a controller here vs. leave it per-surface: the four-question
+ * extraction test in `docs/doctrine/surface-controller-extraction.md`.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
