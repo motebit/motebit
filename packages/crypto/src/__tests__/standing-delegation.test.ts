@@ -1,0 +1,268 @@
+import { describe, it, expect } from "vitest";
+import {
+  generateKeypair,
+  bytesToHex,
+  signDelegation,
+  signStandingDelegation,
+  verifyStandingDelegation,
+  verifyTokenAgainstGrant,
+  signDelegationRevocation,
+  verifyDelegationRevocation,
+} from "../index.js";
+import type { DelegationToken, StandingDelegation } from "@motebit/protocol";
+
+type Kp = { publicKey: Uint8Array; privateKey: Uint8Array };
+
+const HOUR = 3_600_000;
+
+async function makeGrant(
+  delegator: Kp,
+  delegate: Kp,
+  over: Partial<Omit<StandingDelegation, "signature" | "suite">> = {},
+): Promise<StandingDelegation> {
+  const now = Date.now();
+  return signStandingDelegation(
+    {
+      grant_id: over.grant_id ?? "grant-1",
+      delegator_id: over.delegator_id ?? "did:motebit:alice",
+      delegator_public_key: over.delegator_public_key ?? bytesToHex(delegator.publicKey),
+      delegate_id: over.delegate_id ?? "did:motebit:bob",
+      delegate_public_key: over.delegate_public_key ?? bytesToHex(delegate.publicKey),
+      scope: over.scope ?? "web_search,summarize",
+      subject: over.subject ?? "research:thesis=acme",
+      cadence_ms: over.cadence_ms ?? 24 * HOUR,
+      issued_at: over.issued_at ?? now,
+      not_before: over.not_before ?? null,
+      expires_at: over.expires_at ?? now + 90 * 24 * HOUR,
+      max_token_ttl_ms: over.max_token_ttl_ms ?? HOUR,
+    },
+    delegator.privateKey,
+  );
+}
+
+// Mint a per-tick token under a grant (what a monitor does each tick).
+async function mintTick(
+  grant: StandingDelegation,
+  delegator: Kp,
+  delegate: Kp,
+  over: Partial<Omit<DelegationToken, "signature" | "suite">> = {},
+): Promise<DelegationToken> {
+  const now = Date.now();
+  return signDelegation(
+    {
+      delegator_id: grant.delegator_id,
+      delegator_public_key: grant.delegator_public_key,
+      delegate_id: grant.delegate_id,
+      delegate_public_key: grant.delegate_public_key,
+      scope: over.scope ?? "web_search",
+      issued_at: over.issued_at ?? now,
+      expires_at: over.expires_at ?? now + HOUR,
+      grant_id: "grant_id" in over ? over.grant_id : grant.grant_id,
+    },
+    delegator.privateKey,
+  );
+}
+
+describe("signStandingDelegation / verifyStandingDelegation", () => {
+  it("round-trips a valid grant", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    expect(grant.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(await verifyStandingDelegation(grant)).toBe(true);
+  });
+
+  it("rejects a tampered body", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    expect(await verifyStandingDelegation({ ...grant, scope: "*" })).toBe(false);
+  });
+
+  it("rejects a grant signed by the wrong key", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const mallory = await generateKeypair();
+    // delegator_public_key claims alice, but mallory signs.
+    const grant = await makeGrant(mallory, bob, {
+      delegator_public_key: bytesToHex(alice.publicKey),
+    });
+    expect(await verifyStandingDelegation(grant)).toBe(false);
+  });
+
+  it("rejects an expired grant, accepts with checkExpiry:false", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const past = Date.now() - 10 * HOUR;
+    const grant = await makeGrant(alice, bob, { issued_at: past, expires_at: past + HOUR });
+    expect(await verifyStandingDelegation(grant)).toBe(false);
+    expect(await verifyStandingDelegation(grant, { checkExpiry: false })).toBe(true);
+  });
+
+  it("rejects a not-yet-active grant", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const now = Date.now();
+    const grant = await makeGrant(alice, bob, { not_before: now + HOUR });
+    expect(await verifyStandingDelegation(grant, { now })).toBe(false);
+    expect(await verifyStandingDelegation(grant, { now: now + 2 * HOUR })).toBe(true);
+  });
+
+  it("rejects a revoked grant via the injected isRevoked seam", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    expect(await verifyStandingDelegation(grant, { isRevoked: () => false })).toBe(true);
+    expect(await verifyStandingDelegation(grant, { isRevoked: (id) => id === "grant-1" })).toBe(
+      false,
+    );
+  });
+});
+
+describe("verifyTokenAgainstGrant", () => {
+  it("accepts a well-formed per-tick token", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    const tick = await mintTick(grant, alice, bob);
+    expect(await verifyTokenAgainstGrant(tick, grant)).toEqual({ valid: true });
+  });
+
+  it("rejects a token whose grant_id does not match", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    const tick = await mintTick(grant, alice, bob, { grant_id: "other" });
+    const r = await verifyTokenAgainstGrant(tick, grant);
+    expect(r.valid).toBe(false);
+    expect(r.error).toMatch(/grant_id/);
+  });
+
+  it("rejects a token that widens scope beyond the grant ceiling", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob, { scope: "web_search" });
+    const tick = await mintTick(grant, alice, bob, { scope: "web_search,withdraw" });
+    const r = await verifyTokenAgainstGrant(tick, grant);
+    expect(r.valid).toBe(false);
+    expect(r.error).toMatch(/scope/);
+  });
+
+  it("rejects a token whose TTL exceeds the grant ceiling", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob, { max_token_ttl_ms: HOUR });
+    const now = Date.now();
+    const tick = await mintTick(grant, alice, bob, {
+      issued_at: now,
+      expires_at: now + 2 * HOUR, // exceeds 1h ceiling
+    });
+    const r = await verifyTokenAgainstGrant(tick, grant, { now });
+    expect(r.valid).toBe(false);
+    expect(r.error).toMatch(/TTL/);
+  });
+
+  it("rejects a token whose parties do not match the grant", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const carol = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    // A token for a different delegate (carol), signed by alice.
+    const now = Date.now();
+    const tick = await signDelegation(
+      {
+        delegator_id: grant.delegator_id,
+        delegator_public_key: grant.delegator_public_key,
+        delegate_id: "did:motebit:carol",
+        delegate_public_key: bytesToHex(carol.publicKey),
+        scope: "web_search",
+        issued_at: now,
+        expires_at: now + HOUR,
+        grant_id: grant.grant_id,
+      },
+      alice.privateKey,
+    );
+    const r = await verifyTokenAgainstGrant(tick, grant, { now });
+    expect(r.valid).toBe(false);
+    expect(r.error).toMatch(/parties/);
+  });
+
+  it("rejects every tick once the grant is revoked", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    const tick = await mintTick(grant, alice, bob);
+    expect((await verifyTokenAgainstGrant(tick, grant)).valid).toBe(true);
+    const r = await verifyTokenAgainstGrant(tick, grant, { isRevoked: () => true });
+    expect(r.valid).toBe(false);
+    expect(r.error).toMatch(/revoked/);
+  });
+
+  it("rejects an expired per-tick token even under a valid grant", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    const now = Date.now();
+    const tick = await mintTick(grant, alice, bob, {
+      issued_at: now - 2 * HOUR,
+      expires_at: now - HOUR,
+    });
+    const r = await verifyTokenAgainstGrant(tick, grant, { now });
+    expect(r.valid).toBe(false);
+    expect(r.error).toMatch(/signature or expiry/);
+  });
+});
+
+describe("signDelegationRevocation / verifyDelegationRevocation", () => {
+  it("round-trips a revocation signed by the delegator", async () => {
+    const alice = await generateKeypair();
+    const rev = await signDelegationRevocation(
+      {
+        grant_id: "grant-1",
+        delegator_id: "did:motebit:alice",
+        delegator_public_key: bytesToHex(alice.publicKey),
+        revoked_at: Date.now(),
+      },
+      alice.privateKey,
+    );
+    expect(await verifyDelegationRevocation(rev)).toBe(true);
+  });
+
+  it("rejects a revocation signed by a non-delegator key", async () => {
+    const alice = await generateKeypair();
+    const mallory = await generateKeypair();
+    // Claims alice's key but mallory signs — the offline-verifiable refusal.
+    const rev = await signDelegationRevocation(
+      {
+        grant_id: "grant-1",
+        delegator_id: "did:motebit:alice",
+        delegator_public_key: bytesToHex(alice.publicKey),
+        revoked_at: Date.now(),
+      },
+      mallory.privateKey,
+    );
+    expect(await verifyDelegationRevocation(rev)).toBe(false);
+  });
+
+  it("a valid revocation only binds the grant when its key matches the grant's delegator", async () => {
+    // The note in verifyDelegationRevocation: a well-formed revocation is only
+    // authoritative over a grant whose delegator_public_key it carries.
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    const rev = await signDelegationRevocation(
+      {
+        grant_id: grant.grant_id,
+        delegator_id: grant.delegator_id,
+        delegator_public_key: grant.delegator_public_key,
+        revoked_at: Date.now(),
+      },
+      alice.privateKey,
+    );
+    expect(await verifyDelegationRevocation(rev)).toBe(true);
+    // The binding check the consumer performs:
+    const bindsGrant =
+      rev.grant_id === grant.grant_id && rev.delegator_public_key === grant.delegator_public_key;
+    expect(bindsGrant).toBe(true);
+  });
+});

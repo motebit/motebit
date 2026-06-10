@@ -11,6 +11,7 @@ import type { ComputerSessionActionRecord } from '@motebit/protocol';
 import type { ConsolidationReceipt } from '@motebit/protocol';
 import type { ContentArtifactType } from '@motebit/protocol';
 import type { CredentialBundle } from '@motebit/protocol';
+import type { DelegationRevocation } from '@motebit/protocol';
 import type { DelegationToken } from '@motebit/protocol';
 import type { DeletionCertificate } from '@motebit/protocol';
 import type { DepartureAttestation } from '@motebit/protocol';
@@ -36,6 +37,7 @@ import type { SignableComputerSessionReceipt } from '@motebit/protocol';
 import type { SkillEnvelope } from '@motebit/protocol';
 import type { SkillManifest } from '@motebit/protocol';
 import type { SkillSignature } from '@motebit/protocol';
+import type { StandingDelegation } from '@motebit/protocol';
 import type { SuiteId } from '@motebit/protocol';
 import type { WitnessOmissionDispute } from '@motebit/protocol';
 
@@ -314,6 +316,8 @@ export function decodeSkillSignaturePublicKey(sig: SkillSignature): Uint8Array;
 
 // @public
 export const DELEGATION_TOKEN_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+export { DelegationRevocation }
 
 export { DelegationToken }
 
@@ -1184,6 +1188,9 @@ export function signCredentialBundle(bundle: Omit<CredentialBundle, "bundle_hash
 export function signDelegation(delegation: Omit<DelegationToken, "signature" | "suite">, delegatorPrivateKey: Uint8Array): Promise<DelegationToken>;
 
 // @public
+export function signDelegationRevocation(revocation: Omit<DelegationRevocation, "signature" | "suite">, delegatorPrivateKey: Uint8Array): Promise<DelegationRevocation>;
+
+// @public
 export function signDeviceRegistration<T extends Omit<SignableDeviceRegistration, "signature" | "suite">>(body: T, privateKey: Uint8Array): Promise<T & {
     suite: typeof DEVICE_REGISTRATION_SUITE;
     signature: string;
@@ -1281,6 +1288,9 @@ export function signSkillManifest(unsigned: Omit<SkillManifest, "motebit"> & {
 export function signSovereignPaymentReceipt(input: SovereignPaymentReceiptInput, privateKey: Uint8Array, publicKey: Uint8Array): Promise<SignableReceipt>;
 
 // @public
+export function signStandingDelegation(grant: Omit<StandingDelegation, "signature" | "suite">, delegatorPrivateKey: Uint8Array): Promise<StandingDelegation>;
+
+// @public
 export function signToolInvocationReceipt<T extends Omit<SignableToolInvocationReceipt, "signature" | "suite">>(receipt: T, privateKey: Uint8Array, publicKey?: Uint8Array): Promise<T & {
     suite: typeof TOOL_INVOCATION_RECEIPT_SUITE;
     signature: string;
@@ -1370,6 +1380,8 @@ export interface SovereignPaymentReceiptInput {
     // (undocumented)
     tx_hash: string;
 }
+
+export { StandingDelegation }
 
 // @public
 export interface SuccessionChainResult {
@@ -1562,6 +1574,9 @@ export function verifyDelegationChain(chain: DelegationToken[]): Promise<{
 }>;
 
 // @public
+export function verifyDelegationRevocation(revocation: DelegationRevocation): Promise<boolean>;
+
+// @public
 export function verifyDeletionCertificate(cert: DeletionCertificate, ctx: DeletionCertificateVerifyContext): Promise<DeletionCertificateVerifyResult>;
 
 // @public
@@ -1704,7 +1719,23 @@ export function verifySkillManifestDetailed(manifest: SkillManifest, body: Uint8
 export function verifySovereignBinding(motebitId: string, genesisPublicKeyHex: string): Promise<boolean>;
 
 // @public
+export function verifyStandingDelegation(grant: StandingDelegation, options?: {
+    checkExpiry?: boolean;
+    now?: number;
+    isRevoked?: (grantId: string) => boolean;
+}): Promise<boolean>;
+
+// @public
 export function verifySuccessionChain(chain: KeySuccessionRecord[], guardianPublicKeyHex?: string): Promise<SuccessionChainResult>;
+
+// @public
+export function verifyTokenAgainstGrant(token: DelegationToken, grant: StandingDelegation, options?: {
+    now?: number;
+    isRevoked?: (grantId: string) => boolean;
+}): Promise<{
+    valid: boolean;
+    error?: string;
+}>;
 
 // @public
 export function verifyToolInvocationReceipt(receipt: SignableToolInvocationReceipt, publicKey: Uint8Array): Promise<boolean>;

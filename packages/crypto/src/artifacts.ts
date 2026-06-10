@@ -728,8 +728,8 @@ export async function verifyReceiptSequence(
  * `export type { X } from "..."` is technically type-only by TypeScript
  * semantics, but the drift probe's regex only recognizes `import type`.
  */
-import type { DelegationToken } from "@motebit/protocol";
-export type { DelegationToken };
+import type { DelegationToken, StandingDelegation, DelegationRevocation } from "@motebit/protocol";
+export type { DelegationToken, StandingDelegation, DelegationRevocation };
 
 /** The one suite DelegationTokens sign under today. */
 export const DELEGATION_TOKEN_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
@@ -840,6 +840,151 @@ export async function verifyDelegationChain(
   }
 
   return { valid: true };
+}
+
+// === Standing Delegation (standing-delegation@1.0) ===
+//
+// A standing grant authorizes minting short-lived per-tick DelegationTokens
+// within a fixed scope ceiling and cadence, for a long-but-finite revocable
+// lifetime. Same suite + JCS + Ed25519 + base64url-sig conventions as
+// `signDelegation`; self-verifiable per crypto rule 4 (third party verifies
+// with this package + the signer's public key, no relay contact).
+
+/** Sign a `StandingDelegation` grant with the delegator's private key. */
+export async function signStandingDelegation(
+  grant: Omit<StandingDelegation, "signature" | "suite">,
+  delegatorPrivateKey: Uint8Array,
+): Promise<StandingDelegation> {
+  const body = { ...grant, suite: DELEGATION_TOKEN_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(DELEGATION_TOKEN_SUITE, message, delegatorPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify a `StandingDelegation`: signature (against `delegator_public_key`),
+ * activation (`not_before`), expiry, and — when provided — revocation.
+ *
+ * Fail-closed on: unknown suite, malformed key/sig, primitive failure, not-yet-
+ * active, expired (unless `checkExpiry === false`), or revoked.
+ *
+ * @param options.isRevoked - Injected revocation lookup (the I/O-free seam,
+ *   mirroring `isAgentRevoked`). The canonical source is the signed revocation
+ *   feed; the consumer wires the lookup. Omit ⇒ revocation not checked.
+ */
+export async function verifyStandingDelegation(
+  grant: StandingDelegation,
+  options?: { checkExpiry?: boolean; now?: number; isRevoked?: (grantId: string) => boolean },
+): Promise<boolean> {
+  if (grant.suite !== DELEGATION_TOKEN_SUITE) return false;
+
+  const now = options?.now ?? Date.now();
+  if (grant.not_before != null && now < grant.not_before) return false;
+  const checkExpiry = options?.checkExpiry ?? true;
+  if (checkExpiry && grant.expires_at < now) return false;
+  if (options?.isRevoked?.(grant.grant_id) === true) return false;
+
+  const { signature, ...body } = grant;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const pubKey = hexToBytes(grant.delegator_public_key);
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(grant.suite, message, sig, pubKey);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verify a per-tick `DelegationToken` against its `StandingDelegation`.
+ *
+ * A token is a valid tick of a grant iff ALL hold:
+ *   1. the token's own signature + expiry verify (`verifyDelegation`),
+ *   2. `token.grant_id === grant.grant_id`,
+ *   3. the grant verifies (signature, active, not expired, not revoked),
+ *   4. the parties match (both delegator AND delegate id + key equal the grant's),
+ *   5. the token's scope narrows within the grant's ceiling,
+ *   6. the token's TTL does not exceed `grant.max_token_ttl_ms`.
+ *
+ * Cadence (the minimum interval between ticks) is NOT checked here — it is a
+ * mint-time / relay-side rate limit, not derivable from a single token. Returns
+ * `{ valid, error? }` for debuggability.
+ */
+export async function verifyTokenAgainstGrant(
+  token: DelegationToken,
+  grant: StandingDelegation,
+  options?: { now?: number; isRevoked?: (grantId: string) => boolean },
+): Promise<{ valid: boolean; error?: string }> {
+  const now = options?.now ?? Date.now();
+
+  if (!(await verifyDelegation(token, { now }))) {
+    return { valid: false, error: "token signature or expiry invalid" };
+  }
+  if (token.grant_id !== grant.grant_id) {
+    return { valid: false, error: "token.grant_id does not match grant" };
+  }
+  if (!(await verifyStandingDelegation(grant, { now, isRevoked: options?.isRevoked }))) {
+    return { valid: false, error: "grant invalid, expired, or revoked" };
+  }
+  if (
+    token.delegator_id !== grant.delegator_id ||
+    token.delegator_public_key !== grant.delegator_public_key ||
+    token.delegate_id !== grant.delegate_id ||
+    token.delegate_public_key !== grant.delegate_public_key
+  ) {
+    return { valid: false, error: "token parties do not match grant" };
+  }
+  if (!isScopeNarrowed(grant.scope, token.scope)) {
+    return {
+      valid: false,
+      error: `token widens scope beyond grant: grant="${grant.scope}", token="${token.scope}"`,
+    };
+  }
+  if (token.expires_at - token.issued_at > grant.max_token_ttl_ms) {
+    return { valid: false, error: "token TTL exceeds grant.max_token_ttl_ms" };
+  }
+  return { valid: true };
+}
+
+/** Sign a `DelegationRevocation`. Only the grant's delegator may sign one. */
+export async function signDelegationRevocation(
+  revocation: Omit<DelegationRevocation, "signature" | "suite">,
+  delegatorPrivateKey: Uint8Array,
+): Promise<DelegationRevocation> {
+  const body = { ...revocation, suite: DELEGATION_TOKEN_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(DELEGATION_TOKEN_SUITE, message, delegatorPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify a `DelegationRevocation`'s signature (against its own
+ * `delegator_public_key`). Fail-closed on unknown suite / malformed key+sig.
+ *
+ * NOTE: this proves the revocation is a well-formed signed statement. To accept
+ * it as authority over a specific grant, the caller MUST also check that it
+ * targets that grant and was signed by THAT grant's delegator — i.e.
+ * `rev.grant_id === grant.grant_id && rev.delegator_public_key ===
+ * grant.delegator_public_key`. (A revocation is only as authoritative as the
+ * key matching the grant it claims to revoke.)
+ */
+export async function verifyDelegationRevocation(
+  revocation: DelegationRevocation,
+): Promise<boolean> {
+  if (revocation.suite !== DELEGATION_TOKEN_SUITE) return false;
+  const { signature, ...body } = revocation;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const pubKey = hexToBytes(revocation.delegator_public_key);
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(revocation.suite, message, sig, pubKey);
+  } catch {
+    return false;
+  }
 }
 
 // === Dispute Resolution + Adjudicator Votes (dispute §6.4 + §6.5) ===

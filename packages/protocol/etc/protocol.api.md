@@ -1117,6 +1117,18 @@ export interface DelegationReceiptSummary {
 }
 
 // @public
+export interface DelegationRevocation {
+    // (undocumented)
+    delegator_id: string;
+    delegator_public_key: string;
+    grant_id: string;
+    // (undocumented)
+    revoked_at: number;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
+
+// @public
 export interface DelegationToken {
     // (undocumented)
     delegate_id: string;
@@ -1126,6 +1138,7 @@ export interface DelegationToken {
     delegator_public_key: string;
     // (undocumented)
     expires_at: number;
+    grant_id?: string;
     // (undocumented)
     issued_at: number;
     scope: string;
@@ -3489,6 +3502,27 @@ export interface SovereignWalletRail extends SovereignRail {
     buildP2pPayment?(request: SovereignP2pPaymentRequest): Promise<P2pPaymentProof>;
     isAvailable(): Promise<boolean>;
     send(toAddress: string, microAmount: bigint): Promise<SovereignSendResult>;
+}
+
+// @public
+export interface StandingDelegation {
+    cadence_ms: number;
+    // (undocumented)
+    delegate_id: string;
+    delegate_public_key: string;
+    // (undocumented)
+    delegator_id: string;
+    delegator_public_key: string;
+    expires_at: number;
+    grant_id: string;
+    // (undocumented)
+    issued_at: number;
+    max_token_ttl_ms: number;
+    not_before: number | null;
+    scope: string;
+    signature: string;
+    subject: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public

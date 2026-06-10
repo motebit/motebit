@@ -239,12 +239,91 @@ export interface DelegationToken {
   issued_at: number;
   expires_at: number;
   /**
+   * Optional link to a {@link StandingDelegation} this token was minted under.
+   * Absent ⇒ a standalone, single-act delegation (today's semantics). Present ⇒
+   * one tick of a standing grant; verified against the grant via
+   * `verifyTokenAgainstGrant` (scope ⊆ grant, ttl ≤ grant.max_token_ttl_ms,
+   * grant not revoked). See standing-delegation@1.0 §3. Backward compatible.
+   */
+  grant_id?: string;
+  /**
    * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` for
    * this artifact today. Part of the signed body — tampering breaks
    * verification. Verifiers reject missing or unknown values fail-closed.
    */
   suite: "motebit-jcs-ed25519-b64-v1";
   /** Base64url-encoded Ed25519 signature. */
+  signature: string;
+}
+
+/**
+ * A standing (open-ended-feeling, cadence-scoped, revocable) delegation grant.
+ * Unlike a {@link DelegationToken} — which authorizes ONE act and is short-lived
+ * by invariant — a StandingDelegation authorizes its holder to MINT short-lived
+ * per-tick `DelegationToken`s within a fixed scope ceiling and cadence, for a
+ * long-but-finite, revocable lifetime. The standing authority lives only here;
+ * each minted token stays 1h/task-scoped; revocation lives on the grant (a
+ * signed {@link DelegationRevocation}). Forcing use case: a standing monitor
+ * ("daily research on subject S until revoked"). See standing-delegation@1.0.
+ */
+export interface StandingDelegation {
+  /** UUID v7. The stable handle a {@link DelegationRevocation} targets. */
+  grant_id: string;
+  delegator_id: string;
+  /** Delegator's Ed25519 public key, hex-encoded (64 lowercase). The verify key. */
+  delegator_public_key: string;
+  delegate_id: string;
+  /** Delegate's Ed25519 public key, hex-encoded (64 lowercase). */
+  delegate_public_key: string;
+  /**
+   * Comma-separated capability CEILING, or `"*"`. Each minted per-tick token's
+   * scope must narrow within this (same grammar as `DelegationToken.scope`).
+   */
+  scope: string;
+  /**
+   * Human-meaningful binding (e.g. `"research:thesis=acme-q3"`). Opaque to
+   * verification; carried for receipt-linkage and operator legibility.
+   */
+  subject: string;
+  /** Authorized minimum firing interval (ms). Enforced at mint/relay time, not by single-token verify. */
+  cadence_ms: number;
+  issued_at: number;
+  /** Optional activation delay. Null ⇒ active from `issued_at`. */
+  not_before: number | null;
+  /**
+   * Grant expiry (Unix ms). Long-but-finite and renewable — NOT open-ended:
+   * revocation has a propagation horizon, so a grant that outlives revocation
+   * reachability would be unsafe. The delegate renews by re-signing. See
+   * standing-delegation@1.0 §6 D1.
+   */
+  expires_at: number;
+  /** Ceiling on each minted token's `(expires_at - issued_at)` — keeps per-tick tokens short-lived. */
+  max_token_ttl_ms: number;
+  /** Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` today. */
+  suite: "motebit-jcs-ed25519-b64-v1";
+  /** Base64url-encoded Ed25519 signature over JCS(body). */
+  signature: string;
+}
+
+/**
+ * A signed revocation of a {@link StandingDelegation}. Only the grant's
+ * delegator can sign one (verified against `delegator_public_key`). Self-
+ * contained and offline-verifiable like the token — it carries the delegator's
+ * public key so a third party verifies it without relay contact, then matches
+ * it to the grant. It is the canonical, append-only-feed source of truth for
+ * grant revocation; a relay deny-list is a cache, not the authority
+ * (self-attesting-system doctrine). Revocation is terminal in v1.
+ */
+export interface DelegationRevocation {
+  /** The {@link StandingDelegation.grant_id} being revoked. */
+  grant_id: string;
+  delegator_id: string;
+  /** Delegator's Ed25519 public key, hex-encoded (64 lowercase). The verify key. */
+  delegator_public_key: string;
+  revoked_at: number;
+  /** Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` today. */
+  suite: "motebit-jcs-ed25519-b64-v1";
+  /** Base64url-encoded Ed25519 signature over JCS(body). */
   signature: string;
 }
 
