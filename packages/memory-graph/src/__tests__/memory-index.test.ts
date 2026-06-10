@@ -143,7 +143,7 @@ describe("buildMemoryIndex — rendered output", () => {
     expect(rendered).toContain("rewrite_memory");
     expect(rendered).toContain("User prefers TypeScript.");
     expect(rendered).toContain("User lives in SF.");
-    expect(rendered).toContain("(confident)");
+    expect(rendered).toContain("(confident, from:unknown)");
   });
 
   it("surfaces the 8-char node id prefix for each entry (so rewrite_memory has a target)", () => {

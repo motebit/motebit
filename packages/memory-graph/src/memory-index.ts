@@ -30,6 +30,7 @@
  */
 
 import type { MemoryNode, MemoryEdge } from "@motebit/sdk";
+import { MEMORY_SOURCE_MARKERS, MEMORY_SOURCE_MARKER_UNKNOWN } from "@motebit/sdk";
 import { computeDecayedConfidence } from "./index.js";
 
 /**
@@ -166,7 +167,11 @@ function renderLine(entry: MemoryIndexEntry, maxSummaryChars: number): string {
   const shortId = entry.node.node_id.slice(0, 8);
   const summary = entry.node.content.replace(/\s+/g, " ").trim().slice(0, maxSummaryChars);
   const suffix = entry.node.pinned ? " [pinned]" : "";
-  return `- [${shortId}] ${summary} (${entry.certainty})${suffix}`;
+  const marker =
+    entry.node.source !== undefined
+      ? MEMORY_SOURCE_MARKERS[entry.node.source]
+      : MEMORY_SOURCE_MARKER_UNKNOWN;
+  return `- [${shortId}] ${summary} (${entry.certainty}, from:${marker})${suffix}`;
 }
 
 /**
@@ -193,7 +198,7 @@ export function buildMemoryIndex(
 
   const header = [
     "# Memory Index (Layer 1)",
-    "Entries ranked by index-worthiness. Certainty: absolute | confident | tentative. Pull full detail via recall; correct a stale entry via the `rewrite_memory` tool (node_id is the `[xxxxxxxx]` short id).",
+    "Entries ranked by index-worthiness. Certainty: absolute | confident | tentative. Provenance: from:user is a direct user statement; every other from:* label (tool, peer-agent, inference, consolidation, unknown) is an absorbed, unverified claim. Pull full detail via recall; correct a stale entry via the `rewrite_memory` tool (node_id is the `[xxxxxxxx]` short id).",
     "",
   ];
 

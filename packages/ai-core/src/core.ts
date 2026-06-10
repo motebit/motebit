@@ -11,7 +11,13 @@ import type {
   MotebitState,
   ToolCall,
 } from "@motebit/sdk";
-import { SensitivityLevel, MemoryType } from "@motebit/sdk";
+import {
+  SensitivityLevel,
+  MemoryType,
+  MEMORY_SOURCE_MARKERS,
+  MEMORY_SOURCE_MARKER_UNKNOWN,
+} from "@motebit/sdk";
+import type { MemorySource } from "@motebit/sdk";
 import { buildSystemPromptCacheable as buildPromptCacheable } from "./prompt.js";
 
 /** Default URL for a local Ollama instance. */
@@ -180,6 +186,41 @@ export interface AnthropicProviderConfig {
 
 // === Context Packing ===
 
+/**
+ * Escape data-boundary and provenance markers embedded in memory
+ * content. Content is formed from conversations and tool output and may
+ * carry injected directives — it must not be able to fabricate its own
+ * `[MEMORY_DATA]` boundary OR spoof a `[from:user]` provenance marker
+ * (the marker renders OUTSIDE the boundary; this escape forecloses an
+ * in-content fake).
+ */
+function escapeMemoryContent(content: string): string {
+  return content
+    .replace(/\[MEMORY_DATA\b/g, "[ESCAPED_MEMORY")
+    .replace(/\[\/MEMORY_DATA\]/g, "[/ESCAPED_MEMORY]")
+    .replace(/\[from:/g, "[escaped-from:");
+}
+
+/**
+ * One memory line: provenance marker + confidence OUTSIDE the data
+ * boundary, content inside. `[from:user]` is the only marker that
+ * records a direct user statement; everything else is an absorbed
+ * claim the prompt teaches the model to weigh accordingly
+ * (docs/doctrine/memory-provenance.md). Absent source renders
+ * honestly as `unknown` — never fabricated.
+ */
+function renderMemoryLine(mem: {
+  content: string;
+  confidence: number;
+  source?: MemorySource;
+}): string {
+  // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- pinned is narrowed to any via `in` check
+  const prefix = "pinned" in mem && (mem as { pinned?: boolean }).pinned ? "[pinned] " : "";
+  const marker =
+    mem.source !== undefined ? MEMORY_SOURCE_MARKERS[mem.source] : MEMORY_SOURCE_MARKER_UNKNOWN;
+  return `  ${prefix}[from:${marker}] [confidence=${mem.confidence.toFixed(2)}] [MEMORY_DATA]${escapeMemoryContent(mem.content)}[/MEMORY_DATA]`;
+}
+
 export function packContext(contextPack: ContextPack): string {
   const parts: string[] = [];
 
@@ -210,30 +251,14 @@ export function packContext(contextPack: ContextPack): string {
     if (semantic.length > 0) {
       parts.push("[What I Know]");
       for (const mem of semantic) {
-        // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- pinned is narrowed to any via `in` check
-        const prefix = "pinned" in mem && mem.pinned ? "[pinned] " : "";
-        // Memory content wrapped in data boundaries — these are formed from user
-        // conversations and may contain embedded directives (prompt injection).
-        const safeContent = mem.content
-          .replace(/\[MEMORY_DATA\b/g, "[ESCAPED_MEMORY")
-          .replace(/\[\/MEMORY_DATA\]/g, "[/ESCAPED_MEMORY]");
-        parts.push(
-          `  ${prefix}[confidence=${mem.confidence.toFixed(2)}] [MEMORY_DATA]${safeContent}[/MEMORY_DATA]`,
-        );
+        parts.push(renderMemoryLine(mem));
       }
     }
 
     if (episodic.length > 0) {
       parts.push("[What Happened Recently]");
       for (const mem of episodic) {
-        // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- pinned is narrowed to any via `in` check
-        const prefix = "pinned" in mem && mem.pinned ? "[pinned] " : "";
-        const safeContent = mem.content
-          .replace(/\[MEMORY_DATA\b/g, "[ESCAPED_MEMORY")
-          .replace(/\[\/MEMORY_DATA\]/g, "[/ESCAPED_MEMORY]");
-        parts.push(
-          `  ${prefix}[confidence=${mem.confidence.toFixed(2)}] [MEMORY_DATA]${safeContent}[/MEMORY_DATA]`,
-        );
+        parts.push(renderMemoryLine(mem));
       }
     }
   }
@@ -242,9 +267,7 @@ export function packContext(contextPack: ContextPack): string {
   if (contextPack.curiosityHints && contextPack.curiosityHints.length > 0) {
     parts.push("[Getting Fuzzy]");
     for (const hint of contextPack.curiosityHints.slice(0, 2)) {
-      const safeHint = hint.content
-        .replace(/\[MEMORY_DATA\b/g, "[ESCAPED_MEMORY")
-        .replace(/\[\/MEMORY_DATA\]/g, "[/ESCAPED_MEMORY]");
+      const safeHint = escapeMemoryContent(hint.content);
       parts.push(
         `  - "[MEMORY_DATA]${safeHint}[/MEMORY_DATA]" (haven't discussed in ${hint.daysSinceDiscussed}d)`,
       );

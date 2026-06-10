@@ -152,8 +152,8 @@ describe("Memory Trinity — end-to-end composition", () => {
 
       expect(indexV1).toContain("User prefers TypeScript");
       expect(indexV1).toContain("User lives in SF");
-      expect(indexV1).toMatch(/User prefers TypeScript.*\(absolute\)/);
-      expect(indexV1).toMatch(/User lives in SF.*\(confident\)/);
+      expect(indexV1).toMatch(/User prefers TypeScript.*\(absolute, from:user\)/);
+      expect(indexV1).toMatch(/User lives in SF.*\(confident, from:user\)/);
 
       // 5. Agent decides the memory was wrong and rewrites via the
       //    tool path.
