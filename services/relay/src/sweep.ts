@@ -21,6 +21,7 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import { computeDisputeWindowHold, requestWithdrawal } from "./accounts.js";
 import { enqueuePendingWithdrawal } from "./batch-withdrawals.js";
 import { createLogger } from "./logger.js";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 const logger = createLogger({ service: "relay", module: "sweep" });
 
@@ -65,15 +66,17 @@ export function startSweepLoop(
   db: DatabaseDriver,
   config: SweepConfig = {},
   isFrozen?: () => boolean,
+  supervisor?: LoopSupervisor,
 ): ReturnType<typeof setInterval> {
   const intervalMs = config.intervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
   const minSweep = config.minSweepAmount ?? MIN_SWEEP_AMOUNT;
   const sweepRail = config.sweepRail;
 
-  return setInterval(() => {
-    if (isFrozen?.()) return;
-
-    void (() => {
+  return superviseInterval(
+    supervisor,
+    "sweep",
+    intervalMs,
+    () => {
       try {
         // Find agents eligible for sweep:
         // - Has a sweep_threshold configured (not null)
@@ -178,6 +181,7 @@ export function startSweepLoop(
           error: err instanceof Error ? err.message : String(err),
         });
       }
-    })();
-  }, intervalMs);
+    },
+    { isFrozen },
+  );
 }

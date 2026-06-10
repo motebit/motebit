@@ -159,6 +159,7 @@ import { registerBrowserSandboxRoutes } from "./browser-sandbox.js";
 import { registerBudgetRoutes } from "./budget.js";
 import { startSweepLoop } from "./sweep.js";
 import { startBatchWithdrawalLoop, getPendingWithdrawalsSummary } from "./batch-withdrawals.js";
+import { LoopSupervisor } from "./loop-supervisor.js";
 import { registerAgentRoutes } from "./agents.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
 import { registerTaskRoutes, TASK_TTL_MS } from "./tasks.js";
@@ -581,6 +582,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Shared state ---
   const connections = new Map<string, ConnectedDevice[]>();
+
+  // Background-loop supervisor — liveness + error observability for the
+  // money-movement loops (settlement-retry, P2P verifier, batch withdrawal,
+  // sweep). Surfaced at GET /api/v1/admin/health (`loops`). In-memory,
+  // per-process by design: the question is "are this process's loops healthy
+  // now". Audit/anchoring/federation loops adopt it in a follow-up.
+  const loopSupervisor = new LoopSupervisor();
 
   // TASK_TTL_MS is imported from tasks.ts — one canonical task lifetime. (A
   // local duplicate of the literal lived here until 2026-06, shadowing the
@@ -1116,7 +1124,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // or external analytics infrastructure.
   /** @internal */
   app.get("/api/v1/admin/health", (c) => {
-    return c.json(aggregateHealthSummary(moteDb.db));
+    return c.json({ ...aggregateHealthSummary(moteDb.db), loops: loopSupervisor.snapshot() });
   });
 
   // Admin: platform-fee aggregation (5% of relay-mediated settlements).
@@ -1397,6 +1405,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     },
     () => getEmergencyFreeze(),
+    undefined, // retryPolicy — use the default
+    loopSupervisor,
   );
 
   // --- Unified chain anchor submitter (Solana Memo by default) ---
@@ -1568,6 +1578,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         ...(solanaUsdcMint ? { usdcMint: solanaUsdcMint } : {}),
       },
       () => getEmergencyFreeze(),
+      loopSupervisor,
     );
     logger.info("p2p_verifier.started", { intervalMs: 60000, relayTreasuryAddress });
 
@@ -1608,14 +1619,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   }
 
   // --- Auto-sweep loop (relay balance → sovereign wallet) ---
-  const sweepInterval = startSweepLoop(moteDb.db, {}, () => getEmergencyFreeze());
+  const sweepInterval = startSweepLoop(moteDb.db, {}, () => getEmergencyFreeze(), loopSupervisor);
   logger.info("sweep.started", { intervalMs: 300000 });
 
   // --- Batch withdrawal loop (aggregated-fire policy per rail) ---
   // Runs regardless of whether sweep is enqueueing — a future user-initiated
   // batch opt-in would enqueue into the same queue.
-  const batchWithdrawalInterval = startBatchWithdrawalLoop(moteDb.db, railRegistry.list(), {}, () =>
-    getEmergencyFreeze(),
+  const batchWithdrawalInterval = startBatchWithdrawalLoop(
+    moteDb.db,
+    railRegistry.list(),
+    {},
+    () => getEmergencyFreeze(),
+    loopSupervisor,
   );
 
   // Mobile push-wake adapter — env-gated like the Solana/x402 capabilities.

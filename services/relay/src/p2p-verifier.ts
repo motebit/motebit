@@ -21,6 +21,7 @@ import {
   type TxVerificationResult,
 } from "@motebit/wallet-solana";
 import { createLogger } from "./logger.js";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 const logger = createLogger({ service: "relay", module: "p2p-verifier" });
 
@@ -96,6 +97,7 @@ export function startP2pVerifierLoop(
   db: DatabaseDriver,
   config: P2pVerifierConfig,
   isFrozen?: () => boolean,
+  supervisor?: LoopSupervisor,
 ): ReturnType<typeof setInterval> {
   const intervalMs = config.intervalMs ?? VERIFY_INTERVAL_MS;
   const maxPerCycle = config.maxPerCycle ?? MAX_VERIFY_PER_CYCLE;
@@ -113,10 +115,11 @@ export function startP2pVerifierLoop(
       ...(config.usdcMint ? { usdcMint: config.usdcMint } : {}),
     });
 
-  return setInterval(() => {
-    if (isFrozen?.()) return;
-
-    void (async () => {
+  return superviseInterval(
+    supervisor,
+    "p2p-verifier",
+    intervalMs,
+    async () => {
       try {
         // After Arc 2 of the off-ramp arc, P2P settlements carry a
         // composite tx hash (single atomic Solana tx with worker leg +
@@ -165,8 +168,9 @@ export function startP2pVerifierLoop(
           error: err instanceof Error ? err.message : String(err),
         });
       }
-    })();
-  }, intervalMs);
+    },
+    { isFrozen },
+  );
 }
 
 // === Onchain Verification ===

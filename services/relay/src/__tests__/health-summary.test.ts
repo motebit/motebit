@@ -268,4 +268,26 @@ describe("GET /api/v1/admin/health (HTTP)", () => {
     expect(body.subscribers.status_counts).toEqual({ active: 1 });
     expect(typeof body.generated_at).toBe("number");
   });
+
+  it("surfaces the money-loop supervisor snapshot under `loops`", async () => {
+    const res = await relay.app.request("/api/v1/admin/health", { headers: AUTH_HEADER });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      loops: Array<{ name: string; status: string; interval_ms: number; error_count: number }>;
+    };
+    expect(Array.isArray(body.loops)).toBe(true);
+    const names = body.loops.map((l) => l.name);
+    // The always-on money-movement loops register at boot. (p2p-verifier only
+    // registers with SOLANA_RPC_URL set, absent in the test relay.)
+    expect(names).toContain("settlement-retry");
+    expect(names).toContain("sweep");
+    expect(names).toContain("batch-withdrawal");
+    // Freshly booted: registered, no tick has fired yet (intervals are ≥30s),
+    // so every loop is healthy (idle within grace, or ok), zero errors.
+    for (const loop of body.loops) {
+      expect(["idle", "ok"]).toContain(loop.status);
+      expect(loop.interval_ms).toBeGreaterThan(0);
+      expect(loop.error_count).toBe(0);
+    }
+  });
 });

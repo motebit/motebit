@@ -57,6 +57,7 @@ import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 import { FederationError } from "./errors.js";
 import { FixedWindowLimiter } from "./rate-limiter.js";
 import {
@@ -946,11 +947,16 @@ export function startSettlementRetryLoop(
   isFrozen?: () => boolean,
   /** Override default retry policy (backoff timing, max retries, jitter). */
   retryPolicy: RetryPolicy = DEFAULT_RETRY_POLICY,
+  /** Optional loop supervisor for liveness/error observability. */
+  supervisor?: LoopSupervisor,
 ): ReturnType<typeof setInterval> {
-  return setInterval(() => {
-    if (isFrozen?.()) return;
-    void processSettlementRetries(db, relayIdentity, onRetryExhausted, retryPolicy);
-  }, intervalMs);
+  return superviseInterval(
+    supervisor,
+    "settlement-retry",
+    intervalMs,
+    () => processSettlementRetries(db, relayIdentity, onRetryExhausted, retryPolicy),
+    { isFrozen },
+  );
 }
 
 /** Start the heartbeat sender loop. Returns the interval handle for cleanup. */

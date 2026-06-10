@@ -36,6 +36,7 @@ import { shouldBatchSettle, DEFAULT_BATCH_POLICY, type BatchPolicy } from "@mote
 import { computeDisputeWindowHold, getOrCreateAccount, fromMicro } from "./accounts.js";
 import { sqliteAccountStoreFor } from "./account-store-sqlite.js";
 import { createLogger } from "./logger.js";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 const logger = createLogger({ service: "batch-withdrawals" });
 
@@ -469,6 +470,7 @@ export function startBatchWithdrawalLoop(
   rails: ReadonlyArray<GuestRail>,
   config: BatchWithdrawalConfig = {},
   isFrozen?: () => boolean,
+  supervisor?: LoopSupervisor,
 ): ReturnType<typeof setInterval> {
   const intervalMs = config.intervalMs ?? DEFAULT_LOOP_INTERVAL_MS;
   // Filter the incoming rail list to only those that opt-in to
@@ -484,9 +486,11 @@ export function startBatchWithdrawalLoop(
     skipped: rails.length - withdrawableRails.length,
   });
 
-  return setInterval(() => {
-    if (isFrozen?.()) return;
-    void (async () => {
+  return superviseInterval(
+    supervisor,
+    "batch-withdrawal",
+    intervalMs,
+    async () => {
       try {
         logStaleFiring(db);
         for (const rail of withdrawableRails) {
@@ -497,6 +501,7 @@ export function startBatchWithdrawalLoop(
           error: err instanceof Error ? err.message : String(err),
         });
       }
-    })();
-  }, intervalMs);
+    },
+    { isFrozen },
+  );
 }
