@@ -196,6 +196,70 @@ describe("formMemoriesFromCandidates", () => {
     expect(consolidationProvider.classify).toHaveBeenCalled();
   });
 
+  it("passes sensitivityCeiling through so classify neighbors above the ceiling never egress", async () => {
+    // Seed a Medical memory, then form a benign candidate through a
+    // recording classify provider with sensitivityCeiling=Personal: the
+    // Medical neighbor must NOT appear in the classifier's `existing`
+    // set (the external-AI egress floor on the interactive path).
+    const seen: string[][] = [];
+    const consolidationProvider = {
+      classify: vi.fn(
+        async (
+          _content: string,
+          existing: Array<{ node_id: string; content: string; confidence: number }>,
+        ) => {
+          seen.push(existing.map((e) => e.content));
+          return { action: ConsolidationAction.ADD, reason: "test" };
+        },
+      ),
+    };
+    // Form the Medical memory with the SAME embedding the candidate will
+    // get (deterministic mock keyed on content) so it is a guaranteed
+    // top similarity neighbor — the test is non-vacuous: without the
+    // ceiling it WOULD be classified-against.
+    const { embedText } = await import("../embeddings.js");
+    const sharedEmbedding = await embedText("user mentioned a routine");
+    // Two top neighbors sharing the candidate's embedding: a Personal one
+    // (passes the ceiling) and a Medical one (filtered). classify must
+    // fire with the Personal neighbor but never see the Medical content.
+    await graph.formMemory(
+      {
+        content: "user prefers tea in the morning",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.Personal,
+        source: "user_stated",
+      },
+      sharedEmbedding,
+    );
+    await graph.formMemory(
+      {
+        content: "patient takes medication X",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.Medical,
+        source: "user_stated",
+      },
+      sharedEmbedding,
+    );
+
+    await formMemoriesFromCandidates(
+      { memoryGraph: graph, consolidationProvider, sensitivityCeiling: SensitivityLevel.Personal },
+      [
+        {
+          content: "user mentioned a routine",
+          confidence: 0.8,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
+      ],
+      [],
+    );
+
+    expect(consolidationProvider.classify).toHaveBeenCalled();
+    const allNeighbors = seen.flat();
+    expect(allNeighbors.some((c) => c.includes("tea"))).toBe(true); // Personal passes
+    expect(allNeighbors.some((c) => c.includes("medication"))).toBe(false); // Medical filtered
+  });
+
   it("links new memories to retrieved memories above the cosine-similarity threshold", async () => {
     // Seed a retrieved memory with a known embedding so the formation
     // pass can cosine-link against it.

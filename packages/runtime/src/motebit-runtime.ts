@@ -2574,9 +2574,14 @@ export class MotebitRuntime {
         const relevantMemories = chunk.relevantMemories;
         const memoryGraph = this.memory;
         const consolidationProvider = this.loopDeps?.consolidationProvider;
+        // Same classify-neighbor egress floor as the inline path: cap
+        // neighbors at the context-safe tier on a non-sovereign provider.
+        const sensitivityCeiling = this.providerIsSovereign()
+          ? undefined
+          : SensitivityLevel.Personal;
         this.memoryFormation.enqueue(async () => {
           await formMemoriesFromCandidates(
-            { memoryGraph, consolidationProvider },
+            { memoryGraph, consolidationProvider, sensitivityCeiling },
             candidates,
             relevantMemories,
           );

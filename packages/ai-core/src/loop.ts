@@ -1638,8 +1638,19 @@ export async function* runTurnStreaming(
       relevantMemories: [...relevantMemories],
     };
   } else {
+    // Classify-neighbor egress floor: on a non-sovereign provider, cap
+    // the similarity neighbors consolidateAndForm sends to the external
+    // classifier at the context-safe tier so a stored ≥Medical memory
+    // can't leak as a neighbor on a benign turn (same floor the idle
+    // cycle applies; CONTEXT_SAFE_SENSITIVITY is None|Personal).
+    const classifyCeiling =
+      deps.getProviderMode?.() === "on-device" ? undefined : SensitivityLevel.Personal;
     const { memoriesFormed: newlyFormed } = await formMemoriesFromCandidates(
-      { memoryGraph, consolidationProvider: deps.consolidationProvider },
+      {
+        memoryGraph,
+        consolidationProvider: deps.consolidationProvider,
+        sensitivityCeiling: classifyCeiling,
+      },
       candidates,
       relevantMemories,
     );

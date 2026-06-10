@@ -18,7 +18,7 @@
  * without swallowing.
  */
 
-import type { AttributedMemoryCandidate, MemoryNode } from "@motebit/sdk";
+import type { AttributedMemoryCandidate, MemoryNode, SensitivityLevel } from "@motebit/sdk";
 import { RelationType } from "@motebit/sdk";
 import { embedText } from "./embeddings.js";
 import { cosineSimilarity } from "./index.js";
@@ -28,6 +28,17 @@ import type { ConsolidationProvider } from "./consolidation.js";
 export interface MemoryFormationDeps {
   readonly memoryGraph: MemoryGraph;
   readonly consolidationProvider?: ConsolidationProvider;
+  /**
+   * Ceiling applied to the classify neighbors `consolidateAndForm`
+   * sends to the provider. On a non-sovereign provider this MUST be
+   * set to the context-safe tier (`Personal`) so a stored
+   * medical/financial/secret memory cannot egress to external AI as a
+   * similarity neighbor on a topically-related turn — the same floor
+   * the idle consolidation cycle applies. Omitted (sovereign / local)
+   * ⇒ no cap. Doctrine: CLAUDE.md "medical/financial/secret never
+   * reach external AI".
+   */
+  readonly sensitivityCeiling?: SensitivityLevel;
 }
 
 export interface MemoryFormationResult {
@@ -76,6 +87,10 @@ export async function formMemoriesFromCandidates(
         candidate,
         embedding,
         deps.consolidationProvider,
+        undefined,
+        deps.sensitivityCeiling !== undefined
+          ? { sensitivityCeiling: deps.sensitivityCeiling }
+          : undefined,
       );
       if (node) memoriesFormed.push(node);
     } else {
