@@ -39,7 +39,6 @@
 import {
   EventType,
   MemoryType,
-  RelationType,
   SensitivityLevel,
   rankSensitivity,
   maxSensitivity,
@@ -587,12 +586,23 @@ async function consolidatePhase(
         // re-clustering + re-boosting every idle interval.
         const targetId = node?.node_id ?? cDecision.existingNodeId ?? null;
         if (!targetId) continue; // degenerate REINFORCE/NOOP without a target — leave cluster intact
+        // Preserve set: the consolidation target AND, on an UPDATE
+        // decision, the superseded node (cDecision.existingNodeId) —
+        // consolidateAndForm deliberately keeps the superseded node
+        // live (valid_until closed, Supersedes edge, NOT tombstoned)
+        // for bi-temporal as-of recall, so it must survive the member
+        // sweep even when it is a cluster member. Deleting it here would
+        // erase the history consolidateAndForm just preserved and leave
+        // a dangling Supersedes edge.
+        const preserve = new Set(
+          [targetId, cDecision.existingNodeId].filter((id): id is string => id != null),
+        );
+        // No PartOf links: deleteMemory → eraseNode cascade-deletes every
+        // edge referencing the erased node, so a summary→member edge is
+        // dead the instant the member is swept. The memory_consolidated
+        // event (logged by consolidateAndForm) carries the provenance.
         for (const sourceNode of cluster) {
-          if (sourceNode.node_id === targetId) continue;
-          await deps.memory.link(targetId, sourceNode.node_id, RelationType.PartOf);
-        }
-        for (const sourceNode of cluster) {
-          if (sourceNode.node_id === targetId) continue;
+          if (preserve.has(sourceNode.node_id)) continue;
           await deps.memory.deleteMemory(sourceNode.node_id);
         }
         merged++;
@@ -600,14 +610,7 @@ async function consolidatePhase(
         // No classify provider wired — plain formation (no conflict
         // detection). Kept for provider-less composition in tests and
         // minimal surfaces.
-        const synthesized = await deps.memory.formMemory(
-          candidate,
-          embedding,
-          MemoryGraph.HALF_LIFE_SEMANTIC,
-        );
-        for (const sourceNode of cluster) {
-          await deps.memory.link(synthesized.node_id, sourceNode.node_id, RelationType.PartOf);
-        }
+        await deps.memory.formMemory(candidate, embedding, MemoryGraph.HALF_LIFE_SEMANTIC);
         for (const sourceNode of cluster) {
           await deps.memory.deleteMemory(sourceNode.node_id);
         }

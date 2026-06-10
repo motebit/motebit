@@ -32,8 +32,19 @@ export function createRecallMemoriesHandler(
       if (memories.length === 0) {
         return { ok: true, data: "No relevant memories found." };
       }
+      // Escape data-boundary + provenance markers embedded in recalled
+      // content — recalled memories may have absorbed injected text, and
+      // the system prompt teaches the model that a `[from:…]` marker is
+      // authoritative provenance. Content must not be able to fabricate
+      // one (same discipline as packContext in @motebit/ai-core).
+      // docs/doctrine/memory-provenance.md.
+      const escape = (content: string): string =>
+        content
+          .replace(/\[MEMORY_DATA\b/g, "[ESCAPED_MEMORY")
+          .replace(/\[\/MEMORY_DATA\]/g, "[/ESCAPED_MEMORY]")
+          .replace(/\[from:/g, "[escaped-from:");
       const formatted = memories
-        .map((m, i) => `${i + 1}. [confidence=${m.confidence.toFixed(2)}] ${m.content}`)
+        .map((m, i) => `${i + 1}. [confidence=${m.confidence.toFixed(2)}] ${escape(m.content)}`)
         .join("\n");
       return { ok: true, data: formatted };
     } catch (err: unknown) {

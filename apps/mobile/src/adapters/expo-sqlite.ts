@@ -41,7 +41,7 @@ import type {
   ApprovalStoreAdapter,
   AuditLogSink,
 } from "@motebit/sdk";
-import { StepStatus, AgentTrustLevel } from "@motebit/sdk";
+import { StepStatus, AgentTrustLevel, isMemorySource } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
@@ -282,6 +282,8 @@ interface NodeRow {
   memory_type: string | null;
   valid_from: number | null;
   valid_until: number | null;
+  source: string | null;
+  source_turn_id: string | null;
 }
 
 interface EdgeRow {
@@ -344,6 +346,10 @@ function rowToNode(row: NodeRow): MemoryNode {
     memory_type: (row.memory_type as MemoryNode["memory_type"]) ?? undefined,
     valid_from: row.valid_from ?? undefined,
     valid_until: row.valid_until,
+    // Provenance maps through the guard — NULL/garbage → undefined,
+    // never a fabricated trusted tier (docs/doctrine/memory-provenance.md).
+    source: isMemorySource(row.source) ? row.source : undefined,
+    source_turn_id: row.source_turn_id ?? undefined,
   };
 }
 
@@ -497,8 +503,8 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
   async saveNode(node: MemoryNode): Promise<void> {
     this.db.runSync(
       `INSERT OR REPLACE INTO memory_nodes
-       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned, memory_type, valid_from, valid_until)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned, memory_type, valid_from, valid_until, source, source_turn_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         node.node_id,
         node.motebit_id,
@@ -514,6 +520,8 @@ export class ExpoSqliteMemoryStorage implements MemoryStorageAdapter {
         node.memory_type ?? "semantic",
         node.valid_from ?? null,
         node.valid_until ?? null,
+        node.source ?? null,
+        node.source_turn_id ?? null,
       ],
     );
   }

@@ -903,9 +903,22 @@ describe("redactMemoryContent (deletion propagation)", () => {
       event_type: "memory_formed" as never,
       payload: { node_id: "n1", content: "tenant-b fact", sensitivity: "none" },
     });
+    // Non-memory event for m1 — skipped by the event_type guard even
+    // though its payload carries a matching node_id.
+    await store.appendWithClock({
+      ...base,
+      event_id: "e-non-memory",
+      event_type: "state_updated" as never,
+      payload: { node_id: "n1", unrelated: true },
+    });
 
     const first = await store.redactMemoryEvents("m1", "n1");
     expect(first).toEqual({ supported: true, changed: 1 });
+    // The non-memory event is untouched.
+    expect(
+      (await store.query({ motebit_id: "m1" })).find((e) => e.event_id === "e-non-memory")!.payload
+        .unrelated,
+    ).toBe(true);
 
     const events = await store.query({ motebit_id: "m1" });
     const target = events.find((e) => e.event_id === "e-target")!;

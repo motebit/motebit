@@ -94,7 +94,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       // node. An error surfaces as a 500 — the client retries, the
       // event_id dedup makes the replay idempotent, and propagation
       // re-runs.
-      await propagateDeletionForEvent({ eventStore, moteDb: deps.moteDb }, event);
+      await propagateDeletionForEvent({ eventStore, moteDb: deps.moteDb }, event, motebitId);
     }
 
     // Fan out to WebSocket clients, skipping the sender device.

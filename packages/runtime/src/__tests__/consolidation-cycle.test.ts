@@ -514,6 +514,43 @@ describe("consolidatePhase repair — taxonomy routing, sensitivity join, delimi
     }
   });
 
+  it("UPDATE preserves the superseded node (bi-temporal history) even when it is a cluster member", async () => {
+    const h = createHarness();
+    const ids = await seedCluster(h, [
+      SensitivityLevel.None,
+      SensitivityLevel.None,
+      SensitivityLevel.None,
+    ]);
+    const superseded = ids[0]!;
+    const classify = vi
+      .fn()
+      .mockResolvedValue({
+        action: "update",
+        existingNodeId: superseded,
+        reason: "belief changed",
+      });
+    h.deps.getConsolidationProvider = () => ({ classify });
+
+    const result = await runConsolidationCycle(h.deps, { phases: ["gather", "consolidate"] });
+    expect(result.summary.consolidateMerged).toBe(1);
+
+    const after = await h.runtime.memory.exportAll();
+    // The superseded node survives with valid_until closed (preserved by
+    // consolidateAndForm for as-of recall) — it must NOT be erased by the
+    // member sweep.
+    const survivor = after.nodes.find((n) => n.node_id === superseded);
+    expect(survivor).toBeDefined();
+    expect(survivor!.valid_until).toBeTypeOf("number");
+    // The Supersedes edge from the new node to the superseded node survives.
+    const supersedes = after.edges.filter(
+      (e) => e.relation_type === "supersedes" && e.target_id === superseded,
+    );
+    expect(supersedes.length).toBe(1);
+    // The other (non-superseded, non-target) members are swept.
+    expect(after.nodes.find((n) => n.node_id === ids[1])).toBeUndefined();
+    expect(after.nodes.find((n) => n.node_id === ids[2])).toBeUndefined();
+  });
+
   it("REINFORCE folds members into the existing target and stays idempotent across cycles", async () => {
     const h = createHarness();
     const ids = await seedCluster(h, [

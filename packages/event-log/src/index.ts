@@ -1,4 +1,5 @@
 import type { EventLogEntry, DeletionCertificate, HorizonSubject } from "@motebit/protocol";
+import { EventType } from "@motebit/protocol";
 export type { EventFilter, EventStoreAdapter } from "@motebit/protocol";
 import type { EventFilter, EventStoreAdapter } from "@motebit/protocol";
 import { signHorizonCertAsIssuer } from "@motebit/crypto";
@@ -116,7 +117,7 @@ export class InMemoryEventStore implements EventStoreAdapter {
     let changed = 0;
     for (const e of this.events) {
       if (e.motebit_id !== motebitId) continue;
-      if (e.event_type !== "memory_formed") continue;
+      if (e.event_type !== EventType.MemoryFormed) continue;
       const payload = e.payload as Record<string, unknown> | undefined;
       if (!payload || payload._encrypted === true) continue;
       if (payload.node_id !== nodeId) continue;

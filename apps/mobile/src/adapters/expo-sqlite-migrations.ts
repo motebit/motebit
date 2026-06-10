@@ -486,4 +486,18 @@ export const MOBILE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE settlements ADD COLUMN motebit_id TEXT",
     ],
   },
+  {
+    version: 27,
+    description: "memory_nodes.source + source_turn_id — memory provenance",
+    statements: [
+      // Sibling of persistence v40 + desktop v7 — MemorySource provenance
+      // (docs/doctrine/memory-provenance.md). Without these columns the
+      // mobile adapter silently drops every memory's source, rendering all
+      // of them [from:unknown] and making the prompt's provenance clause
+      // treat the user's own statements as unverified. Additive nullable;
+      // rowToNode maps through isMemorySource (never fabricates).
+      "ALTER TABLE memory_nodes ADD COLUMN source TEXT",
+      "ALTER TABLE memory_nodes ADD COLUMN source_turn_id TEXT",
+    ],
+  },
 ];

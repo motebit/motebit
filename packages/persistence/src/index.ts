@@ -480,11 +480,15 @@ export class SqliteEventStore implements EventStoreAdapter {
     // opaque ciphertext and skipped by design.
     let changed = 0;
     this.db.transaction(() => {
+      // Prefilter on a substring of the serialized node_id so a long-lived
+      // motebit's full formation history isn't parsed per deletion. node_id
+      // is a UUID, so false positives are ~zero; the JS `payload.node_id ===
+      // nodeId` check below remains the authority. Driver-agnostic (no JSON1).
       const rows = this.db
         .prepare(
-          "SELECT event_id, payload FROM events WHERE motebit_id = ? AND event_type = 'memory_formed'",
+          "SELECT event_id, payload FROM events WHERE motebit_id = ? AND event_type = 'memory_formed' AND payload LIKE '%' || ? || '%'",
         )
-        .all(motebitId) as {
+        .all(motebitId, nodeId) as {
         event_id: string;
         payload: string;
       }[];

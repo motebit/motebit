@@ -135,6 +135,28 @@ describe("deletion propagation (sync push path)", () => {
     expect(storedPayload(relay, formedB.event_id).content).toBe("B's fact");
   });
 
+  it("ignores a DeleteRequested whose event motebit_id mismatches the auth-bound path (cross-tenant attack)", async () => {
+    // Device authenticated for A pushes to /sync/A/push an event whose
+    // body claims motebit_id=B targeting B's node. Propagation must scope
+    // to the path-bound A, never the event's self-declared B.
+    const formedB = makeEvent(MOTEBIT_B, EventType.MemoryFormed, {
+      node_id: "node-victim",
+      content: "B's private fact",
+      sensitivity: "none",
+    });
+    await push(relay, MOTEBIT_B, [formedB]);
+
+    const crossTenant = makeEvent(MOTEBIT_B, EventType.DeleteRequested, {
+      target_type: "memory",
+      target_id: "node-victim",
+    });
+    // Pushed through A's path despite carrying motebit_id=B.
+    await push(relay, MOTEBIT_A, [crossTenant]);
+
+    // B's content is untouched — the mismatched event never propagated.
+    expect(storedPayload(relay, formedB.event_id).content).toBe("B's private fact");
+  });
+
   it("no-ops on encrypted payloads — the client key lifecycle is the erasure mechanism", async () => {
     const encrypted = makeEvent(MOTEBIT_A, EventType.MemoryFormed, {
       _encrypted: true,

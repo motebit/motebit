@@ -368,7 +368,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               // Ingress redaction: memory content above the sync-safe ceiling
               // must never reach the event store OR other connected devices
               // unredacted (the previous fan-out below sent raw entries).
-              const safeEvents = redactSensitiveEvents(msg.events as EventLogEntry[]);
+              const safeEvents = redactSensitiveEvents(msg.events);
               let wsAccepted = 0;
               for (const entry of safeEvents) {
                 // Receipt idempotency: skip events with duplicate receipt signatures
@@ -389,7 +389,8 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                 try {
                   await propagateDeletionForEvent(
                     { eventStore, moteDb: deps.moteDb },
-                    entry as EventLogEntry,
+                    entry,
+                    motebitId,
                   );
                 } catch (err: unknown) {
                   deps.logger.warn("ws deletion propagation failed", {
