@@ -41,10 +41,31 @@ export type { VerifyFileOptions, VerifyResultWithBinding } from "./lib.js";
 // ladder — see docs/developer/governance-triad.mdx); it is verified explicitly
 // against a pinned approver key, never against its own embedded key alone.
 export { verifyApprovalDecision } from "@motebit/crypto";
+// The delegation family (delegation@1.0 + standing-delegation@1.0). Like
+// `verifyApprovalDecision`, these are NOT auto-detected artifact types: a
+// delegation's authority is the scope/chain + (for a standing grant) the
+// signed revocation feed, not a `motebit_id → key` binding ladder resolvable
+// from the artifact alone. They are verified explicitly. Re-exported here so a
+// consumer already pinning `@motebit/verifier` can validate a standing
+// monitor's authorization root, every per-tick token (against its grant), and
+// a revocation without adding `@motebit/crypto` as a second dependency.
+//   - verifyDelegation          — a standalone or per-tick token's own signature + expiry
+//   - verifyStandingDelegation  — the grant (signature, activation, expiry, injected revocation seam)
+//   - verifyTokenAgainstGrant   — a per-tick token IS a valid tick of its grant
+//   - verifyDelegationRevocation — a revocation's signature (caller binds it to the grant)
+export {
+  verifyDelegation,
+  verifyStandingDelegation,
+  verifyTokenAgainstGrant,
+  verifyDelegationRevocation,
+} from "@motebit/crypto";
 export type {
   VerifyResult,
   ArtifactType,
   SkillVerifyResult,
   SkillFileVerifyResult,
   ApprovalDecision,
+  DelegationToken,
+  StandingDelegation,
+  DelegationRevocation,
 } from "@motebit/crypto";

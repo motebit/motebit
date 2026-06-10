@@ -47,6 +47,8 @@ This package wraps the dispatcher with `verifyFile` (path → result), `verifyAr
 
 It also re-exports **`verifyApprovalDecision`** from `@motebit/crypto` — the "approve" governance band's signed human-consent artifact (`ApprovalDecision`). Unlike the auto-detected artifact types above, an `ApprovalDecision` is verified explicitly against a **pinned approver key** (it carries no `motebit_id → key` binding, so verifying against its own embedded key is circular). See [the governance-triad guide](https://docs.motebit.com/docs/developer/governance-triad) for where a verified decision sits on the binding ladder.
 
+For the same reason — authority is the scope/chain, not a `motebit_id → key` ladder resolvable from the artifact alone — the **delegation family** is also re-exported as explicit verifiers (not auto-detected): **`verifyDelegation`** (a standalone or per-tick `DelegationToken`), **`verifyStandingDelegation`** (a standing grant: signature, activation, expiry, and an injected revocation seam), **`verifyTokenAgainstGrant`** (a per-tick token IS a valid tick of its grant — scope narrows, TTL bounded, grant not revoked), and **`verifyDelegationRevocation`** (a revocation's signature; the caller binds it to the grant). This lets a consumer validate a standing monitor's authorization root, every tick token, and a revocation through this package alone. See [`standing-delegation@1.0`](https://github.com/motebit/motebit/blob/main/spec/standing-delegation-v1.md).
+
 ## Guarantees
 
 - **No network.** Verification runs entirely offline. No relay calls, no DID resolution over the wire.
