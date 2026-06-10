@@ -130,6 +130,26 @@ export const DESKTOP_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE settlements ADD COLUMN motebit_id TEXT",
     ],
   },
+  {
+    version: 7,
+    description: "memory_nodes.source + source_turn_id — memory provenance",
+    statements: [
+      // Sibling of persistence v40 + mobile v27 — the MemorySource
+      // provenance arc (docs/doctrine/memory-provenance.md) reached every
+      // surface but desktop, whose memory_nodes is bootstrapped by
+      // src-tauri/src/main.rs. Without these columns the desktop adapter
+      // silently dropped every memory's source on write, rendering all
+      // recall `[from:unknown]` — the one surface where the agent could
+      // not tell a user statement from an absorbed web/peer/tool claim.
+      // rowToNode maps through isMemorySource (NULL/garbage → undefined,
+      // never a fabricated trusted tier). main.rs declares both columns in
+      // its CREATE TABLE for fresh installs; migrateExec swallows the
+      // resulting "duplicate column" on those, so this ALTER is the
+      // existing-install path only.
+      "ALTER TABLE memory_nodes ADD COLUMN source TEXT",
+      "ALTER TABLE memory_nodes ADD COLUMN source_turn_id TEXT",
+    ],
+  },
 ];
 
 interface UserVersionRow {

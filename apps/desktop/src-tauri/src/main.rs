@@ -50,7 +50,13 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
   pinned INTEGER NOT NULL DEFAULT 0,
   memory_type TEXT DEFAULT 'semantic',
   valid_from INTEGER,
-  valid_until INTEGER
+  valid_until INTEGER,
+  -- MemorySource provenance (docs/doctrine/memory-provenance.md): who the
+  -- forming code path attributed this memory to. NULL on pre-provenance
+  -- rows; rowToNode maps through isMemorySource (never fabricates a tier).
+  -- Desktop migration v7 adds these to existing installs.
+  source TEXT,
+  source_turn_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);

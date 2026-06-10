@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
   pinned INTEGER NOT NULL DEFAULT 0,
   memory_type TEXT DEFAULT 'semantic',
   valid_from INTEGER,
-  valid_until INTEGER
+  valid_until INTEGER,
+  source TEXT,
+  source_turn_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote ON memory_nodes (motebit_id);
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_mote_tomb_pin ON memory_nodes (motebit_id, tombstoned, pinned);
@@ -305,6 +307,35 @@ describe("TauriMemoryStorage", () => {
     expect(loaded!.content).toBe("test memory");
     expect(loaded!.embedding).toEqual([0.1, 0.2, 0.3]);
     expect(loaded!.tombstoned).toBe(false);
+  });
+
+  it("persists MemorySource provenance across a round-trip", async () => {
+    await storage.saveNode({
+      ...makeNode({ node_id: "n-prov" }),
+      source: "tool_derived" as never,
+      source_turn_id: "turn-42",
+    });
+
+    const loaded = await storage.getNode("n-prov");
+    expect(loaded!.source).toBe("tool_derived");
+    expect(loaded!.source_turn_id).toBe("turn-42");
+  });
+
+  it("maps a NULL / unrecognized source to undefined — never a fabricated tier", async () => {
+    // Legacy pre-provenance row: column present, value NULL.
+    await storage.saveNode(makeNode({ node_id: "n-legacy" }));
+    const legacy = await storage.getNode("n-legacy");
+    expect(legacy!.source).toBeUndefined();
+    expect(legacy!.source_turn_id).toBeUndefined();
+
+    // Garbage value written directly (e.g. a corrupt/forward-version row)
+    // must NOT round-trip as a trusted source.
+    db.prepare("UPDATE memory_nodes SET source = ? WHERE node_id = ?").run(
+      "not_a_real_source",
+      "n-legacy",
+    );
+    const garbage = await storage.getNode("n-legacy");
+    expect(garbage!.source).toBeUndefined();
   });
 
   it("getNode returns null for missing node", async () => {

@@ -61,6 +61,13 @@ describe("tauri-migrations — DESKTOP_MIGRATIONS registry", () => {
       "ALTER TABLE settlements ADD COLUMN settlement_mode TEXT DEFAULT 'relay'",
     );
   });
+
+  it("declares the v7 memory-provenance migration (source + source_turn_id)", () => {
+    const v7 = DESKTOP_MIGRATIONS.find((m) => m.version === 7);
+    expect(v7).toBeDefined();
+    expect(v7!.statements).toContain("ALTER TABLE memory_nodes ADD COLUMN source TEXT");
+    expect(v7!.statements).toContain("ALTER TABLE memory_nodes ADD COLUMN source_turn_id TEXT");
+  });
 });
 
 describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => {
@@ -101,6 +108,11 @@ describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => 
         allocation_id TEXT NOT NULL,
         receipt_hash TEXT NOT NULL,
         amount_settled INTEGER NOT NULL
+      );
+      CREATE TABLE memory_nodes (
+        node_id TEXT PRIMARY KEY,
+        motebit_id TEXT NOT NULL,
+        content TEXT NOT NULL
       );
     `);
   });
@@ -146,6 +158,13 @@ describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => 
     }>;
     expect(settlementCols.some((c) => c.name === "settlement_mode")).toBe(true);
     expect(settlementCols.some((c) => c.name === "motebit_id")).toBe(true);
+
+    // v7 columns — MemorySource provenance
+    const nodeCols = db.prepare("PRAGMA table_info(memory_nodes)").all() as Array<{
+      name: string;
+    }>;
+    expect(nodeCols.some((c) => c.name === "source")).toBe(true);
+    expect(nodeCols.some((c) => c.name === "source_turn_id")).toBe(true);
 
     const version = db.prepare("PRAGMA user_version").get() as { user_version: number };
     expect(version.user_version).toBe(latest);
