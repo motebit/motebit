@@ -18,7 +18,7 @@
  * without swallowing.
  */
 
-import type { MemoryCandidate, MemoryNode } from "@motebit/sdk";
+import type { AttributedMemoryCandidate, MemoryNode } from "@motebit/sdk";
 import { RelationType } from "@motebit/sdk";
 import { embedText } from "./embeddings.js";
 import { cosineSimilarity } from "./index.js";
@@ -52,7 +52,7 @@ export const MEMORY_EDGE_SIMILARITY_THRESHOLD = 0.7;
  */
 export async function formMemoriesFromCandidates(
   deps: MemoryFormationDeps,
-  candidates: readonly MemoryCandidate[],
+  candidates: readonly AttributedMemoryCandidate[],
   relevantMemories: readonly MemoryNode[],
 ): Promise<MemoryFormationResult> {
   if (candidates.length === 0) return { memoriesFormed: [] };

@@ -3,6 +3,7 @@ import type {
   MotebitState,
   MemoryNode,
   MemoryCandidate,
+  AttributedMemoryCandidate,
   ToolRegistry,
   ToolDefinition,
   ToolResult,
@@ -670,7 +671,10 @@ export type AgenticChunk =
        * waiting on embedding + consolidation.
        */
       type: "memory_formation_deferred";
-      candidates: MemoryCandidate[];
+      /** Provenance-stamped in the loop before the chunk is yielded —
+       * the deferred queue inherits source + source_turn_id with no
+       * turn context of its own. */
+      candidates: AttributedMemoryCandidate[];
       relevantMemories: MemoryNode[];
     }
   | { type: "result"; result: TurnResult };
@@ -1578,7 +1582,7 @@ export async function* runTurnStreaming(
       rankSensitivity(c.sensitivity) >= effectiveRank ? c : { ...c, sensitivity: effectiveTier },
     );
   }
-  const candidates = deps.memoryGovernor
+  const governedCandidates = deps.memoryGovernor
     ? rawCandidates
         .map((c) => {
           const decisions = deps.memoryGovernor!.evaluate([c]);
@@ -1590,6 +1594,20 @@ export async function* runTurnStreaming(
         })
         .filter((c): c is MemoryCandidate => c !== null)
     : rawCandidates;
+
+  // Provenance stamping — assigned by the forming code path, never the
+  // model (docs/doctrine/memory-provenance.md; the <memory> tag carries
+  // no source attribute by design). A turn whose tools succeeded formed
+  // its candidates under external tool content — tool_derived, an
+  // unverified outside claim. A pure conversational turn is user_stated.
+  // The same signal already caps tool-turn confidence above
+  // (MAX_TOOL_TURN_CONFIDENCE); provenance makes the cause durable.
+  const turnSource = toolCallsSucceeded > 0 ? ("tool_derived" as const) : ("user_stated" as const);
+  const candidates: AttributedMemoryCandidate[] = governedCandidates.map((c) => ({
+    ...c,
+    source: turnSource,
+    ...(turnCtx ? { source_turn_id: turnCtx.turnId } : {}),
+  }));
 
   // Memory formation pass — embed (parallel), consolidate (sequential),
   // link (cosine-threshold). Extracted into @motebit/memory-graph's

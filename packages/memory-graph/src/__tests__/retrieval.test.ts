@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { InMemoryMemoryStorage, MemoryGraph } from "../index.js";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { RelationType, SensitivityLevel } from "@motebit/sdk";
-import type { MemoryCandidate } from "@motebit/sdk";
+import type { AttributedMemoryCandidate } from "@motebit/sdk";
 
 // ── Fixture: a small, intentionally-asymmetric memory graph ─────────
 //
@@ -73,10 +73,11 @@ async function buildFixture(): Promise<{ graph: MemoryGraph; nodes: FixtureNodes
     return raw;
   };
 
-  const candidate = (content: string): MemoryCandidate => ({
+  const candidate = (content: string): AttributedMemoryCandidate => ({
     content,
     sensitivity: SensitivityLevel.None,
     confidence: 0.9,
+    source: "user_stated",
   });
 
   const A = (await graph.formMemory(candidate("A"), emb("A")))!.node_id;
@@ -233,11 +234,11 @@ describe("recall lens edge cases", () => {
     const eventStore = new EventStore(new InMemoryEventStore());
     const graph = new MemoryGraph(storage, eventStore, "test-motebit");
     const a = (await graph.formMemory(
-      { content: "a", sensitivity: SensitivityLevel.None, confidence: 0.9 },
+      { content: "a", sensitivity: SensitivityLevel.None, confidence: 0.9, source: "user_stated" },
       [1, 0, 0],
     ))!.node_id;
     const b = (await graph.formMemory(
-      { content: "b", sensitivity: SensitivityLevel.None, confidence: 0.9 },
+      { content: "b", sensitivity: SensitivityLevel.None, confidence: 0.9, source: "user_stated" },
       [0, 1, 0],
     ))!.node_id;
     // No edge between a and b — disconnected.
@@ -256,7 +257,7 @@ describe("recall lens edge cases", () => {
     const eventStore = new EventStore(new InMemoryEventStore());
     const graph = new MemoryGraph(storage, eventStore, "test-motebit");
     const a = (await graph.formMemory(
-      { content: "a", sensitivity: SensitivityLevel.None, confidence: 0.9 },
+      { content: "a", sensitivity: SensitivityLevel.None, confidence: 0.9, source: "user_stated" },
       [1, 0, 0],
     ))!.node_id;
     expect(await graph.recallFuzzyCluster(a)).toEqual([]);

@@ -195,6 +195,10 @@ function main(): void {
   // together is the drift signature for both.
   const aiCoreViolations: string[] = [];
   for (const rel of walkTsFiles("packages/ai-core/src")) {
+    // Test files are excluded: the negative fixture proving a
+    // model-authored source attribute is NOT honored necessarily
+    // contains the forbidden pattern.
+    if (rel.includes("__tests__")) continue;
     const content = readFile(rel);
     if (content === null) continue;
     const lines = content.split("\n");

@@ -20,7 +20,7 @@ import type { ScoringConfig } from "../index.js";
 import type { ConsolidationProvider } from "../consolidation.js";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { MemoryType, SensitivityLevel, RelationType, EventType } from "@motebit/sdk";
-import type { MemoryNode, MemoryCandidate } from "@motebit/sdk";
+import type { MemoryNode, AttributedMemoryCandidate } from "@motebit/sdk";
 
 const SCORING: ScoringConfig = {
   similarityWeight: 0.5,
@@ -139,8 +139,9 @@ describe("supersession is invalidation-with-provenance + emits validity on the w
     };
     const graph = new MemoryGraph(storage, eventStore, "m");
 
-    const cand = (content: string): MemoryCandidate => ({
+    const cand = (content: string): AttributedMemoryCandidate => ({
       content,
+      source: "user_stated",
       confidence: 0.9,
       sensitivity: SensitivityLevel.None,
       memory_type: MemoryType.Semantic,

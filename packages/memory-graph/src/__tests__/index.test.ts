@@ -7,7 +7,7 @@ import {
 } from "../index";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { SensitivityLevel, RelationType, EventType } from "@motebit/sdk";
-import type { MemoryCandidate } from "@motebit/sdk";
+import type { AttributedMemoryCandidate } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // computeDecayedConfidence()
@@ -271,7 +271,12 @@ describe("MemoryGraph", () => {
   describe("getNode (delegate to storage)", () => {
     it("returns a stored node by id", async () => {
       const node = await graph.formMemory(
-        { content: "fetchable", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "fetchable",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0],
       );
       const fetched = await graph.getNode(node.node_id);
@@ -288,7 +293,10 @@ describe("MemoryGraph", () => {
 
   describe("getSelfStateSummary (the [Now] block's Memory line)", () => {
     const form = (content: string) =>
-      graph.formMemory({ content, confidence: 0.9, sensitivity: SensitivityLevel.None }, [1, 0]);
+      graph.formMemory(
+        { content, confidence: 0.9, sensitivity: SensitivityLevel.None, source: "user_stated" },
+        [1, 0],
+      );
 
     it("reports an empty store as total 0, newestAgeMs null, formedThisSession 0", async () => {
       const s = await graph.getSelfStateSummary(0);
@@ -327,10 +335,11 @@ describe("MemoryGraph", () => {
 
   describe("formMemory", () => {
     it("creates a memory node with correct fields", async () => {
-      const candidate: MemoryCandidate = {
+      const candidate: AttributedMemoryCandidate = {
         content: "The user likes jazz",
         confidence: 0.85,
         sensitivity: SensitivityLevel.Personal,
+        source: "user_stated",
       };
       const embedding = [0.1, 0.2, 0.3];
       const node = await graph.formMemory(candidate, embedding);
@@ -345,11 +354,46 @@ describe("MemoryGraph", () => {
       expect(node.half_life).toBe(30 * 24 * 60 * 60 * 1000); // semantic default
     });
 
+    it("carries provenance on the node and the MemoryFormed event payload", async () => {
+      const candidate: AttributedMemoryCandidate = {
+        content: "User prefers dark mode",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        source: "tool_derived",
+        source_turn_id: "turn-7",
+      };
+      const node = await graph.formMemory(candidate, [1, 0]);
+      expect(node.source).toBe("tool_derived");
+      expect(node.source_turn_id).toBe("turn-7");
+
+      const events = await eventStore.query({ motebit_id: motebitId });
+      const formed = events.find((e) => e.event_type === "memory_formed")!;
+      expect(formed.payload.source).toBe("tool_derived");
+      // Local provenance never rides the wire payload.
+      expect("source_turn_id" in formed.payload).toBe(false);
+    });
+
+    it("supersedeMemoryByNodeId preserves the old node's provenance", async () => {
+      const old = await graph.formMemory(
+        {
+          content: "User lives in NYC",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "peer_agent",
+        },
+        [1, 0],
+      );
+      const newId = await graph.supersedeMemoryByNodeId(old.node_id, "User lives in LA", "moved");
+      const newNode = await graph.getMemory(newId);
+      expect(newNode!.source).toBe("peer_agent");
+    });
+
     it("logs a MemoryFormed event", async () => {
-      const candidate: MemoryCandidate = {
+      const candidate: AttributedMemoryCandidate = {
         content: "test",
         confidence: 0.9,
         sensitivity: SensitivityLevel.None,
+        source: "user_stated",
       };
       await graph.formMemory(candidate, [1, 0]);
       const events = await eventStore.query({ motebit_id: motebitId });
@@ -358,20 +402,22 @@ describe("MemoryGraph", () => {
     });
 
     it("uses custom half_life when provided", async () => {
-      const candidate: MemoryCandidate = {
+      const candidate: AttributedMemoryCandidate = {
         content: "temp",
         confidence: 0.5,
         sensitivity: SensitivityLevel.None,
+        source: "user_stated",
       };
       const node = await graph.formMemory(candidate, [1], 3600000);
       expect(node.half_life).toBe(3600000);
     });
 
     it("rejects redacted content (literal '[REDACTED]')", async () => {
-      const candidate: MemoryCandidate = {
+      const candidate: AttributedMemoryCandidate = {
         content: "[REDACTED]",
         confidence: 0.8,
         sensitivity: SensitivityLevel.None,
+        source: "user_stated",
       };
       await expect(graph.formMemory(candidate, [1, 0])).rejects.toThrow(
         "Cannot form memory from redacted content",
@@ -386,9 +432,10 @@ describe("MemoryGraph", () => {
         content: "[REDACTED]",
         confidence: 0.8,
         sensitivity: SensitivityLevel.None,
+        source: "user_stated",
         redacted: true,
         redacted_sensitivity: "medical",
-      } as MemoryCandidate;
+      } as AttributedMemoryCandidate;
       await expect(graph.formMemory(candidate, [1, 0])).rejects.toThrow(
         "Cannot form memory from redacted content",
       );
@@ -403,6 +450,7 @@ describe("MemoryGraph", () => {
           content: "relevant memory",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0, 0],
       );
@@ -411,6 +459,7 @@ describe("MemoryGraph", () => {
           content: "irrelevant memory",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [0, 0, 1],
       );
@@ -429,6 +478,7 @@ describe("MemoryGraph", () => {
             content: `memory-${i}`,
             confidence: 0.9,
             sensitivity: SensitivityLevel.None,
+            source: "user_stated",
           },
           [1, 0],
         );
@@ -447,7 +497,12 @@ describe("MemoryGraph", () => {
 
     it("accumulates similarity scores from retrieve() calls", async () => {
       await graph.formMemory(
-        { content: "test memory", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "test memory",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
 
@@ -460,7 +515,12 @@ describe("MemoryGraph", () => {
 
     it("resets after read", async () => {
       await graph.formMemory(
-        { content: "test memory", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "test memory",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
 
@@ -476,15 +536,30 @@ describe("MemoryGraph", () => {
   describe("queryNodes with sensitivity_filter", () => {
     it("filters memories by sensitivity level", async () => {
       await graph.formMemory(
-        { content: "public info", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "public info",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       await graph.formMemory(
-        { content: "personal info", confidence: 0.9, sensitivity: SensitivityLevel.Personal },
+        {
+          content: "personal info",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.Personal,
+          source: "user_stated",
+        },
         [0, 1, 0],
       );
       await graph.formMemory(
-        { content: "financial info", confidence: 0.9, sensitivity: SensitivityLevel.Financial },
+        {
+          content: "financial info",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.Financial,
+          source: "user_stated",
+        },
         [0, 0, 1],
       );
 
@@ -511,6 +586,7 @@ describe("MemoryGraph", () => {
           content: "to be deleted",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0],
       );
@@ -523,11 +599,21 @@ describe("MemoryGraph", () => {
 
     it("erases incident edges as part of the cascade", async () => {
       const a = await graph.formMemory(
-        { content: "anchor a", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "anchor a",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0],
       );
       const b = await graph.formMemory(
-        { content: "anchor b", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "anchor b",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0, 1],
       );
       await graph.link(a.node_id, b.node_id, RelationType.Related, 0.5, 0.7);
@@ -548,6 +634,7 @@ describe("MemoryGraph", () => {
           content: "to be deleted",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0],
       );
@@ -569,6 +656,7 @@ describe("MemoryGraph", () => {
           content: "A",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0],
       );
@@ -577,6 +665,7 @@ describe("MemoryGraph", () => {
           content: "B",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [0, 1],
       );
@@ -596,6 +685,7 @@ describe("MemoryGraph", () => {
           content: "A",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0],
       );
@@ -604,6 +694,7 @@ describe("MemoryGraph", () => {
           content: "B",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [0, 1],
       );
@@ -617,15 +708,17 @@ describe("MemoryGraph", () => {
 
   describe("version_clock incrementing", () => {
     it("increments version_clock across multiple operations", async () => {
-      const c1: MemoryCandidate = {
+      const c1: AttributedMemoryCandidate = {
         content: "first",
         confidence: 0.9,
         sensitivity: SensitivityLevel.None,
+        source: "user_stated",
       };
-      const c2: MemoryCandidate = {
+      const c2: AttributedMemoryCandidate = {
         content: "second",
         confidence: 0.9,
         sensitivity: SensitivityLevel.None,
+        source: "user_stated",
       };
 
       const node1 = await graph.formMemory(c1, [1, 0]);
@@ -647,6 +740,7 @@ describe("MemoryGraph", () => {
           content: "A",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0],
       );
@@ -655,6 +749,7 @@ describe("MemoryGraph", () => {
           content: "B",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [0, 1],
       );
@@ -674,6 +769,7 @@ describe("MemoryGraph", () => {
           content: "semantically close",
           confidence: 0.3,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0, 0], // perfect match to query
       );
@@ -682,6 +778,7 @@ describe("MemoryGraph", () => {
           content: "high confidence but distant",
           confidence: 1.0,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [0, 0, 1], // orthogonal to query
       );
@@ -700,6 +797,7 @@ describe("MemoryGraph", () => {
           content: "low confidence exact match",
           confidence: 0.2,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0, 0],
       );
@@ -708,6 +806,7 @@ describe("MemoryGraph", () => {
           content: "high confidence orthogonal",
           confidence: 1.0,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [0, 0, 1],
       );
@@ -726,6 +825,7 @@ describe("MemoryGraph", () => {
           content: "exact match",
           confidence: 0.2,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0, 0],
       );
@@ -734,6 +834,7 @@ describe("MemoryGraph", () => {
           content: "high confidence distant",
           confidence: 1.0,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [0, 0, 1],
       );
@@ -757,6 +858,7 @@ describe("MemoryGraph", () => {
           content: "exact match",
           confidence: 0.1,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0, 0],
       );
@@ -765,6 +867,7 @@ describe("MemoryGraph", () => {
           content: "high confidence distant",
           confidence: 1.0,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [0, 0, 1],
       );
@@ -791,6 +894,7 @@ describe("MemoryGraph", () => {
           content: "exact match low confidence",
           confidence: 0.1,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0, 0],
       );
@@ -799,6 +903,7 @@ describe("MemoryGraph", () => {
           content: "distant high confidence",
           confidence: 1.0,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [0, 0, 1],
       );
@@ -824,6 +929,7 @@ describe("MemoryGraph", () => {
             content: `memory-${i}`,
             confidence: 0.9,
             sensitivity: SensitivityLevel.None,
+            source: "user_stated",
           },
           [1, 0],
         );
@@ -884,7 +990,12 @@ describe("MemoryGraph", () => {
   describe("pinMemory / getPinnedMemories", () => {
     it("pinMemory sets pinned to true", async () => {
       const node = await graph.formMemory(
-        { content: "pinnable", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "pinnable",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0],
       );
 
@@ -896,7 +1007,12 @@ describe("MemoryGraph", () => {
 
     it("pinMemory appends a MemoryPinned event", async () => {
       const node = await graph.formMemory(
-        { content: "pin event", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "pin event",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0],
       );
 
@@ -912,7 +1028,12 @@ describe("MemoryGraph", () => {
 
     it("pinMemory on tombstoned node is a no-op", async () => {
       const node = await graph.formMemory(
-        { content: "will be deleted", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "will be deleted",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0],
       );
       await graph.deleteMemory(node.node_id);
@@ -928,7 +1049,12 @@ describe("MemoryGraph", () => {
 
     it("unpinMemory clears pin state", async () => {
       const node = await graph.formMemory(
-        { content: "unpin me", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "unpin me",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0],
       );
 
@@ -941,15 +1067,30 @@ describe("MemoryGraph", () => {
 
     it("getPinnedMemories returns only pinned non-tombstoned nodes", async () => {
       const n1 = await graph.formMemory(
-        { content: "pinned one", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "pinned one",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0],
       );
       await graph.formMemory(
-        { content: "not pinned", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "not pinned",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0, 1],
       );
       const n3 = await graph.formMemory(
-        { content: "pinned then deleted", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "pinned then deleted",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 1],
       );
 
@@ -971,15 +1112,30 @@ describe("MemoryGraph", () => {
     it("expands results via edges to include linked neighbors", async () => {
       // A and B are linked; query matches A; B should appear via expansion
       const nodeA = await graph.formMemory(
-        { content: "memory A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory A",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       const nodeB = await graph.formMemory(
-        { content: "memory B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory B",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0, 0, 1], // very different embedding from query
       );
       await graph.formMemory(
-        { content: "memory C (unlinked)", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory C (unlinked)",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0, 0, 1], // similar to B but not linked
       );
 
@@ -996,11 +1152,21 @@ describe("MemoryGraph", () => {
 
     it("does not expand when expandEdges is false", async () => {
       const nodeA = await graph.formMemory(
-        { content: "memory A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory A",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       const nodeB = await graph.formMemory(
-        { content: "memory B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory B",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0, 0, 1],
       );
 
@@ -1019,11 +1185,21 @@ describe("MemoryGraph", () => {
 
     it("excludes tombstoned neighbors from expansion", async () => {
       const nodeA = await graph.formMemory(
-        { content: "memory A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory A",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       const nodeB = await graph.formMemory(
-        { content: "tombstoned B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "tombstoned B",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0, 0, 1],
       );
 
@@ -1039,11 +1215,21 @@ describe("MemoryGraph", () => {
 
     it("applies discount factor correctly to neighbor scores", async () => {
       const nodeA = await graph.formMemory(
-        { content: "memory A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory A",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       const nodeB = await graph.formMemory(
-        { content: "memory B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory B",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0, 0, 1],
       );
 
@@ -1070,12 +1256,22 @@ describe("MemoryGraph", () => {
   describe("temporal filtering", () => {
     it("excludes expired memories from retrieval by default", async () => {
       const current = await graph.formMemory(
-        { content: "current fact", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "current fact",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
 
       const expired = await graph.formMemory(
-        { content: "old fact", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "old fact",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0.95, 0.05, 0],
       );
       // Manually set valid_until in the past
@@ -1091,7 +1287,12 @@ describe("MemoryGraph", () => {
 
     it("includes expired memories when includeExpired is true", async () => {
       const expired = await graph.formMemory(
-        { content: "old fact", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "old fact",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       expired.valid_until = Date.now() - 1000;
@@ -1105,11 +1306,21 @@ describe("MemoryGraph", () => {
 
     it("excludes temporally expired neighbor during graph expansion", async () => {
       const nodeA = await graph.formMemory(
-        { content: "current A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "current A",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       const nodeB = await graph.formMemory(
-        { content: "expired B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "expired B",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0, 0, 1],
       );
       nodeB.valid_until = Date.now() - 1000;
@@ -1132,7 +1343,12 @@ describe("MemoryGraph", () => {
   describe("type-aware half-lives", () => {
     it("uses 30-day half-life for semantic memories", async () => {
       const node = await graph.formMemory(
-        { content: "semantic fact", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "semantic fact",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       expect(node.half_life).toBe(30 * 24 * 60 * 60 * 1000);
@@ -1146,6 +1362,7 @@ describe("MemoryGraph", () => {
           content: "something happened",
           confidence: 0.8,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
           memory_type: MT.Episodic,
         },
         [1, 0, 0],
@@ -1157,7 +1374,12 @@ describe("MemoryGraph", () => {
     it("allows explicit half-life override", async () => {
       const customHalfLife = 42 * 24 * 60 * 60 * 1000;
       const node = await graph.formMemory(
-        { content: "custom decay", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "custom decay",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
         customHalfLife,
       );
@@ -1172,7 +1394,12 @@ describe("MemoryGraph", () => {
   describe("retrieval side effects", () => {
     it("updates last_accessed on retrieved nodes", async () => {
       const node = await graph.formMemory(
-        { content: "test memory", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "test memory",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       const originalAccessed = node.last_accessed;
@@ -1188,11 +1415,21 @@ describe("MemoryGraph", () => {
 
     it("creates co-retrieval edges when strengthenCoRetrieved is true", async () => {
       const nodeA = await graph.formMemory(
-        { content: "memory A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory A",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       await graph.formMemory(
-        { content: "memory B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory B",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0.9, 0.1, 0],
       );
 
@@ -1212,11 +1449,21 @@ describe("MemoryGraph", () => {
 
     it("strengthens existing co-retrieval edges on repeated retrieval", async () => {
       const nodeA = await graph.formMemory(
-        { content: "memory A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory A",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       await graph.formMemory(
-        { content: "memory B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory B",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0.9, 0.1, 0],
       );
 
@@ -1233,7 +1480,12 @@ describe("MemoryGraph", () => {
 
     it("does not create co-retrieval edges with only one result", async () => {
       await graph.formMemory(
-        { content: "lonely memory", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "lonely memory",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
 
@@ -1260,11 +1512,21 @@ describe("MemoryGraph", () => {
     it("high precision increases similarity weight in retrieval", async () => {
       // Create two memories: one semantically close, one with high confidence
       await graph.formMemory(
-        { content: "semantic match", confidence: 0.5, sensitivity: SensitivityLevel.None },
+        {
+          content: "semantic match",
+          confidence: 0.5,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       await graph.formMemory(
-        { content: "confident memory", confidence: 1.0, sensitivity: SensitivityLevel.None },
+        {
+          content: "confident memory",
+          confidence: 1.0,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0, 1, 0],
       );
 
@@ -1277,12 +1539,22 @@ describe("MemoryGraph", () => {
     it("low precision diversifies retrieval weights", async () => {
       // Create a high-confidence memory that's semantically distant
       await graph.formMemory(
-        { content: "confident distant", confidence: 1.0, sensitivity: SensitivityLevel.None },
+        {
+          content: "confident distant",
+          confidence: 1.0,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0, 0, 1],
       );
       // And a lower-confidence memory that's semantically close
       await graph.formMemory(
-        { content: "close but unsure", confidence: 0.3, sensitivity: SensitivityLevel.None },
+        {
+          content: "close but unsure",
+          confidence: 0.3,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0.9, 0.1, 0],
       );
 
@@ -1300,7 +1572,12 @@ describe("MemoryGraph", () => {
 
       // After clearing, should use default weights
       await graph.formMemory(
-        { content: "test", confidence: 0.8, sensitivity: SensitivityLevel.None },
+        {
+          content: "test",
+          confidence: 0.8,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0],
       );
       const results = await graph.recallRelevant([1, 0]);
@@ -1309,7 +1586,12 @@ describe("MemoryGraph", () => {
 
     it("per-call scoringConfig overrides precision weights", async () => {
       await graph.formMemory(
-        { content: "only memory", confidence: 0.8, sensitivity: SensitivityLevel.None },
+        {
+          content: "only memory",
+          confidence: 0.8,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0],
       );
 
@@ -1330,7 +1612,12 @@ describe("MemoryGraph", () => {
     it("swallows event store errors during consolidation logging", async () => {
       // Seed an existing memory so consolidation doesn't skip the LLM call
       await graph.formMemory(
-        { content: "existing fact", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "existing fact",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
 
@@ -1358,7 +1645,12 @@ describe("MemoryGraph", () => {
 
       // Should not throw — logConsolidation swallows the error
       const { node, decision } = await graph.consolidateAndForm(
-        { content: "new fact", confidence: 0.8, sensitivity: SensitivityLevel.None },
+        {
+          content: "new fact",
+          confidence: 0.8,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0.95, 0.05, 0],
         provider,
       );
@@ -1377,11 +1669,21 @@ describe("MemoryGraph", () => {
   describe("graph expansion edge cases", () => {
     it("skips expired neighbor nodes during graph expansion", async () => {
       const nodeA = await graph.formMemory(
-        { content: "current A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "current A",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       const nodeB = await graph.formMemory(
-        { content: "expired neighbor B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "expired neighbor B",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0, 0, 1],
       );
       // Set valid_until to exactly now (<=now means expired per the code: valid_until <= now)
@@ -1401,15 +1703,30 @@ describe("MemoryGraph", () => {
       // Create 3 memories: A, B (linked to A), C (linked to A)
       // With limit=2, after expansion adds B and C, it should trim back to 2
       const nodeA = await graph.formMemory(
-        { content: "primary A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "primary A",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       const nodeB = await graph.formMemory(
-        { content: "neighbor B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "neighbor B",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0, 1, 0],
       );
       const nodeC = await graph.formMemory(
-        { content: "neighbor C", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "neighbor C",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0, 0, 1],
       );
 
@@ -1433,11 +1750,21 @@ describe("MemoryGraph", () => {
   describe("co-retrieval edge strengthening details", () => {
     it("increments existing edge weight by 0.05 and caps at 1.0", async () => {
       const nodeA = await graph.formMemory(
-        { content: "memory A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory A",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       const nodeB = await graph.formMemory(
-        { content: "memory B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory B",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0.9, 0.1, 0],
       );
 
@@ -1456,11 +1783,21 @@ describe("MemoryGraph", () => {
 
     it("strengthens an edge found via reverse direction (target→source)", async () => {
       const nodeA = await graph.formMemory(
-        { content: "memory A", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory A",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0, 0],
       );
       const nodeB = await graph.formMemory(
-        { content: "memory B", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "memory B",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0.9, 0.1, 0],
       );
 

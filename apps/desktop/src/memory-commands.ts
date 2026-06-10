@@ -62,7 +62,13 @@ export async function formMemoryDirect(
   if (!runtime) return null;
   const embedding = await embedText(content);
   return runtime.memory.formMemory(
-    { content, confidence, sensitivity: SensitivityLevelEnum.None as SensitivityLevel },
+    {
+      content,
+      confidence,
+      sensitivity: SensitivityLevelEnum.None as SensitivityLevel,
+      // First-run greeting fallback is agent-authored, not a user statement.
+      source: "agent_inferred",
+    },
     embedding,
   );
 }

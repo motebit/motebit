@@ -345,8 +345,11 @@ async function persistHighSignalInsights(
       const [decision] = deps.memoryGovernor.evaluate([candidate]);
       if (!decision || decision.memoryClass === MemoryClass.REJECTED) continue;
 
+      // Provenance: the insight is reflection-synthesized, never a user
+      // statement — agent_inferred regardless of what the governor
+      // returned (docs/doctrine/memory-provenance.md).
       const insightNode = await deps.memory.formMemory(
-        decision.candidate,
+        { ...decision.candidate, source: "agent_inferred" },
         embedding,
         REFLECTION_HALF_LIFE,
       );

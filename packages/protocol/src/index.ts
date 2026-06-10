@@ -495,15 +495,24 @@ export interface MemoryCandidate {
 }
 
 /**
- * A `MemoryCandidate` whose provenance has been assigned. The formation
+ * A `MemoryCandidate` whose provenance has been declared. The formation
  * entry points (`formMemory`, `consolidateAndForm`,
  * `formMemoriesFromCandidates`) take THIS type, not `MemoryCandidate` —
  * so every new formation call site is a compile error until it declares
  * a source. Asymmetric-typing enforcement, same shape as
  * `WritableSettlementMode`: reads stay open for legacy data; writes are
  * structurally closed.
+ *
+ * The key is REQUIRED but the value admits explicit `undefined`: a
+ * call site must always write `source: …`, and `source: undefined` is
+ * a deliberate declaration of unknown provenance — used only where
+ * provenance legitimately cannot be known, e.g. a supersede that
+ * inherits from a pre-provenance legacy node. Declared-unknown beats
+ * fabricated; omission stays impossible.
  */
-export type AttributedMemoryCandidate = MemoryCandidate & { source: MemorySource };
+export type AttributedMemoryCandidate = MemoryCandidate & {
+  source: MemorySource | undefined;
+};
 
 // === Event Log ===
 

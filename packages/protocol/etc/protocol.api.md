@@ -291,6 +291,9 @@ export const ALL_CONTENT_ARTIFACT_TYPES: readonly ContentArtifactType[];
 export const ALL_EVENT_TYPES: readonly EventType[];
 
 // @public
+export const ALL_MEMORY_SOURCES: readonly MemorySource[];
+
+// @public
 export const ALL_MERKLE_TREE_VERSIONS: readonly MerkleTreeVersion[];
 
 // @public
@@ -383,6 +386,11 @@ export function asProposalId(id: string): ProposalId;
 
 // @public
 export function asSettlementId(id: string): SettlementId;
+
+// @public
+export type AttributedMemoryCandidate = MemoryCandidate & {
+    source: MemorySource | undefined;
+};
 
 // @public
 export const AUDIT_TRAIL_ARTIFACT: ContentArtifactType;
@@ -2020,6 +2028,9 @@ export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail
 export function isEventType(value: unknown): value is EventType;
 
 // @public
+export function isMemorySource(value: unknown): value is MemorySource;
+
+// @public
 export function isMerkleTreeVersion(value: unknown): value is MerkleTreeVersion;
 
 // @public
@@ -2179,6 +2190,12 @@ export function maxSensitivity(a: SensitivityLevel, b: SensitivityLevel): Sensit
 export const MEMORY_EXPORT_ARTIFACT: ContentArtifactType;
 
 // @public
+export const MEMORY_SOURCE_MARKER_UNKNOWN = "unknown";
+
+// @public
+export const MEMORY_SOURCE_MARKERS: Readonly<Record<MemorySource, string>>;
+
+// @public
 export interface MemoryAccessedPayload {
     // (undocumented)
     readonly node_id: string;
@@ -2200,6 +2217,8 @@ export interface MemoryCandidate {
     memory_type?: MemoryType;
     // (undocumented)
     sensitivity: SensitivityLevel;
+    source?: MemorySource;
+    source_turn_id?: string;
 }
 
 // @public
@@ -2221,6 +2240,8 @@ export interface MemoryContent {
     memory_type?: MemoryType;
     // (undocumented)
     sensitivity: SensitivityLevel;
+    source?: MemorySource;
+    source_turn_id?: string;
     // (undocumented)
     valid_from?: number;
     // (undocumented)
@@ -2262,6 +2283,9 @@ export interface MemoryPromotedPayload {
     readonly reinforcement_count: number;
     readonly to_confidence: number;
 }
+
+// @public
+export type MemorySource = "user_stated" | "agent_inferred" | "tool_derived" | "peer_agent" | "consolidation_derived";
 
 // @public (undocumented)
 export enum MemoryType {

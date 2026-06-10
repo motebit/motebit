@@ -18,7 +18,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { RelationType, SensitivityLevel } from "@motebit/sdk";
-import type { MemoryCandidate } from "@motebit/sdk";
+import type { AttributedMemoryCandidate } from "@motebit/sdk";
 import {
   InMemoryMemoryStorage,
   MemoryGraph,
@@ -90,10 +90,25 @@ describe("formMemoriesFromCandidates", () => {
       return [h % 7, h % 11, h % 13].map((n) => n / 13);
     });
 
-    const candidates: MemoryCandidate[] = [
-      { content: "First candidate", confidence: 0.8, sensitivity: SensitivityLevel.None },
-      { content: "Second candidate", confidence: 0.8, sensitivity: SensitivityLevel.None },
-      { content: "Third candidate", confidence: 0.8, sensitivity: SensitivityLevel.None },
+    const candidates: AttributedMemoryCandidate[] = [
+      {
+        content: "First candidate",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
+      {
+        content: "Second candidate",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
+      {
+        content: "Third candidate",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
     ];
 
     await formMemoriesFromCandidates({ memoryGraph: graph }, candidates, []);
@@ -107,9 +122,19 @@ describe("formMemoriesFromCandidates", () => {
   });
 
   it("forms every candidate when no consolidation provider is supplied", async () => {
-    const candidates: MemoryCandidate[] = [
-      { content: "Alpha memory", confidence: 0.8, sensitivity: SensitivityLevel.None },
-      { content: "Beta memory", confidence: 0.8, sensitivity: SensitivityLevel.None },
+    const candidates: AttributedMemoryCandidate[] = [
+      {
+        content: "Alpha memory",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
+      {
+        content: "Beta memory",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
     ];
 
     const { memoriesFormed } = await formMemoriesFromCandidates(
@@ -133,11 +158,12 @@ describe("formMemoriesFromCandidates", () => {
       })),
     };
 
-    const candidates: MemoryCandidate[] = [
+    const candidates: AttributedMemoryCandidate[] = [
       {
         content: "Gamma memory requiring consolidation",
         confidence: 0.8,
         sensitivity: SensitivityLevel.None,
+        source: "user_stated",
       },
     ];
 
@@ -161,6 +187,7 @@ describe("formMemoriesFromCandidates", () => {
           content: "Delta memory also requiring consolidation",
           confidence: 0.8,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
       ],
       [],
@@ -173,7 +200,12 @@ describe("formMemoriesFromCandidates", () => {
     // Seed a retrieved memory with a known embedding so the formation
     // pass can cosine-link against it.
     const retrieved = await graph.formMemory(
-      { content: "Retrieved anchor", confidence: 0.9, sensitivity: SensitivityLevel.None },
+      {
+        content: "Retrieved anchor",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [1, 1, 1], // simple unit-ish vector for similarity checks
     );
 
@@ -183,8 +215,13 @@ describe("formMemoriesFromCandidates", () => {
     const mock = embedText as ReturnType<typeof vi.fn>;
     mock.mockResolvedValueOnce([0.99, 0.99, 0.99]);
 
-    const candidates: MemoryCandidate[] = [
-      { content: "New candidate", confidence: 0.8, sensitivity: SensitivityLevel.None },
+    const candidates: AttributedMemoryCandidate[] = [
+      {
+        content: "New candidate",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
     ];
 
     const { memoriesFormed } = await formMemoriesFromCandidates(

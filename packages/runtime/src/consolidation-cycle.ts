@@ -475,6 +475,9 @@ async function consolidatePhase(
         confidence: newConf,
         sensitivity: head.sensitivity,
         memory_type: MemoryType.Semantic,
+        // Provenance: synthesized by the idle cycle from an episodic
+        // cluster — never a user statement (docs/doctrine/memory-provenance.md).
+        source: "consolidation_derived" as const,
       };
       const [decision] = deps.memoryGovernor.evaluate([candidate]);
       if (decision && decision.memoryClass === MemoryClass.REJECTED) continue;

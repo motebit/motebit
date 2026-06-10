@@ -207,7 +207,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
   it("ADD: forms a new memory normally", async () => {
     const provider = mockProvider({ action: "add", reason: "New info" });
     const { node, decision } = await graph.consolidateAndForm(
-      { content: "User likes cats", confidence: 0.8, sensitivity: SensitivityLevel.None },
+      {
+        content: "User likes cats",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [1, 0, 0],
       provider,
     );
@@ -227,7 +232,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
     };
 
     const { node, decision } = await graph.consolidateAndForm(
-      { content: "Brand new fact", confidence: 0.9, sensitivity: SensitivityLevel.None },
+      {
+        content: "Brand new fact",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [1, 0, 0],
       provider,
     );
@@ -240,7 +250,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
   it("UPDATE: old node gets valid_until, new node created, Supersedes edge exists", async () => {
     // Pre-populate with an existing memory
     const oldNode = await graph.formMemory(
-      { content: "User works at Acme", confidence: 0.9, sensitivity: SensitivityLevel.None },
+      {
+        content: "User works at Acme",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [1, 0, 0],
     );
 
@@ -251,7 +266,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
     });
 
     const { node: newNode, decision } = await graph.consolidateAndForm(
-      { content: "User now works at Tesla", confidence: 0.85, sensitivity: SensitivityLevel.None },
+      {
+        content: "User now works at Tesla",
+        confidence: 0.85,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [0.95, 0.05, 0], // similar enough to find old node
       provider,
     );
@@ -274,7 +294,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
 
   it("REINFORCE: existing confidence boosted, half-life increased, no duplicate node created", async () => {
     const existingNode = await graph.formMemory(
-      { content: "User likes Python", confidence: 0.7, sensitivity: SensitivityLevel.None },
+      {
+        content: "User likes Python",
+        confidence: 0.7,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [1, 0, 0],
     );
 
@@ -291,6 +316,7 @@ describe("MemoryGraph.consolidateAndForm", () => {
         content: "User mentioned liking Python again",
         confidence: 0.6,
         sensitivity: SensitivityLevel.None,
+        source: "user_stated",
       },
       [0.95, 0.05, 0],
       provider,
@@ -311,7 +337,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
   it("REINFORCE: half-life caps at MAX_HALF_LIFE (365 days)", async () => {
     // Start with a memory near the cap (300-day half-life)
     const existingNode = await graph.formMemory(
-      { content: "Core identity fact", confidence: 0.9, sensitivity: SensitivityLevel.None },
+      {
+        content: "Core identity fact",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [1, 0, 0],
       300 * 24 * 60 * 60 * 1000, // 300 days
     );
@@ -323,7 +354,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
     });
 
     await graph.consolidateAndForm(
-      { content: "Reconfirms identity", confidence: 0.8, sensitivity: SensitivityLevel.None },
+      {
+        content: "Reconfirms identity",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [0.95, 0.05, 0],
       provider,
     );
@@ -335,7 +371,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
 
   it("NOOP: no new node, existing confidence and half-life compounded", async () => {
     const existingNode = await graph.formMemory(
-      { content: "User likes tea", confidence: 0.8, sensitivity: SensitivityLevel.None },
+      {
+        content: "User likes tea",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [1, 0, 0],
     );
 
@@ -351,7 +392,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
     });
 
     const { node, decision } = await graph.consolidateAndForm(
-      { content: "User likes tea", confidence: 0.8, sensitivity: SensitivityLevel.None },
+      {
+        content: "User likes tea",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [0.99, 0.01, 0],
       provider,
     );
@@ -369,7 +415,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
   it("UPDATE: proceeds without oldNode when existingNodeId is missing", async () => {
     // Pre-populate to ensure LLM call is triggered (similar memory needed)
     await graph.formMemory(
-      { content: "User works at Acme", confidence: 0.9, sensitivity: SensitivityLevel.None },
+      {
+        content: "User works at Acme",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [1, 0, 0],
     );
 
@@ -382,7 +433,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
     };
 
     const { node, decision } = await graph.consolidateAndForm(
-      { content: "User now at Tesla", confidence: 0.85, sensitivity: SensitivityLevel.None },
+      {
+        content: "User now at Tesla",
+        confidence: 0.85,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [0.95, 0.05, 0],
       provider,
     );
@@ -394,7 +450,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
 
   it("REINFORCE: handles missing existingNodeId gracefully", async () => {
     await graph.formMemory(
-      { content: "User likes Python", confidence: 0.7, sensitivity: SensitivityLevel.None },
+      {
+        content: "User likes Python",
+        confidence: 0.7,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [1, 0, 0],
     );
 
@@ -406,7 +467,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
     };
 
     const { node, decision } = await graph.consolidateAndForm(
-      { content: "User confirmed Python", confidence: 0.6, sensitivity: SensitivityLevel.None },
+      {
+        content: "User confirmed Python",
+        confidence: 0.6,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [0.95, 0.05, 0],
       provider,
     );
@@ -417,7 +483,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
 
   it("NOOP: handles missing existingNodeId gracefully", async () => {
     await graph.formMemory(
-      { content: "User likes tea", confidence: 0.8, sensitivity: SensitivityLevel.None },
+      {
+        content: "User likes tea",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [1, 0, 0],
     );
 
@@ -429,7 +500,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
     };
 
     const { node, decision } = await graph.consolidateAndForm(
-      { content: "User likes tea", confidence: 0.8, sensitivity: SensitivityLevel.None },
+      {
+        content: "User likes tea",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [0.99, 0.01, 0],
       provider,
     );
@@ -446,7 +522,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
 
     // Pre-populate
     await failGraph.formMemory(
-      { content: "Existing memory", confidence: 0.9, sensitivity: SensitivityLevel.None },
+      {
+        content: "Existing memory",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [1, 0, 0],
     );
 
@@ -464,7 +545,12 @@ describe("MemoryGraph.consolidateAndForm", () => {
     // Should not throw despite event store failure in logConsolidation
     // Use similar embedding so LLM path is triggered (and logConsolidation is called)
     const { node, decision } = await failGraph.consolidateAndForm(
-      { content: "New fact", confidence: 0.8, sensitivity: SensitivityLevel.None },
+      {
+        content: "New fact",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [0.95, 0.05, 0],
       provider,
     );

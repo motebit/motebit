@@ -1,4 +1,4 @@
-import type { MemoryNode, MemoryEdge, MemoryCandidate, RelationType } from "@motebit/sdk";
+import type { MemoryNode, MemoryEdge, AttributedMemoryCandidate, RelationType } from "@motebit/sdk";
 import { EventType, MemoryType, RelationType as RT } from "@motebit/sdk";
 import { ConsolidationAction } from "./consolidation.js";
 import type { ConsolidationProvider, ConsolidationDecision } from "./consolidation.js";
@@ -704,7 +704,7 @@ export class MemoryGraph {
    * instead of storing "[REDACTED]" as a memory node.
    */
   async formMemory(
-    candidate: MemoryCandidate,
+    candidate: AttributedMemoryCandidate,
     embedding: number[],
     halfLife?: number,
   ): Promise<MemoryNode> {
@@ -742,6 +742,8 @@ export class MemoryGraph {
       pinned: false,
       memory_type: memoryType,
       valid_from: now,
+      source: candidate.source,
+      source_turn_id: candidate.source_turn_id,
     };
 
     await this.storage.saveNode(node);
@@ -755,6 +757,9 @@ export class MemoryGraph {
         node_id: nodeId,
         content: candidate.content,
         sensitivity: candidate.sensitivity,
+        // Provenance rides the wire (spec/memory-delta-v1.md §5.1);
+        // source_turn_id is local-only and deliberately omitted.
+        source: candidate.source,
         valid_from: node.valid_from,
         valid_until: node.valid_until ?? null,
       },
@@ -793,7 +798,7 @@ export class MemoryGraph {
    * ADD (new fact), UPDATE (supersedes), REINFORCE (confirms), or NOOP (skip).
    */
   async consolidateAndForm(
-    candidate: MemoryCandidate,
+    candidate: AttributedMemoryCandidate,
     embedding: number[],
     provider: ConsolidationProvider,
     halfLife?: number,
@@ -1273,6 +1278,12 @@ export class MemoryGraph {
         confidence: oldNode.confidence,
         sensitivity: oldNode.sensitivity,
         memory_type: oldNode.memory_type,
+        // Provenance inherits from the superseded node — the rewrite is a
+        // correction, not a re-classification; the corrected fact has the
+        // same epistemic origin. A pre-provenance legacy node stays
+        // declared-unknown (never fabricate).
+        source: oldNode.source,
+        source_turn_id: oldNode.source_turn_id,
       },
       embedding,
       oldNode.half_life,

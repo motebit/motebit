@@ -971,10 +971,16 @@ export async function handleServe(config: CliConfig): Promise<void> {
       if (!decision || decision.memoryClass === MemoryClass.REJECTED) {
         throw new Error(`Memory rejected by governance: ${decision?.reason ?? "unknown"}`);
       }
-      // Use the (possibly confidence-capped) candidate from the decision
+      // Use the (possibly confidence-capped) candidate from the decision.
+      // Provenance: an external caller's write is ALWAYS peer_agent —
+      // hard-coded after governance, never caller-derived
+      // (docs/doctrine/memory-provenance.md).
       const governedCandidate = decision.candidate;
       const embedding = await embedText(governedCandidate.content);
-      const node = await runtime.memory.formMemory(governedCandidate, embedding);
+      const node = await runtime.memory.formMemory(
+        { ...governedCandidate, source: "peer_agent" },
+        embedding,
+      );
       return { node_id: node.node_id };
     },
 

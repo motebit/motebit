@@ -360,4 +360,18 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE agent_trust ADD COLUMN petname TEXT",
     ],
   },
+  {
+    version: 40,
+    description: "memory_nodes.source + source_turn_id — memory provenance",
+    statements: [
+      // MemorySource provenance (docs/doctrine/memory-provenance.md):
+      // who contributed a remembered fact. Additive nullable columns;
+      // NULL ⇒ formed before provenance tracking, rendered as provenance
+      // "unknown" — rowToNode maps through isMemorySource and never
+      // fabricates a default (a fabricated source is a trust claim).
+      // source_turn_id is local provenance only, never on the wire.
+      "ALTER TABLE memory_nodes ADD COLUMN source TEXT",
+      "ALTER TABLE memory_nodes ADD COLUMN source_turn_id TEXT",
+    ],
+  },
 ];

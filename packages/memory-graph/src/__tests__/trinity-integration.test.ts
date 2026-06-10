@@ -74,6 +74,7 @@ describe("Memory Trinity — end-to-end composition", () => {
         content,
         confidence: 0.8,
         sensitivity: SensitivityLevel.None,
+        source: "user_stated",
       },
       [0.1, 0.1, 0.1],
       {
@@ -107,11 +108,17 @@ describe("Memory Trinity — end-to-end composition", () => {
           content: "User prefers TypeScript",
           confidence: 0.75,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [0.1, 0.2, 0.3],
       );
       const nodeB = await graph.formMemory(
-        { content: "User lives in SF", confidence: 0.75, sensitivity: SensitivityLevel.None },
+        {
+          content: "User lives in SF",
+          confidence: 0.75,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [0.4, 0.5, 0.6],
       );
 
@@ -193,7 +200,12 @@ describe("Memory Trinity — end-to-end composition", () => {
     expect(emptyIndex).toBe("");
 
     await graph.formMemory(
-      { content: "Pinned anchor fact", confidence: 0.9, sensitivity: SensitivityLevel.None },
+      {
+        content: "Pinned anchor fact",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [0.1, 0.2, 0.3],
     );
 
@@ -214,6 +226,7 @@ describe("Memory Trinity — end-to-end composition", () => {
         content: "User's favorite color is blue",
         confidence: 0.8,
         sensitivity: SensitivityLevel.None,
+        source: "user_stated",
       },
       [0.1, 0.1, 0.1],
     );
@@ -235,7 +248,12 @@ describe("Memory Trinity — end-to-end composition", () => {
     ).rejects.toThrow(/No memory node/);
 
     const node = await graph.formMemory(
-      { content: "Will tombstone this", confidence: 0.8, sensitivity: SensitivityLevel.None },
+      {
+        content: "Will tombstone this",
+        confidence: 0.8,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       [0.1, 0.1, 0.1],
     );
 

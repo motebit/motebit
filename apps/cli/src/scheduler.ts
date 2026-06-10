@@ -920,6 +920,8 @@ export class GoalScheduler {
             content: `[goal_learning] ${text}`,
             confidence: 0.7,
             sensitivity: SensitivityLevel.None,
+            // Plan-reflection learnings are agent-synthesized, not user statements.
+            source: "agent_inferred",
           },
           embedding,
         );
@@ -948,6 +950,8 @@ export class GoalScheduler {
           content,
           confidence: 0.6,
           sensitivity: SensitivityLevel.None,
+          // Goal-outcome summaries are agent-synthesized, not user statements.
+          source: "agent_inferred",
         },
         embedding,
       );

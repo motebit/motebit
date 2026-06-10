@@ -69,7 +69,13 @@ export interface ServiceMemoryGraph {
     }>
   >;
   formMemory(
-    data: { content: string; confidence: number; sensitivity: string },
+    data: {
+      content: string;
+      confidence: number;
+      sensitivity: string;
+      /** Provenance — the MCP server always passes the literal "peer_agent". */
+      source: string | undefined;
+    },
     embedding: number[],
   ): Promise<{ node_id: string }>;
 }
@@ -240,6 +246,11 @@ export function wireServerDeps(
           content,
           confidence: 0.7,
           sensitivity: sensitivity ?? SensitivityLevel.None,
+          // Provenance: a remote caller's write is ALWAYS peer_agent —
+          // hard-coded, never caller-derived. A peer that could
+          // self-declare user_stated would mint trusted memories
+          // remotely. Gate-enforced by check-memory-source-canonical.
+          source: "peer_agent",
         },
         embedding,
       );

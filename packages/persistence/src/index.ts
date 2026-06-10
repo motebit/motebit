@@ -31,7 +31,7 @@ import type {
   MotebitId,
   StoredCredential,
 } from "@motebit/sdk";
-import { PlanStatus, StepStatus, AgentTrustLevel } from "@motebit/sdk";
+import { PlanStatus, StepStatus, AgentTrustLevel, isMemorySource } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
@@ -513,8 +513,8 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
   constructor(private db: DatabaseDriver) {
     this.stmtSaveNode = db.prepare(
       `INSERT OR REPLACE INTO memory_nodes
-       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned, memory_type, valid_from, valid_until)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (node_id, motebit_id, content, embedding, confidence, sensitivity, created_at, last_accessed, half_life, tombstoned, pinned, memory_type, valid_from, valid_until, source, source_turn_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGetNode = db.prepare(`SELECT * FROM memory_nodes WHERE node_id = ?`);
     this.stmtSaveEdge = db.prepare(
@@ -553,6 +553,8 @@ export class SqliteMemoryStorage implements MemoryStorageAdapter {
       node.memory_type ?? "semantic",
       node.valid_from ?? null,
       node.valid_until ?? null,
+      node.source ?? null,
+      node.source_turn_id ?? null,
     );
   }
 
@@ -691,6 +693,8 @@ interface NodeRow {
   memory_type: string | null;
   valid_from: number | null;
   valid_until: number | null;
+  source: string | null;
+  source_turn_id: string | null;
 }
 
 function rowToNode(row: NodeRow): MemoryNode {
@@ -709,6 +713,12 @@ function rowToNode(row: NodeRow): MemoryNode {
     memory_type: (row.memory_type as MemoryNode["memory_type"]) ?? undefined,
     valid_from: row.valid_from ?? undefined,
     valid_until: row.valid_until,
+    // Provenance maps through the type guard: NULL and garbage both
+    // become undefined (rendered as provenance "unknown") — deliberately
+    // NOT the `?? "semantic"` defaulting pattern memory_type uses, because
+    // a fabricated source is a trust claim, not a display default.
+    source: isMemorySource(row.source) ? row.source : undefined,
+    source_turn_id: row.source_turn_id ?? undefined,
   };
 }
 

@@ -249,6 +249,29 @@ describe("SqliteMemoryStorage", () => {
     expect(result).toBeNull();
   });
 
+  it("round-trips provenance (source + source_turn_id)", async () => {
+    const node = makeNode({ source: "tool_derived", source_turn_id: "turn-42" });
+    await mdb.memoryStorage.saveNode(node);
+    const loaded = await mdb.memoryStorage.getNode(node.node_id);
+    expect(loaded!.source).toBe("tool_derived");
+    expect(loaded!.source_turn_id).toBe("turn-42");
+  });
+
+  it("legacy rows without source read back as undefined — never a fabricated default", async () => {
+    const node = makeNode();
+    await mdb.memoryStorage.saveNode(node);
+    // Simulate a pre-provenance row (and a garbage value) via raw SQL.
+    mdb.db.prepare("UPDATE memory_nodes SET source = NULL WHERE node_id = ?").run(node.node_id);
+    const legacy = await mdb.memoryStorage.getNode(node.node_id);
+    expect(legacy!.source).toBeUndefined();
+
+    mdb.db
+      .prepare("UPDATE memory_nodes SET source = 'not_a_registry_value' WHERE node_id = ?")
+      .run(node.node_id);
+    const garbage = await mdb.memoryStorage.getNode(node.node_id);
+    expect(garbage!.source).toBeUndefined();
+  });
+
   it("queryNodes filters by motebit_id", async () => {
     await mdb.memoryStorage.saveNode(makeNode({ motebit_id: "motebit-1" }));
     await mdb.memoryStorage.saveNode(makeNode({ motebit_id: "motebit-2" }));

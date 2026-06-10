@@ -232,6 +232,7 @@ describe("Runtime — proactive interior wire-in", () => {
           content: `Episode ${i}`,
           confidence: 0.7,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
           memory_type: MemoryType.Episodic,
         },
         embedding,

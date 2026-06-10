@@ -196,6 +196,7 @@ describe("PrivacyLayer", () => {
           content: "to delete",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0],
       );
@@ -222,6 +223,7 @@ describe("PrivacyLayer", () => {
           content: "to delete",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0],
       );
@@ -251,7 +253,12 @@ describe("PrivacyLayer", () => {
       );
 
       const node = await localGraph.formMemory(
-        { content: "verify me", confidence: 0.9, sensitivity: SensitivityLevel.Personal },
+        {
+          content: "verify me",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.Personal,
+          source: "user_stated",
+        },
         [1, 0],
       );
       // Reason: self_enforcement — the subject's runtime drives policy and signs.
@@ -269,7 +276,12 @@ describe("PrivacyLayer", () => {
 
     it("emits a DeleteRequested event before erasing the memory", async () => {
       const node = await memoryGraph.formMemory(
-        { content: "audited", confidence: 0.9, sensitivity: SensitivityLevel.Personal },
+        {
+          content: "audited",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.Personal,
+          source: "user_stated",
+        },
         [1, 0],
       );
       await privacyLayer.deleteMemory(node.node_id, "user_request");
@@ -460,6 +472,7 @@ describe("PrivacyLayer", () => {
           content: "exportable",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
         },
         [1, 0],
       );
@@ -483,23 +496,48 @@ describe("PrivacyLayer", () => {
 
     it("filters out sensitive memories by default", async () => {
       await memoryGraph.formMemory(
-        { content: "public info", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "public info",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0],
       );
       await memoryGraph.formMemory(
-        { content: "personal note", confidence: 0.8, sensitivity: SensitivityLevel.Personal },
+        {
+          content: "personal note",
+          confidence: 0.8,
+          sensitivity: SensitivityLevel.Personal,
+          source: "user_stated",
+        },
         [0, 1],
       );
       await memoryGraph.formMemory(
-        { content: "medical record", confidence: 0.9, sensitivity: SensitivityLevel.Medical },
+        {
+          content: "medical record",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.Medical,
+          source: "user_stated",
+        },
         [1, 1],
       );
       await memoryGraph.formMemory(
-        { content: "bank details", confidence: 0.9, sensitivity: SensitivityLevel.Financial },
+        {
+          content: "bank details",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.Financial,
+          source: "user_stated",
+        },
         [0.5, 0.5],
       );
       await memoryGraph.formMemory(
-        { content: "secret key", confidence: 1.0, sensitivity: SensitivityLevel.Secret },
+        {
+          content: "secret key",
+          confidence: 1.0,
+          sensitivity: SensitivityLevel.Secret,
+          source: "user_stated",
+        },
         [0.3, 0.7],
       );
 
@@ -517,11 +555,21 @@ describe("PrivacyLayer", () => {
 
     it("includes all memories when includeAllSensitivity is true", async () => {
       await memoryGraph.formMemory(
-        { content: "allowed", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "allowed",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0],
       );
       await memoryGraph.formMemory(
-        { content: "secret stuff", confidence: 1.0, sensitivity: SensitivityLevel.Secret },
+        {
+          content: "secret stuff",
+          confidence: 1.0,
+          sensitivity: SensitivityLevel.Secret,
+          source: "user_stated",
+        },
         [0, 1],
       );
 
@@ -539,7 +587,12 @@ describe("PrivacyLayer", () => {
   describe("setSensitivity", () => {
     it("changes sensitivity level and creates audit trail", async () => {
       const node = await memoryGraph.formMemory(
-        { content: "reclassify me", confidence: 0.9, sensitivity: SensitivityLevel.None },
+        {
+          content: "reclassify me",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
         [1, 0],
       );
 

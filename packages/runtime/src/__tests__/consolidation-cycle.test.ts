@@ -128,7 +128,12 @@ describe("runConsolidationCycle", () => {
   it("tombstones decayed memories during the prune phase", async () => {
     const embedding = new Array(384).fill(0.1);
     const node = await harness.runtime.memory.formMemory(
-      { content: "old fact", confidence: 0.6, sensitivity: SensitivityLevel.None },
+      {
+        content: "old fact",
+        confidence: 0.6,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       embedding,
       SEVEN_DAYS,
     );
@@ -150,7 +155,12 @@ describe("runConsolidationCycle", () => {
   it("preserves pinned memories during prune even when decayed", async () => {
     const embedding = new Array(384).fill(0.1);
     const node = await harness.runtime.memory.formMemory(
-      { content: "pinned wisdom", confidence: 0.6, sensitivity: SensitivityLevel.None },
+      {
+        content: "pinned wisdom",
+        confidence: 0.6,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
       embedding,
       SEVEN_DAYS,
     );
@@ -180,6 +190,7 @@ describe("runConsolidationCycle", () => {
           content: `Saw the user open editor at ${i}am`,
           confidence: 0.75,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
           memory_type: MemoryType.Episodic,
         },
         embedding,
@@ -216,6 +227,7 @@ describe("runConsolidationCycle", () => {
           confidence: 0.75,
           sensitivity,
           memory_type: MemoryType.Episodic,
+          source: "agent_inferred",
         },
         embedding,
         SEVEN_DAYS,
@@ -317,6 +329,7 @@ describe("runConsolidationCycle", () => {
           content: `Episode ${i}`,
           confidence: 0.7,
           sensitivity: SensitivityLevel.None,
+          source: "user_stated",
           memory_type: MemoryType.Episodic,
         },
         embedding,

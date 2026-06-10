@@ -2925,6 +2925,7 @@ describe("MotebitRuntime — [Now] block stale pixel-omission (typed-truth-perce
         content: "the user prefers dark mode",
         confidence: 0.9,
         sensitivity: SensitivityLevel.None,
+        source: "user_stated",
       },
       [1, 0],
     );
