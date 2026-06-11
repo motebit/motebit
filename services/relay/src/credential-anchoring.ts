@@ -26,6 +26,7 @@ import {
 } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 const logger = createLogger({ service: "relay", module: "credential-anchoring" });
 
@@ -311,16 +312,18 @@ export function startCredentialAnchorLoop(
   relayIdentity: RelayIdentity,
   config: CredentialAnchoringConfig = {},
   isFrozen?: () => boolean,
+  supervisor?: LoopSupervisor,
 ): ReturnType<typeof setInterval> {
   const maxSize = config.batchMaxSize ?? DEFAULT_BATCH_MAX_SIZE;
   const intervalMs = config.batchIntervalMs ?? DEFAULT_BATCH_INTERVAL_MS;
   const submitter = config.submitter;
   const checkIntervalMs = Math.min(60_000, intervalMs);
 
-  return setInterval(() => {
-    if (isFrozen?.()) return;
-
-    void (async () => {
+  return superviseInterval(
+    supervisor,
+    "credential-anchor",
+    checkIntervalMs,
+    async () => {
       try {
         // Count unanchored credentials
         const countRow = db
@@ -366,9 +369,13 @@ export function startCredentialAnchorLoop(
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error("credential_anchoring.loop_error", { error: message });
+        // Rethrow so the supervisor records the failed tick; the plain
+        // (supervisor-less) path swallows it after the structured log above.
+        throw err;
       }
-    })();
-  }, checkIntervalMs);
+    },
+    { ...(isFrozen ? { isFrozen } : {}) },
+  );
 }
 
 // === Proof Serving ===

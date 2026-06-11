@@ -811,6 +811,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-property-test-floor",
   },
   {
+    name: "check-loops-supervised",
+    defends:
+      "every relay background loop reports to the LoopSupervisor — no raw `setInterval(` call in `services/relay/src` outside `loop-supervisor.ts` (plus two narrowly-anchored non-loop shapes: deposit-detector's disabled-path no-op handle, index.ts's bounded WS-drain waiter). `setInterval` does not die on a thrown callback, so an unsupervised loop fails invisibly three ways (erroring every tick / hung tick / never started); `superviseInterval` surfaces all three at GET /api/v1/admin/health `loops`. Load-bearing because the anchoring loops produce the on-chain roots behind the `anchored` identity-binding rung and operator transparency — a silently wedged anchor loop is the same failure class as the 2026-05-22 prod incident (receipts silently degraded to integrity-only). Locks Phase 2 of the loop-supervisor arc (relay CLAUDE.md rule 18). Invariant #125, added 2026-06-11",
+    script: "check-loops-supervised",
+  },
+  {
     name: "check-credential-input-autofill",
     defends:
       'every `<input type="password">` in a non-dist `apps/**/*.html` carries the autofill-suppression contract (`autocomplete="off"` + `data-1p-ignore` + `data-lpignore`) so third-party password managers (iCloud Passwords, 1Password, LastPass) neither offer to save these secrets as a motebit.com login nor anchor an AutoFill prompt to them. The credential fields are a local operator PIN, BYOK provider keys, and the recovery seed — none are website logins. Surfaced 2026-05-27: the operator-PIN field sat in a centered overlay hidden only with `opacity:0`, so it stayed laid out at viewport center when closed and carried none of these attrs; iCloud Passwords anchored its "Enable Password AutoFill" bubble dead-center over the creature\'s face on every load. The canonical pattern lived on `#chat-input` but the ~12 credential fields had silently drifted off it — classic sibling-drift. Companion layout invariant (credential overlays hide via `visibility:hidden`/`display:none`, never `opacity:0` alone) is documented at each overlay CSS site, not gated (needs cascade analysis; the attr contract neutralizes the autofill surface regardless).',

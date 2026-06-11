@@ -44,6 +44,7 @@ import {
   type SolanaTreasuryReconciliationStore,
 } from "@motebit/wallet-solana";
 import { createLogger } from "./logger.js";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 export type { SolanaReconciliationResult };
 
@@ -131,6 +132,9 @@ export interface SolanaTreasuryReconciliationLoopConfig {
   confirmationLagBufferMs?: number;
   /** Optional emergency-freeze callback. When true, cycle is skipped. */
   isFrozen?: () => boolean;
+  /** Loop-supervisor adoption (CLAUDE.md rule 18 Phase 2). Optional —
+   *  unit tests that omit it get the plain frozen-guarded interval. */
+  supervisor?: LoopSupervisor;
   /** Override `Date.now` for tests. */
   now?: () => number;
   /** Override the reconciliation_id generator for tests. */
@@ -191,7 +195,6 @@ export function startSolanaTreasuryReconciliationLoop(
   });
 
   const tick = async (): Promise<void> => {
-    if (config.isFrozen?.()) return;
     try {
       await reconciler.reconcile({
         store,
@@ -205,10 +208,13 @@ export function startSolanaTreasuryReconciliationLoop(
         chain,
         error: err instanceof Error ? err.message : String(err),
       });
+      // Rethrow so the supervisor records the failed tick; the plain
+      // (supervisor-less) path swallows it after the structured log above.
+      throw err;
     }
   };
 
-  return setInterval(() => {
-    void tick();
-  }, intervalMs);
+  return superviseInterval(config.supervisor, "solana-treasury-reconciliation", intervalMs, tick, {
+    ...(config.isFrozen ? { isFrozen: config.isFrozen } : {}),
+  });
 }

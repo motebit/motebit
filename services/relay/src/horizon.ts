@@ -65,6 +65,7 @@ import { WitnessSolicitationResponseSchema } from "@motebit/wire-schemas";
 import type { RelayIdentity } from "./federation.js";
 import { REVOCATION_TTL_MS } from "./federation.js";
 import { createLogger } from "./logger.js";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 const logger = createLogger({ service: "relay", module: "horizon" });
 
@@ -714,15 +715,26 @@ export function startRevocationHorizonLoop(
   ctx: HorizonAdvanceContext,
   intervalMs = DEFAULT_REVOCATION_HORIZON_INTERVAL_MS,
   isFrozen?: () => boolean,
+  supervisor?: LoopSupervisor,
 ): ReturnType<typeof setInterval> {
-  return setInterval(() => {
-    if (isFrozen?.()) return;
-    void advanceRevocationHorizon(db, ctx).catch((err: unknown) => {
-      logger.error("horizon.revocation.loop_tick_failed", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
-  }, intervalMs);
+  return superviseInterval(
+    supervisor,
+    "revocation-horizon",
+    intervalMs,
+    async () => {
+      try {
+        await advanceRevocationHorizon(db, ctx);
+      } catch (err: unknown) {
+        logger.error("horizon.revocation.loop_tick_failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        // Rethrow so the supervisor records the failed tick; the plain
+        // (supervisor-less) path swallows it after the structured log above.
+        throw err;
+      }
+    },
+    { ...(isFrozen ? { isFrozen } : {}) },
+  );
 }
 
 // Re-exports for federation.ts peer-side handler convenience.

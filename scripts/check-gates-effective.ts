@@ -1212,6 +1212,22 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       ),
   },
   {
+    script: "check-loops-supervised",
+    proves:
+      "flags a raw setInterval() call reintroduced in services/relay/src — the pre-supervisor invisible-failure shape (a loop erroring every tick, hung, or never started, with nothing surfaced at admin/health)",
+    perturb: () =>
+      // Reintroduce a raw background-loop setInterval in a migrated module.
+      // The gate (which matches setInterval call sites outside
+      // loop-supervisor.ts and the two narrow allowlist anchors) must flag
+      // it. mutateFile restores byte-identical on cleanup.
+      mutateFile("services/relay/src/horizon.ts", (src) =>
+        src.replace(
+          "  return superviseInterval(",
+          "  const _unsupervised = setInterval(() => {}, 60_000);\n  return superviseInterval(",
+        ),
+      ),
+  },
+  {
     script: "check-preset-imports",
     proves:
       "flags a surface-app declaration that shadows an @motebit/sdk canonical preset identifier (APPROVAL_PRESET_CONFIGS, COLOR_PRESETS, RISK_LABELS, …)",

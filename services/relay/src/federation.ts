@@ -694,17 +694,22 @@ export async function initRelayIdentity(
 
 const FEDERATION_QUERY_TTL_MS = 30_000;
 
-export function createFederationQueryCache(): {
+export function createFederationQueryCache(supervisor?: LoopSupervisor): {
   cache: Map<string, number>;
   pruneInterval: ReturnType<typeof setInterval>;
 } {
   const cache = new Map<string, number>();
-  const pruneInterval = setInterval(() => {
-    const cutoff = Date.now() - FEDERATION_QUERY_TTL_MS;
-    for (const [id, ts] of cache) {
-      if (ts < cutoff) cache.delete(id);
-    }
-  }, FEDERATION_QUERY_TTL_MS);
+  const pruneInterval = superviseInterval(
+    supervisor,
+    "federation-query-cache-prune",
+    FEDERATION_QUERY_TTL_MS,
+    () => {
+      const cutoff = Date.now() - FEDERATION_QUERY_TTL_MS;
+      for (const [id, ts] of cache) {
+        if (ts < cutoff) cache.delete(id);
+      }
+    },
+  );
   return { cache, pruneInterval };
 }
 
@@ -976,11 +981,16 @@ export function startHeartbeatLoop(
   intervalMs = 60_000,
   /** Optional guard — when it returns true, the loop iteration is skipped. */
   isFrozen?: () => boolean,
+  /** Optional loop supervisor for liveness/error observability. */
+  supervisor?: LoopSupervisor,
 ): ReturnType<typeof setInterval> {
-  return setInterval(() => {
-    if (isFrozen?.()) return;
-    void sendHeartbeats(db, relayIdentity);
-  }, intervalMs);
+  return superviseInterval(
+    supervisor,
+    "federation-heartbeat",
+    intervalMs,
+    () => sendHeartbeats(db, relayIdentity),
+    { ...(isFrozen ? { isFrozen } : {}) },
+  );
 }
 
 // === Peer Signature Verification ===

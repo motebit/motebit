@@ -159,7 +159,7 @@ import { registerBrowserSandboxRoutes } from "./browser-sandbox.js";
 import { registerBudgetRoutes } from "./budget.js";
 import { startSweepLoop } from "./sweep.js";
 import { startBatchWithdrawalLoop, getPendingWithdrawalsSummary } from "./batch-withdrawals.js";
-import { LoopSupervisor } from "./loop-supervisor.js";
+import { LoopSupervisor, superviseInterval } from "./loop-supervisor.js";
 import { registerAgentRoutes } from "./agents.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
 import { registerTaskRoutes, TASK_TTL_MS } from "./tasks.js";
@@ -589,11 +589,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Shared state ---
   const connections = new Map<string, ConnectedDevice[]>();
 
-  // Background-loop supervisor — liveness + error observability for the
-  // money-movement loops (settlement-retry, P2P verifier, batch withdrawal,
-  // sweep). Surfaced at GET /api/v1/admin/health (`loops`). In-memory,
+  // Background-loop supervisor — liveness + error observability for every
+  // background loop (money movement, anchoring, reconciliation, federation,
+  // cleanup). Surfaced at GET /api/v1/admin/health (`loops`). In-memory,
   // per-process by design: the question is "are this process's loops healthy
-  // now". Audit/anchoring/federation loops adopt it in a follow-up.
+  // now". check-loops-supervised forbids raw setInterval loops in this service.
   const loopSupervisor = new LoopSupervisor();
 
   // TASK_TTL_MS is imported from tasks.ts — one canonical task lifetime. (A
@@ -613,7 +613,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Task routing & federation query cache ---
   const taskRouter = createTaskRouter({ db: moteDb.db, relayIdentity, federationConfig });
   const { cache: federationQueryCache, pruneInterval: federationQueryPruneInterval } =
-    createFederationQueryCache();
+    createFederationQueryCache(loopSupervisor);
 
   // --- Hono app & WebSocket ---
   const app = new Hono();
@@ -681,7 +681,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       `STALE_ALLOCATION_HORIZON_MS (${STALE_ALLOCATION_HORIZON_MS}ms) must be >= 3x TASK_TTL_MS (${TASK_TTL_MS}ms) — sweeping a live task's allocation opens a refund/settlement double-credit race`,
     );
   }
-  const taskCleanupInterval = setInterval(() => {
+  const taskCleanupInterval = superviseInterval(loopSupervisor, "task-cleanup", 60_000, () => {
     const now = Date.now();
     // Expire completed/failed tasks and tasks past their TTL
     taskQueue.cleanup(now);
@@ -774,7 +774,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     } catch {
       // Best-effort cleanup
     }
-  }, 60_000);
+  });
 
   // --- WebSocket routes ---
   registerWebSocketRoutes({
@@ -908,6 +908,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const orchestrationWorkerInterval = startDeferredOrchestrationWorker({
     db: moteDb.db,
     relayIdentity,
+    supervisor: loopSupervisor,
   });
   logger.info("dispute_orchestration_worker.started");
 
@@ -1303,8 +1304,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Federation background loops ---
 
-  const heartbeatInterval = startHeartbeatLoop(moteDb.db, relayIdentity, 60_000, () =>
-    getEmergencyFreeze(),
+  const heartbeatInterval = startHeartbeatLoop(
+    moteDb.db,
+    relayIdentity,
+    60_000,
+    () => getEmergencyFreeze(),
+    loopSupervisor,
   );
 
   // Phase 4b-3 — periodic revocation-events horizon advance. Replaces
@@ -1317,6 +1322,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     { relayIdentity, witnessSolicitationTimeoutMs: federationConfig?.witnessSolicitationTimeoutMs },
     federationConfig?.revocationHorizonIntervalMs,
     () => getEmergencyFreeze(),
+    loopSupervisor,
   );
 
   // Settlement retry loop callback touches taskQueue — stays in index.ts
@@ -1473,6 +1479,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     relayIdentity,
     { submitter: anchorSubmitter },
     () => getEmergencyFreeze(),
+    loopSupervisor,
   );
 
   // --- Per-agent settlement anchor batching (the "ceiling" parallel
@@ -1484,6 +1491,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     relayIdentity,
     { submitter: anchorSubmitter },
     () => getEmergencyFreeze(),
+    loopSupervisor,
   );
 
   // --- Credential anchor batching (credential-anchor-v1.md) ---
@@ -1493,6 +1501,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     relayIdentity,
     credentialAnchorConfig,
     () => getEmergencyFreeze(),
+    loopSupervisor,
   );
 
   // --- Identity-log anchoring (identity-binding-verification doctrine) ---
@@ -1507,6 +1516,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     relayIdentity,
     { submitter: anchorSubmitter },
     () => getEmergencyFreeze(),
+    loopSupervisor,
   );
 
   // --- Deposit detector (scans onchain Transfer events for agent wallets) ---
@@ -1514,6 +1524,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const depositDetectorInterval = startDepositDetector({
     db: moteDb.db,
     chain: depositDetectorChain,
+    supervisor: loopSupervisor,
   });
 
   // --- Treasury reconciliation (compares recorded x402 fees to onchain balance) ---
@@ -1543,6 +1554,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         usdcContractAddress,
         intervalMs,
         isFrozen: () => getEmergencyFreeze(),
+        supervisor: loopSupervisor,
       });
     } else {
       logger.info("treasury-reconciliation.disabled", {
@@ -1618,6 +1630,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       ...(solanaUsdcMint ? { usdcMint: solanaUsdcMint } : {}),
       intervalMs: solanaReconciliationIntervalMs,
       isFrozen: () => getEmergencyFreeze(),
+      supervisor: loopSupervisor,
     });
   } else {
     logger.info("solana-treasury-reconciliation.disabled", {

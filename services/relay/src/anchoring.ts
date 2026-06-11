@@ -33,6 +33,7 @@ import {
 } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 /** Cryptosuite for the per-agent settlement anchor batch + proof artifacts.
  *  Matches spec/agent-settlement-anchor-v1.md §4.1 / §5.1 — JCS canonicalization,
@@ -354,6 +355,7 @@ export function startBatchAnchorLoop(
   relayIdentity: RelayIdentity,
   config: AnchoringConfig = {},
   isFrozen?: () => boolean,
+  supervisor?: LoopSupervisor,
 ): ReturnType<typeof setInterval> {
   const maxSize = config.batchMaxSize ?? DEFAULT_BATCH_MAX_SIZE;
   const intervalMs = config.batchIntervalMs ?? DEFAULT_BATCH_INTERVAL_MS;
@@ -362,10 +364,11 @@ export function startBatchAnchorLoop(
 
   const submitter = config.submitter;
 
-  return setInterval(() => {
-    if (isFrozen?.()) return;
-
-    void (async () => {
+  return superviseInterval(
+    supervisor,
+    "federation-anchor",
+    checkIntervalMs,
+    async () => {
       try {
         // Count unanchored settlements. The `record_json IS NOT NULL` filter
         // MUST match `cutBatch`'s selection predicate: only rows carrying the
@@ -418,9 +421,13 @@ export function startBatchAnchorLoop(
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error("anchoring.loop_error", { error: message });
+        // Rethrow so the supervisor records the failed tick; the plain
+        // (supervisor-less) path swallows it after the structured log above.
+        throw err;
       }
-    })();
-  }, checkIntervalMs);
+    },
+    { ...(isFrozen ? { isFrozen } : {}) },
+  );
 }
 
 // === Proof Serving ===
@@ -878,6 +885,7 @@ export function startAgentSettlementAnchorLoop(
   relayIdentity: RelayIdentity,
   config: AnchoringConfig = {},
   isFrozen?: () => boolean,
+  supervisor?: LoopSupervisor,
 ): ReturnType<typeof setInterval> {
   const maxSize = config.batchMaxSize ?? DEFAULT_BATCH_MAX_SIZE;
   const intervalMs = config.batchIntervalMs ?? DEFAULT_BATCH_INTERVAL_MS;
@@ -887,10 +895,11 @@ export function startAgentSettlementAnchorLoop(
   // once at startup and inject into both.
   const submitter = config.submitter;
 
-  return setInterval(() => {
-    if (isFrozen?.()) return;
-
-    void (async () => {
+  return superviseInterval(
+    supervisor,
+    "agent-settlement-anchor",
+    checkIntervalMs,
+    async () => {
       try {
         // Count unanchored signed settlements. Filter on
         // signature IS NOT NULL — pre-v13 unsigned legacy rows are not
@@ -941,9 +950,13 @@ export function startAgentSettlementAnchorLoop(
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error("anchoring.agent_loop_error", { error: message });
+        // Rethrow so the supervisor records the failed tick; the plain
+        // (supervisor-less) path swallows it after the structured log above.
+        throw err;
       }
-    })();
-  }, checkIntervalMs);
+    },
+    { ...(isFrozen ? { isFrozen } : {}) },
+  );
 }
 
 /**

@@ -22,6 +22,7 @@ import type { ChainAnchorSubmitter } from "@motebit/sdk";
 import { canonicalJson, sign, bytesToHex } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 import { buildIdentityLog, type IdentityBinding } from "./identity-log.js";
 import { readIdentityBindings } from "./identity-transparency.js";
 
@@ -367,16 +368,27 @@ export function startIdentityLogAnchorLoop(
   relayIdentity: RelayIdentity,
   config: IdentityLogAnchorConfig = {},
   isFrozen?: () => boolean,
+  supervisor?: LoopSupervisor,
 ): ReturnType<typeof setInterval> {
   const intervalMs = config.intervalMs ?? DEFAULT_IDENTITY_ANCHOR_INTERVAL_MS;
   const checkIntervalMs = Math.min(IDENTITY_ANCHOR_CHECK_INTERVAL_MS, intervalMs);
 
-  return setInterval(() => {
-    if (isFrozen?.()) return;
-    void runIdentityLogAnchorTick(db, relayIdentity, config).catch((err: unknown) => {
-      logger.error("identity_log.anchor_loop_error", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
-  }, checkIntervalMs);
+  return superviseInterval(
+    supervisor,
+    "identity-log-anchor",
+    checkIntervalMs,
+    async () => {
+      try {
+        await runIdentityLogAnchorTick(db, relayIdentity, config);
+      } catch (err: unknown) {
+        logger.error("identity_log.anchor_loop_error", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        // Rethrow so the supervisor records the failed tick; the plain
+        // (supervisor-less) path swallows it after the structured log above.
+        throw err;
+      }
+    },
+    { ...(isFrozen ? { isFrozen } : {}) },
+  );
 }

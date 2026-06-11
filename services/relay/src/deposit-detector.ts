@@ -27,6 +27,7 @@ import {
 import { HttpJsonRpcEvmAdapter } from "@motebit/evm-rpc";
 import { sqliteAccountStoreFor } from "./account-store-sqlite.js";
 import { createLogger } from "./logger.js";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 export type { EvmRpcAdapter, EvmTransferLog };
 
@@ -231,6 +232,9 @@ export interface DepositDetectorConfig {
   chain: string;
   /** Poll interval in ms. Default: 15_000. */
   intervalMs?: number;
+  /** Loop-supervisor adoption (CLAUDE.md rule 18 Phase 2). Optional —
+   *  unit tests that omit it get the plain interval. */
+  supervisor?: LoopSupervisor;
   /** Max blocks to scan per cycle. Default: 1000. */
   maxBlocksPerCycle?: number;
   /** Custom RPC URLs. Merged with defaults. Ignored when `rpc` is provided. */
@@ -312,9 +316,13 @@ export function startDepositDetector(
         chain: config.chain,
         error: err instanceof Error ? err.message : String(err),
       });
+      // Rethrow so the supervisor records the failed tick; both the
+      // immediate boot tick below and the plain (supervisor-less) path
+      // swallow it after the structured log above.
+      throw err;
     }
   };
 
-  void tick();
-  return setInterval(() => void tick(), intervalMs);
+  void tick().catch(() => {});
+  return superviseInterval(config.supervisor, "deposit-detector", intervalMs, tick);
 }

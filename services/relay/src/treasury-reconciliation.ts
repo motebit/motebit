@@ -31,6 +31,7 @@ import {
   type TreasuryReconciliationStore,
 } from "@motebit/treasury-reconciliation";
 import { createLogger } from "./logger.js";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 export type { EvmRpcAdapter, ReconciliationResult };
 
@@ -254,6 +255,9 @@ export interface TreasuryReconciliationLoopConfig {
   confirmationLagBufferMs?: number;
   /** Optional emergency-freeze callback. When true, cycle is skipped. */
   isFrozen?: () => boolean;
+  /** Loop-supervisor adoption (CLAUDE.md rule 18 Phase 2). Optional —
+   *  unit tests that omit it get the plain frozen-guarded interval. */
+  supervisor?: LoopSupervisor;
   /** Override `Date.now` for tests. */
   now?: () => number;
   /** Override the reconciliation_id generator for tests. */
@@ -293,7 +297,6 @@ export function startTreasuryReconciliationLoop(
   });
 
   const tick = async () => {
-    if (config.isFrozen?.()) return;
     try {
       await reconcileTreasury({
         rpc: config.rpc,
@@ -314,10 +317,13 @@ export function startTreasuryReconciliationLoop(
         chain: config.chain,
         error: err instanceof Error ? err.message : String(err),
       });
+      // Rethrow so the supervisor records the failed tick; the plain
+      // (supervisor-less) path swallows it after the structured log above.
+      throw err;
     }
   };
 
-  return setInterval(() => {
-    void tick();
-  }, intervalMs);
+  return superviseInterval(config.supervisor, "treasury-reconciliation", intervalMs, tick, {
+    ...(config.isFrozen ? { isFrozen: config.isFrozen } : {}),
+  });
 }

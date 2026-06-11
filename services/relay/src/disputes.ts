@@ -44,6 +44,7 @@ import {
   debitAccount as debitCanonical,
 } from "./accounts.js";
 import { createLogger } from "./logger.js";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 import {
   finalizeFederationResolution,
   getDueOrchestrations,
@@ -981,15 +982,27 @@ export function startDeferredOrchestrationWorker(deps: {
   fetchImpl?: typeof fetch;
   voteRequestTimeoutMs?: number;
   intervalMs?: number;
+  /** Loop-supervisor adoption (CLAUDE.md rule 18 Phase 2). */
+  supervisor?: LoopSupervisor;
 }): ReturnType<typeof setInterval> {
   const intervalMs = deps.intervalMs ?? ORCHESTRATION_WORKER_INTERVAL_MS;
-  const handle = setInterval(() => {
-    void runDeferredOrchestrationCycle(deps).catch((err) => {
-      logger.warn("dispute.orchestration.cycle_failed", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
-  }, intervalMs);
+  const handle = superviseInterval(
+    deps.supervisor,
+    "dispute-orchestration",
+    intervalMs,
+    async () => {
+      try {
+        await runDeferredOrchestrationCycle(deps);
+      } catch (err) {
+        logger.warn("dispute.orchestration.cycle_failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        // Rethrow so the supervisor records the failed tick; the plain
+        // (supervisor-less) path swallows it after the structured log above.
+        throw err;
+      }
+    },
+  );
   // Don't keep the event loop alive solely for this timer — when the
   // process is otherwise idle (e.g., post-WS-drain), let it exit.
   // Mirrors the sweep / batch-withdrawal loop convention.
