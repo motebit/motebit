@@ -270,8 +270,8 @@ async function phase1() {
     // together — federation-e2e.test.ts has a defensive test that catches the constant↔doc
     // drift, but this live-test assertion has no such backstop.
     const specOk =
-      identityA.spec === "motebit/relay-federation@1.2" &&
-      identityB.spec === "motebit/relay-federation@1.2";
+      identityA.spec === "motebit/relay-federation@1.3" &&
+      identityB.spec === "motebit/relay-federation@1.3";
     expect(specOk, `A.spec=${identityA.spec}, B.spec=${identityB.spec}`);
   } else {
     fail("cannot check — identity fetch failed");
@@ -611,16 +611,36 @@ async function phase3() {
   test("Direct federation discover endpoint on Relay B returns test agent");
   try {
     const queryId = crypto.randomUUID();
+    // Per-hop sender signing (relay-federation@1.3 §4.1): sign the JCS form of
+    // the body-minus-signature with the synthetic peer's key. The synthetic
+    // peer is an ACTIVE peer on B at this point (Phase 2 ran first), so this
+    // exercises the signed path — and survives strict mode
+    // (MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE=true), where an unsigned
+    // discover 403s. Falls back to unsigned only if Phase 2 didn't establish
+    // the synthetic peer (tolerant relays accept; strict relays reject loudly).
+    const senderId = phase2.syntheticRelayId ?? "synthetic-test-relay";
+    const discoverPayload = {
+      query: { capability: testCapability, limit: 10 },
+      hop_count: 0,
+      max_hops: 1,
+      visited: [senderId],
+      query_id: queryId,
+      origin_relay: senderId,
+      sender_relay: senderId,
+      timestamp: Date.now(),
+    };
+    const discoverBody = phase2.syntheticPrivKey
+      ? {
+          ...discoverPayload,
+          signature: signBytes(
+            Buffer.from(canonicalJson(discoverPayload)),
+            phase2.syntheticPrivKey,
+          ).toString("hex"),
+        }
+      : discoverPayload;
     const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/discover`, {
       method: "POST",
-      body: JSON.stringify({
-        query: { capability: testCapability, limit: 10 },
-        hop_count: 0,
-        max_hops: 1,
-        visited: ["synthetic-test-relay"],
-        query_id: queryId,
-        origin_relay: "synthetic-test-relay",
-      }),
+      body: JSON.stringify(discoverBody),
     });
     if (!ok) {
       fail(`federation discover failed: ${JSON.stringify(body)}`);
@@ -1133,11 +1153,11 @@ async function phase8() {
   }
 
   // 8.1 — stg-c identity check
-  test("Phase 8.1: stg-c reports motebit/relay-federation@1.2 + vote_policy_configured");
+  test("Phase 8.1: stg-c reports motebit/relay-federation@1.3 + vote_policy_configured");
   const idC = await fetchJSON(`${RELAY_C_URL}/federation/v1/identity`);
   if (
     idC.ok &&
-    idC.body.spec === "motebit/relay-federation@1.2" &&
+    idC.body.spec === "motebit/relay-federation@1.3" &&
     idC.body.vote_policy_configured === true
   ) {
     pass();
@@ -1148,11 +1168,11 @@ async function phase8() {
   }
 
   // 8.2 — stg-d identity check
-  test("Phase 8.2: stg-d reports motebit/relay-federation@1.2 + vote_policy_configured");
+  test("Phase 8.2: stg-d reports motebit/relay-federation@1.3 + vote_policy_configured");
   const idD = await fetchJSON(`${RELAY_D_URL}/federation/v1/identity`);
   if (
     idD.ok &&
-    idD.body.spec === "motebit/relay-federation@1.2" &&
+    idD.body.spec === "motebit/relay-federation@1.3" &&
     idD.body.vote_policy_configured === true
   ) {
     pass();
