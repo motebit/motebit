@@ -3114,6 +3114,16 @@ export interface ScrollAction {
 }
 
 // @public
+export interface SeedEscrowPayload {
+    encrypted_seed: string;
+    identity_pubkey_check: string;
+    kdf: "webauthn-prf-hkdf-sha256";
+    nonce: string;
+    tag: string;
+    unlock_hint: string;
+}
+
+// @public
 export interface Semiring<T> {
     add(a: T, b: T): T;
     readonly eq?: ((a: T, b: T) => boolean) | undefined;

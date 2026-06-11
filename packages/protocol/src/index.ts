@@ -1562,6 +1562,40 @@ export interface KeyTransferPayload {
 }
 
 /**
+ * Durability without custody — an identity's Ed25519 seed, AEAD-encrypted under a
+ * key only the owner's authenticator can reproduce, parked with a custodian that
+ * is structurally unable to open it. Escrow, not custody. The sibling of
+ * {@link KeyTransferPayload}: transfer moves a key between parties under key
+ * agreement; escrow parks a seed with a custodian under an authenticator-held
+ * secret. Deliberate deltas: no X25519 ephemeral, `kdf` as a registry, same
+ * post-decryption verification posture. Unsigned by design — integrity is the
+ * GCM tag, correctness is the mandatory `identity_pubkey_check`, and placement is
+ * authenticated by `signed-request-envelope@1.0`. Spec: `spec/seed-escrow-v1.md`.
+ */
+export interface SeedEscrowPayload {
+  /** Opaque locator for the unwrap secret. For kdf `webauthn-prf-hkdf-sha256`:
+   *  the WebAuthn credential id (base64url). Unguessable; retrieval is keyed on
+   *  it and MUST NOT be publicly enumerable. */
+  unlock_hint: string;
+  /** KDF descriptor — closed enum, registered never forked. v1's sole entry:
+   *  WebAuthn PRF output → HKDF-SHA256 → AES-256-GCM key. Unknown values are
+   *  rejected fail-closed by custodians and restoring clients alike. */
+  kdf: "webauthn-prf-hkdf-sha256";
+  /** AES-256-GCM ciphertext of the 32-byte Ed25519 seed (64-char hex). */
+  encrypted_seed: string;
+  /** AES-256-GCM nonce, 12 bytes (24-char hex). Fresh per placement. */
+  nonce: string;
+  /** AES-256-GCM authentication tag, 16 bytes (32-char hex). AEAD failure on
+   *  restore is rejection — wrong credential, corruption, and tampering are
+   *  indistinguishable by design. */
+  tag: string;
+  /** Ed25519 public key derived from the escrowed seed (64-char hex). MANDATORY
+   *  post-decryption check: a restored seed that does not re-derive to this key
+   *  is discarded — an AEAD success is not yet a restore. */
+  identity_pubkey_check: string;
+}
+
+/**
  * A key succession record proving that one Ed25519 key has been replaced by another.
  * Both the old and new keys sign the record, creating a cryptographic chain of custody.
  * Structurally compatible with @motebit/crypto KeySuccessionRecord.

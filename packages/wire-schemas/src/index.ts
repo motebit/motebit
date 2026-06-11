@@ -52,6 +52,11 @@ export {
   buildSignedRequestEnvelopeJsonSchema,
 } from "./signed-request-envelope.js";
 export {
+  SeedEscrowPayloadSchema,
+  SEED_ESCROW_PAYLOAD_SCHEMA_ID,
+  buildSeedEscrowPayloadJsonSchema,
+} from "./seed-escrow-payload.js";
+export {
   AgentServiceListingSchema,
   AGENT_SERVICE_LISTING_SCHEMA_ID,
   buildAgentServiceListingJsonSchema,

@@ -1,0 +1,81 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/seed-escrow-payload-v1.json",
+  "title": "SeedEscrowPayload (v1)",
+  "description": "An identity's Ed25519 seed, AEAD-encrypted under a key only the owner's authenticator can reproduce, parked with a custodian that is structurally unable to open it. Escrow, not custody. Unsigned by design: integrity is the AES-GCM tag, correctness is identity_pubkey_check, placement is authenticated by the enclosing transport. See spec/seed-escrow-v1.md.",
+  "type": "object",
+  "properties": {
+    "unlock_hint": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Opaque locator for the unwrap secret. For kdf `webauthn-prf-hkdf-sha256`: the WebAuthn credential id, base64url. Unguessable; retrieval is keyed on it and MUST NOT be publicly enumerable."
+    },
+    "kdf": {
+      "type": "string",
+      "enum": ["webauthn-prf-hkdf-sha256"],
+      "description": "KDF descriptor — closed enum, registered never forked. v1's sole entry: WebAuthn PRF extension output → HKDF-SHA256 (empty salt, application-fixed info constant) → AES-256-GCM key. Unknown values are rejected fail-closed by custodians and restoring clients alike."
+    },
+    "encrypted_seed": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "AES-256-GCM ciphertext of the 32-byte Ed25519 seed, hex-encoded (64 lowercase characters). WebCrypto implementations split SubtleCrypto's `ciphertext ‖ tag` output — the final 16 bytes go to `tag`."
+    },
+    "nonce": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{24}$",
+      "description": "AES-256-GCM nonce, 12 random bytes, hex-encoded (24 lowercase characters). Fresh per placement."
+    },
+    "tag": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "AES-256-GCM authentication tag, 16 bytes, hex-encoded (32 lowercase characters). AEAD failure on restore is rejection — wrong credential, corruption, and tampering are indistinguishable by design."
+    },
+    "identity_pubkey_check": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Ed25519 public key derived from the escrowed seed, hex-encoded (64 lowercase characters). MANDATORY post-decryption check: a restored seed that does not re-derive to this key is discarded — an AEAD success is not yet a restore."
+    }
+  },
+  "required": ["unlock_hint", "kdf", "encrypted_seed", "nonce", "tag", "identity_pubkey_check"],
+  "additionalProperties": false,
+  "definitions": {
+    "SeedEscrowPayload": {
+      "type": "object",
+      "properties": {
+        "unlock_hint": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque locator for the unwrap secret. For kdf `webauthn-prf-hkdf-sha256`: the WebAuthn credential id, base64url. Unguessable; retrieval is keyed on it and MUST NOT be publicly enumerable."
+        },
+        "kdf": {
+          "type": "string",
+          "enum": ["webauthn-prf-hkdf-sha256"],
+          "description": "KDF descriptor — closed enum, registered never forked. v1's sole entry: WebAuthn PRF extension output → HKDF-SHA256 (empty salt, application-fixed info constant) → AES-256-GCM key. Unknown values are rejected fail-closed by custodians and restoring clients alike."
+        },
+        "encrypted_seed": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "AES-256-GCM ciphertext of the 32-byte Ed25519 seed, hex-encoded (64 lowercase characters). WebCrypto implementations split SubtleCrypto's `ciphertext ‖ tag` output — the final 16 bytes go to `tag`."
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{24}$",
+          "description": "AES-256-GCM nonce, 12 random bytes, hex-encoded (24 lowercase characters). Fresh per placement."
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "AES-256-GCM authentication tag, 16 bytes, hex-encoded (32 lowercase characters). AEAD failure on restore is rejection — wrong credential, corruption, and tampering are indistinguishable by design."
+        },
+        "identity_pubkey_check": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Ed25519 public key derived from the escrowed seed, hex-encoded (64 lowercase characters). MANDATORY post-decryption check: a restored seed that does not re-derive to this key is discarded — an AEAD success is not yet a restore."
+        }
+      },
+      "required": ["unlock_hint", "kdf", "encrypted_seed", "nonce", "tag", "identity_pubkey_check"],
+      "additionalProperties": false
+    }
+  }
+}
