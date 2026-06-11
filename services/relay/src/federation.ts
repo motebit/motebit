@@ -52,7 +52,7 @@ const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1" as const;
  * 3. Update consumer assertions (`federation-e2e.test.ts`, `scripts/test-federation-live.mjs`)
  * 4. Update `@spec` jsdoc annotations on each endpoint that changed
  */
-export const RELAY_SPEC_VERSION = "motebit/relay-federation@1.2";
+export const RELAY_SPEC_VERSION = "motebit/relay-federation@1.3";
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -111,6 +111,16 @@ export interface FederationConfig {
    * minutes-to-hours is fine given the 7d TTL on revocation events.
    */
   revocationHorizonIntervalMs?: number;
+  /**
+   * Require a valid per-hop sender signature on inbound
+   * `POST /federation/v1/discover` requests (relay-federation@1.3 §4.1 + §10.2).
+   * Default: false — the tolerant-reader rollout window: an UNSIGNED discover
+   * from an un-upgraded peer is accepted with a warning so the mesh keeps
+   * discovering during a rolling deploy. A PRESENT-but-invalid signature is
+   * ALWAYS rejected regardless of this flag. Flip to true once every peer emits
+   * signed discover requests, at which point an unsigned request rejects (403).
+   */
+  requireDiscoverSignature?: boolean;
 }
 
 export interface AgentInfo {
@@ -988,17 +998,27 @@ async function verifyPeerSignature(
   signatureHex: string,
   payloadBytes: Uint8Array,
   allowedStates = ["active"],
-  /** If provided, reject requests with timestamps outside ±5min drift. */
+  /**
+   * Replay-protection timestamp (epoch ms). REQUIRED — a request without it is
+   * rejected (400). Typed optional only so existing call sites that pass a
+   * possibly-`undefined` `body.timestamp` typecheck; presence is enforced at
+   * runtime. Every federation sender stamps `timestamp: Date.now()` on the
+   * signed body (task/forward, task/result, settlement/forward, discover), so
+   * this rejects only malformed or replayed requests, never legitimate traffic.
+   */
   timestamp?: number,
 ): Promise<string> {
-  // Timestamp drift check — prevents replay attacks
-  if (timestamp != null) {
-    const drift = Math.abs(Date.now() - timestamp);
-    if (drift > FEDERATION_TIMESTAMP_DRIFT_MS) {
-      throw new HTTPException(400, {
-        message: "Request timestamp outside acceptable drift (±5min)",
-      });
-    }
+  // Timestamp freshness — fail-closed. A MISSING timestamp was the audit's
+  // latent fail-open (the drift check was skipped, leaving the replay window
+  // open), so absence now rejects rather than skips.
+  if (timestamp == null || !Number.isFinite(timestamp)) {
+    throw new HTTPException(400, { message: "Federation request timestamp required" });
+  }
+  const drift = Math.abs(Date.now() - timestamp);
+  if (drift > FEDERATION_TIMESTAMP_DRIFT_MS) {
+    throw new HTTPException(400, {
+      message: "Request timestamp outside acceptable drift (±5min)",
+    });
   }
 
   const stateList = allowedStates.map(() => "?").join(", ");
@@ -1016,6 +1036,69 @@ async function verifyPeerSignature(
     throw new HTTPException(403, { message: "Invalid federation signature" });
   }
   return peer.public_key;
+}
+
+/**
+ * Attach per-hop sender authentication to an outbound `/federation/v1/discover`
+ * request: stamp `sender_relay` (THIS relay — the immediate forwarder, distinct
+ * from the multi-hop `origin_relay`) and a fresh `timestamp`, then sign the
+ * RFC 8785 (JCS) canonical JSON of the whole body (sans `signature`) and attach
+ * the hex signature. Both discover senders — the originating query
+ * (`task-routing.ts`) and the fan-out re-forward (the discover handler below) —
+ * route through this single helper so the signed bytes can never diverge from
+ * what `verifyDiscoverSender` recomputes on the receiver. relay-federation@1.3
+ * §4.1 + §10.2.
+ */
+export async function signDiscoverBody<T extends Record<string, unknown>>(
+  body: T,
+  relayIdentity: RelayIdentity,
+): Promise<T & { sender_relay: string; timestamp: number; signature: string }> {
+  const signed = {
+    ...body,
+    sender_relay: relayIdentity.relayMotebitId,
+    timestamp: Date.now(),
+  };
+  const sig = await sign(new TextEncoder().encode(canonicalJson(signed)), relayIdentity.privateKey);
+  return { ...signed, signature: bytesToHex(sig) };
+}
+
+/**
+ * Authenticate the IMMEDIATE sender of an inbound `/federation/v1/discover`
+ * request. Discovery is multi-hop (A→B→D), so the receiver verifies its DIRECT
+ * neighbor (`sender_relay`, an active peer whose key it holds), NOT the
+ * multi-hop `origin_relay` (whose key the receiver may not have — it could be
+ * two hops away). Returns the verified sender id, or `null` when no signature
+ * is present AND `requireSignature` is false (the tolerant-reader rollout
+ * window — the caller logs the unsigned request). A PRESENT signature is always
+ * verified strictly: `sender_relay` + `timestamp` required, ±5min drift, and an
+ * active-peer Ed25519 check — throwing 400/403 on any failure.
+ */
+async function verifyDiscoverSender(
+  db: DatabaseDriver,
+  body: { sender_relay?: string; timestamp?: number; signature?: string } & Record<string, unknown>,
+  requireSignature: boolean,
+): Promise<string | null> {
+  if (body.signature == null) {
+    if (requireSignature) {
+      throw new HTTPException(403, { message: "Unsigned discovery request rejected" });
+    }
+    return null;
+  }
+  if (typeof body.sender_relay !== "string") {
+    throw new HTTPException(400, { message: "Signed discovery request missing sender_relay" });
+  }
+  if (typeof body.timestamp !== "number") {
+    throw new HTTPException(400, { message: "Signed discovery request missing timestamp" });
+  }
+  const { signature, ...payload } = body;
+  return verifyPeerSignature(
+    db,
+    body.sender_relay,
+    signature,
+    new TextEncoder().encode(canonicalJson(payload)),
+    ["active"],
+    body.timestamp,
+  );
 }
 
 // === Per-Peer Rate Limiter ===
@@ -1124,6 +1207,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       : federationConfig?.endpointUrl != null;
 
   const maxPeers = federationConfig?.maxPeers ?? 50;
+  const requireDiscoverSignature = federationConfig?.requireDiscoverSignature ?? false;
 
   /** Throw 403 if federation is explicitly disabled. */
   function checkFederationEnabled(): void {
@@ -1181,7 +1265,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 1: Identity ──
 
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.get("/federation/v1/identity", (c) => {
     return c.json({
       spec: RELAY_SPEC_VERSION,
@@ -1200,7 +1284,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 2: Peering Protocol ──
 
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.post("/federation/v1/peer/propose", async (c) => {
     const body = await c.req.json<{
       relay_id?: string;
@@ -1309,7 +1393,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.post("/federation/v1/peer/confirm", async (c) => {
     const body = await c.req.json<{ relay_id?: string; challenge_response?: string }>();
     const { relay_id, challenge_response } = body;
@@ -1352,7 +1436,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json({ status: "active", peered_at: now });
   });
 
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.post("/federation/v1/peer/heartbeat", async (c) => {
     const body = await c.req.json<{
       relay_id?: string;
@@ -1465,7 +1549,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // — witnesses are portable across compositions of the same body. The
   // issuer's eventual final cert.signature binds the assembled witness
   // array.
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.post("/federation/v1/horizon/witness", async (c) => {
     const rawBody = (await c.req.json()) as unknown;
     const parsed = WitnessSolicitationRequestSchema.safeParse(rawBody);
@@ -1544,7 +1628,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // Cert remains TERMINAL per retention-policy.md decision 5 — a
   // sustained dispute is a reputation hit on the issuer, not a cert
   // invalidation.
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.post("/federation/v1/horizon/dispute", async (c) => {
     const rawBody = (await c.req.json()) as unknown;
     const parsed = WitnessOmissionDisputeSchema.safeParse(rawBody);
@@ -1665,7 +1749,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
    * MUST switch on `error_code`, not `message`. The rest of §3–15
    * still uses plain `{message}`; aligning is a follow-up arc.
    */
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.post("/federation/v1/disputes/:disputeId/vote-request", async (c) => {
     const disputeIdParam = c.req.param("disputeId");
 
@@ -1808,7 +1892,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json(signedVote);
   });
 
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.post("/federation/v1/peer/remove", async (c) => {
     const body = await c.req.json<{ relay_id?: string; signature?: string }>();
     const { relay_id, signature: sig } = body;
@@ -1859,7 +1943,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.get("/federation/v1/peers", (c) => {
     const rows = db
       .prepare(
@@ -1885,7 +1969,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 3: Federated Discovery ──
 
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.post("/federation/v1/discover", async (c) => {
     const body = await c.req.json<{
       query: { capability?: string; motebit_id?: string; limit?: number };
@@ -1894,6 +1978,12 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       visited: string[];
       query_id: string;
       origin_relay: string;
+      // Per-hop sender authentication (relay-federation@1.3 §4.1). Optional on
+      // the wire during the tolerant-reader rollout; verified strictly when
+      // present, required once `requireDiscoverSignature` is flipped on.
+      sender_relay?: string;
+      timestamp?: number;
+      signature?: string;
     }>();
 
     if (!body.query_id || body.max_hops > 3) {
@@ -1905,7 +1995,18 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       return c.json({ agents: [] });
     }
 
-    checkPeerLimit(body.origin_relay);
+    // Per-hop sender auth: verify the IMMEDIATE forwarder (sender_relay), not the
+    // multi-hop origin_relay. Rate-limit on the verified sender when we have it,
+    // falling back to the self-asserted origin only during the unsigned rollout
+    // window (logged so the gap is observable).
+    const verifiedSender = await verifyDiscoverSender(db, body, requireDiscoverSignature);
+    if (verifiedSender == null) {
+      logger.warn("federation.discover.unsigned", {
+        origin_relay: body.origin_relay,
+        query_id: body.query_id,
+      });
+    }
+    checkPeerLimit(verifiedSender ?? body.origin_relay);
 
     // Dedup
     if (federationQueryCache.has(body.query_id)) return c.json({ agents: [] });
@@ -1955,20 +2056,26 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       .filter((p) => !visitedSet.has(p.peer_relay_id))
       .map(async (peer) => {
         try {
-          const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Correlation-ID": body.query_id,
-            },
-            body: JSON.stringify({
+          // Re-sign at each hop: THIS relay becomes the sender_relay for the
+          // next leg (origin_relay carries through unchanged for dedup/merge).
+          const forwardBody = await signDiscoverBody(
+            {
               query: body.query,
               hop_count: body.hop_count + 1,
               max_hops: body.max_hops,
               visited,
               query_id: body.query_id,
               origin_relay: body.origin_relay,
-            }),
+            },
+            relayIdentity,
+          );
+          const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Correlation-ID": body.query_id,
+            },
+            body: JSON.stringify(forwardBody),
             signal: AbortSignal.timeout(5000),
           });
           if (!resp.ok) return [];
@@ -2012,7 +2119,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 4: Task Forwarding ──
 
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.post("/federation/v1/task/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -2092,7 +2199,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     );
   });
 
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.post("/federation/v1/task/result", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -2140,7 +2247,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement ──
 
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.post("/federation/v1/settlement/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -2189,7 +2296,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.get("/federation/v1/settlements", (c) => {
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
     const rows = db
@@ -2200,7 +2307,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement Proof (§7.6.6) ──
 
-  /** @spec motebit/relay-federation@1.2 */
+  /** @spec motebit/relay-federation@1.3 */
   app.get("/federation/v1/settlement/proof", async (c) => {
     const settlementId = c.req.query("settlement_id");
     if (!settlementId) {

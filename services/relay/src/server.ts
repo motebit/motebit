@@ -104,6 +104,14 @@ const relay = await createSyncRelay({
           ? parseIntEnv("MOTEBIT_FEDERATION_MAX_PEERS", 50)
           : undefined,
         autoAcceptPeers: parseBoolEnv("MOTEBIT_FEDERATION_AUTO_ACCEPT", false),
+        // Strict per-hop discover signing (relay-federation@1.3 §4.1). Leave
+        // false until every mesh peer runs the signing producer; flipping one
+        // peer strict while another still sends unsigned discovers 403s the
+        // mesh. Tracked in issue #188.
+        requireDiscoverSignature: parseBoolEnv(
+          "MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE",
+          false,
+        ),
         allowedPeers: process.env.MOTEBIT_FEDERATION_ALLOWED_PEERS
           ? process.env.MOTEBIT_FEDERATION_ALLOWED_PEERS.split(",").map((s) => s.trim())
           : undefined,
