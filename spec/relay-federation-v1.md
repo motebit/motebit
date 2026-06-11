@@ -8,6 +8,7 @@
 
 **Version history:**
 
+- **1.2 — Corrigendum** (2026-06-11) — Documentation correctness, no wire change. §10/§10.2/§10.3 previously described a uniform `X-Relay-Id`/`X-Relay-Signature`/`X-Relay-Timestamp` transport-header authentication scheme returning HTTP 401. That scheme was never normative and contradicted the in-body signing constructions specified since 1.0 in §3.1, §3.2, §5.3–§5.4, and §7.3 — and never implemented. The authentication map is now per-endpoint and in-body (in-body `signature` field over RFC 8785 canonical JSON; signer keyed by the in-body relay id against `relay_peers`; failures are 403/400, not 401). This corrects the prose to match the wire that 1.0–1.2 always spoke. Also documents `/discover`'s current mesh-membership authentication and names **per-hop sender signing** as a tracked hardening item (a future additive minor).
 - **1.2** (2026-05-01) — Additive: `/disputes/:disputeId/vote-request` endpoint (§16) for federation peer fan-out during execution-ledger dispute adjudication (`spec/dispute-v1.md` §6.2). Extends the route table from fourteen to fifteen entries. Backward-compatible — peers without §16 support continue to interoperate on §3–15; vote-request fan-out is opt-in (relays without peers self-adjudicate when not party, 503 when party per §6.5).
 - **1.1** (2026-05-01) — Additive: `/horizon/witness` + `/horizon/dispute` endpoints (§15) for federation co-witness solicitation on `append_only_horizon` retention certs (`docs/doctrine/retention-policy.md` decision 4 + 9). Extends the route table from twelve to fourteen entries. Backward-compatible — peers without §15 support continue to interoperate on §3–14; horizon-cert co-witnessing is opt-in (relays without peers self-witness).
 - **1.0** (2026-03-24) — Initial stable release. Peering handshake, heartbeat, federated discovery, cross-relay routing, settlement forwarding, Merkle anchor proofs.
@@ -632,7 +633,7 @@ Administrators can manually block a peer relay by transitioning its state to `re
 
 ## 10. Federation API Surface
 
-All federation endpoints are under the `/federation/v1/` path prefix. All requests MUST include an Ed25519 signature in the `X-Relay-Signature` header, computed over the canonical JSON request body using the sending relay's private key.
+All federation endpoints are under the `/federation/v1/` path prefix. Authentication is **per-endpoint and in-body** — not a uniform transport header. Each mutating endpoint carries its signature inside the JSON request body (the `signature` field), using the signing construction its own section already specifies: §3.1 (handshake), §3.2 (heartbeat), §5.3/§5.4 (task forward/result), and §7.3 (settlement). There is no `X-Relay-*` header authentication layer; §10.2 is the authoritative per-endpoint map.
 
 #### Routes (foundation law)
 
@@ -674,25 +675,27 @@ The fifteen routes below are the binding cross-relay contract. Renaming or reloc
 
 ### 10.2 — Authentication
 
-Every request to a federation endpoint MUST include:
+Authentication is **in-body and per-endpoint** — there is no transport-header (`X-Relay-*`) scheme. Each endpoint authenticates with the construction its own section specifies; this table is the authoritative map.
 
-| Header              | Value                                                                   |
-| ------------------- | ----------------------------------------------------------------------- |
-| `X-Relay-Id`        | The sending relay's `motebit_id`.                                       |
-| `X-Relay-Signature` | Base64url-encoded Ed25519 signature of the canonical JSON request body. |
-| `X-Relay-Timestamp` | ISO 8601 timestamp. Requests older than 5 minutes MUST be rejected.     |
-| `Content-Type`      | `application/json`                                                      |
+| Endpoint(s)                                                            | Authentication                                                                                                                                                                                                                                                                                                                        | Failure                                                       |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `peer/propose`, `peer/confirm`                                         | Nonce challenge-response (§3.1). The peer is not yet `active`, so the public key comes from the proposal payload, not `relay_peers`.                                                                                                                                                                                                  | 403                                                           |
+| `peer/heartbeat`, `peer/remove`                                        | In-body `signature` over the construction the section specifies (§3.2 heartbeat: `{relay_id}\|{timestamp}\|{suite}`), verified against the peer's `relay_peers.public_key`.                                                                                                                                                           | 403                                                           |
+| `task/forward`, `task/result`, `settlement/forward`                    | In-body `signature` field: hex-encoded Ed25519 over the RFC 8785 (JCS) canonical JSON of the request body **with the `signature` field removed**. The signer is named by the in-body relay id (`origin_relay`); its public key is looked up in `relay_peers` (state `active`). An in-body `timestamp` is checked for ±5-minute drift. | 403 (unknown/inactive peer or invalid signature); 400 (drift) |
+| `horizon/witness`, `horizon/dispute`, `disputes/:id/vote-request`      | In-body signed payloads per §15–§16; signer key from `relay_peers`.                                                                                                                                                                                                                                                                   | 403                                                           |
+| `discover`                                                             | Authenticated by active-peer mesh membership, bounded by per-`query_id` deduplication (§4.4) and the `visited` loop-guard (§4.3). Per-hop sender signing is a tracked hardening item — see the corrigendum in the version history.                                                                                                    | —                                                             |
+| `GET identity`, `GET peers`, `GET settlements`, `GET settlement/proof` | Unauthenticated by design: identity is public (§2.4) and the settlement proof is self-verifying (§7.6.6).                                                                                                                                                                                                                             | —                                                             |
 
-The receiving relay:
+The receiving relay, for the signed mutating endpoints:
 
-1. Looks up the sender's public key from `relay_peers` (or from the proposal payload for initial handshake).
-2. Verifies the signature against the request body.
-3. Checks the timestamp is within 5 minutes of the relay's clock.
-4. Rejects the request if any check fails (HTTP 401).
+1. Extracts the signer's relay id from the body and looks up its public key in `relay_peers` (state `active`).
+2. Verifies the in-body `signature` over the canonical JSON of the remaining body fields.
+3. Checks the in-body `timestamp` is within 5 minutes of the relay's clock.
+4. Rejects with **403** on an unknown/inactive peer or an invalid signature, **400** on timestamp drift.
 
 ### 10.3 — Rate Limiting
 
-Federation endpoints use a dedicated rate limit tier: **30 requests per minute per peer relay**. This is separate from the existing 5-tier rate limiting on agent-facing endpoints. Rate limits are keyed by `X-Relay-Id`, not by IP address.
+Federation endpoints use a dedicated rate limit tier: **30 requests per minute per peer relay**. This is separate from the existing 5-tier rate limiting on agent-facing endpoints. Rate limits are keyed by the in-body sending relay id (e.g. `origin_relay`), not by IP address.
 
 ---
 
