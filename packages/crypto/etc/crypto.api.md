@@ -1701,6 +1701,7 @@ export function verifyRelayMetadata(metadata: RelayMetadata, publicKey: Uint8Arr
 export function verifyRequestEnvelope(envelope: SignedRequestEnvelope, registeredPublicKey: Uint8Array, options?: {
     payload?: unknown;
     expectedAud?: string;
+    checkFreshness?: boolean;
     now?: number;
     windowMs?: number;
 }): Promise<boolean>;

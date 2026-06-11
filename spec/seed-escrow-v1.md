@@ -115,6 +115,7 @@ Step 6: The identity is restored; the client re-derives and proceeds
 
 - Step 5 is mandatory. An AEAD success without the pubkey check is not a restore.
 - The custodian MUST accept placement and replacement only from the identity whose seed the payload claims to hold (authenticated placement, §5.1 Step 5).
+- At placement, the custodian MUST verify that the payload's `identity_pubkey_check` equals the registered public key of the identity that authenticated the placement. Without this, an identity can park a payload asserting _another_ identity's key under its own signature — confidentiality is unharmed, but the check field becomes noise exactly where §6's substitution defense needs it meaningful. One equality test at intake makes the field load-bearing at rest, not only at restore.
 - The custodian MUST NOT condition retrieval on anything beyond presentation of the `unlock_hint` — the hint is an unguessable opaque locator, the payload is ciphertext, and the real gate is the authenticator. Retrieval MUST NOT be publicly enumerable.
 - Escrow placement failure MUST NOT block the identity's normal operation. Escrow is durability, never a dependency.
 
