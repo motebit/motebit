@@ -1,5 +1,5 @@
 /**
- * Canonical endpoint paths for the runtime-host election.
+ * Canonical endpoint paths for the runtime-host election (node hosts).
  *
  * One endpoint per machine per home directory: a unix domain socket at
  * `~/.motebit/runtime.sock` (mode 0600), or a named pipe on Windows
@@ -7,17 +7,15 @@
  * two Windows users never collide). The PID lockfile sits next to the
  * socket as advisory metadata — the bind is the truth, the lock only
  * speeds up stale-socket detection.
+ *
+ * Node-only (homedir + hashing); non-node hosts construct the same
+ * shape from their platform's home directory (the desktop's Rust side
+ * reports it).
  */
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-
-export interface RuntimeHostPaths {
-  /** Unix domain socket path, or `\\.\pipe\...` name on Windows. */
-  socketPath: string;
-  /** Advisory PID lockfile; always a real file, also on Windows. */
-  lockfilePath: string;
-}
+import type { RuntimeHostPaths } from "./paths-shared.js";
 
 /**
  * Resolve the canonical endpoint for a home directory. Both arguments

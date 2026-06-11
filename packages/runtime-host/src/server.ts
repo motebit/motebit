@@ -5,11 +5,14 @@
  * coordinator (`docs/doctrine/daemon-desktop-unification.md`). This
  * server owns the endpoint: it verifies attach handshakes fail-closed,
  * proxies typed capability invocations into the hosting process's
- * runtime, and streams events to attached frontends. It never decides
- * policy itself — it is transport plus the authentication boundary.
+ * runtime, streams events to attached frontends, and dispatches
+ * bridged invocations to the frontends that contributed the organ.
+ * It never decides policy itself — it is transport plus the
+ * authentication boundary.
+ *
+ * All OS access goes through the injected `RuntimeHostPlatform`, so
+ * this logic runs identically under node and the desktop webview.
  */
-import { chmodSync, rmSync } from "node:fs";
-import { createServer, type Server, type Socket } from "node:net";
 import { fromBase64Url, verifySignedToken } from "@motebit/crypto";
 import { RUNTIME_ATTACH_AUDIENCE } from "@motebit/protocol";
 import { removeLockfile, writeLockfile } from "./lockfile.js";
@@ -21,6 +24,7 @@ import {
   type ClientMessage,
   type ServerMessage,
 } from "./protocol.js";
+import type { FrameConnection, FrameListener, RuntimeHostPlatform } from "./transport.js";
 
 /** Thrown by `RuntimeHostServer.bind` when another process holds the socket. */
 export class CoordinatorAlreadyBoundError extends Error {
@@ -69,6 +73,8 @@ export type ResolveApprovalHandler = (
 ) => AsyncIterable<unknown>;
 
 export interface RuntimeHostServerOptions {
+  /** The OS seam — node sockets or the desktop's Tauri pipe. */
+  platform: RuntimeHostPlatform;
   socketPath: string;
   lockfilePath: string;
   /** The machine identity every attacher must prove membership of. */
@@ -85,7 +91,7 @@ export interface RuntimeHostServerOptions {
   /** Absent ⇒ resolve_approval frames answer `invoke_error`, never silently drop. */
   onResolveApproval?: ResolveApprovalHandler;
   logger?: RuntimeHostLogger;
-  /** Injectable for tests. Defaults to `process.pid`. */
+  /** Injectable for tests. Defaults to `platform.pid`. */
   pid?: number;
   now?: () => number;
   /** How long a fresh connection may sit silent before `hello`. */
@@ -93,16 +99,24 @@ export interface RuntimeHostServerOptions {
 }
 
 interface Connection {
-  socket: Socket;
+  conn: FrameConnection;
   decoder: JsonLineDecoder;
   authenticated: boolean;
   channels: Set<string>;
+  /** Organs this frontend contributed via register_capabilities. */
+  capabilities: Set<string>;
   inflight: Map<string, AbortController>;
-  handshakeTimer: NodeJS.Timeout | null;
+  /** Bridged invocations this connection is currently answering. */
+  bridgeIds: Set<string>;
+  handshakeTimer: ReturnType<typeof setTimeout> | null;
 }
 
-function isWindowsPipe(path: string): boolean {
-  return path.startsWith("\\\\.\\pipe\\");
+interface BridgeState {
+  conn: Connection;
+  queue: unknown[];
+  done: boolean;
+  error: Error | null;
+  wake: (() => void) | null;
 }
 
 /** Decode the payload half of a signed token without verifying it. */
@@ -130,49 +144,33 @@ function parseTokenClaims(token: string): { mid: string; did: string; aud: strin
 
 export class RuntimeHostServer {
   private readonly connections = new Set<Connection>();
+  /** capability → the connection contributing it (last registrar wins). */
+  private readonly bridged = new Map<string, Connection>();
+  private readonly bridgeInflight = new Map<string, BridgeState>();
+  private bridgeCounter = 0;
   private closed = false;
 
   private constructor(
-    private readonly server: Server,
+    private readonly listener: FrameListener,
     private readonly opts: RuntimeHostServerOptions,
     private readonly pid: number,
   ) {}
 
   /**
    * Bind the canonical endpoint and become the coordinator. Throws
-   * `CoordinatorAlreadyBoundError` on EADDRINUSE — the caller attaches
-   * instead. The caller is responsible for clearing a *verified-stale*
-   * socket file first (the election does this); bind never unlinks.
+   * `CoordinatorAlreadyBoundError` when another listener holds it —
+   * the caller attaches instead. The caller is responsible for
+   * clearing a *verified-stale* socket file first (the election does
+   * this); bind never unlinks.
    */
   static async bind(opts: RuntimeHostServerOptions): Promise<RuntimeHostServer> {
-    const pid = opts.pid ?? process.pid;
+    const pid = opts.pid ?? opts.platform.pid;
     const now = opts.now ?? (() => Date.now());
-    const server = createServer();
-    const host = new RuntimeHostServer(server, opts, pid);
-    server.on("connection", (socket) => host.onConnection(socket));
-
-    await new Promise<void>((resolve, reject) => {
-      const onError = (err: NodeJS.ErrnoException): void => {
-        server.removeListener("listening", onListening);
-        if (err.code === "EADDRINUSE") {
-          reject(new CoordinatorAlreadyBoundError(opts.socketPath));
-        } else {
-          reject(new Error(`runtime-host bind failed: ${err.message}`, { cause: err }));
-        }
-      };
-      const onListening = (): void => {
-        server.removeListener("error", onError);
-        resolve();
-      };
-      server.once("error", onError);
-      server.once("listening", onListening);
-      server.listen(opts.socketPath);
-    });
-
-    if (!isWindowsPipe(opts.socketPath)) {
-      chmodSync(opts.socketPath, 0o600);
-    }
-    writeLockfile(opts.lockfilePath, {
+    const bound = await opts.platform.bind(opts.socketPath);
+    if (bound === "in_use") throw new CoordinatorAlreadyBoundError(opts.socketPath);
+    const host = new RuntimeHostServer(bound, opts, pid);
+    bound.onConnection((conn) => host.onConnection(conn));
+    await writeLockfile(opts.platform, opts.lockfilePath, {
       pid,
       bound_at: now(),
       protocol_version: RUNTIME_HOST_PROTOCOL_VERSION,
@@ -186,6 +184,11 @@ export class RuntimeHostServer {
     return count;
   }
 
+  /** The organs currently contributed by attached frontends. */
+  get bridgedCapabilities(): string[] {
+    return [...this.bridged.keys()];
+  }
+
   /** Push an event to every attached frontend subscribed to `channel`. */
   publishEvent(channel: string, payload: unknown): void {
     for (const conn of this.connections) {
@@ -195,31 +198,63 @@ export class RuntimeHostServer {
     }
   }
 
+  /**
+   * Invoke an organ a frontend contributed — the bridging half of the
+   * election doctrine. Streams the frontend's chunks; throws honestly
+   * when no attached frontend contributes the capability or the
+   * contributor disconnects mid-stream (fail-loud, never silent retry
+   * across the authority boundary).
+   */
+  async *invokeBridged(
+    capability: string,
+    prompt: string,
+    options?: Record<string, unknown>,
+  ): AsyncGenerator<unknown> {
+    const conn = this.bridged.get(capability);
+    if (conn === undefined || conn.conn.destroyed) {
+      throw new Error(`no attached frontend contributes capability "${capability}"`);
+    }
+    this.bridgeCounter += 1;
+    const id = `bridge-${this.bridgeCounter}`;
+    const state: BridgeState = { conn, queue: [], done: false, error: null, wake: null };
+    this.bridgeInflight.set(id, state);
+    conn.bridgeIds.add(id);
+    this.send(conn, { t: "bridge_invoke", id, capability, prompt, options });
+    try {
+      for (;;) {
+        while (state.queue.length > 0) yield state.queue.shift();
+        if (state.error !== null) throw state.error;
+        if (state.done) return;
+        await new Promise<void>((resolve) => {
+          state.wake = resolve;
+        });
+        state.wake = null;
+      }
+    } finally {
+      this.bridgeInflight.delete(id);
+      conn.bridgeIds.delete(id);
+    }
+  }
+
   /** Stop coordinating: drop connections, release the socket + lock. */
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     for (const conn of this.connections) this.destroyConnection(conn);
-    await new Promise<void>((resolve) => {
-      this.server.close(() => resolve());
-    });
-    if (!isWindowsPipe(this.opts.socketPath)) {
-      try {
-        rmSync(this.opts.socketPath, { force: true });
-      } catch {
-        // A leftover socket file is the stale case the election handles.
-      }
-    }
-    removeLockfile(this.opts.lockfilePath, this.pid);
+    await this.listener.close();
+    await this.opts.platform.removeSocketFile(this.opts.socketPath);
+    await removeLockfile(this.opts.platform, this.opts.lockfilePath, this.pid);
   }
 
-  private onConnection(socket: Socket): void {
+  private onConnection(frameConn: FrameConnection): void {
     const conn: Connection = {
-      socket,
+      conn: frameConn,
       decoder: new JsonLineDecoder(),
       authenticated: false,
       channels: new Set(),
+      capabilities: new Set(),
       inflight: new Map(),
+      bridgeIds: new Set(),
       handshakeTimer: null,
     };
     this.connections.add(conn);
@@ -227,7 +262,7 @@ export class RuntimeHostServer {
       if (!conn.authenticated) this.destroyConnection(conn);
     }, this.opts.handshakeTimeoutMs ?? 5000);
 
-    socket.on("data", (data) => {
+    frameConn.onData((data) => {
       let frames: unknown[];
       try {
         frames = conn.decoder.push(data);
@@ -242,8 +277,7 @@ export class RuntimeHostServer {
         void this.onMessage(conn, frame as ClientMessage);
       }
     });
-    socket.on("error", () => this.destroyConnection(conn));
-    socket.on("close", () => this.destroyConnection(conn));
+    frameConn.onClose(() => this.destroyConnection(conn));
   }
 
   private async onMessage(conn: Connection, message: ClientMessage): Promise<void> {
@@ -267,6 +301,37 @@ export class RuntimeHostServer {
       case "unsubscribe":
         if (typeof message.channel === "string") conn.channels.delete(message.channel);
         return;
+      case "register_capabilities": {
+        if (
+          !Array.isArray(message.capabilities) ||
+          message.capabilities.some((c) => typeof c !== "string")
+        ) {
+          this.destroyConnection(conn);
+          return;
+        }
+        // Idempotent replace of this connection's contributed set.
+        for (const capability of conn.capabilities) {
+          if (this.bridged.get(capability) === conn) this.bridged.delete(capability);
+        }
+        conn.capabilities = new Set(message.capabilities);
+        for (const capability of conn.capabilities) {
+          this.bridged.set(capability, conn);
+        }
+        return;
+      }
+      case "bridge_chunk":
+      case "bridge_end":
+      case "bridge_error": {
+        const state = this.bridgeInflight.get(message.id);
+        // Only the connection answering ITS OWN bridged invocation may
+        // touch the stream — another frontend cannot inject chunks.
+        if (state === undefined || state.conn !== conn) return;
+        if (message.t === "bridge_chunk") state.queue.push(message.chunk);
+        else if (message.t === "bridge_end") state.done = true;
+        else state.error = new Error(message.message);
+        state.wake?.();
+        return;
+      }
       case "invoke":
         if (
           typeof message.id !== "string" ||
@@ -327,7 +392,7 @@ export class RuntimeHostServer {
 
   private refuse(conn: Connection, reason: AttachRefusalReason, detail: string): void {
     this.send(conn, { t: "refuse", reason, detail });
-    conn.socket.end();
+    conn.conn.end();
   }
 
   private async onHello(
@@ -404,12 +469,12 @@ export class RuntimeHostServer {
     conn.inflight.set(id, controller);
     try {
       for await (const chunk of start({ signal: controller.signal })) {
-        if (controller.signal.aborted || conn.socket.destroyed) return;
+        if (controller.signal.aborted || conn.conn.destroyed) return;
         this.send(conn, { t: "chunk", id, chunk });
       }
-      if (!conn.socket.destroyed) this.send(conn, { t: "end", id });
+      if (!conn.conn.destroyed) this.send(conn, { t: "end", id });
     } catch (err) {
-      if (!conn.socket.destroyed) {
+      if (!conn.conn.destroyed) {
         this.send(conn, {
           t: "invoke_error",
           id,
@@ -422,8 +487,8 @@ export class RuntimeHostServer {
   }
 
   private send(conn: Connection, message: ServerMessage): void {
-    if (conn.socket.destroyed) return;
-    conn.socket.write(encodeFrame(message));
+    if (conn.conn.destroyed) return;
+    conn.conn.send(encodeFrame(message));
   }
 
   private destroyConnection(conn: Connection): void {
@@ -432,6 +497,19 @@ export class RuntimeHostServer {
     if (conn.handshakeTimer !== null) clearTimeout(conn.handshakeTimer);
     for (const controller of conn.inflight.values()) controller.abort();
     conn.inflight.clear();
-    conn.socket.destroy();
+    // Fail-loud: bridged invocations this frontend was answering die
+    // with it, and its organs leave the bridged set.
+    for (const id of conn.bridgeIds) {
+      const state = this.bridgeInflight.get(id);
+      if (state !== undefined && state.error === null && !state.done) {
+        state.error = new Error("bridged frontend disconnected mid-invocation");
+        state.wake?.();
+      }
+    }
+    conn.bridgeIds.clear();
+    for (const capability of conn.capabilities) {
+      if (this.bridged.get(capability) === conn) this.bridged.delete(capability);
+    }
+    conn.conn.destroy();
   }
 }

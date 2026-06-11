@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { generateKeypair, type KeyPair } from "@motebit/crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AttachRefusedError, mintAttachToken, RuntimeHostClient } from "../client.js";
+import { nodePlatform } from "../node-platform.js";
 import { RuntimeHostServer, type RuntimeHostServerOptions } from "../server.js";
+
+const platform = nodePlatform();
 
 const MOTEBIT_ID = "36080ffe-test-8000-a000-000000000001";
 const DEVICE_ID = "device-1";
@@ -31,6 +34,7 @@ function serverOptions(
   overrides: Partial<RuntimeHostServerOptions> = {},
 ): RuntimeHostServerOptions {
   return {
+    platform,
     socketPath: join(dir, "runtime.sock"),
     lockfilePath: join(dir, "runtime.lock"),
     motebitId: MOTEBIT_ID,
@@ -45,6 +49,7 @@ function serverOptions(
 
 async function attachOk(socketPath: string): Promise<RuntimeHostClient> {
   return RuntimeHostClient.attach({
+    platform,
     socketPath,
     token: await mintAttachToken({ motebitId: MOTEBIT_ID, deviceId: DEVICE_ID }, keys.privateKey),
   });
@@ -66,7 +71,7 @@ describe("attach handshake", () => {
       strangerKeys.privateKey,
     );
     await expect(
-      RuntimeHostClient.attach({ socketPath: serverOptions().socketPath, token }),
+      RuntimeHostClient.attach({ platform, socketPath: serverOptions().socketPath, token }),
     ).rejects.toThrow(AttachRefusedError);
   });
 
@@ -77,6 +82,7 @@ describe("attach handshake", () => {
       keys.privateKey,
     );
     const err = await RuntimeHostClient.attach({
+      platform,
       socketPath: serverOptions().socketPath,
       token,
     }).catch((e: unknown) => e);
@@ -92,6 +98,7 @@ describe("attach handshake", () => {
       keys.privateKey,
     );
     const err = await RuntimeHostClient.attach({
+      platform,
       socketPath: serverOptions().socketPath,
       token,
     }).catch((e: unknown) => e);
@@ -113,6 +120,7 @@ describe("attach handshake", () => {
       keys.privateKey,
     );
     const err = await RuntimeHostClient.attach({
+      platform,
       socketPath: serverOptions().socketPath,
       token,
     }).catch((e: unknown) => e);
@@ -128,6 +136,7 @@ describe("attach handshake", () => {
       { ttlMs: -1000 },
     );
     const err = await RuntimeHostClient.attach({
+      platform,
       socketPath: serverOptions().socketPath,
       token,
     }).catch((e: unknown) => e);
@@ -137,6 +146,7 @@ describe("attach handshake", () => {
   it("refuses a malformed token", async () => {
     server = await RuntimeHostServer.bind(serverOptions());
     const err = await RuntimeHostClient.attach({
+      platform,
       socketPath: serverOptions().socketPath,
       token: "garbage",
     }).catch((e: unknown) => e);
@@ -165,6 +175,7 @@ describe("attach handshake", () => {
       keys.privateKey,
     );
     const err = await RuntimeHostClient.attach({
+      platform,
       socketPath: serverOptions().socketPath,
       token,
       protocolVersion: 999,

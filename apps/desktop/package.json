@@ -38,6 +38,7 @@
     "@motebit/protocol": "workspace:*",
     "@motebit/render-engine": "workspace:*",
     "@motebit/runtime": "workspace:*",
+    "@motebit/runtime-host": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@motebit/skills": "workspace:*",
     "@motebit/sqlite-migrations": "workspace:*",

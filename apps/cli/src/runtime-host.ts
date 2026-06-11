@@ -8,12 +8,14 @@
 
 import type { MotebitRuntime } from "@motebit/runtime";
 import {
-  defaultRuntimeHostPaths,
   electRuntimeHost,
   mintAttachToken,
+  pickSafeChatOptions,
+  pickSafeInvokeOptions,
   type ElectionOutcome,
   type RuntimeHostPaths,
 } from "@motebit/runtime-host";
+import { defaultRuntimeHostPaths, nodePlatform } from "@motebit/runtime-host/node";
 import type { FullConfig } from "./config.js";
 import { fromHex } from "./identity.js";
 
@@ -44,44 +46,10 @@ function requireRuntime(ref: { current: MotebitRuntime | null }): MotebitRuntime
   return ref.current;
 }
 
-/**
- * Narrow the wire-supplied chat options to the safe subset. Authority
- * fields are NEVER forwarded: `verifiedGrant` may only be produced by
- * `verifyGrantForTurn` from signed artifacts
- * (docs/doctrine/memory-never-confers-authority.md), and
- * `userActionAttestation` must originate from a real local user action
- * — an attached process asserting either over the socket would be a
- * privilege escalation, authenticated or not.
- */
-export function pickChatOptions(
-  options: Record<string, unknown> | undefined,
-): { delegationScope?: string; suppressHistory?: boolean } | undefined {
-  if (options === undefined) return undefined;
-  const picked: { delegationScope?: string; suppressHistory?: boolean } = {};
-  if (typeof options["delegationScope"] === "string") {
-    picked.delegationScope = options["delegationScope"];
-  }
-  if (typeof options["suppressHistory"] === "boolean") {
-    picked.suppressHistory = options["suppressHistory"];
-  }
-  return picked;
-}
-
-/** Same narrowing for invoke options; origin stays the default "user-tap". */
-export function pickInvokeOptions(options: Record<string, unknown> | undefined): {
-  targetWorkerId?: string;
-  acknowledgeNoHistoryRisk?: boolean;
-} {
-  const picked: { targetWorkerId?: string; acknowledgeNoHistoryRisk?: boolean } = {};
-  if (options === undefined) return picked;
-  if (typeof options["targetWorkerId"] === "string") {
-    picked.targetWorkerId = options["targetWorkerId"];
-  }
-  if (typeof options["acknowledgeNoHistoryRisk"] === "boolean") {
-    picked.acknowledgeNoHistoryRisk = options["acknowledgeNoHistoryRisk"];
-  }
-  return picked;
-}
+// The authority-field strip is a protocol-level guard every coordinator
+// host applies — it lives in the package (`safe-options.ts`); these
+// re-exports keep this module the CLI's single runtime-host seam.
+export { pickSafeChatOptions as pickChatOptions, pickSafeInvokeOptions as pickInvokeOptions };
 
 /**
  * Run the machine-wide election for a CLI entry point. Device-key
@@ -95,6 +63,7 @@ export async function electCliRuntimeHost(deps: CliElectionDeps): Promise<Electi
   const devicePublicKey = deps.fullConfig.device_public_key;
 
   return electRuntimeHost({
+    platform: nodePlatform(),
     socketPath: paths.socketPath,
     lockfilePath: paths.lockfilePath,
     motebitId: deps.motebitId,
@@ -104,7 +73,7 @@ export async function electCliRuntimeHost(deps: CliElectionDeps): Promise<Electi
         : null,
     onInvoke: (capability, prompt, options, ctx) =>
       requireRuntime(deps.runtimeRef).invokeCapability(capability, prompt, {
-        ...pickInvokeOptions(options),
+        ...pickSafeInvokeOptions(options),
         signal: ctx.signal,
       }),
     // sendMessageStreaming has no abort seam; a frontend disconnect
@@ -115,7 +84,7 @@ export async function electCliRuntimeHost(deps: CliElectionDeps): Promise<Electi
       requireRuntime(deps.runtimeRef).sendMessageStreaming(
         text,
         undefined,
-        pickChatOptions(options),
+        pickSafeChatOptions(options),
       ),
     onResolveApproval: (approved, approverId) =>
       requireRuntime(deps.runtimeRef).resolveApprovalVote(approved, approverId),

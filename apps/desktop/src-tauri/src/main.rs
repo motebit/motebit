@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod computer_use;
+mod runtime_host;
 mod secure_enclave;
 mod skills;
 mod tool_guard;
@@ -8,6 +9,12 @@ mod tpm;
 
 use computer_use::{computer_execute, computer_query_display};
 use secure_enclave::{se_available, se_mint_attestation};
+use runtime_host::{
+    runtime_host_bind, runtime_host_close, runtime_host_connect, runtime_host_meta,
+    runtime_host_mkdir_exclusive, runtime_host_pid_alive, runtime_host_read_file,
+    runtime_host_remove_dir, runtime_host_remove_file, runtime_host_send, runtime_host_unbind,
+    runtime_host_write_file, RuntimeHostState,
+};
 use skills::{
     skills_disable, skills_enable, skills_install_directory, skills_list, skills_read_detail,
     skills_remove, skills_trust, skills_untrust, skills_verify, SkillsState,
@@ -1109,6 +1116,7 @@ fn main() {
             db: Mutex::new(db),
         })
         .manage(SkillsState::new())
+        .manage(RuntimeHostState::default())
         .invoke_handler(tauri::generate_handler![
             db_query,
             db_execute,
@@ -1144,6 +1152,18 @@ fn main() {
             skills_untrust,
             skills_remove,
             skills_verify,
+            runtime_host_meta,
+            runtime_host_connect,
+            runtime_host_send,
+            runtime_host_close,
+            runtime_host_bind,
+            runtime_host_unbind,
+            runtime_host_read_file,
+            runtime_host_write_file,
+            runtime_host_remove_file,
+            runtime_host_mkdir_exclusive,
+            runtime_host_remove_dir,
+            runtime_host_pid_alive,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

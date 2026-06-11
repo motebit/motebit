@@ -25,6 +25,9 @@ import {
   type ElectRuntimeHostOptions,
 } from "../election.js";
 import { JsonLineDecoder } from "../protocol.js";
+import { nodePlatform } from "../node-platform.js";
+
+const platform = nodePlatform();
 import {
   CoordinatorAlreadyBoundError,
   RuntimeHostServer,
@@ -53,6 +56,7 @@ function serverOptions(
   overrides: Partial<RuntimeHostServerOptions> = {},
 ): RuntimeHostServerOptions {
   return {
+    platform,
     socketPath: join(dir, "runtime.sock"),
     lockfilePath: join(dir, "runtime.lock"),
     motebitId: MOTEBIT_ID,
@@ -114,9 +118,9 @@ const waitClose = (socket: Socket): Promise<void> =>
 describe("probeSocketLive", () => {
   it("reports a live listener and a dead path", async () => {
     const path = join(dir, "probe.sock");
-    expect(await probeSocketLive(path, 100)).toBe(false);
+    expect(await probeSocketLive(platform, path, 100)).toBe(false);
     await listenRaw(path);
-    expect(await probeSocketLive(path, 100)).toBe(true);
+    expect(await probeSocketLive(platform, path, 100)).toBe(true);
   });
 });
 
@@ -124,42 +128,46 @@ describe("acquireTakeoverMutex", () => {
   const probeAlive = (): boolean => true;
   const probeDead = (): boolean => false;
 
-  it("acquires fresh, refuses a live holder, releases cleanly", () => {
+  it("acquires fresh, refuses a live holder, releases cleanly", async () => {
     const mutex = join(dir, "runtime.lock.takeover");
-    expect(acquireTakeoverMutex(mutex, 100, probeAlive)).toBe(true);
-    expect(acquireTakeoverMutex(mutex, 200, probeAlive)).toBe(false);
-    releaseTakeoverMutex(mutex);
-    expect(acquireTakeoverMutex(mutex, 200, probeAlive)).toBe(true);
-    releaseTakeoverMutex(mutex);
+    expect(await acquireTakeoverMutex(platform, mutex, 100, probeAlive)).toBe(true);
+    expect(await acquireTakeoverMutex(platform, mutex, 200, probeAlive)).toBe(false);
+    await releaseTakeoverMutex(platform, mutex);
+    expect(await acquireTakeoverMutex(platform, mutex, 200, probeAlive)).toBe(true);
+    await releaseTakeoverMutex(platform, mutex);
   });
 
-  it("steals a dead holder's mutex", () => {
+  it("steals a dead holder's mutex", async () => {
     const mutex = join(dir, "runtime.lock.takeover");
-    expect(acquireTakeoverMutex(mutex, 100, probeDead)).toBe(true);
-    expect(acquireTakeoverMutex(mutex, 200, probeDead)).toBe(true);
-    releaseTakeoverMutex(mutex);
+    expect(await acquireTakeoverMutex(platform, mutex, 100, probeDead)).toBe(true);
+    expect(await acquireTakeoverMutex(platform, mutex, 200, probeDead)).toBe(true);
+    await releaseTakeoverMutex(platform, mutex);
   });
 
-  it("treats a holder mid-write (no pid file yet) as live", () => {
+  it("treats a holder mid-write (no pid file yet) as live", async () => {
     const mutex = join(dir, "runtime.lock.takeover");
     mkdirSync(mutex, { recursive: true });
-    expect(acquireTakeoverMutex(mutex, 200, probeDead)).toBe(false);
+    expect(await acquireTakeoverMutex(platform, mutex, 200, probeDead)).toBe(false);
   });
 
-  it("ignores a garbage pid file via the integer guard", () => {
+  it("ignores a garbage pid file via the integer guard", async () => {
     const mutex = join(dir, "runtime.lock.takeover");
     mkdirSync(mutex, { recursive: true });
     writeFileSync(join(mutex, "pid"), "not-a-pid");
     // NaN holder fails the integer guard → treated as dead → stolen.
-    expect(acquireTakeoverMutex(mutex, 200, probeAlive)).toBe(true);
-    releaseTakeoverMutex(mutex);
+    expect(await acquireTakeoverMutex(platform, mutex, 200, probeAlive)).toBe(true);
+    await releaseTakeoverMutex(platform, mutex);
   });
 });
 
 describe("client boundary", () => {
   it("reports an empty path as unreachable", async () => {
     await expect(
-      RuntimeHostClient.attach({ socketPath: join(dir, "absent.sock"), token: await mintOk() }),
+      RuntimeHostClient.attach({
+        platform,
+        socketPath: join(dir, "absent.sock"),
+        token: await mintOk(),
+      }),
     ).rejects.toThrow(CoordinatorUnreachableError);
   });
 
@@ -167,6 +175,7 @@ describe("client boundary", () => {
     const path = join(dir, "silent.sock");
     await listenRaw(path);
     const err = await RuntimeHostClient.attach({
+      platform,
       socketPath: path,
       token: await mintOk(),
       handshakeTimeoutMs: 50,
@@ -179,7 +188,7 @@ describe("client boundary", () => {
     const path = join(dir, "hangup.sock");
     await listenRaw(path, (socket) => socket.end());
     await expect(
-      RuntimeHostClient.attach({ socketPath: path, token: await mintOk() }),
+      RuntimeHostClient.attach({ platform, socketPath: path, token: await mintOk() }),
     ).rejects.toThrow(CoordinatorUnreachableError);
   });
 
@@ -187,7 +196,7 @@ describe("client boundary", () => {
     const path = join(dir, "garbage.sock");
     await listenRaw(path, (socket) => socket.write("not json\n"));
     await expect(
-      RuntimeHostClient.attach({ socketPath: path, token: await mintOk() }),
+      RuntimeHostClient.attach({ platform, socketPath: path, token: await mintOk() }),
     ).rejects.toThrow(/malformed coordinator frame/);
   });
 
@@ -197,7 +206,7 @@ describe("client boundary", () => {
       socket.write(`${JSON.stringify({ t: "event", channel: "x", payload: 1 })}\n`),
     );
     await expect(
-      RuntimeHostClient.attach({ socketPath: path, token: await mintOk() }),
+      RuntimeHostClient.attach({ platform, socketPath: path, token: await mintOk() }),
     ).rejects.toThrow(/unexpected first coordinator frame/);
   });
 
@@ -205,6 +214,7 @@ describe("client boundary", () => {
     const server = await RuntimeHostServer.bind(serverOptions());
     cleanups.push(() => server.close());
     const client = await RuntimeHostClient.attach({
+      platform,
       socketPath: serverOptions().socketPath,
       token: await mintOk(),
     });
@@ -220,6 +230,7 @@ describe("client boundary", () => {
     const server = await RuntimeHostServer.bind(serverOptions());
     cleanups.push(() => server.close());
     const client = await RuntimeHostClient.attach({
+      platform,
       socketPath: serverOptions().socketPath,
       token: await mintOk(),
     });
@@ -282,6 +293,7 @@ describe("server boundary", () => {
     cleanups.push(() => server.close());
     const token = `${toBase64Url(new TextEncoder().encode(JSON.stringify("just-a-string")))}.sig`;
     const err = await RuntimeHostClient.attach({
+      platform,
       socketPath: serverOptions().socketPath,
       token,
     }).catch((e: unknown) => e);
@@ -294,6 +306,7 @@ describe("server boundary", () => {
     cleanups.push(() => server.close());
     const token = `${toBase64Url(new TextEncoder().encode(JSON.stringify({ mid: MOTEBIT_ID })))}.sig`;
     const err = await RuntimeHostClient.attach({
+      platform,
       socketPath: serverOptions().socketPath,
       token,
     }).catch((e: unknown) => e);
@@ -397,7 +410,11 @@ describe("impostor coordinator", () => {
     await listenImpostor(path, (socket) => {
       socket.on("data", () => socket.write("garbage after ack\n"));
     });
-    const client = await RuntimeHostClient.attach({ socketPath: path, token: await mintOk() });
+    const client = await RuntimeHostClient.attach({
+      platform,
+      socketPath: path,
+      token: await mintOk(),
+    });
     let closed = false;
     client.onClose(() => {
       closed = true;
@@ -421,7 +438,11 @@ describe("impostor coordinator", () => {
       );
       socket.write(`${JSON.stringify({ t: "event", channel: "unsubscribed", payload: 1 })}\n`);
     });
-    const client = await RuntimeHostClient.attach({ socketPath: path, token: await mintOk() });
+    const client = await RuntimeHostClient.attach({
+      platform,
+      socketPath: path,
+      token: await mintOk(),
+    });
     let closed = false;
     client.onClose(() => {
       closed = true;
@@ -482,6 +503,7 @@ describe("invalid token encodings", () => {
     const server = await RuntimeHostServer.bind(serverOptions());
     cleanups.push(() => server.close());
     const err = await RuntimeHostClient.attach({
+      platform,
       socketPath: serverOptions().socketPath,
       token: "!!!not-base64!!!.sig",
     }).catch((e: unknown) => e);

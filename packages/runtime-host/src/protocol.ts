@@ -83,13 +83,49 @@ export interface UnsubscribeMessage {
   channel: string;
 }
 
+/**
+ * Declare this frontend's contributed organs — the capability-bridging
+ * half of the election doctrine: whichever process coordinates, an
+ * attached process's unique capabilities (desktop SE-attest,
+ * computer-use, …) stay reachable through the coordinator. Idempotent
+ * replace of this connection's set.
+ */
+export interface RegisterCapabilitiesMessage {
+  t: "register_capabilities";
+  capabilities: string[];
+}
+
+/** One streamed chunk of a coordinator-initiated bridged invocation. */
+export interface BridgeChunkMessage {
+  t: "bridge_chunk";
+  id: string;
+  chunk: unknown;
+}
+
+/** Bridged invocation completed on the frontend. */
+export interface BridgeEndMessage {
+  t: "bridge_end";
+  id: string;
+}
+
+/** Bridged invocation failed on the frontend; terminal for this id. */
+export interface BridgeErrorMessage {
+  t: "bridge_error";
+  id: string;
+  message: string;
+}
+
 export type ClientMessage =
   | HelloMessage
   | InvokeMessage
   | ChatMessage
   | ResolveApprovalMessage
   | SubscribeMessage
-  | UnsubscribeMessage;
+  | UnsubscribeMessage
+  | RegisterCapabilitiesMessage
+  | BridgeChunkMessage
+  | BridgeEndMessage
+  | BridgeErrorMessage;
 
 // === Coordinator → client ====================================================
 
@@ -134,13 +170,28 @@ export interface EventMessage {
   payload: unknown;
 }
 
+/**
+ * Coordinator-initiated invocation of a capability this frontend
+ * registered via `register_capabilities` — the reverse channel that
+ * makes the election outcome operationally neutral. The frontend
+ * answers with `bridge_chunk*` then `bridge_end` (or `bridge_error`).
+ */
+export interface BridgeInvokeMessage {
+  t: "bridge_invoke";
+  id: string;
+  capability: string;
+  prompt: string;
+  options?: Record<string, unknown>;
+}
+
 export type ServerMessage =
   | HelloAckMessage
   | RefuseMessage
   | ChunkMessage
   | EndMessage
   | InvokeErrorMessage
-  | EventMessage;
+  | EventMessage
+  | BridgeInvokeMessage;
 
 // === Framing =================================================================
 
@@ -165,9 +216,13 @@ export function encodeFrame(message: ClientMessage | ServerMessage): string {
  */
 export class JsonLineDecoder {
   private buffer = "";
+  // Streaming decoder: a multibyte UTF-8 character split across two
+  // socket chunks must not corrupt — `stream: true` holds the partial
+  // sequence until its continuation bytes arrive.
+  private readonly utf8 = new TextDecoder();
 
   push(data: string | Uint8Array): unknown[] {
-    this.buffer += typeof data === "string" ? data : new TextDecoder().decode(data);
+    this.buffer += typeof data === "string" ? data : this.utf8.decode(data, { stream: true });
     if (this.buffer.length > MAX_FRAME_BYTES) {
       throw new Error(`frame exceeds ${MAX_FRAME_BYTES} bytes`);
     }

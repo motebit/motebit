@@ -463,6 +463,12 @@ export type GovernanceStatus = { governed: true } | { governed: false; reason: s
 
 export class DesktopApp {
   private runtime: MotebitRuntime | null = null;
+  /** Attached-frontend mode: a coordinator (typically the CLI daemon)
+   * owns the machine's runtime; chat proxies over the local socket and
+   * the Tauri organs are bridged. Mutually exclusive with `runtime`. */
+  private _attachedHost: import("@motebit/runtime-host").RuntimeHostClient | null = null;
+  /** Coordinator mode: this desktop serves the runtime-host socket. */
+  private _runtimeHostServer: import("@motebit/runtime-host").RuntimeHostServer | null = null;
   private renderer: ThreeJSAdapter;
   /**
    * Slab bridge unsub — set after the runtime is constructed and the
@@ -690,6 +696,11 @@ export class DesktopApp {
       const dispose = this.haltResumeListeners.pop();
       dispose?.();
     }
+    // Release the runtime-host endpoint/attachment so a successor can elect.
+    this._attachedHost?.close();
+    this._attachedHost = null;
+    void this._runtimeHostServer?.close().catch(() => {});
+    this._runtimeHostServer = null;
     this.runtime?.stop();
     this.renderer.dispose();
   }
@@ -1141,6 +1152,39 @@ export class DesktopApp {
       }
     }
 
+    // Runtime-host election (daemon-desktop unification, increment 3):
+    // one coordinator runtime per machine. When a coordinator
+    // (typically the CLI daemon) is already live, the desktop attaches
+    // as a frontend — chat proxies over the socket and the Tauri
+    // organs (SE attestation, computer-use) register as bridged
+    // capabilities — instead of constructing a second authority over
+    // the shared identity key. Fail-honest: an election failure aborts
+    // init rather than silently dual-running.
+    if (config.invoke && signingKeys && this.deviceId !== "") {
+      const { electDesktopRuntimeHost } = await import("./runtime-host.js");
+      const election = await electDesktopRuntimeHost({
+        invoke: config.invoke,
+        motebitId: this.motebitId,
+        deviceId: this.deviceId,
+        signingKeys,
+        getRuntime: () => this.runtime,
+      });
+      if (election.role === "frontend") {
+        this._attachedHost = election.client;
+        election.client.onClose(() => {
+          this._attachedHost = null;
+          console.warn(
+            "[runtime-host] coordinator exited — restart the desktop to take over as coordinator",
+          );
+        });
+        console.info(
+          `[runtime-host] attached to the machine's coordinator (pid ${election.client.coordinatorPid}) — organs bridged, chat proxied`,
+        );
+        return true; // attached mode: the coordinator owns the runtime
+      }
+      this._runtimeHostServer = election.server;
+    }
+
     const proactive = config.proactive ?? {};
     // Default ON when inference is free to the user (on-device / BYOK),
     // opt-in on metered motebit-cloud. Policy lives in the SDK's
@@ -1236,6 +1280,13 @@ export class DesktopApp {
       DeviceCapability.Keyring,
       DeviceCapability.Background,
     ]);
+
+    // Coordinator mode: stream presence to attached frontends.
+    if (this._runtimeHostServer !== null) {
+      this.runtime.presence.subscribe((presence) => {
+        this._runtimeHostServer?.publishEvent("presence", presence);
+      });
+    }
 
     // Hardware-attestation peer flow — production wiring. Without these
     // setters the runtime hook in `bumpTrustFromReceipt` is dormant.
@@ -1390,11 +1441,21 @@ export class DesktopApp {
   }
 
   async sendMessage(text: string, runId?: string): Promise<TurnResult> {
+    if (this._attachedHost) {
+      throw new Error(
+        "attached mode: chat streams through the machine's coordinator — use sendMessageStreaming",
+      );
+    }
     if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
     return this.runtime.sendMessage(text, runId);
   }
 
   async *sendMessageStreaming(text: string, runId?: string): AsyncGenerator<StreamChunk> {
+    if (this._attachedHost) {
+      // Attached mode: the coordinator acts, this surface renders.
+      yield* this._attachedHost.chat(text) as AsyncGenerator<StreamChunk>;
+      return;
+    }
     if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
     // Auto-router consumer site — branches between the two
     // consumers (PR 2 BYOK, PR 3 on-device) the desktop surface
@@ -1456,6 +1517,13 @@ export class DesktopApp {
   }
 
   async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
+    if (this._attachedHost) {
+      yield* this._attachedHost.resolveApproval(
+        approved,
+        this.motebitId,
+      ) as AsyncGenerator<StreamChunk>;
+      return;
+    }
     if (!this.runtime) throw new Error("AI not initialized — call initAI() first");
     yield* this.runtime.resumeAfterApproval(approved);
   }

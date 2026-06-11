@@ -3,13 +3,14 @@
  *
  * A process that loses the election (or starts while a coordinator is
  * live) attaches here: signed handshake in, typed capability proxying
- * coordinator-ward, receipt/event streaming frontend-ward. Coordinator
- * EOF surfaces through `onClose` so the frontend can re-run the
- * election — in-flight invocations fail loudly to their origin, never
- * silently retried across an authority boundary.
+ * coordinator-ward, receipt/event streaming frontend-ward, and — the
+ * bridging half of the doctrine — this frontend's unique organs
+ * registered as capabilities the coordinator can invoke back across
+ * the same connection. Coordinator EOF surfaces through `onClose` so
+ * the frontend can re-run the election — in-flight invocations fail
+ * loudly to their origin, never silently retried across an authority
+ * boundary.
  */
-import { randomUUID } from "node:crypto";
-import { connect, type Socket } from "node:net";
 import { createSignedToken } from "@motebit/crypto";
 import { RUNTIME_ATTACH_AUDIENCE } from "@motebit/protocol";
 import {
@@ -19,6 +20,7 @@ import {
   type AttachRefusalReason,
   type ServerMessage,
 } from "./protocol.js";
+import type { FrameConnection, RuntimeHostPlatform } from "./transport.js";
 
 /** The coordinator refused the handshake (auth, version skew, malformed hello). */
 export class AttachRefusedError extends Error {
@@ -57,14 +59,28 @@ export async function mintAttachToken(
       did: identity.deviceId,
       iat: issuedAt,
       exp: issuedAt + (opts.ttlMs ?? 30_000),
-      jti: randomUUID(),
+      // Web Crypto — available in node ≥ 20 AND the desktop webview;
+      // this module must never import node:crypto.
+      jti: globalThis.crypto.randomUUID(),
       aud: RUNTIME_ATTACH_AUDIENCE,
     },
     privateKey,
   );
 }
 
+/**
+ * An organ this frontend contributes — invoked BY the coordinator over
+ * the bridge. `signal` aborts when the connection drops.
+ */
+export type BridgedCapabilityHandler = (
+  prompt: string,
+  options: Record<string, unknown> | undefined,
+  ctx: { signal: AbortSignal },
+) => AsyncIterable<unknown>;
+
 export interface RuntimeHostClientOptions {
+  /** The OS seam — node sockets or the desktop's Tauri pipe. */
+  platform: RuntimeHostPlatform;
   socketPath: string;
   /** Signed attach token (`mintAttachToken`). */
   token: string;
@@ -75,6 +91,11 @@ export interface RuntimeHostClientOptions {
    * path) must surface as unreachable, not hang the election.
    */
   handshakeTimeoutMs?: number;
+  /**
+   * Organs to contribute immediately after attaching (also settable
+   * later via `setBridgedCapabilities`).
+   */
+  capabilities?: Record<string, BridgedCapabilityHandler>;
   /**
    * Test seam: send a different protocol version in `hello` to exercise
    * the coordinator's version-skew refusal. Production callers omit it.
@@ -93,10 +114,13 @@ export class RuntimeHostClient {
   private readonly inflight = new Map<string, InflightInvoke>();
   private readonly eventHandlers = new Map<string, Set<(payload: unknown) => void>>();
   private readonly closeHandlers = new Set<() => void>();
+  private capabilityHandlers = new Map<string, BridgedCapabilityHandler>();
+  private readonly bridgeAborts = new Map<string, AbortController>();
+  private requestCounter = 0;
   private closed = false;
 
   private constructor(
-    private readonly socket: Socket,
+    private readonly conn: FrameConnection,
     public readonly coordinatorPid: number,
   ) {}
 
@@ -107,23 +131,12 @@ export class RuntimeHostClient {
    * no — caller must NOT try to bind over it).
    */
   static async attach(opts: RuntimeHostClientOptions): Promise<RuntimeHostClient> {
-    const socket = await new Promise<Socket>((resolve, reject) => {
-      const sock = connect(opts.socketPath);
-      const timer = setTimeout(() => {
-        sock.destroy();
-        reject(new CoordinatorUnreachableError(opts.socketPath, new Error("connect timeout")));
-      }, opts.connectTimeoutMs ?? 2000);
-      sock.once("connect", () => {
-        clearTimeout(timer);
-        resolve(sock);
-      });
-      sock.once("error", (err) => {
-        clearTimeout(timer);
-        reject(new CoordinatorUnreachableError(opts.socketPath, err));
-      });
-    });
+    const conn = await opts.platform.connect(opts.socketPath, opts.connectTimeoutMs ?? 2000);
+    if (conn === null) {
+      throw new CoordinatorUnreachableError(opts.socketPath, new Error("connect failed"));
+    }
 
-    socket.write(
+    conn.send(
       encodeFrame({
         t: "hello",
         protocol_version: opts.protocolVersion ?? RUNTIME_HOST_PROTOCOL_VERSION,
@@ -136,18 +149,24 @@ export class RuntimeHostClient {
     // not be dropped — they replay into the attached client below.
     const { first, rest } = await new Promise<{ first: ServerMessage; rest: ServerMessage[] }>(
       (resolve, reject) => {
+        let settled = false;
         const timer = setTimeout(() => {
-          cleanup();
-          socket.destroy();
+          settle();
+          conn.destroy();
           reject(new CoordinatorUnreachableError(opts.socketPath, new Error("handshake timeout")));
         }, opts.handshakeTimeoutMs ?? 3000);
-        const onData = (data: Uint8Array): void => {
+        const settle = (): void => {
+          settled = true;
+          clearTimeout(timer);
+        };
+        conn.onData((data) => {
+          if (settled) return;
           let frames: unknown[];
           try {
             frames = decoder.push(data);
           } catch (err) {
-            cleanup();
-            socket.destroy();
+            settle();
+            conn.destroy();
             reject(
               new Error(
                 `malformed coordinator frame: ${err instanceof Error ? err.message : String(err)}`,
@@ -157,44 +176,37 @@ export class RuntimeHostClient {
             return;
           }
           if (frames.length > 0) {
-            cleanup();
+            settle();
             resolve({
               first: frames[0] as ServerMessage,
               rest: frames.slice(1) as ServerMessage[],
             });
           }
-        };
-        const onEnd = (): void => {
-          cleanup();
-          socket.destroy();
+        });
+        conn.onClose(() => {
+          if (settled) return;
+          settle();
+          conn.destroy();
           reject(
             new CoordinatorUnreachableError(opts.socketPath, new Error("closed during handshake")),
           );
-        };
-        const cleanup = (): void => {
-          clearTimeout(timer);
-          socket.removeListener("data", onData);
-          socket.removeListener("end", onEnd);
-          socket.removeListener("error", onEnd);
-        };
-        socket.on("data", onData);
-        socket.once("end", onEnd);
-        socket.once("error", onEnd);
+        });
       },
     );
 
     if (first.t === "refuse") {
-      socket.destroy();
+      conn.destroy();
       throw new AttachRefusedError(first.reason, first.detail);
     }
     if (first.t !== "hello_ack") {
-      socket.destroy();
+      conn.destroy();
       throw new Error(`unexpected first coordinator frame: ${first.t}`);
     }
 
-    const client = new RuntimeHostClient(socket, first.coordinator_pid);
+    const client = new RuntimeHostClient(conn, first.coordinator_pid);
     client.wire(decoder);
     for (const frame of rest) client.onMessage(frame);
+    if (opts.capabilities !== undefined) client.setBridgedCapabilities(opts.capabilities);
     return client;
   }
 
@@ -233,14 +245,60 @@ export class RuntimeHostClient {
     }));
   }
 
+  /**
+   * Contribute this frontend's organs. Replaces the previous set, both
+   * locally and on the coordinator (idempotent).
+   */
+  setBridgedCapabilities(handlers: Record<string, BridgedCapabilityHandler>): void {
+    if (this.closed) throw new Error("runtime-host client is closed");
+    this.capabilityHandlers = new Map(Object.entries(handlers));
+    this.conn.send(
+      encodeFrame({
+        t: "register_capabilities",
+        capabilities: [...this.capabilityHandlers.keys()],
+      }),
+    );
+  }
+
+  /** Subscribe to a coordinator event channel. Returns the unsubscriber. */
+  subscribe(channel: string, handler: (payload: unknown) => void): () => void {
+    let handlers = this.eventHandlers.get(channel);
+    if (handlers === undefined) {
+      handlers = new Set();
+      this.eventHandlers.set(channel, handlers);
+      this.conn.send(encodeFrame({ t: "subscribe", channel }));
+    }
+    handlers.add(handler);
+    return () => {
+      const current = this.eventHandlers.get(channel);
+      if (current === undefined) return;
+      current.delete(handler);
+      if (current.size === 0) {
+        this.eventHandlers.delete(channel);
+        if (!this.closed) this.conn.send(encodeFrame({ t: "unsubscribe", channel }));
+      }
+    };
+  }
+
+  /** Fires once when the coordinator connection ends — the re-elect signal. */
+  onClose(handler: () => void): () => void {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
+  }
+
+  close(): void {
+    this.teardown(null);
+  }
+
   private async *stream(
     buildFrame: (id: string) => Parameters<typeof encodeFrame>[0],
   ): AsyncGenerator<unknown> {
     if (this.closed) throw new Error("runtime-host client is closed");
-    const id = randomUUID();
+    this.requestCounter += 1;
+    const id = `req-${this.requestCounter}-${globalThis.crypto.randomUUID().slice(0, 8)}`;
     const state: InflightInvoke = { queue: [], done: false, error: null, wake: null };
     this.inflight.set(id, state);
-    this.socket.write(encodeFrame(buildFrame(id)));
+    this.conn.send(encodeFrame(buildFrame(id)));
     try {
       for (;;) {
         while (state.queue.length > 0) yield state.queue.shift();
@@ -256,38 +314,8 @@ export class RuntimeHostClient {
     }
   }
 
-  /** Subscribe to a coordinator event channel. Returns the unsubscriber. */
-  subscribe(channel: string, handler: (payload: unknown) => void): () => void {
-    let handlers = this.eventHandlers.get(channel);
-    if (handlers === undefined) {
-      handlers = new Set();
-      this.eventHandlers.set(channel, handlers);
-      this.socket.write(encodeFrame({ t: "subscribe", channel }));
-    }
-    handlers.add(handler);
-    return () => {
-      const current = this.eventHandlers.get(channel);
-      if (current === undefined) return;
-      current.delete(handler);
-      if (current.size === 0) {
-        this.eventHandlers.delete(channel);
-        if (!this.closed) this.socket.write(encodeFrame({ t: "unsubscribe", channel }));
-      }
-    };
-  }
-
-  /** Fires once when the coordinator connection ends — the re-elect signal. */
-  onClose(handler: () => void): () => void {
-    this.closeHandlers.add(handler);
-    return () => this.closeHandlers.delete(handler);
-  }
-
-  close(): void {
-    this.teardown(null);
-  }
-
   private wire(decoder: JsonLineDecoder): void {
-    this.socket.on("data", (data) => {
+    this.conn.onData((data) => {
       let frames: unknown[];
       try {
         frames = decoder.push(data);
@@ -302,8 +330,7 @@ export class RuntimeHostClient {
       }
       for (const frame of frames) this.onMessage(frame as ServerMessage);
     });
-    this.socket.on("close", () => this.teardown(new Error("coordinator connection closed")));
-    this.socket.on("error", (err) => this.teardown(err));
+    this.conn.onClose(() => this.teardown(new Error("coordinator connection closed")));
   }
 
   private onMessage(message: ServerMessage): void {
@@ -339,8 +366,64 @@ export class RuntimeHostClient {
         }
         return;
       }
+      case "bridge_invoke": {
+        if (
+          typeof message.id === "string" &&
+          typeof message.capability === "string" &&
+          typeof message.prompt === "string"
+        ) {
+          void this.runBridgedInvocation(
+            message.id,
+            message.capability,
+            message.prompt,
+            message.options,
+          );
+        }
+        return;
+      }
       default:
         return;
+    }
+  }
+
+  /** Answer a coordinator-initiated bridged invocation. */
+  private async runBridgedInvocation(
+    id: string,
+    capability: string,
+    prompt: string,
+    options: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    const handler = this.capabilityHandlers.get(capability);
+    if (handler === undefined) {
+      this.conn.send(
+        encodeFrame({
+          t: "bridge_error",
+          id,
+          message: `capability "${capability}" is not contributed by this frontend`,
+        }),
+      );
+      return;
+    }
+    const controller = new AbortController();
+    this.bridgeAborts.set(id, controller);
+    try {
+      for await (const chunk of handler(prompt, options, { signal: controller.signal })) {
+        if (controller.signal.aborted || this.closed) return;
+        this.conn.send(encodeFrame({ t: "bridge_chunk", id, chunk }));
+      }
+      if (!this.closed) this.conn.send(encodeFrame({ t: "bridge_end", id }));
+    } catch (err) {
+      if (!this.closed) {
+        this.conn.send(
+          encodeFrame({
+            t: "bridge_error",
+            id,
+            message: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      }
+    } finally {
+      this.bridgeAborts.delete(id);
     }
   }
 
@@ -353,7 +436,9 @@ export class RuntimeHostClient {
       }
       state.wake?.();
     }
-    this.socket.destroy();
+    for (const controller of this.bridgeAborts.values()) controller.abort();
+    this.bridgeAborts.clear();
+    this.conn.destroy();
     for (const handler of this.closeHandlers) handler();
     this.closeHandlers.clear();
   }

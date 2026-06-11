@@ -9,18 +9,19 @@
  * would accept) is takeover territory, and the PID lockfile then
  * adjudicates "crashed coordinator, take over now" vs "coordinator
  * mid-boot, give it a beat". The bind itself is the truth: a lost race
- * surfaces as EADDRINUSE and the loser attaches.
+ * surfaces as in-use and the loser attaches.
+ *
+ * All OS access goes through the injected `RuntimeHostPlatform`.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { connect } from "node:net";
-import { dirname, join } from "node:path";
-import { isPidAlive, readLockfile } from "./lockfile.js";
+import { isWindowsPipePath } from "./paths-shared.js";
+import { readLockfile } from "./lockfile.js";
 import { AttachRefusedError, CoordinatorUnreachableError, RuntimeHostClient } from "./client.js";
 import {
   CoordinatorAlreadyBoundError,
   RuntimeHostServer,
   type RuntimeHostServerOptions,
 } from "./server.js";
+import type { RuntimeHostPlatform } from "./transport.js";
 
 export type ElectionOutcome =
   | { role: "coordinator"; server: RuntimeHostServer }
@@ -37,34 +38,22 @@ export interface ElectRuntimeHostOptions extends RuntimeHostServerOptions {
   maxAttempts?: number;
   /** Delay between iterations. Default 150ms. */
   retryDelayMs?: number;
-  /** Test seam for the PID liveness probe. */
-  probePid?: (pid: number) => boolean;
-}
-
-function isWindowsPipe(path: string): boolean {
-  return path.startsWith("\\\\.\\pipe\\");
+  /** Test seam for the PID liveness probe (defaults to the platform's). */
+  probePid?: (pid: number) => boolean | Promise<boolean>;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Does anything accept connections on the socket right now? Exported as a test seam. */
-export function probeSocketLive(socketPath: string, timeoutMs: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const sock = connect(socketPath);
-    const timer = setTimeout(() => {
-      sock.destroy();
-      resolve(false);
-    }, timeoutMs);
-    sock.once("connect", () => {
-      clearTimeout(timer);
-      sock.destroy();
-      resolve(true);
-    });
-    sock.once("error", () => {
-      clearTimeout(timer);
-      resolve(false);
-    });
-  });
+export async function probeSocketLive(
+  platform: RuntimeHostPlatform,
+  socketPath: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  const conn = await platform.connect(socketPath, timeoutMs);
+  if (conn === null) return false;
+  conn.destroy();
+  return true;
 }
 
 /**
@@ -76,42 +65,34 @@ export function probeSocketLive(socketPath: string, timeoutMs: number): Promise<
  * and Windows; a crashed holder is recovered by the PID probe.
  * Exported as a test seam.
  */
-export function acquireTakeoverMutex(
+export async function acquireTakeoverMutex(
+  platform: RuntimeHostPlatform,
   mutexDir: string,
   pid: number,
-  probePid: (pid: number) => boolean,
-): boolean {
-  mkdirSync(dirname(mutexDir), { recursive: true, mode: 0o700 });
+  probePid: (pid: number) => boolean | Promise<boolean>,
+): Promise<boolean> {
   for (let i = 0; i < 2; i += 1) {
-    try {
-      mkdirSync(mutexDir);
-      writeFileSync(join(mutexDir, "pid"), String(pid), { mode: 0o600 });
+    if ((await platform.mkdirExclusive(mutexDir)) === "created") {
+      await platform.writeFile(`${mutexDir}/pid`, String(pid));
       return true;
-    } catch {
-      let holderPid = Number.NaN;
-      try {
-        holderPid = Number(readFileSync(join(mutexDir, "pid"), "utf8").trim());
-      } catch {
-        // Holder mid-write or crashed pre-write; treat as live this round.
-        return false;
-      }
-      if (Number.isInteger(holderPid) && holderPid > 0 && probePid(holderPid)) return false;
-      try {
-        rmSync(mutexDir, { recursive: true, force: true });
-      } catch {
-        return false;
-      }
     }
+    const holderRaw = await platform.readFile(`${mutexDir}/pid`);
+    if (holderRaw === null) {
+      // Holder mid-write or crashed pre-write; treat as live this round.
+      return false;
+    }
+    const holderPid = Number(holderRaw.trim());
+    if (Number.isInteger(holderPid) && holderPid > 0 && (await probePid(holderPid))) return false;
+    await platform.removeDir(mutexDir);
   }
   return false;
 }
 
-export function releaseTakeoverMutex(mutexDir: string): void {
-  try {
-    rmSync(mutexDir, { recursive: true, force: true });
-  } catch {
-    // A stale mutex is recovered by the PID probe on the next election.
-  }
+export async function releaseTakeoverMutex(
+  platform: RuntimeHostPlatform,
+  mutexDir: string,
+): Promise<void> {
+  await platform.removeDir(mutexDir);
 }
 
 /**
@@ -125,9 +106,10 @@ export function releaseTakeoverMutex(mutexDir: string): void {
  * converge within `maxAttempts`.
  */
 export async function electRuntimeHost(opts: ElectRuntimeHostOptions): Promise<ElectionOutcome> {
+  const platform = opts.platform;
   const maxAttempts = opts.maxAttempts ?? 4;
   const retryDelayMs = opts.retryDelayMs ?? 150;
-  const probePid = opts.probePid ?? isPidAlive;
+  const probePid = opts.probePid ?? ((pid: number) => platform.isPidAlive(pid));
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -135,7 +117,7 @@ export async function electRuntimeHost(opts: ElectRuntimeHostOptions): Promise<E
     //    minting: the attach token may require an unlocked signing key,
     //    and the common boot path (no coordinator yet) must not pay —
     //    or fail — that cost just to discover nothing is listening.
-    if (await probeSocketLive(opts.socketPath, retryDelayMs * 2)) {
+    if (await probeSocketLive(platform, opts.socketPath, retryDelayMs * 2)) {
       let token: string;
       try {
         token = await opts.mintToken();
@@ -149,6 +131,7 @@ export async function electRuntimeHost(opts: ElectRuntimeHostOptions): Promise<E
       }
       try {
         const client = await RuntimeHostClient.attach({
+          platform,
           socketPath: opts.socketPath,
           token,
           handshakeTimeoutMs: opts.handshakeTimeoutMs,
@@ -168,8 +151,8 @@ export async function electRuntimeHost(opts: ElectRuntimeHostOptions): Promise<E
 
     // 2. Nothing answered. A lockfile naming a live PID may be a
     //    coordinator mid-boot — give it a beat before takeover.
-    const lock = readLockfile(opts.lockfilePath);
-    if (lock !== null && probePid(lock.pid) && attempt < maxAttempts) {
+    const lock = await readLockfile(platform, opts.lockfilePath);
+    if (lock !== null && (await probePid(lock.pid)) && attempt < maxAttempts) {
       await sleep(retryDelayMs);
       continue;
     }
@@ -179,24 +162,20 @@ export async function electRuntimeHost(opts: ElectRuntimeHostOptions): Promise<E
     //    must be re-verified *inside* it — a connect-refused observed
     //    before the mutex may be stale by the time we hold it.
     const mutexDir = `${opts.lockfilePath}.takeover`;
-    const pid = opts.pid ?? process.pid;
-    if (!acquireTakeoverMutex(mutexDir, pid, probePid)) {
+    const pid = opts.pid ?? platform.pid;
+    if (!(await acquireTakeoverMutex(platform, mutexDir, pid, probePid))) {
       // Another process is mid-takeover; it will be attachable shortly.
       await sleep(retryDelayMs);
       continue;
     }
     try {
-      if (await probeSocketLive(opts.socketPath, retryDelayMs * 2)) {
+      if (await probeSocketLive(platform, opts.socketPath, retryDelayMs * 2)) {
         // A coordinator bound between our probe and the mutex — attach
         // on the next iteration, never unlink a live socket.
         continue;
       }
-      if (!isWindowsPipe(opts.socketPath)) {
-        try {
-          rmSync(opts.socketPath, { force: true });
-        } catch {
-          // Bind will tell the truth either way.
-        }
+      if (!isWindowsPipePath(opts.socketPath)) {
+        await platform.removeSocketFile(opts.socketPath);
       }
       const server = await RuntimeHostServer.bind(opts);
       return { role: "coordinator", server };
@@ -211,7 +190,7 @@ export async function electRuntimeHost(opts: ElectRuntimeHostOptions): Promise<E
       }
       throw err;
     } finally {
-      releaseTakeoverMutex(mutexDir);
+      await releaseTakeoverMutex(platform, mutexDir);
     }
   }
 

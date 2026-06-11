@@ -17,6 +17,9 @@ enigo = "0.6"
 image = "0.25"
 sha2 = "0.10"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # macOS Vision framework — native, offline, state-of-the-art OCR used by
 # `do_screenshot` to extract text + bounding boxes so the TS sensitivity
 # classifier can fail-close on screen captures containing secrets / cards /

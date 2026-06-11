@@ -1,3 +1,6 @@
+// Platform-agnostic surface — loadable in environments without Node
+// APIs (the desktop webview). Node hosts additionally import
+// `@motebit/runtime-host/node` for the node platform + canonical paths.
 export {
   RUNTIME_HOST_PROTOCOL_VERSION,
   MAX_FRAME_BYTES,
@@ -14,6 +17,11 @@ export type {
   InvokeMessage,
   ChatMessage,
   ResolveApprovalMessage,
+  RegisterCapabilitiesMessage,
+  BridgeInvokeMessage,
+  BridgeChunkMessage,
+  BridgeEndMessage,
+  BridgeErrorMessage,
   ChunkMessage,
   EndMessage,
   InvokeErrorMessage,
@@ -22,10 +30,12 @@ export type {
   UnsubscribeMessage,
 } from "./protocol.js";
 
-export { defaultRuntimeHostPaths } from "./paths.js";
-export type { RuntimeHostPaths } from "./paths.js";
+export { isWindowsPipePath } from "./paths-shared.js";
+export type { RuntimeHostPaths } from "./paths-shared.js";
 
-export { readLockfile, writeLockfile, removeLockfile, isPidAlive } from "./lockfile.js";
+export type { FrameConnection, FrameListener, RuntimeHostPlatform } from "./transport.js";
+
+export { readLockfile, writeLockfile, removeLockfile } from "./lockfile.js";
 export type { LockfileRecord } from "./lockfile.js";
 
 export { RuntimeHostServer, CoordinatorAlreadyBoundError } from "./server.js";
@@ -43,7 +53,14 @@ export {
   CoordinatorUnreachableError,
   mintAttachToken,
 } from "./client.js";
-export type { RuntimeHostClientOptions } from "./client.js";
+export type { RuntimeHostClientOptions, BridgedCapabilityHandler } from "./client.js";
 
-export { electRuntimeHost } from "./election.js";
+export { pickSafeChatOptions, pickSafeInvokeOptions } from "./safe-options.js";
+
+export {
+  electRuntimeHost,
+  probeSocketLive,
+  acquireTakeoverMutex,
+  releaseTakeoverMutex,
+} from "./election.js";
 export type { ElectionOutcome, ElectRuntimeHostOptions } from "./election.js";

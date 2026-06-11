@@ -2,7 +2,7 @@
 
 The runtime-host election + attach protocol: one coordinator runtime per machine, every other motebit process attaches as a frontend. Implements increment 1 of [`docs/doctrine/daemon-desktop-unification.md`](../../docs/doctrine/daemon-desktop-unification.md).
 
-Layer 1. BUSL-1.1. Deps: `@motebit/protocol` (the `runtime:attach` audience), `@motebit/crypto` (signed-token mint/verify). Node `net`/`fs` only — no storage, no runtime import.
+Layer 1. BUSL-1.1. Deps: `@motebit/protocol` (the `runtime:attach` audience), `@motebit/crypto` (signed-token mint/verify). No storage, no runtime import. The package root is **platform-agnostic** (loadable in the desktop webview); everything OS-shaped goes through the injected `RuntimeHostPlatform` seam, and node:net/fs lives ONLY behind the `@motebit/runtime-host/node` subpath. Never add a node import to a root-exported module.
 
 ## Rules
 

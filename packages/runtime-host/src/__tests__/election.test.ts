@@ -7,6 +7,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AttachRefusedError, mintAttachToken } from "../client.js";
 import { electRuntimeHost, type ElectRuntimeHostOptions } from "../election.js";
 import { readLockfile, writeLockfile } from "../lockfile.js";
+import { nodePlatform } from "../node-platform.js";
+
+const platform = nodePlatform();
 
 const MOTEBIT_ID = "36080ffe-test-8000-a000-000000000002";
 const DEVICE_ID = "device-1";
@@ -30,6 +33,7 @@ function electionOptions(
   overrides: Partial<ElectRuntimeHostOptions> = {},
 ): ElectRuntimeHostOptions {
   return {
+    platform,
     socketPath: join(dir, "runtime.sock"),
     lockfilePath: join(dir, "runtime.lock"),
     motebitId: MOTEBIT_ID,
@@ -51,7 +55,7 @@ describe("electRuntimeHost", () => {
     expect(outcome.role).toBe("coordinator");
     if (outcome.role !== "coordinator") throw new Error("unreachable");
     cleanups.push(() => outcome.server.close());
-    expect(readLockfile(electionOptions().lockfilePath)?.pid).toBe(7001);
+    expect((await readLockfile(platform, electionOptions().lockfilePath))?.pid).toBe(7001);
   });
 
   it("attaches the second process as a frontend to the first", async () => {
@@ -74,7 +78,11 @@ describe("electRuntimeHost", () => {
     await new Promise<void>((resolve) => stale.listen(opts.socketPath, () => resolve()));
     await new Promise<void>((resolve) => stale.close(() => resolve()));
     if (!existsSync(opts.socketPath)) writeFileSync(opts.socketPath, "");
-    writeLockfile(opts.lockfilePath, { pid: 99_999_999, bound_at: 0, protocol_version: 1 });
+    await writeLockfile(platform, opts.lockfilePath, {
+      pid: 99_999_999,
+      bound_at: 0,
+      protocol_version: 1,
+    });
 
     const outcome = await electRuntimeHost({
       ...opts,
@@ -83,12 +91,16 @@ describe("electRuntimeHost", () => {
     expect(outcome.role).toBe("coordinator");
     if (outcome.role !== "coordinator") throw new Error("unreachable");
     cleanups.push(() => outcome.server.close());
-    expect(readLockfile(opts.lockfilePath)?.pid).toBe(7003);
+    expect((await readLockfile(platform, opts.lockfilePath))?.pid).toBe(7003);
   });
 
   it("gives a live-pid lock a grace period, then binds anyway (the bind is the truth)", async () => {
     const opts = electionOptions({ pid: 7004, maxAttempts: 3 });
-    writeLockfile(opts.lockfilePath, { pid: process.pid, bound_at: 0, protocol_version: 1 });
+    await writeLockfile(platform, opts.lockfilePath, {
+      pid: process.pid,
+      bound_at: 0,
+      protocol_version: 1,
+    });
     let probes = 0;
     const outcome = await electRuntimeHost({
       ...opts,
@@ -118,7 +130,7 @@ describe("electRuntimeHost", () => {
       ),
     ).rejects.toThrow(AttachRefusedError);
     // The refused process must NOT have displaced the coordinator.
-    expect(readLockfile(electionOptions().lockfilePath)?.pid).toBe(7005);
+    expect((await readLockfile(platform, electionOptions().lockfilePath))?.pid).toBe(7005);
   });
 
   it("resolves a simultaneous start to exactly one coordinator", async () => {
@@ -152,6 +164,6 @@ describe("electRuntimeHost", () => {
     expect(reelected.role).toBe("coordinator");
     if (reelected.role !== "coordinator") throw new Error("unreachable");
     cleanups.push(() => reelected.server.close());
-    expect(readLockfile(electionOptions().lockfilePath)?.pid).toBe(7009);
+    expect((await readLockfile(platform, electionOptions().lockfilePath))?.pid).toBe(7009);
   });
 });

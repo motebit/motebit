@@ -10,7 +10,10 @@ import { generateKeypair, type KeyPair } from "@motebit/crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { mintAttachToken, RuntimeHostClient } from "../client.js";
 import { electRuntimeHost, type ElectRuntimeHostOptions } from "../election.js";
+import { nodePlatform } from "../node-platform.js";
 import { RuntimeHostServer, type RuntimeHostServerOptions } from "../server.js";
+
+const platform = nodePlatform();
 
 const MOTEBIT_ID = "36080ffe-test-8000-a000-000000000004";
 const DEVICE_ID = "device-1";
@@ -34,6 +37,7 @@ function serverOptions(
   overrides: Partial<RuntimeHostServerOptions> = {},
 ): RuntimeHostServerOptions {
   return {
+    platform,
     socketPath: join(dir, "runtime.sock"),
     lockfilePath: join(dir, "runtime.lock"),
     motebitId: MOTEBIT_ID,
@@ -52,6 +56,7 @@ async function bindAndAttach(
   const server = await RuntimeHostServer.bind(serverOptions(overrides));
   cleanups.push(() => server.close());
   const client = await RuntimeHostClient.attach({
+    platform,
     socketPath: serverOptions().socketPath,
     token: await mintAttachToken({ motebitId: MOTEBIT_ID, deviceId: DEVICE_ID }, keys.privateKey),
   });
