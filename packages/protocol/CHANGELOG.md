@@ -1,5 +1,80 @@
 # @motebit/protocol
 
+## 3.3.0
+
+### Minor Changes
+
+- a0fb79c: `EventStoreAdapter.redactMemoryContent?(motebitId, nodeId)` — the optional storage operation behind deletion propagation: erase the content of stored `memory_formed` events for a deleted memory node, replacing it with the `"[REDACTED]"` sentinel + `redacted: true` + `redacted_reason: "deleted"`. Joins the sanctioned deletion-shaped mutation family (`tombstone` / `compact` / `truncateBeforeHorizon`); the `DeleteRequested` event remains the surviving audit record. Encrypted payloads are opaque and skipped by design — the client-side key lifecycle is the erasure mechanism for ciphertext. Consumed by the relay: a synced `DeleteRequested` for a memory node now erases that node's relay-stored formation content, so a subject's signed deletion certificate is not outlived by the relay's copy.
+- dee96b8: Declare `redacted_reason?: "deleted"` on `MemoryFormedPayload` — close the wire-contract gap on the deletion tombstone.
+
+  The deletion-propagation arc (`a0fb79ce`) made user-initiated forget reach the relay: when a `memory_deleted` syncs, a conforming store rewrites the matching `memory_formed` payload in place, blanking `content` to the `"[REDACTED]"` sentinel and stamping `redacted_reason: "deleted"`. That field is already written by every producer (`EventStoreAdapter.redactMemoryContent` in event-log + persistence, the relay `deletion-propagation.ts`, and the relay backfill migration) and is _load-bearing_ — `event-log/index.ts` and `persistence/index.ts` both read `payload.redacted_reason === "deleted"` to keep the rewrite idempotent. But it was declared nowhere in the wire contract: not on `MemoryFormedPayload`, not in `MemoryFormedPayloadSchema`, not in `spec/memory-delta-v1.md`. The `.passthrough()` envelope kept it from failing validation, so the drift was silent — exactly the spec-vs-code divergence the synchronization-invariants principle forbids.
+
+  `redacted_reason` is the sole discriminator between the two mechanisms that both blank `content`: sync-forwarder **sensitivity** redaction (`redacted: true` + `redacted_sensitivity`, original re-requestable from the emitter) versus a **deletion tombstone** (content terminally erased; a conforming consumer MUST NOT re-form a node from it). A third party implementing `memory-delta` from the schema could not previously tell "stripped, recoverable" from "erased, terminal".
+
+  Additive and replay-compatible: optional literal, absent ⇒ sensitivity redaction or no redaction; 1.0–1.3 logs replay identically. Lands the protocol type, the zod schema (`@motebit/wire-schemas`, regenerated `spec/schemas/memory-formed-payload-v1.json`), and `spec/memory-delta-v1.md` (§5.1 field + new §6.1 deletion-tombstone section + version-history 1.4; the stale `**Version:** 1.2` header is corrected to 1.4 in the same pass).
+
+- 2f6852f: The standing-authority invariant — memory never confers authority (`docs/doctrine/memory-never-confers-authority.md`).
+
+  `TurnContext.verifiedGrant?: { grant_id, verified_at }` — a cryptographically verified standing-delegation grant covering the turn. Populated exclusively by the runtime's dispatch-layer grant verifier (`verifyGrantForTurn`: `verifyStandingDelegation` + `verifyTokenAgainstGrant` + a revocation check over signed artifacts), never from model output, recalled memory, trust level, or configuration. Its sole consumer is the policy gate's new step 8b: an R4_MONEY tool call auto-executes only when `verifiedGrant` is present; otherwise it requires live human approval regardless of any approval-lowering path — the Trusted-caller bypass, the service-motebit adjustment, and governance presets are subordinated for R4 (they still clear R0–R3). `denyAbove` is never overridden by a grant; the deterministic `invokeCapability` tap path is untouched.
+
+  Companion fix: `delegate_to_agent` now registers with an explicit `riskHint` (`R4_MONEY` + irreversible when a payment rail is configured, `R2_WRITE` otherwise) — previously it carried no hint and the risk-model patterns classified the money-capable delegation tool `R0_READ`, letting it auto-execute as read-class.
+
+  Gate-enforced by `check-money-authority` (drift-defenses #123): block present + ordered after the trust switch, explicit riskHint, single audited producer of `verifiedGrant`.
+
+- 99819c4: `MemorySource` — the memory-provenance closed registry (tenth registered registry per `docs/doctrine/registry-pattern-canonical.md`).
+
+  Memory candidates carried no provenance: a memory formed from a web page, a peer agent's message, or a tool result was byte-indistinguishable from one the user stated directly — the persistent-prompt-injection and hallucinated-authority channel (absorbed third-party content reads as durable user intent on recall, then informs delegation and policy).
+
+  New exports:
+  - `MemorySource` — `"user_stated" | "agent_inferred" | "tool_derived" | "peer_agent" | "consolidation_derived"`. `web_content` deliberately deferred until the loop can honestly distinguish web tools from other tools at formation time (registry append when it can).
+  - `ALL_MEMORY_SOURCES` (frozen iteration array), `isMemorySource` (type guard — inbound wire values degrade to `undefined` on mismatch, never fail open to a trusted tier).
+  - `MEMORY_SOURCE_MARKERS` / `MEMORY_SOURCE_MARKER_UNKNOWN` — the canonical `[from:X]` render-marker map, `Record<MemorySource, string>` so a registry append without a marker is a compile error.
+  - `MemoryContent.source?` / `MemoryContent.source_turn_id?` and `MemoryCandidate.source?` / `source_turn_id?` — optional on reads (legacy nodes render as provenance `unknown`, honestly absent, never fabricated). `source_turn_id` is local provenance only and never rides the wire.
+  - `AttributedMemoryCandidate = MemoryCandidate & { source: MemorySource | undefined }` — the asymmetric-typing enforcement (same shape as `WritableSettlementMode`): formation entry points take the attributed type, so every formation call site is a compile error until it declares a source. The key is required but the value admits explicit `undefined` — a deliberate declaration of unknown provenance for the one legitimate case (supersede inheriting from a pre-provenance legacy node); declared-unknown beats fabricated, omission stays impossible.
+
+  Wire: `MemoryFormedPayload.source?` (memory-delta@1.3, additive and replay-compatible; forwarder-immutable; canonical JSON Schema regenerated at `spec/schemas/memory-formed-payload-v1.json`).
+
+  Authorship rule (interop law, gate-enforced by `check-memory-source-canonical`, drift-defenses #122): `source` is assigned by the forming code path — never parsed from model output (no `source` attribute on `<memory>` tags) and never accepted from a peer's self-declaration (MCP writes are `peer_agent` only). Doctrine: `docs/doctrine/memory-provenance.md`.
+
+- 93ff63c: Land `seed-escrow@1.0` — durability without custody.
+
+  A `SeedEscrowPayload` is an identity's Ed25519 seed, AES-256-GCM-encrypted under a key only the owner's authenticator can reproduce (v1: a WebAuthn passkey's PRF output), parked with a custodian that is **structurally unable to open it**. Escrow, not custody — restore is relay-optional, exactly as the identity doctrine requires. The sibling of `KeyTransferPayload`: transfer moves a key between parties under key agreement; escrow parks a seed with a custodian under an authenticator-held secret (no X25519 ephemeral, `kdf` as a closed registry, same `identity_pubkey_check` post-decryption verification).
+
+  Forced by agency (Q2), who run it in production (`apps/app/lib/passkey.ts`).
+
+  Adds:
+  - `@motebit/protocol`: the `SeedEscrowPayload` type.
+  - `@motebit/wire-schemas` (private): zod schema + committed `spec/schemas/seed-escrow-payload-v1.json` (parity-locked, drift-tested).
+  - `spec/seed-escrow-v1.md`.
+
+  Unsigned by design — integrity is the AES-GCM tag, correctness is the mandatory `identity_pubkey_check`, and placement is authenticated by `signed-request-envelope@1.0` (the two compose; no signing primitive). "Escrow, not custody" is enforceable foundation law: a custodian that can decrypt its escrows is in protocol violation, and conformance requires demonstrating it can't. The fresh-device restore anchor is the identity registry / key-transparency log, not the payload's self-asserted `identity_pubkey_check` (review note folded into §6).
+
+- 93ff63c: Land `signed-request-envelope@1.0` — stateless per-request identity authentication.
+
+  A `SignedRequestEnvelope` authenticates a single request from a registered motebit identity to a service endpoint: the key is the login. It binds the requesting `motebit_id`, a timestamp, a SHA-256 digest of the (detached) request body, and an audience into one Ed25519 signature, verified against the identity's **registered** public key — never a key the request self-asserts. The stateless sibling of `auth-token@1.0`, for a different caller and trust root.
+
+  Forced by agency (Q1), who run the inline-payload predecessor in production (`apps/app/lib/signed-request.ts`); their module collapses to a re-export now that the primitives publish.
+
+  Adds:
+  - `@motebit/protocol`: the `SignedRequestEnvelope` type.
+  - `@motebit/crypto`: `signRequestEnvelope(payload, fields, identityPrivateKey)` + `verifyRequestEnvelope(envelope, registeredPublicKey, options?)` — JCS + Ed25519 + base64url-sig, same suite as the rest of the identity family; the registered key is a verify-side parameter (the trust move). Self-verifiable per crypto rule 4.
+  - `@motebit/verifier`: re-exports both, so a consumer validates the whole flow through the package it already pins.
+  - `@motebit/wire-schemas` (private): zod schema + committed `spec/schemas/signed-request-envelope-v1.json` (parity-locked).
+  - `spec/signed-request-envelope-v1.md` + `scripts/check-signed-artifact-verifiers.ts` REGISTRY entry (`SignedRequestEnvelope` → `verifyRequestEnvelope`).
+
+  Three review improvements over agency's draft are folded in: the detached `payload_digest` (envelope detaches from the body), the verifier MUST parse-then-canonicalize the received body (§7.2), and `aud` is a free-form audience string rather than the coarse `TokenAudience` registry.
+
+- 3044a2a: standing-delegation v1.1 — optional `not_before` on `DelegationToken` makes pre-minting honest.
+
+  agency, building standing monitors on `standing-delegation@1.0`, surfaced a real gap: a sovereign delegator (passkey-gated seed) can't sign per-tick tokens at tick time, so the conformant pattern is **pre-minting** — sign every cadence slot's token at grant-creation. But `DelegationToken` had no activation field and `verifyDelegation` checked only `expires_at`, so a future-windowed pre-minted token verified **early** — offline, a slot's token was indistinguishable from one minted at its slot.
+
+  Fix (additive, fully backward-compatible — 1.0 tokens replay identically):
+  - `@motebit/protocol`: `DelegationToken` gains an optional `not_before` (Unix ms).
+  - `@motebit/crypto`: `verifyDelegation` rejects when `now < not_before` (gated under `checkExpiry`, so historical chain verification skips it like expiry). `@motebit/wire-schemas` zod + regenerated `spec/schemas/delegation-token-v1.json`.
+  - Spec: `standing-delegation-v1.md` §1/§4 reframed — the per-tick token is **signed by the delegator** (the prose said "the delegate mints"; the code rejects delegate-signed ticks, so the prose was the drift), pre-minting is the documented v1.0 model, and cadence is bound cryptographically by the signed token set rather than demoted to a rate-limit. `market-v1.md` §12.1 gains the `not_before` field + verification step.
+
+  Holder-side (delegate-signed) minting stays a deliberate **non-goal in v1.0** — agency's doctrine-grounded call: for a receipts-over-trust product, keeping cadence cryptographic beats deleting pre-mint code. A future version MAY add it behind an explicit trigger.
+
 ## 3.2.0
 
 ### Minor Changes
