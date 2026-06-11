@@ -1,5 +1,13 @@
 # @motebit/verify-web
 
+## 0.0.10
+
+### Patch Changes
+
+- Updated dependencies [f6d820a]
+  - @motebit/crypto@3.8.0
+  - @motebit/state-export-client@0.5.7
+
 ## 0.0.9
 
 ### Patch Changes
