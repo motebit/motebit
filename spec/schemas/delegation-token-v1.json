@@ -39,6 +39,10 @@
       "type": "number",
       "description": "Unix timestamp in milliseconds after which the token is invalid. Verifiers reject tokens where `now > expires_at`."
     },
+    "not_before": {
+      "type": "number",
+      "description": "Optional activation time (Unix ms). Present ⇒ the token is INVALID before it — verifiers reject when `now < not_before`. Makes pre-minting honest: a standing grant's delegator can sign a future slot's tick at grant-creation, and it cannot verify until its slot. Absent ⇒ active from `issued_at` (today's behavior). standing-delegation@1.0 §3."
+    },
     "grant_id": {
       "type": "string",
       "description": "Optional link to a StandingDelegation this token was minted under (standing-delegation@1.0 §3). Absent ⇒ a standalone single-act delegation (today's semantics). Present ⇒ one tick of a standing grant; verify with `verifyTokenAgainstGrant`. Backward compatible."
@@ -102,6 +106,10 @@
         "expires_at": {
           "type": "number",
           "description": "Unix timestamp in milliseconds after which the token is invalid. Verifiers reject tokens where `now > expires_at`."
+        },
+        "not_before": {
+          "type": "number",
+          "description": "Optional activation time (Unix ms). Present ⇒ the token is INVALID before it — verifiers reject when `now < not_before`. Makes pre-minting honest: a standing grant's delegator can sign a future slot's tick at grant-creation, and it cannot verify until its slot. Absent ⇒ active from `issued_at` (today's behavior). standing-delegation@1.0 §3."
         },
         "grant_id": {
           "type": "string",

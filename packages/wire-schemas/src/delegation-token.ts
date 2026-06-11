@@ -75,6 +75,12 @@ export const DelegationTokenSchema = z
       .describe(
         "Unix timestamp in milliseconds after which the token is invalid. Verifiers reject tokens where `now > expires_at`.",
       ),
+    not_before: z
+      .number()
+      .optional()
+      .describe(
+        "Optional activation time (Unix ms). Present ⇒ the token is INVALID before it — verifiers reject when `now < not_before`. Makes pre-minting honest: a standing grant's delegator can sign a future slot's tick at grant-creation, and it cannot verify until its slot. Absent ⇒ active from `issued_at` (today's behavior). standing-delegation@1.0 §3.",
+      ),
     grant_id: z
       .string()
       .optional()

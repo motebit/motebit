@@ -1149,6 +1149,7 @@ export interface DelegationToken {
     grant_id?: string;
     // (undocumented)
     issued_at: number;
+    not_before?: number;
     scope: string;
     signature: string;
     suite: "motebit-jcs-ed25519-b64-v1";
