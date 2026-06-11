@@ -38,7 +38,13 @@ import type {
   SignableComputerSessionReceipt,
   ComputerSessionActionRecord,
 } from "@motebit/sdk";
-import { EventType, AgentTrustLevel, SensitivityLevel, rankSensitivity } from "@motebit/sdk";
+import {
+  EventType,
+  AgentTrustLevel,
+  SensitivityLevel,
+  rankSensitivity,
+  RiskLevel,
+} from "@motebit/sdk";
 import type { SensitivityCleared } from "@motebit/sdk";
 import type {
   ProviderMode,
@@ -211,7 +217,7 @@ import type {
 } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import type { DeviceCapability } from "@motebit/sdk";
-import { PolicyGate, MemoryGovernor, ChainedAuditSink } from "@motebit/policy";
+import { PolicyGate, MemoryGovernor, ChainedAuditSink, classifyTool } from "@motebit/policy";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { base58Encode } from "@motebit/protocol";
 import type {
@@ -1303,6 +1309,41 @@ export class MotebitRuntime {
         ? crypto.randomUUID()
         : `inv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const startedAt = Date.now();
+    const origin: IntentOrigin = options.invocationOrigin ?? "user-tap";
+
+    // One authority, no exceptions. The local-tool affordance routes through
+    // the SAME policy gate as the AI loop — a local frontend is not an
+    // exception (docs/doctrine/surface-authority-model.md § keystone). A
+    // genuine user tap IS the human-in-the-loop approval
+    // (docs/doctrine/surface-determinism.md), so it satisfies the approval
+    // band for reversible/irreversible local tools without a second modal —
+    // but it never overrides a hard deny, and never clears R4_MONEY. Only a
+    // verified standing grant clears R4 (docs/doctrine/memory-never-confers-authority.md),
+    // and a fresh per-invocation TurnContext carries none, so R4 always blocks
+    // here. `validate()` writes the audit entry internally, so every decision —
+    // allow or deny — is recorded. Enforced by `check-local-tool-gated`.
+    const toolDef = this.toolRegistry.list().find((t) => t.name === name);
+    if (!toolDef) {
+      // Unknown, or scoped out of the current presence mode: unclassifiable,
+      // so the gate cannot risk-assess it. Fail closed — it must not run.
+      return { ok: false, error: `Tool "${name}" is not available` };
+    }
+    const decision = this.policy.validate(toolDef, args, this.policy.createTurnContext());
+    if (!decision.allowed) {
+      return { ok: false, error: decision.reason ?? `Tool "${name}" blocked by policy` };
+    }
+    if (decision.requiresApproval) {
+      const tapSatisfiesApproval =
+        origin === "user-tap" && classifyTool(toolDef).risk < RiskLevel.R4_MONEY;
+      if (!tapSatisfiesApproval) {
+        return {
+          ok: false,
+          error:
+            decision.reason ??
+            `Tool "${name}" requires approval a ${origin} invocation cannot grant`,
+        };
+      }
+    }
 
     let result: ToolResult;
     try {
@@ -1355,7 +1396,7 @@ export class MotebitRuntime {
             status: result.ok ? "completed" : "failed",
             args_hash: argsHash,
             result_hash: resultHash,
-            invocation_origin: options.invocationOrigin ?? "user-tap",
+            invocation_origin: origin,
           },
           this._signingKeys.privateKey,
           this._signingKeys.publicKey,

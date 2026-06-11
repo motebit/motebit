@@ -1988,6 +1988,15 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-local-tool-gated",
+    proves:
+      "flags the invokeLocalTool policy-gate bypass reopening — the surface-authority keystone that a local-tool affordance routes through the same gate as the AI loop (finding h). Drift class: a refactor that drops the `this.policy.validate(` call (or moves the tool execution ahead of it) silently restores the direct `toolRegistry.execute` bypass that signed a receipt for an ungated side-effect. Probe neutralizes the validate call inside motebit-runtime.ts (`this.policy.validate(` → `this.policy.__novalidate(`) so the method-scoped marker scan no longer finds it; assertion 1 must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/runtime/src/motebit-runtime.ts`, (src) =>
+        src.replace("this.policy.validate(toolDef", "this.policy.__novalidate(toolDef"),
+      ),
+  },
+  {
     script: "check-memory-source-canonical",
     proves:
       'flags the MemorySource three-way lock breaking — a value rotated in `ALL_MEMORY_SOURCES` without updating the union (or the gate\'s reference). Drift class: single-file registry, same shape as the SettlementMode probe — union AND array live in `packages/protocol/src/memory-source.ts`, so the probe targets the comma-bearing array entry (`"user_stated",`); the union arm uses leading `| ` with no trailing comma and the MEMORY_SOURCE_MARKERS key form is unquoted (`user_stated:`), so neither is touched. Gate must surface the sibling-alignment violation. byte-identical restoration on cleanup via mutateFile.',
