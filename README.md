@@ -39,7 +39,7 @@ open https://motebit.com
 
 # Or scaffold a signed agent identity (30 seconds)
 npm create motebit@latest my-agent
-cd my-agent && node verify.js
+cd my-agent && npm install && node verify.js
 
 # Install the full operator console
 npm install -g motebit

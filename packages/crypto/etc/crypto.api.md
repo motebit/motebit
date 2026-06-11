@@ -290,6 +290,8 @@ export interface CredentialVerifyResult extends BaseResult {
     hardware_attestation?: HardwareAttestationVerifyResult;
     // (undocumented)
     issuer?: string;
+    not_yet_valid?: boolean;
+    revocation_unchecked?: boolean;
     // (undocumented)
     subject?: string;
     // (undocumented)
@@ -1544,7 +1546,7 @@ export function verifyApprovalDecision(decision: ApprovalDecision, approverPubli
 // @public
 export function verifyBalanceWaiver(waiver: BalanceWaiver, agentPublicKey: Uint8Array): Promise<boolean>;
 
-// @public
+// @public (undocumented)
 export function verifyBySuite(suite: SuiteId, canonicalBytes: Uint8Array, signatureBytes: Uint8Array, publicKeyBytes: Uint8Array): Promise<boolean>;
 
 // @public
@@ -1766,8 +1768,11 @@ export function verifyTokenAgainstGrant(token: DelegationToken, grant: StandingD
 // @public
 export function verifyToolInvocationReceipt(receipt: SignableToolInvocationReceipt, publicKey: Uint8Array): Promise<boolean>;
 
-// @public (undocumented)
-export function verifyVerifiableCredential<T = Record<string, unknown>>(vc: VerifiableCredential<T>): Promise<boolean>;
+// @public
+export function verifyVerifiableCredential<T = Record<string, unknown>>(vc: VerifiableCredential<T>, options?: {
+    now?: number;
+    isRevoked?: (credentialStatusId: string) => boolean;
+}): Promise<boolean>;
 
 // @public (undocumented)
 export function verifyVerifiablePresentation(vp: VerifiablePresentation): Promise<{
@@ -1807,7 +1812,7 @@ export interface WitnessOmissionDisputeVerifyResult {
 
 // Warnings were encountered during analysis:
 //
-// src/credentials.ts:388:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
+// src/credentials.ts:403:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

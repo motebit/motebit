@@ -71,20 +71,28 @@ if (!ed.hashes.sha512) {
  *      `signatureEncoding` / `publicKeyEncoding`).
  *
  * Returns `false` on unknown or unsupported suite, on primitive-level
- * exception, and on signature mismatch. Never throws in the Ed25519
- * path. Throws only on PQ suites (placeholder until implementation
- * lands), because a misconfigured dispatcher there would silently
- * pass every verification.
+ * exception, and on signature mismatch — verification is fail-closed and never
+ * throws (an unknown suite, including a PQ suite before its arm lands, rejects
+ * rather than silently passing). The signing counterparts (`signBySuite`,
+ * `getPublicKeyBySuite`) THROW on an unknown suite, because a signer that
+ * returned `undefined` would ship an unsigned artifact.
  */
+function assertNeverSuite(suite: never): never {
+  // A new SuiteId added to @motebit/protocol without a dispatch arm fails to
+  // compile at the signing call sites; at runtime an unknown suite that bypassed
+  // the type system (wire data, a cast) throws rather than returning undefined.
+  throw new Error(`unsupported cryptosuite: ${String(suite)}`);
+}
+
 export async function verifyBySuite(
   suite: SuiteId,
   canonicalBytes: Uint8Array,
   signatureBytes: Uint8Array,
   publicKeyBytes: Uint8Array,
 ): Promise<boolean> {
-  // Exhaustive switch on the SuiteId literal union. When ML-DSA /
-  // SLH-DSA suites land as new `SuiteId` members, TypeScript will
-  // refuse to compile this switch until their arms are added.
+  // Exhaustive switch on the SuiteId literal union. When ML-DSA / SLH-DSA suites
+  // land as new `SuiteId` members, the `assertNeverSuite` arms in signBySuite /
+  // getPublicKeyBySuite refuse to compile until their arms are added.
   switch (suite) {
     case "motebit-jcs-ed25519-b64-v1":
     case "motebit-jcs-ed25519-hex-v1":
@@ -96,6 +104,9 @@ export async function verifyBySuite(
       } catch {
         return false;
       }
+    default:
+      // Unknown suite → fail-closed reject (matches the doc; signers throw).
+      return false;
   }
 }
 
@@ -121,6 +132,8 @@ export async function signBySuite(
     case "motebit-concat-ed25519-hex-v1":
     case "eddsa-jcs-2022":
       return ed.signAsync(canonicalBytes, privateKeyBytes);
+    default:
+      return assertNeverSuite(suite);
   }
 }
 
@@ -182,6 +195,8 @@ export async function getPublicKeyBySuite(
     case "motebit-concat-ed25519-hex-v1":
     case "eddsa-jcs-2022":
       return ed.getPublicKeyAsync(privateKey);
+    default:
+      return assertNeverSuite(suite);
   }
 }
 

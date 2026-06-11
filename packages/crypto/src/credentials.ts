@@ -217,13 +217,28 @@ export async function signVerifiableCredential<T = Record<string, unknown>>(
   return { ...unsignedVC, proof };
 }
 
+/**
+ * Verify a W3C Verifiable Credential's Data Integrity proof + temporal validity.
+ *
+ * Checks, fail-closed: the `eddsa-jcs-2022` signature, `validUntil` (expiry), and
+ * `validFrom` (not-yet-valid). `now` defaults to the wall clock.
+ *
+ * REVOCATION IS NOT CHECKED unless you wire `isRevoked`. A credential carrying a
+ * `credentialStatus` (credential-v1 §6) is revocable; this function is I/O-free
+ * and cannot consult the relay's revocation list. A `true` return means "validly
+ * signed and within its validity window", NOT "not revoked". Pass
+ * `isRevoked(statusId) => boolean` to enforce revocation — mirroring the
+ * standing-delegation `isRevoked` seam. Omitting it on a revocable credential is
+ * an explicit choice to trust without a revocation check.
+ */
 export async function verifyVerifiableCredential<T = Record<string, unknown>>(
   vc: VerifiableCredential<T>,
+  options?: { now?: number; isRevoked?: (credentialStatusId: string) => boolean },
 ): Promise<boolean> {
-  if (vc.validUntil) {
-    const expiresAt = new Date(vc.validUntil).getTime();
-    if (Date.now() > expiresAt) return false;
-  }
+  const now = options?.now ?? Date.now();
+  if (vc.validUntil && now > new Date(vc.validUntil).getTime()) return false;
+  if (vc.validFrom && now < new Date(vc.validFrom).getTime()) return false;
+  if (vc.credentialStatus && options?.isRevoked?.(vc.credentialStatus.id) === true) return false;
   return verifyDataIntegritySigning(vc as unknown as Record<string, unknown>, vc.proof);
 }
 

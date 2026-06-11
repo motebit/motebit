@@ -6,7 +6,7 @@
     "apps/desktop",
     "apps/mobile",
     "apps/spatial",
-    "apps/docs"
+    "apps/docs",
   ],
   "ignoreDependencies": ["@motebit/*", "@changesets/changelog-github", "better-sqlite3", "motebit"],
   "ignoreBinaries": ["tauri"],
@@ -14,19 +14,21 @@
     "examples/**",
     "packages/wire-schemas/src/__parity/**",
     "scripts/__tests__/affordance-routing-fixture/**",
-    "packages/sdk/src/credential-types-doc.ts"
+    "packages/sdk/src/credential-types-doc.ts",
   ],
   "workspaces": {
     ".": {
-      "entry": ["scripts/*.{ts,mjs}"]
+      "entry": ["scripts/*.{ts,mjs}"],
     },
     "packages/*": {
       "entry": ["src/index.ts"],
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts"],
     },
     "apps/cli": {
       "project": ["src/**/*.ts"],
-      "comment": "apps/cli is an esbuild bundle that EXTERNALIZES node_modules; deps imported only by the bundled @motebit/* runtime closure (not by apps/cli/src) must stay direct deps for the dist binary to boot (check-dist-smoke), so knip can't see them in src.",
+      // apps/cli is an esbuild bundle that EXTERNALIZES node_modules; deps imported only by the
+      // bundled @motebit/* runtime closure (not by apps/cli/src) must stay direct deps for the
+      // dist binary to boot (check-dist-smoke), so knip can't see them in src.
       "ignoreDependencies": [
         "@modelcontextprotocol/sdk",
         "sql.js",
@@ -37,26 +39,26 @@
         "@solana/spl-token",
         "@x402/core",
         "@x402/hono",
-        "@hono/node-ws"
-      ]
+        "@hono/node-ws",
+      ],
     },
     "apps/web": {
       "project": ["src/**/*.ts"],
-      "ignoreDependencies": ["three", "@types/three", "buffer"]
+      "ignoreDependencies": ["three", "@types/three", "buffer"],
     },
     "apps/identity": {
-      "project": ["src/**/*.{ts,tsx}"]
+      "project": ["src/**/*.{ts,tsx}"],
     },
     "services/*": {
       "entry": ["src/index.ts"],
       "project": ["src/**/*.ts"],
-      "ignoreDependencies": ["@modelcontextprotocol/sdk", "tsx"]
+      "ignoreDependencies": ["@modelcontextprotocol/sdk", "tsx"],
     },
     "services/proxy": {
       "entry": ["src/app/**/*.{ts,tsx}", "src/validation.ts"],
-      "project": ["src/**/*.{ts,tsx}"]
-    }
+      "project": ["src/**/*.{ts,tsx}"],
+    },
   },
   "ignoreExportsUsedInFile": true,
-  "exclude": ["types", "enumMembers"]
+  "exclude": ["types", "enumMembers"],
 }
