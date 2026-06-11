@@ -117,6 +117,7 @@ export const REGISTRY: Record<string, Classification> = {
   DelegationToken: { kind: "verifier", verifier: "verifyDelegation" },
   StandingDelegation: { kind: "verifier", verifier: "verifyStandingDelegation" },
   DelegationRevocation: { kind: "verifier", verifier: "verifyDelegationRevocation" },
+  SignedRequestEnvelope: { kind: "verifier", verifier: "verifyRequestEnvelope" },
   DeviceRegistrationRequest: { kind: "verifier", verifier: "verifyDeviceRegistration" },
   ExecutionReceipt: { kind: "verifier", verifier: "verifyExecutionReceipt" },
   GoalExecutionManifest: { kind: "verifier", verifier: "verifyGoalExecutionManifest" },

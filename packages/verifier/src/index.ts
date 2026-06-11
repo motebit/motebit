@@ -61,6 +61,11 @@ export {
   verifyDelegationRevocation,
   findGrantRevocation,
 } from "@motebit/crypto";
+// Signed request envelope (signed-request-envelope@1.0). Explicitly re-exported
+// like the delegation family — verified against the identity's REGISTERED key
+// (resolved by the caller from `motebit_id`), never a key the request carries.
+export { signRequestEnvelope, verifyRequestEnvelope } from "@motebit/crypto";
+export type { SignedRequestEnvelope } from "@motebit/crypto";
 export type {
   VerifyResult,
   ArtifactType,

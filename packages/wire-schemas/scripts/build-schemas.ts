@@ -24,6 +24,8 @@ import {
   buildStandingDelegationJsonSchema,
   buildDelegationRevocationJsonSchema,
 } from "../src/standing-delegation.js";
+import { buildSignedRequestEnvelopeJsonSchema } from "../src/signed-request-envelope.js";
+import { buildSeedEscrowPayloadJsonSchema } from "../src/seed-escrow-payload.js";
 import { buildExecutionReceiptJsonSchema } from "../src/execution-receipt.js";
 import {
   buildCredentialAnchorBatchJsonSchema,
@@ -132,6 +134,14 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "delegation-token-v1.json", build: buildDelegationTokenJsonSchema },
   { filename: "standing-delegation-v1.json", build: buildStandingDelegationJsonSchema },
   { filename: "delegation-revocation-v1.json", build: buildDelegationRevocationJsonSchema },
+  {
+    filename: "signed-request-envelope-v1.json",
+    build: buildSignedRequestEnvelopeJsonSchema,
+  },
+  {
+    filename: "seed-escrow-payload-v1.json",
+    build: buildSeedEscrowPayloadJsonSchema,
+  },
   { filename: "agent-service-listing-v1.json", build: buildAgentServiceListingJsonSchema },
   { filename: "agent-resolution-result-v1.json", build: buildAgentResolutionResultJsonSchema },
   { filename: "agent-task-v1.json", build: buildAgentTaskJsonSchema },

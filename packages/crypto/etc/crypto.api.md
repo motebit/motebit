@@ -34,6 +34,7 @@ import type { RetentionManifest } from '@motebit/protocol';
 import type { SettlementAsset } from '@motebit/protocol';
 import type { SettlementRecord } from '@motebit/protocol';
 import type { SignableComputerSessionReceipt } from '@motebit/protocol';
+import type { SignedRequestEnvelope } from '@motebit/protocol';
 import type { SkillEnvelope } from '@motebit/protocol';
 import type { SkillManifest } from '@motebit/protocol';
 import type { SkillSignature } from '@motebit/protocol';
@@ -1212,7 +1213,12 @@ export function signDisputeRequest(request: Omit<DisputeRequest, "signature" | "
 export function signDisputeResolution(resolution: Omit<DisputeResolution, "signature" | "suite">, adjudicatorPrivateKey: Uint8Array): Promise<DisputeResolution>;
 
 // @public
+export const SIGNED_REQUEST_ENVELOPE_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
 export const SIGNED_TOKEN_SUITE: "motebit-jwt-ed25519-v1";
+
+export { SignedRequestEnvelope }
 
 // @public (undocumented)
 export interface SignedTokenPayload {
@@ -1275,6 +1281,14 @@ export function signMotebitAnnouncement<T extends Omit<SignableMotebitAnnounceme
     suite: typeof MOTEBIT_ANNOUNCEMENT_SUITE;
     signature: string;
 }>;
+
+// @public
+export function signRequestEnvelope(payload: unknown, fields: {
+    motebit_id: string;
+    ts: number;
+    aud: string;
+    nonce?: string;
+}, identityPrivateKey: Uint8Array): Promise<SignedRequestEnvelope>;
 
 // @public
 export function signSettlement(settlement: Omit<SettlementRecord, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<SettlementRecord>;
@@ -1682,6 +1696,14 @@ export function verifyReceiptSequence(chain: ReceiptChainEntry[]): Promise<{
 
 // @public
 export function verifyRelayMetadata(metadata: RelayMetadata, publicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyRequestEnvelope(envelope: SignedRequestEnvelope, registeredPublicKey: Uint8Array, options?: {
+    payload?: unknown;
+    expectedAud?: string;
+    now?: number;
+    windowMs?: number;
+}): Promise<boolean>;
 
 // @public (undocumented)
 export type VerifyResult = IdentityVerifyResult | ReceiptVerifyResult | ToolInvocationVerifyResult | CredentialVerifyResult | PresentationVerifyResult | SkillVerifyResult | UnknownVerifyResult;

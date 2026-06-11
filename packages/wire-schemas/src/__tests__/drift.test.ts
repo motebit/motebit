@@ -104,6 +104,14 @@ import {
 } from "../settlement-record.js";
 import { DELEGATION_TOKEN_SCHEMA_ID, buildDelegationTokenJsonSchema } from "../delegation-token.js";
 import {
+  SIGNED_REQUEST_ENVELOPE_SCHEMA_ID,
+  buildSignedRequestEnvelopeJsonSchema,
+} from "../signed-request-envelope.js";
+import {
+  SEED_ESCROW_PAYLOAD_SCHEMA_ID,
+  buildSeedEscrowPayloadJsonSchema,
+} from "../seed-escrow-payload.js";
+import {
   STANDING_DELEGATION_SCHEMA_ID,
   DELEGATION_REVOCATION_SCHEMA_ID,
   buildStandingDelegationJsonSchema,
@@ -235,6 +243,18 @@ const CASES: SchemaCase[] = [
     filename: "delegation-revocation-v1.json",
     expectedId: DELEGATION_REVOCATION_SCHEMA_ID,
     build: buildDelegationRevocationJsonSchema,
+  },
+  {
+    name: "signed-request-envelope-v1",
+    filename: "signed-request-envelope-v1.json",
+    expectedId: SIGNED_REQUEST_ENVELOPE_SCHEMA_ID,
+    build: buildSignedRequestEnvelopeJsonSchema,
+  },
+  {
+    name: "seed-escrow-payload-v1",
+    filename: "seed-escrow-payload-v1.json",
+    expectedId: SEED_ESCROW_PAYLOAD_SCHEMA_ID,
+    build: buildSeedEscrowPayloadJsonSchema,
   },
   {
     name: "agent-service-listing-v1",

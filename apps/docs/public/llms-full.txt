@@ -6169,7 +6169,7 @@ Source: https://docs.motebit.com/docs/operator/architecture
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **51 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 8 services · 26 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **51 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 8 services · 28 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -6288,7 +6288,7 @@ motebit/
 │   ├── browser-sandbox/       [atom]        Playwright-driven Chromium for the virtual_browser embodiment — second computer-use-v1 producer.
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
-├── spec/                      # 26 open specifications, each motebit/<name>@1.0
+├── spec/                      # 28 open specifications, each motebit/<name>@1.0
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
 │   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
@@ -6297,6 +6297,7 @@ motebit/
 │   ├── credential-v1.md                     W3C VC 2.0, issuance, weighting, revocation.
 │   ├── settlement-v1.md                     Foundation law, rail taxonomy, sovereign rail, security.
 │   ├── auth-token-v1.md                     Signed bearer tokens, audience binding, replay prevention.
+│   ├── signed-request-envelope-v1.md        Stateless per-request identity auth: registered-key, detached payload digest, audience binding.
 │   ├── credential-anchor-v1.md              Merkle batch anchoring, self-verifiable proofs.
 │   ├── agent-settlement-anchor-v1.md         Per-agent settlement anchoring — worker audit ceiling alongside SettlementRecord signing floor.
 │   ├── delegation-v1.md                     Task submission, receipt exchange, budget lifecycle.
@@ -6304,6 +6305,7 @@ motebit/
 │   ├── discovery-v1.md                      .well-known, DNS SRV, agent resolution, relay metadata.
 │   ├── agent-revocation-v1.md               Operator de-listing of agents from Discover — signed, reasoned, public feed. De-list, not de-identify; hygiene, not curation.
 │   ├── migration-v1.md                      Departure attestation, credential export, trust bootstrap.
+│   ├── seed-escrow-v1.md                     Durability without custody: authenticator-wrapped seed, opaque to its custodian, relay-optional restore.
 │   ├── device-self-registration-v1.md       Self-attesting device → relay handshake, no master token required.
 │   ├── dispute-v1.md                        Evidence, adjudication, fund handling, appeal, sybil defense.
 │   ├── memory-delta-v1.md                   Event-shaped memory mutations, wire-format payloads, sensitivity redaction.

@@ -307,6 +307,40 @@ export interface StandingDelegation {
 }
 
 /**
+ * Stateless request authentication from a registered identity — the key is
+ * the login. Binds the requesting `motebit_id`, a timestamp, a digest of the
+ * (detached) request body, and an audience into one Ed25519 signature,
+ * verified against the identity's REGISTERED public key — never a key the
+ * request self-asserts. The stateless sibling of `auth-token@1.0`, for a
+ * different caller and trust root. Spec: `spec/signed-request-envelope-v1.md`.
+ */
+export interface SignedRequestEnvelope {
+  /** Requesting identity. The verifier resolves the Ed25519 key for this id
+   *  from its registry; a key carried by the request is never trusted. */
+  motebit_id: string;
+  /** Unix ms at signing. Freshness, not entropy — verifiers reject when
+   *  `|now − ts|` exceeds the freshness window (default ±300s). */
+  ts: number;
+  /** SHA-256 of `canonicalJson(payload)`, hex-encoded (64 lowercase). Binds
+   *  the detached request body to the envelope; recomputed from the body as
+   *  received, so JSON whitespace differences do not break verification. */
+  payload_digest: string;
+  /** Audience — free-form string (deliberately NOT the `TokenAudience`
+   *  registry; request audiences are finer-grained), convention `"{host}/{route}"`.
+   *  Exact-match at the verifier, fail-closed; kills cross-service replay. */
+  aud: string;
+  /** Optional. Present ⇒ the signer requests replay-once semantics; verifiers
+   *  offering them dedup within the freshness window. Absent ⇒ a within-window
+   *  replay re-executes the same idempotent operation. */
+  nonce?: string;
+  /** Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"`. */
+  suite: "motebit-jcs-ed25519-b64-v1";
+  /** Base64url-encoded Ed25519 signature over `canonicalJson(body)` where
+   *  `body` = this object minus `signature`. Verify with the REGISTERED key. */
+  signature: string;
+}
+
+/**
  * A signed revocation of a {@link StandingDelegation}. Only the grant's
  * delegator can sign one (verified against `delegator_public_key`). Self-
  * contained and offline-verifiable like the token — it carries the delegator's
@@ -1524,6 +1558,40 @@ export interface KeyTransferPayload {
   /** AES-256-GCM auth tag, 16 bytes (32-char hex). */
   tag: string;
   /** Device A's Ed25519 identity public key for post-decryption verification (64-char hex). */
+  identity_pubkey_check: string;
+}
+
+/**
+ * Durability without custody — an identity's Ed25519 seed, AEAD-encrypted under a
+ * key only the owner's authenticator can reproduce, parked with a custodian that
+ * is structurally unable to open it. Escrow, not custody. The sibling of
+ * {@link KeyTransferPayload}: transfer moves a key between parties under key
+ * agreement; escrow parks a seed with a custodian under an authenticator-held
+ * secret. Deliberate deltas: no X25519 ephemeral, `kdf` as a registry, same
+ * post-decryption verification posture. Unsigned by design — integrity is the
+ * GCM tag, correctness is the mandatory `identity_pubkey_check`, and placement is
+ * authenticated by `signed-request-envelope@1.0`. Spec: `spec/seed-escrow-v1.md`.
+ */
+export interface SeedEscrowPayload {
+  /** Opaque locator for the unwrap secret. For kdf `webauthn-prf-hkdf-sha256`:
+   *  the WebAuthn credential id (base64url). Unguessable; retrieval is keyed on
+   *  it and MUST NOT be publicly enumerable. */
+  unlock_hint: string;
+  /** KDF descriptor — closed enum, registered never forked. v1's sole entry:
+   *  WebAuthn PRF output → HKDF-SHA256 → AES-256-GCM key. Unknown values are
+   *  rejected fail-closed by custodians and restoring clients alike. */
+  kdf: "webauthn-prf-hkdf-sha256";
+  /** AES-256-GCM ciphertext of the 32-byte Ed25519 seed (64-char hex). */
+  encrypted_seed: string;
+  /** AES-256-GCM nonce, 12 bytes (24-char hex). Fresh per placement. */
+  nonce: string;
+  /** AES-256-GCM authentication tag, 16 bytes (32-char hex). AEAD failure on
+   *  restore is rejection — wrong credential, corruption, and tampering are
+   *  indistinguishable by design. */
+  tag: string;
+  /** Ed25519 public key derived from the escrowed seed (64-char hex). MANDATORY
+   *  post-decryption check: a restored seed that does not re-derive to this key
+   *  is discarded — an AEAD success is not yet a restore. */
   identity_pubkey_check: string;
 }
 

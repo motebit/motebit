@@ -3114,6 +3114,16 @@ export interface ScrollAction {
 }
 
 // @public
+export interface SeedEscrowPayload {
+    encrypted_seed: string;
+    identity_pubkey_check: string;
+    kdf: "webauthn-prf-hkdf-sha256";
+    nonce: string;
+    tag: string;
+    unlock_hint: string;
+}
+
+// @public
 export interface Semiring<T> {
     add(a: T, b: T): T;
     readonly eq?: ((a: T, b: T) => boolean) | undefined;
@@ -3313,6 +3323,17 @@ export interface SignableComputerSessionReceipt {
     // (undocumented)
     readonly session_id: string;
     readonly was_halted: boolean;
+}
+
+// @public
+export interface SignedRequestEnvelope {
+    aud: string;
+    motebit_id: string;
+    nonce?: string;
+    payload_digest: string;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    ts: number;
 }
 
 // @public
