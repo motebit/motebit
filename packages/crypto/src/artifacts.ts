@@ -1068,22 +1068,36 @@ export async function signRequestEnvelope(
  * caller MUST resolve `registeredPublicKey` from its registry by
  * `envelope.motebit_id`, never from the envelope).
  *
- * Always checks the suite + the signature. Optionally checks, when the
- * corresponding option is supplied: audience (exact-match), freshness
- * (`|now − ts| ≤ windowMs`, default 300s), and the payload digest. Nonce
- * replay-dedup is stateful and stays the consumer's concern. Fail-closed on
- * unknown suite / malformed signature / any supplied-check mismatch.
+ * Always checks the suite + the signature. Freshness (`|now − ts| ≤ windowMs`)
+ * is checked **by default** — `now` defaults to `Date.now()`, `windowMs` to
+ * 300s — because a request-auth envelope verified without a freshness bound is a
+ * forever replay window. Opt out explicitly with `checkFreshness: false` (e.g.
+ * verifying a historical envelope), mirroring `verifyDelegation`'s `checkExpiry`.
+ * Audience (exact-match) and the payload digest are checked when their option is
+ * supplied. Nonce replay-dedup is stateful and stays the consumer's concern.
+ * Fail-closed on unknown suite / malformed signature / staleness / any
+ * supplied-check mismatch.
  */
 export async function verifyRequestEnvelope(
   envelope: SignedRequestEnvelope,
   registeredPublicKey: Uint8Array,
-  options?: { payload?: unknown; expectedAud?: string; now?: number; windowMs?: number },
+  options?: {
+    payload?: unknown;
+    expectedAud?: string;
+    checkFreshness?: boolean;
+    now?: number;
+    windowMs?: number;
+  },
 ): Promise<boolean> {
   if (envelope.suite !== SIGNED_REQUEST_ENVELOPE_SUITE) return false;
   if (options?.expectedAud !== undefined && envelope.aud !== options.expectedAud) return false;
-  if (options?.now !== undefined) {
-    const windowMs = options.windowMs ?? 300_000;
-    if (Math.abs(options.now - envelope.ts) > windowMs) return false;
+  // Freshness is fail-closed by default: a forever replay window is never a safe
+  // default for request auth. Skip only when a consumer explicitly opts out.
+  const checkFreshness = options?.checkFreshness ?? true;
+  if (checkFreshness) {
+    const now = options?.now ?? Date.now();
+    const windowMs = options?.windowMs ?? 300_000;
+    if (Math.abs(now - envelope.ts) > windowMs) return false;
   }
   if (options?.payload !== undefined) {
     const recomputed = await canonicalSha256(options.payload);

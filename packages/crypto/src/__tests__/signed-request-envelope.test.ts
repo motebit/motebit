@@ -4,15 +4,17 @@ import { generateKeypair, signRequestEnvelope, verifyRequestEnvelope } from "../
 const AUD = "app.agency.computer/api/monitors";
 
 describe("signRequestEnvelope / verifyRequestEnvelope", () => {
-  it("round-trips against the signing key", async () => {
+  it("round-trips against the signing key with the default freshness window", async () => {
     const kp = await generateKeypair();
     const env = await signRequestEnvelope(
       { subject: "S", cadence: "daily" },
-      { motebit_id: "mb-1", ts: 1_000, aud: AUD },
+      { motebit_id: "mb-1", ts: Date.now(), aud: AUD },
       kp.privateKey,
     );
     expect(env.suite).toBe("motebit-jcs-ed25519-b64-v1");
     expect(env.payload_digest).toMatch(/^[0-9a-f]{64}$/);
+    // No options → freshness checked by default against Date.now(); a just-signed
+    // envelope is inside the 300s window.
     expect(await verifyRequestEnvelope(env, kp.publicKey)).toBe(true);
   });
 
@@ -24,7 +26,9 @@ describe("signRequestEnvelope / verifyRequestEnvelope", () => {
       { motebit_id: "mb-1", ts: 1_000, aud: AUD },
       kp.privateKey,
     );
-    expect(await verifyRequestEnvelope(env, other.publicKey)).toBe(false);
+    expect(await verifyRequestEnvelope(env, other.publicKey, { checkFreshness: false })).toBe(
+      false,
+    );
   });
 
   it("re-checks the detached payload digest when the payload is supplied", async () => {
@@ -35,11 +39,16 @@ describe("signRequestEnvelope / verifyRequestEnvelope", () => {
       { motebit_id: "mb-1", ts: 1_000, aud: AUD },
       kp.privateKey,
     );
-    expect(await verifyRequestEnvelope(env, kp.publicKey, { payload })).toBe(true);
-    // A different body has a different digest → reject.
-    expect(await verifyRequestEnvelope(env, kp.publicKey, { payload: { subject: "EVIL" } })).toBe(
-      false,
+    expect(await verifyRequestEnvelope(env, kp.publicKey, { payload, checkFreshness: false })).toBe(
+      true,
     );
+    // A different body has a different digest → reject.
+    expect(
+      await verifyRequestEnvelope(env, kp.publicKey, {
+        payload: { subject: "EVIL" },
+        checkFreshness: false,
+      }),
+    ).toBe(false);
   });
 
   it("enforces exact audience match when expectedAud is supplied", async () => {
@@ -49,10 +58,41 @@ describe("signRequestEnvelope / verifyRequestEnvelope", () => {
       { motebit_id: "mb-1", ts: 1_000, aud: AUD },
       kp.privateKey,
     );
-    expect(await verifyRequestEnvelope(env, kp.publicKey, { expectedAud: AUD })).toBe(true);
     expect(
-      await verifyRequestEnvelope(env, kp.publicKey, { expectedAud: "other.host/route" }),
+      await verifyRequestEnvelope(env, kp.publicKey, { expectedAud: AUD, checkFreshness: false }),
+    ).toBe(true);
+    expect(
+      await verifyRequestEnvelope(env, kp.publicKey, {
+        expectedAud: "other.host/route",
+        checkFreshness: false,
+      }),
     ).toBe(false);
+  });
+
+  it("checks freshness BY DEFAULT — a stale envelope is rejected with no options (the foot-gun)", async () => {
+    const kp = await generateKeypair();
+    // ts is ancient relative to Date.now(); the obvious call supplies neither now
+    // nor windowMs. A forever replay window would (wrongly) accept this.
+    const env = await signRequestEnvelope(
+      { x: 1 },
+      { motebit_id: "mb-1", ts: 1_000, aud: AUD },
+      kp.privateKey,
+    );
+    expect(await verifyRequestEnvelope(env, kp.publicKey)).toBe(false);
+    // The same call shape that a consumer would actually write — still fail-closed.
+    expect(
+      await verifyRequestEnvelope(env, kp.publicKey, { payload: { x: 1 }, expectedAud: AUD }),
+    ).toBe(false);
+  });
+
+  it("accepts a stale envelope only when freshness is explicitly disabled", async () => {
+    const kp = await generateKeypair();
+    const env = await signRequestEnvelope(
+      { x: 1 },
+      { motebit_id: "mb-1", ts: 1_000, aud: AUD },
+      kp.privateKey,
+    );
+    expect(await verifyRequestEnvelope(env, kp.publicKey, { checkFreshness: false })).toBe(true);
   });
 
   it("enforces the freshness window when now is supplied", async () => {
@@ -66,6 +106,10 @@ describe("signRequestEnvelope / verifyRequestEnvelope", () => {
     expect(await verifyRequestEnvelope(env, kp.publicKey, { now: 1_000 + 200_000 })).toBe(true);
     // Beyond the window → stale.
     expect(await verifyRequestEnvelope(env, kp.publicKey, { now: 1_000 + 400_000 })).toBe(false);
+    // A wider explicit window admits it again.
+    expect(
+      await verifyRequestEnvelope(env, kp.publicKey, { now: 1_000 + 400_000, windowMs: 600_000 }),
+    ).toBe(true);
   });
 
   it("signs the optional nonce into the body", async () => {
@@ -76,8 +120,10 @@ describe("signRequestEnvelope / verifyRequestEnvelope", () => {
       kp.privateKey,
     );
     expect(env.nonce).toBe("n-123");
-    expect(await verifyRequestEnvelope(env, kp.publicKey)).toBe(true);
+    expect(await verifyRequestEnvelope(env, kp.publicKey, { checkFreshness: false })).toBe(true);
     // Tampering with a signed field (aud) breaks the signature.
-    expect(await verifyRequestEnvelope({ ...env, aud: "x" }, kp.publicKey)).toBe(false);
+    expect(
+      await verifyRequestEnvelope({ ...env, aud: "x" }, kp.publicKey, { checkFreshness: false }),
+    ).toBe(false);
   });
 });

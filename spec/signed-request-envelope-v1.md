@@ -103,6 +103,7 @@ Step 7: Accept
 
 - The verifier MUST resolve the public key from its registry by `motebit_id`. Verifying against a key carried in or alongside the request defeats the design — possession of the registered key IS the account.
 - Steps 1–5 are mandatory for every verifier. Step 6 is mandatory only for verifiers that advertise replay-once semantics.
+- Freshness (Step 2) is **on by default and fail-closed**: `now` defaults to the wall clock, so a verifier that supplies neither `now` nor `windowMs` still rejects a stale envelope. An implementation MAY expose an explicit opt-out (e.g. `checkFreshness: false`) for re-verifying a _historical_ envelope outside a live request path, but a live request-auth verifier MUST NOT disable Step 2 — a verifier that runs freshness only when a clock is passed in ships a forever replay window to any caller who forgets to pass one.
 - Default freshness window: ±300 seconds. Implementations SHOULD allow ~60s additional skew tolerance in distributed deployments.
 
 ---
@@ -112,6 +113,8 @@ Step 7: Accept
 `aud` is a **free-form string**, deliberately not the `TokenAudience` registry of auth-token@1.0 — request audiences are finer-grained than relay operations and owned by each service.
 
 Convention: `"{host}/{route}"`, e.g. `"app.agency.computer/api/monitors"`. The verifier compares for exact equality, fail-closed. A service MAY use coarser audiences (one per service) at the cost of intra-service replay surface; it MUST NOT accept an envelope whose `aud` it does not recognize as its own.
+
+The host part is a stable **service identifier**, not the transport host. A service spanning environments (e.g. dev and prod against one registry) SHOULD fix one `aud` per route and use it everywhere rather than deriving `aud` from the request's `Host:` header — a reflected host splits one service into per-environment audiences and lets a header rewrite move an envelope between them. The identifier need not resolve in DNS; it must only be agreed, fixed, and exact-matched on both sides.
 
 ---
 
@@ -171,6 +174,6 @@ An implementation conforms to this specification if:
 1. Envelopes contain all required fields with `payload_digest` computed over canonical JSON (§2, §3).
 2. The signature covers `canonicalJson(envelope minus signature)` (§3 Step 3).
 3. Verification resolves the key from the registry, never the request (§4 foundation law).
-4. Verification performs Steps 1–5 in order, fail-closed (§4).
+4. Verification performs Steps 1–5 in order, fail-closed; freshness (Step 2) is enabled by default and a live request-auth verifier MUST NOT skip it (§4).
 5. Audience comparison is exact-match (§5).
 6. Replay-once semantics, where offered, honor `nonce` dedup within the freshness window (§6).
