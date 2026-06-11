@@ -266,6 +266,11 @@ const DOCS: ReadonlyArray<DocFile> = [
         key: "publishedTotal",
         label: "Versioning section 'the N published packages above'",
       },
+      {
+        regex: /\(\[`services\/`\]\(services\/\)\) — (\d+) services in four roles/,
+        key: "services",
+        label: "Marketplace section — service count",
+      },
     ],
   },
   {
@@ -278,6 +283,11 @@ const DOCS: ReadonlyArray<DocFile> = [
         key: "apps",
         kind: "sum",
         label: "Architecture line — surfaces + supporting apps",
+      },
+      {
+        regex: /supporting apps, (\d+) services/,
+        key: "services",
+        label: "Architecture line — service count",
       },
     ],
   },
@@ -295,6 +305,16 @@ const DOCS: ReadonlyArray<DocFile> = [
         key: "apps",
         kind: "sum",
         label: "Shape banner — surfaces + supporting apps",
+      },
+      {
+        regex: /supporting apps · (\d+) services/,
+        key: "services",
+        label: "Shape banner — service count",
+      },
+      {
+        regex: /(\d+) packages sit on the permissive floor/,
+        key: "publishedApache",
+        label: "License-tier section — permissive-floor (Apache-2.0) count",
       },
     ],
   },
