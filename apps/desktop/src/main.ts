@@ -1,3 +1,7 @@
+// MUST be first: installs globalThis.Buffer before any Solana-touching module
+// evaluates (see buffer-polyfill.ts). Externalized from index.html so the
+// desktop CSP can forbid inline script.
+import "./buffer-polyfill.js";
 import {
   DesktopApp,
   COLOR_PRESETS,

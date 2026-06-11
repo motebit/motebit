@@ -1,27 +1,14 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <script type="module">
-      // Buffer polyfill for @solana/web3.js + @solana/spl-token (pulled in
-      // via @motebit/wallet-solana). These Solana libraries reference
-      // Node's Buffer as a global at module-eval time, which doesn't
-      // exist in browsers or Tauri's webview. Must run before any module
-      // import. Mirrors apps/web/index.html — sibling-boundary rule.
-      import { Buffer } from "buffer";
-      globalThis.Buffer = Buffer;
-    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Motebit</title>
-    <script>
-      // Anti-flash: apply theme before first paint
-      (function () {
-        var t = localStorage.getItem("motebit-theme");
-        var d =
-          t === "dark" || (t !== "light" && matchMedia("(prefers-color-scheme:dark)").matches);
-        if (d) document.documentElement.dataset.theme = "dark";
-      })();
-    </script>
+    <!-- Inline scripts externalized so the desktop CSP can forbid inline
+         script (script-src 'self'), the XSS->RCE backstop. The Buffer polyfill
+         moved to the first import of src/main.ts; the anti-flash theme init is
+         a classic blocking script served from public/ under 'self'. -->
+    <script src="/theme-init.js"></script>
     <style>
       /* === Selection-leak defense ===
        *
@@ -6237,9 +6224,8 @@
         <div class="divergence-banner-title">Previous identity could not be loaded</div>
         <div class="divergence-banner-text">
           The keystore had no matching private key for
-          <code id="divergence-banner-motebit-id">…</code>. A new identity was created on
-          this device. If you have a backup, restore it to recover funds, credentials, and
-          trust.
+          <code id="divergence-banner-motebit-id">…</code>. A new identity was created on this
+          device. If you have a backup, restore it to recover funds, credentials, and trust.
         </div>
       </div>
       <div class="divergence-banner-actions">
@@ -6461,7 +6447,10 @@
       <div id="cap-pane-connections" class="capabilities-pane" style="display: none">
         <div style="padding: 12px; overflow-y: auto">
           <div id="mcp-server-list" style="margin-bottom: 8px"></div>
-          <div id="mcp-empty" style="font-size:12px;color:rgba(255,255,255,0.3);padding:8px 0;">
+          <div
+            id="mcp-empty"
+            style="font-size: 12px; color: rgba(255, 255, 255, 0.3); padding: 8px 0"
+          >
             No MCP servers configured
           </div>
           <button class="mcp-add-btn" id="mcp-add-toggle">+ Add Server</button>
@@ -6755,7 +6744,10 @@
            is part of the create flow so envelope sizing is a deliberate
            choice, not a buried setting. -->
       <div id="goal-add-form">
-        <textarea id="goal-prompt" placeholder="Describe the outcome — motebit figures out how"></textarea>
+        <textarea
+          id="goal-prompt"
+          placeholder="Describe the outcome — motebit figures out how"
+        ></textarea>
         <div class="goal-form-row">
           <select id="goal-interval">
             <option value="1800000">Every 30m</option>
@@ -6813,9 +6805,7 @@
         <div id="agents-empty" class="panel-empty-pulse">
           <div class="panel-empty-pulse-dot"></div>
           <div class="panel-empty-pulse-title">Known agents appear here</div>
-          <div class="panel-empty-pulse-sub">
-            as your motebit discovers them through delegation
-          </div>
+          <div class="panel-empty-pulse-sub">as your motebit discovers them through delegation</div>
         </div>
       </div>
       <div id="agents-discover-pane" class="agents-pane" style="display: none">
@@ -7129,10 +7119,7 @@
                   <select id="settings-cloud-model"></select>
                 </div>
                 <div id="billing-topup" style="display: none; margin-bottom: 10px">
-                  <div
-                    id="billing-topup-buttons"
-                    style="display: flex; gap: 8px"
-                  ></div>
+                  <div id="billing-topup-buttons" style="display: flex; gap: 8px"></div>
                 </div>
                 <div id="billing-actions" style="text-align: right; padding-bottom: 4px"></div>
               </div>
@@ -7152,7 +7139,12 @@
               </div>
               <div
                 id="billing-message"
-                style="font-size: 11px; color: var(--text-muted); text-align: center; margin-top: 8px"
+                style="
+                  font-size: 11px;
+                  color: var(--text-muted);
+                  text-align: center;
+                  margin-top: 8px;
+                "
               ></div>
             </div>
 
@@ -7256,7 +7248,14 @@
               <div class="settings-field">
                 <label for="settings-apikey">API Key</label>
                 <div class="settings-key-row">
-                  <input id="settings-apikey" type="password" placeholder="sk-ant-..." autocomplete="new-password" data-1p-ignore data-lpignore="true" />
+                  <input
+                    id="settings-apikey"
+                    type="password"
+                    placeholder="sk-ant-..."
+                    autocomplete="new-password"
+                    data-1p-ignore
+                    data-lpignore="true"
+                  />
                   <button id="settings-apikey-toggle" type="button">Show</button>
                 </div>
               </div>
@@ -7294,8 +7293,7 @@
               </div>
               <div class="ollama-status" id="settings-ondevice-status"></div>
               <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px">
-                Auto-detects Ollama, LM Studio, llama.cpp, Jan, or any
-                OpenAI-compatible server.
+                Auto-detects Ollama, LM Studio, llama.cpp, Jan, or any OpenAI-compatible server.
               </div>
             </div>
 
@@ -7343,7 +7341,14 @@
             <div class="settings-field">
               <label for="settings-elevenlabs-apikey">ElevenLabs API Key</label>
               <div class="settings-key-row">
-                <input id="settings-elevenlabs-apikey" type="password" placeholder="xi-..." autocomplete="new-password" data-1p-ignore data-lpignore="true" />
+                <input
+                  id="settings-elevenlabs-apikey"
+                  type="password"
+                  placeholder="xi-..."
+                  autocomplete="new-password"
+                  data-1p-ignore
+                  data-lpignore="true"
+                />
                 <button id="settings-elevenlabs-apikey-toggle" type="button">Show</button>
               </div>
               <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
@@ -7353,7 +7358,14 @@
             <div class="settings-field" style="margin-top: 10px">
               <label for="settings-inworld-apikey">Inworld API Key</label>
               <div class="settings-key-row">
-                <input id="settings-inworld-apikey" type="password" placeholder="..." autocomplete="new-password" data-1p-ignore data-lpignore="true" />
+                <input
+                  id="settings-inworld-apikey"
+                  type="password"
+                  placeholder="..."
+                  autocomplete="new-password"
+                  data-1p-ignore
+                  data-lpignore="true"
+                />
                 <button id="settings-inworld-apikey-toggle" type="button">Show</button>
               </div>
               <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
@@ -7363,7 +7375,14 @@
             <div class="settings-field" style="margin-top: 10px">
               <label for="settings-deepgram-apikey">Deepgram API Key</label>
               <div class="settings-key-row">
-                <input id="settings-deepgram-apikey" type="password" placeholder="..." autocomplete="new-password" data-1p-ignore data-lpignore="true" />
+                <input
+                  id="settings-deepgram-apikey"
+                  type="password"
+                  placeholder="..."
+                  autocomplete="new-password"
+                  data-1p-ignore
+                  data-lpignore="true"
+                />
                 <button id="settings-deepgram-apikey-toggle" type="button">Show</button>
               </div>
               <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
@@ -7683,16 +7702,12 @@
             <div style="font-size: 11px; color: var(--text-muted); margin-top: -2px">
               Full identity bundle. You'll also need your recovery seed.
             </div>
-            <button
-              class="settings-outline-btn"
-              id="settings-restore-seed"
-              style="margin-top: 4px"
-            >
+            <button class="settings-outline-btn" id="settings-restore-seed" style="margin-top: 4px">
               Restore from recovery seed…
             </button>
             <div style="font-size: 11px; color: var(--text-muted); margin-top: -2px">
-              Raw key only. Reclaims funds + private key, but creates a new motebit_id
-              (the original UUID is not derivable from the seed).
+              Raw key only. Reclaims funds + private key, but creates a new motebit_id (the original
+              UUID is not derivable from the seed).
             </div>
           </div>
         </div>
@@ -7711,8 +7726,8 @@
         <div id="restore-step-file" class="restore-step">
           <div class="restore-title">Restore from motebit.md</div>
           <div class="restore-body">
-            Select your motebit.md backup file. You'll provide your recovery seed in
-            the next step to complete the restore.
+            Select your motebit.md backup file. You'll provide your recovery seed in the next step
+            to complete the restore.
           </div>
           <div class="restore-actions">
             <button id="restore-cancel-1" class="restore-cancel">Cancel</button>
@@ -7722,9 +7737,9 @@
         <div id="restore-step-seed-only" class="restore-step" style="display: none">
           <div class="restore-title">Restore from recovery seed</div>
           <div class="restore-body">
-            Paste your 64-hex-char recovery seed. The original motebit_id cannot be
-            recovered from the seed alone — a new one will be assigned. Your
-            cryptographic identity (private key + Solana address + funds) is preserved.
+            Paste your 64-hex-char recovery seed. The original motebit_id cannot be recovered from
+            the seed alone — a new one will be assigned. Your cryptographic identity (private key +
+            Solana address + funds) is preserved.
           </div>
           <div class="restore-field-group">
             <label class="restore-label" for="restore-seed-only-input">
@@ -7734,7 +7749,10 @@
               id="restore-seed-only-input"
               type="password"
               autocomplete="off"
-              placeholder="Paste your recovery seed" data-1p-ignore data-lpignore="true" />
+              placeholder="Paste your recovery seed"
+              data-1p-ignore
+              data-lpignore="true"
+            />
             <div id="restore-seed-only-status" class="restore-status"></div>
           </div>
           <div class="restore-actions">
@@ -7752,7 +7770,10 @@
               id="restore-seed"
               type="password"
               autocomplete="off"
-              placeholder="Paste your recovery seed" data-1p-ignore data-lpignore="true" />
+              placeholder="Paste your recovery seed"
+              data-1p-ignore
+              data-lpignore="true"
+            />
             <div id="restore-seed-status" class="restore-status"></div>
           </div>
           <label class="restore-checkbox restore-checkbox-active">
@@ -7765,8 +7786,8 @@
             </span>
           </label>
           <div class="restore-warning">
-            This replaces your current identity. Funds, credentials, and trust
-            currently on this device will be ORPHANED. Cannot be undone.
+            This replaces your current identity. Funds, credentials, and trust currently on this
+            device will be ORPHANED. Cannot be undone.
           </div>
           <div class="restore-field-group">
             <label class="restore-label" for="restore-confirm">
@@ -7782,9 +7803,7 @@
           <div id="restore-error" class="restore-error"></div>
           <div class="restore-actions">
             <button id="restore-cancel-2" class="restore-cancel">Cancel</button>
-            <button id="restore-replace" class="restore-primary" disabled>
-              Replace identity
-            </button>
+            <button id="restore-replace" class="restore-primary" disabled>Replace identity</button>
           </div>
         </div>
       </div>
@@ -7798,14 +7817,22 @@
           maxlength="6"
           placeholder="PIN"
           inputmode="numeric"
-          pattern="\d*" autocomplete="off" data-1p-ignore data-lpignore="true" />
+          pattern="\d*"
+          autocomplete="off"
+          data-1p-ignore
+          data-lpignore="true"
+        />
         <input
           id="pin-confirm-input"
           type="password"
           maxlength="6"
           placeholder="Confirm PIN"
           inputmode="numeric"
-          pattern="\d*" autocomplete="off" data-1p-ignore data-lpignore="true" />
+          pattern="\d*"
+          autocomplete="off"
+          data-1p-ignore
+          data-lpignore="true"
+        />
         <div id="pin-hint">4–6 digits</div>
         <div
           id="pin-confirm-text"
@@ -7852,7 +7879,10 @@
           "
         />
         <div id="rotate-key-error" style="color: #ff6b6b; font-size: 12px; display: none"></div>
-        <div id="rotate-key-result" style="color: var(--accent); font-size: 12px; display: none"></div>
+        <div
+          id="rotate-key-result"
+          style="color: var(--accent); font-size: 12px; display: none"
+        ></div>
         <div class="pin-actions">
           <button id="rotate-key-cancel">Cancel</button>
           <button

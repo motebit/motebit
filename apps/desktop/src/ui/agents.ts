@@ -638,10 +638,17 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
 
       const text = document.createElement("span");
       const price = priceByCapability.get(cap);
+      // `cap` and `price.per` are relay-supplied DiscoveredAgent fields —
+      // untrusted. Build via textContent, never innerHTML: a capability named
+      // `x<img src=q onerror=...>` would otherwise reach the privileged Tauri
+      // webview's IPC. (docs/doctrine/surface-authority-model.md — frontends
+      // render untrusted peer data; the slab path sandboxes, this one must escape.)
+      text.textContent = cap;
       if (price && price.unit_cost > 0) {
-        text.innerHTML = `${cap} <span class="delegate-cap-price">· $${price.unit_cost.toFixed(2)}/${price.per}</span>`;
-      } else {
-        text.textContent = cap;
+        const priceEl = document.createElement("span");
+        priceEl.className = "delegate-cap-price";
+        priceEl.textContent = `· $${price.unit_cost.toFixed(2)}/${price.per}`;
+        text.append(" ", priceEl);
       }
       label.appendChild(text);
       delegateDialogCaps.appendChild(label);
