@@ -3,6 +3,7 @@
 mod computer_use;
 mod secure_enclave;
 mod skills;
+mod tool_guard;
 mod tpm;
 
 use computer_use::{computer_execute, computer_query_display};
@@ -606,8 +607,22 @@ fn home_dir() -> Option<String> {
 
 // === Privileged Tool Commands ===
 
+/// Deny the file tools access to the sovereign state dir `~/.motebit`
+/// (keyring, config, db). Defense-in-depth at the privilege boundary: even a
+/// direct IPC call that bypassed the TS policy gate cannot read or overwrite
+/// the secrets. See `tool_guard` + docs/doctrine/surface-authority-model.md.
+fn deny_if_protected(path: &str) -> Result<(), String> {
+    if let Some(root) = tool_guard::motebit_root() {
+        if tool_guard::is_protected_path(std::path::Path::new(path), &root) {
+            return Err("access to the motebit state directory (~/.motebit) is not permitted".into());
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn read_file_tool(path: String) -> Result<String, String> {
+    deny_if_protected(&path)?;
     std::fs::read_to_string(&path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => format!("File not found: {}", path),
         std::io::ErrorKind::PermissionDenied => format!("Permission denied: {}", path),
@@ -617,6 +632,7 @@ fn read_file_tool(path: String) -> Result<String, String> {
 
 #[tauri::command]
 fn write_file_tool(path: String, content: String) -> Result<String, String> {
+    deny_if_protected(&path)?;
     // Create parent directories if needed
     if let Some(parent) = std::path::Path::new(&path).parent() {
         std::fs::create_dir_all(parent)
@@ -640,6 +656,16 @@ struct ShellExecResult {
 #[tauri::command]
 fn shell_exec_tool(command: String, cwd: Option<String>) -> Result<ShellExecResult, String> {
     use std::process::Command;
+
+    // Best-effort destructive-command guard (catastrophic-wipe protection).
+    // NOT a complete shell boundary — raw `sh -c` stays powerful by design;
+    // the CSP is the upstream defense and the full sandbox is deferred
+    // (docs/doctrine/surface-authority-model.md).
+    if let Some(pattern) = tool_guard::is_destructive_command(&command) {
+        return Err(format!(
+            "blocked: destructive command pattern '{pattern}' is not permitted"
+        ));
+    }
 
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(&command);
