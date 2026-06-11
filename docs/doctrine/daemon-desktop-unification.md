@@ -1,0 +1,44 @@
+# Daemon ⟷ desktop unification: host election by first bind, capability bridging
+
+The keystone invariant in [`surface-authority-model.md`](surface-authority-model.md) — one sovereign runtime per machine, frontends attach — left one sub-question to build time: **which process runs the single coordinator, and how do the others find it.** This memo records the decision (2026-06-11, grounded against the real keyring-sharing and process inventory) and scopes the build.
+
+## Ground truth the rule is built against
+
+Every local entry point today instantiates its own full `@motebit/runtime`: the CLI REPL (`apps/cli/src/index.ts`), the daemon (`motebit run`, `apps/cli/src/daemon.ts`), the MCP server (`motebit serve`), and the desktop app (`apps/desktop/src/index.ts`, runtime in the webview, privileged organs in `apps/desktop/src-tauri/src/main.rs`). Four potential policy/signing/receipt authorities over **one** identity key (shared OS keyring) and **one** SQLite file — with no lockfile, no election, no local IPC, and nothing preventing two daemons. The vscode shape (spawn `motebit lsp` over stdio) proves thin-client rendering, but nothing today _attaches to a running_ runtime. Two assets lower the build cost: `motebit serve` already exposes a localhost transport with signed-token auth, and `signed-request-envelope@1.0` ships the envelope the remote-ingress increment needs.
+
+## The election rule (decided)
+
+**The coordinator endpoint is the election.** One canonical local endpoint per machine — a unix domain socket at `~/.motebit/runtime.sock` (Windows: named pipe), mode 0600, plus a PID lockfile. The OS guarantees exactly one binder; **the first motebit process to bind is the coordinator**. Every other motebit process that starts detects the live endpoint and attaches as a frontend instead of instantiating its own authority.
+
+**Attachment is a signed handshake, not an open socket.** An attaching process authenticates with a device-key-signed token under a new closed-registry audience (`runtime:attach` joins `TokenAudience` with its eight-artifact registry obligations). After the handshake: typed `invokeCapability` proxying coordinator-ward, receipt/event streaming frontend-ward, protocol version exchanged up front — version skew refuses with an honest error, never silently degrades.
+
+**Capability bridging replaces handover.** The reason [`surface-authority-model.md`](surface-authority-model.md) called desktop "the natural coordinator when present" is that desktop carries the visible control surface (halt, approvals, OS-drive view) and mints hardware attestation. Bridging satisfies those reasons without transferring authority: whichever process coordinates, the **attached** process registers its unique organs as bridged capabilities — desktop attaching to a daemon still contributes Secure-Enclave attestation, computer-use, and the GUI halt/approval surface; a daemon attaching to desktop still contributes headless scheduling. Bridging makes the election outcome **operationally neutral for capability**, which is exactly what licenses first-binder-wins: no live handover protocol — the riskiest component, with a structural two-coordinators window mid-transfer — ships in v1. _Named trigger to revisit handover:_ a concrete user-hit wall that bridging structurally cannot serve (not inconvenience — a capability that must run in the coordinator process itself).
+
+**Authority narrows in phases.** v1 serializes **policy decisions, signing operations, and receipt/state-event writes** through the coordinator — the three things two processes must never do in parallel over one key. Storage stays shared-WAL with today's vector-clock conflict semantics. Full single-writer storage is a later increment carrying its own state-holder analysis per [`migration-cleanup.md`](migration-cleanup.md).
+
+## Failure modes and their designed answers
+
+- **Stale lockfile after a crash** — PID liveness probe; a dead PID's lock is taken over and the socket rebound. The lock is advisory metadata; the bind is the truth.
+- **Socket squatting by another local user** — 0600 endpoint permissions AND the signed handshake; possession of the device key is the authority, the socket is just transport.
+- **Coordinator exits with frontends attached** — frontends detect EOF and re-elect; the bind guarantees exactly one winner. In-flight invocations fail loudly to their origin frontend (honest degradation, never silent retry across an authority boundary).
+- **Version skew** between CLI and desktop builds — handshake version check, refuse + name the mismatch.
+- **Desktop installed but not running** — nothing binds on its behalf; the first process that runs coordinates. No phantom preference.
+- **Simultaneous start** — both race the bind; the loser attaches. No tie-break logic beyond the OS's.
+- **The drift this whole arc forbids** — any entry point instantiating a runtime without routing through the election. Locked by the increment-5 drift gate, not by review.
+
+## Increments
+
+1. **`@motebit/runtime-host`** — election (bind + lockfile), signed attach handshake, capability-proxy + receipt-stream protocol. Protocol-shaped, so it is a package; never inline in `apps/*` (root-CLAUDE.md service-primitives rule).
+2. **CLI adopts** — daemon binds; REPL and `motebit serve` attach when a coordinator is live; single-instance enforcement lands here.
+3. **Desktop adopts** — attach-or-bind on launch; Tauri organs (SE attest, computer-use, keychain) registered as bridged capabilities.
+4. **Remote ingress hardened** — `command_request` (today an unsigned relay-forwarded message) becomes a `signed-request-envelope@1.0` consumer, satisfying the product-posture precondition for ever advertising remote-trigger.
+5. **Drift gate + ledger** — a runtime-host-election drift gate (named and registered when it lands): every runtime-instantiating entry point routes through the election; registered per [`registry-pattern-canonical.md`](registry-pattern-canonical.md) discipline (check.ts, drift-defenses, effectiveness probe).
+
+## Cross-cuts
+
+- [`surface-authority-model.md`](surface-authority-model.md) — the keystone invariant and the product posture this memo resolves the open sub-question of.
+- [`hardware-attestation.md`](hardware-attestation.md) — why election is coordination, not key custody: attestation mints a separate attestor key over the shared identity key; no process "owns" the key by coordinating.
+- [`memory-never-confers-authority.md`](memory-never-confers-authority.md) — the policy gate the coordinator serializes; R4 semantics are unchanged by where the gate runs.
+- [`surface-determinism.md`](surface-determinism.md) — attached frontends invoke typed capabilities over the proxy, never constructed prompts.
+- [`migration-cleanup.md`](migration-cleanup.md) — the state-holder analysis the single-writer storage increment owes before it ships.
+- [`deprecation-lifecycle.md`](deprecation-lifecycle.md) — the standalone-runtime paths in CLI/desktop follow the deprecation contract once attach paths are proven, never silent removal.
