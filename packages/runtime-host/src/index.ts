@@ -12,6 +12,8 @@ export type {
   HelloAckMessage,
   RefuseMessage,
   InvokeMessage,
+  ChatMessage,
+  ResolveApprovalMessage,
   ChunkMessage,
   EndMessage,
   InvokeErrorMessage,
@@ -27,7 +29,13 @@ export { readLockfile, writeLockfile, removeLockfile, isPidAlive } from "./lockf
 export type { LockfileRecord } from "./lockfile.js";
 
 export { RuntimeHostServer, CoordinatorAlreadyBoundError } from "./server.js";
-export type { RuntimeHostServerOptions, RuntimeHostLogger, InvokeHandler } from "./server.js";
+export type {
+  RuntimeHostServerOptions,
+  RuntimeHostLogger,
+  InvokeHandler,
+  ChatHandler,
+  ResolveApprovalHandler,
+} from "./server.js";
 
 export {
   RuntimeHostClient,

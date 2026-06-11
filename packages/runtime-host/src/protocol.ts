@@ -44,6 +44,33 @@ export interface InvokeMessage {
   options?: Record<string, unknown>;
 }
 
+/**
+ * Proxy one conversational turn to the coordinator's runtime
+ * (`sendMessageStreaming`). Deliberately a distinct frame from
+ * `invoke`: capabilities are deterministic affordances, chat is the AI
+ * loop — the distinction stays typed end-to-end
+ * (`docs/doctrine/surface-determinism.md`).
+ */
+export interface ChatMessage {
+  t: "chat";
+  id: string;
+  text: string;
+  options?: Record<string, unknown>;
+}
+
+/**
+ * Resolve a pending approval surfaced by an `approval_request` chunk.
+ * The chat stream ends after yielding the request; the continuation
+ * turn streams back under THIS frame's id (mirrors the in-process
+ * `resolveApprovalVote` shape).
+ */
+export interface ResolveApprovalMessage {
+  t: "resolve_approval";
+  id: string;
+  approved: boolean;
+  approver_id: string;
+}
+
 /** Subscribe this connection to a coordinator event channel. */
 export interface SubscribeMessage {
   t: "subscribe";
@@ -56,7 +83,13 @@ export interface UnsubscribeMessage {
   channel: string;
 }
 
-export type ClientMessage = HelloMessage | InvokeMessage | SubscribeMessage | UnsubscribeMessage;
+export type ClientMessage =
+  | HelloMessage
+  | InvokeMessage
+  | ChatMessage
+  | ResolveApprovalMessage
+  | SubscribeMessage
+  | UnsubscribeMessage;
 
 // === Coordinator → client ====================================================
 

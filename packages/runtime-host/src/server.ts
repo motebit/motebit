@@ -47,6 +47,27 @@ export type InvokeHandler = (
   ctx: { signal: AbortSignal },
 ) => AsyncIterable<unknown>;
 
+/**
+ * The conversational seam — wired to the runtime's
+ * `sendMessageStreaming`. Distinct from `InvokeHandler` by doctrine:
+ * chat is the AI loop, invoke is a deterministic affordance.
+ */
+export type ChatHandler = (
+  text: string,
+  options: Record<string, unknown> | undefined,
+  ctx: { signal: AbortSignal },
+) => AsyncIterable<unknown>;
+
+/**
+ * The approval-resolution seam — wired to the runtime's
+ * `resolveApprovalVote`. Streams the continuation turn's chunks.
+ */
+export type ResolveApprovalHandler = (
+  approved: boolean,
+  approverId: string,
+  ctx: { signal: AbortSignal },
+) => AsyncIterable<unknown>;
+
 export interface RuntimeHostServerOptions {
   socketPath: string;
   lockfilePath: string;
@@ -59,6 +80,10 @@ export interface RuntimeHostServerOptions {
    */
   resolveDevicePublicKey: (deviceId: string) => Uint8Array | null | Promise<Uint8Array | null>;
   onInvoke: InvokeHandler;
+  /** Absent ⇒ chat frames answer `invoke_error` ("not supported"), never silently drop. */
+  onChat?: ChatHandler;
+  /** Absent ⇒ resolve_approval frames answer `invoke_error`, never silently drop. */
+  onResolveApproval?: ResolveApprovalHandler;
   logger?: RuntimeHostLogger;
   /** Injectable for tests. Defaults to `process.pid`. */
   pid?: number;
@@ -243,8 +268,58 @@ export class RuntimeHostServer {
         if (typeof message.channel === "string") conn.channels.delete(message.channel);
         return;
       case "invoke":
-        await this.onInvoke(conn, message.id, message.capability, message.prompt, message.options);
+        if (
+          typeof message.id !== "string" ||
+          typeof message.capability !== "string" ||
+          typeof message.prompt !== "string"
+        ) {
+          this.destroyConnection(conn);
+          return;
+        }
+        await this.runStream(conn, message.id, (ctx) =>
+          this.opts.onInvoke(message.capability, message.prompt, message.options, ctx),
+        );
         return;
+      case "chat": {
+        if (typeof message.id !== "string" || typeof message.text !== "string") {
+          this.destroyConnection(conn);
+          return;
+        }
+        const onChat = this.opts.onChat;
+        if (onChat === undefined) {
+          this.send(conn, {
+            t: "invoke_error",
+            id: message.id,
+            message: "this coordinator does not proxy chat",
+          });
+          return;
+        }
+        await this.runStream(conn, message.id, (ctx) => onChat(message.text, message.options, ctx));
+        return;
+      }
+      case "resolve_approval": {
+        if (
+          typeof message.id !== "string" ||
+          typeof message.approved !== "boolean" ||
+          typeof message.approver_id !== "string"
+        ) {
+          this.destroyConnection(conn);
+          return;
+        }
+        const onResolveApproval = this.opts.onResolveApproval;
+        if (onResolveApproval === undefined) {
+          this.send(conn, {
+            t: "invoke_error",
+            id: message.id,
+            message: "this coordinator does not proxy approval resolution",
+          });
+          return;
+        }
+        await this.runStream(conn, message.id, (ctx) =>
+          onResolveApproval(message.approved, message.approver_id, ctx),
+        );
+        return;
+      }
       default:
         this.destroyConnection(conn);
     }
@@ -319,23 +394,16 @@ export class RuntimeHostServer {
     });
   }
 
-  private async onInvoke(
+  /** Drive one handler stream onto the wire: chunk* then end, or invoke_error. */
+  private async runStream(
     conn: Connection,
     id: string,
-    capability: string,
-    prompt: string,
-    options: Record<string, unknown> | undefined,
+    start: (ctx: { signal: AbortSignal }) => AsyncIterable<unknown>,
   ): Promise<void> {
-    if (typeof id !== "string" || typeof capability !== "string" || typeof prompt !== "string") {
-      this.destroyConnection(conn);
-      return;
-    }
     const controller = new AbortController();
     conn.inflight.set(id, controller);
     try {
-      for await (const chunk of this.opts.onInvoke(capability, prompt, options, {
-        signal: controller.signal,
-      })) {
+      for await (const chunk of start({ signal: controller.signal })) {
         if (controller.signal.aborted || conn.socket.destroyed) return;
         this.send(conn, { t: "chunk", id, chunk });
       }

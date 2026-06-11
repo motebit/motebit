@@ -22,5 +22,5 @@ Layer 1. BUSL-1.1. Deps: `@motebit/protocol` (the `runtime:attach` audience), `@
 
 ## Consumers
 
-- `apps/cli` (increment 2) — daemon binds; REPL and `motebit serve` attach.
+- `apps/cli` (increment 2, shipped) — daemon + `motebit serve` bind (refusing honestly when a coordinator is live); the REPL attaches as a rendering frontend (chat / invoke / approval proxying via `apps/cli/src/runtime-host.ts`, which owns the authority-field strip at the wire boundary). Serve-in-attach-mode is the recorded residual.
 - `apps/desktop` (increment 3) — attach-or-bind on launch; Tauri organs become bridged capabilities.

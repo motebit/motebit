@@ -131,23 +131,39 @@ export async function electRuntimeHost(opts: ElectRuntimeHostOptions): Promise<E
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    // 1. Attach to a live coordinator if one answers.
-    try {
-      const client = await RuntimeHostClient.attach({
-        socketPath: opts.socketPath,
-        token: await opts.mintToken(),
-        handshakeTimeoutMs: opts.handshakeTimeoutMs,
-      });
-      return { role: "frontend", client };
-    } catch (err) {
-      if (err instanceof AttachRefusedError) throw err;
-      if (!(err instanceof CoordinatorUnreachableError)) {
+    // 1. Attach to a live coordinator if one answers. Probe before
+    //    minting: the attach token may require an unlocked signing key,
+    //    and the common boot path (no coordinator yet) must not pay —
+    //    or fail — that cost just to discover nothing is listening.
+    if (await probeSocketLive(opts.socketPath, retryDelayMs * 2)) {
+      let token: string;
+      try {
+        token = await opts.mintToken();
+      } catch (err) {
         throw new Error(
-          `runtime-host attach failed: ${err instanceof Error ? err.message : String(err)}`,
+          `a coordinator is live at ${opts.socketPath} but minting the attach token failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
           { cause: err },
         );
       }
-      lastError = err;
+      try {
+        const client = await RuntimeHostClient.attach({
+          socketPath: opts.socketPath,
+          token,
+          handshakeTimeoutMs: opts.handshakeTimeoutMs,
+        });
+        return { role: "frontend", client };
+      } catch (err) {
+        if (err instanceof AttachRefusedError) throw err;
+        if (!(err instanceof CoordinatorUnreachableError)) {
+          throw new Error(
+            `runtime-host attach failed: ${err instanceof Error ? err.message : String(err)}`,
+            { cause: err },
+          );
+        }
+        lastError = err;
+      }
     }
 
     // 2. Nothing answered. A lockfile naming a live PID may be a

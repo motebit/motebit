@@ -21,6 +21,9 @@ import {
 } from "./runtime-factory.js";
 import { consumeStream } from "./stream.js";
 import { readInput, writeOutput, initTerminal, destroyTerminal } from "./terminal.js";
+import { electCliRuntimeHost } from "./runtime-host.js";
+import { runAttachedRepl } from "./attached-repl.js";
+import type { ElectionOutcome } from "@motebit/runtime-host";
 import {
   prompt as promptColor,
   meta,
@@ -566,6 +569,39 @@ async function main(): Promise<void> {
   };
   const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
 
+  // Runtime-host election (daemon-desktop unification): one coordinator
+  // runtime per machine. If another motebit process already binds the
+  // socket, this REPL attaches as a rendering frontend instead of
+  // constructing a second authority.
+  let election: ElectionOutcome;
+  try {
+    election = await electCliRuntimeHost({
+      fullConfig: reloadedConfig,
+      motebitId,
+      loadPrivateKey: () =>
+        privateKeyBytes !== undefined
+          ? Promise.resolve(privateKeyBytes)
+          : Promise.reject(
+              new Error("signing key unavailable — cannot attach to the running coordinator"),
+            ),
+      runtimeRef,
+    });
+  } catch (err: unknown) {
+    console.error(
+      `Runtime-host election failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    console.error(
+      "Another motebit process may be coordinating with an incompatible build. Stop it and retry.",
+    );
+    destroyTerminal();
+    process.exit(1);
+  }
+  if (election.role === "frontend") {
+    await runAttachedRepl(election.client, motebitId);
+    return;
+  }
+  const runtimeHostServer = election.server;
+
   // MCP servers from config — overlay trust from trusted list, inject caller identity for motebit servers
   const trustedServers = fullConfig.mcp_trusted_servers ?? [];
   const mcpServers = (fullConfig.mcp_servers ?? []).map((s) => ({
@@ -758,6 +794,8 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     destroyTerminal();
+    // Release the runtime-host socket first so a successor can elect.
+    await runtimeHostServer.close().catch(() => {});
     runtime.stop();
     // Disconnect MCP servers
     await Promise.allSettled(mcpAdapters.map((a) => a.disconnect()));

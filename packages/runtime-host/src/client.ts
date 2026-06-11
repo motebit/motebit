@@ -208,11 +208,39 @@ export class RuntimeHostClient {
     prompt: string,
     options?: Record<string, unknown>,
   ): AsyncGenerator<unknown> {
+    yield* this.stream((id) => ({ t: "invoke", id, capability, prompt, options }));
+  }
+
+  /**
+   * Proxy one conversational turn (`sendMessageStreaming`) to the
+   * coordinator. A turn that pauses on `approval_request` ends its
+   * stream; continue it with `resolveApproval`.
+   */
+  async *chat(text: string, options?: Record<string, unknown>): AsyncGenerator<unknown> {
+    yield* this.stream((id) => ({ t: "chat", id, text, options }));
+  }
+
+  /**
+   * Resolve a pending approval on the coordinator
+   * (`resolveApprovalVote`); yields the continuation turn's chunks.
+   */
+  async *resolveApproval(approved: boolean, approverId: string): AsyncGenerator<unknown> {
+    yield* this.stream((id) => ({
+      t: "resolve_approval",
+      id,
+      approved,
+      approver_id: approverId,
+    }));
+  }
+
+  private async *stream(
+    buildFrame: (id: string) => Parameters<typeof encodeFrame>[0],
+  ): AsyncGenerator<unknown> {
     if (this.closed) throw new Error("runtime-host client is closed");
     const id = randomUUID();
     const state: InflightInvoke = { queue: [], done: false, error: null, wake: null };
     this.inflight.set(id, state);
-    this.socket.write(encodeFrame({ t: "invoke", id, capability, prompt, options }));
+    this.socket.write(encodeFrame(buildFrame(id)));
     try {
       for (;;) {
         while (state.queue.length > 0) yield state.queue.shift();
