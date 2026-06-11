@@ -1,5 +1,35 @@
 # @motebit/crypto Changelog
 
+## 3.6.0
+
+### Minor Changes
+
+- 93ff63c: Land `signed-request-envelope@1.0` — stateless per-request identity authentication.
+
+  A `SignedRequestEnvelope` authenticates a single request from a registered motebit identity to a service endpoint: the key is the login. It binds the requesting `motebit_id`, a timestamp, a SHA-256 digest of the (detached) request body, and an audience into one Ed25519 signature, verified against the identity's **registered** public key — never a key the request self-asserts. The stateless sibling of `auth-token@1.0`, for a different caller and trust root.
+
+  Forced by agency (Q1), who run the inline-payload predecessor in production (`apps/app/lib/signed-request.ts`); their module collapses to a re-export now that the primitives publish.
+
+  Adds:
+  - `@motebit/protocol`: the `SignedRequestEnvelope` type.
+  - `@motebit/crypto`: `signRequestEnvelope(payload, fields, identityPrivateKey)` + `verifyRequestEnvelope(envelope, registeredPublicKey, options?)` — JCS + Ed25519 + base64url-sig, same suite as the rest of the identity family; the registered key is a verify-side parameter (the trust move). Self-verifiable per crypto rule 4.
+  - `@motebit/verifier`: re-exports both, so a consumer validates the whole flow through the package it already pins.
+  - `@motebit/wire-schemas` (private): zod schema + committed `spec/schemas/signed-request-envelope-v1.json` (parity-locked).
+  - `spec/signed-request-envelope-v1.md` + `scripts/check-signed-artifact-verifiers.ts` REGISTRY entry (`SignedRequestEnvelope` → `verifyRequestEnvelope`).
+
+  Three review improvements over agency's draft are folded in: the detached `payload_digest` (envelope detaches from the body), the verifier MUST parse-then-canonicalize the received body (§7.2), and `aud` is a free-form audience string rather than the coarse `TokenAudience` registry.
+
+- 3044a2a: standing-delegation v1.1 — optional `not_before` on `DelegationToken` makes pre-minting honest.
+
+  agency, building standing monitors on `standing-delegation@1.0`, surfaced a real gap: a sovereign delegator (passkey-gated seed) can't sign per-tick tokens at tick time, so the conformant pattern is **pre-minting** — sign every cadence slot's token at grant-creation. But `DelegationToken` had no activation field and `verifyDelegation` checked only `expires_at`, so a future-windowed pre-minted token verified **early** — offline, a slot's token was indistinguishable from one minted at its slot.
+
+  Fix (additive, fully backward-compatible — 1.0 tokens replay identically):
+  - `@motebit/protocol`: `DelegationToken` gains an optional `not_before` (Unix ms).
+  - `@motebit/crypto`: `verifyDelegation` rejects when `now < not_before` (gated under `checkExpiry`, so historical chain verification skips it like expiry). `@motebit/wire-schemas` zod + regenerated `spec/schemas/delegation-token-v1.json`.
+  - Spec: `standing-delegation-v1.md` §1/§4 reframed — the per-tick token is **signed by the delegator** (the prose said "the delegate mints"; the code rejects delegate-signed ticks, so the prose was the drift), pre-minting is the documented v1.0 model, and cadence is bound cryptographically by the signed token set rather than demoted to a rate-limit. `market-v1.md` §12.1 gains the `not_before` field + verification step.
+
+  Holder-side (delegate-signed) minting stays a deliberate **non-goal in v1.0** — agency's doctrine-grounded call: for a receipts-over-trust product, keeping cadence cryptographic beats deleting pre-mint code. A future version MAY add it behind an explicit trigger.
+
 ## 3.5.0
 
 ### Minor Changes
