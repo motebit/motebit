@@ -778,6 +778,10 @@ export async function verifyDelegation(
   if (checkExpiry) {
     const now = options?.now ?? Date.now();
     if (delegation.expires_at < now) return false;
+    // Activation time: a pre-minted future-slot tick must not verify before its
+    // slot (standing-delegation@1.0 §3). Absent ⇒ active from issued_at. Gated
+    // under checkExpiry so historical chain verification skips it like expiry.
+    if (delegation.not_before !== undefined && now < delegation.not_before) return false;
   }
 
   const { signature, ...body } = delegation;

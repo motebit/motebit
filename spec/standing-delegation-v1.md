@@ -8,7 +8,9 @@
 
 `delegation@1.0` authorizes ONE act: a `DelegationToken` is short-lived by invariant (required `expires_at`, recommended 1h / max 24h, rejected once expired) and carries no cadence and no revocation. That is correct for a single delegated task. It does not model **standing** work — "this key authorizes daily research on subject S until I revoke it."
 
-This spec defines that missing shape. A `StandingDelegation` is a signed, revocable grant that does **not** authorize a task itself — it authorizes its holder to **mint short-lived per-tick `DelegationToken`s** within a fixed scope ceiling and cadence, for a long-but-finite, revocable lifetime. The standing authority lives only on the grant; each minted token stays short-lived and task-scoped; revocation lives on the grant. It also closes a gap that exists independently: delegation previously had no published revocation story.
+This spec defines that missing shape. A `StandingDelegation` is a signed, revocable grant that does **not** authorize a task itself — it authorizes short-lived per-tick `DelegationToken`s, **each signed by the delegator**, to be issued and exercised within a fixed scope ceiling and cadence, for a long-but-finite, revocable lifetime. The standing authority lives only on the grant; each per-tick token stays short-lived and task-scoped; revocation lives on the grant. It also closes a gap that exists independently: delegation previously had no published revocation story.
+
+For a **sovereign delegator** whose key is unlocked only at grant-creation (e.g. a passkey-gated seed that cannot sign at tick time), the canonical pattern is **pre-minting**: sign the grant AND every per-tick token for the grant's life up front — one per cadence slot, future-dated, each `not_before`-gated to its slot (§4) — so a slot's token cannot verify before its slot. This is the v1.0 model and the one a "receipts over trust" consumer should prefer: **cadence is bound cryptographically** by the signed token set (every tick the holder exercises was individually signed by the delegator's key), not merely rate-limited. Letting the delegate sign its own per-tick tokens (holder-side minting) is a deliberate non-goal in v1.0 — see §4.
 
 Every artifact here is signed and **offline-verifiable** (self-attesting): a third party validates a standing monitor's authorization root, every per-tick token, and a revocation with only `@motebit/crypto` (or any Ed25519 library + these JSON Schemas) and the signer's public key — no relay contact.
 
@@ -68,15 +70,17 @@ A complete verification has two parts: **intrinsic** validity (checkable from th
 
 ## 4. Per-tick tokens
 
-A `DelegationToken` (delegation@1.0) gains one OPTIONAL field, `grant_id`. Absent ⇒ a standalone single-act delegation (today's semantics — backward compatible). Present ⇒ this token is one tick of a `StandingDelegation`.
+A `DelegationToken` (delegation@1.0) gains two OPTIONAL fields, `grant_id` and `not_before`. `grant_id` absent ⇒ a standalone single-act delegation (today's semantics — backward compatible); present ⇒ this token is one tick of a `StandingDelegation`. `not_before` (Unix ms) absent ⇒ active from `issued_at`; present ⇒ the token is invalid before it (verifiers reject when `now < not_before`). Both are additive and replay-compatible; 1.0 tokens verify identically.
 
-Each tick, the delegate mints a `DelegationToken` with: the grant's parties; `scope ⊆ grant.scope`; `expires_at - issued_at <= grant.max_token_ttl_ms`; `issued_at` no sooner than the previous tick's `issued_at + grant.cadence_ms`; and `grant_id = grant.grant_id`. The tick's `ExecutionReceipt` references both the per-tick token and `grant_id`, anchoring the receipt chain to the grant.
+Each tick is a `DelegationToken` **signed by the delegator** (verified against `delegator_public_key`; the parties are pinned, so a tick the delegate signed for itself is rejected) with: the grant's parties; `scope ⊆ grant.scope`; `expires_at - issued_at <= grant.max_token_ttl_ms`; `issued_at` no sooner than the previous tick's `issued_at + grant.cadence_ms`; and `grant_id = grant.grant_id`. The tick's `ExecutionReceipt` references both the per-tick token and `grant_id`, anchoring the receipt chain to the grant.
+
+**Who signs, and pre-minting (v1.0 model).** The delegator signs each tick — so for a sovereign delegator the ticks are **pre-minted** at grant-creation while the key is unlocked: one per cadence slot, each future-dated with `not_before` set to its slot start so it cannot verify early. This binds cadence cryptographically (the signed token set _is_ the schedule) and keeps the delegator the sole signer. **Holder-side minting** — letting the grant's `delegate_public_key` sign its own per-tick tokens — would let the holder act with the delegator offline, but it demotes cadence from a cryptographic property to a mint/relay rate-limit (only `scope` stays crypto-bounded). It is a deliberate **non-goal in v1.0**; a future version MAY add it behind an explicit trigger (a consumer that genuinely cannot pre-mint), with the cadence trade-off documented.
 
 #### Verification (foundation law)
 
 A per-tick `DelegationToken` is a valid tick of a grant iff ALL hold (`@motebit/crypto` `verifyTokenAgainstGrant`):
 
-1. The token verifies as a `DelegationToken` (signature + expiry).
+1. The token verifies as a `DelegationToken` (signature + expiry + `not_before` activation).
 2. `token.grant_id == grant.grant_id`.
 3. The grant verifies (§3.1 — including not-revoked).
 4. The parties match: both `delegator_*` AND `delegate_*` equal the grant's.

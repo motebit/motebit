@@ -240,6 +240,15 @@ export interface DelegationToken {
   issued_at: number;
   expires_at: number;
   /**
+   * Optional activation time (Unix ms). Present ⇒ the token is INVALID before
+   * it — `verifyDelegation` rejects when `now < not_before`. This makes
+   * pre-minting honest: a standing grant's delegator can sign a future slot's
+   * tick at grant-creation time (while the seed is unlocked), and that tick
+   * cannot verify until its slot. Absent ⇒ active from `issued_at` (today's
+   * behavior; legacy tokens replay identically). standing-delegation@1.0 §3.
+   */
+  not_before?: number;
+  /**
    * Optional link to a {@link StandingDelegation} this token was minted under.
    * Absent ⇒ a standalone, single-act delegation (today's semantics). Present ⇒
    * one tick of a standing grant; verified against the grant via

@@ -3,6 +3,7 @@ import {
   generateKeypair,
   bytesToHex,
   signDelegation,
+  verifyDelegation,
   signStandingDelegation,
   verifyStandingDelegation,
   verifyTokenAgainstGrant,
@@ -58,6 +59,7 @@ async function mintTick(
       scope: over.scope ?? "web_search",
       issued_at: over.issued_at ?? now,
       expires_at: over.expires_at ?? now + HOUR,
+      ...(over.not_before !== undefined ? { not_before: over.not_before } : {}),
       grant_id: "grant_id" in over ? over.grant_id : grant.grant_id,
     },
     delegator.privateKey,
@@ -211,6 +213,49 @@ describe("verifyTokenAgainstGrant", () => {
     const r = await verifyTokenAgainstGrant(tick, grant, { now });
     expect(r.valid).toBe(false);
     expect(r.error).toMatch(/signature or expiry/);
+  });
+});
+
+describe("verifyDelegation — not_before activation (standing-delegation v1.1)", () => {
+  it("a pre-minted future-slot tick does not verify before its slot, verifies after", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    const slot = Date.now() + 5 * HOUR; // a future cadence slot
+    const tick = await mintTick(grant, alice, bob, {
+      issued_at: slot,
+      not_before: slot,
+      expires_at: slot + HOUR,
+    });
+    // Before the slot: rejected on activation even though the signature is valid.
+    expect(await verifyDelegation(tick, { now: slot - HOUR })).toBe(false);
+    // At/after the slot (and before expiry): valid.
+    expect(await verifyDelegation(tick, { now: slot })).toBe(true);
+    expect(await verifyDelegation(tick, { now: slot + 30 * 60_000 })).toBe(true);
+  });
+
+  it("absent not_before is unconstrained (legacy tokens replay identically)", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    const now = Date.now();
+    const tick = await mintTick(grant, alice, bob, { issued_at: now, expires_at: now + HOUR });
+    expect(tick.not_before).toBeUndefined();
+    expect(await verifyDelegation(tick, { now })).toBe(true);
+  });
+
+  it("checkExpiry:false skips the activation check (historical chain verification)", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    const slot = Date.now() + 5 * HOUR;
+    const tick = await mintTick(grant, alice, bob, {
+      issued_at: slot,
+      not_before: slot,
+      expires_at: slot + HOUR,
+    });
+    // now is before the slot, but historical verification ignores time.
+    expect(await verifyDelegation(tick, { now: slot - HOUR, checkExpiry: false })).toBe(true);
   });
 });
 
