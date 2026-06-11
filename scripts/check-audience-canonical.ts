@@ -75,6 +75,7 @@ const CANONICAL_AUDIENCES = new Set<string>([
   "account:checkout",
   "browser-sandbox-grant",
   "browser-sandbox",
+  "runtime:attach",
 ]);
 
 /**

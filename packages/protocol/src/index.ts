@@ -3251,6 +3251,7 @@ export {
   ACCOUNT_CHECKOUT_AUDIENCE,
   BROWSER_SANDBOX_GRANT_AUDIENCE,
   BROWSER_SANDBOX_AUDIENCE,
+  RUNTIME_ATTACH_AUDIENCE,
 } from "./audience.js";
 
 // Content-artifact types — closed registry of `artifact_type` claim

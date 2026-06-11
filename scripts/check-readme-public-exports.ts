@@ -126,8 +126,6 @@ const WAIVED_EXPORTS: ReadonlyArray<PackageWaiver> = [
       "fromMicro",
       "toCents",
       "fromCents",
-      "ALL_TOKEN_AUDIENCES",
-      "isTokenAudience",
       "SYNC_AUDIENCE",
       "DEVICE_AUTH_AUDIENCE",
       "PAIR_AUDIENCE",

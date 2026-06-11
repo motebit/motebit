@@ -53,6 +53,10 @@
  *   **Browser-sandbox dispatcher token (relay-mediated auth)**
  *     - `browser-sandbox-grant` — motebit→relay grant request
  *     - `browser-sandbox` — relay→motebit→sandbox dispatcher token
+ *
+ *   **Local runtime-host coordination (never crosses the machine)**
+ *     - `runtime:attach` — frontend→coordinator attach handshake on the
+ *       local runtime-host socket
  */
 export type TokenAudience =
   | "sync"
@@ -70,7 +74,8 @@ export type TokenAudience =
   | "account:withdrawals"
   | "account:checkout"
   | "browser-sandbox-grant"
-  | "browser-sandbox";
+  | "browser-sandbox"
+  | "runtime:attach";
 
 // === Named constants — same value, narrower type ============================
 //
@@ -136,6 +141,18 @@ export const BROWSER_SANDBOX_GRANT_AUDIENCE: TokenAudience = "browser-sandbox-gr
  */
 export const BROWSER_SANDBOX_AUDIENCE: TokenAudience = "browser-sandbox";
 
+/**
+ * Audience for the device-key-signed attach handshake on the local
+ * runtime-host socket (`~/.motebit/runtime.sock`): a frontend process
+ * authenticating to the machine's coordinator runtime. Verified by
+ * `@motebit/runtime-host` fail-closed; never accepted by the relay or
+ * any network verifier — the token never leaves the machine.
+ *
+ * See `docs/doctrine/daemon-desktop-unification.md` for the election +
+ * attach model.
+ */
+export const RUNTIME_ATTACH_AUDIENCE: TokenAudience = "runtime:attach";
+
 // === Iteration + type guard =================================================
 
 /**
@@ -160,6 +177,7 @@ export const ALL_TOKEN_AUDIENCES: readonly TokenAudience[] = Object.freeze([
   "account:checkout",
   "browser-sandbox-grant",
   "browser-sandbox",
+  "runtime:attach",
 ]);
 
 /**

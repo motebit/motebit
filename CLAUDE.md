@@ -16,7 +16,7 @@ MCP defines capability but not identity. A2A defines communication but has no tr
 
 ## Architecture
 
-pnpm monorepo, Turborepo, TypeScript. Node ≥ 20, pnpm 9.15. 51 packages on a 7-layer DAG enforced by `pnpm check-deps`. 5 surfaces + 6 supporting apps, 9 services, 28 open protocol specs.
+pnpm monorepo, Turborepo, TypeScript. Node ≥ 20, pnpm 9.15. 52 packages on a 7-layer DAG enforced by `pnpm check-deps`. 5 surfaces + 6 supporting apps, 9 services, 28 open protocol specs.
 
 Layout and per-package roles: [`README.md`](README.md), [`apps/docs/content/docs/operator/architecture.mdx`](apps/docs/content/docs/operator/architecture.mdx) (canonical; enforced by `check-docs-tree`).
 
@@ -33,6 +33,7 @@ Per-directory doctrine loads lazily (every sub-`CLAUDE.md` must appear here; enf
 - [`packages/verify/CLAUDE.md`](packages/verify/CLAUDE.md) — canonical `motebit-verify` CLI; Apache-2.0 aggregator that bundles the canonical Apache-2.0 platform leaves with motebit-canonical defaults
 - [`packages/state-export-client/CLAUDE.md`](packages/state-export-client/CLAUDE.md) — browser-safe verifier for `X-Motebit-Content-Manifest`; trust-on-first-use bootstrap from `/.well-known/motebit-transparency.json`; the consumer-side counterpart to the relay's state-export-signed producer surface
 - [`packages/circuit-breaker/CLAUDE.md`](packages/circuit-breaker/CLAUDE.md) — per-peer three-state engine, no I/O, injected clock
+- [`packages/runtime-host/CLAUDE.md`](packages/runtime-host/CLAUDE.md) — runtime-host election (bind is the truth) + fail-closed `runtime:attach` handshake; capability proxy, never policy
 - [`packages/evm-rpc/CLAUDE.md`](packages/evm-rpc/CLAUDE.md) — JSON-RPC behind a motebit-shaped interface; one error shape out
 - [`packages/deposit-detector/CLAUDE.md`](packages/deposit-detector/CLAUDE.md) — single `eth_getLogs` per cycle; dedup is the consumer's atomic write
 - [`packages/treasury-reconciliation/CLAUDE.md`](packages/treasury-reconciliation/CLAUDE.md) — operator-treasury observability for relay-mediated x402 fees; recorded-fee-sum vs onchain `balanceOf` comparison; sibling of deposit-detector but watches the operator's fee-collection address, never an agent wallet (must not unify)

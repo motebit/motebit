@@ -23,7 +23,7 @@ Every local entry point today instantiates its own full `@motebit/runtime`: the 
 - **Coordinator exits with frontends attached** — frontends detect EOF and re-elect; the bind guarantees exactly one winner. In-flight invocations fail loudly to their origin frontend (honest degradation, never silent retry across an authority boundary).
 - **Version skew** between CLI and desktop builds — handshake version check, refuse + name the mismatch.
 - **Desktop installed but not running** — nothing binds on its behalf; the first process that runs coordinates. No phantom preference.
-- **Simultaneous start** — both race the bind; the loser attaches. No tie-break logic beyond the OS's.
+- **Simultaneous start** — both race the bind; the loser attaches. One subtlety the build proved by failing test (increment 1): the bind race alone is NOT sufficient on unix sockets, because takeover _unlinks_ a connect-refused socket file first — and a connect-refused observed before takeover can be stale by takeover time, so the slower racer's unlink removes the winner's just-bound live socket and binds a second coordinator at the same path. The unlink + bind pair is therefore a critical section: serialized behind an atomic-`mkdir` takeover mutex (crashed holder recovered by PID probe), with socket liveness re-probed _inside_ the mutex. Outside that critical section, no tie-break logic beyond the OS's.
 - **The drift this whole arc forbids** — any entry point instantiating a runtime without routing through the election. Locked by the increment-5 drift gate, not by review.
 
 ## Increments
