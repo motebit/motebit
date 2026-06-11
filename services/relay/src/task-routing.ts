@@ -17,6 +17,7 @@ import type { ListingId } from "@motebit/sdk";
 import { hexPublicKeyToDidKey, didKeyToPublicKey, bytesToHex } from "@motebit/encryption";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
+import { signDiscoverBody } from "./federation.js";
 import { CircuitBreaker } from "@motebit/circuit-breaker";
 import type { CircuitBreakerConfig, CircuitBreakerState } from "@motebit/circuit-breaker";
 import { createLogger } from "./logger.js";
@@ -494,17 +495,23 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       }
 
       try {
-        const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Correlation-ID": queryId },
-          body: JSON.stringify({
+        // Originating hop: sign as sender_relay = this relay (== origin_relay
+        // here, since we're the query's origin). relay-federation@1.3 §4.1.
+        const discoverBody = await signDiscoverBody(
+          {
             query: { capability: requiredCaps[0], limit: 20 },
             hop_count: 0,
             max_hops: 1, // Only one hop for task routing candidates
             visited,
             query_id: queryId,
             origin_relay: relayIdentity.relayMotebitId,
-          }),
+          },
+          relayIdentity,
+        );
+        const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Correlation-ID": queryId },
+          body: JSON.stringify(discoverBody),
           signal: AbortSignal.timeout(5000),
         });
         if (!resp.ok) return [];

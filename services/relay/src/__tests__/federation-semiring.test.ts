@@ -68,7 +68,11 @@ function makeDeps(
     relayIdentity: {
       relayMotebitId: RELAY_MOTEBIT_ID,
       publicKey: new Uint8Array(32),
-      privateKey: new Uint8Array(64),
+      // 32-byte Ed25519 seed: fetchFederatedCandidates now signs its outbound
+      // discover request (relay-federation@1.3 §4.1), so the key must be a valid
+      // signing seed. The signature isn't verified here (fetch is mocked) — it
+      // only needs `sign()` not to throw.
+      privateKey: new Uint8Array(32),
     },
   } as TaskRouterDeps;
 }

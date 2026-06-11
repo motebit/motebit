@@ -334,7 +334,7 @@ describe("Federation E2E", () => {
         public_key: string;
         did: string;
       };
-      expect(body.spec).toBe("motebit/relay-federation@1.2");
+      expect(body.spec).toBe("motebit/relay-federation@1.3");
       expect(body.relay_motebit_id).toMatch(/^relay-/);
       expect(body.public_key).toHaveLength(64); // 32 bytes hex
       expect(body.did).toMatch(/^did:key:z/);
@@ -839,6 +839,116 @@ describe("Federation E2E", () => {
     });
   });
 
+  // --- Phase 3b: Discover per-hop sender signing (relay-federation@1.3 §4.1) ---
+
+  describe("Phase 3b: Discover per-hop signing", () => {
+    // The POSITIVE signed path (sign → verify → 200) is exercised end-to-end by
+    // the Phase 3 cross-relay tests above: relayA's fan-out/originating discover
+    // now routes through `signDiscoverBody`, and relayB verifies it. These tests
+    // cover the REJECTION paths, which reject before (or regardless of) signature
+    // validity, so a random signature suffices — the test harness intentionally
+    // does not expose relay private keys.
+    const randomSig = (): string => bytesToHex(crypto.getRandomValues(new Uint8Array(64)));
+
+    const discoverBase = (sender: string): Record<string, unknown> => ({
+      query: { capability: "web-search", limit: 20 },
+      hop_count: 0,
+      max_hops: 1,
+      visited: [],
+      query_id: crypto.randomUUID(),
+      origin_relay: sender,
+      sender_relay: sender,
+    });
+
+    it("rejects a present-but-invalid discover signature from an active peer (403)", async () => {
+      await establishPeering(relayA, relayB);
+      // sender_relay is an ACTIVE peer + timestamp is fresh, so verification
+      // reaches the Ed25519 check and fails on the random signature → 403 (not 400).
+      const res = await relayB.app.request("/federation/v1/discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...discoverBase(relayA.relayIdentity.relayMotebitId),
+          timestamp: Date.now(),
+          signature: randomSig(),
+        }),
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("rejects a signed discover missing its timestamp (400)", async () => {
+      await establishPeering(relayA, relayB);
+      const res = await relayB.app.request("/federation/v1/discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...discoverBase(relayA.relayIdentity.relayMotebitId),
+          signature: randomSig(),
+        }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects a signed discover from a non-peer sender (403)", async () => {
+      // sender_relay isn't a known active peer → peer lookup fails → 403.
+      const res = await relayB.app.request("/federation/v1/discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...discoverBase("unknown-relay"),
+          timestamp: Date.now(),
+          signature: randomSig(),
+        }),
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("tolerates an UNSIGNED discover under the default rollout window (200)", async () => {
+      await establishPeering(relayA, relayB);
+      const res = await relayB.app.request("/federation/v1/discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: { capability: "web-search", limit: 20 },
+          hop_count: 0,
+          max_hops: 1,
+          visited: [],
+          query_id: crypto.randomUUID(),
+          origin_relay: "some-relay",
+        }),
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it("rejects an UNSIGNED discover once requireDiscoverSignature is on (403)", async () => {
+      const strict = await createTestRelay({
+        enableDeviceAuth: false,
+        federation: {
+          endpointUrl: RELAY_A_URL,
+          displayName: "Strict",
+          requireDiscoverSignature: true,
+        },
+      });
+      try {
+        const res = await strict.app.request("/federation/v1/discover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: { capability: "web-search", limit: 20 },
+            hop_count: 0,
+            max_hops: 1,
+            visited: [],
+            query_id: crypto.randomUUID(),
+            origin_relay: "some-relay",
+          }),
+        });
+        expect(res.status).toBe(403);
+      } finally {
+        await strict.close();
+      }
+    });
+  });
+
   // --- Phase 4: Cross-Relay Task Forwarding ---
 
   describe("Phase 4: Cross-Relay Task Forwarding", () => {
@@ -851,6 +961,7 @@ describe("Federation E2E", () => {
           origin_relay: "unknown-relay",
           target_agent: "some-agent",
           task_payload: { prompt: "test" },
+          timestamp: Date.now(),
           signature: bytesToHex(crypto.getRandomValues(new Uint8Array(64))),
         }),
       });
@@ -868,6 +979,7 @@ describe("Federation E2E", () => {
           origin_relay: relayA.relayIdentity.relayMotebitId,
           target_agent: "some-agent",
           task_payload: { prompt: "test" },
+          timestamp: Date.now(),
           signature: bytesToHex(crypto.getRandomValues(new Uint8Array(64))),
         }),
       });
@@ -1018,6 +1130,7 @@ describe("Federation E2E", () => {
         body: JSON.stringify({
           task_id: crypto.randomUUID(),
           origin_relay: "unknown-relay",
+          timestamp: now,
           // Wire-format-conforming ExecutionReceipt (ExecutionReceiptSchema);
           // peer-auth must reject before relay trusts the body.
           receipt: {
@@ -1055,6 +1168,7 @@ describe("Federation E2E", () => {
           origin_relay: "unknown-relay",
           gross_amount: 100,
           receipt_hash: "abc123",
+          timestamp: Date.now(),
           signature: bytesToHex(crypto.getRandomValues(new Uint8Array(64))),
         }),
       });
@@ -1073,6 +1187,7 @@ describe("Federation E2E", () => {
           origin_relay: relayA.relayIdentity.relayMotebitId,
           gross_amount: 100,
           receipt_hash: "abc123",
+          timestamp: Date.now(),
           signature: bytesToHex(crypto.getRandomValues(new Uint8Array(64))),
         }),
       });

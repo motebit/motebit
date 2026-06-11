@@ -248,6 +248,12 @@ export interface SyncRelayConfig {
      * Default 1h. Operational tuning knob (not a doctrinal commitment).
      */
     revocationHorizonIntervalMs?: number;
+    /**
+     * Require a valid per-hop sender signature on inbound `/federation/v1/discover`
+     * (relay-federation@1.3 §4.1). Default: false (tolerant-reader rollout window).
+     * Mirrors `FederationConfig.requireDiscoverSignature` — passed straight through.
+     */
+    requireDiscoverSignature?: boolean;
   };
   /** Platform fee rate for settlement (0–1). Default: 0.05 (5%). Protocol supports any value. */
   platformFeeRate?: number;
