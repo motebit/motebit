@@ -47,6 +47,11 @@ export {
   buildDelegationRevocationJsonSchema,
 } from "./standing-delegation.js";
 export {
+  SignedRequestEnvelopeSchema,
+  SIGNED_REQUEST_ENVELOPE_SCHEMA_ID,
+  buildSignedRequestEnvelopeJsonSchema,
+} from "./signed-request-envelope.js";
+export {
   AgentServiceListingSchema,
   AGENT_SERVICE_LISTING_SCHEMA_ID,
   buildAgentServiceListingJsonSchema,

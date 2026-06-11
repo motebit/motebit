@@ -307,6 +307,40 @@ export interface StandingDelegation {
 }
 
 /**
+ * Stateless request authentication from a registered identity — the key is
+ * the login. Binds the requesting `motebit_id`, a timestamp, a digest of the
+ * (detached) request body, and an audience into one Ed25519 signature,
+ * verified against the identity's REGISTERED public key — never a key the
+ * request self-asserts. The stateless sibling of `auth-token@1.0`, for a
+ * different caller and trust root. Spec: `spec/signed-request-envelope-v1.md`.
+ */
+export interface SignedRequestEnvelope {
+  /** Requesting identity. The verifier resolves the Ed25519 key for this id
+   *  from its registry; a key carried by the request is never trusted. */
+  motebit_id: string;
+  /** Unix ms at signing. Freshness, not entropy — verifiers reject when
+   *  `|now − ts|` exceeds the freshness window (default ±300s). */
+  ts: number;
+  /** SHA-256 of `canonicalJson(payload)`, hex-encoded (64 lowercase). Binds
+   *  the detached request body to the envelope; recomputed from the body as
+   *  received, so JSON whitespace differences do not break verification. */
+  payload_digest: string;
+  /** Audience — free-form string (deliberately NOT the `TokenAudience`
+   *  registry; request audiences are finer-grained), convention `"{host}/{route}"`.
+   *  Exact-match at the verifier, fail-closed; kills cross-service replay. */
+  aud: string;
+  /** Optional. Present ⇒ the signer requests replay-once semantics; verifiers
+   *  offering them dedup within the freshness window. Absent ⇒ a within-window
+   *  replay re-executes the same idempotent operation. */
+  nonce?: string;
+  /** Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"`. */
+  suite: "motebit-jcs-ed25519-b64-v1";
+  /** Base64url-encoded Ed25519 signature over `canonicalJson(body)` where
+   *  `body` = this object minus `signature`. Verify with the REGISTERED key. */
+  signature: string;
+}
+
+/**
  * A signed revocation of a {@link StandingDelegation}. Only the grant's
  * delegator can sign one (verified against `delegator_public_key`). Self-
  * contained and offline-verifiable like the token — it carries the delegator's

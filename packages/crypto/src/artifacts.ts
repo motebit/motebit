@@ -1019,6 +1019,83 @@ export async function findGrantRevocation(
   return null;
 }
 
+// === Signed Request Envelope (signed-request-envelope@1.0) ===
+//
+// Stateless request authentication from a registered identity: Ed25519 over
+// canonicalJson(envelope minus signature), verified against the identity's
+// REGISTERED public key — never a key the request carries. The payload travels
+// detached, bound by `payload_digest = hex(SHA-256(canonicalJson(payload)))`.
+// Same suite + JCS + base64url-sig conventions as the rest of the identity
+// family; self-verifiable per crypto rule 4. Spec: signed-request-envelope-v1.
+
+import type { SignedRequestEnvelope } from "@motebit/protocol";
+export type { SignedRequestEnvelope };
+
+/** The one suite a SignedRequestEnvelope signs under today. */
+export const SIGNED_REQUEST_ENVELOPE_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/**
+ * Sign a request envelope. Computes the payload digest, assembles the body
+ * ({@link SignedRequestEnvelope} minus `signature`), and signs it. The caller
+ * supplies the identity fields; the signer owns `payload_digest` and `suite`.
+ */
+export async function signRequestEnvelope(
+  payload: unknown,
+  fields: { motebit_id: string; ts: number; aud: string; nonce?: string },
+  identityPrivateKey: Uint8Array,
+): Promise<SignedRequestEnvelope> {
+  const payload_digest = await canonicalSha256(payload);
+  const body: Omit<SignedRequestEnvelope, "signature"> = {
+    motebit_id: fields.motebit_id,
+    ts: fields.ts,
+    payload_digest,
+    aud: fields.aud,
+    ...(fields.nonce !== undefined ? { nonce: fields.nonce } : {}),
+    suite: SIGNED_REQUEST_ENVELOPE_SUITE,
+  };
+  const message = new TextEncoder().encode(canonicalJson(body));
+  const sig = await signBySuite(SIGNED_REQUEST_ENVELOPE_SUITE, message, identityPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify a request envelope against the identity's REGISTERED public key —
+ * the single trust move (a key carried by the request is never trusted, so the
+ * caller MUST resolve `registeredPublicKey` from its registry by
+ * `envelope.motebit_id`, never from the envelope).
+ *
+ * Always checks the suite + the signature. Optionally checks, when the
+ * corresponding option is supplied: audience (exact-match), freshness
+ * (`|now − ts| ≤ windowMs`, default 300s), and the payload digest. Nonce
+ * replay-dedup is stateful and stays the consumer's concern. Fail-closed on
+ * unknown suite / malformed signature / any supplied-check mismatch.
+ */
+export async function verifyRequestEnvelope(
+  envelope: SignedRequestEnvelope,
+  registeredPublicKey: Uint8Array,
+  options?: { payload?: unknown; expectedAud?: string; now?: number; windowMs?: number },
+): Promise<boolean> {
+  if (envelope.suite !== SIGNED_REQUEST_ENVELOPE_SUITE) return false;
+  if (options?.expectedAud !== undefined && envelope.aud !== options.expectedAud) return false;
+  if (options?.now !== undefined) {
+    const windowMs = options.windowMs ?? 300_000;
+    if (Math.abs(options.now - envelope.ts) > windowMs) return false;
+  }
+  if (options?.payload !== undefined) {
+    const recomputed = await canonicalSha256(options.payload);
+    if (recomputed !== envelope.payload_digest) return false;
+  }
+
+  const { signature, ...body } = envelope;
+  const message = new TextEncoder().encode(canonicalJson(body));
+  try {
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(envelope.suite, message, sig, registeredPublicKey);
+  } catch {
+    return false;
+  }
+}
+
 // === Dispute Resolution + Adjudicator Votes (dispute §6.4 + §6.5) ===
 // === Dispute Request / Evidence / Appeal (dispute §4.2 + §5.2 + §8.2) ===
 

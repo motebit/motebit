@@ -1,0 +1,89 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/signed-request-envelope-v1.json",
+  "title": "SignedRequestEnvelope (v1)",
+  "description": "Stateless request authentication from a registered identity: Ed25519 over canonicalJson(envelope minus signature), verified against the identity's REGISTERED public key. The payload travels detached, bound by payload_digest. Canonicalization: JCS (RFC 8785). See spec/signed-request-envelope-v1.md.",
+  "type": "object",
+  "properties": {
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Requesting identity. The verifier resolves the Ed25519 public key for this id from its registry; a key carried by the request is never trusted."
+    },
+    "ts": {
+      "type": "number",
+      "description": "Unix timestamp in milliseconds at signing. Freshness, not entropy — verifiers reject when |now − ts| exceeds the freshness window (default ±300s)."
+    },
+    "payload_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of canonicalJson(payload), hex-encoded (64 lowercase characters). Binds the detached request body to the envelope; the verifier recomputes from the body as received."
+    },
+    "aud": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Audience — free-form string (deliberately not the auth-token TokenAudience registry), convention \"{host}/{route}\". Exact-match at the verifier, fail-closed; kills cross-service replay."
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional — UUID v4 recommended. Present ⇒ the signer requests replay-once semantics; verifiers offering them dedup within the freshness window. Absent ⇒ within-window replay re-executes the same idempotent operation."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-b64-v1",
+      "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1`: JCS canonicalization (RFC 8785), Ed25519 signature, base64url-encoded signature. See @motebit/protocol SUITE_REGISTRY."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = this object minus `signature`. Verify with the REGISTERED key for `motebit_id`."
+    }
+  },
+  "required": ["motebit_id", "ts", "payload_digest", "aud", "suite", "signature"],
+  "additionalProperties": false,
+  "definitions": {
+    "SignedRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Requesting identity. The verifier resolves the Ed25519 public key for this id from its registry; a key carried by the request is never trusted."
+        },
+        "ts": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds at signing. Freshness, not entropy — verifiers reject when |now − ts| exceeds the freshness window (default ±300s)."
+        },
+        "payload_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of canonicalJson(payload), hex-encoded (64 lowercase characters). Binds the detached request body to the envelope; the verifier recomputes from the body as received."
+        },
+        "aud": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Audience — free-form string (deliberately not the auth-token TokenAudience registry), convention \"{host}/{route}\". Exact-match at the verifier, fail-closed; kills cross-service replay."
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional — UUID v4 recommended. Present ⇒ the signer requests replay-once semantics; verifiers offering them dedup within the freshness window. Absent ⇒ within-window replay re-executes the same idempotent operation."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1`: JCS canonicalization (RFC 8785), Ed25519 signature, base64url-encoded signature. See @motebit/protocol SUITE_REGISTRY."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = this object minus `signature`. Verify with the REGISTERED key for `motebit_id`."
+        }
+      },
+      "required": ["motebit_id", "ts", "payload_digest", "aud", "suite", "signature"],
+      "additionalProperties": false
+    }
+  }
+}

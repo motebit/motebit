@@ -3316,6 +3316,17 @@ export interface SignableComputerSessionReceipt {
 }
 
 // @public
+export interface SignedRequestEnvelope {
+    aud: string;
+    motebit_id: string;
+    nonce?: string;
+    payload_digest: string;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    ts: number;
+}
+
+// @public
 export interface SignedTransparencyDeclaration {
     readonly content: unknown;
     readonly declared_at: number;
