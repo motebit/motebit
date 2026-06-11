@@ -36,7 +36,12 @@ import { describe, it, beforeAll, expect } from "vitest";
 import fc from "fast-check";
 import { ALL_SUITE_IDS } from "@motebit/protocol";
 import type { SuiteId } from "@motebit/protocol";
-import { signBySuite, verifyBySuite, generateEd25519Keypair } from "../suite-dispatch.js";
+import {
+  signBySuite,
+  verifyBySuite,
+  getPublicKeyBySuite,
+  generateEd25519Keypair,
+} from "../suite-dispatch.js";
 import { canonicalJson } from "../signing.js";
 
 const FC_SEED = 0x5eed;
@@ -203,5 +208,29 @@ describe("end-to-end: sign(canonicalJson(obj)) verifies; mutated obj does not", 
         },
       ),
     );
+  });
+});
+
+describe("suite-dispatch: an unknown suite is fail-closed at runtime", () => {
+  // A value that bypassed the closed SuiteId union — wire data, a cast.
+  const BAD = "ml-dsa-65-not-yet-implemented" as SuiteId;
+
+  it("verifyBySuite returns false (never silently passes)", async () => {
+    const { publicKey, privateKey } = await generateEd25519Keypair();
+    const msg = new Uint8Array([1, 2, 3]);
+    const sig = await signBySuite("motebit-jcs-ed25519-b64-v1", msg, privateKey);
+    expect(await verifyBySuite(BAD, msg, sig, publicKey)).toBe(false);
+  });
+
+  it("signBySuite throws (never ships an unsigned/undefined artifact)", async () => {
+    const { privateKey } = await generateEd25519Keypair();
+    await expect(signBySuite(BAD, new Uint8Array([1]), privateKey)).rejects.toThrow(
+      /unsupported cryptosuite/,
+    );
+  });
+
+  it("getPublicKeyBySuite throws", async () => {
+    const { privateKey } = await generateEd25519Keypair();
+    await expect(getPublicKeyBySuite(privateKey, BAD)).rejects.toThrow(/unsupported cryptosuite/);
   });
 });

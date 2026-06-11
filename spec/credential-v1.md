@@ -303,6 +303,16 @@ The `verificationMethod` field is a DID URL: `did:key:z6Mk...#z6Mk...`. The frag
 - **Credentials** use `proofPurpose: "assertionMethod"` — the issuer asserts a claim about the subject.
 - **Presentations** use `proofPurpose: "authentication"` — the holder proves they control the presenting identity.
 
+### 5.4 Verification (foundation law)
+
+A verifier MUST reject a credential unless ALL of the following hold. The checks are fail-closed; a credential that omits the relevant field skips only that field's check.
+
+1. **Signature.** The `eddsa-jcs-2022` Data Integrity proof verifies against the key resolved from `proof.verificationMethod` (§5.1, §5.2).
+2. **Not expired.** If `validUntil` is present, `now ≤ validUntil` (with deployment clock-skew tolerance).
+3. **Active.** If `validFrom` is present, `now ≥ validFrom` (with the same skew). A credential dated to activate in the future is **not yet valid** and MUST be rejected — the temporal sibling of the expiry check. (`validFrom` is REQUIRED per §2.1, so this check applies to every conformant credential.)
+
+**Revocation is a separate, source-dependent step.** A credential carrying a `credentialStatus` (§6) is revocable, but revocation lives on the relay/federation and CANNOT be derived from the credential bytes. An offline verifier (no revocation source) therefore proves only "validly signed and within its validity window" — it MUST NOT report a revocable credential as unconditionally valid; it surfaces that revocation was unchecked. A verifier with a revocation source MUST consult it for any credential bearing a `credentialStatus` and reject a revoked credential. The reference implementation exposes this as an injected `isRevoked` revocation-check seam on `verifyVerifiableCredential` and a `revocation_unchecked` flag on the offline aggregator's result.
+
 ---
 
 ## 6. Revocation

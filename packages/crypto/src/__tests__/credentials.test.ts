@@ -130,6 +130,59 @@ describe("Verifiable Credentials", () => {
     const valid = await verifyVerifiableCredential(vc);
     expect(valid).toBe(false);
   });
+
+  it("rejects not-yet-valid credentials (validFrom in the future)", async () => {
+    const { publicKey, privateKey } = await generateKeypair();
+    const issuerDid = publicKeyToDidKey(publicKey);
+
+    const unsignedVC = {
+      "@context": ["https://www.w3.org/ns/credentials/v2"] as [
+        "https://www.w3.org/ns/credentials/v2",
+      ],
+      type: ["VerifiableCredential", "TestCredential"],
+      issuer: issuerDid,
+      credentialSubject: { id: issuerDid, score: 0.85 },
+      validFrom: new Date(Date.now() + 3600_000).toISOString(), // becomes valid in 1h
+    };
+
+    const vc = await signVerifiableCredential(unsignedVC, privateKey, publicKey);
+    // Not yet active → reject, even though the signature is valid.
+    expect(await verifyVerifiableCredential(vc)).toBe(false);
+    // Once its window opens, it verifies.
+    expect(await verifyVerifiableCredential(vc, { now: Date.now() + 7200_000 })).toBe(true);
+  });
+
+  it("checks revocation only when the isRevoked seam is wired", async () => {
+    const { publicKey, privateKey } = await generateKeypair();
+    const issuerDid = publicKeyToDidKey(publicKey);
+
+    const unsignedVC = {
+      "@context": ["https://www.w3.org/ns/credentials/v2"] as [
+        "https://www.w3.org/ns/credentials/v2",
+      ],
+      type: ["VerifiableCredential", "TestCredential"],
+      issuer: issuerDid,
+      credentialSubject: { id: issuerDid, score: 0.85 },
+      validFrom: new Date().toISOString(),
+      credentialStatus: { id: "https://relay.example/status/abc", type: "RevocationList2024" },
+    };
+
+    const vc = await signVerifiableCredential(unsignedVC, privateKey, publicKey);
+    // No seam → revocation is NOT checked (signature + temporal validity only).
+    expect(await verifyVerifiableCredential(vc)).toBe(true);
+    // Seam reports revoked → reject, fail-closed.
+    expect(await verifyVerifiableCredential(vc, { isRevoked: () => true })).toBe(false);
+    // Seam reports live → accept, and is consulted with the credential's own status id.
+    let seen = "";
+    const ok = await verifyVerifiableCredential(vc, {
+      isRevoked: (id) => {
+        seen = id;
+        return false;
+      },
+    });
+    expect(ok).toBe(true);
+    expect(seen).toBe("https://relay.example/status/abc");
+  });
 });
 
 // ---------------------------------------------------------------------------

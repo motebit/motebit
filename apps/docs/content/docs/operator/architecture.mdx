@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **51 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 8 services · 28 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **51 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 9 services · 28 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -169,7 +169,7 @@ Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencie
 
 ## Permissive / BSL boundary
 
-Ten packages sit on the permissive floor — Apache-2.0, with an explicit patent grant and litigation-termination clause. `check-deps.ts` enforces that permissive-floor packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
+Eleven packages sit on the permissive floor — Apache-2.0, with an explicit patent grant and litigation-termination clause. `check-deps.ts` enforces that permissive-floor packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
 
 | Package                                         | Answers                                                            | Layer |
 | ----------------------------------------------- | ------------------------------------------------------------------ | ----- |
@@ -188,7 +188,7 @@ The four canonical `crypto-*` platform leaves (`crypto-appattest`, `crypto-andro
 
 `motebit-verify` covers six artifact categories under one Apache-2.0 CLI: identity files, execution receipts, credentials (with hardware-attestation channels when present), presentations, skill envelopes, and content-artifact manifests on relay-assembled state exports. The last category — `motebit-verify content-artifact <body> --manifest <header>` — verifies the relay-asserted `X-Motebit-Content-Manifest` HTTP header emitted on every endpoint registered in `services/relay/src/state-export.ts`. Trust anchor: `relay_public_key` from `/.well-known/motebit-transparency.json` (which is itself self-signed and self-attesting). The 12 canonical content-artifact categories live in the closed `ContentArtifactType` registry in `@motebit/protocol`, drift-locked by `check-artifact-type-canonical`; the per-endpoint wiring requirement is drift-locked by `check-state-export-signed`. See [`docs/doctrine/nist-alignment.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/nist-alignment.md) §8.
 
-The remaining 34 packages are BSL-1.1 — the reference implementation that answers _how the system decides, adapts, routes, and governs_. Both license families converge to Apache-2.0 at each version's Change Date (four years after first public release), eliminating the two-license end state. See `LICENSING.md` for the full boundary test, convergence story, and commercial terms.
+The remaining packages are BSL-1.1 — the reference implementation that answers _how the system decides, adapts, routes, and governs_. Both license families converge to Apache-2.0 at each version's Change Date (four years after first public release), eliminating the two-license end state. See `LICENSING.md` for the full boundary test, convergence story, and commercial terms.
 
 The architectural role is "permissive floor"; the specific license instance (`Apache-2.0`) is replaceable. Identifiers in `scripts/check-deps.ts` (`PERMISSIVE_PACKAGES`, `PERMISSIVE_IMPORT_ALLOWED`, `PERMISSIVE_ALLOWED_FUNCTIONS`) and the sibling gate `check-spec-permissive-boundary` use the role name so a future license revision is a metadata change, not a rename cascade across the codebase.
 

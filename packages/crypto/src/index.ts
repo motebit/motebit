@@ -242,6 +242,22 @@ export interface CredentialVerifyResult extends BaseResult {
   subject?: string;
   expired?: boolean;
   /**
+   * True when `validFrom` is in the future (with clock skew) — the credential
+   * is not yet active. Counts against `valid`, mirroring `expired`. Absent ⇒
+   * the credential is within its validity window (or carries no `validFrom`).
+   */
+  not_yet_valid?: boolean;
+  /**
+   * True when the credential carries a `credentialStatus` (it is revocable) but
+   * this verifier could not consult a revocation source. The offline aggregator
+   * `verify()` is I/O-free and CANNOT check revocation — so it does not silently
+   * imply "not revoked": it sets this flag, and a consumer that needs revocation
+   * MUST check `credentialStatus.id` against its own source (or call
+   * `verifyVerifiableCredential` with an injected `isRevoked` seam). `valid` here
+   * means "signature + temporal validity", NOT "not revoked".
+   */
+  revocation_unchecked?: boolean;
+  /**
    * Hardware-attestation verification outcome. Present only when the
    * credential's subject declared a `hardware_attestation` claim. Absent
    * means "no claim" (not "fails closed" — the credential's own
@@ -1834,16 +1850,33 @@ async function verifyCredential(
 ): Promise<CredentialVerifyResult> {
   const errors: VerificationError[] = [];
 
+  const skewMs = clockSkewSeconds * 1000;
+
   // Check expiry (with clock skew tolerance for distributed systems)
   let expired = false;
   if (vc.validUntil) {
     const expiresAt = new Date(vc.validUntil).getTime();
-    const skewMs = clockSkewSeconds * 1000;
     if (Date.now() > expiresAt + skewMs) {
       expired = true;
       errors.push({ message: "Credential has expired", path: "validUntil" });
     }
   }
+
+  // Check activation — `validFrom` is REQUIRED (credential-v1 §2.1: "when the
+  // credential becomes valid"). A credential dated to activate in the future is
+  // not yet valid, fail-closed — the temporal sibling of the expiry check.
+  let notYetValid = false;
+  if (vc.validFrom) {
+    const activeAt = new Date(vc.validFrom).getTime();
+    if (Date.now() + skewMs < activeAt) {
+      notYetValid = true;
+      errors.push({ message: "Credential is not yet valid", path: "validFrom" });
+    }
+  }
+
+  // Revocation is a relay/federation concern (§6); the offline aggregator cannot
+  // consult it. Surface that honestly rather than implying "not revoked".
+  const revocationUnchecked = vc.credentialStatus !== undefined;
 
   // Verify proof
   const proofValid = await verifyDataIntegrity(vc as unknown as Record<string, unknown>, vc.proof);
@@ -1905,11 +1938,13 @@ async function verifyCredential(
 
   return {
     type: "credential",
-    valid: proofValid && !expired,
+    valid: proofValid && !expired && !notYetValid,
     credential: vc,
     issuer: issuerDid,
     subject: subjectId,
     expired,
+    ...(notYetValid ? { not_yet_valid: true } : {}),
+    ...(revocationUnchecked ? { revocation_unchecked: true } : {}),
     ...(hardwareAttestation && { hardware_attestation: hardwareAttestation }),
     ...(errors.length > 0 ? { errors } : {}),
   };
