@@ -46,6 +46,7 @@
     "@motebit/render-engine",
     "@motebit/research",
     "@motebit/runtime",
+    "@motebit/runtime-host",
     "@motebit/self-knowledge",
     "@motebit/semiring",
     "@motebit/settlement-rails",
