@@ -53,7 +53,11 @@ import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
-import { electCoordinatorRole, wireBridgedOrgans } from "./runtime-host.js";
+import {
+  electAttachOrCoordinate,
+  electCoordinatorRole,
+  wireBridgedOrgans,
+} from "./runtime-host.js";
 import {
   getDbPath,
   createProvider,
@@ -749,6 +753,160 @@ export async function handleRun(config: CliConfig): Promise<void> {
   process.on("SIGTERM", shutdown);
 }
 
+/**
+ * `motebit serve` attached: an MCP frontend over the coordinator's
+ * interior (daemon-desktop unification, attach-mode parity). No
+ * database handle, no runtime construction, no relay registration, no
+ * worker mode — the coordinator is the machine's one authority and its
+ * one relay presence; this process only translates MCP traffic into
+ * attached reads/acts. `motebit_task` is deliberately absent: signing
+ * authority never proxies over the socket. Tool execution is
+ * policy-gated on the coordinator regardless of this process's
+ * pre-flight (`tool_execute` re-validates), and memory writes run the
+ * coordinator's governance with hardcoded `peer_agent` provenance —
+ * identical to the local serve path.
+ */
+async function runServeAttached(
+  client: import("@motebit/runtime-host").RuntimeHostClient,
+  motebitId: string,
+  publicKeyHex: string | undefined,
+  transport: "stdio" | "http",
+  port: number,
+  log: (msg: string) => void,
+): Promise<void> {
+  const projectMemories = (
+    nodes: Array<{
+      content: string;
+      confidence: number;
+      sensitivity: string;
+      created_at: number;
+      tombstoned?: boolean;
+      valid_until?: number | null;
+    }>,
+    limit: number,
+  ): Array<{ content: string; confidence: number; sensitivity: string; created_at: number }> => {
+    const now = Date.now();
+    return nodes
+      .filter((n) => n.tombstoned !== true && (n.valid_until == null || n.valid_until > now))
+      .map((n) => ({
+        content: n.content,
+        confidence: n.confidence,
+        sensitivity: n.sensitivity,
+        created_at: n.created_at,
+      }))
+      .slice(0, limit);
+  };
+
+  const deps: MotebitServerDeps = {
+    motebitId,
+    ...(publicKeyHex != null && publicKeyHex !== "" ? { publicKeyHex } : {}),
+
+    listTools: async () => (await client.query("tools_filtered")) as ToolDefinition[],
+    // tools_filtered is already policy-filtered on the coordinator.
+    filterTools: (tools) => tools,
+    validateTool: async (tool, args) =>
+      (await client.query("policy_validate", {
+        name: tool.name,
+        args,
+      })) as import("@motebit/sdk").PolicyDecision,
+    executeTool: async (name, args) =>
+      (await client.act("tool_execute", { name, args })) as import("@motebit/sdk").ToolResult,
+
+    getState: async () => (await client.query("state")) as Record<string, unknown>,
+
+    getMemories: async (limit = 50) => {
+      const exported = (await client.query("memory_export")) as {
+        nodes: Array<{
+          content: string;
+          confidence: number;
+          sensitivity: string;
+          created_at: number;
+          tombstoned?: boolean;
+          valid_until?: number | null;
+        }>;
+      };
+      return projectMemories(exported.nodes, limit);
+    },
+
+    logToolCall: (name, args, result) => {
+      void client
+        .act("tool_used_log", {
+          tool: name,
+          args_preview: JSON.stringify(args).slice(0, 200),
+          ok: result.ok,
+        })
+        .catch(() => {});
+    },
+
+    // The AI loop is the coordinator's — one turn over the chat frame.
+    sendMessage: async (text: string) => {
+      let response = "";
+      for await (const chunk of client.chat(text)) {
+        const c = chunk as { type?: string; text?: string };
+        if (c.type === "text" && typeof c.text === "string") response += c.text;
+      }
+      return { response, memoriesFormed: 0 };
+    },
+
+    queryMemories: async (query: string, limit?: number) => {
+      // Embedding is computed here (local model, no network); recall and
+      // its sensitivity floor run on the coordinator.
+      const embedding = await embedText(query);
+      const nodes = (await client.query("memory_recall", {
+        embedding: [...embedding],
+        ...(limit !== undefined ? { limit } : {}),
+      })) as Array<{
+        content: string;
+        confidence: number;
+        half_life: number;
+        memory_type?: string;
+        created_at: number;
+      }>;
+      return nodes.map((n) => ({
+        content: n.content,
+        confidence: n.confidence,
+        similarity: 0,
+        half_life_days: Math.round(n.half_life / 86_400_000),
+        memory_type: n.memory_type ?? "semantic",
+        created_at: n.created_at,
+      }));
+    },
+
+    storeMemory: async (content: string, sensitivity?: string) =>
+      (await client.act("memory_store", {
+        content,
+        ...(sensitivity !== undefined ? { sensitivity } : {}),
+      })) as { node_id: string },
+
+    verifySignedToken: async (token: string, publicKey: Uint8Array) => {
+      return verifySignedToken(token, publicKey);
+    },
+    // handleAgentTask deliberately absent — worker mode belongs to the
+    // coordinator; signing authority never proxies over the socket.
+  };
+
+  const mcpServer = new McpServerAdapter(
+    { name: `motebit-${motebitId.slice(0, 8)}`, transport, port },
+    deps,
+  );
+  await mcpServer.start();
+
+  log(`Attached to the machine's coordinator (pid ${client.coordinatorPid}).`);
+  if (transport === "stdio") {
+    log("MCP server running (stdio) over the coordinator's interior.");
+  } else {
+    log(`MCP server running on http://localhost:${port} over the coordinator's interior.`);
+  }
+  log("Worker mode and relay registration are the coordinator's — not started here.");
+
+  client.onClose(() => {
+    console.error(
+      "runtime-host: coordinator exited — motebit serve (attached) stopping. Restart to coordinate.",
+    );
+    process.exit(1);
+  });
+}
+
 export async function handleServe(config: CliConfig): Promise<void> {
   // Determine transport and port
   const transport = (config.serveTransport ?? "stdio") as "stdio" | "http";
@@ -864,11 +1022,17 @@ export async function handleServe(config: CliConfig): Promise<void> {
   const runtimeRef: { current: MotebitRuntime | null } = { current: null };
   const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
 
-  // Runtime-host election — serve is a coordinator-role entry point.
-  // Attach mode for `motebit serve` (MCP server deps over the proxy) is
-  // a recorded follow-up of the unification arc; until it lands, a live
-  // coordinator means an honest refusal, never a second authority.
-  const runtimeHostServer = await electCoordinatorRole(loadFullConfig(), motebitId, runtimeRef);
+  // Runtime-host election — `motebit serve` serves both roles: first
+  // process coordinates (full runtime below); with a live coordinator it
+  // attaches as an MCP frontend over that coordinator's interior
+  // (attach-mode parity) — never a second authority, never a second
+  // database handle.
+  const election = await electAttachOrCoordinate(loadFullConfig(), motebitId, runtimeRef);
+  if (election.role === "frontend") {
+    await runServeAttached(election.client, motebitId, publicKeyHex, transport, port, log);
+    return;
+  }
+  const runtimeHostServer = election.server;
 
   // Load external tools from --tools module
   if (config.tools) {

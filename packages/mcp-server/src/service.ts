@@ -478,7 +478,7 @@ export async function startServiceServer(
   );
   await mcpServer.start();
 
-  const toolCount = deps.listTools().length;
+  const toolCount = (await deps.listTools()).length;
   if (config.onStart) {
     config.onStart(config.port, toolCount);
   }
@@ -503,7 +503,7 @@ export async function startServiceServer(
   let registering = false; // guard against concurrent registration attempts
 
   if (config.syncUrl) {
-    const toolNames = deps.listTools().map((t) => t.name);
+    const toolNames = (await deps.listTools()).map((t) => t.name);
     const regHeaders: Record<string, string> = {
       "Content-Type": "application/json",
     };

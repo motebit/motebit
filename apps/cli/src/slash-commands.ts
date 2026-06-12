@@ -754,7 +754,8 @@ export async function handleSlashCommand(
       // Security: exclude local-only tools from network exposure.
       // read_file gives filesystem access — safe for local REPL, dangerous for remote callers.
       const origListTools = serveDeps.listTools.bind(serveDeps);
-      serveDeps.listTools = () => origListTools().filter((t) => !LOCAL_ONLY_TOOLS.has(t.name));
+      serveDeps.listTools = async () =>
+        (await origListTools()).filter((t) => !LOCAL_ONLY_TOOLS.has(t.name));
       const origFilterTools = serveDeps.filterTools.bind(serveDeps);
       serveDeps.filterTools = (tools) =>
         origFilterTools(tools.filter((t) => !LOCAL_ONLY_TOOLS.has(t.name)));
@@ -791,7 +792,7 @@ export async function handleSlashCommand(
         await mcpServer.start();
         isServing = true;
 
-        const exposedTools = serveDeps.listTools();
+        const exposedTools = await serveDeps.listTools();
         console.log(success(`  MCP server running on http://localhost:${port}`));
         console.log(dim(`  ${exposedTools.length} tools exposed. Accepting incoming delegations.`));
 

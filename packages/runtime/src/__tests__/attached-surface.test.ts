@@ -30,10 +30,46 @@ describe("resolveAttachedRead", () => {
 
   it("every registered read kind dispatches (no registry/dispatch drift)", async () => {
     const runtime = makeRuntime();
+    // Minimal valid params for kinds that require them.
+    const PARAMS: Partial<Record<string, Record<string, unknown>>> = {
+      policy_validate: { name: "no_such_tool" },
+      memory_recall: { embedding: [0.1, 0.2, 0.3] },
+    };
     for (const kind of ATTACHED_READ_KINDS) {
-      // Must not be refused as unknown — a registry entry without a
-      // dispatch arm is the drift this asserts against.
-      await expect(runtime.resolveAttachedRead(kind)).resolves.toBeDefined();
+      // Must not be refused as UNKNOWN — a registry entry without a
+      // dispatch arm is the drift this asserts against. A kind may
+      // still reject for its own honest reasons (e.g. unknown tool).
+      try {
+        await runtime.resolveAttachedRead(kind, PARAMS[kind]);
+      } catch (err: unknown) {
+        expect(err instanceof Error ? err.message : String(err)).not.toMatch(
+          /unknown attached read kind/,
+        );
+      }
+    }
+  });
+
+  it("every registered act kind dispatches (no registry/dispatch drift)", async () => {
+    const runtime = makeRuntime();
+    const PARAMS: Record<string, Record<string, unknown>> = {
+      memory_delete: { node_id: "n-missing" },
+      memory_pin: { node_id: "n-missing", pinned: true },
+      agent_petname: { remote_motebit_id: "m2", petname: null },
+      session_sensitivity_set: { level: "none" },
+      command_execute: { command: "state" },
+      tool_execute: { name: "no_such_tool" },
+      memory_store: { content: "drift probe" },
+      tool_used_log: { tool: "probe", ok: true },
+    };
+    for (const kind of ATTACHED_ACT_KINDS) {
+      expect(PARAMS[kind], `act kind "${kind}" missing minimal params in this test`).toBeDefined();
+      try {
+        await runtime.resolveAttachedAct(kind, PARAMS[kind]);
+      } catch (err: unknown) {
+        expect(err instanceof Error ? err.message : String(err)).not.toMatch(
+          /unknown attached act kind/,
+        );
+      }
     }
   });
 
@@ -106,5 +142,64 @@ describe("resolveAttachedAct", () => {
     await expect(
       runtime.resolveAttachedAct("agent_petname", { remote_motebit_id: "m2", petname: null }),
     ).resolves.toBeNull();
+  });
+});
+
+describe("serve-and-slash kinds", () => {
+  it("command_execute runs only registered commands and returns the CommandResult", async () => {
+    const runtime = makeRuntime();
+    await expect(
+      runtime.resolveAttachedAct("command_execute", { command: "not_a_command" }),
+    ).rejects.toThrow(/is not a registered command/);
+    const result = (await runtime.resolveAttachedAct("command_execute", {
+      command: "state",
+    })) as { summary: string } | null;
+    expect(result).not.toBeNull();
+    expect(typeof result!.summary).toBe("string");
+  });
+
+  it("tool_execute answers honestly for an unknown tool and gates through policy", async () => {
+    const runtime = makeRuntime();
+    const result = (await runtime.resolveAttachedAct("tool_execute", {
+      name: "no_such_tool",
+    })) as { ok: boolean; error?: string };
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/Unknown tool/);
+  });
+
+  it("memory_store hardcodes peer_agent provenance after governance", async () => {
+    const runtime = makeRuntime();
+    const stored = (await runtime.resolveAttachedAct("memory_store", {
+      content: "the relay's staging peer is motebit-sync-stg-b",
+    })) as { node_id: string };
+    expect(stored.node_id).toBeTruthy();
+    const exported = (await runtime.resolveAttachedRead("memory_export")) as {
+      nodes: Array<{ node_id: string; source?: string }>;
+    };
+    const node = exported.nodes.find((n) => n.node_id === stored.node_id);
+    expect(node?.source).toBe("peer_agent");
+  });
+
+  it("memory_recall validates the embedding and applies the fixed sensitivity floor", async () => {
+    const runtime = makeRuntime();
+    await expect(
+      runtime.resolveAttachedRead("memory_recall", { embedding: "nope" }),
+    ).rejects.toThrow(/"embedding" must be a non-empty array of finite numbers/);
+  });
+
+  it("tool_used_log appends the coordinator-constructed event row", async () => {
+    const runtime = makeRuntime();
+    await runtime.resolveAttachedAct("tool_used_log", {
+      tool: "motebit_query",
+      ok: true,
+      args_preview: "x".repeat(500),
+    });
+    const events = (await runtime.resolveAttachedRead("events_query", {
+      event_types: ["tool_used"],
+    })) as Array<{ payload: { tool?: string; args_preview?: string } }>;
+    expect(events.length).toBe(1);
+    expect(events[0]!.payload.tool).toBe("motebit_query");
+    // The preview is bounded coordinator-side, never wire-length.
+    expect(events[0]!.payload.args_preview!.length).toBeLessThanOrEqual(200);
   });
 });

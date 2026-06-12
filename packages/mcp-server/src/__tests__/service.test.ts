@@ -47,7 +47,7 @@ function makeRuntime(overrides: Partial<ServiceRuntime> = {}): ServiceRuntime {
 }
 
 describe("wireServerDeps", () => {
-  it("wires all required deps from runtime", () => {
+  it("wires all required deps from runtime", async () => {
     const runtime = makeRuntime();
     const deps = wireServerDeps(runtime, {
       motebitId: "test-id",
@@ -56,8 +56,8 @@ describe("wireServerDeps", () => {
 
     expect(deps.motebitId).toBe("test-id");
     expect(deps.publicKeyHex).toBe("abcdef");
-    expect(deps.listTools()).toHaveLength(1);
-    expect(deps.listTools()[0]!.name).toBe("test_tool");
+    expect(await deps.listTools()).toHaveLength(1);
+    expect((await deps.listTools())[0]!.name).toBe("test_tool");
   });
 
   it("filters tombstoned memories", async () => {
@@ -159,7 +159,7 @@ describe("wireServerDeps", () => {
 
     const tool = { name: "test_tool", description: "test", inputSchema: {} };
     const caller = { motebitId: "remote-mote", trustLevel: AgentTrustLevel.Verified };
-    deps.validateTool(tool, { arg: "val" }, caller);
+    void deps.validateTool(tool, { arg: "val" }, caller);
 
     expect(validateSpy).toHaveBeenCalledTimes(1);
     const ctx = validateSpy.mock.calls[0]![2];
@@ -184,7 +184,7 @@ describe("wireServerDeps", () => {
     const deps = wireServerDeps(runtime, { motebitId: "test-id" });
 
     const tool = { name: "test_tool", description: "test", inputSchema: {} };
-    deps.validateTool(tool, { arg: "val" });
+    void deps.validateTool(tool, { arg: "val" });
 
     const ctx = validateSpy.mock.calls[0]![2];
     expect(ctx.callerMotebitId).toBeUndefined();

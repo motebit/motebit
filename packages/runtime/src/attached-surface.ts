@@ -20,7 +20,10 @@
  * is allowed to do.
  */
 
-import { isSensitivityLevel, type EventType } from "@motebit/sdk";
+import { embedText } from "@motebit/memory-graph";
+import { MemoryClass } from "@motebit/policy";
+import { EventType, SensitivityLevel, isSensitivityLevel } from "@motebit/sdk";
+import { COMMAND_DEFINITIONS, executeCommand } from "./commands/index.js";
 import type { MotebitRuntime } from "./motebit-runtime.js";
 
 export const ATTACHED_READ_KINDS = [
@@ -34,6 +37,10 @@ export const ATTACHED_READ_KINDS = [
   "gradient_summary",
   "reflection_last",
   "session_sensitivity",
+  // Attached `motebit serve` (MCP frontend over the coordinator's interior):
+  "tools_filtered",
+  "policy_validate",
+  "memory_recall",
 ] as const;
 export type AttachedReadKind = (typeof ATTACHED_READ_KINDS)[number];
 
@@ -42,6 +49,18 @@ export const ATTACHED_ACT_KINDS = [
   "memory_pin",
   "agent_petname",
   "session_sensitivity_set",
+  // Slash commands are deterministic user affordances — the shared
+  // command layer (COMMAND_DEFINITIONS, a closed registry of its own)
+  // executes on the coordinator:
+  "command_execute",
+  // Attached `motebit serve`: tool execution is policy-gated HERE (the
+  // coordinator never trusts that a frontend ran the pre-flight);
+  // memory writes run the same governance + hardcoded peer_agent
+  // provenance as the local serve path; usage logging is a narrow
+  // typed event, never a wire-supplied event row:
+  "tool_execute",
+  "memory_store",
+  "tool_used_log",
 ] as const;
 export type AttachedActKind = (typeof ATTACHED_ACT_KINDS)[number];
 
@@ -73,6 +92,31 @@ function optStringArray(
     throw bad(kind, `param "${field}" must be an array of strings`);
   }
   return value as string[];
+}
+
+function optObject(
+  kind: string,
+  params: Record<string, unknown>,
+  field: string,
+): Record<string, unknown> | undefined {
+  const value = params[field];
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw bad(kind, `param "${field}" must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function reqNumberArray(kind: string, params: Record<string, unknown>, field: string): number[] {
+  const value = params[field];
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((v) => typeof v !== "number" || !Number.isFinite(v))
+  ) {
+    throw bad(kind, `param "${field}" must be a non-empty array of finite numbers`);
+  }
+  return value as number[];
 }
 
 function reqString(kind: string, params: Record<string, unknown>, field: string): string {
@@ -138,6 +182,32 @@ export async function resolveAttachedRead(
       return runtime.getLastReflection();
     case "session_sensitivity":
       return runtime.getSessionSensitivity();
+    case "tools_filtered":
+      // Policy filtering runs HERE — an attached MCP frontend exposes
+      // exactly what the coordinator's gate says is visible.
+      return runtime.policy.filterTools(runtime.getToolRegistry().list());
+    case "policy_validate": {
+      const name = reqString(kind, params, "name");
+      const def = runtime
+        .getToolRegistry()
+        .list()
+        .find((t) => t.name === name);
+      if (def === undefined) throw bad(kind, `unknown tool "${name}"`);
+      return runtime.policy.validate(
+        def,
+        optObject(kind, params, "args") ?? {},
+        runtime.policy.createTurnContext(),
+      );
+    }
+    case "memory_recall": {
+      // Sensitivity floor is fixed coordinator-side — an attached MCP
+      // surface recalls at the same none/personal ceiling the local
+      // serve path grants external callers, never a wire-chosen tier.
+      return runtime.memory.recallRelevant(reqNumberArray(kind, params, "embedding"), {
+        limit: optPositiveInt(kind, params, "limit") ?? 10,
+        sensitivityFilter: [SensitivityLevel.None, SensitivityLevel.Personal],
+      });
+    }
     default:
       throw new Error(`unknown attached read kind "${kind}"`);
   }
@@ -181,6 +251,96 @@ export async function resolveAttachedAct(
         throw bad(kind, `"${level}" is not a sensitivity level`);
       }
       runtime.setSessionSensitivity(level);
+      return null;
+    }
+    case "command_execute": {
+      const command = reqString(kind, params, "command");
+      if (!COMMAND_DEFINITIONS.some((c) => c.name === command)) {
+        throw bad(kind, `"${command}" is not a registered command`);
+      }
+      const args = params["args"];
+      if (args !== undefined && typeof args !== "string") {
+        throw bad(kind, 'param "args" must be a string');
+      }
+      // Relay-backed commands answer with the command layer's own
+      // honest "relay not configured" copy — the coordinator's relay
+      // credentials are never minted on behalf of a frontend frame.
+      return executeCommand(runtime, command, args);
+    }
+    case "tool_execute": {
+      const name = reqString(kind, params, "name");
+      const args = optObject(kind, params, "args") ?? {};
+      const def = runtime
+        .getToolRegistry()
+        .list()
+        .find((t) => t.name === name);
+      if (def === undefined) return { ok: false, error: `Unknown tool: ${name}` };
+      // Defense in depth: the gate runs here regardless of any
+      // pre-flight the frontend claims to have done.
+      const decision = runtime.policy.validate(def, args, runtime.policy.createTurnContext());
+      if (!decision.allowed) {
+        return { ok: false, error: `denied by policy: ${decision.reason ?? "denied"}` };
+      }
+      if (decision.requiresApproval) {
+        return {
+          ok: false,
+          error:
+            "requires human approval — the attached read/act surface carries no approval channel; approve via a chat-connected surface",
+        };
+      }
+      return runtime.getToolRegistry().execute(name, args);
+    }
+    case "memory_store": {
+      const content = reqString(kind, params, "content");
+      const sensitivityRaw = params["sensitivity"];
+      let sensitivity: SensitivityLevel = SensitivityLevel.None;
+      if (sensitivityRaw !== undefined) {
+        if (typeof sensitivityRaw !== "string" || !isSensitivityLevel(sensitivityRaw)) {
+          throw bad(kind, 'param "sensitivity" is not a sensitivity level');
+        }
+        sensitivity = sensitivityRaw;
+      }
+      // Same governance choke point as the local serve path; provenance
+      // is HARDCODED peer_agent after governance — an external MCP
+      // caller's write is never user_stated, and never caller-derived
+      // (docs/doctrine/memory-provenance.md).
+      const candidate = { content, confidence: 0.7, sensitivity };
+      const decisions = runtime.memoryGovernor.evaluate([candidate]);
+      const decision = decisions[0];
+      if (!decision || decision.memoryClass === MemoryClass.REJECTED) {
+        throw bad(kind, `memory rejected by governance: ${decision?.reason ?? "unknown"}`);
+      }
+      const governed = decision.candidate;
+      const embedding = await embedText(governed.content);
+      const node = await runtime.memory.formMemory(
+        { ...governed, source: "peer_agent" },
+        embedding,
+      );
+      return { node_id: node.node_id };
+    }
+    case "tool_used_log": {
+      const tool = reqString(kind, params, "tool");
+      const ok = reqBoolean(kind, params, "ok");
+      const preview = params["args_preview"];
+      if (preview !== undefined && typeof preview !== "string") {
+        throw bad(kind, 'param "args_preview" must be a string');
+      }
+      // The event row is constructed HERE — a frontend logs a typed
+      // fact, it never appends an arbitrary wire-supplied event.
+      await runtime.events.append({
+        event_id: globalThis.crypto.randomUUID(),
+        motebit_id: runtime.motebitId,
+        timestamp: Date.now(),
+        event_type: EventType.ToolUsed,
+        payload: {
+          tool,
+          args_preview: preview?.slice(0, 200) ?? "",
+          ok,
+          source: "mcp_server",
+        },
+        version_clock: 0,
+        tombstoned: false,
+      });
       return null;
     }
     default:

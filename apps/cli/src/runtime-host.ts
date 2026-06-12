@@ -139,9 +139,32 @@ export async function electCoordinatorRole(
   motebitId: string,
   runtimeRef: { current: MotebitRuntime | null },
 ): Promise<RuntimeHostServer> {
-  let election: ElectionOutcome;
+  const election = await electAttachOrCoordinate(fullConfig, motebitId, runtimeRef);
+  if (election.role === "frontend") {
+    const pid = election.client.coordinatorPid;
+    election.client.close();
+    console.error(`Another motebit process is already coordinating this machine (pid ${pid}).`);
+    console.error(
+      "One runtime per machine: stop that process first, or run `motebit` (no arguments) to attach a rendering REPL to it.",
+    );
+    process.exit(1);
+  }
+  return election.server;
+}
+
+/**
+ * Run the election and hand back the outcome — for entry points that
+ * can serve BOTH roles (`motebit serve` coordinates when first, or
+ * attaches as an MCP frontend over the coordinator's interior). Exits
+ * the process honestly only on an election failure.
+ */
+export async function electAttachOrCoordinate(
+  fullConfig: FullConfig,
+  motebitId: string,
+  runtimeRef: { current: MotebitRuntime | null },
+): Promise<ElectionOutcome> {
   try {
-    election = await electCliRuntimeHost({
+    return await electCliRuntimeHost({
       fullConfig,
       motebitId,
       loadPrivateKey: async () =>
@@ -161,14 +184,4 @@ export async function electCoordinatorRole(
     );
     process.exit(1);
   }
-  if (election.role === "frontend") {
-    const pid = election.client.coordinatorPid;
-    election.client.close();
-    console.error(`Another motebit process is already coordinating this machine (pid ${pid}).`);
-    console.error(
-      "One runtime per machine: stop that process first, or run `motebit` (no arguments) to attach a rendering REPL to it.",
-    );
-    process.exit(1);
-  }
-  return election.server;
 }

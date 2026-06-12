@@ -84,18 +84,22 @@ interface MotebitServerDeps {
   motebitId: string;
   publicKeyHex?: string;
 
-  // Tools
-  listTools(): ToolDefinition[];
+  // Tools — listTools / validateTool / getState may answer
+  // asynchronously: an attached `motebit serve` (daemon-desktop
+  // unification, attach-mode parity) resolves them over the
+  // runtime-host socket from the coordinator's interior. Sync
+  // implementations remain valid; the adapter awaits either way.
+  listTools(): ToolDefinition[] | Promise<ToolDefinition[]>;
   filterTools(tools: ToolDefinition[]): ToolDefinition[];
   validateTool(
     tool: ToolDefinition,
     args: Record<string, unknown>,
     caller?: CallerIdentity,
-  ): PolicyDecision;
+  ): PolicyDecision | Promise<PolicyDecision>;
   executeTool(name: string, args: Record<string, unknown>): Promise<ToolResult>;
 
   // Resources
-  getState(): Record<string, unknown>;
+  getState(): Record<string, unknown> | Promise<Record<string, unknown>>;
   getMemories(limit?: number): Promise<
     Array<{
       content: string;
@@ -301,7 +305,7 @@ export function jsonSchemaToZodShape(
 // === McpServerAdapter ===
 
 export class McpServerAdapter {
-  private server: McpServer;
+  private server: McpServer | null = null;
   private config: McpServerConfig;
   private deps: MotebitServerDeps;
   private httpServer?: import("node:http").Server;
@@ -316,7 +320,6 @@ export class McpServerAdapter {
   constructor(config: McpServerConfig, deps: MotebitServerDeps) {
     this.config = config;
     this.deps = deps;
-    this.server = this.createServer();
   }
 
   /**
@@ -324,12 +327,12 @@ export class McpServerAdapter {
    * registered. For StreamableHTTP, each session needs its own server instance
    * (the SDK only allows one transport per server).
    */
-  private createServer(): McpServer {
+  private async createServer(): Promise<McpServer> {
     const server = new McpServer({
       name: this.config.name ?? "motebit",
       version: this.config.version ?? "0.1.0",
     });
-    this.registerToolsOn(server);
+    await this.registerToolsOn(server);
     this.registerSyntheticToolsOn(server);
     this.registerResourcesOn(server);
     this.registerPromptsOn(server);
@@ -344,6 +347,7 @@ export class McpServerAdapter {
       // types/helpers without choking the bundler.
       const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
       const transport = new StdioServerTransport();
+      this.server ??= await this.createServer();
       await this.server.connect(transport);
     } else {
       await this.startHttp();
@@ -351,7 +355,7 @@ export class McpServerAdapter {
   }
 
   async stop(): Promise<void> {
-    await this.server.close();
+    if (this.server !== null) await this.server.close();
     if (this.httpServer) {
       await new Promise<void>((resolve, reject) => {
         this.httpServer!.close((err) => (err ? reject(err) : resolve()));
@@ -362,8 +366,8 @@ export class McpServerAdapter {
 
   // --- Tool Registration ---
 
-  private registerToolsOn(server: McpServer): void {
-    const allTools = this.deps.listTools();
+  private async registerToolsOn(server: McpServer): Promise<void> {
+    const allTools = await this.deps.listTools();
     const visibleTools = this.deps.filterTools(allTools);
 
     for (const tool of visibleTools) {
@@ -413,7 +417,7 @@ export class McpServerAdapter {
     isError?: boolean;
   }> {
     // Policy check
-    const decision = this.deps.validateTool(tool, args, this.lastVerifiedCaller ?? undefined);
+    const decision = await this.deps.validateTool(tool, args, this.lastVerifiedCaller ?? undefined);
 
     if (!decision.allowed && !decision.requiresApproval) {
       return {
@@ -477,11 +481,15 @@ export class McpServerAdapter {
    * Validate a synthetic tool through PolicyGate. Returns null if allowed,
    * or an error result if denied or requires approval.
    */
-  private validateSyntheticTool(
+  private async validateSyntheticTool(
     toolDef: ToolDefinition,
     args: Record<string, unknown>,
-  ): { content: Array<{ type: "text"; text: string }>; isError: true } | null {
-    const decision = this.deps.validateTool(toolDef, args, this.lastVerifiedCaller ?? undefined);
+  ): Promise<{ content: Array<{ type: "text"; text: string }>; isError: true } | null> {
+    const decision = await this.deps.validateTool(
+      toolDef,
+      args,
+      this.lastVerifiedCaller ?? undefined,
+    );
 
     if (!decision.allowed && !decision.requiresApproval) {
       return {
@@ -538,7 +546,7 @@ export class McpServerAdapter {
         "Ask this motebit a question — AI response with memory context",
         { message: z.string().describe("The question or message to send") },
         async (args: { message: string }) => {
-          const denied = this.validateSyntheticTool(toolDef, args);
+          const denied = await this.validateSyntheticTool(toolDef, args);
           if (denied) return denied;
 
           const result = await sendMessage(args.message);
@@ -565,7 +573,7 @@ export class McpServerAdapter {
           sensitivity: z.string().optional().describe("Sensitivity level (none, personal)"),
         },
         async (args: { content: string; sensitivity?: string }) => {
-          const denied = this.validateSyntheticTool(toolDef, args);
+          const denied = await this.validateSyntheticTool(toolDef, args);
           if (denied) return denied;
 
           // Fail-closed: external callers cannot store high-sensitivity memories
@@ -604,7 +612,7 @@ export class McpServerAdapter {
           limit: z.number().optional().describe("Max results to return"),
         },
         async (args: { query: string; limit?: number }) => {
-          const denied = this.validateSyntheticTool(toolDef, args);
+          const denied = await this.validateSyntheticTool(toolDef, args);
           if (denied) return denied;
 
           const results = await queryMemories(args.query, args.limit);
@@ -651,7 +659,7 @@ export class McpServerAdapter {
           required_capabilities?: unknown;
           relay_task_id?: string;
         }) => {
-          const denied = this.validateSyntheticTool(toolDef, args);
+          const denied = await this.validateSyntheticTool(toolDef, args);
           if (denied) return denied;
 
           // Parse and verify delegation token for scope enforcement
@@ -814,7 +822,7 @@ export class McpServerAdapter {
     /** @spec motebit/agent-mcp-surface@1.0 */
     // eslint-disable-next-line @typescript-eslint/require-await -- MCP SDK expects async handler
     server.tool("motebit_identity", "Return this motebit's identity information", async () => {
-      const denied = this.validateSyntheticTool(identityToolDef, {});
+      const denied = await this.validateSyntheticTool(identityToolDef, {});
       if (denied) return denied;
 
       this.deps.logToolCall("motebit_identity", {}, { ok: true, data: "identity" });
@@ -847,10 +855,10 @@ export class McpServerAdapter {
     /** @spec motebit/agent-mcp-surface@1.0 */
     // eslint-disable-next-line @typescript-eslint/require-await -- MCP SDK expects async handler
     server.tool("motebit_tools", "List available tools with risk levels", async () => {
-      const denied = this.validateSyntheticTool(toolsToolDef, {});
+      const denied = await this.validateSyntheticTool(toolsToolDef, {});
       if (denied) return denied;
 
-      const tools = this.deps.listTools().map((t) => ({
+      const tools = (await this.deps.listTools()).map((t) => ({
         name: t.name,
         description: t.description,
         risk: t.riskHint?.risk ?? null,
@@ -874,7 +882,7 @@ export class McpServerAdapter {
         "motebit_credentials",
         "Get this agent's signed verifiable credentials (gradient, reputation)",
         async () => {
-          const denied = this.validateSyntheticTool(credentialsToolDef, {});
+          const denied = await this.validateSyntheticTool(credentialsToolDef, {});
           if (denied) return denied;
 
           const vp = await getCredentials();
@@ -900,7 +908,7 @@ export class McpServerAdapter {
         "motebit_service_listing",
         "Get this agent's service listing (capabilities, pricing, SLA)",
         async () => {
-          const denied = this.validateSyntheticTool(listingToolDef, {});
+          const denied = await this.validateSyntheticTool(listingToolDef, {});
           if (denied) return denied;
 
           const listing = await getServiceListing();
@@ -940,7 +948,7 @@ export class McpServerAdapter {
           {
             uri: "motebit://state",
             mimeType: "application/json",
-            text: JSON.stringify(this.deps.getState()),
+            text: JSON.stringify(await this.deps.getState()),
           },
         ],
       }));
@@ -1227,7 +1235,7 @@ export class McpServerAdapter {
 
             // Each session gets its own McpServer instance (required by the SDK —
             // a single McpServer can only be connected to one transport at a time).
-            const sessionServer = this.createServer();
+            const sessionServer = await this.createServer();
             await sessionServer.connect(transport);
           } else {
             // Invalid: no session ID and not an init request

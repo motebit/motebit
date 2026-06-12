@@ -13,6 +13,9 @@ import {
   bindSlabControllerToRenderer,
   createRelayCapabilitiesFetcher,
   cmdSelfTest,
+  executeCommand,
+  type CommandResult,
+  type RelayConfig,
 } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
@@ -1922,12 +1925,44 @@ export class DesktopApp {
    * tool calls at high tiers when the configured provider is not
    * sovereign — see `SovereignTierRequiredError`.
    */
-  getSessionSensitivity(): import("@motebit/sdk").SensitivityLevel | null {
+  async getSessionSensitivity(): Promise<import("@motebit/sdk").SensitivityLevel | null> {
+    const attached =
+      this.attachedRead<import("@motebit/sdk").SensitivityLevel>("session_sensitivity");
+    if (attached) return attached;
     return this.runtime?.getSessionSensitivity() ?? null;
   }
 
-  setSessionSensitivity(level: import("@motebit/sdk").SensitivityLevel): void {
+  async setSessionSensitivity(level: import("@motebit/sdk").SensitivityLevel): Promise<void> {
+    // Attached: the sensitivity gate lives on the coordinator (it gates
+    // the coordinator's provider calls) — the set must land THERE, and
+    // a failure must surface, never a believed-but-inactive medical mode.
+    const attached = this.attachedAct<null>("session_sensitivity_set", { level });
+    if (attached) {
+      await attached;
+      return;
+    }
     this.runtime?.setSessionSensitivity(level);
+  }
+
+  /**
+   * Run a shared-layer slash command — locally against this window's
+   * runtime, or on the coordinator over the act frame when attached
+   * (slash commands are deterministic affordances; the coordinator's
+   * COMMAND_DEFINITIONS registry gates what runs there). Relay-backed
+   * commands run with the executing side's own relay credentials.
+   */
+  executeRuntimeCommand(
+    command: string,
+    args?: string,
+    relay?: RelayConfig,
+  ): Promise<CommandResult | null> {
+    const attached = this.attachedAct<CommandResult | null>("command_execute", {
+      command,
+      ...(args !== undefined ? { args } : {}),
+    });
+    if (attached) return attached;
+    if (!this.runtime) throw new Error("Runtime not initialized");
+    return executeCommand(this.runtime, command, args, relay);
   }
 
   hasPendingApproval(): boolean {

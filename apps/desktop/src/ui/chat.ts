@@ -1,5 +1,4 @@
 import { stripPartialActionTag } from "@motebit/ai-core";
-import { executeCommand } from "@motebit/runtime";
 import type { RelayConfig } from "@motebit/runtime";
 import { buildReceiptArtifact } from "@motebit/render-engine";
 import type { ExecutionReceipt } from "@motebit/sdk";
@@ -993,32 +992,45 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         // explaining the consequence (calm-software doctrine).
         const arg = args.trim().toLowerCase();
         const VALID = ["none", "personal", "medical", "financial", "secret"] as const;
-        if (arg === "" || arg === "status") {
-          addMessage("system", `Session sensitivity: ${ctx.app.getSessionSensitivity() ?? "none"}`);
-          return;
-        }
-        if (!(VALID as ReadonlyArray<string>).includes(arg)) {
-          addMessage(
-            "system",
-            `Usage: /sensitivity [<level>] — level ∈ {${VALID.join(", ")}} (current: ${ctx.app.getSessionSensitivity() ?? "none"})`,
-          );
-          return;
-        }
-        ctx.app.setSessionSensitivity(arg as import("@motebit/sdk").SensitivityLevel);
-        const elevated = arg === "medical" || arg === "financial" || arg === "secret";
-        addMessage(
-          "system",
-          elevated
-            ? `Session elevated to ${arg} — outbound tools and external AI will fail-close until you switch to a sovereign (on-device) provider.`
-            : `Session sensitivity: ${arg}`,
-        );
+        void (async () => {
+          try {
+            if (arg === "" || arg === "status") {
+              addMessage(
+                "system",
+                `Session sensitivity: ${(await ctx.app.getSessionSensitivity()) ?? "none"}`,
+              );
+              return;
+            }
+            if (!(VALID as ReadonlyArray<string>).includes(arg)) {
+              addMessage(
+                "system",
+                `Usage: /sensitivity [<level>] — level ∈ {${VALID.join(", ")}} (current: ${(await ctx.app.getSessionSensitivity()) ?? "none"})`,
+              );
+              return;
+            }
+            await ctx.app.setSessionSensitivity(arg as import("@motebit/sdk").SensitivityLevel);
+            const elevated = arg === "medical" || arg === "financial" || arg === "secret";
+            addMessage(
+              "system",
+              elevated
+                ? `Session elevated to ${arg} — outbound tools and external AI will fail-close until you switch to a sovereign (on-device) provider.`
+                : `Session sensitivity: ${arg}`,
+            );
+          } catch (err: unknown) {
+            addMessage(
+              "system",
+              `sensitivity error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        })();
         return;
       }
     }
 
-    // Shared commands — same data extraction and formatting as all surfaces
-    const runtime = ctx.app.getRuntime();
-    if (!runtime) {
+    // Shared commands — same data extraction and formatting as all
+    // surfaces; an attached window runs them on the coordinator
+    // (attach-mode parity).
+    if (ctx.app.getRuntime() === null && ctx.app.runtimeHostStatus().role !== "attached") {
       addMessage("system", "Runtime not initialized.");
       return;
     }
@@ -1026,8 +1038,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
     void (async () => {
       try {
         const relay = await getRelayConfig();
-        const result = await executeCommand(
-          runtime,
+        const result = await ctx.app.executeRuntimeCommand(
           command,
           args || undefined,
           relay ?? undefined,
