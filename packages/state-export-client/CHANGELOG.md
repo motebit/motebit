@@ -1,5 +1,15 @@
 # @motebit/state-export-client
 
+## 0.5.8
+
+### Patch Changes
+
+- Updated dependencies [5b1103e]
+- Updated dependencies [d6ae64c]
+- Updated dependencies [21e035d]
+  - @motebit/crypto@3.9.0
+  - @motebit/protocol@3.4.0
+
 ## 0.5.7
 
 ### Patch Changes

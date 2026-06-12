@@ -1,5 +1,15 @@
 # @motebit/protocol
 
+## 3.4.0
+
+### Minor Changes
+
+- 21e035d: New `TokenAudience` registry entry: `runtime:attach` (+ `RUNTIME_ATTACH_AUDIENCE` constant). The device-key-signed attach handshake on the machine-local runtime-host socket — a frontend process authenticating to the machine's coordinator runtime, per the daemon–desktop unification doctrine (one sovereign runtime per machine, frontends attach). Verified exclusively by the local coordinator; the relay and every network verifier reject it by audience binding, so the token never authorizes anything beyond the machine boundary. Additive: existing audiences, verifiers, and wire formats are unchanged.
+
+### Patch Changes
+
+- d6ae64c: Pin the failed-vs-denied status semantics on `ExecutionReceipt` and `ToolInvocationReceipt`. The discriminator is who refused: `denied` is the governance boundary's verdict (a policy gate blocked the task's actions and no permitted work completed), `failed` is the execution interior's verdict (crashes, timeouts, and the worker's own principled refusals all included). Doc-comment clarification only — no wire-format or runtime change; existing receipts stand as minted. Canonical prose lives in `spec/execution-ledger-v1.md` §11.1 "Status semantics".
+
 ## 3.3.0
 
 ### Minor Changes

@@ -1,5 +1,33 @@
 # motebit CLI Changelog
 
+## 1.5.0
+
+### Minor Changes
+
+- 5b1103e: Remote command ingress is now fail-closed (daemon-desktop unification, increment 4). `command_request` — previously an unsigned relay-forwarded message every surface trusted implicitly — requires a `signed-request-envelope@1.0` signed by the agent's own identity, audience-bound to the target (`agent-command/{motebit_id}`, registered in the spec's audience-convention table) and digest-bound to the exact `{command, args}` payload.
+
+  `@motebit/crypto` gains the convention helpers: `signAgentCommandEnvelope`, `verifyAgentCommandEnvelope` (verdict-shaped, honest rejection reasons), `agentCommandAudience`, `agentCommandPayload`. The relay verifies at ingress against the registered identity key as defense in depth and forwards the envelope verbatim; every consuming surface (CLI daemon, `motebit serve`, desktop, mobile, web, spatial) re-verifies fail-closed before executing — the relay remains a convenience layer, never the trust root.
+
+  Breaking only for unsigned senders, of which there are none advertised: the `/command` route was `@internal` with no production callers, so this flip carries no migration window. This closes the product-posture precondition for ever advertising remote-trigger.
+
+- 73e0666: A coordinator daemon can now drive an attached desktop's computer — bridged organs surface as policy-gated tools (daemon-desktop unification, the capability-bridging consumer step). When a desktop attaches to a running `motebit run` / `motebit serve` coordinator, its contributed `computer_use` organ registers in the coordinator's tool registry as the canonical `computer` tool — same definition, same `desktop_drive` embodiment stamp, and the same policy gate as a local registration; risk is declared, never inferred. Tools appear when the contributing frontend attaches and are removed the moment it disconnects, and a disconnect mid-action fails honestly with the reason — never a silent retry across the authority boundary.
+
+  The Secure-Enclave attestation organ is deliberately not exposed to the AI loop: hardware-attestation minting is a user-initiated identity affordance, and wiring it as a model-chosen tool is refused at startup, fail-closed.
+
+- 6105070: One coordinator runtime per machine — the CLI adopts the runtime-host election (daemon-desktop unification, increment 2). Every entry point elects before constructing a runtime: the first motebit process binds `~/.motebit/runtime.sock` and coordinates; the rest attach or refuse honestly.
+  - `motebit run` and `motebit serve` are coordinator-role: a second start no longer silently runs a parallel authority over the same identity key and database — it exits naming the live coordinator's pid. This is the single-instance enforcement the unification doctrine called for.
+  - The bare `motebit` REPL attaches as a rendering frontend when a coordinator (for example a running daemon) is live: chat, `/invoke`, and approval votes proxy over the local socket with a device-key-signed `runtime:attach` handshake. The coordinator acts; the terminal renders. `/exit` leaves the coordinator running.
+  - Authority cannot be asserted over the socket: wire-supplied options are narrowed to a rendering-safe subset before reaching the runtime — grant and attestation fields are stripped at the boundary.
+
+  No flags, no migration: with no coordinator running, every command behaves exactly as before (and now also serves the socket for later frontends).
+
+### Patch Changes
+
+- f2fabf3: Internal: the runtime-host wire→runtime authority-field strip (`verifiedGrant` / `userActionAttestation` / `goalContext` never forwarded from an attached frontend) moved from CLI-local code into `@motebit/runtime-host` (`pickSafeChatOptions` / `pickSafeInvokeOptions`) so the desktop coordinator applies the identical guard. No behavior change at the CLI surface.
+- eef8729: `motebit delegate --plan` now runs the runtime-host election before touching shared state (daemon-desktop unification follow-up — closes the "one-shot subcommands" residual). The plan run constructs a transient runtime over the shared `~/.motebit` database and, in sovereign mode, signs with the identity key — a full authority while it lives, however briefly. It is now coordinator-role for its lifetime: it binds `~/.motebit/runtime.sock` before opening the database and releases the bind when the plan completes, or refuses honestly — naming the live coordinator's pid — when another motebit process already coordinates the machine. A delegate run can no longer race a running daemon as a second signing authority over the same key and database.
+
+  With no coordinator running, `motebit delegate` behaves exactly as before.
+
 ## 1.4.4
 
 ### Patch Changes
