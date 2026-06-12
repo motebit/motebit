@@ -1,0 +1,19 @@
+# receipt.computer
+
+> A public, login-free verifier for Motebit receipts. Paste any signed Motebit artifact — an execution receipt, a tool-invocation receipt, a content manifest — and read its verdict: signature validity and the identity-binding rung (integrity-only → pinned → anchored → sovereign).
+
+receipt.computer is the consumer side of Motebit's self-attesting system: every claim the protocol makes is user-verifiable, offline-first, with no account and no install. Verification is pure — canonical JSON → SHA-256 → Ed25519 — and external anchoring (Solana) is additive evidence, never a gatekeeper.
+
+## What the rungs mean
+
+- **integrity-only**: the signature verifies against the key embedded in the artifact — the artifact is internally consistent, but the key→identity binding is unproven.
+- **pinned**: the key matches the identity the relay serves for that motebit id.
+- **anchored**: the identity log's Merkle root is committed on-chain (Solana) at a pinned address — the operator cannot equivocate.
+- **sovereign**: the motebit id itself is a cryptographic commitment to the genesis key — the binding holds with no operator in the trust root at all.
+
+## Use it
+
+- [receipt.computer](https://receipt.computer): paste a receipt, get the verdict.
+- [Verification spec and docs](https://docs.motebit.com): the protocol behind the verdicts.
+- [`@motebit/verifier` on npm](https://www.npmjs.com/package/@motebit/verifier): the same verification as a library — consume it, never fork it.
+- [motebit.com](https://motebit.com): the sovereign agent runtime that mints these receipts.
