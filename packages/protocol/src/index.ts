@@ -1063,6 +1063,18 @@ export interface ExecutionReceipt {
   device_id: DeviceId;
   submitted_at: number;
   completed_at: number;
+  /**
+   * Task outcome. The discriminator between the two non-completed values is
+   * WHO refused: `denied` is the governance boundary's verdict (a policy gate
+   * blocked the task's actions and no permitted work completed); `failed` is
+   * the execution interior's verdict (the run did not yield its outcome —
+   * crashes, timeouts, and the worker's own principled refusals all
+   * included, however much work was metered along the way). Workers never
+   * classify their own refusals as `denied` — trust accumulation treats
+   * `denied` as neutral and `failed` as a success-rate debit, so
+   * self-classified denials would launder failures out of trust history.
+   * See `spec/execution-ledger-v1.md` §11.1 "Status semantics".
+   */
   status: "completed" | "failed" | "denied";
   result: string;
   tools_used: string[];
@@ -1157,7 +1169,11 @@ export interface ToolInvocationReceipt {
   started_at: number;
   /** Unix ms when the tool reached terminal state. Equal to `started_at` for instantaneous tools. */
   completed_at: number;
-  /** Terminal state of the tool invocation. */
+  /**
+   * Terminal state of the tool invocation. Same boundary/interior split as
+   * `ExecutionReceipt.status`, at per-call granularity: `denied` = a policy
+   * gate blocked this call; `failed` = the tool itself errored.
+   */
   status: "completed" | "failed" | "denied";
   /**
    * SHA-256 hex digest of the canonical JSON of the tool's arguments.

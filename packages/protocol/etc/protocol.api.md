@@ -1644,7 +1644,6 @@ export interface ExecutionReceipt {
     result_hash: string;
     // (undocumented)
     signature: string;
-    // (undocumented)
     status: "completed" | "failed" | "denied";
     // (undocumented)
     submitted_at: number;

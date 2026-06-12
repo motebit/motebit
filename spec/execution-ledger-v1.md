@@ -327,6 +327,15 @@ The atomic proof of task execution. Every conformant implementation MUST emit th
 
 The `ExecutionReceipt` type in `@motebit/protocol` is the binding machine-readable form.
 
+#### Status semantics
+
+The discriminator between the two non-completed statuses is **who refused**: the governance boundary, or the execution interior.
+
+- `denied` is the boundary's verdict: a policy gate (deny-above risk tier, denylist, delegated scope, approval refusal) blocked the task's actions and **no permitted work completed**. The agent signs its own refusal, making "the boundary held" a verifiable fact rather than the relay's word for it.
+- `failed` is the interior's verdict: the run did not yield its outcome. Crashes, timeouts, and **principled refusals by the worker itself** (an output-quality invariant declining to compose a result) are all `failed`, however much work was metered along the way.
+
+A worker MUST NOT classify its own refusals as `denied`. The reason is not taxonomy but trust accounting: reference trust accumulation treats `denied` as neutral (a held boundary is not the worker's defect) while `failed` debits the worker's success rate — self-classified denials would launder failures out of the worker's trust history. Reference relay-custody settlement refunds `failed` and `denied` identically (full release, zero fee), so the distinction is consumed by the trust layer, not the money layer.
+
 #### Storage (reference convention — non-binding)
 
 The reference relay persists receipts in the `relay_settlements` and per-agent execution-ledger tables (UTF-8 canonical JSON + indexed columns for `task_id`, `motebit_id`, `status`, `completed_at`). Apps persist receipts as events in the local event log. Alternative implementations MAY store receipts in any append-only structure; the wire shape above is what crosses every boundary.

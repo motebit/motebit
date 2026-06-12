@@ -70,7 +70,7 @@ const SuiteSchema = z
 const StatusSchema = z
   .enum(["completed", "failed", "denied"])
   .describe(
-    "Terminal state of the task. `completed` = result produced and signed. `failed` = execution errored. `denied` = policy or budget gate rejected the invocation.",
+    "Terminal state of the task. `completed` = result produced and signed. `failed` = the execution interior did not yield its outcome (crashes, timeouts, and the worker's own principled refusals all included). `denied` = the governance boundary refused: a policy or budget gate blocked the task's actions and no permitted work completed. The discriminator is who refused — the boundary (`denied`) or the interior (`failed`). See execution-ledger-v1 §11.1 Status semantics.",
   );
 
 // ---------------------------------------------------------------------------
