@@ -31,6 +31,22 @@ describe("DesktopApp", () => {
     expect(app).toBeInstanceOf(DesktopApp);
   });
 
+  it("reports a standalone runtime-host role when no election ran", () => {
+    app = new DesktopApp();
+    expect(app.runtimeHostStatus()).toEqual({ role: "standalone" });
+  });
+
+  it("exports an honestly-marked partial bundle when no runtime exists in this window", async () => {
+    // The attached-frontend case rides the same branch: a silent export
+    // omitting the interior would read as "this motebit has no memories".
+    app = new DesktopApp();
+    const bundle = JSON.parse(await app.exportAllData()) as Record<string, unknown>;
+    expect(bundle["partial_export"]).toBe(true);
+    expect(bundle["failed_sections"]).toEqual(["memories", "edges", "events", "state"]);
+    expect(bundle["partial_reason"]).toMatch(/runtime not initialized/);
+    expect(bundle["memories"]).toEqual([]);
+  });
+
   it("can be initialized with a null canvas (stub adapter)", async () => {
     app = new DesktopApp();
     // ThreeJSAdapter.init accepts unknown, so null works in stub mode

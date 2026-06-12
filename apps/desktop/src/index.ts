@@ -762,6 +762,25 @@ export class DesktopApp {
     return this.runtime;
   }
 
+  /**
+   * Typed runtime-host truth for the UI (daemon-desktop unification).
+   * `attached` means this window is a rendering frontend: the interior —
+   * memory, receipts, trust — lives in the coordinator process, chat and
+   * approvals proxy there, and runtime-bound panels must render that
+   * fact instead of a structural-void empty state. `standalone` means
+   * the election did not run (no signing keys / non-Tauri dev shell).
+   */
+  runtimeHostStatus():
+    | { role: "coordinator" }
+    | { role: "attached"; coordinatorPid: number }
+    | { role: "standalone" } {
+    if (this._attachedHost !== null) {
+      return { role: "attached", coordinatorPid: this._attachedHost.coordinatorPid };
+    }
+    if (this._runtimeHostServer !== null) return { role: "coordinator" };
+    return { role: "standalone" };
+  }
+
   /** Expose the render adapter so UI modules can drive scene primitives
    *  directly (slab, artifact manager). */
   getRenderer(): ThreeJSAdapter {
@@ -1946,6 +1965,20 @@ export class DesktopApp {
         data.events = [];
         failedSections.push("events");
       }
+    } else {
+      // No runtime in this window. An export that silently omits the
+      // sections would read as "this motebit has no memories" — say
+      // what is true instead: attached frontends point at the
+      // coordinator that holds the interior.
+      const host = this.runtimeHostStatus();
+      data.memories = [];
+      data.edges = [];
+      data.events = [];
+      failedSections.push("memories", "edges", "events", "state");
+      data.partial_reason =
+        host.role === "attached"
+          ? `this window is attached to the machine's coordinator (pid ${host.coordinatorPid}) — the interior lives there; export from that process`
+          : "runtime not initialized in this window";
     }
 
     if (failedSections.length > 0) {

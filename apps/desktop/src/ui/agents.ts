@@ -1,3 +1,4 @@
+import { attachedNotice } from "./attached-notice.js";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 import {
@@ -323,6 +324,18 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
   function renderKnown(state: AgentsState): void {
     agentsList.innerHTML = "";
     if (state.known.length === 0) {
+      // Attached frontend ⇒ the trust graph is not void, it lives in the
+      // coordinator — the empty pulse must say so, not promise records
+      // that will never arrive in this window. Discover (relay-backed)
+      // keeps working either way.
+      const host = ctx.app.runtimeHostStatus();
+      const titleEl = agentsEmpty.querySelector(".panel-empty-pulse-title");
+      const subEl = agentsEmpty.querySelector(".panel-empty-pulse-sub");
+      if (host.role === "attached" && titleEl !== null && subEl !== null) {
+        const notice = attachedNotice(host.coordinatorPid, "Known agents");
+        titleEl.textContent = notice.title;
+        subEl.textContent = notice.sub;
+      }
       agentsEmpty.style.display = "block";
       return;
     }

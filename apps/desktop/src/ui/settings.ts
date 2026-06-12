@@ -620,6 +620,17 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     syncBadge.className = `sync-badge ${syncState.status}`;
     syncBadge.textContent = statusLabels[syncState.status] ?? syncState.status;
 
+    // Runtime-host role (daemon-desktop unification): which process
+    // holds the machine's one sovereign runtime. Identity pane because
+    // it is what this window IS, not what it has.
+    const host = ctx.app.runtimeHostStatus();
+    (document.getElementById("identity-runtime-host") as HTMLElement).textContent =
+      host.role === "coordinator"
+        ? "Coordinator (this process)"
+        : host.role === "attached"
+          ? `Attached to coordinator (pid ${host.coordinatorPid})`
+          : "Single process";
+
     // Sovereign wallet address belongs in Settings (identity — the address
     // *is* the Ed25519 public key). Balance lives in the Sovereign panel
     // Budget tab where economic state belongs. Settings stays calm.

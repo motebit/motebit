@@ -10,6 +10,7 @@
  * locks every surface against re-implementing the fetch/verify path.
  */
 
+import { attachedNoticeLine } from "./attached-notice.js";
 import {
   createActivityController,
   createRetentionController,
@@ -366,8 +367,16 @@ export function initActivity(ctx: DesktopContext): ActivityAPI {
     const ctrl = activityCtrl;
     if (list === null || countBadge === null) return;
     if (ctrl === null) {
-      list.innerHTML = `<div class="activity-empty">Activity is starting up…</div>`;
-      countBadge.textContent = "…";
+      // No runtime in this window. Attached frontend ⇒ the activity
+      // ledger lives in the coordinator — say so instead of an eternal
+      // "starting up".
+      const host = ctx.app.runtimeHostStatus();
+      list.innerHTML = `<div class="activity-empty">${escapeHtml(
+        host.role === "attached"
+          ? attachedNoticeLine(host.coordinatorPid, "Activity records")
+          : "Activity is starting up…",
+      )}</div>`;
+      countBadge.textContent = host.role === "attached" ? "—" : "…";
       return;
     }
     const view = ctrl.filteredView();
