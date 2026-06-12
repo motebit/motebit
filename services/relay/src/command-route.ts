@@ -2,19 +2,30 @@
  * Command endpoint — unified remote execution interface.
  *
  * POST /api/v1/agents/:motebitId/command
- *   { command: "state", args?: "..." }
+ *   { command: "state", args?: "...", envelope: SignedRequestEnvelope }
  *   → CommandResult
+ *
+ * Remote ingress is signed (`signed-request-envelope@1.0`, audience
+ * `agent-command/{motebit_id}`): the agent's OWN identity signs the
+ * command, the relay verifies at ingress against the registered
+ * public key as defense in depth, and forwards the envelope VERBATIM
+ * so every consuming surface re-verifies fail-closed — the relay is a
+ * convenience layer, never the trust root (Rule 6;
+ * `docs/doctrine/daemon-desktop-unification.md` increment 4).
+ * Unsigned requests are rejected 401 — this path has no advertised
+ * senders, so there is no tolerant-reader window.
  *
  * Two execution paths:
  * 1. Relay-side (balance, deposits, discover, proposals) — answered from relay DB
  * 2. Runtime-side (state, memories, audit, etc.) — forwarded to connected agent via WebSocket
  *
  * Runtime-side commands use a request/response correlation over WebSocket:
- * relay sends { type: "command_request", id, command, args }
+ * relay sends { type: "command_request", id, command, args, envelope }
  * agent responds { type: "command_response", id, result }
  * relay returns result to HTTP caller with 30s timeout.
  */
 
+import { verifyAgentCommandEnvelope } from "@motebit/crypto";
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { ConnectedDevice } from "./websocket.js";
@@ -80,6 +91,29 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
     const command = body.command;
     const args = typeof body.args === "string" ? body.args : undefined;
 
+    // --- Signed-request-envelope verification (fail-closed ingress) ---
+    // Defense in depth: the relay rejects what it can already see is
+    // invalid, but the consuming surface's own verification is the
+    // invariant — the envelope is forwarded verbatim below.
+    const registered = db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(motebitId) as { public_key: string } | undefined;
+    if (!registered || registered.public_key === "") {
+      throw new HTTPException(401, {
+        message: "Unknown agent identity — no registered public key to verify the command against",
+      });
+    }
+    const verdict = await verifyAgentCommandEnvelope({
+      envelope: body.envelope,
+      command,
+      args,
+      motebitId,
+      identityPublicKey: registered.public_key,
+    });
+    if (!verdict.ok) {
+      throw new HTTPException(401, { message: verdict.reason });
+    }
+
     // --- Informational commands (no runtime or relay needed) ---
     if (command in INFO_COMMANDS) {
       return c.json({ summary: INFO_COMMANDS[command] });
@@ -104,7 +138,7 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
       }
 
       try {
-        const result = await forwardCommandToAgent(peers, command, args);
+        const result = await forwardCommandToAgent(peers, command, args, body.envelope);
         return c.json(result);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -148,7 +182,9 @@ export function handleCommandResponse(commandId: string, result: unknown): void 
 async function forwardCommandToAgent(
   peers: ConnectedDevice[],
   command: string,
-  args?: string,
+  args: string | undefined,
+  // Forwarded VERBATIM — the consuming surface re-verifies fail-closed.
+  envelope: unknown,
 ): Promise<unknown> {
   const commandId = crypto.randomUUID();
   const payload = JSON.stringify({
@@ -156,6 +192,7 @@ async function forwardCommandToAgent(
     id: commandId,
     command,
     args,
+    envelope,
   });
 
   return new Promise((resolve, reject) => {

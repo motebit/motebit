@@ -341,3 +341,12 @@ export type {
 // Doctrine: docs/doctrine/memory-never-confers-authority.md.
 export { verifyGrantForTurn } from "./grant-verifier.js";
 export type { VerifiedGrant } from "./grant-verifier.js";
+
+// Remote command ingress verification — re-exported from
+// @motebit/crypto for the surfaces (apps consume the product
+// vocabulary, never Layer-0 crypto directly; check-app-primitives).
+// Every command_request consumer verifies fail-closed before
+// executeCommand. See docs/doctrine/daemon-desktop-unification.md
+// increment 4.
+export { verifyAgentCommandEnvelope, agentCommandAudience } from "@motebit/crypto";
+export type { AgentCommandVerdict } from "@motebit/crypto";

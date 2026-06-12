@@ -9,6 +9,7 @@ import {
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
   createRelayCapabilitiesFetcher,
+  verifyAgentCommandEnvelope,
 } from "@motebit/runtime";
 import type { MintToken } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
@@ -508,11 +509,36 @@ export async function handleRun(config: CliConfig): Promise<void> {
           return;
         }
 
-        // Handle remote command requests (forwarded by relay)
+        // Handle remote command requests (forwarded by relay).
+        // Fail-closed: the relay's word is transport, not authorization
+        // — only a signed-request-envelope@1.0 from this agent's own
+        // identity executes (daemon-desktop unification, increment 4).
         if (msg.type === "command_request") {
-          const cmdMsg = msg as unknown as { id: string; command: string; args?: string };
+          const cmdMsg = msg as unknown as {
+            id: string;
+            command: string;
+            args?: string;
+            envelope?: unknown;
+          };
           void (async () => {
             try {
+              const verdict = await verifyAgentCommandEnvelope({
+                envelope: cmdMsg.envelope,
+                command: cmdMsg.command,
+                args: cmdMsg.args,
+                motebitId,
+                identityPublicKey: identity.identity.public_key,
+              });
+              if (!verdict.ok) {
+                wsAdapter!.sendRaw(
+                  JSON.stringify({
+                    type: "command_response",
+                    id: cmdMsg.id,
+                    result: { summary: verdict.reason },
+                  }),
+                );
+                return;
+              }
               const result = await executeCommand(runtime, cmdMsg.command, cmdMsg.args);
               wsAdapter!.sendRaw(
                 JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
@@ -1273,9 +1299,41 @@ export async function handleServe(config: CliConfig): Promise<void> {
       serveWsAdapter.onCustomMessage((msg) => {
         // Handle remote command requests (forwarded by relay)
         if (msg.type === "command_request" && runtimeRef.current) {
-          const cmdMsg = msg as unknown as { id: string; command: string; args?: string };
+          const cmdMsg = msg as unknown as {
+            id: string;
+            command: string;
+            args?: string;
+            envelope?: unknown;
+          };
           void (async () => {
             try {
+              // Fail-closed remote ingress: no registered identity key
+              // means nothing to verify against — reject, never trust
+              // the relay's forwarding alone.
+              const verdict =
+                publicKeyHex == null || publicKeyHex === ""
+                  ? {
+                      ok: false as const,
+                      reason:
+                        "command_request rejected: no registered identity public key to verify against",
+                    }
+                  : await verifyAgentCommandEnvelope({
+                      envelope: cmdMsg.envelope,
+                      command: cmdMsg.command,
+                      args: cmdMsg.args,
+                      motebitId,
+                      identityPublicKey: publicKeyHex,
+                    });
+              if (!verdict.ok) {
+                serveWsAdapter!.sendRaw(
+                  JSON.stringify({
+                    type: "command_response",
+                    id: cmdMsg.id,
+                    result: { summary: verdict.reason },
+                  }),
+                );
+                return;
+              }
               const result = await executeCommand(runtimeRef.current!, cmdMsg.command, cmdMsg.args);
               serveWsAdapter!.sendRaw(
                 JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),

@@ -2229,3 +2229,18 @@ export {
   canonicalLeaf,
   resolveTreeHashVersion,
 } from "./merkle.js";
+
+// Agent-command envelope convention — the first consumer binding of
+// signed-request-envelope@1.0: remote `command_request` ingress is
+// signed by the agent's own identity, audience-bound to the target
+// (`agent-command/{motebit_id}`), digest-bound to `{command, args}`.
+// Relay verifies at ingress as defense in depth; every consuming
+// surface re-verifies fail-closed. See
+// `docs/doctrine/daemon-desktop-unification.md` increment 4.
+export {
+  agentCommandAudience,
+  agentCommandPayload,
+  signAgentCommandEnvelope,
+  verifyAgentCommandEnvelope,
+  type AgentCommandVerdict,
+} from "./agent-command.js";

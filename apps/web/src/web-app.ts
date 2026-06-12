@@ -8,6 +8,7 @@ import {
   bindSlabControllerToRenderer,
   createRelayBackedSandboxTokenSource,
   getOrPinRelayKey,
+  verifyAgentCommandEnvelope,
 } from "@motebit/runtime";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
 import type {
@@ -3566,9 +3567,34 @@ export class UnbootedWebApp {
     this._wsUnsubOnCustom = wsAdapter.onCustomMessage((msg) => {
       // Handle remote command requests (forwarded by relay)
       if (msg.type === "command_request" && this.runtime) {
-        const cmdMsg = msg as unknown as { id: string; command: string; args?: string };
+        // Fail-closed remote ingress: only a signed-request-envelope@1.0
+        // from this agent's own identity executes (daemon-desktop
+        // unification, increment 4).
+        const cmdMsg = msg as unknown as {
+          id: string;
+          command: string;
+          args?: string;
+          envelope?: unknown;
+        };
         void (async () => {
           try {
+            const verdict = await verifyAgentCommandEnvelope({
+              envelope: cmdMsg.envelope,
+              command: cmdMsg.command,
+              args: cmdMsg.args,
+              motebitId: this.runtime!.motebitId,
+              identityPublicKey: this._publicKeyHex,
+            });
+            if (!verdict.ok) {
+              this._wsAdapter?.sendRaw(
+                JSON.stringify({
+                  type: "command_response",
+                  id: cmdMsg.id,
+                  result: { summary: verdict.reason },
+                }),
+              );
+              return;
+            }
             const result = await executeCommand(this.runtime!, cmdMsg.command, cmdMsg.args);
             this._wsAdapter?.sendRaw(
               JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),

@@ -26,7 +26,12 @@
  */
 
 import type { MotebitRuntime } from "@motebit/runtime";
-import { executeCommand, cmdSelfTest, getOrPinRelayKey } from "@motebit/runtime";
+import {
+  executeCommand,
+  cmdSelfTest,
+  getOrPinRelayKey,
+  verifyAgentCommandEnvelope,
+} from "@motebit/runtime";
 import { DeviceCapability } from "@motebit/sdk";
 import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
@@ -354,9 +359,34 @@ export class SyncController {
       const rt = this.deps.getRuntime();
       // Handle remote command requests (forwarded by relay)
       if (msg.type === "command_request" && rt) {
-        const cmdMsg = msg as unknown as { id: string; command: string; args?: string };
+        // Fail-closed remote ingress: only a signed-request-envelope@1.0
+        // from this agent's own identity executes (daemon-desktop
+        // unification, increment 4).
+        const cmdMsg = msg as unknown as {
+          id: string;
+          command: string;
+          args?: string;
+          envelope?: unknown;
+        };
         void (async () => {
           try {
+            const verdict = await verifyAgentCommandEnvelope({
+              envelope: cmdMsg.envelope,
+              command: cmdMsg.command,
+              args: cmdMsg.args,
+              motebitId: this.deps.getMotebitId(),
+              identityPublicKey: keypair.publicKey,
+            });
+            if (!verdict.ok) {
+              this._wsAdapter?.sendRaw(
+                JSON.stringify({
+                  type: "command_response",
+                  id: cmdMsg.id,
+                  result: { summary: verdict.reason },
+                }),
+              );
+              return;
+            }
             const result = await executeCommand(rt, cmdMsg.command, cmdMsg.args);
             this._wsAdapter?.sendRaw(
               JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),

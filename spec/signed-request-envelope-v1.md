@@ -116,6 +116,12 @@ Convention: `"{host}/{route}"`, e.g. `"app.agency.computer/api/monitors"`. The v
 
 The host part is a stable **service identifier**, not the transport host. A service spanning environments (e.g. dev and prod against one registry) SHOULD fix one `aud` per route and use it everywhere rather than deriving `aud` from the request's `Host:` header — a reflected host splits one service into per-environment audiences and lets a header rewrite move an envelope between them. The identifier need not resolve in DNS; it must only be agreed, fixed, and exact-matched on both sides.
 
+#### Registered audience conventions
+
+| Audience                     | Consumer                                                                                                      | Semantics                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent-command/{motebit_id}` | Remote `command_request` ingress (relay `POST /api/v1/agents/{motebit_id}/command` + every receiving surface) | A remote command targeting one agent, signed by the agent's **own** identity (v1: only the owning identity may command its agent). Payload is `{ command, args }` with absent `args` normalized to `null`. The relay verifies at ingress as defense in depth and forwards the envelope verbatim; the receiving surface's verification is authoritative. Reference helpers: `signAgentCommandEnvelope` / `verifyAgentCommandEnvelope` in `@motebit/crypto`. |
+
 ---
 
 ## 6. Replay Semantics

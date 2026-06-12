@@ -25,7 +25,12 @@
  */
 
 import type { MotebitRuntime, StorageAdapters } from "@motebit/runtime";
-import { executeCommand, cmdSelfTest, RelayDelegationAdapter } from "@motebit/runtime";
+import {
+  executeCommand,
+  cmdSelfTest,
+  RelayDelegationAdapter,
+  verifyAgentCommandEnvelope,
+} from "@motebit/runtime";
 import { DeviceCapability } from "@motebit/sdk";
 import type { SyncStatus as SyncEngineStatus } from "@motebit/sync-engine";
 import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
@@ -260,9 +265,34 @@ export class SpatialSyncController {
         wsAdapter.onCustomMessage((msg) => {
           const rt = this.deps.getRuntime();
           if (msg.type !== "command_request" || !rt) return;
-          const cmdMsg = msg as unknown as { id: string; command: string; args?: string };
+          // Fail-closed remote ingress: only a signed-request-envelope@1.0
+          // from this agent's own identity executes (daemon-desktop
+          // unification, increment 4).
+          const cmdMsg = msg as unknown as {
+            id: string;
+            command: string;
+            args?: string;
+            envelope?: unknown;
+          };
           void (async () => {
             try {
+              const verdict = await verifyAgentCommandEnvelope({
+                envelope: cmdMsg.envelope,
+                command: cmdMsg.command,
+                args: cmdMsg.args,
+                motebitId: this.deps.getMotebitId(),
+                identityPublicKey: this.deps.getPublicKey(),
+              });
+              if (!verdict.ok) {
+                wsAdapter.sendRaw(
+                  JSON.stringify({
+                    type: "command_response",
+                    id: cmdMsg.id,
+                    result: { summary: verdict.reason },
+                  }),
+                );
+                return;
+              }
               const result = await executeCommand(rt, cmdMsg.command, cmdMsg.args);
               wsAdapter.sendRaw(
                 JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),

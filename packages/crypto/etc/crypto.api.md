@@ -51,6 +51,23 @@ export { AdjudicatorVote }
 export const AGENT_SETTLEMENT_ANCHOR_SUITE: "motebit-jcs-ed25519-hex-v1";
 
 // @public
+export function agentCommandAudience(targetMotebitId: string): string;
+
+// @public
+export function agentCommandPayload(command: string, args?: string): {
+    command: string;
+    args: string | null;
+};
+
+// @public (undocumented)
+export type AgentCommandVerdict = {
+    ok: true;
+} | {
+    ok: false;
+    reason: string;
+};
+
+// @public
 export interface AgentSettlementAnchorProofFields {
     // (undocumented)
     anchor: {
@@ -1124,6 +1141,16 @@ export interface SignableToolInvocationReceipt {
 export function signAdjudicatorVote(vote: Omit<AdjudicatorVote, "signature" | "suite">, peerPrivateKey: Uint8Array): Promise<AdjudicatorVote>;
 
 // @public
+export function signAgentCommandEnvelope(opts: {
+    command: string;
+    args?: string;
+    motebitId: string;
+    identityPrivateKey: Uint8Array;
+    now?: () => number;
+    nonce?: string;
+}): Promise<SignedRequestEnvelope>;
+
+// @public
 export function signApprovalDecision<T extends Omit<ApprovalDecision, "signature" | "suite">>(decision: T, approverPrivateKey: Uint8Array, publicKey?: Uint8Array): Promise<T & {
     suite: typeof APPROVAL_DECISION_SUITE;
     signature: string;
@@ -1536,6 +1563,16 @@ export function verify(artifact: unknown, options?: VerifyOptions): Promise<Veri
 
 // @public
 export function verifyAdjudicatorVote(vote: AdjudicatorVote, peerPublicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyAgentCommandEnvelope(opts: {
+    envelope: unknown;
+    command: string;
+    args?: string;
+    motebitId: string;
+    identityPublicKey: Uint8Array | string;
+    now?: number;
+}): Promise<AgentCommandVerdict>;
 
 // @public
 export function verifyAgentSettlementAnchor(settlement: Record<string, unknown>, proof: AgentSettlementAnchorProofFields, chainVerifier?: ChainAnchorVerifier): Promise<AgentSettlementAnchorVerifyResult>;

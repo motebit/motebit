@@ -98,6 +98,12 @@ const vc = await issueReputationCredential(
 - **`signVerifiableCredential(vc, privateKey, publicKey)`** — Sign a W3C VC (eddsa-jcs-2022).
 - **`signVerifiablePresentation(vp, privateKey, publicKey)`** — Sign a W3C VP.
 
+### Remote Command Envelopes (`signed-request-envelope@1.0`)
+
+- **`signAgentCommandEnvelope(opts)`** — Sign a remote command targeting an agent: the agent's own identity signs, audience-bound to `agentCommandAudience(motebitId)` (`agent-command/{motebit_id}`), digest-bound to `agentCommandPayload(command, args)`.
+- **`verifyAgentCommandEnvelope(opts)`** — Fail-closed verification consumers run before executing a relay-forwarded `command_request`; returns an `AgentCommandVerdict` with an honest rejection reason (missing envelope, foreign identity, bad signature, stale timestamp, audience mismatch, payload tamper).
+- **`agentCommandAudience(motebitId)`** / **`agentCommandPayload(command, args?)`** — the shared audience + canonical-payload convention both sides bind to.
+
 ### Credential Issuance
 
 - **`issueGradientCredential(snapshot, privateKey, publicKey)`** — Issue an intelligence gradient VC.
