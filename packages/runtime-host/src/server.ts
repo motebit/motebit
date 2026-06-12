@@ -147,6 +147,7 @@ export class RuntimeHostServer {
   /** capability → the connection contributing it (last registrar wins). */
   private readonly bridged = new Map<string, Connection>();
   private readonly bridgeInflight = new Map<string, BridgeState>();
+  private readonly capabilityListeners = new Set<(capabilities: string[]) => void>();
   private bridgeCounter = 0;
   private closed = false;
 
@@ -187,6 +188,35 @@ export class RuntimeHostServer {
   /** The organs currently contributed by attached frontends. */
   get bridgedCapabilities(): string[] {
     return [...this.bridged.keys()];
+  }
+
+  /**
+   * Subscribe to changes in the bridged-organ set — fired after a
+   * frontend registers capabilities and after a contributing frontend
+   * disconnects. The listener receives the CURRENT full set (idempotent
+   * sync semantics, never deltas: last-registrar-wins and multi-frontend
+   * churn collapse to "reconcile against this"). Returns unsubscribe.
+   */
+  onBridgedCapabilitiesChanged(listener: (capabilities: string[]) => void): () => void {
+    this.capabilityListeners.add(listener);
+    return () => this.capabilityListeners.delete(listener);
+  }
+
+  /**
+   * Listener faults must not tear down the coordinator or the frame
+   * that triggered the change — log and keep serving.
+   */
+  private notifyCapabilitiesChanged(): void {
+    const capabilities = this.bridgedCapabilities;
+    for (const listener of this.capabilityListeners) {
+      try {
+        listener(capabilities);
+      } catch (err: unknown) {
+        this.opts.logger?.warn("runtime-host: bridged-capabilities listener failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   /** Push an event to every attached frontend subscribed to `channel`. */
@@ -317,6 +347,7 @@ export class RuntimeHostServer {
         for (const capability of conn.capabilities) {
           this.bridged.set(capability, conn);
         }
+        this.notifyCapabilitiesChanged();
         return;
       }
       case "bridge_chunk":
@@ -507,9 +538,14 @@ export class RuntimeHostServer {
       }
     }
     conn.bridgeIds.clear();
+    let removedOrgans = 0;
     for (const capability of conn.capabilities) {
-      if (this.bridged.get(capability) === conn) this.bridged.delete(capability);
+      if (this.bridged.get(capability) === conn) {
+        this.bridged.delete(capability);
+        removedOrgans += 1;
+      }
     }
     conn.conn.destroy();
+    if (removedOrgans > 0) this.notifyCapabilitiesChanged();
   }
 }

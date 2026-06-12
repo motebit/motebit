@@ -1281,11 +1281,16 @@ export class DesktopApp {
       DeviceCapability.Background,
     ]);
 
-    // Coordinator mode: stream presence to attached frontends.
+    // Coordinator mode: stream presence to attached frontends, and
+    // surface any attached frontend's bridged organs as policy-gated
+    // tools (synced across attach/disconnect — the consumer step of
+    // capability bridging).
     if (this._runtimeHostServer !== null) {
       this.runtime.presence.subscribe((presence) => {
         this._runtimeHostServer?.publishEvent("presence", presence);
       });
+      const { wireBridgedOrgans } = await import("./runtime-host.js");
+      wireBridgedOrgans(this._runtimeHostServer, this.runtime);
     }
 
     // Hardware-attestation peer flow — production wiring. Without these

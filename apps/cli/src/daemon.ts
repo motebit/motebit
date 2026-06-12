@@ -53,7 +53,7 @@ import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
-import { electCoordinatorRole } from "./runtime-host.js";
+import { electCoordinatorRole, wireBridgedOrgans } from "./runtime-host.js";
 import {
   getDbPath,
   createProvider,
@@ -238,6 +238,10 @@ export async function handleRun(config: CliConfig): Promise<void> {
     },
   );
   runtimeRef.current = runtime;
+  // Bridged organs (an attached desktop's computer-use) surface as
+  // policy-gated tools in this coordinator's registry; synced across
+  // frontend attach/disconnect.
+  wireBridgedOrgans(runtimeHostServer, runtime);
 
   await runtime.init();
 
@@ -930,6 +934,10 @@ export async function handleServe(config: CliConfig): Promise<void> {
     },
   );
   runtimeRef.current = runtime;
+  // Bridged organs (an attached desktop's computer-use) surface as
+  // policy-gated tools in this coordinator's registry; synced across
+  // frontend attach/disconnect.
+  wireBridgedOrgans(runtimeHostServer, runtime);
 
   await runtime.init();
 

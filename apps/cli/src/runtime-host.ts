@@ -12,11 +12,13 @@ import {
   mintAttachToken,
   pickSafeChatOptions,
   pickSafeInvokeOptions,
+  wireBridgedOrganTools,
   type ElectionOutcome,
   type RuntimeHostPaths,
   type RuntimeHostServer,
 } from "@motebit/runtime-host";
 import { defaultRuntimeHostPaths, nodePlatform } from "@motebit/runtime-host/node";
+import { computerDefinition } from "@motebit/tools/web-safe";
 import type { FullConfig } from "./config.js";
 import { fromHex, loadActiveSigningKey } from "./identity.js";
 
@@ -109,6 +111,25 @@ export async function electCliRuntimeHost(deps: CliElectionDeps): Promise<Electi
  * already live — one runtime authority per machine
  * (docs/doctrine/daemon-desktop-unification.md).
  */
+/**
+ * Surface an attached frontend's bridged organs as policy-gated tools
+ * in this coordinator's registry — the consumer step of capability
+ * bridging. Definitions are injected here at the registration site:
+ * the only contributor of `computer_use` is a desktop frontend driving
+ * the user's real OS, so the canonical `computer` definition carries
+ * the `desktop_drive` embodiment stamp (same stamp the desktop's own
+ * local registration applies — the model, prompt, and policy gate
+ * treat the bridged tool exactly like the local one). `se_attestation`
+ * deliberately has no entry: it is a deterministic identity affordance,
+ * and `AI_LOOP_EXCLUDED_ORGANS` makes exposing it a wire-time error.
+ * Call after the runtime exists; the sync tracks attach/disconnect.
+ */
+export function wireBridgedOrgans(server: RuntimeHostServer, runtime: MotebitRuntime): void {
+  wireBridgedOrganTools(server, runtime, {
+    computer_use: { ...computerDefinition, embodimentMode: "desktop_drive" },
+  });
+}
+
 export async function electCoordinatorRole(
   fullConfig: FullConfig,
   motebitId: string,

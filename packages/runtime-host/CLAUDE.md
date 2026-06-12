@@ -13,6 +13,7 @@ Layer 1. BUSL-1.1. Deps: `@motebit/protocol` (the `runtime:attach` audience), `@
 5. **The invoke seam carries typed capabilities only.** Hosting processes wire `onInvoke` to the runtime's `invokeCapability`, never to a constructed prompt (`docs/doctrine/surface-determinism.md`). Frontend disconnect aborts the in-flight invocation via the handler's `signal`.
 6. **Fail-loud across the authority boundary.** Coordinator EOF rejects in-flight invocations to their origin frontend and fires `onClose` (the re-elect signal). No silent retry.
 7. **The token never leaves the machine.** `runtime:attach` is verified here and only here; the relay and every network verifier reject it by audience binding.
+8. **Bridged organs surface as tools only through `bridged-tools.ts`, definitions injected.** The module owns mechanics (live bridged-set view, execution over the bridge, fail-closed classification); the hosting surface injects the canonical `ToolDefinition`s at the registration site (this package cannot import `@motebit/tools`, and the embodiment stamp belongs to the registration site per `docs/doctrine/motebit-computer.md`). `AI_LOOP_EXCLUDED_ORGANS` (`se_attestation`) throws at wire time — deterministic user affordances never become model-chosen tools (`docs/doctrine/surface-determinism.md`). Policy stays in the hosting runtime's gate: bridged tools enter the SAME registry and the SAME policy gate as local tools, never a side door.
 
 ## What NOT to add
 

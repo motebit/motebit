@@ -5,7 +5,8 @@
  * implementation run in the webview over the Rust dumb pipe.
  */
 import { describe, expect, it, vi } from "vitest";
-import { desktopOrganHandlers } from "../runtime-host.js";
+import { AI_LOOP_EXCLUDED_ORGANS } from "@motebit/runtime-host";
+import { BRIDGED_ORGAN_DEFINITIONS, desktopOrganHandlers } from "../runtime-host.js";
 import { createTauriRuntimeHostPlatform } from "../runtime-host-platform.js";
 import type { InvokeFn } from "../tauri-storage.js";
 
@@ -209,5 +210,41 @@ describe("createTauriRuntimeHostPlatform", () => {
     channelBox.ch?.onmessage({ type: "data", conn_id: 1_000_001, data: "hello\n" });
     expect(received).toEqual(["hello\n"]);
     await listener.close();
+  });
+});
+
+describe("bridged organ classification", () => {
+  it("classifies every contributed organ: a canonical tool definition or an explicit AI-loop exclusion", () => {
+    // The three-way lock between what the desktop contributes over the
+    // bridge and what a coordinator may surface to its AI loop. A new
+    // organ handler added here without a classification fails this test:
+    // either give it a canonical ToolDefinition in BRIDGED_ORGAN_DEFINITIONS
+    // (policy-gated tool) or register it in AI_LOOP_EXCLUDED_ORGANS
+    // (deterministic affordance, never model-chosen).
+    const contributed = Object.keys(
+      desktopOrganHandlers({
+        invoke: (async () => null) as InvokeFn,
+        motebitId: "m-1",
+        deviceId: "d-1",
+        identityPublicKeyHex: "ab".repeat(32),
+      }),
+    );
+    expect(contributed.length).toBeGreaterThan(0);
+    for (const organ of contributed) {
+      const asTool = organ in BRIDGED_ORGAN_DEFINITIONS;
+      const excluded = AI_LOOP_EXCLUDED_ORGANS.has(organ);
+      expect(
+        asTool || excluded,
+        `bridged organ "${organ}" is unclassified — add a canonical ToolDefinition or an explicit exclusion`,
+      ).toBe(true);
+      expect(asTool && excluded, `bridged organ "${organ}" is both exposed and excluded`).toBe(
+        false,
+      );
+    }
+  });
+
+  it("never exposes the SE-attestation affordance as an AI-loop tool", () => {
+    expect(AI_LOOP_EXCLUDED_ORGANS.has("se_attestation")).toBe(true);
+    expect("se_attestation" in BRIDGED_ORGAN_DEFINITIONS).toBe(false);
   });
 });

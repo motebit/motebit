@@ -58,6 +58,14 @@ export type { RuntimeHostClientOptions, BridgedCapabilityHandler } from "./clien
 export { pickSafeChatOptions, pickSafeInvokeOptions } from "./safe-options.js";
 
 export {
+  AI_LOOP_EXCLUDED_ORGANS,
+  BRIDGED_ORGAN_TOOL_SOURCE,
+  bridgedToolRegistry,
+  wireBridgedOrganTools,
+} from "./bridged-tools.js";
+export type { BridgedOrganDefinitions, BridgedToolHost } from "./bridged-tools.js";
+
+export {
   electRuntimeHost,
   probeSocketLive,
   acquireTakeoverMutex,

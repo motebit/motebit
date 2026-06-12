@@ -13,9 +13,12 @@ import {
   mintAttachToken,
   pickSafeChatOptions,
   pickSafeInvokeOptions,
+  wireBridgedOrganTools,
   type BridgedCapabilityHandler,
   type ElectionOutcome,
+  type RuntimeHostServer,
 } from "@motebit/runtime-host";
+import { computerDefinition } from "@motebit/tools/web-safe";
 import { createTauriRuntimeHostPlatform } from "./runtime-host-platform.js";
 import type { InvokeFn } from "./tauri-storage.js";
 
@@ -77,6 +80,24 @@ export function desktopOrganHandlers(deps: {
       yield await deps.invoke("computer_execute", { action });
     },
   };
+}
+
+/**
+ * Surface an attached frontend's bridged organs as policy-gated tools
+ * in this coordinator's registry — the consumer step of capability
+ * bridging, the sibling of the CLI daemon's wiring. A desktop
+ * coordinator's OWN computer tool is locally registered, so a bridged
+ * `computer` is skipped while it exists (local organ beats bridge);
+ * the wiring still matters for any future organ-contributing frontend.
+ * `se_attestation` deliberately has no entry — a deterministic identity
+ * affordance, wire-time-refused by `AI_LOOP_EXCLUDED_ORGANS`.
+ */
+export const BRIDGED_ORGAN_DEFINITIONS = {
+  computer_use: { ...computerDefinition, embodimentMode: "desktop_drive" },
+} as const;
+
+export function wireBridgedOrgans(server: RuntimeHostServer, runtime: MotebitRuntime): void {
+  wireBridgedOrganTools(server, runtime, BRIDGED_ORGAN_DEFINITIONS);
 }
 
 /** Run the machine-wide election for the desktop surface. */
