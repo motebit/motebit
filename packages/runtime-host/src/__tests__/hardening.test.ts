@@ -24,7 +24,7 @@ import {
   releaseTakeoverMutex,
   type ElectRuntimeHostOptions,
 } from "../election.js";
-import { JsonLineDecoder } from "../protocol.js";
+import { JsonLineDecoder, RUNTIME_HOST_PROTOCOL_VERSION } from "../protocol.js";
 import { nodePlatform } from "../node-platform.js";
 
 const platform = nodePlatform();
@@ -98,7 +98,9 @@ function listenRaw(socketPath: string, onConnection?: (socket: Socket) => void):
 async function rawAttachedSocket(socketPath: string): Promise<Socket> {
   const socket = connect(socketPath);
   await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
-  socket.write(`${JSON.stringify({ t: "hello", protocol_version: 1, token: await mintOk() })}\n`);
+  socket.write(
+    `${JSON.stringify({ t: "hello", protocol_version: RUNTIME_HOST_PROTOCOL_VERSION, token: await mintOk() })}\n`,
+  );
   const decoder = new JsonLineDecoder();
   await new Promise<void>((resolve, reject) => {
     socket.on("data", (data) => {
@@ -318,7 +320,9 @@ describe("server boundary", () => {
     cleanups.push(() => server.close());
     const socket = await rawAttachedSocket(serverOptions().socketPath);
     expect(server.attachedCount).toBe(1);
-    socket.write(`${JSON.stringify({ t: "hello", protocol_version: 1, token: await mintOk() })}\n`);
+    socket.write(
+      `${JSON.stringify({ t: "hello", protocol_version: RUNTIME_HOST_PROTOCOL_VERSION, token: await mintOk() })}\n`,
+    );
     await waitClose(socket);
     expect(server.attachedCount).toBe(0);
   });
@@ -398,7 +402,7 @@ describe("impostor coordinator", () => {
     return listenRaw(socketPath, (socket) => {
       socket.once("data", () => {
         socket.write(
-          `${JSON.stringify({ t: "hello_ack", protocol_version: 1, coordinator_pid: 1 })}\n`,
+          `${JSON.stringify({ t: "hello_ack", protocol_version: RUNTIME_HOST_PROTOCOL_VERSION, coordinator_pid: 1 })}\n`,
         );
         afterAck(socket);
       });

@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { encodeFrame, JsonLineDecoder, MAX_FRAME_BYTES, type HelloMessage } from "../protocol.js";
+import {
+  encodeFrame,
+  JsonLineDecoder,
+  MAX_FRAME_BYTES,
+  type HelloMessage,
+  RUNTIME_HOST_PROTOCOL_VERSION,
+} from "../protocol.js";
 
-const hello: HelloMessage = { t: "hello", protocol_version: 1, token: "a.b" };
+const hello: HelloMessage = {
+  t: "hello",
+  protocol_version: RUNTIME_HOST_PROTOCOL_VERSION,
+  token: "a.b",
+};
 
 describe("encodeFrame / JsonLineDecoder", () => {
   it("round-trips a message", () => {

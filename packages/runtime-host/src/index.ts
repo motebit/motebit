@@ -17,6 +17,10 @@ export type {
   InvokeMessage,
   ChatMessage,
   ResolveApprovalMessage,
+  QueryMessage,
+  ActMessage,
+  QueryResultMessage,
+  QueryErrorMessage,
   RegisterCapabilitiesMessage,
   BridgeInvokeMessage,
   BridgeChunkMessage,
@@ -45,6 +49,7 @@ export type {
   InvokeHandler,
   ChatHandler,
   ResolveApprovalHandler,
+  QueryHandler,
 } from "./server.js";
 
 export {

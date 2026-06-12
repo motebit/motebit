@@ -91,6 +91,10 @@ export async function electCliRuntimeHost(deps: CliElectionDeps): Promise<Electi
       ),
     onResolveApproval: (approved, approverId) =>
       requireRuntime(deps.runtimeRef).resolveApprovalVote(approved, approverId),
+    // Attach-mode parity: records and the narrow typed-act set, resolved
+    // by the runtime's closed registries (unknown kinds refuse honestly).
+    onQuery: (kind, params) => requireRuntime(deps.runtimeRef).resolveAttachedRead(kind, params),
+    onAct: (kind, params) => requireRuntime(deps.runtimeRef).resolveAttachedAct(kind, params),
     mintToken: async () => {
       if (deviceId == null || deviceId === "") {
         throw new Error(

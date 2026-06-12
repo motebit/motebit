@@ -1,3 +1,4 @@
+import { RUNTIME_HOST_PROTOCOL_VERSION } from "../protocol.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -183,7 +184,7 @@ describe("attach handshake", () => {
     expect(err).toBeInstanceOf(AttachRefusedError);
     expect((err as AttachRefusedError).reason).toBe("version_skew");
     expect((err as AttachRefusedError).detail).toContain("v999");
-    expect((err as AttachRefusedError).detail).toContain("v1");
+    expect((err as AttachRefusedError).detail).toContain(`v${RUNTIME_HOST_PROTOCOL_VERSION}`);
   });
 });
 

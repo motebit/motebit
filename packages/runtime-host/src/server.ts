@@ -72,6 +72,17 @@ export type ResolveApprovalHandler = (
   ctx: { signal: AbortSignal },
 ) => AsyncIterable<unknown>;
 
+/**
+ * The attached read/act seams — wired to the runtime's
+ * `resolveAttachedRead` / `resolveAttachedAct` closed registries. The
+ * kind is opaque to this package; an unknown kind or malformed params
+ * must REJECT (the answer becomes an honest `query_error`).
+ */
+export type QueryHandler = (
+  kind: string,
+  params: Record<string, unknown> | undefined,
+) => Promise<unknown>;
+
 export interface RuntimeHostServerOptions {
   /** The OS seam — node sockets or the desktop's Tauri pipe. */
   platform: RuntimeHostPlatform;
@@ -90,6 +101,10 @@ export interface RuntimeHostServerOptions {
   onChat?: ChatHandler;
   /** Absent ⇒ resolve_approval frames answer `invoke_error`, never silently drop. */
   onResolveApproval?: ResolveApprovalHandler;
+  /** Absent ⇒ query frames answer `query_error`, never silently drop. */
+  onQuery?: QueryHandler;
+  /** Absent ⇒ act frames answer `query_error`, never silently drop. */
+  onAct?: QueryHandler;
   logger?: RuntimeHostLogger;
   /** Injectable for tests. Defaults to `platform.pid`. */
   pid?: number;
@@ -391,6 +406,42 @@ export class RuntimeHostServer {
           return;
         }
         await this.runStream(conn, message.id, (ctx) => onChat(message.text, message.options, ctx));
+        return;
+      }
+      case "query":
+      case "act": {
+        if (
+          typeof message.id !== "string" ||
+          typeof message.kind !== "string" ||
+          (message.params !== undefined &&
+            (message.params === null ||
+              typeof message.params !== "object" ||
+              Array.isArray(message.params)))
+        ) {
+          this.destroyConnection(conn);
+          return;
+        }
+        const handler = message.t === "query" ? this.opts.onQuery : this.opts.onAct;
+        if (handler === undefined) {
+          this.send(conn, {
+            t: "query_error",
+            id: message.id,
+            message: `this coordinator does not serve ${message.t === "query" ? "reads" : "acts"}`,
+          });
+          return;
+        }
+        try {
+          const payload = await handler(message.kind, message.params);
+          this.send(conn, { t: "query_result", id: message.id, payload });
+        } catch (err: unknown) {
+          // Unknown kind, malformed params, or the read/act itself
+          // failing — all answer honestly under this id.
+          this.send(conn, {
+            t: "query_error",
+            id: message.id,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
         return;
       }
       case "resolve_approval": {

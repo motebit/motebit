@@ -124,6 +124,10 @@ export async function electDesktopRuntimeHost(deps: DesktopElectionDeps): Promis
       ),
     onResolveApproval: (approved, approverId) =>
       requireRuntime(deps.getRuntime).resolveApprovalVote(approved, approverId),
+    // Attach-mode parity: records and the narrow typed-act set, resolved
+    // by the runtime's closed registries (unknown kinds refuse honestly).
+    onQuery: (kind, params) => requireRuntime(deps.getRuntime).resolveAttachedRead(kind, params),
+    onAct: (kind, params) => requireRuntime(deps.getRuntime).resolveAttachedAct(kind, params),
     mintToken: () =>
       mintAttachToken(
         { motebitId: deps.motebitId, deviceId: deps.deviceId },

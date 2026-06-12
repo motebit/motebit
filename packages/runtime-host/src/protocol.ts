@@ -18,8 +18,11 @@
  * Version exchanged in the `hello` / `hello_ack` pair. A mismatch is
  * refused with `version_skew` and the mismatch named — honest refusal,
  * never silent degradation.
+ *
+ * v2 (2026-06-12): `query` / `act` frame pairs — attach-mode parity
+ * (reads and acts against the coordinator's interior).
  */
-export const RUNTIME_HOST_PROTOCOL_VERSION = 1;
+export const RUNTIME_HOST_PROTOCOL_VERSION = 2;
 
 /** Why an attach handshake was refused. Closed set; `detail` elaborates. */
 export type AttachRefusalReason = "auth_failed" | "version_skew" | "malformed_hello";
@@ -71,6 +74,38 @@ export interface ResolveApprovalMessage {
   approver_id: string;
 }
 
+/**
+ * Read a record set from the coordinator's interior (attach-mode
+ * parity). `kind` is opaque to the transport — the closed registry of
+ * read kinds lives with the record owner (`@motebit/runtime`'s
+ * `resolveAttachedRead`), exactly as `invoke` carries opaque capability
+ * names. Answered by `query_result` / `query_error`. Reads return
+ * records and carry no authority fields.
+ */
+export interface QueryMessage {
+  t: "query";
+  id: string;
+  kind: string;
+  params?: Record<string, unknown>;
+}
+
+/**
+ * Perform a typed panel act against the coordinator's interior
+ * (delete/pin/form memory, set petname, …). Deliberately a distinct
+ * frame from `query` — records vs acts stays typed end-to-end
+ * (`docs/doctrine/records-vs-acts.md`) — and from `invoke`, which is
+ * relay delegation, not a local act. The closed act registry lives in
+ * `@motebit/runtime`'s `resolveAttachedAct`; money-shaped acts are
+ * structurally absent from it. Answered by `query_result` /
+ * `query_error`.
+ */
+export interface ActMessage {
+  t: "act";
+  id: string;
+  kind: string;
+  params?: Record<string, unknown>;
+}
+
 /** Subscribe this connection to a coordinator event channel. */
 export interface SubscribeMessage {
   t: "subscribe";
@@ -120,6 +155,8 @@ export type ClientMessage =
   | InvokeMessage
   | ChatMessage
   | ResolveApprovalMessage
+  | QueryMessage
+  | ActMessage
   | SubscribeMessage
   | UnsubscribeMessage
   | RegisterCapabilitiesMessage
@@ -163,6 +200,24 @@ export interface InvokeErrorMessage {
   message: string;
 }
 
+/** Successful answer to a `query` or `act` frame; terminal for its id. */
+export interface QueryResultMessage {
+  t: "query_result";
+  id: string;
+  payload: unknown;
+}
+
+/**
+ * A `query` or `act` refused or failed; terminal for its id. Unknown
+ * kinds, malformed params, and a coordinator that serves no
+ * query/act seam all answer here — honest error, never a hang.
+ */
+export interface QueryErrorMessage {
+  t: "query_error";
+  id: string;
+  message: string;
+}
+
 /** Coordinator-pushed event on a subscribed channel. */
 export interface EventMessage {
   t: "event";
@@ -190,6 +245,8 @@ export type ServerMessage =
   | ChunkMessage
   | EndMessage
   | InvokeErrorMessage
+  | QueryResultMessage
+  | QueryErrorMessage
   | EventMessage
   | BridgeInvokeMessage;
 

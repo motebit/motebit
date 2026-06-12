@@ -1,3 +1,4 @@
+import { RUNTIME_HOST_PROTOCOL_VERSION } from "../protocol.js";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -81,7 +82,7 @@ describe("electRuntimeHost", () => {
     await writeLockfile(platform, opts.lockfilePath, {
       pid: 99_999_999,
       bound_at: 0,
-      protocol_version: 1,
+      protocol_version: RUNTIME_HOST_PROTOCOL_VERSION,
     });
 
     const outcome = await electRuntimeHost({
@@ -99,7 +100,7 @@ describe("electRuntimeHost", () => {
     await writeLockfile(platform, opts.lockfilePath, {
       pid: process.pid,
       bound_at: 0,
-      protocol_version: 1,
+      protocol_version: RUNTIME_HOST_PROTOCOL_VERSION,
     });
     let probes = 0;
     const outcome = await electRuntimeHost({

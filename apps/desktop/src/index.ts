@@ -781,6 +781,64 @@ export class DesktopApp {
     return { role: "standalone" };
   }
 
+  /**
+   * Attach-mode parity (daemon-desktop unification, increment 6): when
+   * this window is an attached frontend, panel data reads from the
+   * coordinator's interior over the runtime-host `query` frame and
+   * panel affordances act over the `act` frame. The cast at this
+   * boundary is trusted — the payload is our own coordinator's answer
+   * over the authenticated same-machine socket.
+   */
+  private attachedRead<T>(kind: string, params?: Record<string, unknown>): Promise<T> | null {
+    return this._attachedHost !== null
+      ? (this._attachedHost.query(kind, params) as Promise<T>)
+      : null;
+  }
+
+  private attachedAct<T>(kind: string, params?: Record<string, unknown>): Promise<T> | null {
+    return this._attachedHost !== null
+      ? (this._attachedHost.act(kind, params) as Promise<T>)
+      : null;
+  }
+
+  /**
+   * Event-log reads for panels (activity, consolidation log) — local
+   * runtime or attached coordinator behind one call shape. The
+   * identity scope is always the interior's own (params never carry a
+   * motebit_id).
+   */
+  queryEvents(
+    filter: { event_types?: string[]; limit?: number; after_timestamp?: number } = {},
+  ): Promise<Awaited<ReturnType<MotebitRuntime["events"]["query"]>>> {
+    const attached = this.attachedRead<Awaited<ReturnType<MotebitRuntime["events"]["query"]>>>(
+      "events_query",
+      filter as Record<string, unknown>,
+    );
+    if (attached) return attached;
+    if (!this.runtime) return Promise.resolve([]);
+    return this.runtime.events.query({
+      motebit_id: this.motebitId,
+      ...(filter.event_types
+        ? { event_types: filter.event_types as import("@motebit/sdk").EventType[] }
+        : {}),
+      ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
+      ...(filter.after_timestamp !== undefined ? { after_timestamp: filter.after_timestamp } : {}),
+    });
+  }
+
+  /** Audit-log reads for panels — same one-call-shape split as queryEvents. */
+  queryAuditLog(
+    opts: { limit?: number; after?: number } = {},
+  ): Promise<Awaited<ReturnType<MotebitRuntime["auditLog"]["query"]>>> {
+    const attached = this.attachedRead<Awaited<ReturnType<MotebitRuntime["auditLog"]["query"]>>>(
+      "audit_query",
+      opts as Record<string, unknown>,
+    );
+    if (attached) return attached;
+    if (!this.runtime) return Promise.resolve([]);
+    return this.runtime.auditLog.query(this.motebitId, opts);
+  }
+
   /** Expose the render adapter so UI modules can drive scene primitives
    *  directly (slab, artifact manager). */
   getRenderer(): ThreeJSAdapter {
@@ -1788,8 +1846,11 @@ export class DesktopApp {
   }
 
   async getMemoryGraphStats() {
-    if (!this.runtime) return null;
-    const { nodes, edges } = await this.runtime.memory.exportAll();
+    const exported = await (this.attachedRead<{ nodes: MemoryNode[]; edges: MemoryEdge[] }>(
+      "memory_export",
+    ) ?? (this.runtime ? this.runtime.memory.exportAll() : Promise.resolve(null)));
+    if (exported === null) return null;
+    const { nodes, edges } = exported;
     const now = Date.now();
     const active = nodes.filter(
       (n) => !n.tombstoned && (n.valid_until == null || n.valid_until > now),
@@ -1832,12 +1893,23 @@ export class DesktopApp {
   }
 
   async listTrustedAgents() {
+    const attached =
+      this.attachedRead<Awaited<ReturnType<MotebitRuntime["listTrustedAgents"]>>>("trusted_agents");
+    if (attached) return attached;
     if (!this.runtime) return [];
     return this.runtime.listTrustedAgents();
   }
 
-  /** First-person local petname for a peer agent (display-only; never on the wire). */
+  /** First-person local petname for a peer agent (display-only; never on the relay wire). */
   async setAgentPetname(remoteMotebitId: string, petname: string | undefined) {
+    const attached = this.attachedAct<null>("agent_petname", {
+      remote_motebit_id: remoteMotebitId,
+      petname: petname ?? null,
+    });
+    if (attached) {
+      await attached;
+      return;
+    }
     if (!this.runtime) return;
     return this.runtime.setAgentPetname(remoteMotebitId, petname);
   }
@@ -1965,20 +2037,41 @@ export class DesktopApp {
         data.events = [];
         failedSections.push("events");
       }
+    } else if (this._attachedHost !== null) {
+      // Attached frontend: the interior lives in the coordinator — export
+      // the REAL records over the attach-mode parity frames (full bundle).
+      try {
+        const [exported, state, events] = await Promise.all([
+          this._attachedHost.query("memory_export") as Promise<{
+            nodes: unknown[];
+            edges: unknown[];
+          }>,
+          this._attachedHost.query("state"),
+          this._attachedHost.query("events_query", { limit: 500 }),
+        ]);
+        data.memories = exported.nodes;
+        data.edges = exported.edges;
+        data.state = state;
+        data.events = events;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console -- diagnostic for partial export
+        console.warn(`[export] attached export failed — bundle marked partial: ${msg}`);
+        data.memories = [];
+        data.edges = [];
+        data.events = [];
+        failedSections.push("memories", "edges", "events", "state");
+        data.partial_reason = `attached export from the coordinator failed: ${msg}`;
+      }
     } else {
-      // No runtime in this window. An export that silently omits the
-      // sections would read as "this motebit has no memories" — say
-      // what is true instead: attached frontends point at the
-      // coordinator that holds the interior.
-      const host = this.runtimeHostStatus();
+      // No runtime and no coordinator attachment (pre-init). An export
+      // that silently omits the sections would read as "this motebit
+      // has no memories" — say what is true instead.
       data.memories = [];
       data.edges = [];
       data.events = [];
       failedSections.push("memories", "edges", "events", "state");
-      data.partial_reason =
-        host.role === "attached"
-          ? `this window is attached to the machine's coordinator (pid ${host.coordinatorPid}) — the interior lives there; export from that process`
-          : "runtime not initialized in this window";
+      data.partial_reason = "runtime not initialized in this window";
     }
 
     if (failedSections.length > 0) {
@@ -1995,11 +2088,15 @@ export class DesktopApp {
 
   /** List all non-tombstoned memories, sorted by created_at DESC. */
   listMemories(): Promise<MemoryNode[]> {
+    const attached = this.attachedRead<{ nodes: MemoryNode[] }>("memory_export");
+    if (attached) return attached.then(({ nodes }) => memoryCommands.projectLiveMemories(nodes));
     return memoryCommands.listMemories(this.runtime);
   }
 
   /** List all edges for the current motebit. */
   listMemoryEdges(): Promise<MemoryEdge[]> {
+    const attached = this.attachedRead<{ edges: MemoryEdge[] }>("memory_export");
+    if (attached) return attached.then(({ edges }) => edges);
     return memoryCommands.listMemoryEdges(this.runtime);
   }
 
@@ -2011,16 +2108,28 @@ export class DesktopApp {
 
   /** Erase a memory and emit a signed `mutable_pruning` deletion certificate. */
   deleteMemory(nodeId: string): Promise<import("@motebit/sdk").DeletionCertificate | null> {
+    // Attached: the act routes through the coordinator's privacy-layer
+    // choke point — same signed certificate, same honest failure.
+    const attached = this.attachedAct<import("@motebit/sdk").DeletionCertificate | null>(
+      "memory_delete",
+      { node_id: nodeId },
+    );
+    if (attached) return attached;
     return memoryCommands.deleteMemory(this.runtime, nodeId);
   }
 
   /** List deletion certificates from the audit log. */
   listDeletionCertificates(): ReturnType<typeof memoryCommands.listDeletionCertificates> {
+    const attached =
+      this.attachedRead<Awaited<ReturnType<MotebitRuntime["auditLog"]["query"]>>>("audit_query");
+    if (attached) return attached.then((rows) => memoryCommands.projectDeletionCertificates(rows));
     return memoryCommands.listDeletionCertificates(this.runtime, this.motebitId);
   }
 
   /** Pin or unpin a memory. */
   pinMemory(nodeId: string, pinned: boolean): Promise<void> {
+    const attached = this.attachedAct<null>("memory_pin", { node_id: nodeId, pinned });
+    if (attached) return attached.then(() => undefined);
     return memoryCommands.pinMemory(this.runtime, nodeId, pinned);
   }
 

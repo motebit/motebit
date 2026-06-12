@@ -10,7 +10,6 @@
  * locks every surface against re-implementing the fetch/verify path.
  */
 
-import { attachedNoticeLine } from "./attached-notice.js";
 import {
   createActivityController,
   createRetentionController,
@@ -28,7 +27,6 @@ import {
   type SelfTestFetchAdapter,
   type TransparencyManifestSummary,
 } from "@motebit/panels";
-import { EventType } from "@motebit/sdk";
 import { verifyRetentionManifest } from "@motebit/encryption";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
@@ -150,15 +148,18 @@ export function initActivity(ctx: DesktopContext): ActivityAPI {
 
   function attachActivityController(): ActivityController | null {
     if (activityCtrl !== null) return activityCtrl;
-    const runtime = ctx.app.getRuntime();
-    if (runtime === null) return null;
+    // Local runtime or attached coordinator — the app-level query split
+    // serves both; with neither (pre-init), stay un-attached and honest.
+    if (ctx.app.getRuntime() === null && ctx.app.runtimeHostStatus().role !== "attached") {
+      return null;
+    }
 
     const adapter: ActivityFetchAdapter = {
       queryAudit: async ({ limit, after }) => {
         const opts: { limit?: number; after?: number } = {};
         if (limit !== undefined) opts.limit = limit;
         if (after !== undefined) opts.after = after;
-        const rows = await runtime.auditLog.query(runtime.motebitId, opts);
+        const rows = await ctx.app.queryAuditLog(opts);
         return rows.map((r) => ({
           audit_id: r.audit_id,
           motebit_id: r.motebit_id,
@@ -171,19 +172,16 @@ export function initActivity(ctx: DesktopContext): ActivityAPI {
       },
       queryEvents: async ({ eventTypes, limit, after }) => {
         const filter: {
-          motebit_id: string;
           limit?: number;
           after_timestamp?: number;
-          event_types?: EventType[];
-        } = {
-          motebit_id: runtime.motebitId,
-        };
+          event_types?: string[];
+        } = {};
         if (limit !== undefined) filter.limit = limit;
         if (after !== undefined) filter.after_timestamp = after;
         if (eventTypes !== undefined && eventTypes.length > 0) {
-          filter.event_types = eventTypes as EventType[];
+          filter.event_types = [...eventTypes];
         }
-        const rows = await runtime.events.query(filter);
+        const rows = await ctx.app.queryEvents(filter);
         return rows.map((r) => ({
           event_id: r.event_id,
           motebit_id: r.motebit_id,
@@ -367,16 +365,8 @@ export function initActivity(ctx: DesktopContext): ActivityAPI {
     const ctrl = activityCtrl;
     if (list === null || countBadge === null) return;
     if (ctrl === null) {
-      // No runtime in this window. Attached frontend ⇒ the activity
-      // ledger lives in the coordinator — say so instead of an eternal
-      // "starting up".
-      const host = ctx.app.runtimeHostStatus();
-      list.innerHTML = `<div class="activity-empty">${escapeHtml(
-        host.role === "attached"
-          ? attachedNoticeLine(host.coordinatorPid, "Activity records")
-          : "Activity is starting up…",
-      )}</div>`;
-      countBadge.textContent = host.role === "attached" ? "—" : "…";
+      list.innerHTML = `<div class="activity-empty">Activity is starting up…</div>`;
+      countBadge.textContent = "…";
       return;
     }
     const view = ctrl.filteredView();

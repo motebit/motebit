@@ -18,6 +18,7 @@ import {
   JsonLineDecoder,
   RUNTIME_HOST_PROTOCOL_VERSION,
   type AttachRefusalReason,
+  type ClientMessage,
   type ServerMessage,
 } from "./protocol.js";
 import type { FrameConnection, RuntimeHostPlatform } from "./transport.js";
@@ -112,6 +113,10 @@ interface InflightInvoke {
 
 export class RuntimeHostClient {
   private readonly inflight = new Map<string, InflightInvoke>();
+  private readonly pendingQueries = new Map<
+    string,
+    { resolve: (payload: unknown) => void; reject: (err: Error) => void }
+  >();
   private readonly eventHandlers = new Map<string, Set<(payload: unknown) => void>>();
   private readonly closeHandlers = new Set<() => void>();
   private capabilityHandlers = new Map<string, BridgedCapabilityHandler>();
@@ -246,6 +251,38 @@ export class RuntimeHostClient {
   }
 
   /**
+   * Read a record set from the coordinator's interior (attach-mode
+   * parity). Resolves with the payload, rejects with the coordinator's
+   * honest refusal (unknown kind, malformed params, no read seam) or on
+   * disconnect.
+   */
+  query(kind: string, params?: Record<string, unknown>): Promise<unknown> {
+    return this.request((id) => ({ t: "query", id, kind, params }));
+  }
+
+  /**
+   * Perform a typed panel act against the coordinator's interior. A
+   * distinct verb from `query` (records vs acts) and from `invoke`
+   * (relay delegation); the coordinator's closed act registry decides
+   * what is performable.
+   */
+  act(kind: string, params?: Record<string, unknown>): Promise<unknown> {
+    return this.request((id) => ({ t: "act", id, kind, params }));
+  }
+
+  private request(build: (id: string) => ClientMessage): Promise<unknown> {
+    if (this.closed) {
+      return Promise.reject(new Error("runtime-host client is closed"));
+    }
+    this.requestCounter += 1;
+    const id = `q-${this.requestCounter}`;
+    return new Promise<unknown>((resolve, reject) => {
+      this.pendingQueries.set(id, { resolve, reject });
+      this.conn.send(encodeFrame(build(id)));
+    });
+  }
+
+  /**
    * Contribute this frontend's organs. Replaces the previous set, both
    * locally and on the coordinator (idempotent).
    */
@@ -359,6 +396,22 @@ export class RuntimeHostClient {
         }
         return;
       }
+      case "query_result": {
+        const pending = this.pendingQueries.get(message.id);
+        if (pending !== undefined) {
+          this.pendingQueries.delete(message.id);
+          pending.resolve(message.payload);
+        }
+        return;
+      }
+      case "query_error": {
+        const pending = this.pendingQueries.get(message.id);
+        if (pending !== undefined) {
+          this.pendingQueries.delete(message.id);
+          pending.reject(new Error(message.message));
+        }
+        return;
+      }
       case "event": {
         const handlers = this.eventHandlers.get(message.channel);
         if (handlers !== undefined) {
@@ -436,6 +489,11 @@ export class RuntimeHostClient {
       }
       state.wake?.();
     }
+    // Fail-loud: in-flight reads/acts die with the connection.
+    for (const pending of this.pendingQueries.values()) {
+      pending.reject(cause ?? new Error("runtime-host client closed"));
+    }
+    this.pendingQueries.clear();
     for (const controller of this.bridgeAborts.values()) controller.abort();
     this.bridgeAborts.clear();
     this.conn.destroy();

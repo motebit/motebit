@@ -1,4 +1,3 @@
-import { attachedNotice, attachedNoticeLine } from "./attached-notice.js";
 import { RelationType, SensitivityLevel } from "@motebit/sdk";
 import type { MemoryNode, MemoryEdge, DeletionCertificate } from "../index";
 import type { DesktopContext } from "../types";
@@ -438,20 +437,10 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
         dot.className = "panel-empty-pulse-dot";
         const title = document.createElement("div");
         title.className = "panel-empty-pulse-title";
+        title.textContent = "Memories appear here";
         const sub = document.createElement("div");
         sub.className = "panel-empty-pulse-sub";
-        // Attached frontend ⇒ the interior is not void, it lives in the
-        // coordinator — never render the structural-void READY pulse
-        // over it (panel-temporal-registers.md §"The structural-void test").
-        const host = ctx.app.runtimeHostStatus();
-        if (host.role === "attached") {
-          const notice = attachedNotice(host.coordinatorPid, "Memories");
-          title.textContent = notice.title;
-          sub.textContent = notice.sub;
-        } else {
-          title.textContent = "Memories appear here";
-          sub.textContent = "as conversations build";
-        }
+        sub.textContent = "as conversations build";
         empty.appendChild(dot);
         empty.appendChild(title);
         empty.appendChild(sub);
@@ -667,34 +656,20 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     loading.textContent = "";
     memoryList.appendChild(loading);
 
-    const runtime = ctx.app.getRuntime();
-    if (runtime == null) {
-      const host = ctx.app.runtimeHostStatus();
+    if (ctx.app.getRuntime() == null && ctx.app.runtimeHostStatus().role !== "attached") {
       memoryList.innerHTML = "";
       const empty = document.createElement("div");
       empty.className = "mem-empty";
-      empty.textContent =
-        host.role === "attached"
-          ? attachedNoticeLine(host.coordinatorPid, "Consolidation records")
-          : "Runtime not initialized";
+      empty.textContent = "Runtime not initialized";
       memoryList.appendChild(empty);
       return;
     }
 
     const { EventType } = await import("@motebit/sdk");
     const [cycleEvents, receiptEvents, anchorEvents] = await Promise.all([
-      runtime.events.query({
-        motebit_id: runtime.motebitId,
-        event_types: [EventType.ConsolidationCycleRun],
-      }),
-      runtime.events.query({
-        motebit_id: runtime.motebitId,
-        event_types: [EventType.ConsolidationReceiptSigned],
-      }),
-      runtime.events.query({
-        motebit_id: runtime.motebitId,
-        event_types: [EventType.ConsolidationReceiptsAnchored],
-      }),
+      ctx.app.queryEvents({ event_types: [EventType.ConsolidationCycleRun] }),
+      ctx.app.queryEvents({ event_types: [EventType.ConsolidationReceiptSigned] }),
+      ctx.app.queryEvents({ event_types: [EventType.ConsolidationReceiptsAnchored] }),
     ]);
 
     memoryList.innerHTML = "";
@@ -839,15 +814,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     if (allMemories.length === 0) {
       memoryGraphWrap.style.display = "none";
       memoryList.style.display = "";
-      const host = ctx.app.runtimeHostStatus();
-      memoryList.innerHTML = "";
-      const empty = document.createElement("div");
-      empty.className = "mem-empty";
-      empty.textContent =
-        host.role === "attached"
-          ? attachedNoticeLine(host.coordinatorPid, "Memories")
-          : "No memories yet";
-      memoryList.appendChild(empty);
+      memoryList.innerHTML = '<div class="mem-empty">No memories yet</div>';
       return;
     }
 

@@ -12,7 +12,7 @@ import { generateKeypair, type KeyPair } from "@motebit/crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { mintAttachToken, RuntimeHostClient } from "../client.js";
 import { nodePlatform } from "../node-platform.js";
-import { JsonLineDecoder } from "../protocol.js";
+import { JsonLineDecoder, RUNTIME_HOST_PROTOCOL_VERSION } from "../protocol.js";
 import { RuntimeHostServer, type RuntimeHostServerOptions } from "../server.js";
 
 const platform = nodePlatform();
@@ -214,7 +214,7 @@ describe("capability bridging", () => {
     const attacker: Socket = connect(serverOptions().socketPath);
     await new Promise<void>((resolve) => attacker.once("connect", () => resolve()));
     attacker.write(
-      `${JSON.stringify({ t: "hello", protocol_version: 1, token: await mintOk() })}\n`,
+      `${JSON.stringify({ t: "hello", protocol_version: RUNTIME_HOST_PROTOCOL_VERSION, token: await mintOk() })}\n`,
     );
     const decoder = new JsonLineDecoder();
     await new Promise<void>((resolve) => {

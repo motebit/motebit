@@ -25,14 +25,24 @@ import type { DeletionCertificate } from "@motebit/sdk";
  * Filters out memories whose `valid_until` has passed. Returns `[]` if the
  * runtime isn't yet ready or the underlying export call throws.
  */
+/**
+ * Project raw exported nodes to the live, render-ordered list. Shared
+ * by the local-runtime path and the attached-frontend path (which reads
+ * the same export shape over the runtime-host `memory_export` query) —
+ * one projection, no drift between the two renders.
+ */
+export function projectLiveMemories(nodes: MemoryNode[]): MemoryNode[] {
+  const now = Date.now();
+  return nodes
+    .filter((n) => !n.tombstoned && (n.valid_until == null || n.valid_until > now))
+    .sort((a, b) => b.created_at - a.created_at);
+}
+
 export async function listMemories(runtime: MotebitRuntime | null): Promise<MemoryNode[]> {
   if (!runtime) return [];
   try {
     const { nodes } = await runtime.memory.exportAll();
-    const now = Date.now();
-    return nodes
-      .filter((n) => !n.tombstoned && (n.valid_until == null || n.valid_until > now))
-      .sort((a, b) => b.created_at - a.created_at);
+    return projectLiveMemories(nodes);
   } catch {
     return [];
   }
@@ -110,19 +120,41 @@ export async function listDeletionCertificates(
 > {
   if (!runtime) return [];
   try {
-    const records = await runtime.auditLog.query(motebitId);
-    return records
-      .filter((r) => r.action === "delete_memory")
-      .map((r) => ({
-        auditId: r.audit_id,
-        timestamp: r.timestamp,
-        targetId: r.target_id,
-        tombstoneHash: (r.details as Record<string, string>).tombstone_hash ?? "",
-        deletedBy: (r.details as Record<string, string>).deleted_by ?? "",
-      }));
+    return projectDeletionCertificates(await runtime.auditLog.query(motebitId));
   } catch {
     return [];
   }
+}
+
+/**
+ * Project audit records to the deletion-certificate rows the UI
+ * renders. Shared by the local path and the attached `audit_query`
+ * path — one projection, no drift.
+ */
+export function projectDeletionCertificates(
+  records: Array<{
+    audit_id: string;
+    timestamp: number;
+    action: string;
+    target_id: string;
+    details: Record<string, unknown>;
+  }>,
+): Array<{
+  auditId: string;
+  timestamp: number;
+  targetId: string;
+  tombstoneHash: string;
+  deletedBy: string;
+}> {
+  return records
+    .filter((r) => r.action === "delete_memory")
+    .map((r) => ({
+      auditId: r.audit_id,
+      timestamp: r.timestamp,
+      targetId: r.target_id,
+      tombstoneHash: (r.details as Record<string, string>).tombstone_hash ?? "",
+      deletedBy: (r.details as Record<string, string>).deleted_by ?? "",
+    }));
 }
 
 /** Pin or unpin a memory. No-op if the runtime isn't ready. */

@@ -140,6 +140,36 @@ describe("electCliRuntimeHost", () => {
     );
   });
 
+  it("serves attached reads and acts through the runtime's closed registries", async () => {
+    const acts: unknown[] = [];
+    const runtime = {
+      resolveAttachedRead: (kind: string, params?: Record<string, unknown>) =>
+        kind === "memory_export"
+          ? Promise.resolve({ nodes: [{ node_id: "n1" }], edges: [], params })
+          : Promise.reject(new Error(`unknown attached read kind "${kind}"`)),
+      resolveAttachedAct: (kind: string, params?: Record<string, unknown>) => {
+        acts.push({ kind, params });
+        return Promise.resolve(null);
+      },
+    } as unknown as MotebitRuntime;
+
+    const first = await electCliRuntimeHost(deps({ runtimeRef: { current: runtime } }));
+    if (first.role !== "coordinator") throw new Error("first should coordinate");
+    cleanups.push(() => first.server.close());
+    const second = await electCliRuntimeHost(deps());
+    if (second.role !== "frontend") throw new Error("second should attach");
+    cleanups.push(() => second.client.close());
+
+    const payload = await second.client.query("memory_export", { limit: 3 });
+    expect(payload).toMatchObject({ nodes: [{ node_id: "n1" }] });
+
+    await second.client.act("memory_pin", { node_id: "n1", pinned: true });
+    expect(acts).toEqual([{ kind: "memory_pin", params: { node_id: "n1", pinned: true } }]);
+
+    // Unknown kinds refuse honestly end-to-end.
+    await expect(second.client.query("no_such_kind")).rejects.toThrow(/unknown attached read kind/);
+  });
+
   it("answers an honest error to a frame arriving before the runtime exists", async () => {
     const first = await electCliRuntimeHost(deps({ runtimeRef: { current: null } }));
     if (first.role !== "coordinator") throw new Error("first should coordinate");

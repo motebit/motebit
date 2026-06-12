@@ -247,6 +247,7 @@ import {
   bumpTrustFromReceipt as _bumpTrustFromReceipt,
   recordAgentInteraction as _recordAgentInteraction,
 } from "./agent-trust.js";
+import { resolveAttachedRead, resolveAttachedAct } from "./attached-surface.js";
 import { ConversationManager } from "./conversation.js";
 import { GradientManager } from "./gradient-manager.js";
 import { InteractiveDelegationManager } from "./interactive-delegation.js";
@@ -1637,6 +1638,27 @@ export class MotebitRuntime {
       this.externalToolSources.delete(sourceId);
       this.wireLoopDeps();
     }
+  }
+
+  /**
+   * Resolve one read from an attached rendering frontend — the records
+   * half of attach-mode parity
+   * (`docs/doctrine/daemon-desktop-unification.md` increment 6). Closed
+   * kind registry with strict param validation in `attached-surface.ts`;
+   * unknown kinds refuse fail-closed.
+   */
+  resolveAttachedRead(kind: string, params?: Record<string, unknown>): Promise<unknown> {
+    return resolveAttachedRead(this, kind, params);
+  }
+
+  /**
+   * Resolve one typed panel act from an attached rendering frontend —
+   * the acts half. The act registry is deliberately narrow and routes
+   * through the same interior choke points the local UI uses;
+   * money-shaped acts are structurally absent.
+   */
+  resolveAttachedAct(kind: string, params?: Record<string, unknown>): Promise<unknown> {
+    return resolveAttachedAct(this, kind, params);
   }
 
   private async buildAgentContext(): Promise<{

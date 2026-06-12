@@ -7,6 +7,13 @@
 // visible through this barrel is a public-API event.
 
 export { canonicalJson } from "./execution-ledger.js";
+export {
+  ATTACHED_READ_KINDS,
+  ATTACHED_ACT_KINDS,
+  resolveAttachedRead,
+  resolveAttachedAct,
+} from "./attached-surface.js";
+export type { AttachedReadKind, AttachedActKind } from "./attached-surface.js";
 export { getOrPinRelayKey } from "./relay-key-pin.js";
 export type { RelayKeyPinStorage, RelayKeyPinDeps } from "./relay-key-pin.js";
 export { performMigration } from "./migration-client.js";
