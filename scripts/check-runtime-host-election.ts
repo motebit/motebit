@@ -47,7 +47,7 @@
  *   4. For `mode: "elected"` entries, the `electionVia` file MUST
  *      reference an election symbol (`electRuntimeHost`,
  *      `electCliRuntimeHost`, `electDesktopRuntimeHost`,
- *      `electDaemonCoordinator`). Construction and election need not
+ *      `electCoordinatorRole`). Construction and election need not
  *      co-locate — the CLI REPL constructs in `runtime-factory.ts` but
  *      elects in `index.ts` — so the entry names where the election
  *      lives and the gate verifies it is there. Deleting the election
@@ -67,7 +67,7 @@ const ELECTION_SYMBOLS = [
   "electRuntimeHost",
   "electCliRuntimeHost",
   "electDesktopRuntimeHost",
-  "electDaemonCoordinator",
+  "electCoordinatorRole",
 ] as const;
 
 type ConstructionSite =
@@ -98,7 +98,7 @@ const CONSTRUCTION_SITES: ReadonlyArray<ConstructionSite> = [
     mode: "elected",
     electionVia: "apps/cli/src/daemon.ts",
     reason:
-      "`motebit run` + `motebit serve` are coordinator-role; both call electDaemonCoordinator (→ electCliRuntimeHost) and bind, or refuse honestly when a coordinator is live.",
+      "`motebit run` + `motebit serve` are coordinator-role; both call electCoordinatorRole (→ electCliRuntimeHost) and bind, or refuse honestly when a coordinator is live.",
   },
   {
     file: "apps/cli/src/runtime-factory.ts",
@@ -116,9 +116,10 @@ const CONSTRUCTION_SITES: ReadonlyArray<ConstructionSite> = [
   },
   {
     file: "apps/cli/src/subcommands/delegate.ts",
-    mode: "exempt",
+    mode: "elected",
+    electionVia: "apps/cli/src/subcommands/delegate.ts",
     reason:
-      "EXEMPT (recorded residual): `motebit delegate` is a one-shot subcommand that constructs a transient runtime to sign one delegation and exit. It does not yet attach to a live coordinator — the 'one-shot subcommands attach' residual of the daemon-desktop unification arc. Its writes ride the v1 shared-WAL + vector-clock storage semantics the arc tolerates; routing it through the election (proxying the delegation to the coordinator) is tracked, not silently allowed.",
+      "`motebit delegate --plan` constructs a transient planning runtime over the shared ~/.motebit WAL and, in sovereign mode, the identity signing key — a full authority while it lives, however briefly. Coordinator-role for its lifetime: electCoordinatorRole binds before the DB opens (released in the run's finally), or refuses honestly when another process already coordinates. Closed 2026-06-12; was the 'one-shot subcommands attach' residual registered exempt at gate-landing.",
   },
 ];
 

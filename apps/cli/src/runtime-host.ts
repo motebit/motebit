@@ -14,10 +14,11 @@ import {
   pickSafeInvokeOptions,
   type ElectionOutcome,
   type RuntimeHostPaths,
+  type RuntimeHostServer,
 } from "@motebit/runtime-host";
 import { defaultRuntimeHostPaths, nodePlatform } from "@motebit/runtime-host/node";
 import type { FullConfig } from "./config.js";
-import { fromHex } from "./identity.js";
+import { fromHex, loadActiveSigningKey } from "./identity.js";
 
 export interface CliElectionDeps {
   fullConfig: FullConfig;
@@ -97,4 +98,52 @@ export async function electCliRuntimeHost(deps: CliElectionDeps): Promise<Electi
       return mintAttachToken({ motebitId: deps.motebitId, deviceId }, await deps.loadPrivateKey());
     },
   });
+}
+
+/**
+ * Run the election for a coordinator-role entry point — `motebit run`,
+ * `motebit serve`, and one-shot subcommands that construct a transient
+ * runtime over the shared `~/.motebit` storage (a transient runtime is
+ * still a full signing/receipt authority while it lives). Returns the
+ * bound server; exits the process honestly when another coordinator is
+ * already live — one runtime authority per machine
+ * (docs/doctrine/daemon-desktop-unification.md).
+ */
+export async function electCoordinatorRole(
+  fullConfig: FullConfig,
+  motebitId: string,
+  runtimeRef: { current: MotebitRuntime | null },
+): Promise<RuntimeHostServer> {
+  let election: ElectionOutcome;
+  try {
+    election = await electCliRuntimeHost({
+      fullConfig,
+      motebitId,
+      loadPrivateKey: async () =>
+        (
+          await loadActiveSigningKey(fullConfig, {
+            promptLabel: "Passphrase (to verify the running coordinator): ",
+          })
+        ).privateKey,
+      runtimeRef,
+    });
+  } catch (err: unknown) {
+    console.error(
+      `Runtime-host election failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    console.error(
+      "A coordinator may already be running with an incompatible build or a locked signing key. Stop it and retry.",
+    );
+    process.exit(1);
+  }
+  if (election.role === "frontend") {
+    const pid = election.client.coordinatorPid;
+    election.client.close();
+    console.error(`Another motebit process is already coordinating this machine (pid ${pid}).`);
+    console.error(
+      "One runtime per machine: stop that process first, or run `motebit` (no arguments) to attach a rendering REPL to it.",
+    );
+    process.exit(1);
+  }
+  return election.server;
 }

@@ -16,11 +16,13 @@
  */
 
 import { openMotebitDatabase } from "@motebit/persistence";
+import type { MotebitRuntime as MotebitRuntimeInstance } from "@motebit/runtime";
 import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "@motebit/planner";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
+import { electCoordinatorRole } from "../runtime-host.js";
 import { getRelayUrl, getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -34,6 +36,17 @@ async function handleDelegatePlan(
 ): Promise<void> {
   const relayUrl = getRelayUrl(config);
 
+  // Runtime-host election — one sovereign runtime per machine
+  // (docs/doctrine/daemon-desktop-unification.md). `delegate --plan`
+  // constructs a transient runtime over the shared ~/.motebit WAL and,
+  // in sovereign mode, signs with the identity key — a full authority
+  // while it lives, however briefly. Coordinator-role for its lifetime:
+  // bind before touching shared state, or refuse honestly when another
+  // process already coordinates — never a second signing/receipt
+  // authority racing the daemon over one key and one database.
+  const runtimeRef: { current: MotebitRuntimeInstance | null } = { current: null };
+  const hostServer = await electCoordinatorRole(loadFullConfig(), motebitId, runtimeRef);
+
   // Build auth headers for relay calls
   const authHeaders = await getRelayAuthHeaders(config, { aud: "task:submit", json: true });
 
@@ -44,8 +57,6 @@ async function handleDelegatePlan(
 
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
-
-  const runtimeRef: { current: InstanceType<typeof MotebitRuntime> | null } = { current: null };
   const provider = createProvider(config);
   const registry = buildToolRegistry(config, runtimeRef, motebitId);
   const storage = buildStorageAdapters(moteDb);
@@ -310,6 +321,8 @@ async function handleDelegatePlan(
   } finally {
     runtime.stop();
     moteDb.close();
+    // Release the bind so the next coordinator-role process can elect.
+    await hostServer.close().catch(() => {});
   }
 }
 

@@ -51,10 +51,9 @@ import { GoalScheduler } from "./scheduler.js";
 import { applyMotebitYaml, resolveYamlPath } from "./subcommands/up.js";
 import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
-import { loadFullConfig, extractPersonality, type FullConfig } from "./config.js";
+import { loadFullConfig, extractPersonality } from "./config.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
-import { electCliRuntimeHost } from "./runtime-host.js";
-import type { ElectionOutcome, RuntimeHostServer } from "@motebit/runtime-host";
+import { electCoordinatorRole } from "./runtime-host.js";
 import {
   getDbPath,
   createProvider,
@@ -107,51 +106,6 @@ async function publishServiceListing(
   } catch {
     // Best-effort listing
   }
-}
-
-/**
- * Run the runtime-host election for a coordinator-role entry point
- * (`motebit run`, `motebit serve`). Returns the bound server; exits the
- * process honestly when another coordinator is already live — one
- * runtime authority per machine (docs/doctrine/daemon-desktop-unification.md).
- */
-async function electDaemonCoordinator(
-  fullConfig: FullConfig,
-  motebitId: string,
-  runtimeRef: { current: MotebitRuntime | null },
-): Promise<RuntimeHostServer> {
-  let election: ElectionOutcome;
-  try {
-    election = await electCliRuntimeHost({
-      fullConfig,
-      motebitId,
-      loadPrivateKey: async () =>
-        (
-          await loadActiveSigningKey(fullConfig, {
-            promptLabel: "Passphrase (to verify the running coordinator): ",
-          })
-        ).privateKey,
-      runtimeRef,
-    });
-  } catch (err: unknown) {
-    console.error(
-      `Runtime-host election failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    console.error(
-      "A coordinator may already be running with an incompatible build or a locked signing key. Stop it and retry.",
-    );
-    process.exit(1);
-  }
-  if (election.role === "frontend") {
-    const pid = election.client.coordinatorPid;
-    election.client.close();
-    console.error(`Another motebit process is already coordinating this machine (pid ${pid}).`);
-    console.error(
-      "One runtime per machine: stop that process first, or run `motebit` (no arguments) to attach a rendering REPL to it.",
-    );
-    process.exit(1);
-  }
-  return election.server;
 }
 
 export async function handleRun(config: CliConfig): Promise<void> {
@@ -244,7 +198,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
   // another motebit process already coordinates this machine, refuse
   // honestly instead of running a second authority over the same
   // identity key and database.
-  const runtimeHostServer = await electDaemonCoordinator(fullConfig, motebitId, runtimeRef);
+  const runtimeHostServer = await electCoordinatorRole(fullConfig, motebitId, runtimeRef);
 
   const mcpServers = (fullConfig.mcp_servers ?? []).map((s) => ({
     ...s,
@@ -910,7 +864,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // Attach mode for `motebit serve` (MCP server deps over the proxy) is
   // a recorded follow-up of the unification arc; until it lands, a live
   // coordinator means an honest refusal, never a second authority.
-  const runtimeHostServer = await electDaemonCoordinator(loadFullConfig(), motebitId, runtimeRef);
+  const runtimeHostServer = await electCoordinatorRole(loadFullConfig(), motebitId, runtimeRef);
 
   // Load external tools from --tools module
   if (config.tools) {
