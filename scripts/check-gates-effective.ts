@@ -2013,6 +2013,16 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-runtime-host-election",
+    proves:
+      "flags a NEW shared-machine runtime construction site that skips the election — the regression the daemon-desktop unification arc forbids (a second `new MotebitRuntime(` entry point under apps/cli or apps/desktop becomes a second uncoordinated authority over one identity key + one SQLite). Probe plants an unregistered construction file under `apps/cli/src`; the gate's closed-registry scan must surface it as `not a registered construction site` (the 'no silent new authority' lock). The sibling regression — deleting the election call from a registered site's electionVia file — is the gate's other arm, verified during development. writeFixture-and-delete (no real file mutated).",
+    perturb: () =>
+      writeFixture(
+        `apps/cli/src/${PROBE_PREFIX}runtime_construct.ts`,
+        "export const probe = () => new MotebitRuntime({} as never, {} as never);\n",
+      ),
+  },
+  {
     script: "check-memory-source-canonical",
     proves:
       'flags the MemorySource three-way lock breaking — a value rotated in `ALL_MEMORY_SOURCES` without updating the union (or the gate\'s reference). Drift class: single-file registry, same shape as the SettlementMode probe — union AND array live in `packages/protocol/src/memory-source.ts`, so the probe targets the comma-bearing array entry (`"user_stated",`); the union arm uses leading `| ` with no trailing comma and the MEMORY_SOURCE_MARKERS key form is unquoted (`user_stated:`), so neither is touched. Gate must surface the sibling-alignment violation. byte-identical restoration on cleanup via mutateFile.',
