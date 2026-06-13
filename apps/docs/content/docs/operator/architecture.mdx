@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **52 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 9 services · 28 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **52 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 9 services · 29 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -125,7 +125,7 @@ motebit/
 │   ├── browser-sandbox/       [atom]        Playwright-driven Chromium for the virtual_browser embodiment — second computer-use-v1 producer.
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
-├── spec/                      # 28 open specifications, each motebit/<name>@1.0
+├── spec/                      # 29 open specifications, each motebit/<name>@1.0
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
 │   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
@@ -149,6 +149,7 @@ motebit/
 │   ├── goal-lifecycle-v1.md                 Event-shaped goal declaration, execution, progress, completion, removal.
 │   ├── plan-lifecycle-v1.md                 Event-shaped plan creation, per-step lifecycle, delegation, termination.
 │   ├── consolidation-receipt-v1.md          Signed proactive-cycle proof + Merkle-batched Solana anchor — self-attesting interior work.
+│   ├── consolidation-mutation-manifest-v1.md  Signed owner-facing commitment to a cycle's exact formed/refined mutations — the felt-interior binding.
 │   ├── computer-use-v1.md                   Full-fidelity Workstation viewport — screen observation + input actions, signed, governance-gated.
 │   ├── agent-mcp-surface-v1.md              Canonical motebit_* MCP tool vocabulary — eight tool names every motebit MCP server uses, profile-based conformance.
 │   ├── proposals-v1.md                      Multi-agent plan negotiation — proposal submission, acceptance, withdrawal, and collaborative-step-result reporting.

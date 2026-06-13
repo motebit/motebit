@@ -173,6 +173,12 @@ export {
   buildConsolidationAnchorJsonSchema,
 } from "./consolidation-receipt.js";
 export {
+  ConsolidationMutationManifestSchema,
+  ConsolidationMutationCommitmentSchema,
+  CONSOLIDATION_MUTATION_MANIFEST_SCHEMA_ID,
+  buildConsolidationMutationManifestJsonSchema,
+} from "./consolidation-mutation-manifest.js";
+export {
   MemoryFormedPayloadSchema,
   MEMORY_FORMED_PAYLOAD_SCHEMA_ID,
   buildMemoryFormedPayloadJsonSchema,

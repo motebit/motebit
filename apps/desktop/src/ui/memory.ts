@@ -1,12 +1,16 @@
-import { RelationType, SensitivityLevel } from "@motebit/sdk";
+import { RelationType, SensitivityLevel, MEMORY_SOURCE_MARKERS } from "@motebit/sdk";
 import type { MemoryNode, MemoryEdge, DeletionCertificate } from "../index";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 import {
   createMemoryController,
   classifyCertainty,
+  projectFeltConsolidation,
+  verifyFeltCoverage,
   type MemoryFetchAdapter,
   type MemoryState,
+  type FeltConsolidationRecord,
+  type FeltCoverageAdapter,
 } from "@motebit/panels";
 
 // === DOM Refs ===
@@ -672,94 +676,156 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       ctx.app.queryEvents({ event_types: [EventType.ConsolidationReceiptsAnchored] }),
     ]);
 
+    // The felt record is sensitivity-bounded per memory, so it needs the
+    // actual mutations — which the counts-only receipt deliberately omits.
+    // Bound the memory query to the oldest fetched cycle's start so we never
+    // scan the whole history. The projection correlates by time window.
+    const earliestCycle = cycleEvents.reduce(
+      (min, e) => Math.min(min, e.timestamp),
+      Number.POSITIVE_INFINITY,
+    );
+    const memoryEvents =
+      cycleEvents.length === 0
+        ? []
+        : (
+            await Promise.all([
+              ctx.app.queryEvents({
+                event_types: [EventType.MemoryFormed],
+                after_timestamp: earliestCycle - 1,
+              }),
+              ctx.app.queryEvents({
+                event_types: [EventType.MemoryConsolidated],
+                after_timestamp: earliestCycle - 1,
+              }),
+            ])
+          ).flat();
+
+    const feltEvents = [...cycleEvents, ...receiptEvents, ...anchorEvents, ...memoryEvents].map(
+      (e) => ({ event_type: e.event_type, timestamp: e.timestamp, payload: e.payload }),
+    );
+
+    // The projection is the doctrine boundary: a no-op cycle yields no record;
+    // retirements are counts; disclosure is sensitivity-tiered; details start
+    // UNcovered by the signature.
+    const projected = projectFeltConsolidation(feltEvents);
+
+    // Upgrade coverage only where the signed mutation manifest cryptographically
+    // proves the displayed details ARE this cycle's mutations — verified against
+    // the owner's OWN identity key (never the manifest's embedded key). Without
+    // a local identity, details stay honestly uncovered.
+    let records = projected;
+    const ownerPubHex = ctx.app.publicKey;
+    if (ownerPubHex) {
+      const {
+        verifyConsolidationMutationManifest,
+        consolidationReceiptDigest,
+        consolidationContentDigest,
+        hexToBytes,
+      } = await import("@motebit/encryption");
+      const ownerKey = hexToBytes(ownerPubHex);
+      const adapter: FeltCoverageAdapter = {
+        verifyManifest: (m) => verifyConsolidationMutationManifest(m, ownerKey),
+        receiptDigest: (r) => consolidationReceiptDigest(r),
+        contentDigest: (c) => consolidationContentDigest(c),
+      };
+      records = await verifyFeltCoverage(projected, feltEvents, adapter);
+    }
+
     memoryList.innerHTML = "";
 
-    if (cycleEvents.length === 0) {
+    if (records.length === 0) {
       const empty = document.createElement("div");
       empty.className = "mem-empty";
-      empty.textContent = "No consolidation cycles yet";
+      empty.textContent = "Nothing learned yet";
       memoryList.appendChild(empty);
       return;
     }
 
-    // Index receipts + anchors by cycle_id so we can decorate each cycle row
-    // with "signed" and "anchored" indicators.
-    const receiptByCycle = new Map<string, unknown>();
-    for (const e of receiptEvents) {
-      const p = e.payload as { receipt?: { cycle_id?: string } };
-      if (p.receipt?.cycle_id) receiptByCycle.set(p.receipt.cycle_id, p.receipt);
+    for (const rec of records) {
+      memoryList.appendChild(renderFeltRow(rec));
     }
-    const anchoredReceiptIds = new Set<string>();
-    for (const e of anchorEvents) {
-      const p = e.payload as { anchor?: { receipt_ids?: string[] } };
-      for (const id of p.anchor?.receipt_ids ?? []) anchoredReceiptIds.add(id);
-    }
+  }
 
-    // Newest first.
-    const sorted = [...cycleEvents].sort((a, b) => b.timestamp - a.timestamp);
+  // One calm resting record. The assurance badge renders the receipt's
+  // ACTUAL state — never an implied signing/anchoring. Detail is revealed on
+  // demand, not announced. Doctrine: docs/doctrine/felt-interior.md.
+  function renderFeltRow(rec: FeltConsolidationRecord): HTMLDivElement {
+    const idShort = rec.cycleId ? rec.cycleId.slice(0, 8) : "cycle";
+    const assuranceGlyph =
+      rec.assurance === "anchored" ? " ⚓" : rec.assurance === "signed" ? " ✓" : "";
+    // Scope is honest: the glyph attests the cycle RECEIPT (the counts). The
+    // detail lines are covered only when the signed mutation manifest verified.
+    const scopeNote = rec.mutationsCoveredBySignature
+      ? "covers the counts and the details below"
+      : "covers the counts, not the details below";
+    const assuranceTitle =
+      rec.assurance === "anchored"
+        ? `cycle receipt signed and anchored onchain — ${scopeNote}`
+        : rec.assurance === "signed"
+          ? `cycle receipt signed; not yet anchored — ${scopeNote}`
+          : "unsigned (no signing keys configured or cycle ran zero phases)";
 
-    for (const ev of sorted) {
-      const payload = ev.payload as {
-        cycle_id?: string;
-        phases_run?: string[];
-        phases_yielded?: string[];
-        summary?: {
-          orient_nodes?: number;
-          gather_clusters?: number;
-          gather_notable?: number;
-          consolidate_merged?: number;
-          pruned_decay?: number;
-          pruned_notability?: number;
-          pruned_retention?: number;
-        };
-      };
-      const cycleId = payload.cycle_id ?? "";
-      const receipt = receiptByCycle.get(cycleId) as
-        | { receipt_id?: string; signature?: string }
-        | undefined;
-      const receiptId = receipt?.receipt_id;
-      const anchored = receiptId !== undefined && anchoredReceiptIds.has(receiptId);
+    const learned = rec.mutations.length;
+    const headlineParts: string[] = [];
+    if (learned > 0) headlineParts.push(`learned ${learned}`);
+    if (rec.retired.count > 0) headlineParts.push(`${rec.retired.count} faded`);
 
-      const row = document.createElement("div");
-      row.className = "mem-cert-row";
+    const wrap = document.createElement("div");
+    wrap.className = "mem-felt-wrap";
 
-      const badge = document.createElement("span");
-      badge.className = "mem-cert-hash";
-      const idShort = cycleId ? cycleId.slice(0, 8) : "cycle";
-      if (anchored) {
-        badge.textContent = `${idShort} ⚓`;
-        badge.title = `Cycle ${cycleId} — signed and anchored onchain`;
-      } else if (receipt) {
-        badge.textContent = `${idShort} ✓`;
-        badge.title = `Cycle ${cycleId} — signed receipt; not yet anchored`;
-      } else {
-        badge.textContent = idShort;
-        badge.title = `Cycle ${cycleId} — unsigned (no signing keys configured or cycle ran zero phases)`;
+    const head = document.createElement("div");
+    head.className = "mem-cert-row";
+
+    const badge = document.createElement("span");
+    badge.className = "mem-cert-hash";
+    badge.textContent = `${idShort}${assuranceGlyph}`;
+    badge.title = `Cycle ${rec.cycleId} — ${assuranceTitle}`;
+
+    const summary = document.createElement("span");
+    summary.className = "mem-cert-target";
+    summary.textContent = headlineParts.join(", ");
+
+    const timeSpan = document.createElement("span");
+    timeSpan.className = "mem-cert-time";
+    timeSpan.textContent = formatTimeAgo(rec.finishedAt);
+
+    head.appendChild(badge);
+    head.appendChild(summary);
+    head.appendChild(timeSpan);
+    wrap.appendChild(head);
+
+    // Explicit reveal — the sensitivity-bounded lines, on demand.
+    if (rec.mutations.length > 0) {
+      head.style.cursor = "pointer";
+      const detail = document.createElement("div");
+      detail.className = "mem-felt-detail";
+      detail.style.display = "none";
+      for (const m of rec.mutations) {
+        const line = document.createElement("div");
+        line.className = "mem-felt-line";
+        const verb = m.kind === "refined" ? "Refined" : "Learned";
+        const marker = m.provenance ? MEMORY_SOURCE_MARKERS[m.provenance] : "";
+        line.textContent = marker
+          ? `${verb}: ${m.disclosure} · ${marker}`
+          : `${verb}: ${m.disclosure}`;
+        detail.appendChild(line);
       }
-
-      const summary = document.createElement("span");
-      summary.className = "mem-cert-target";
-      const parts: string[] = [];
-      const s = payload.summary ?? {};
-      if (s.consolidate_merged) parts.push(`merged ${s.consolidate_merged}`);
-      if (s.pruned_decay) parts.push(`pruned-decay ${s.pruned_decay}`);
-      if (s.pruned_notability) parts.push(`pruned-noise ${s.pruned_notability}`);
-      if (s.pruned_retention) parts.push(`retention ${s.pruned_retention}`);
-      if (s.gather_clusters) parts.push(`clusters ${s.gather_clusters}`);
-      if (s.orient_nodes != null) parts.push(`oriented ${s.orient_nodes}`);
-      const yielded = (payload.phases_yielded ?? []).length;
-      if (yielded > 0) parts.push(`${yielded} yielded`);
-      summary.textContent = parts.length > 0 ? parts.join(", ") : "(no work)";
-
-      const timeSpan = document.createElement("span");
-      timeSpan.className = "mem-cert-time";
-      timeSpan.textContent = formatTimeAgo(ev.timestamp);
-
-      row.appendChild(badge);
-      row.appendChild(summary);
-      row.appendChild(timeSpan);
-      memoryList.appendChild(row);
+      // Honest assurance scope, always shown: when the signed mutation manifest
+      // verified, these exact lines are cryptographically the signed cycle's;
+      // otherwise they are a local reconstruction the signature does not cover.
+      const note = document.createElement("div");
+      note.className = "mem-felt-note";
+      note.textContent = rec.mutationsCoveredBySignature
+        ? "Covered by this cycle's signature · verified locally"
+        : "From your local memory · not covered by the receipt signature";
+      detail.appendChild(note);
+      wrap.appendChild(detail);
+      head.addEventListener("click", () => {
+        detail.style.display = detail.style.display === "none" ? "block" : "none";
+      });
     }
+
+    return wrap;
   }
 
   function renderDeletionLog(): void {

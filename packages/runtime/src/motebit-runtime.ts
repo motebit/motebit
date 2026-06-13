@@ -277,9 +277,13 @@ import {
 } from "./consolidation-cycle.js";
 import {
   signConsolidationReceipt,
+  signConsolidationMutationManifest,
+  consolidationReceiptDigest,
+  consolidationContentDigest,
   signContentArtifact,
   type ContentArtifactManifest,
 } from "@motebit/crypto";
+import type { ConsolidationMutationCommitment } from "@motebit/sdk";
 // `GOAL_RESULT_ARTIFACT` is re-exported via `@motebit/sdk` per the sdk
 // CLAUDE.md re-export rule — every protocol type accessible through sdk.
 import { GOAL_RESULT_ARTIFACT } from "@motebit/sdk";
@@ -2804,6 +2808,7 @@ export class MotebitRuntime {
       const now = Date.now();
       return {
         cycleId: "",
+        formedMutations: [],
         phasesRun: [],
         phasesYielded: [],
         phasesErrored: [],
@@ -3128,12 +3133,52 @@ export class MotebitRuntime {
         },
       };
       const signed = await signConsolidationReceipt(unsigned, keys.privateKey, keys.publicKey);
+
+      // Sibling artifact: the signed mutation manifest commits to the EXACT
+      // formed/refined mutations of this cycle, joined to the counts-only
+      // receipt by id + digest (docs/doctrine/felt-interior.md). Local-only,
+      // stored beside the receipt. Built only when the cycle formed something
+      // — a pure-prune cycle has no detail to cover.
+      let mutationManifest:
+        | Awaited<ReturnType<typeof signConsolidationMutationManifest>>
+        | undefined;
+      if (cycleResult.formedMutations.length > 0) {
+        const commitments: ConsolidationMutationCommitment[] = await Promise.all(
+          cycleResult.formedMutations.map(async (m) => ({
+            node_id: m.node_id,
+            kind: m.kind,
+            content_sha256: await consolidationContentDigest(m.content),
+            provenance: m.provenance,
+            sensitivity: m.sensitivity,
+          })),
+        );
+        // Deterministic canonical order — verifiers reproduce the same body.
+        commitments.sort((a, b) => (a.node_id < b.node_id ? -1 : a.node_id > b.node_id ? 1 : 0));
+        mutationManifest = await signConsolidationMutationManifest(
+          {
+            manifest_type: "consolidation_mutation_manifest",
+            schema_version: "1",
+            manifest_id: crypto.randomUUID(),
+            motebit_id: this.motebitId,
+            cycle_id: signed.cycle_id,
+            receipt_id: signed.receipt_id,
+            receipt_digest: await consolidationReceiptDigest(signed),
+            mutations: commitments,
+            created_at: signed.finished_at,
+          },
+          keys.privateKey,
+          keys.publicKey,
+        );
+      }
+
       await this.events.appendWithClock({
         event_id: crypto.randomUUID(),
         motebit_id: this.motebitId,
         timestamp: signed.finished_at,
         event_type: EventType.ConsolidationReceiptSigned,
-        payload: { receipt: signed },
+        payload: mutationManifest
+          ? { receipt: signed, mutation_manifest: mutationManifest }
+          : { receipt: signed },
         tombstoned: false,
       });
     } catch (err: unknown) {

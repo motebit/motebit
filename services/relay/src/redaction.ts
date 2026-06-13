@@ -46,16 +46,39 @@ export function redactMemoryFormedPayload(
 }
 
 /**
+ * Strip the owner-local `mutation_manifest` from a
+ * `consolidation_receipt_signed` payload. The manifest (felt-interior;
+ * `docs/doctrine/felt-interior.md`) commits per-mutation content digests +
+ * sensitivity tiers that must never persist at or forward through the relay
+ * — it is owner-local by construction; no peer or device needs it. The
+ * counts-only receipt stays. Returns the stripped payload, or `null` when
+ * there is nothing to strip.
+ */
+export function stripConsolidationManifest(
+  payload: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!("mutation_manifest" in payload)) return null;
+  const { mutation_manifest: _omit, ...rest } = payload;
+  return rest;
+}
+
+/**
  * Map a batch of events, redacting `memory_formed` content above the
- * sync-safe ceiling. Non-memory events pass through byte-identical.
+ * sync-safe ceiling and stripping the owner-local consolidation mutation
+ * manifest. Other events pass through byte-identical.
  */
 export function redactSensitiveEvents(events: EventLogEntry[]): EventLogEntry[] {
   return events.map((e) => {
-    if (e.event_type !== EventType.MemoryFormed) return e;
     const payload = e.payload as Record<string, unknown> | undefined;
     if (!payload) return e;
-    const redacted = redactMemoryFormedPayload(payload);
-    if (!redacted) return e;
-    return { ...e, payload: redacted };
+    if (e.event_type === EventType.MemoryFormed) {
+      const redacted = redactMemoryFormedPayload(payload);
+      return redacted ? { ...e, payload: redacted } : e;
+    }
+    if (e.event_type === EventType.ConsolidationReceiptSigned) {
+      const stripped = stripConsolidationManifest(payload);
+      return stripped ? { ...e, payload: stripped } : e;
+    }
+    return e;
   });
 }

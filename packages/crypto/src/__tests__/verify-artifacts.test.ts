@@ -28,6 +28,7 @@ import type {
   CredentialBundle,
   RelayMetadata,
 } from "@motebit/protocol";
+import { SensitivityLevel } from "@motebit/protocol";
 import {
   generateKeypair,
   verify,
@@ -49,6 +50,10 @@ import {
   verifyBalanceWaiver,
   signConsolidationReceipt,
   verifyConsolidationReceipt,
+  signConsolidationMutationManifest,
+  verifyConsolidationMutationManifest,
+  consolidationReceiptDigest,
+  consolidationContentDigest,
   signAdjudicatorVote,
   verifyAdjudicatorVote,
   signApprovalDecision,
@@ -842,6 +847,139 @@ describe("signConsolidationReceipt / verifyConsolidationReceipt", () => {
     expect(() => {
       (signed as unknown as { motebit_id: string }).motebit_id = "mote-mutated";
     }).toThrow(TypeError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// signConsolidationMutationManifest / verifyConsolidationMutationManifest
+// (consolidation-mutation-manifest-v1 — the felt-interior binding)
+// ---------------------------------------------------------------------------
+
+describe("signConsolidationMutationManifest / verifyConsolidationMutationManifest", () => {
+  function makeManifest() {
+    return {
+      manifest_type: "consolidation_mutation_manifest" as const,
+      schema_version: "1" as const,
+      manifest_id: "00000000-0000-4000-8000-0000000000aa",
+      motebit_id: "mote-tending",
+      cycle_id: "cycle-abc-123",
+      receipt_id: "00000000-0000-4000-8000-000000000001",
+      receipt_digest: "deadbeef",
+      mutations: [
+        {
+          node_id: "n1",
+          kind: "formed" as const,
+          content_sha256: "aaaa",
+          provenance: "consolidation_derived" as const,
+          sensitivity: SensitivityLevel.Personal,
+        },
+      ],
+      created_at: 1_700_000_005_000,
+    };
+  }
+
+  it("round-trips and stamps suite + artifact_type", async () => {
+    const kp = await generateKeypair();
+    const signed = await signConsolidationMutationManifest(
+      makeManifest(),
+      kp.privateKey,
+      kp.publicKey,
+    );
+    expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
+    expect(signed.manifest_type).toBe("consolidation_mutation_manifest");
+    expect(signed.signature).toBeTruthy();
+    expect(await verifyConsolidationMutationManifest(signed, kp.publicKey)).toBe(true);
+  });
+
+  it("detects mutation tampering — a content digest cannot be silently swapped", async () => {
+    const kp = await generateKeypair();
+    const signed = await signConsolidationMutationManifest(
+      makeManifest(),
+      kp.privateKey,
+      kp.publicKey,
+    );
+    const tampered = {
+      ...signed,
+      mutations: [
+        {
+          node_id: "n1",
+          kind: "formed" as const,
+          content_sha256: "bbbb",
+          provenance: "consolidation_derived" as const,
+          sensitivity: SensitivityLevel.Personal,
+        },
+      ],
+    };
+    expect(await verifyConsolidationMutationManifest(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("detects receipt-linkage tampering — manifest cannot be re-bound to another receipt", async () => {
+    const kp = await generateKeypair();
+    const signed = await signConsolidationMutationManifest(
+      makeManifest(),
+      kp.privateKey,
+      kp.publicKey,
+    );
+    const tampered = { ...signed, receipt_digest: "00000000" };
+    expect(await verifyConsolidationMutationManifest(tampered, kp.publicKey)).toBe(false);
+  });
+
+  it("fails closed on a foreign artifact_type (domain separation)", async () => {
+    const kp = await generateKeypair();
+    const signed = await signConsolidationMutationManifest(
+      makeManifest(),
+      kp.privateKey,
+      kp.publicKey,
+    );
+    const foreign = {
+      ...signed,
+      manifest_type: "execution_receipt" as unknown as "consolidation_mutation_manifest",
+    };
+    expect(await verifyConsolidationMutationManifest(foreign, kp.publicKey)).toBe(false);
+  });
+
+  it("rejects the wrong key", async () => {
+    const kpA = await generateKeypair();
+    const kpB = await generateKeypair();
+    const signed = await signConsolidationMutationManifest(
+      makeManifest(),
+      kpA.privateKey,
+      kpA.publicKey,
+    );
+    expect(await verifyConsolidationMutationManifest(signed, kpB.publicKey)).toBe(false);
+  });
+
+  it("receipt + content digests are deterministic and reproducible", async () => {
+    const a = await consolidationContentDigest("prefers structured answers");
+    const b = await consolidationContentDigest("prefers structured answers");
+    const c = await consolidationContentDigest("something else");
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+    const r1 = await consolidationReceiptDigest({
+      receipt_id: "r",
+      motebit_id: "m",
+      cycle_id: "c",
+      started_at: 1,
+      finished_at: 2,
+      phases_run: [],
+      phases_yielded: [],
+      summary: {},
+      suite: "motebit-jcs-ed25519-b64-v1",
+      signature: "sig",
+    });
+    const r2 = await consolidationReceiptDigest({
+      receipt_id: "r",
+      motebit_id: "m",
+      cycle_id: "c",
+      started_at: 1,
+      finished_at: 2,
+      phases_run: [],
+      phases_yielded: [],
+      summary: {},
+      suite: "motebit-jcs-ed25519-b64-v1",
+      signature: "sig",
+    });
+    expect(r1).toBe(r2);
   });
 });
 

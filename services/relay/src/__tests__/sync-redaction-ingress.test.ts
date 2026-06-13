@@ -183,7 +183,7 @@ describe("redactMemoryFormedPayload unit", () => {
     expect(redactMemoryFormedPayload({ _encrypted: true, _data: "ct" })).toBeNull();
   });
 
-  it("redactSensitiveEvents only touches memory_formed entries", () => {
+  it("redactSensitiveEvents leaves unrelated events byte-identical", () => {
     const memory = makeMemoryFormedEvent({ content: "x", sensitivity: "secret" });
     const other = makeMemoryFormedEvent(
       { content: "y", sensitivity: "secret" },
@@ -192,5 +192,23 @@ describe("redactMemoryFormedPayload unit", () => {
     const [m, o] = redactSensitiveEvents([memory, other]);
     expect(m!.payload.content).toBe("[REDACTED]");
     expect(o!.payload).toEqual(other.payload);
+  });
+
+  it("strips the owner-local mutation_manifest from a synced consolidation receipt", () => {
+    const event = makeMemoryFormedEvent(
+      {
+        receipt: { receipt_id: "r1", cycle_id: "c1", summary: {} },
+        mutation_manifest: {
+          manifest_id: "mm1",
+          mutations: [{ node_id: "n1", content_sha256: "deadbeef", sensitivity: "medical" }],
+        },
+      },
+      { event_type: EventType.ConsolidationReceiptSigned },
+    );
+    const [out] = redactSensitiveEvents([event]);
+    // The manifest (content digests + per-node sensitivity) must never persist
+    // at or forward through the relay; the counts-only receipt stays.
+    expect(out!.payload.mutation_manifest).toBeUndefined();
+    expect(out!.payload.receipt).toEqual({ receipt_id: "r1", cycle_id: "c1", summary: {} });
   });
 });

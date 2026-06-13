@@ -256,6 +256,18 @@ describe("runConsolidationCycle", () => {
     expect(result.summary.gatherClusters ?? 0).toBeGreaterThanOrEqual(1);
     expect(result.summary.consolidateMerged ?? 0).toBeGreaterThanOrEqual(1);
 
+    // felt-interior: the cycle carries the formed semantic mutation out for
+    // the signed manifest — content held for digesting, provenance its own.
+    expect(result.formedMutations.length).toBeGreaterThanOrEqual(1);
+    const [m] = result.formedMutations;
+    expect(m).toBeDefined();
+    if (m) {
+      expect(m.provenance).toBe("consolidation_derived");
+      expect(["formed", "refined"]).toContain(m.kind);
+      expect(m.content.length).toBeGreaterThan(0);
+      expect(m.node_id).toBeTruthy();
+    }
+
     const after = await harness.runtime.memory.exportAll();
     const live = after.nodes.filter((n) => !n.tombstoned);
     const semantic = live.filter((n) => n.memory_type === MemoryType.Semantic);

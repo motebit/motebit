@@ -1337,6 +1337,83 @@ export interface ConsolidationReceipt {
 }
 
 /**
+ * One commitment inside a `ConsolidationMutationManifest` — binds a single
+ * formed/refined memory node without carrying its text.
+ */
+export interface ConsolidationMutationCommitment {
+  /** The formed/refined memory node this commitment covers. */
+  node_id: string;
+  /** Whether the cycle formed a fresh node or refined an existing belief.
+   *  Committed so a relabel (creation ↔ modification) breaks the signature. */
+  kind: "formed" | "refined";
+  /** SHA-256 (hex) of the node's content at formation — commits to the exact
+   *  sentence the felt surface displays WITHOUT carrying it (the digest is
+   *  one-way). A keyed/salted commitment + the sync privacy model is the
+   *  export-triggered follow-up: a raw digest is dictionary-attackable only
+   *  once the manifest travels without its content, and this artifact is
+   *  local-only today. `docs/doctrine/felt-interior.md`. */
+  content_sha256: string;
+  /** Provenance marker committed so a taught↔inferred relabel breaks the
+   *  signature. Emitter-authored (`docs/doctrine/memory-provenance.md`). */
+  provenance: MemorySource;
+  /** Sensitivity tier committed so a downgrade (which would loosen the felt
+   *  disclosure ceiling) breaks the signature. */
+  sensitivity: SensitivityLevel;
+}
+
+/**
+ * The owner-facing adjunct to a `ConsolidationReceipt`: a signed commitment
+ * to the EXACT durable mutations a consolidation cycle formed, joined to its
+ * counts-only receipt by id + digest. Two artifacts, two privacy boundaries
+ * (`docs/doctrine/felt-interior.md`): the receipt is portable and counts-only
+ * — a third party verifies that work happened without touching memory text;
+ * this manifest is local and commits per-mutation digests so a surface can
+ * prove the displayed sentences are exactly the signed cycle's mutations,
+ * the receipt never carrying content.
+ *
+ * Domain-separated from the receipt family by `artifact_type` inside the
+ * signed body (the same JCS+Ed25519 suite, distinct committed bytes), so a
+ * receipt signature can never verify as a manifest and vice versa — no new
+ * `SuiteId` required.
+ *
+ * Retirements are deliberately NOT committed here: the felt surface displays
+ * them as a count, never content, and the count is already covered by the
+ * receipt's signed `summary`. The manifest covers exactly what is displayed
+ * as detail — the formed/refined lines.
+ */
+export interface ConsolidationMutationManifest {
+  /** Domain-separation discriminator, inside the signed body. (Distinct field
+   *  from the `ContentArtifactType` `artifact_type` registry — a manifest is
+   *  not a content artifact.) */
+  manifest_type: "consolidation_mutation_manifest";
+  /** Manifest schema version, independent of the receipt's. */
+  schema_version: "1";
+  /** This manifest's own identity. */
+  manifest_id: string;
+  /** The motebit that performed the cycle. */
+  motebit_id: MotebitId;
+  /** The cycle whose mutations this commits to — matches the receipt and the
+   *  `consolidation_cycle_run` event. */
+  cycle_id: string;
+  /** Binds to the EXACT counts-only receipt this supplements, not merely a
+   *  reusable cycle id: a regenerated or substituted receipt breaks the link. */
+  receipt_id: string;
+  /** Canonical SHA-256 (hex) of the signed `ConsolidationReceipt` body. */
+  receipt_digest: string;
+  /** Commitments to the cycle's formed/refined mutations, ordered by
+   *  `node_id` for deterministic canonicalization. */
+  mutations: ReadonlyArray<ConsolidationMutationCommitment>;
+  /** Formation time — milliseconds since Unix epoch. */
+  created_at: number;
+  /** Signer's Ed25519 public key (hex), embedded for portable verification. */
+  public_key?: string;
+  /** Cryptosuite — the same JCS+Ed25519+base64url recipe as the receipt
+   *  family; domain separation is by `artifact_type`, not a distinct suite. */
+  suite: "motebit-jcs-ed25519-b64-v1";
+  signature: string;
+}
+
+/**
  * Merkle-batched anchor over signed `ConsolidationReceipt`s. The motebit
  * batches its own receipts (no relay required), computes a Merkle root
  * over canonical-JSON SHA-256 leaves, and optionally submits the root

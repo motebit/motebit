@@ -1,0 +1,237 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/consolidation-mutation-manifest-v1.json",
+  "title": "ConsolidationMutationManifest (v1)",
+  "description": "Signed owner-facing commitment to the exact formed/refined mutations of a consolidation cycle, joined to its counts-only ConsolidationReceipt by receipt_id + receipt_digest. Commits per-mutation content digests (never content), so a surface can prove displayed sentences are the signed cycle's mutations. Local-only this version. See spec/consolidation-mutation-manifest-v1.md.",
+  "type": "object",
+  "properties": {
+    "manifest_type": {
+      "type": "string",
+      "const": "consolidation_mutation_manifest",
+      "description": "Domain-separation discriminator inside the signed body — a receipt signature can never verify as a manifest. Distinct from the ContentArtifactType `artifact_type` registry; a manifest is not a content artifact."
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "1",
+      "description": "Manifest schema version, independent of the receipt's."
+    },
+    "manifest_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "UUIDv4 — the manifest's own identity."
+    },
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Signer's MotebitId — the motebit that performed the cycle."
+    },
+    "cycle_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The cycle whose mutations this commits to — matches the receipt and the consolidation_cycle_run event."
+    },
+    "receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The EXACT ConsolidationReceipt this supplements — not merely a reusable cycle id."
+    },
+    "receipt_digest": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Canonical SHA-256 (hex) of the signed ConsolidationReceipt body. A regenerated/substituted receipt breaks the link."
+    },
+    "mutations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The formed/refined memory node this commitment covers (opaque UUID, not authority)."
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["formed", "refined"],
+            "description": "Creation vs modification — committed so a relabel breaks the signature."
+          },
+          "content_sha256": {
+            "type": "string",
+            "minLength": 1,
+            "description": "SHA-256 (hex) of the node's content at formation. Commits to the exact displayed sentence WITHOUT carrying it (one-way). Local-only today; a keyed/salted commitment is the export-triggered follow-up."
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "user_stated",
+              "agent_inferred",
+              "tool_derived",
+              "peer_agent",
+              "consolidation_derived"
+            ],
+            "description": "Provenance of the formed node, committed so a taught↔inferred relabel breaks the signature. Emitter-authored (docs/doctrine/memory-provenance.md)."
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": ["none", "personal", "medical", "financial", "secret"],
+            "description": "Sensitivity tier of the formed node, committed so a downgrade (which would loosen the felt-surface disclosure ceiling) breaks the signature."
+          }
+        },
+        "required": ["node_id", "kind", "content_sha256", "provenance", "sensitivity"],
+        "additionalProperties": true
+      },
+      "description": "Commitments to the cycle's formed/refined mutations, ordered by node_id for deterministic canonicalization."
+    },
+    "created_at": {
+      "type": "number",
+      "description": "Formation time — milliseconds since Unix epoch."
+    },
+    "public_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Hex Ed25519 public key of the signer, embedded for portable verification."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-b64-v1",
+      "description": "Cryptosuite — the same JCS+Ed25519+base64url recipe as the receipt family; domain separation is by manifest_type, not a distinct suite."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Base64url-encoded Ed25519 signature over canonicalJson(body_without_signature)."
+    }
+  },
+  "required": [
+    "manifest_type",
+    "schema_version",
+    "manifest_id",
+    "motebit_id",
+    "cycle_id",
+    "receipt_id",
+    "receipt_digest",
+    "mutations",
+    "created_at",
+    "suite",
+    "signature"
+  ],
+  "additionalProperties": true,
+  "definitions": {
+    "ConsolidationMutationManifest": {
+      "type": "object",
+      "properties": {
+        "manifest_type": {
+          "type": "string",
+          "const": "consolidation_mutation_manifest",
+          "description": "Domain-separation discriminator inside the signed body — a receipt signature can never verify as a manifest. Distinct from the ContentArtifactType `artifact_type` registry; a manifest is not a content artifact."
+        },
+        "schema_version": {
+          "type": "string",
+          "const": "1",
+          "description": "Manifest schema version, independent of the receipt's."
+        },
+        "manifest_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUIDv4 — the manifest's own identity."
+        },
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Signer's MotebitId — the motebit that performed the cycle."
+        },
+        "cycle_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The cycle whose mutations this commits to — matches the receipt and the consolidation_cycle_run event."
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The EXACT ConsolidationReceipt this supplements — not merely a reusable cycle id."
+        },
+        "receipt_digest": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Canonical SHA-256 (hex) of the signed ConsolidationReceipt body. A regenerated/substituted receipt breaks the link."
+        },
+        "mutations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "node_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The formed/refined memory node this commitment covers (opaque UUID, not authority)."
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["formed", "refined"],
+                "description": "Creation vs modification — committed so a relabel breaks the signature."
+              },
+              "content_sha256": {
+                "type": "string",
+                "minLength": 1,
+                "description": "SHA-256 (hex) of the node's content at formation. Commits to the exact displayed sentence WITHOUT carrying it (one-way). Local-only today; a keyed/salted commitment is the export-triggered follow-up."
+              },
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "user_stated",
+                  "agent_inferred",
+                  "tool_derived",
+                  "peer_agent",
+                  "consolidation_derived"
+                ],
+                "description": "Provenance of the formed node, committed so a taught↔inferred relabel breaks the signature. Emitter-authored (docs/doctrine/memory-provenance.md)."
+              },
+              "sensitivity": {
+                "type": "string",
+                "enum": ["none", "personal", "medical", "financial", "secret"],
+                "description": "Sensitivity tier of the formed node, committed so a downgrade (which would loosen the felt-surface disclosure ceiling) breaks the signature."
+              }
+            },
+            "required": ["node_id", "kind", "content_sha256", "provenance", "sensitivity"],
+            "additionalProperties": true
+          },
+          "description": "Commitments to the cycle's formed/refined mutations, ordered by node_id for deterministic canonicalization."
+        },
+        "created_at": {
+          "type": "number",
+          "description": "Formation time — milliseconds since Unix epoch."
+        },
+        "public_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hex Ed25519 public key of the signer, embedded for portable verification."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite — the same JCS+Ed25519+base64url recipe as the receipt family; domain separation is by manifest_type, not a distinct suite."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded Ed25519 signature over canonicalJson(body_without_signature)."
+        }
+      },
+      "required": [
+        "manifest_type",
+        "schema_version",
+        "manifest_id",
+        "motebit_id",
+        "cycle_id",
+        "receipt_id",
+        "receipt_digest",
+        "mutations",
+        "created_at",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

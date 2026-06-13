@@ -312,6 +312,98 @@ describe("Runtime — proactive interior wire-in", () => {
     expect(await verifyConsolidationReceipt(payload.receipt, kp.publicKey)).toBe(true);
   });
 
+  it("emits a signed, receipt-linked mutation manifest covering the cycle's formed memory", async () => {
+    const { generateKeypair, verifyConsolidationMutationManifest, consolidationReceiptDigest } =
+      await import("@motebit/crypto");
+    const { MemoryType, SensitivityLevel } = await import("@motebit/sdk");
+    const kp = await generateKeypair();
+    const provider = createMockProvider();
+    // A summary long enough to pass the consolidate-phase length gate.
+    (provider.generate as ReturnType<typeof vi.fn>).mockResolvedValue({
+      text: "The user opens the editor early each morning.",
+      confidence: 0.8,
+      memory_candidates: [],
+      state_updates: {},
+    });
+    const storage = createInMemoryStorage();
+    const rt = new MotebitRuntime(
+      { motebitId: "manifest-e2e", tickRateHz: 0, signingKeys: kp },
+      { storage, renderer: new NullRenderer(), ai: provider },
+    );
+    // Seed 3 aged, identical-embedding episodics so gather clusters + consolidate forms.
+    const fortyDaysAgo = Date.now() - 40 * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 3; i++) {
+      const node = await rt.memory.formMemory(
+        {
+          content: `Saw the user open editor at ${i}am`,
+          confidence: 0.75,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+          memory_type: MemoryType.Episodic,
+        },
+        new Array(384).fill(0.1),
+      );
+      node.created_at = fortyDaysAgo;
+      node.last_accessed = fortyDaysAgo;
+      await storage.memoryStorage.saveNode(node);
+    }
+
+    await rt.consolidationCycle();
+
+    const events = await rt.events.query({
+      motebit_id: "manifest-e2e",
+      event_types: [EventType.ConsolidationReceiptSigned],
+    });
+    const withManifest = events.find(
+      (e) => (e.payload as { mutation_manifest?: unknown }).mutation_manifest,
+    );
+    expect(withManifest).toBeDefined();
+    if (!withManifest) return;
+    const payload = withManifest.payload as {
+      receipt: import("@motebit/sdk").ConsolidationReceipt;
+      mutation_manifest: import("@motebit/sdk").ConsolidationMutationManifest;
+    };
+    const manifest = payload.mutation_manifest;
+    // Signature verifies against the motebit's identity key.
+    expect(await verifyConsolidationMutationManifest(manifest, kp.publicKey)).toBe(true);
+    // Bound to the EXACT receipt by id + digest.
+    expect(manifest.receipt_id).toBe(payload.receipt.receipt_id);
+    expect(manifest.receipt_digest).toBe(await consolidationReceiptDigest(payload.receipt));
+    // Commits the cycle's own formed mutation.
+    expect(manifest.mutations.length).toBeGreaterThanOrEqual(1);
+    const [firstMutation] = manifest.mutations;
+    expect(firstMutation).toBeDefined();
+    if (firstMutation) {
+      expect(firstMutation.provenance).toBe("consolidation_derived");
+      expect(firstMutation.content_sha256).toBeTruthy();
+    }
+  });
+
+  it("confers no authority — a consolidation cycle never enters the approval machinery", async () => {
+    // memory-never-confers-authority, at the cycle boundary: the felt
+    // manifest is an account of becoming, never a grant. The cycle takes no
+    // TurnContext and has no grant-verifier path (structurally locked by
+    // check-money-authority); this asserts it positively — no approval/
+    // authority event is emitted by a cycle that forms memory.
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const rt = new MotebitRuntime(
+      { motebitId: "authority-test", tickRateHz: 0, signingKeys: kp },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: createMockProvider() },
+    );
+    await rt.consolidationCycle();
+    const authorityEvents = await rt.events.query({
+      motebit_id: "authority-test",
+      event_types: [
+        EventType.ApprovalRequested,
+        EventType.ApprovalApproved,
+        EventType.ApprovalDenied,
+        EventType.ApprovalExpired,
+      ],
+    });
+    expect(authorityEvents).toHaveLength(0);
+  });
+
   it("does NOT emit a ConsolidationReceiptSigned event when signing keys are absent", async () => {
     // Default constructor — no signing keys configured.
     await runtime.consolidationCycle();

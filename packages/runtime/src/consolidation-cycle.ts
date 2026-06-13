@@ -45,6 +45,7 @@ import {
 } from "@motebit/sdk";
 import type {
   MemoryNode,
+  MemorySource,
   ConversationStoreAdapter,
   AuditLogSink,
   ToolAuditEntry,
@@ -179,8 +180,27 @@ export interface ConsolidationCycleConfig {
   onPhaseStart?: (phase: Phase, cycleId: string) => void;
 }
 
+/**
+ * A durable formed/refined mutation the cycle produced, carried out of the
+ * cycle so the runtime can commit to it in a signed `ConsolidationMutationManifest`
+ * (felt-interior). Local-only: it never enters the counts-only
+ * `consolidation_cycle_run` event (which picks fields explicitly) — only the
+ * receipt's sibling manifest. `content` is held to compute its digest, never
+ * surfaced on the wire.
+ */
+export interface FormedMutation {
+  node_id: string;
+  content: string;
+  kind: "formed" | "refined";
+  provenance: MemorySource;
+  sensitivity: SensitivityLevel;
+}
+
 export interface ConsolidationCycleResult {
   cycleId: string;
+  /** Formed/refined mutations of this cycle — input to the signed mutation
+   *  manifest. Excluded from the counts-only run event by construction. */
+  formedMutations: FormedMutation[];
   phasesRun: Phase[];
   phasesYielded: Phase[];
   phasesErrored: Array<{ phase: Phase; error: string }>;
@@ -240,6 +260,7 @@ export async function runConsolidationCycle(
 
   const result: ConsolidationCycleResult = {
     cycleId,
+    formedMutations: [],
     phasesRun: [],
     phasesYielded: [],
     phasesErrored: [],
@@ -336,6 +357,7 @@ export async function runConsolidationCycle(
         case "consolidate": {
           const out = await consolidatePhase(deps, ctx, gathered);
           result.summary.consolidateMerged = out.merged;
+          result.formedMutations.push(...out.mutations);
           break;
         }
         case "prune": {
@@ -506,12 +528,13 @@ async function consolidatePhase(
   deps: ConsolidationCycleDeps,
   ctx: PhaseContext,
   gathered: GatheredState,
-): Promise<{ merged: number }> {
+): Promise<{ merged: number; mutations: FormedMutation[] }> {
   const provider = deps.getProvider();
-  if (!provider) return { merged: 0 };
+  if (!provider) return { merged: 0, mutations: [] };
   const consolidationProvider = deps.getConsolidationProvider?.() ?? null;
 
   let merged = 0;
+  const mutations: FormedMutation[] = [];
   for (const cluster of gathered.consolidationClusters) {
     if (ctx.signal.aborted) break;
     if (cluster.length < 2) continue;
@@ -594,6 +617,19 @@ async function consolidatePhase(
         // sweep even when it is a cluster member. Deleting it here would
         // erase the history consolidateAndForm just preserved and leave
         // a dangling Supersedes edge.
+        // Commit the newly-formed semantic node (if one was formed — a pure
+        // REINFORCE/NOOP returns no node and emits no memory_formed event, so
+        // there is nothing to display or commit). A decision that folded an
+        // existing belief in is a refinement; a fresh summary is a formation.
+        if (node) {
+          mutations.push({
+            node_id: node.node_id,
+            content: node.content,
+            kind: cDecision.existingNodeId ? "refined" : "formed",
+            provenance: node.source ?? "consolidation_derived",
+            sensitivity: node.sensitivity,
+          });
+        }
         const preserve = new Set(
           [targetId, cDecision.existingNodeId].filter((id): id is string => id != null),
         );
@@ -610,7 +646,18 @@ async function consolidatePhase(
         // No classify provider wired — plain formation (no conflict
         // detection). Kept for provider-less composition in tests and
         // minimal surfaces.
-        await deps.memory.formMemory(candidate, embedding, MemoryGraph.HALF_LIFE_SEMANTIC);
+        const node = await deps.memory.formMemory(
+          candidate,
+          embedding,
+          MemoryGraph.HALF_LIFE_SEMANTIC,
+        );
+        mutations.push({
+          node_id: node.node_id,
+          content: node.content,
+          kind: "formed",
+          provenance: node.source ?? "consolidation_derived",
+          sensitivity: node.sensitivity,
+        });
         for (const sourceNode of cluster) {
           await deps.memory.deleteMemory(sourceNode.node_id);
         }
@@ -620,7 +667,7 @@ async function consolidatePhase(
       // Per-cluster best-effort — never fail the phase on one bad summary.
     }
   }
-  return { merged };
+  return { merged, mutations };
 }
 
 async function prunePhase(

@@ -114,6 +114,10 @@ export const REGISTRY: Record<string, Classification> = {
   WitnessOmissionDispute: { kind: "verifier", verifier: "verifyWitnessOmissionDispute" },
   CollaborativeReceipt: { kind: "verifier", verifier: "verifyCollaborativeReceipt" },
   ConsolidationReceipt: { kind: "verifier", verifier: "verifyConsolidationReceipt" },
+  ConsolidationMutationManifest: {
+    kind: "verifier",
+    verifier: "verifyConsolidationMutationManifest",
+  },
   DelegationToken: { kind: "verifier", verifier: "verifyDelegation" },
   StandingDelegation: { kind: "verifier", verifier: "verifyStandingDelegation" },
   DelegationRevocation: { kind: "verifier", verifier: "verifyDelegationRevocation" },

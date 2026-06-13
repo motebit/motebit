@@ -8,6 +8,7 @@ import type { AdjudicatorVote } from '@motebit/protocol';
 import type { ApprovalDecision } from '@motebit/protocol';
 import type { BalanceWaiver } from '@motebit/protocol';
 import type { ComputerSessionActionRecord } from '@motebit/protocol';
+import type { ConsolidationMutationManifest } from '@motebit/protocol';
 import type { ConsolidationReceipt } from '@motebit/protocol';
 import type { ContentArtifactType } from '@motebit/protocol';
 import type { CredentialBundle } from '@motebit/protocol';
@@ -217,9 +218,20 @@ export function computeFederationSettlementLeaf(settlement: Record<string, unkno
 export const COMPUTER_SESSION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
+export const CONSOLIDATION_MUTATION_MANIFEST_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
 export const CONSOLIDATION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
+// @public
+export function consolidationContentDigest(content: string): Promise<string>;
+
+export { ConsolidationMutationManifest }
+
 export { ConsolidationReceipt }
+
+// @public
+export function consolidationReceiptDigest(receipt: ConsolidationReceipt): Promise<string>;
 
 // @public
 export const CONTENT_ARTIFACT_SUITE: SuiteId;
@@ -1194,6 +1206,9 @@ export function signComputerSessionReceipt<T extends Omit<SignableComputerSessio
 }>;
 
 // @public
+export function signConsolidationMutationManifest(manifest: Omit<ConsolidationMutationManifest, "signature" | "suite" | "public_key">, privateKey: Uint8Array, publicKey?: Uint8Array): Promise<ConsolidationMutationManifest>;
+
+// @public
 export function signConsolidationReceipt(receipt: Omit<ConsolidationReceipt, "signature" | "suite" | "public_key">, privateKey: Uint8Array, publicKey?: Uint8Array): Promise<ConsolidationReceipt>;
 
 // @public
@@ -1597,6 +1612,9 @@ export function verifyComputerSessionReceipt(receipt: SignableComputerSessionRec
     suite: string;
     signature: string;
 }, publicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyConsolidationMutationManifest(manifest: ConsolidationMutationManifest, publicKey: Uint8Array): Promise<boolean>;
 
 // @public
 export function verifyConsolidationReceipt(receipt: ConsolidationReceipt, publicKey: Uint8Array): Promise<boolean>;

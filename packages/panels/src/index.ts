@@ -64,6 +64,19 @@ export {
 } from "./memory/controller";
 
 export {
+  projectFeltConsolidation,
+  verifyFeltCoverage,
+  defaultFeltRedaction,
+  type FeltSourceEvent,
+  type FeltAssurance,
+  type FeltMutation,
+  type FeltMutationKind,
+  type FeltConsolidationRecord,
+  type FeltRedactionPolicy,
+  type FeltCoverageAdapter,
+} from "./memory/felt-consolidation";
+
+export {
   createActivityController,
   filterActivityView,
   type ActivityController,

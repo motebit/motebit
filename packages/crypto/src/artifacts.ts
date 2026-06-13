@@ -1501,6 +1501,77 @@ export async function verifyConsolidationReceipt(
   }
 }
 
+// === Consolidation Mutation Manifest (felt-interior) ===
+
+import type { ConsolidationMutationManifest } from "@motebit/protocol";
+export type { ConsolidationMutationManifest };
+
+/** Same JCS+Ed25519+b64 recipe as the receipt; domain separation is the
+ *  `artifact_type` in the signed body, so a receipt signature can never
+ *  verify as a manifest. No fresh SuiteId is minted. */
+export const CONSOLIDATION_MUTATION_MANIFEST_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/** Canonical SHA-256 (hex) of a signed `ConsolidationReceipt` — the value a
+ *  manifest's `receipt_digest` binds to. Producer and verifier MUST use this
+ *  exact function so the link is reproducible. */
+export async function consolidationReceiptDigest(receipt: ConsolidationReceipt): Promise<string> {
+  return canonicalSha256(receipt);
+}
+
+/** SHA-256 (hex) of a memory node's content — the value a commitment's
+ *  `content_sha256` binds to. Shared so producer and verifier never drift. */
+export async function consolidationContentDigest(content: string): Promise<string> {
+  return hash(new TextEncoder().encode(content));
+}
+
+/**
+ * Sign a consolidation mutation manifest — the owner-facing adjunct that
+ * commits to the exact formed/refined mutations of a cycle, joined to its
+ * counts-only receipt by id + digest (spec/consolidation-mutation-manifest-v1.md).
+ * Callers pass the body without `signature`/`suite`; the signer stamps both
+ * and embeds `public_key` for portable verification. `mutations` MUST already
+ * be sorted by `node_id` so the canonical form is deterministic.
+ */
+export async function signConsolidationMutationManifest(
+  manifest: Omit<ConsolidationMutationManifest, "signature" | "suite" | "public_key">,
+  privateKey: Uint8Array,
+  publicKey?: Uint8Array,
+): Promise<ConsolidationMutationManifest> {
+  const withKey: Omit<ConsolidationMutationManifest, "signature" | "suite"> = publicKey
+    ? { ...manifest, public_key: bytesToHex(publicKey) }
+    : manifest;
+  const body = { ...withKey, suite: CONSOLIDATION_MUTATION_MANIFEST_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(CONSOLIDATION_MUTATION_MANIFEST_SUITE, message, privateKey);
+  return Object.freeze({ ...body, signature: toBase64Url(sig) });
+}
+
+/**
+ * Verify a consolidation mutation manifest against the signer's public key.
+ * Fail-closed on unknown `suite`, wrong `artifact_type`, base64url decode
+ * error, or primitive failure. This proves only "this body was signed by the
+ * holder of this key"; receipt linkage and per-mutation content matching are
+ * the caller's separate, equally-required checks
+ * (spec/consolidation-mutation-manifest-v1.md §6).
+ */
+export async function verifyConsolidationMutationManifest(
+  manifest: ConsolidationMutationManifest,
+  publicKey: Uint8Array,
+): Promise<boolean> {
+  if (manifest.suite !== CONSOLIDATION_MUTATION_MANIFEST_SUITE) return false;
+  if (manifest.manifest_type !== "consolidation_mutation_manifest") return false;
+  const { signature, ...body } = manifest;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(manifest.suite, message, sig, publicKey);
+  } catch {
+    return false;
+  }
+}
+
 // === Balance Waivers (migration §7.2) ===
 
 import type { BalanceWaiver } from "@motebit/protocol";

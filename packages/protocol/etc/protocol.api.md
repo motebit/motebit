@@ -843,6 +843,32 @@ export interface ConsolidationAnchor {
 }
 
 // @public
+export interface ConsolidationMutationCommitment {
+    content_sha256: string;
+    kind: "formed" | "refined";
+    node_id: string;
+    provenance: MemorySource;
+    sensitivity: SensitivityLevel;
+}
+
+// @public
+export interface ConsolidationMutationManifest {
+    created_at: number;
+    cycle_id: string;
+    manifest_id: string;
+    manifest_type: "consolidation_mutation_manifest";
+    motebit_id: MotebitId;
+    mutations: ReadonlyArray<ConsolidationMutationCommitment>;
+    public_key?: string;
+    receipt_digest: string;
+    receipt_id: string;
+    schema_version: "1";
+    // (undocumented)
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
+
+// @public
 export interface ConsolidationReceipt {
     cycle_id: string;
     // (undocumented)

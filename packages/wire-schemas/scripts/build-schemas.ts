@@ -44,6 +44,7 @@ import {
   buildConsolidationReceiptJsonSchema,
   buildConsolidationAnchorJsonSchema,
 } from "../src/consolidation-receipt.js";
+import { buildConsolidationMutationManifestJsonSchema } from "../src/consolidation-mutation-manifest.js";
 import { buildCredentialBundleJsonSchema } from "../src/credential-bundle.js";
 import {
   buildGradientCredentialSubjectJsonSchema,
@@ -191,6 +192,10 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   },
   { filename: "consolidation-receipt-v1.json", build: buildConsolidationReceiptJsonSchema },
   { filename: "consolidation-anchor-v1.json", build: buildConsolidationAnchorJsonSchema },
+  {
+    filename: "consolidation-mutation-manifest-v1.json",
+    build: buildConsolidationMutationManifestJsonSchema,
+  },
   { filename: "memory-formed-payload-v1.json", build: buildMemoryFormedPayloadJsonSchema },
   { filename: "memory-accessed-payload-v1.json", build: buildMemoryAccessedPayloadJsonSchema },
   { filename: "memory-pinned-payload-v1.json", build: buildMemoryPinnedPayloadJsonSchema },

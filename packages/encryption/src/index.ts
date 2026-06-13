@@ -414,6 +414,15 @@ export type { MerkleTree, MerkleProof } from "./merkle.js";
 export { verifyConsolidationAnchor } from "./consolidation-anchor.js";
 export type { ConsolidationAnchorVerifyResult } from "./consolidation-anchor.js";
 
+// ── Consolidation mutation manifest (felt-interior) ─────────────────
+// Product-level re-export so app surfaces verify owner-facing felt coverage
+// without reaching into the permissive-floor @motebit/crypto directly.
+export {
+  verifyConsolidationMutationManifest,
+  consolidationReceiptDigest,
+  consolidationContentDigest,
+} from "@motebit/crypto";
+
 // ── Hardware-attestation credential composer ────────────────────────
 // Canonical builder for `AgentTrustCredential`s that carry a
 // `hardware_attestation` claim. Single source of truth — both the CLI
