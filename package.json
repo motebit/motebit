@@ -128,6 +128,7 @@
     "check-doctrine-references": "npx tsx scripts/check-doctrine-references.ts",
     "check-readme-bin-claims": "npx tsx scripts/check-readme-bin-claims.ts",
     "check-credential-input-autofill": "npx tsx scripts/check-credential-input-autofill.ts",
+    "check-felt-interior-honesty": "npx tsx scripts/check-felt-interior-honesty.ts",
     "check-docs-cli-claims": "npx tsx scripts/check-docs-cli-claims.ts",
     "check-docs-slash-claims": "npx tsx scripts/check-docs-slash-claims.ts",
     "check-docs-default-models": "npx tsx scripts/check-docs-default-models.ts",

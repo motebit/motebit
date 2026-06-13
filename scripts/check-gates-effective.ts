@@ -156,6 +156,15 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-felt-interior-honesty",
+    proves:
+      "flags the owner-local consolidation mutation manifest no longer being stripped on relay sync ingress — the felt-interior privacy invariant (SyncEngine pushes ALL events; a sensitive event-payload field must be in redactSensitiveEvents). The `_PROBE` rename evades the word-boundary regex, so the gate sees redaction.ts no longer handling `mutation_manifest`.",
+    perturb: () =>
+      mutateFile("services/relay/src/redaction.ts", (src) =>
+        src.split("mutation_manifest").join("mutation_manifest_PROBE"),
+      ),
+  },
+  {
     script: "check-multihop-depth-single-site",
     proves:
       "flags a re-inlined settlement depth-limit comparison outside the canonical multihop-depth.ts (the recursion-safety invariant: the depth bound lives in exactly one place)",

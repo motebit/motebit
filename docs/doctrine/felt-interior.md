@@ -176,24 +176,26 @@ calm or the sovereignty it depends on.
   resting-or-summoned, never interrupting." If it grabs attention it has become an
   act and must obey `records-vs-acts.md`; if it cannot be found it has failed this
   doctrine.
-- **Legibility ratio.** This file is one-third of the commitment, and the code
-  follows in sequence, not all at once. First prove one complete vertical slice on
-  the canonical surface (desktop): a real durable mutation in
-  `packages/runtime/src/consolidation-cycle.ts` → its signed, provenance-bound
-  receipt → a sensitivity-safe summary projection → the calm resting record →
-  inspection on explicit reveal → an explicit _authority unchanged_. Then extract the
-  projection primitive and one-pass it to web / mobile / spatial
-  ([`panels-pattern.md`](panels-pattern.md)). One-pass delivery applies _once the
-  package boundary is stable_; the projection primitive does not exist yet, so
-  stabilizing it on one surface comes first — the proven order (desktop dogfood, then
-  cross-surface) that [`proactive-interior.md`](proactive-interior.md) already
-  followed. A drift gate then locks the floor on every felt surface: a no-op forms no
-  record; each record maps to a real durable mutation and carries its `MemorySource`
-  provenance (so taught and inferred never collapse into one voice); formation cannot
-  raise authority ([`memory-never-confers-authority.md`](memory-never-confers-authority.md));
-  the same mutation is not double-counted across restart or replay; retirement renders
-  honestly; and disclosure obeys the sensitivity ceiling. Until that ships this is the
-  spec, not a claim of done.
+- **Legibility ratio.** This file is one-third of the commitment; the code and the
+  drift gate are the other two. The desktop vertical slice shipped — a real durable
+  mutation in `packages/runtime/src/consolidation-cycle.ts` → its signed
+  `ConsolidationReceipt` → a signed `ConsolidationMutationManifest` committing the
+  exact mutations ([`spec/consolidation-mutation-manifest-v1.md`](../../spec/consolidation-mutation-manifest-v1.md))
+  → a sensitivity-safe projection → the calm resting record → inspection on explicit
+  reveal, coverage flipped true _only_ on a verified manifest. **The gate is
+  `check-felt-interior-honesty`**: it structurally locks the two invariants a future
+  edit is most likely to silently break — coverage is never faked (no hard-coded
+  `mutationsCoveredBySignature: true`), and the owner-local manifest never leaks via
+  sync (the relay strips `mutation_manifest` on ingress; `SyncEngine.pushEvents` syncs
+  _all_ events). The behavioral floor — a no-op forms no record; provenance keeps
+  taught and inferred distinct; formation cannot raise authority
+  ([`memory-never-confers-authority.md`](memory-never-confers-authority.md)); no
+  double-count across restart/replay; honest retirement; disclosure obeys the
+  sensitivity ceiling — is locked by the test suites in `@motebit/panels`,
+  `@motebit/runtime`, and `@motebit/crypto`. What remains is the one-pass to
+  web / mobile / spatial ([`panels-pattern.md`](panels-pattern.md)) — the projection
+  primitive is now stable, the proven desktop-dogfood-then-cross-surface order that
+  [`proactive-interior.md`](proactive-interior.md) followed.
 
 ## Related
 
