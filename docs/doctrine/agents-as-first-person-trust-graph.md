@@ -396,14 +396,22 @@ what keeps the cost from eating the property it paid for.
   cross-party referent; petname auto-suggestion (if any) is gated behind earned
   first-person trust, never adopted at discovery.
 
-- **Legibility is back-loaded — it does not, alone, answer the distribution gap.**
-  Faces + petnames + earned trust are most legible to a veteran; the Known tab is
-  empty at onboarding, so a stranger sees only the relay roster, faceless and
-  trustless. The model also _refuses_ the at-a-glance aggregate (no global score to
-  total). **Bound:** treat this doctrine as the panel's _honesty_ fix, not the
-  product's _front door_. The legible-to-a-stranger wedge is a separate problem
-  (see [`identity-universal-boundary.md`](identity-universal-boundary.md), §
-  sequencing); do not conflate the two.
+- **Stranger-legibility of trust is back-loaded — but owner-legibility of accrual
+  is not.** Faces + petnames + earned trust are most legible to a veteran; the Known
+  tab is empty at onboarding, so a _stranger_ sees only the relay roster, faceless
+  and trustless. The model also _refuses_ the at-a-glance aggregate (no global score
+  to total). That back-loading is real and stays deferred — the legible-to-a-stranger
+  wedge is a separate problem (see
+  [`identity-universal-boundary.md`](identity-universal-boundary.md), § sequencing).
+  **But do not let this bound swallow a second, different legibility.** What the
+  _owner_ feels of their own accumulating interior — trust edges earned, money
+  history, memory consolidated — is first-person by construction, available from day
+  one, and reintroduces no central authority or gameable score, so it does **not**
+  inherit this deferral. Refusing the global score made trust illegible to
+  _strangers_; it must not be read as license to leave the sovereign's own interior
+  illegible to the _sovereign_. **Bound:** treat _this_ bullet as the panel's
+  stranger-facing _honesty_ fix; owner-facing feltness is a front-door property with
+  its own doctrine ([`felt-interior.md`](felt-interior.md)). Do not conflate the two.
 
 - **"Derive from receipts" has a render cost.** Literal per-paint receipt-tree
   walks are slow; denormalizing a money field onto the trust record is forbidden
