@@ -56,6 +56,10 @@ import {
   buildConsolidationReceiptJsonSchema,
 } from "../consolidation-receipt.js";
 import {
+  CONSOLIDATION_MUTATION_MANIFEST_SCHEMA_ID,
+  buildConsolidationMutationManifestJsonSchema,
+} from "../consolidation-mutation-manifest.js";
+import {
   CREDENTIAL_BUNDLE_SCHEMA_ID,
   buildCredentialBundleJsonSchema,
 } from "../credential-bundle.js";
@@ -419,6 +423,12 @@ const CASES: SchemaCase[] = [
     filename: "consolidation-anchor-v1.json",
     expectedId: CONSOLIDATION_ANCHOR_SCHEMA_ID,
     build: buildConsolidationAnchorJsonSchema,
+  },
+  {
+    name: "consolidation-mutation-manifest-v1",
+    filename: "consolidation-mutation-manifest-v1.json",
+    expectedId: CONSOLIDATION_MUTATION_MANIFEST_SCHEMA_ID,
+    build: buildConsolidationMutationManifestJsonSchema,
   },
   // Memory-delta-v1 payloads — one case per event type under §5 of the spec.
   {
