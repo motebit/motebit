@@ -64,18 +64,24 @@ export {
 } from "./memory/controller";
 
 export {
-  projectFeltConsolidation,
-  verifyFeltCoverage,
+  // Canonical entry point — projects + verifies internally, returns only
+  // render-safe records. The candidate-consuming primitives
+  // (projectFeltConsolidation / verifyFeltCoverage / feltReceiptOnly) and the
+  // `FeltCandidate` type are deliberately NOT exported: unverified
+  // cycle-attributed mutations must not cross the panels boundary.
+  resolveFeltConsolidation,
   defaultFeltRedaction,
   feltHeadline,
   feltMutationLine,
-  feltCoverageStatus,
+  feltVerifiedAssurance,
   feltAssuranceGlyph,
   feltReceiptScope,
   type FeltSourceEvent,
   type FeltAssurance,
   type FeltMutation,
   type FeltMutationKind,
+  type FeltReceiptSummary,
+  type FeltMutationEvidence,
   type FeltConsolidationRecord,
   type FeltRedactionPolicy,
   type FeltCoverageAdapter,

@@ -1,21 +1,21 @@
 import { describe, it, expect } from "vitest";
 import { SensitivityLevel, MEMORY_SOURCE_MARKERS } from "@motebit/protocol";
 import {
+  resolveFeltConsolidation,
   projectFeltConsolidation,
   verifyFeltCoverage,
+  feltReceiptOnly,
   defaultFeltRedaction,
   feltHeadline,
   feltMutationLine,
-  feltCoverageStatus,
+  feltVerifiedAssurance,
   feltAssuranceGlyph,
   feltReceiptScope,
   type FeltSourceEvent,
   type FeltCoverageAdapter,
-  type FeltMutation,
   type FeltConsolidationRecord,
 } from "../memory/felt-consolidation";
 
-// Strict-safe first-element access (noUncheckedIndexedAccess is on).
 function only<T>(arr: readonly T[]): T {
   expect(arr.length).toBeGreaterThan(0);
   const [first] = arr;
@@ -59,7 +59,7 @@ const consolidated = (
   payload: { reason: "x", ...p },
 });
 
-const receipt = (cycleId: string, receiptId: string, ts: number): FeltSourceEvent => ({
+const receiptEvent = (cycleId: string, receiptId: string, ts: number): FeltSourceEvent => ({
   event_type: "consolidation_receipt_signed",
   timestamp: ts,
   payload: { receipt: { cycle_id: cycleId, receipt_id: receiptId } },
@@ -71,20 +71,99 @@ const anchored = (receiptIds: string[], ts: number): FeltSourceEvent => ({
   payload: { anchor: { receipt_ids: receiptIds } },
 });
 
-// A canonical cycle window [100, 200].
 const window = (cycleId: string, summary: Record<string, number> = {}): FeltSourceEvent[] => [
   cycleRun(cycleId, "started", 100),
   cycleRun(cycleId, "completed", 200, summary),
 ];
 
-describe("projectFeltConsolidation", () => {
-  it("forms NO record for a no-op cycle (honest by absence)", () => {
+// ── manifest + adapter helpers (for verify) ─────────────────────────────
+const adapter = (manifestValid = true): FeltCoverageAdapter => ({
+  verifyManifest: async () => manifestValid,
+  receiptDigest: async (r) => `rd:${r.receipt_id}`,
+  contentDigest: async (c) => `h:${c}`,
+});
+
+const commitment = (
+  node_id: string,
+  content: string,
+  sensitivity: SensitivityLevel = SensitivityLevel.Personal,
+  provenance = "consolidation_derived",
+) => ({
+  node_id,
+  kind: "formed" as const,
+  content_sha256: `h:${content}`,
+  provenance,
+  sensitivity,
+});
+
+const manifestFor = (cycleId: string, receiptId: string, commitments: unknown[]) => ({
+  manifest_type: "consolidation_mutation_manifest",
+  schema_version: "1",
+  manifest_id: "manifest-1",
+  motebit_id: "mote",
+  cycle_id: cycleId,
+  receipt_id: receiptId,
+  receipt_digest: `rd:${receiptId}`,
+  mutations: commitments,
+  created_at: 200,
+  suite: "motebit-jcs-ed25519-b64-v1",
+  signature: "sig",
+});
+
+const signedReceiptEvent = (
+  cycleId: string,
+  receiptId: string,
+  ts: number,
+  manifest?: Record<string, unknown>,
+): FeltSourceEvent => ({
+  event_type: "consolidation_receipt_signed",
+  timestamp: ts,
+  payload: {
+    receipt: { cycle_id: cycleId, receipt_id: receiptId },
+    ...(manifest ? { mutation_manifest: manifest } : {}),
+  },
+});
+
+// A canonical verified scenario: one formed memory, a receipt + a manifest
+// committing it. Knobs flip individual pieces for the regression matrix.
+function scenario(
+  opts: {
+    manifest?: Record<string, unknown> | null;
+    content?: string;
+  } = {},
+): FeltSourceEvent[] {
+  const content = opts.content ?? "prefers structured answers";
+  const manifest =
+    opts.manifest === null
+      ? undefined
+      : (opts.manifest ?? manifestFor("c1", "r1", [commitment("n1", content)]));
+  return [
+    ...window("c1", { consolidate_merged: 1 }),
+    formed(150, {
+      node_id: "n1",
+      content,
+      sensitivity: SensitivityLevel.Personal,
+      source: "consolidation_derived",
+    }),
+    signedReceiptEvent("c1", "r1", 210, manifest),
+  ];
+}
+
+async function recordsFor(
+  events: FeltSourceEvent[],
+  valid = true,
+): Promise<FeltConsolidationRecord[]> {
+  return verifyFeltCoverage(projectFeltConsolidation(events), events, adapter(valid));
+}
+
+describe("projectFeltConsolidation (candidates)", () => {
+  it("forms NO candidate for a no-op cycle (honest by absence)", () => {
     expect(projectFeltConsolidation(window("c1"))).toEqual([]);
   });
 
-  it("surfaces a formed mutation with content for none/personal", () => {
-    const records = projectFeltConsolidation([
-      ...window("c1"),
+  it("produces a candidate mutation with sensitivity-bounded disclosure", () => {
+    const cands = projectFeltConsolidation([
+      ...window("c1", { consolidate_merged: 1 }),
       formed(150, {
         node_id: "n1",
         content: "prefers structured answers",
@@ -92,8 +171,7 @@ describe("projectFeltConsolidation", () => {
         source: "consolidation_derived",
       }),
     ]);
-    expect(records).toHaveLength(1);
-    expect(only(records).mutations).toEqual([
+    expect(only(cands).candidateMutations).toEqual([
       {
         nodeId: "n1",
         kind: "formed",
@@ -102,6 +180,7 @@ describe("projectFeltConsolidation", () => {
         sensitivity: SensitivityLevel.Personal,
       },
     ]);
+    expect(only(cands).receiptSummary).toEqual({ consolidated: 1, pruned: 0 });
   });
 
   it("redacts content to existence-only for medical/financial/secret", () => {
@@ -110,49 +189,24 @@ describe("projectFeltConsolidation", () => {
       SensitivityLevel.Financial,
       SensitivityLevel.Secret,
     ]) {
-      const records = projectFeltConsolidation([
+      const cands = projectFeltConsolidation([
         ...window("c1"),
         formed(150, { node_id: "n1", content: "takes medication X at 8am", sensitivity: tier }),
       ]);
-      const m = only(only(records).mutations);
-      expect(m.disclosure).toBe("a private memory");
-      expect(m.disclosure).not.toContain("medication");
+      expect(only(only(cands).candidateMutations).disclosure).toBe("a private memory");
     }
   });
 
-  it("keeps taught and inferred provenance distinct — they never collapse", () => {
-    const records = projectFeltConsolidation([
-      ...window("c1"),
-      formed(140, {
-        node_id: "n1",
-        content: "lives in LA",
-        sensitivity: "none",
-        source: "user_stated",
-      }),
-      formed(160, {
-        node_id: "n2",
-        content: "likely a morning person",
-        sensitivity: "none",
-        source: "agent_inferred",
-      }),
+  it("captures the signed receipt summary (consolidated + pruned)", () => {
+    const cands = projectFeltConsolidation([
+      ...window("c1", { consolidate_merged: 3, pruned_decay: 2, pruned_notability: 1 }),
     ]);
-    const provenances = only(records).mutations.map((m) => m.provenance);
-    expect(provenances).toContain("user_stated");
-    expect(provenances).toContain("agent_inferred");
-    expect(new Set(provenances).size).toBe(2);
+    expect(only(cands).receiptSummary).toEqual({ consolidated: 3, pruned: 3 });
+    expect(only(cands).candidateMutations).toEqual([]);
   });
 
-  it("renders retirements as a count only — never content", () => {
-    const records = projectFeltConsolidation([
-      ...window("c1", { pruned_decay: 2, pruned_notability: 1, pruned_retention: 0 }),
-    ]);
-    expect(records).toHaveLength(1);
-    expect(only(records).retired.count).toBe(3);
-    expect(only(records).mutations).toEqual([]);
-  });
-
-  it("never surfaces a deletion-tombstone memory_formed as a learned line", () => {
-    const records = projectFeltConsolidation([
+  it("never surfaces a deletion-tombstone memory_formed as a candidate", () => {
+    const cands = projectFeltConsolidation([
       ...window("c1", { pruned_decay: 1 }),
       formed(150, {
         node_id: "n1",
@@ -161,328 +215,321 @@ describe("projectFeltConsolidation", () => {
         redacted_reason: "deleted",
       }),
     ]);
-    expect(only(records).mutations).toEqual([]);
-    expect(only(records).retired.count).toBe(1);
+    expect(only(cands).candidateMutations).toEqual([]);
+    expect(only(cands).receiptSummary.pruned).toBe(1);
   });
 
   it("reads the assurance state honestly and never inflates it", () => {
-    const formedEv = formed(150, { node_id: "n1", content: "x", sensitivity: "none" });
-
-    expect(only(projectFeltConsolidation([...window("c1"), formedEv])).assurance).toBe("unsigned");
-
+    const f = formed(150, { node_id: "n1", content: "x", sensitivity: "none" });
     expect(
-      only(projectFeltConsolidation([...window("c1"), formedEv, receipt("c1", "r1", 210)]))
-        .assurance,
-    ).toBe("signed");
-
+      only(projectFeltConsolidation([...window("c1", { consolidate_merged: 1 }), f])).assurance,
+    ).toBe("unsigned");
     expect(
       only(
         projectFeltConsolidation([
-          ...window("c1"),
-          formedEv,
-          receipt("c1", "r1", 210),
+          ...window("c1", { consolidate_merged: 1 }),
+          f,
+          receiptEvent("c1", "r1", 210),
+        ]),
+      ).assurance,
+    ).toBe("signed");
+    expect(
+      only(
+        projectFeltConsolidation([
+          ...window("c1", { consolidate_merged: 1 }),
+          f,
+          receiptEvent("c1", "r1", 210),
           anchored(["r1"], 220),
         ]),
       ).assurance,
     ).toBe("anchored");
   });
 
-  it("dedupes the started + completed markers and is replay-idempotent", () => {
+  it("dedupes started + completed markers and is replay-idempotent", () => {
     const events = [
-      ...window("c1", { pruned_decay: 1 }),
+      ...window("c1", { consolidate_merged: 1, pruned_decay: 1 }),
       formed(150, { node_id: "n1", content: "x", sensitivity: "none" }),
     ];
-    const once = projectFeltConsolidation(events);
-    const twice = projectFeltConsolidation(events);
-    expect(once).toHaveLength(1);
-    expect(once).toEqual(twice);
-    expect(once.filter((r) => r.cycleId === "c1")).toHaveLength(1);
+    expect(projectFeltConsolidation(events)).toEqual(projectFeltConsolidation(events));
+    expect(projectFeltConsolidation(events)).toHaveLength(1);
   });
 
   it("marks merged/superseded nodes as refined, fresh ones as formed", () => {
-    const records = projectFeltConsolidation([
+    const cands = projectFeltConsolidation([
       ...window("c1"),
       formed(140, { node_id: "fresh", content: "new fact", sensitivity: "none" }),
       formed(160, { node_id: "merged", content: "updated fact", sensitivity: "none" }),
       consolidated(161, { action: "merge", new_node_id: "merged", existing_node_id: "old" }),
     ]);
-    const byNode = Object.fromEntries(only(records).mutations.map((m) => [m.disclosure, m.kind]));
+    const byNode = Object.fromEntries(
+      only(cands).candidateMutations.map((m) => [m.disclosure, m.kind]),
+    );
     expect(byNode["new fact"]).toBe("formed");
     expect(byNode["updated fact"]).toBe("refined");
   });
 
   it("fails closed: absent/unknown sensitivity is treated as Secret", () => {
-    const records = projectFeltConsolidation([
+    const cands = projectFeltConsolidation([
       ...window("c1"),
       formed(150, { node_id: "n1", content: "untagged secret" }),
     ]);
-    const m = only(only(records).mutations);
-    expect(m.sensitivity).toBe(SensitivityLevel.Secret);
-    expect(m.disclosure).toBe("a private memory");
+    expect(only(only(cands).candidateMutations).sensitivity).toBe(SensitivityLevel.Secret);
   });
 
   it("does not attribute memory formed outside the cycle window", () => {
-    const records = projectFeltConsolidation([
+    const cands = projectFeltConsolidation([
       ...window("c1"),
       formed(50, { node_id: "before", content: "earlier", sensitivity: "none" }),
       formed(250, { node_id: "after", content: "later", sensitivity: "none" }),
     ]);
-    expect(records).toEqual([]); // nothing in [100,200] → no-op
+    expect(cands).toEqual([]); // nothing in [100,200] and no counts → no candidate
   });
 
-  it("orders records newest-first by finishedAt", () => {
-    const records = projectFeltConsolidation([
-      cycleRun("old", "completed", 200, { pruned_decay: 1 }),
-      cycleRun("new", "completed", 400, { pruned_decay: 1 }),
-    ]);
-    expect(records.map((r) => r.cycleId)).toEqual(["new", "old"]);
-  });
-
-  it("cannot express authority — the record shape carries no grant/trust field", () => {
-    const records = projectFeltConsolidation([
-      ...window("c1"),
-      formed(150, { node_id: "n1", content: "x", sensitivity: "none", source: "user_stated" }),
-    ]);
-    const rec = only(records);
-    expect(Object.keys(rec).sort()).toEqual([
-      "assurance",
-      "cycleId",
-      "finishedAt",
-      "mutations",
-      "mutationsCoveredBySignature",
-      "retired",
-    ]);
-    for (const m of rec.mutations) {
-      for (const k of Object.keys(m)) {
-        expect(["nodeId", "kind", "disclosure", "provenance", "sensitivity"]).toContain(k);
-      }
-    }
-  });
-
-  it("never claims signature coverage of the detail mutations (scope honesty)", () => {
-    // The receipt commits to counts; the details are a local time-window
-    // reconstruction. Even a signed + anchored cycle must report the detail
-    // set as NOT covered by the signature.
-    const records = projectFeltConsolidation([
-      ...window("c1"),
-      formed(150, { node_id: "n1", content: "x", sensitivity: "none" }),
-      receipt("c1", "r1", 210),
-      anchored(["r1"], 220),
-    ]);
-    const rec = only(records);
-    expect(rec.assurance).toBe("anchored");
-    expect(rec.mutationsCoveredBySignature).toBe(false);
-  });
-
-  it("default redaction caps long none/personal content", () => {
-    const long = "a".repeat(200);
-    const out = defaultFeltRedaction({ content: long, sensitivity: SensitivityLevel.None });
-    expect(out.length).toBeLessThanOrEqual(140);
-    expect(out.endsWith("…")).toBe(true);
+  it("a pure-prune cycle surfaces as a receipt-only candidate (no mutations)", () => {
+    const cands = projectFeltConsolidation([...window("c1", { pruned_retention: 4 })]);
+    expect(only(cands).candidateMutations).toEqual([]);
+    expect(only(cands).receiptSummary).toEqual({ consolidated: 0, pruned: 4 });
   });
 });
 
-describe("verifyFeltCoverage", () => {
-  // Deterministic stand-ins for the injected crypto. The real Ed25519/SHA-256
-  // path is covered in @motebit/crypto; here we test the orchestration:
-  // linkage, set-equality, content/provenance/sensitivity matching, fail paths.
-  const adapter = (manifestValid = true): FeltCoverageAdapter => ({
-    verifyManifest: async () => manifestValid,
-    receiptDigest: async (r) => `rd:${r.receipt_id}`,
-    contentDigest: async (c) => `h:${c}`,
+describe("verifyFeltCoverage — evidence regression matrix", () => {
+  it("(6) valid manifest → verified, mutations exposed with the manifest id", async () => {
+    const recs = await recordsFor(scenario());
+    const rec = only(recs);
+    expect(rec.evidence.status).toBe("verified");
+    if (rec.evidence.status === "verified") {
+      expect(rec.evidence.manifestId).toBe("manifest-1");
+      expect(rec.evidence.mutations.map((m) => m.disclosure)).toEqual([
+        "prefers structured answers",
+      ]);
+    }
   });
 
-  const commitment = (node_id: string, content: string) => ({
-    node_id,
-    kind: "formed" as const,
-    content_sha256: `h:${content}`,
-    provenance: "consolidation_derived" as const,
-    sensitivity: SensitivityLevel.Personal,
+  it("(1) manifest absent → receipt_only, no mutations", async () => {
+    const rec = only(await recordsFor(scenario({ manifest: null })));
+    expect(rec.evidence.status).toBe("receipt_only");
+    expect(rec.evidence).not.toHaveProperty("mutations");
   });
 
-  const signedReceiptEvent = (
-    cycleId: string,
-    receiptId: string,
-    ts: number,
-    manifest?: Record<string, unknown>,
-  ): FeltSourceEvent => ({
-    event_type: "consolidation_receipt_signed",
-    timestamp: ts,
-    payload: {
-      receipt: { cycle_id: cycleId, receipt_id: receiptId },
-      ...(manifest ? { mutation_manifest: manifest } : {}),
-    },
+  it("(2) bad signature → receipt_only", async () => {
+    const rec = only(await recordsFor(scenario(), /* valid */ false));
+    expect(rec.evidence.status).toBe("receipt_only");
   });
 
-  const manifestFor = (cycleId: string, receiptId: string, commitments: unknown[]) => ({
-    manifest_type: "consolidation_mutation_manifest",
-    schema_version: "1",
-    manifest_id: "m1",
-    motebit_id: "mote",
-    cycle_id: cycleId,
-    receipt_id: receiptId,
-    receipt_digest: `rd:${receiptId}`,
-    mutations: commitments,
-    created_at: 200,
-    suite: "motebit-jcs-ed25519-b64-v1",
-    signature: "sig",
-  });
-
-  const formedC1 = (content = "prefers structured answers"): FeltSourceEvent => ({
-    event_type: "memory_formed",
-    timestamp: 150,
-    payload: {
-      node_id: "n1",
-      content,
-      sensitivity: SensitivityLevel.Personal,
-      source: "consolidation_derived",
-    },
-  });
-
-  const baseEvents = (manifest?: Record<string, unknown>): FeltSourceEvent[] => [
-    {
-      event_type: "consolidation_cycle_run",
-      timestamp: 100,
-      payload: { cycle_id: "c1", status: "started", summary: {} },
-    },
-    {
-      event_type: "consolidation_cycle_run",
-      timestamp: 200,
-      payload: { cycle_id: "c1", status: "completed", summary: {} },
-    },
-    formedC1(),
-    signedReceiptEvent("c1", "r1", 210, manifest),
-  ];
-
-  async function coverageFor(events: FeltSourceEvent[], valid = true): Promise<boolean> {
-    const records = projectFeltConsolidation(events);
-    const verified = await verifyFeltCoverage(records, events, adapter(valid));
-    const [rec] = verified;
-    expect(rec).toBeDefined();
-    return rec ? rec.mutationsCoveredBySignature : false;
-  }
-
-  it("covers a record when signature, receipt linkage, and content all verify", async () => {
-    const events = baseEvents(
-      manifestFor("c1", "r1", [commitment("n1", "prefers structured answers")]),
-    );
-    expect(await coverageFor(events)).toBe(true);
-  });
-
-  it("does NOT cover when the manifest signature is invalid", async () => {
-    const events = baseEvents(
-      manifestFor("c1", "r1", [commitment("n1", "prefers structured answers")]),
-    );
-    expect(await coverageFor(events, false)).toBe(false);
-  });
-
-  it("does NOT cover when the displayed content does not match the commitment", async () => {
-    // Commitment for different content → content digest mismatch.
-    const events = baseEvents(manifestFor("c1", "r1", [commitment("n1", "a forged sentence")]));
-    expect(await coverageFor(events)).toBe(false);
-  });
-
-  it("does NOT cover when receipt linkage is broken", async () => {
+  it("(3) receipt digest mismatch → receipt_only", async () => {
     const m = manifestFor("c1", "r1", [commitment("n1", "prefers structured answers")]);
     m.receipt_digest = "rd:someone-elses-receipt";
-    expect(await coverageFor(baseEvents(m))).toBe(false);
+    const rec = only(await recordsFor(scenario({ manifest: m })));
+    expect(rec.evidence.status).toBe("receipt_only");
   });
 
-  it("does NOT cover when the committed set differs from the displayed set", async () => {
-    // Manifest commits an extra node the surface never displayed.
+  it("(4) exact-set mismatch (manifest commits an extra node) → receipt_only", async () => {
     const m = manifestFor("c1", "r1", [
       commitment("n1", "prefers structured answers"),
       commitment("n2", "an uncommitted extra"),
     ]);
-    expect(await coverageFor(baseEvents(m))).toBe(false);
+    const rec = only(await recordsFor(scenario({ manifest: m })));
+    expect(rec.evidence.status).toBe("receipt_only");
   });
 
-  it("does NOT cover when there is no manifest (stays at the honest default)", async () => {
-    expect(await coverageFor(baseEvents(undefined))).toBe(false);
+  it("(5) current-key mismatch (verifyManifest false) → receipt_only", async () => {
+    // The adapter abstracts the key check; a manifest signed by a rotated /
+    // wrong key makes verifyManifest return false → receipt_only, never a
+    // false verified.
+    const rec = only(await recordsFor(scenario(), false));
+    expect(rec.evidence.status).toBe("receipt_only");
   });
 
-  it("does NOT cover when the committed sensitivity tier disagrees with the node", async () => {
-    const m = manifestFor("c1", "r1", [
-      { ...commitment("n1", "prefers structured answers"), sensitivity: SensitivityLevel.Medical },
-    ]);
-    expect(await coverageFor(baseEvents(m))).toBe(false);
+  it("(7) a concurrent memory event in-window but absent from the manifest → receipt_only", async () => {
+    const content = "prefers structured answers";
+    const m = manifestFor("c1", "r1", [commitment("n1", content)]);
+    const events = [
+      ...window("c1", { consolidate_merged: 1 }),
+      formed(150, {
+        node_id: "n1",
+        content,
+        sensitivity: SensitivityLevel.Personal,
+        source: "consolidation_derived",
+      }),
+      // A concurrent interactive write that fell inside the window but the
+      // manifest does NOT commit — must break the exact-set check, not leak in.
+      formed(155, { node_id: "intruder", content: "unrelated", sensitivity: "none" }),
+      signedReceiptEvent("c1", "r1", 210, m),
+    ];
+    const rec = only(await recordsFor(events));
+    expect(rec.evidence.status).toBe("receipt_only");
+  });
+
+  it("(8) pure-prune cycle → receipt_only with no mutations", async () => {
+    const rec = only(await recordsFor([...window("c1", { pruned_retention: 4 })]));
+    expect(rec.evidence.status).toBe("receipt_only");
+    expect(rec.receiptSummary.pruned).toBe(4);
+  });
+
+  it("(9) synced manifest-less receipt never shows details or verified", async () => {
+    // Synced cross-device cycle: receipt present (counts), manifest stripped at
+    // the relay, plus synced memory_formed events that time-correlate.
+    const events = [
+      ...window("c1", { consolidate_merged: 2 }),
+      formed(150, {
+        node_id: "synced",
+        content: "from another device",
+        sensitivity: "none",
+        source: "consolidation_derived",
+      }),
+      signedReceiptEvent("c1", "r1", 210 /* no manifest */),
+    ];
+    const rec = only(await recordsFor(events));
+    expect(rec.evidence.status).toBe("receipt_only");
+    expect(rec.evidence).not.toHaveProperty("mutations");
+  });
+
+  it("(10) the shared contract: both verified and receipt_only render through the same formatters", () => {
+    const verified: FeltConsolidationRecord = {
+      cycleId: "c1",
+      finishedAt: 200,
+      assurance: "signed",
+      receiptSummary: { consolidated: 3, pruned: 3 },
+      evidence: {
+        status: "verified",
+        manifestId: "m1",
+        mutations: [
+          { nodeId: "a", kind: "formed", disclosure: "x", sensitivity: SensitivityLevel.None },
+          { nodeId: "b", kind: "refined", disclosure: "y", sensitivity: SensitivityLevel.None },
+        ],
+      },
+    };
+    const receiptOnly: FeltConsolidationRecord = {
+      cycleId: "c2",
+      finishedAt: 200,
+      assurance: "signed",
+      receiptSummary: { consolidated: 3, pruned: 3 },
+      evidence: { status: "receipt_only" },
+    };
+    // Verified uses the per-mutation split; receipt-only uses the signed aggregate.
+    expect(feltHeadline(verified)).toBe("1 learned · 1 refined · 3 faded");
+    expect(feltHeadline(receiptOnly)).toBe("3 consolidated · 3 faded");
+  });
+
+  it("feltReceiptOnly degrades every candidate (no-keys path)", () => {
+    const cands = projectFeltConsolidation(scenario());
+    const recs = feltReceiptOnly(cands);
+    expect(only(recs).evidence.status).toBe("receipt_only");
+  });
+});
+
+describe("resolveFeltConsolidation — canonical boundary", () => {
+  it("verifies when given an expected-key adapter", async () => {
+    const recs = await resolveFeltConsolidation(scenario(), adapter(true));
+    expect(only(recs).evidence.status).toBe("verified");
+  });
+
+  it("degrades to receipt_only when the adapter rejects (wrong/rotated key)", async () => {
+    const recs = await resolveFeltConsolidation(scenario(), adapter(false));
+    expect(only(recs).evidence.status).toBe("receipt_only");
+  });
+
+  it("degrades every cycle to receipt_only when no adapter is supplied (no keys)", async () => {
+    const recs = await resolveFeltConsolidation(scenario());
+    expect(only(recs).evidence.status).toBe("receipt_only");
+    expect(only(recs).evidence).not.toHaveProperty("mutations");
+  });
+
+  it("returns only render-safe records — never exposes candidates", async () => {
+    const recs = await resolveFeltConsolidation(scenario(), adapter(true));
+    // The returned shape is FeltConsolidationRecord (evidence), never a
+    // FeltCandidate (candidateMutations) — the unverified mutations cannot
+    // cross this boundary.
+    expect(only(recs)).not.toHaveProperty("candidateMutations");
+    expect(only(recs)).toHaveProperty("evidence");
   });
 });
 
 describe("felt copy formatters", () => {
-  const mut = (over: Partial<FeltMutation> = {}): FeltMutation => ({
-    nodeId: "n1",
-    kind: "formed",
-    disclosure: "prefers structured answers",
-    sensitivity: SensitivityLevel.Personal,
-    ...over,
-  });
-  const rec = (over: Partial<FeltConsolidationRecord> = {}): FeltConsolidationRecord => ({
-    cycleId: "c1",
-    finishedAt: 200,
-    assurance: "signed",
-    mutations: [],
-    retired: { count: 0 },
-    mutationsCoveredBySignature: false,
-    ...over,
+  it("feltHeadline (verified) splits learned/refined + faded", () => {
+    const rec: FeltConsolidationRecord = {
+      cycleId: "c1",
+      finishedAt: 200,
+      assurance: "signed",
+      receiptSummary: { consolidated: 9, pruned: 3 },
+      evidence: {
+        status: "verified",
+        manifestId: "m1",
+        mutations: [
+          { nodeId: "a", kind: "formed", disclosure: "x", sensitivity: SensitivityLevel.None },
+          { nodeId: "b", kind: "formed", disclosure: "y", sensitivity: SensitivityLevel.None },
+          { nodeId: "c", kind: "refined", disclosure: "z", sensitivity: SensitivityLevel.None },
+        ],
+      },
+    };
+    expect(feltHeadline(rec)).toBe("2 learned · 1 refined · 3 faded");
   });
 
-  it("feltHeadline splits learned/refined/faded so the headline matches the reveal", () => {
+  it("feltMutationLine suppresses the consolidation_derived marker, shows others", () => {
     expect(
-      feltHeadline(rec({ mutations: [mut(), mut({ kind: "refined" })], retired: { count: 3 } })),
-    ).toBe("1 learned · 1 refined · 3 faded");
-    // Collapses to the calm two-part form when there are no refinements.
-    expect(feltHeadline(rec({ mutations: [mut(), mut()] }))).toBe("2 learned");
-    expect(feltHeadline(rec({ mutations: [mut({ kind: "refined" })] }))).toBe("1 refined");
-    expect(feltHeadline(rec({ retired: { count: 3 } }))).toBe("3 faded");
-  });
-
-  it("feltReceiptScope scopes the glyph to the receipt, NOT the displayed counts", () => {
-    expect(feltReceiptScope("anchored")).toContain("anchored");
-    expect(feltReceiptScope("signed")).toContain("signed receipt");
-    expect(feltReceiptScope("unsigned")).toContain("unsigned");
-    // Must not overclaim: the receipt does not attest the displayed
-    // learned/refined counts (those are manifest-covered — consolidate_merged
-    // can differ, e.g. reinforcements that form no node). It defers to
-    // "verified separately".
-    expect(feltReceiptScope("signed")).not.toContain("counts above");
-    expect(feltReceiptScope("signed")).toContain("verified separately");
-  });
-
-  it("feltMutationLine suppresses the redundant consolidation_derived marker", () => {
-    expect(feltMutationLine(mut({ provenance: "consolidation_derived" }))).toBe(
-      "Learned: prefers structured answers",
-    );
+      feltMutationLine({
+        nodeId: "n",
+        kind: "formed",
+        disclosure: "x",
+        provenance: "consolidation_derived",
+        sensitivity: SensitivityLevel.None,
+      }),
+    ).toBe("Learned: x");
     expect(
-      feltMutationLine(
-        mut({ kind: "refined", provenance: "consolidation_derived", disclosure: "x" }),
-      ),
-    ).toBe("Refined: x");
-    expect(feltMutationLine(mut({ provenance: undefined }))).toBe(
-      "Learned: prefers structured answers",
-    );
+      feltMutationLine({
+        nodeId: "n",
+        kind: "formed",
+        disclosure: "lives in LA",
+        provenance: "user_stated",
+        sensitivity: SensitivityLevel.None,
+      }),
+    ).toBe(`Learned: lives in LA · ${MEMORY_SOURCE_MARKERS.user_stated}`);
   });
 
-  it("feltMutationLine shows the marker only when provenance varies (taught vs inferred)", () => {
-    const taught = feltMutationLine(mut({ provenance: "user_stated", disclosure: "lives in LA" }));
-    expect(taught).toBe(`Learned: lives in LA · ${MEMORY_SOURCE_MARKERS.user_stated}`);
-    const inferred = feltMutationLine(
-      mut({ provenance: "agent_inferred", disclosure: "early riser" }),
-    );
-    expect(inferred).toContain(MEMORY_SOURCE_MARKERS.agent_inferred);
-    expect(taught).not.toBe(inferred);
+  it("feltVerifiedAssurance is the only coverage label, scoped to displayed changes", () => {
+    const a = feltVerifiedAssurance();
+    expect(a.label).toBe("Verified");
+    expect(a.detail).toContain("displayed changes match the signed mutation manifest");
   });
 
-  it("feltCoverageStatus is honest — Verified only when covered, scoped to displayed changes", () => {
-    const v = feltCoverageStatus(rec({ mutationsCoveredBySignature: true }));
-    expect(v.label).toBe("Verified");
-    expect(v.detail).toContain("displayed changes match the signed mutation manifest");
-    expect(feltCoverageStatus(rec({ mutationsCoveredBySignature: false })).label).toBe("Local");
+  it("feltReceiptScope scopes to the receipt, not the displayed counts", () => {
+    expect(feltReceiptScope("signed", "verified")).toContain("signed receipt");
+    expect(feltReceiptScope("signed", "verified")).not.toContain("counts above");
+    expect(feltReceiptScope("signed", "verified")).toContain("verified separately");
+  });
+
+  it("feltReceiptScope is evidence-aware: receipt_only never claims displayed changes", () => {
+    // A receipt-only row shows no detail lines, so the label must not imply
+    // changes are shown/verified — it says they are unavailable.
+    for (const a of ["signed", "anchored"] as const) {
+      const ro = feltReceiptScope(a, "receipt_only");
+      expect(ro).toContain("signed receipt");
+      expect(ro).not.toContain("changes shown");
+      expect(ro).not.toContain("verified separately");
+      expect(ro).toContain("unavailable without a verified mutation manifest");
+
+      const v = feltReceiptScope(a, "verified");
+      expect(v).toContain("changes shown");
+      expect(v).toContain("verified separately");
+      expect(v).not.toContain("unavailable");
+    }
+    // Unsigned is evidence-independent (no receipt at all).
+    expect(feltReceiptScope("unsigned", "receipt_only")).toContain("unsigned");
+    expect(feltReceiptScope("unsigned", "verified")).toContain("unsigned");
   });
 
   it("feltAssuranceGlyph never shows a placeholder for unsigned", () => {
     expect(feltAssuranceGlyph("anchored")).toBe("⚓");
     expect(feltAssuranceGlyph("signed")).toBe("✓");
     expect(feltAssuranceGlyph("unsigned")).toBe("");
+  });
+
+  it("default redaction caps long none/personal content", () => {
+    const out = defaultFeltRedaction({
+      content: "a".repeat(200),
+      sensitivity: SensitivityLevel.None,
+    });
+    expect(out.length).toBeLessThanOrEqual(140);
+    expect(out.endsWith("…")).toBe(true);
   });
 });

@@ -44,14 +44,26 @@ function read(rel: string): string {
 const findings: string[] = [];
 
 // ── Invariant 1: coverage is never faked ──────────────────────────────────
+// The evidence union (`{ status: "verified", mutations } | { status: "receipt_only" }`)
+// makes an unverified-record-with-details unrepresentable. The one remaining
+// way to fake it is to CONSTRUCT `{ status: "verified", ... }` in the
+// projection (which holds only time-window candidates) instead of the
+// verifier. So a verified-evidence VALUE (a literal `status: "verified",` —
+// trailing comma distinguishes the object construction from the type union's
+// `status: "verified";`) may appear only at/after `verifyFeltCoverage`.
 const PROJECTION = "packages/panels/src/memory/felt-consolidation.ts";
 const projection = read(PROJECTION);
+const VERIFIED_VALUE = /status\s*:\s*["']verified["']\s*,/;
 if (!projection) {
   findings.push(`${PROJECTION}: missing — the felt projection is the honesty boundary.`);
-} else if (/mutationsCoveredBySignature\s*:\s*true\b/.test(projection)) {
-  findings.push(
-    `${PROJECTION}: hard-codes \`mutationsCoveredBySignature: true\`. Coverage must only ever be the value \`verifyFeltCoverage\` computes from a verified ConsolidationMutationManifest — never asserted. (docs/doctrine/felt-interior.md)`,
-  );
+} else {
+  const verifyIdx = projection.indexOf("export async function verifyFeltCoverage");
+  const beforeVerify = verifyIdx >= 0 ? projection.slice(0, verifyIdx) : projection;
+  if (VERIFIED_VALUE.test(beforeVerify)) {
+    findings.push(
+      `${PROJECTION}: a "verified" mutation evidence VALUE is constructed outside (before) verifyFeltCoverage. Only the verifier may mint "verified" — projectFeltConsolidation produces unverified candidates; verified detail must derive from a cryptographically-checked manifest. (docs/doctrine/felt-interior.md)`,
+    );
+  }
 }
 
 // ── Invariant 2: the owner-local manifest is stripped on relay sync ────────

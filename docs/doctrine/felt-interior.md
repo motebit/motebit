@@ -177,25 +177,38 @@ calm or the sovereignty it depends on.
   act and must obey `records-vs-acts.md`; if it cannot be found it has failed this
   doctrine.
 - **Legibility ratio.** This file is one-third of the commitment; the code and the
-  drift gate are the other two. The desktop vertical slice shipped — a real durable
+  drift gate are the other two. The desktop _and_ web slices shipped — a real durable
   mutation in `packages/runtime/src/consolidation-cycle.ts` → its signed
   `ConsolidationReceipt` → a signed `ConsolidationMutationManifest` committing the
   exact mutations ([`spec/consolidation-mutation-manifest-v1.md`](../../spec/consolidation-mutation-manifest-v1.md))
   → a sensitivity-safe projection → the calm resting record → inspection on explicit
-  reveal, coverage flipped true _only_ on a verified manifest. **The gate is
-  `check-felt-interior-honesty`**: it structurally locks the two invariants a future
-  edit is most likely to silently break — coverage is never faked (no hard-coded
-  `mutationsCoveredBySignature: true`), and the owner-local manifest never leaks via
-  sync (the relay strips `mutation_manifest` on ingress; `SyncEngine.pushEvents` syncs
-  _all_ events). The behavioral floor — a no-op forms no record; provenance keeps
-  taught and inferred distinct; formation cannot raise authority
-  ([`memory-never-confers-authority.md`](memory-never-confers-authority.md)); no
-  double-count across restart/replay; honest retirement; disclosure obeys the
-  sensitivity ceiling — is locked by the test suites in `@motebit/panels`,
-  `@motebit/runtime`, and `@motebit/crypto`. What remains is the one-pass to
-  web / mobile / spatial ([`panels-pattern.md`](panels-pattern.md)) — the projection
-  primitive is now stable, the proven desktop-dogfood-then-cross-surface order that
-  [`proactive-interior.md`](proactive-interior.md) followed.
+  reveal. **Honesty is by construction.** Detail is shown ⟺ verified, because the
+  record's evidence is a discriminated union — `{ status: "verified", mutations } |
+{ status: "receipt_only" }` — so an unverified-record-with-details is
+  _unrepresentable_, not merely avoided. The projection returns unverified
+  _candidates_ that never cross the package boundary — structurally, not by
+  convention: the candidate machinery (`projectFeltConsolidation` /
+  `verifyFeltCoverage` / `feltReceiptOnly`) is absent from the barrel, and
+  `@motebit/panels` ships a single-entry `exports` map, so a surface deep-import of
+  the candidate path (`@motebit/panels/.../felt-consolidation`) is a hard
+  resolution error. Surfaces call only the canonical `resolveFeltConsolidation`,
+  which projects + verifies internally and returns render-safe records. The
+  accessible scope label is evidence-aware too — a `receipt_only` row's glyph
+  never claims "the changes shown are verified," because none are shown. **The gate is `check-felt-interior-honesty`**: it locks the two
+  invariants a future edit is most likely to silently break — only the verifier may
+  mint a `status: "verified"` value (the projection holds candidates), and the
+  owner-local manifest never leaks via sync (the relay strips `mutation_manifest` on
+  ingress; `SyncEngine.pushEvents` syncs _all_ events). The behavioral floor — a no-op
+  forms no record; provenance keeps taught and inferred distinct; formation cannot
+  raise authority ([`memory-never-confers-authority.md`](memory-never-confers-authority.md));
+  no double-count across restart/replay; honest retirement; disclosure obeys the
+  sensitivity ceiling; a time-correlated mutation absent from the manifest never
+  reaches a render — is locked by the test suites in `@motebit/panels`,
+  `@motebit/runtime`, and `@motebit/crypto`. Verification is current-key, fail-closed
+  (a rotated/historical key reads receipt-only, never falsely verified);
+  succession-chain verification is a deferred enhancement for both surfaces. What
+  remains is the one-pass to mobile / spatial
+  ([`panels-pattern.md`](panels-pattern.md)).
 
 ## Related
 

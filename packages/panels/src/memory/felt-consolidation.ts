@@ -2,31 +2,25 @@
 // consolidation cycle changed, bounded by sensitivity.
 //
 // Doctrine: `docs/doctrine/felt-interior.md`. The signed
-// `ConsolidationReceipt` is the *portable* artifact and commits to
-// structural counts only ("merged 3, pruned 7"). This projection is the
-// *local owner-facing* artifact — never transmitted — so it may be as rich
-// as each memory's own sensitivity tier permits. Two artifacts, two
-// boundaries; this file is the second.
+// `ConsolidationReceipt` is the *portable* artifact and commits to structural
+// counts only ("merged 3, pruned 7"). The owner-local
+// `ConsolidationMutationManifest` commits the EXACT mutations. This file
+// shapes both into a calm resting record — and enforces the hard honesty
+// invariants in the TYPES, not the renderer:
 //
-// It is a pure function over the local event log. It invents no accrual:
-// it reads the same `memory_formed` / `memory_consolidated` /
-// `consolidation_cycle_run` / `consolidation_receipt_*` events the runtime
-// already emits, and shapes them into a calm resting record. The hard
-// invariants live here, not in the renderer:
-//
-//   - a no-op cycle forms NO record (honest by absence, never a fabricated
-//     "I did nothing" notice);
-//   - a *retired* memory is rendered as existence-plus-count, never its
-//     content — it is being deleted, and surfacing it would contradict the
-//     deletion;
-//   - disclosure is sensitivity-tiered through an injectable policy (the
-//     per-record redaction seam the doctrine requires — never one
-//     hard-coded line per tier);
-//   - provenance rides every formed mutation so a *taught* fact and an
-//     *inferred* one never collapse into one voice;
-//   - the assurance state is read from the receipt/anchor presence and is
-//     never upgraded — the surface must not imply signing or anchoring that
-//     did not occur.
+//   - **Evidence is discriminated.** `projectFeltConsolidation` reads the
+//     local event log and produces *candidates* carrying time-window-
+//     correlated mutations — which are UNVERIFIED and must not be rendered as
+//     "what this cycle did". Only `verifyFeltCoverage` may promote a candidate
+//     to a `FeltConsolidationRecord`, and its mutation detail lives ONLY on
+//     the `verified` arm of the evidence union. A `receipt_only` record
+//     structurally cannot carry mutations — so an unverified record can never
+//     make the false causal claim "these are this cycle's mutations".
+//   - a no-op cycle yields NO record (honest by absence);
+//   - a *retired* memory is a count, never content (it is being deleted);
+//   - disclosure is sensitivity-tiered through an injectable policy;
+//   - provenance rides every mutation so taught and inferred never collapse;
+//   - the assurance state is read from receipt/anchor presence, never inflated.
 //
 // Deliberately omitted by scope (felt-interior increment 1): trust edges,
 // skills, and economic accrual. Those ride the same projection seam later.
@@ -52,60 +46,77 @@ export interface FeltSourceEvent {
  *  consolidation-log badge vocabulary (`⚓` / `✓` / bare). */
 export type FeltAssurance = "anchored" | "signed" | "unsigned";
 
-/** A formed-or-refined durable mutation, sensitivity-bounded. Retirements
- *  are NOT mutations here — they carry no content by construction and live
- *  in `retired` as a count. */
+/** A formed-or-refined durable mutation, sensitivity-bounded. Retirements are
+ *  NOT mutations — they carry no content and live in `receiptSummary.pruned`. */
 export type FeltMutationKind = "formed" | "refined";
 
 export interface FeltMutation {
-  /** The memory node this line concerns — the key a coverage verifier uses to
-   *  map a displayed line to its manifest commitment and raw content. Opaque
-   *  UUID, not authority. */
+  /** The memory node this line concerns — the key the coverage verifier uses
+   *  to map a displayed line to its manifest commitment and raw content.
+   *  Opaque UUID, not authority. */
   readonly nodeId: string;
   readonly kind: FeltMutationKind;
-  /** Sensitivity-bounded disclosure string produced by the redaction
-   *  policy. For `none`/`personal` this may be the memory's own content;
-   *  for `medical`/`financial`/`secret` it falls to an existence phrase. */
+  /** Sensitivity-bounded disclosure string produced by the redaction policy. */
   readonly disclosure: string;
   /** Provenance marker source so the renderer can keep taught and inferred
-   *  distinct. Absent when the forming event carried unknown vocabulary
-   *  (degraded per `memory-provenance.md`, never to a trusted tier). */
+   *  distinct. Absent when the forming event carried unknown vocabulary. */
   readonly provenance?: MemorySource;
   readonly sensitivity: SensitivityLevel;
 }
 
+/** The signed structural counts from the `ConsolidationReceipt` — what is
+ *  attested even when no manifest covers the exact mutations. `consolidated`
+ *  is the receipt's `consolidate_merged` (which can exceed the verified
+ *  mutation count — it counts reinforcements that form no node); `pruned`
+ *  aggregates the three retirement paths (decay + notability + retention). */
+export interface FeltReceiptSummary {
+  readonly consolidated: number;
+  readonly pruned: number;
+}
+
+/**
+ * The projection's output for one cycle. It carries `candidateMutations` —
+ * memory mutations correlated to the cycle ONLY by time window, hence
+ * UNVERIFIED. A candidate is NOT a render contract: a surface must pass it
+ * through `verifyFeltCoverage` (or `feltReceiptOnly`) first, so the unverified
+ * mutations cannot escape the verifier boundary into a rendered detail line.
+ */
+export interface FeltCandidate {
+  readonly cycleId: string;
+  readonly finishedAt: number;
+  readonly assurance: FeltAssurance;
+  readonly receiptSummary: FeltReceiptSummary;
+  readonly candidateMutations: readonly FeltMutation[];
+}
+
+/**
+ * Discriminated evidence. `receipt_only` structurally cannot carry mutations,
+ * so an unverified record cannot present cycle-attributed detail — the false
+ * causal claim that time-window correlation could otherwise make is
+ * unrepresentable, not merely avoided. Only `verifyFeltCoverage` mints
+ * `verified`.
+ */
+export type FeltMutationEvidence =
+  | {
+      readonly status: "verified";
+      readonly mutations: readonly FeltMutation[];
+      readonly manifestId: string;
+    }
+  | { readonly status: "receipt_only" };
+
+/** The render contract — what a surface draws. Detail lines exist ⟺
+ *  `evidence.status === "verified"`. */
 export interface FeltConsolidationRecord {
   readonly cycleId: string;
   readonly finishedAt: number;
-  /** The receipt's actual assurance state. Scope: this covers the cycle
-   *  *receipt* — the structural counts the signed `ConsolidationReceipt`
-   *  commits to — NOT the per-mutation detail lines below. See
-   *  `mutationsCoveredBySignature`. */
   readonly assurance: FeltAssurance;
-  /** Formed + refined mutations, sensitivity-bounded. */
-  readonly mutations: readonly FeltMutation[];
-  /** Memories the cycle retired (decay + notability + retention), as a
-   *  count only — never content. */
-  readonly retired: { readonly count: number };
-  /** Whether the detail mutations are cryptographically covered by a
-   *  signature. The pure `projectFeltConsolidation` ALWAYS leaves this
-   *  `false` — the signed `ConsolidationReceipt` commits to counts only, so a
-   *  signed/anchored glyph alone attests the counts, never these exact
-   *  sentences. `verifyFeltCoverage` upgrades it to `true` only when the
-   *  cycle's signed `ConsolidationMutationManifest` verifies (signature +
-   *  receipt linkage + every displayed line's content/provenance/sensitivity
-   *  matched against its commitment, displayed set == committed set);
-   *  fail-closed otherwise. The surface MUST render the scope honestly and
-   *  never imply the details are signed when this is `false`. Doctrine:
-   *  `felt-interior.md`; wire: `spec/consolidation-mutation-manifest-v1.md`. */
-  readonly mutationsCoveredBySignature: boolean;
+  readonly receiptSummary: FeltReceiptSummary;
+  readonly evidence: FeltMutationEvidence;
 }
 
 /** The per-record redaction seam. Maps a formed memory to the string the
  *  owner-facing surface may show, bounded by — and free to sit below — its
- *  sensitivity tier. Callers MAY pass a richer policy; the default is the
- *  conservative ceiling. The doctrine forbids hard-coding one line per tier
- *  *in the projection itself* — that is why this is a parameter. */
+ *  sensitivity tier. Default is the conservative ceiling. */
 export type FeltRedactionPolicy = (input: {
   readonly content: string;
   readonly sensitivity: SensitivityLevel;
@@ -122,10 +133,7 @@ function cap(text: string): string {
 }
 
 /** Conservative default: name the change for `none`/`personal`, fall to an
- *  existence phrase at `medical` and above (the category itself can be the
- *  sensitive content). A future policy may surface a *redacted consequence*
- *  for higher tiers where the shape is non-identifying — that extension
- *  rides this same seam without touching the projection. */
+ *  existence phrase at `medical` and above. */
 export const defaultFeltRedaction: FeltRedactionPolicy = ({ content, sensitivity }) => {
   switch (sensitivity) {
     case SensitivityLevel.None:
@@ -136,7 +144,6 @@ export const defaultFeltRedaction: FeltRedactionPolicy = ({ content, sensitivity
     case SensitivityLevel.Secret:
       return "a private memory";
     default:
-      // Unknown tier → fail closed to existence-only.
       return "a private memory";
   }
 };
@@ -145,6 +152,7 @@ interface CycleWindow {
   cycleId: string;
   startedAt: number;
   finishedAt: number;
+  consolidatedCount: number;
   retiredCount: number;
 }
 
@@ -156,18 +164,16 @@ function asNumber(v: unknown): number | undefined {
 }
 
 /**
- * Project the local event log into per-cycle felt records, newest first.
- *
- * Pure and idempotent: the same events yield the same records, and the two
- * `consolidation_cycle_run` events a cycle emits (a `started` write-ahead
- * marker and a `completed` event) are deduped by `cycle_id` so a mutation
- * is never double-counted across a replay or a restart. A cycle that formed
- * nothing and retired nothing yields no record.
+ * Project the local event log into per-cycle candidates, newest first. Pure
+ * and idempotent: the two `consolidation_cycle_run` markers (started +
+ * completed) collapse by `cycle_id`. A cycle that consolidated nothing and
+ * retired nothing yields no candidate. The returned `candidateMutations` are
+ * UNVERIFIED — pass through `verifyFeltCoverage` before rendering detail.
  */
 export function projectFeltConsolidation(
   events: readonly FeltSourceEvent[],
   redact: FeltRedactionPolicy = defaultFeltRedaction,
-): FeltConsolidationRecord[] {
+): FeltCandidate[] {
   const cycleRuns: FeltSourceEvent[] = [];
   const receipts: FeltSourceEvent[] = [];
   const anchors: FeltSourceEvent[] = [];
@@ -196,7 +202,6 @@ export function projectFeltConsolidation(
     }
   }
 
-  // Receipt presence (signed) + anchored receipt ids, keyed for assurance.
   const receiptByCycle = new Map<string, { receiptId?: string }>();
   for (const e of receipts) {
     const r = (e.payload.receipt ?? {}) as { cycle_id?: unknown; receipt_id?: unknown };
@@ -214,7 +219,8 @@ export function projectFeltConsolidation(
     }
   }
 
-  // Collapse the started + completed markers into one window per cycle.
+  // Collapse started + completed markers into one window per cycle; the
+  // completed marker carries the signed structural counts.
   const windows = new Map<string, CycleWindow>();
   for (const e of cycleRuns) {
     const cycleId = asString(e.payload.cycle_id);
@@ -226,10 +232,9 @@ export function projectFeltConsolidation(
       cycleId,
       startedAt: e.timestamp,
       finishedAt: e.timestamp,
+      consolidatedCount: 0,
       retiredCount: 0,
     };
-    // started marker bounds the window's lower edge; completed bounds the
-    // upper edge and carries the retirement counts.
     if (status === "completed" || existing === undefined) {
       w.finishedAt = Math.max(w.finishedAt, e.timestamp);
     }
@@ -237,6 +242,11 @@ export function projectFeltConsolidation(
       w.startedAt = Math.min(w.startedAt, e.timestamp);
     }
     if (status !== "started") {
+      const consolidatedN = asNumber(summary.consolidate_merged) ?? 0;
+      if (consolidatedN > 0) w.consolidatedCount = consolidatedN;
+      // `faded` is the gentle owner-facing umbrella for the three retirement
+      // paths (decay + low-notability + retention policy). The aggregate count
+      // does NOT claim a specific dissolution mechanism.
       const retired =
         (asNumber(summary.pruned_decay) ?? 0) +
         (asNumber(summary.pruned_notability) ?? 0) +
@@ -246,7 +256,6 @@ export function projectFeltConsolidation(
     windows.set(cycleId, w);
   }
 
-  // Which formed nodes were refinements of an existing belief, by id.
   const refinedNodeIds = new Set<string>();
   for (const e of consolidated) {
     const action = asString(e.payload.action);
@@ -254,9 +263,9 @@ export function projectFeltConsolidation(
     if ((action === "merge" || action === "supersede") && newId) refinedNodeIds.add(newId);
   }
 
-  const records: FeltConsolidationRecord[] = [];
+  const candidates: FeltCandidate[] = [];
   for (const w of windows.values()) {
-    const mutations: FeltMutation[] = [];
+    const candidateMutations: FeltMutation[] = [];
     for (const e of formed) {
       if (e.timestamp < w.startedAt || e.timestamp > w.finishedAt) continue;
       const p = e.payload as {
@@ -266,15 +275,13 @@ export function projectFeltConsolidation(
         source?: unknown;
         redacted_reason?: unknown;
       };
-      // A deletion tombstone reuses memory_formed with a blanked content —
-      // never a felt "learned" line.
       if (p.redacted_reason === "deleted") continue;
       const nodeId = asString(p.node_id);
-      if (!nodeId) continue; // a formed event without an id cannot be covered
+      if (!nodeId) continue;
       const content = asString(p.content) ?? "";
       const sensitivity = isSensitivity(p.sensitivity) ? p.sensitivity : SensitivityLevel.Secret;
       const source = isMemorySource(p.source) ? p.source : undefined;
-      mutations.push({
+      candidateMutations.push({
         nodeId,
         kind: refinedNodeIds.has(nodeId) ? "refined" : "formed",
         disclosure: redact({ content, sensitivity, source }),
@@ -283,9 +290,12 @@ export function projectFeltConsolidation(
       });
     }
 
-    // Honest by absence: a cycle that formed nothing and retired nothing is
-    // not a felt record.
-    if (mutations.length === 0 && w.retiredCount === 0) continue;
+    // Honest by absence — a cycle that did nothing surfaces nothing. A
+    // pure-prune cycle (consolidated 0, candidates 0, retired > 0) DOES surface
+    // as a receipt-only summary.
+    if (candidateMutations.length === 0 && w.consolidatedCount === 0 && w.retiredCount === 0) {
+      continue;
+    }
 
     const receipt = receiptByCycle.get(w.cycleId);
     const assurance: FeltAssurance =
@@ -295,51 +305,48 @@ export function projectFeltConsolidation(
           ? "signed"
           : "unsigned";
 
-    records.push({
+    candidates.push({
       cycleId: w.cycleId,
       finishedAt: w.finishedAt,
       assurance,
-      mutations,
-      retired: { count: w.retiredCount },
-      // The receipt commits to counts only; the detail set is a local
-      // time-window reconstruction. Never claim signature coverage of it.
-      mutationsCoveredBySignature: false,
+      receiptSummary: { consolidated: w.consolidatedCount, pruned: w.retiredCount },
+      candidateMutations,
     });
   }
 
-  records.sort((a, b) => b.finishedAt - a.finishedAt);
-  return records;
+  candidates.sort((a, b) => b.finishedAt - a.finishedAt);
+  return candidates;
 }
 
 /**
  * The crypto an owner-facing surface injects so coverage can be verified
- * without `@motebit/panels` taking a crypto dependency (the panels
- * adapter-inversion rule). All three MUST be the producer's exact functions
+ * without `@motebit/panels` taking a crypto dependency (adapter inversion).
+ * All three MUST be the producer's exact functions
  * (`verifyConsolidationMutationManifest` against the OWNER's key,
  * `consolidationReceiptDigest`, `consolidationContentDigest`).
  */
 export interface FeltCoverageAdapter {
   /** Verify the manifest's signature against the OWNER's public key — a
-   *  manifest forged under another key must fail, not pass on its embedded
-   *  key. */
+   *  manifest forged under another key must fail. (Current-key, fail-closed:
+   *  a manifest signed by a rotated/historical key reads receipt-only, never
+   *  falsely verified — succession-chain verification is a deferred
+   *  enhancement for both surfaces, NOT implied here.) */
   verifyManifest(manifest: ConsolidationMutationManifest): Promise<boolean>;
-  /** Canonical SHA-256 (hex) of a signed receipt. */
   receiptDigest(receipt: ConsolidationReceipt): Promise<string>;
-  /** SHA-256 (hex) of a memory node's raw content. */
   contentDigest(content: string): Promise<string>;
 }
 
 /**
- * Upgrade `mutationsCoveredBySignature` to `true` only for records whose
- * displayed mutations are cryptographically proven to be the signed cycle's:
- * the manifest signature verifies, it is bound to the exact receipt by id +
- * digest, and every displayed line's raw local content hashes to its
- * commitment (with matching provenance + sensitivity), the displayed set
- * equaling the committed set. Any failure leaves the record uncovered —
- * fail-closed. Pure orchestration; the crypto is the injected adapter.
+ * Promote candidates to render-safe records. A candidate becomes `verified`
+ * (its mutations exposed for render) ONLY when the manifest signature
+ * verifies, it is bound to the exact receipt by id + digest, and every
+ * candidate mutation's raw local content hashes to its commitment (provenance
+ * + sensitivity matched, displayed set == committed set). Any failure →
+ * `receipt_only` (no mutations, fail-closed). Pure orchestration; crypto is
+ * the injected adapter.
  */
 export async function verifyFeltCoverage(
-  records: readonly FeltConsolidationRecord[],
+  candidates: readonly FeltCandidate[],
   events: readonly FeltSourceEvent[],
   adapter: FeltCoverageAdapter,
 ): Promise<FeltConsolidationRecord[]> {
@@ -383,25 +390,75 @@ export async function verifyFeltCoverage(
   }
 
   const out: FeltConsolidationRecord[] = [];
-  for (const rec of records) {
-    const covered = await coverageHolds(
-      rec,
-      manifestByCycle.get(rec.cycleId),
-      receiptByCycle.get(rec.cycleId),
+  for (const c of candidates) {
+    const manifest = manifestByCycle.get(c.cycleId);
+    const verified = await coverageHolds(
+      c,
+      manifest,
+      receiptByCycle.get(c.cycleId),
       rawByNode,
       adapter,
     );
+    const common = {
+      cycleId: c.cycleId,
+      finishedAt: c.finishedAt,
+      assurance: c.assurance,
+      receiptSummary: c.receiptSummary,
+    };
     out.push(
-      covered === rec.mutationsCoveredBySignature
-        ? rec
-        : { ...rec, mutationsCoveredBySignature: covered },
+      verified && manifest
+        ? {
+            ...common,
+            evidence: {
+              status: "verified",
+              mutations: c.candidateMutations,
+              manifestId: manifest.manifest_id,
+            },
+          }
+        : { ...common, evidence: { status: "receipt_only" } },
     );
   }
   return out;
 }
 
+/**
+ * The no-adapter path: with no signing keys, nothing can be verified, so every
+ * candidate degrades to a render-safe `receipt_only` record. Surfaces use this
+ * when the owner has no local identity key.
+ */
+// Module-exported for in-package tests only — NOT re-exported from the package
+// barrel, so surfaces cannot reach the candidate-consuming primitives and must
+// call `resolveFeltConsolidation`.
+export function feltReceiptOnly(candidates: readonly FeltCandidate[]): FeltConsolidationRecord[] {
+  return candidates.map((c) => ({
+    cycleId: c.cycleId,
+    finishedAt: c.finishedAt,
+    assurance: c.assurance,
+    receiptSummary: c.receiptSummary,
+    evidence: { status: "receipt_only" } as const,
+  }));
+}
+
+/**
+ * The CANONICAL entry point a surface calls — the verifier boundary made
+ * canonical. It projects private candidates, verifies them when an
+ * expected-key adapter is supplied (else degrades every candidate to
+ * receipt-only), and returns ONLY render-safe records. The candidate type —
+ * which carries unverified time-window mutations — never leaves this module
+ * (it is not exported from the package barrel), so no surface can render
+ * unverified cycle-attributed detail or forget the receipt-only degradation.
+ */
+export async function resolveFeltConsolidation(
+  events: readonly FeltSourceEvent[],
+  adapter?: FeltCoverageAdapter,
+  redact: FeltRedactionPolicy = defaultFeltRedaction,
+): Promise<FeltConsolidationRecord[]> {
+  const candidates = projectFeltConsolidation(events, redact);
+  return adapter ? verifyFeltCoverage(candidates, events, adapter) : feltReceiptOnly(candidates);
+}
+
 async function coverageHolds(
-  rec: FeltConsolidationRecord,
+  c: FeltCandidate,
   manifest: ConsolidationMutationManifest | undefined,
   receipt: ConsolidationReceipt | undefined,
   rawByNode: ReadonlyMap<
@@ -411,29 +468,25 @@ async function coverageHolds(
   adapter: FeltCoverageAdapter,
 ): Promise<boolean> {
   if (!manifest || !receipt) return false;
-  if (rec.mutations.length === 0) return false;
-  // Signature — against the owner's key, inside the adapter.
+  if (c.candidateMutations.length === 0) return false;
   if (!(await adapter.verifyManifest(manifest))) return false;
-  // Receipt linkage — the manifest binds the EXACT signed receipt.
   if (manifest.receipt_id !== receipt.receipt_id) return false;
   if (manifest.receipt_digest !== (await adapter.receiptDigest(receipt))) return false;
-  // Displayed set === committed set, each content + provenance + sensitivity matched.
   const committed = new Map(manifest.mutations.map((m) => [m.node_id, m]));
-  if (rec.mutations.length !== committed.size) return false;
-  for (const dm of rec.mutations) {
-    const c = committed.get(dm.nodeId);
-    if (!c) return false;
+  if (c.candidateMutations.length !== committed.size) return false;
+  for (const dm of c.candidateMutations) {
+    const cm = committed.get(dm.nodeId);
+    if (!cm) return false;
     const raw = rawByNode.get(dm.nodeId);
     if (!raw) return false;
-    if ((await adapter.contentDigest(raw.content)) !== c.content_sha256) return false;
-    if (c.provenance !== raw.provenance) return false;
-    if (c.sensitivity !== raw.sensitivity) return false;
+    if ((await adapter.contentDigest(raw.content)) !== cm.content_sha256) return false;
+    if (cm.provenance !== raw.provenance) return false;
+    if (cm.sensitivity !== raw.sensitivity) return false;
   }
   return true;
 }
 
-/** Unknown/absent sensitivity fails closed to `Secret` (the strictest
- *  ceiling) — an omitted classification must never read as `none`. */
+/** Unknown/absent sensitivity fails closed to `Secret`. */
 function isSensitivity(v: unknown): v is SensitivityLevel {
   return (
     v === SensitivityLevel.None ||
@@ -446,36 +499,37 @@ function isSensitivity(v: unknown): v is SensitivityLevel {
 
 // ── Copy formatters — the calm presentation decisions, shared ──────────────
 //
-// These live here (not in a surface) so every surface that renders the felt
-// record reads identically — the canonical-boundary fix, the same place
-// `formatPeerEconomics` / `agentDisplayLabel` live. Only *time* formatting
-// stays per-surface (panels rule 6). The record's substance is settled; these
-// turn it into calm owner-facing words.
+// These live here (not in a surface) so every surface reads identically — the
+// canonical-boundary fix, the same place `formatPeerEconomics` lives. Only
+// *time* formatting stays per-surface (panels rule 6).
 
 /**
- * The resting headline — counts only (receipt-covered), calm and glanceable:
- * "2 learned · 1 refined · 3 faded", a zero part omitted. The split matches
- * the reveal verbs (Learned / Refined) so the headline composition equals the
- * detail composition; it collapses to "N learned · M faded" when there are no
- * refinements. Detail is one reveal away; the count at rest is the record, not
- * the content (records-vs-acts).
+ * The resting headline. A `verified` record shows the per-mutation split
+ * ("2 learned · 1 refined") — the manifest commits each `kind`. A
+ * `receipt_only` record shows the signed aggregate ("3 consolidated") — the
+ * counts-only receipt has no formed/refined split, and the unverified
+ * candidate split must NOT be shown. `faded` (the receipt's pruned aggregate)
+ * follows either. Zero parts omitted.
  */
 export function feltHeadline(record: FeltConsolidationRecord): string {
-  const learned = record.mutations.filter((m) => m.kind === "formed").length;
-  const refined = record.mutations.filter((m) => m.kind === "refined").length;
   const parts: string[] = [];
-  if (learned > 0) parts.push(`${learned} learned`);
-  if (refined > 0) parts.push(`${refined} refined`);
-  if (record.retired.count > 0) parts.push(`${record.retired.count} faded`);
+  if (record.evidence.status === "verified") {
+    const learned = record.evidence.mutations.filter((m) => m.kind === "formed").length;
+    const refined = record.evidence.mutations.filter((m) => m.kind === "refined").length;
+    if (learned > 0) parts.push(`${learned} learned`);
+    if (refined > 0) parts.push(`${refined} refined`);
+  } else if (record.receiptSummary.consolidated > 0) {
+    parts.push(`${record.receiptSummary.consolidated} consolidated`);
+  }
+  if (record.receiptSummary.pruned > 0) parts.push(`${record.receiptSummary.pruned} faded`);
   return parts.join(" · ");
 }
 
 /**
  * One reveal line. The provenance marker is shown ONLY when it is not the
- * obvious default (`consolidation_derived`): on a consolidation surface every
- * line is consolidation-derived, so the marker is redundant clutter; on a
- * surface where provenance varies (a taught vs inferred memory) it is the
- * meaningful signal. The disclosure is already sensitivity-bounded.
+ * obvious default (`consolidation_derived`) — redundant on a consolidation
+ * surface, meaningful where provenance varies. Disclosure is already
+ * sensitivity-bounded.
  */
 export function feltMutationLine(m: FeltMutation): string {
   const verb = m.kind === "refined" ? "Refined" : "Learned";
@@ -487,53 +541,53 @@ export function feltMutationLine(m: FeltMutation): string {
 }
 
 /**
- * The calm assurance status for the detail lines — a short resting label plus
- * the full cryptographic scope for a hover/title. Honest by construction:
- * "Verified" appears ONLY when the manifest cryptographically covered the
- * exact displayed mutations; otherwise the neutral "Local". The technical
- * register lives in `detail`, off the resting surface.
+ * The calm assurance label for a `verified` record's reveal — a short word
+ * plus the cryptographic scope for an accessible label. Only `verified`
+ * records carry detail, so this is the only coverage assurance a surface
+ * shows; a `receipt_only` record shows no coverage label at all (absence of
+ * "Verified" is the honest signal). Never reads "Local"/"Unverified".
  */
-export function feltCoverageStatus(record: FeltConsolidationRecord): {
-  label: string;
-  detail: string;
-} {
-  return record.mutationsCoveredBySignature
-    ? {
-        label: "Verified",
-        detail:
-          "These exact displayed changes match the signed mutation manifest for this cycle, checked against your own key.",
-      }
-    : {
-        label: "Local",
-        detail:
-          "Shown from your local memory and correlated to this cycle — not covered by the receipt signature.",
-      };
+export function feltVerifiedAssurance(): { label: string; detail: string } {
+  return {
+    label: "Verified",
+    detail:
+      "These exact displayed changes match the signed mutation manifest for this cycle, checked against your own key.",
+  };
 }
 
 /**
  * The calm receipt-assurance glyph for the resting row. Scope is the cycle
- * RECEIPT (the counts shown at rest), never the detail lines — those carry
- * their own coverage status. Unsigned ⇒ no glyph (honest: no assurance to
- * show), never a placeholder.
+ * RECEIPT, never the detail lines. Unsigned ⇒ no glyph (no placeholder).
  */
 export function feltAssuranceGlyph(assurance: FeltAssurance): string {
   return assurance === "anchored" ? "⚓" : assurance === "signed" ? "✓" : "";
 }
 
 /**
- * The accessible scope sentence for the receipt glyph — what the `✓`/`⚓`
- * actually attests: that this cycle produced a signed (optionally anchored)
- * receipt. It deliberately does NOT claim to attest the displayed
- * learned/refined counts — those come from the cycle's mutation set and are
- * covered by the separate mutation manifest (`feltCoverageStatus`), not the
- * counts-only receipt (whose `consolidate_merged` can differ, e.g. it counts
- * reinforcements that form no node). Two assurances, two scopes, never
- * conflated. Surfaces render this as `aria-label`/disclosure, not hover-only.
+ * The accessible scope sentence for the receipt glyph — that this cycle
+ * produced a signed (optionally anchored) receipt. It does NOT claim to attest
+ * the displayed counts (those are manifest-covered, `feltVerifiedAssurance`).
+ *
+ * The sentence is evidence-aware: a `receipt_only` row deliberately shows no
+ * exact changes, so its label must not say "the exact changes shown are
+ * verified separately" (state-inaccurate — there are none shown). It says the
+ * detailed changes are *unavailable* without a verified manifest instead. Only
+ * a `verified` row, which does show detail lines, references those changes.
  */
-export function feltReceiptScope(assurance: FeltAssurance): string {
-  return assurance === "anchored"
-    ? "This consolidation cycle's signed receipt is anchored onchain. The exact changes shown are verified separately."
-    : assurance === "signed"
-      ? "This consolidation cycle produced a signed receipt. The exact changes shown are verified separately."
-      : "This cycle is unsigned (no signing keys, or a zero-phase cycle).";
+export function feltReceiptScope(
+  assurance: FeltAssurance,
+  evidenceStatus: FeltMutationEvidence["status"],
+): string {
+  if (assurance === "unsigned") {
+    return "This cycle is unsigned (no signing keys, or a zero-phase cycle).";
+  }
+  const receipt =
+    assurance === "anchored"
+      ? "This consolidation cycle's signed receipt is anchored onchain."
+      : "This consolidation cycle produced a signed receipt.";
+  const detail =
+    evidenceStatus === "verified"
+      ? "The exact changes shown are verified separately against its signed mutation manifest."
+      : "Detailed changes are unavailable without a verified mutation manifest.";
+  return `${receipt} ${detail}`;
 }

@@ -5,11 +5,10 @@ import { formatTimeAgo } from "../types";
 import {
   createMemoryController,
   classifyCertainty,
-  projectFeltConsolidation,
-  verifyFeltCoverage,
+  resolveFeltConsolidation,
   feltHeadline,
   feltMutationLine,
-  feltCoverageStatus,
+  feltVerifiedAssurance,
   feltAssuranceGlyph,
   feltReceiptScope,
   type MemoryFetchAdapter,
@@ -709,16 +708,12 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       (e) => ({ event_type: e.event_type, timestamp: e.timestamp, payload: e.payload }),
     );
 
-    // The projection is the doctrine boundary: a no-op cycle yields no record;
-    // retirements are counts; disclosure is sensitivity-tiered; details start
-    // UNcovered by the signature.
-    const projected = projectFeltConsolidation(feltEvents);
-
-    // Upgrade coverage only where the signed mutation manifest cryptographically
-    // proves the displayed details ARE this cycle's mutations — verified against
-    // the owner's OWN identity key (never the manifest's embedded key). Without
-    // a local identity, details stay honestly uncovered.
-    let records = projected;
+    // resolveFeltConsolidation is the canonical boundary: it projects + verifies
+    // internally and returns ONLY render-safe records — the unverified
+    // candidates never reach this surface. With a local identity key we pass a
+    // verify adapter (against the owner's OWN key, fail-closed); without keys
+    // every cycle honestly degrades to a receipt-only summary.
+    let adapter: FeltCoverageAdapter | undefined;
     const ownerPubHex = ctx.app.publicKey;
     if (ownerPubHex) {
       const {
@@ -728,13 +723,13 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
         hexToBytes,
       } = await import("@motebit/encryption");
       const ownerKey = hexToBytes(ownerPubHex);
-      const adapter: FeltCoverageAdapter = {
+      adapter = {
         verifyManifest: (m) => verifyConsolidationMutationManifest(m, ownerKey),
         receiptDigest: (r) => consolidationReceiptDigest(r),
         contentDigest: (c) => consolidationContentDigest(c),
       };
-      records = await verifyFeltCoverage(projected, feltEvents, adapter);
     }
+    const records = await resolveFeltConsolidation(feltEvents, adapter);
 
     memoryList.innerHTML = "";
 
@@ -758,12 +753,15 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     const wrap = document.createElement("div");
     wrap.className = "mem-felt-wrap";
 
-    const expandable = rec.mutations.length > 0;
+    // Only a VERIFIED record carries detail (the evidence union makes an
+    // unverified-record-with-details unrepresentable). A receipt-only record
+    // renders a calm counts-only row — no reveal, no coverage label.
+    const expandable = rec.evidence.status === "verified";
     const detailId = `felt-detail-${rec.cycleId || "x"}-${rec.finishedAt}`;
 
     // A real <button> when expandable — natively focusable + Enter/Space
     // operable; aria-label on a clickable div would not be. Plain div when
-    // there is nothing to reveal (faded-only cycle).
+    // there is nothing to reveal (receipt-only cycle).
     const head = document.createElement(expandable ? "button" : "div");
     head.className = "mem-cert-row";
     if (expandable) {
@@ -787,7 +785,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       const badge = document.createElement("span");
       badge.className = "mem-felt-glyph";
       badge.textContent = glyph;
-      const scope = feltReceiptScope(rec.assurance);
+      const scope = feltReceiptScope(rec.assurance, rec.evidence.status);
       const glyphLabel = rec.cycleId ? `${scope} (cycle ${rec.cycleId})` : scope;
       badge.title = glyphLabel;
       badge.setAttribute("aria-label", glyphLabel);
@@ -801,22 +799,23 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
 
     wrap.appendChild(head);
 
-    // Explicit reveal — the sensitivity-bounded lines, on demand.
-    if (expandable) {
+    // Explicit reveal — the sensitivity-bounded lines, on demand. Only on a
+    // verified record (the narrowing exposes `evidence.mutations`).
+    if (rec.evidence.status === "verified") {
       const detail = document.createElement("div");
       detail.className = "mem-felt-detail";
       detail.id = detailId;
       detail.style.display = "none";
-      for (const m of rec.mutations) {
+      for (const m of rec.evidence.mutations) {
         const line = document.createElement("div");
         line.className = "mem-felt-line";
         line.textContent = feltMutationLine(m);
         detail.appendChild(line);
       }
-      // Calm coverage status — honest "Verified" only when the manifest covered
-      // these exact lines; the detail is on an accessible aria-label (covering
-      // the exact displayed changes, distinct from the glyph's receipt scope).
-      const status = feltCoverageStatus(rec);
+      // The single coverage label — "Verified" — only a verified record gets a
+      // reveal, so this is the only assurance shown; detail on an accessible
+      // aria-label (the exact displayed changes, distinct from the glyph scope).
+      const status = feltVerifiedAssurance();
       const note = document.createElement("div");
       note.className = "mem-felt-note";
       note.textContent = status.label;

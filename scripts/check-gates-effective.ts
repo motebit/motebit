@@ -165,6 +165,18 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-felt-interior-honesty",
+    proves:
+      'flags the OTHER arm — the projection minting a `verified` evidence VALUE (only the verifier may). Injecting `status: "verified",` into projectFeltConsolidation\'s region is the false-causal regression the discriminated evidence + resolver boundary exist to prevent.',
+    perturb: () =>
+      mutateFile("packages/panels/src/memory/felt-consolidation.ts", (src) =>
+        src.replace(
+          "const candidates: FeltCandidate[] = [];",
+          'const candidates: FeltCandidate[] = [];\n  const _probe = { status: "verified", mutations: [] };\n  void _probe;',
+        ),
+      ),
+  },
+  {
     script: "check-multihop-depth-single-site",
     proves:
       "flags a re-inlined settlement depth-limit comparison outside the canonical multihop-depth.ts (the recursion-safety invariant: the depth bound lives in exactly one place)",

@@ -3744,6 +3744,72 @@
         display: flex;
         flex-direction: column;
       }
+      /* Felt consolidation — "what I've learned" resting record. Shared copy
+         from @motebit/panels; this DOM/styling is web's. */
+      #memory-felt {
+        display: flex;
+        flex-direction: column;
+      }
+      #memory-felt:not(:empty) {
+        border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+        margin-bottom: 4px;
+        padding-bottom: 4px;
+      }
+      .mem-felt-wrap {
+        border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+      }
+      .mem-felt-wrap:last-child {
+        border-bottom: none;
+      }
+      /* Expandable rows are real <button>s (keyboard-operable) — reset chrome. */
+      button.mem-felt-row {
+        appearance: none;
+        -webkit-appearance: none;
+        background: none;
+        border: none;
+        width: 100%;
+        font: inherit;
+        color: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .mem-felt-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+      }
+      button.mem-felt-row:focus-visible {
+        outline: 2px solid rgba(0, 0, 0, 0.25);
+        outline-offset: -2px;
+      }
+      .mem-felt-headline {
+        font-size: 12px;
+        color: rgba(0, 0, 0, 0.72);
+      }
+      .mem-felt-glyph {
+        font-size: 11px;
+        color: rgba(0, 0, 0, 0.35);
+      }
+      .mem-felt-time {
+        font-size: 10px;
+        color: rgba(0, 0, 0, 0.35);
+        margin-left: auto;
+      }
+      .mem-felt-detail {
+        padding: 2px 12px 10px 12px;
+      }
+      .mem-felt-line {
+        font-size: 11px;
+        color: rgba(0, 0, 0, 0.6);
+        padding: 2px 0;
+      }
+      .mem-felt-note {
+        font-size: 10px;
+        color: rgba(0, 0, 0, 0.35);
+        font-style: italic;
+        padding-top: 4px;
+      }
       .mem-panel-header {
         display: flex;
         align-items: center;
@@ -7953,6 +8019,9 @@
            height 50/50 and push the pulse below center (the agents/
            memory bug fixed 2026-05-16).
            Doctrine: panel-temporal-registers.md §"Structural-void". -->
+      <!-- Felt consolidation — "what I've learned" resting record, above the
+           node list. Verified detail only; receipt-only cycles show counts. -->
+      <div id="memory-felt"></div>
       <div id="memory-list"></div>
     </div>
 
@@ -9110,8 +9179,7 @@
                   <div class="webllm-progress-text" id="webllm-progress-text"></div>
                 </div>
                 <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px">
-                  Downloads once (size shown above), then runs offline in your
-                  browser via WebGPU.
+                  Downloads once (size shown above), then runs offline in your browser via WebGPU.
                 </div>
               </div>
               <!-- Local Server sub-panel -->

@@ -35,16 +35,19 @@ import {
   type AgentsFetchAdapter,
   formatCountdownUntil,
   formatTokens,
+  resolveFeltConsolidation,
   type AgentsState,
   type DiscoveredAgent,
   type MemoryFetchAdapter,
   type MemoryState,
   type PricingEntry,
   type ScheduledGoal,
+  type FeltCoverageAdapter,
 } from "@motebit/panels";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import { deriveAgentSigil } from "@motebit/sdk";
 import { sigilToSvg } from "../identity-sigil-svg.js";
+import { buildFeltRow } from "./felt-row";
 // Run records are a web-daemon-only concept owned by the in-process goals
 // engine (web's daemon); the controller's projection state has no `runs`.
 import type { GoalRunRecord } from "../goal-engine.js";
@@ -118,6 +121,7 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
   const memoryPanel = document.getElementById("memory-panel") as HTMLDivElement;
   const memoryBackdrop = document.getElementById("memory-backdrop") as HTMLDivElement;
   const memoryList = document.getElementById("memory-list") as HTMLDivElement;
+  const memoryFelt = document.getElementById("memory-felt") as HTMLDivElement;
 
   const memoryAdapter: MemoryFetchAdapter = {
     listMemories: async () => {
@@ -247,12 +251,73 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
 
   memoryCtrl.subscribe(renderMemories);
 
+  // Felt consolidation — the owner-facing "what I've learned" resting record.
+  // The projection, verification, and copy are the SHARED @motebit/panels
+  // primitives (same as desktop); only this DOM render is web's. Verified
+  // detail only — the evidence union makes an unverified-with-details record
+  // unrepresentable; receipt-only cycles show signed counts.
+  async function renderFeltConsolidation(): Promise<void> {
+    const runtime = ctx.app.getRuntime();
+    if (!runtime) {
+      memoryFelt.innerHTML = "";
+      return;
+    }
+    const { EventType } = await import("@motebit/sdk");
+    const rows = await runtime.events.query({
+      motebit_id: runtime.motebitId,
+      event_types: [
+        EventType.ConsolidationCycleRun,
+        EventType.ConsolidationReceiptSigned,
+        EventType.ConsolidationReceiptsAnchored,
+        EventType.MemoryFormed,
+        EventType.MemoryConsolidated,
+      ],
+    });
+    const feltEvents = rows.map((e) => ({
+      event_type: e.event_type,
+      timestamp: e.timestamp,
+      payload: e.payload,
+    }));
+
+    // resolveFeltConsolidation is the canonical boundary — projects + verifies
+    // internally, returns ONLY render-safe records (unverified candidates never
+    // reach this surface). Verify against the owner's OWN local key (fail-closed
+    // parity with desktop; succession-chain verification deferred). No key →
+    // every cycle degrades to receipt-only.
+    let adapter: FeltCoverageAdapter | undefined;
+    const ownerPubHex = ctx.app.publicKeyHex;
+    if (ownerPubHex) {
+      const {
+        verifyConsolidationMutationManifest,
+        consolidationReceiptDigest,
+        consolidationContentDigest,
+        hexToBytes,
+      } = await import("@motebit/encryption");
+      const ownerKey = hexToBytes(ownerPubHex);
+      adapter = {
+        verifyManifest: (m) => verifyConsolidationMutationManifest(m, ownerKey),
+        receiptDigest: (r) => consolidationReceiptDigest(r),
+        contentDigest: (c) => consolidationContentDigest(c),
+      };
+    }
+    const records = await resolveFeltConsolidation(feltEvents, adapter);
+
+    memoryFelt.innerHTML = "";
+    for (const rec of records) memoryFelt.appendChild(buildFeltRow(rec, formatTimeAgo));
+  }
+
+  // buildFeltRow lives in ./felt-row (imports only @motebit/panels + the DOM)
+  // so the render regression test can assert evidence-state → DOM without
+  // pulling in the whole gated-panels dependency tree. Time formatting is
+  // injected (panels rule 6 — formatTimeAgo stays web-local).
+
   function openMemory(auditNodeIds?: Map<string, string>): void {
     closeAll();
     memoryCtrl.setAuditFlags(auditNodeIds ?? new Map<string, string>());
     memoryPanel.classList.add("open");
     memoryBackdrop.classList.add("open");
     void memoryCtrl.refresh();
+    void renderFeltConsolidation();
   }
 
   function closeMemory(): void {
