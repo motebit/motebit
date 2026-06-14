@@ -34,6 +34,7 @@
 import {
   SensitivityLevel,
   isMemorySource,
+  MEMORY_SOURCE_MARKERS,
   type MemorySource,
   type ConsolidationMutationManifest,
   type ConsolidationReceipt,
@@ -441,4 +442,98 @@ function isSensitivity(v: unknown): v is SensitivityLevel {
     v === SensitivityLevel.Financial ||
     v === SensitivityLevel.Secret
   );
+}
+
+// ── Copy formatters — the calm presentation decisions, shared ──────────────
+//
+// These live here (not in a surface) so every surface that renders the felt
+// record reads identically — the canonical-boundary fix, the same place
+// `formatPeerEconomics` / `agentDisplayLabel` live. Only *time* formatting
+// stays per-surface (panels rule 6). The record's substance is settled; these
+// turn it into calm owner-facing words.
+
+/**
+ * The resting headline — counts only (receipt-covered), calm and glanceable:
+ * "2 learned · 1 refined · 3 faded", a zero part omitted. The split matches
+ * the reveal verbs (Learned / Refined) so the headline composition equals the
+ * detail composition; it collapses to "N learned · M faded" when there are no
+ * refinements. Detail is one reveal away; the count at rest is the record, not
+ * the content (records-vs-acts).
+ */
+export function feltHeadline(record: FeltConsolidationRecord): string {
+  const learned = record.mutations.filter((m) => m.kind === "formed").length;
+  const refined = record.mutations.filter((m) => m.kind === "refined").length;
+  const parts: string[] = [];
+  if (learned > 0) parts.push(`${learned} learned`);
+  if (refined > 0) parts.push(`${refined} refined`);
+  if (record.retired.count > 0) parts.push(`${record.retired.count} faded`);
+  return parts.join(" · ");
+}
+
+/**
+ * One reveal line. The provenance marker is shown ONLY when it is not the
+ * obvious default (`consolidation_derived`): on a consolidation surface every
+ * line is consolidation-derived, so the marker is redundant clutter; on a
+ * surface where provenance varies (a taught vs inferred memory) it is the
+ * meaningful signal. The disclosure is already sensitivity-bounded.
+ */
+export function feltMutationLine(m: FeltMutation): string {
+  const verb = m.kind === "refined" ? "Refined" : "Learned";
+  const marker =
+    m.provenance && m.provenance !== "consolidation_derived"
+      ? ` · ${MEMORY_SOURCE_MARKERS[m.provenance]}`
+      : "";
+  return `${verb}: ${m.disclosure}${marker}`;
+}
+
+/**
+ * The calm assurance status for the detail lines — a short resting label plus
+ * the full cryptographic scope for a hover/title. Honest by construction:
+ * "Verified" appears ONLY when the manifest cryptographically covered the
+ * exact displayed mutations; otherwise the neutral "Local". The technical
+ * register lives in `detail`, off the resting surface.
+ */
+export function feltCoverageStatus(record: FeltConsolidationRecord): {
+  label: string;
+  detail: string;
+} {
+  return record.mutationsCoveredBySignature
+    ? {
+        label: "Verified",
+        detail:
+          "These exact displayed changes match the signed mutation manifest for this cycle, checked against your own key.",
+      }
+    : {
+        label: "Local",
+        detail:
+          "Shown from your local memory and correlated to this cycle — not covered by the receipt signature.",
+      };
+}
+
+/**
+ * The calm receipt-assurance glyph for the resting row. Scope is the cycle
+ * RECEIPT (the counts shown at rest), never the detail lines — those carry
+ * their own coverage status. Unsigned ⇒ no glyph (honest: no assurance to
+ * show), never a placeholder.
+ */
+export function feltAssuranceGlyph(assurance: FeltAssurance): string {
+  return assurance === "anchored" ? "⚓" : assurance === "signed" ? "✓" : "";
+}
+
+/**
+ * The accessible scope sentence for the receipt glyph — what the `✓`/`⚓`
+ * actually attests: that this cycle produced a signed (optionally anchored)
+ * receipt. It deliberately does NOT claim to attest the displayed
+ * learned/refined counts — those come from the cycle's mutation set and are
+ * covered by the separate mutation manifest (`feltCoverageStatus`), not the
+ * counts-only receipt (whose `consolidate_merged` can differ, e.g. it counts
+ * reinforcements that form no node). Two assurances, two scopes, never
+ * conflated. Surfaces render this as `aria-label`/disclosure, not hover-only.
+ */
+export function feltReceiptScope(assurance: FeltAssurance): string {
+  return assurance === "anchored"
+    ? "This consolidation cycle's signed receipt is anchored onchain. The exact changes shown are verified separately."
+    : assurance === "signed"
+      ? "This consolidation cycle produced a signed receipt. The exact changes shown are verified separately."
+      : "This cycle is unsigned (no signing keys, or a zero-phase cycle).";
 }

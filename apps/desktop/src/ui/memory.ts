@@ -1,4 +1,4 @@
-import { RelationType, SensitivityLevel, MEMORY_SOURCE_MARKERS } from "@motebit/sdk";
+import { RelationType, SensitivityLevel } from "@motebit/sdk";
 import type { MemoryNode, MemoryEdge, DeletionCertificate } from "../index";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
@@ -7,6 +7,11 @@ import {
   classifyCertainty,
   projectFeltConsolidation,
   verifyFeltCoverage,
+  feltHeadline,
+  feltMutationLine,
+  feltCoverageStatus,
+  feltAssuranceGlyph,
+  feltReceiptScope,
   type MemoryFetchAdapter,
   type MemoryState,
   type FeltConsolidationRecord,
@@ -750,78 +755,80 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
   // ACTUAL state — never an implied signing/anchoring. Detail is revealed on
   // demand, not announced. Doctrine: docs/doctrine/felt-interior.md.
   function renderFeltRow(rec: FeltConsolidationRecord): HTMLDivElement {
-    const idShort = rec.cycleId ? rec.cycleId.slice(0, 8) : "cycle";
-    const assuranceGlyph =
-      rec.assurance === "anchored" ? " ⚓" : rec.assurance === "signed" ? " ✓" : "";
-    // Scope is honest: the glyph attests the cycle RECEIPT (the counts). The
-    // detail lines are covered only when the signed mutation manifest verified.
-    const scopeNote = rec.mutationsCoveredBySignature
-      ? "covers the counts and the details below"
-      : "covers the counts, not the details below";
-    const assuranceTitle =
-      rec.assurance === "anchored"
-        ? `cycle receipt signed and anchored onchain — ${scopeNote}`
-        : rec.assurance === "signed"
-          ? `cycle receipt signed; not yet anchored — ${scopeNote}`
-          : "unsigned (no signing keys configured or cycle ran zero phases)";
-
-    const learned = rec.mutations.length;
-    const headlineParts: string[] = [];
-    if (learned > 0) headlineParts.push(`learned ${learned}`);
-    if (rec.retired.count > 0) headlineParts.push(`${rec.retired.count} faded`);
-
     const wrap = document.createElement("div");
     wrap.className = "mem-felt-wrap";
 
-    const head = document.createElement("div");
+    const expandable = rec.mutations.length > 0;
+    const detailId = `felt-detail-${rec.cycleId || "x"}-${rec.finishedAt}`;
+
+    // A real <button> when expandable — natively focusable + Enter/Space
+    // operable; aria-label on a clickable div would not be. Plain div when
+    // there is nothing to reveal (faded-only cycle).
+    const head = document.createElement(expandable ? "button" : "div");
     head.className = "mem-cert-row";
+    if (expandable) {
+      const btn = head as HTMLButtonElement;
+      btn.type = "button";
+      btn.setAttribute("aria-expanded", "false");
+      btn.setAttribute("aria-controls", detailId);
+    }
 
-    const badge = document.createElement("span");
-    badge.className = "mem-cert-hash";
-    badge.textContent = `${idShort}${assuranceGlyph}`;
-    badge.title = `Cycle ${rec.cycleId} — ${assuranceTitle}`;
-
+    // Headline leads — what changed, calm and glanceable.
     const summary = document.createElement("span");
-    summary.className = "mem-cert-target";
-    summary.textContent = headlineParts.join(", ");
+    summary.className = "mem-felt-headline";
+    summary.textContent = feltHeadline(rec);
+    head.appendChild(summary);
+
+    // The glyph attests the cycle RECEIPT — distinct from the detail-coverage
+    // status below. Omitted entirely for unsigned (no placeholder). Scope
+    // sentence + cycle id are on an accessible aria-label, not hover-only.
+    const glyph = feltAssuranceGlyph(rec.assurance);
+    if (glyph) {
+      const badge = document.createElement("span");
+      badge.className = "mem-felt-glyph";
+      badge.textContent = glyph;
+      const scope = feltReceiptScope(rec.assurance);
+      const glyphLabel = rec.cycleId ? `${scope} (cycle ${rec.cycleId})` : scope;
+      badge.title = glyphLabel;
+      badge.setAttribute("aria-label", glyphLabel);
+      head.appendChild(badge);
+    }
 
     const timeSpan = document.createElement("span");
     timeSpan.className = "mem-cert-time";
     timeSpan.textContent = formatTimeAgo(rec.finishedAt);
-
-    head.appendChild(badge);
-    head.appendChild(summary);
     head.appendChild(timeSpan);
+
     wrap.appendChild(head);
 
     // Explicit reveal — the sensitivity-bounded lines, on demand.
-    if (rec.mutations.length > 0) {
-      head.style.cursor = "pointer";
+    if (expandable) {
       const detail = document.createElement("div");
       detail.className = "mem-felt-detail";
+      detail.id = detailId;
       detail.style.display = "none";
       for (const m of rec.mutations) {
         const line = document.createElement("div");
         line.className = "mem-felt-line";
-        const verb = m.kind === "refined" ? "Refined" : "Learned";
-        const marker = m.provenance ? MEMORY_SOURCE_MARKERS[m.provenance] : "";
-        line.textContent = marker
-          ? `${verb}: ${m.disclosure} · ${marker}`
-          : `${verb}: ${m.disclosure}`;
+        line.textContent = feltMutationLine(m);
         detail.appendChild(line);
       }
-      // Honest assurance scope, always shown: when the signed mutation manifest
-      // verified, these exact lines are cryptographically the signed cycle's;
-      // otherwise they are a local reconstruction the signature does not cover.
+      // Calm coverage status — honest "Verified" only when the manifest covered
+      // these exact lines; the detail is on an accessible aria-label (covering
+      // the exact displayed changes, distinct from the glyph's receipt scope).
+      const status = feltCoverageStatus(rec);
       const note = document.createElement("div");
       note.className = "mem-felt-note";
-      note.textContent = rec.mutationsCoveredBySignature
-        ? "Covered by this cycle's signature · verified locally"
-        : "From your local memory · not covered by the receipt signature";
+      note.textContent = status.label;
+      note.title = status.detail;
+      note.setAttribute("aria-label", status.detail);
       detail.appendChild(note);
       wrap.appendChild(detail);
+
       head.addEventListener("click", () => {
-        detail.style.display = detail.style.display === "none" ? "block" : "none";
+        const open = detail.style.display === "none";
+        detail.style.display = open ? "block" : "none";
+        head.setAttribute("aria-expanded", open ? "true" : "false");
       });
     }
 

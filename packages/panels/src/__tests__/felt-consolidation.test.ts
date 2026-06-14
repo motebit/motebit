@@ -1,11 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { SensitivityLevel } from "@motebit/protocol";
+import { SensitivityLevel, MEMORY_SOURCE_MARKERS } from "@motebit/protocol";
 import {
   projectFeltConsolidation,
   verifyFeltCoverage,
   defaultFeltRedaction,
+  feltHeadline,
+  feltMutationLine,
+  feltCoverageStatus,
+  feltAssuranceGlyph,
+  feltReceiptScope,
   type FeltSourceEvent,
   type FeltCoverageAdapter,
+  type FeltMutation,
+  type FeltConsolidationRecord,
 } from "../memory/felt-consolidation";
 
 // Strict-safe first-element access (noUncheckedIndexedAccess is on).
@@ -399,5 +406,83 @@ describe("verifyFeltCoverage", () => {
       { ...commitment("n1", "prefers structured answers"), sensitivity: SensitivityLevel.Medical },
     ]);
     expect(await coverageFor(baseEvents(m))).toBe(false);
+  });
+});
+
+describe("felt copy formatters", () => {
+  const mut = (over: Partial<FeltMutation> = {}): FeltMutation => ({
+    nodeId: "n1",
+    kind: "formed",
+    disclosure: "prefers structured answers",
+    sensitivity: SensitivityLevel.Personal,
+    ...over,
+  });
+  const rec = (over: Partial<FeltConsolidationRecord> = {}): FeltConsolidationRecord => ({
+    cycleId: "c1",
+    finishedAt: 200,
+    assurance: "signed",
+    mutations: [],
+    retired: { count: 0 },
+    mutationsCoveredBySignature: false,
+    ...over,
+  });
+
+  it("feltHeadline splits learned/refined/faded so the headline matches the reveal", () => {
+    expect(
+      feltHeadline(rec({ mutations: [mut(), mut({ kind: "refined" })], retired: { count: 3 } })),
+    ).toBe("1 learned · 1 refined · 3 faded");
+    // Collapses to the calm two-part form when there are no refinements.
+    expect(feltHeadline(rec({ mutations: [mut(), mut()] }))).toBe("2 learned");
+    expect(feltHeadline(rec({ mutations: [mut({ kind: "refined" })] }))).toBe("1 refined");
+    expect(feltHeadline(rec({ retired: { count: 3 } }))).toBe("3 faded");
+  });
+
+  it("feltReceiptScope scopes the glyph to the receipt, NOT the displayed counts", () => {
+    expect(feltReceiptScope("anchored")).toContain("anchored");
+    expect(feltReceiptScope("signed")).toContain("signed receipt");
+    expect(feltReceiptScope("unsigned")).toContain("unsigned");
+    // Must not overclaim: the receipt does not attest the displayed
+    // learned/refined counts (those are manifest-covered — consolidate_merged
+    // can differ, e.g. reinforcements that form no node). It defers to
+    // "verified separately".
+    expect(feltReceiptScope("signed")).not.toContain("counts above");
+    expect(feltReceiptScope("signed")).toContain("verified separately");
+  });
+
+  it("feltMutationLine suppresses the redundant consolidation_derived marker", () => {
+    expect(feltMutationLine(mut({ provenance: "consolidation_derived" }))).toBe(
+      "Learned: prefers structured answers",
+    );
+    expect(
+      feltMutationLine(
+        mut({ kind: "refined", provenance: "consolidation_derived", disclosure: "x" }),
+      ),
+    ).toBe("Refined: x");
+    expect(feltMutationLine(mut({ provenance: undefined }))).toBe(
+      "Learned: prefers structured answers",
+    );
+  });
+
+  it("feltMutationLine shows the marker only when provenance varies (taught vs inferred)", () => {
+    const taught = feltMutationLine(mut({ provenance: "user_stated", disclosure: "lives in LA" }));
+    expect(taught).toBe(`Learned: lives in LA · ${MEMORY_SOURCE_MARKERS.user_stated}`);
+    const inferred = feltMutationLine(
+      mut({ provenance: "agent_inferred", disclosure: "early riser" }),
+    );
+    expect(inferred).toContain(MEMORY_SOURCE_MARKERS.agent_inferred);
+    expect(taught).not.toBe(inferred);
+  });
+
+  it("feltCoverageStatus is honest — Verified only when covered, scoped to displayed changes", () => {
+    const v = feltCoverageStatus(rec({ mutationsCoveredBySignature: true }));
+    expect(v.label).toBe("Verified");
+    expect(v.detail).toContain("displayed changes match the signed mutation manifest");
+    expect(feltCoverageStatus(rec({ mutationsCoveredBySignature: false })).label).toBe("Local");
+  });
+
+  it("feltAssuranceGlyph never shows a placeholder for unsigned", () => {
+    expect(feltAssuranceGlyph("anchored")).toBe("⚓");
+    expect(feltAssuranceGlyph("signed")).toBe("✓");
+    expect(feltAssuranceGlyph("unsigned")).toBe("");
   });
 });
