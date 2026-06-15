@@ -504,6 +504,42 @@ describe("HttpConversationSyncAdapter", () => {
     expect(credentialSource.getCredential).toHaveBeenCalledWith({ serverUrl: BASE_URL });
   });
 
+  it("re-resolves credentialSource per request — a fresh token each call (staleness defense)", async () => {
+    // The web surface mints rotating 5-minute JWTs, so a long-lived poller must
+    // obtain a FRESH token on every request, never reuse a bootstrap token.
+    // Regression for the 2026-06-15 incident: a static authToken expired
+    // mid-session and the relay 403'd /sync/:id/conversations on the next poll.
+    // A credentialSource that returns a new token per call proves the adapter
+    // consults it per request, not once at construction (the staleness fix that
+    // the #128 drift gate locks at the wiring level — this proves the mechanism).
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn
+      .mockResolvedValueOnce(new Response(JSON.stringify({ conversations: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ conversations: [] }), { status: 200 }));
+
+    let n = 0;
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockImplementation(async () => `tok-${++n}`),
+    };
+
+    const adapter = new HttpConversationSyncAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource,
+    });
+
+    await adapter.pullConversations(MOTEBIT_ID, 0);
+    await adapter.pullConversations(MOTEBIT_ID, 0);
+
+    // Consulted once per request, and each request carries its own fresh token —
+    // so a token minted at t=0 never lingers to be sent (expired) at t=6min.
+    expect(credentialSource.getCredential).toHaveBeenCalledTimes(2);
+    const [, opt1] = mockFn.mock.calls[0]!;
+    const [, opt2] = mockFn.mock.calls[1]!;
+    expect(opt1.headers["Authorization"]).toBe("Bearer tok-1");
+    expect(opt2.headers["Authorization"]).toBe("Bearer tok-2");
+  });
+
   it("credentialSource takes precedence over authToken", async () => {
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
     mockFn.mockResolvedValueOnce(

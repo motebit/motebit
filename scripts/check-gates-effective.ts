@@ -177,6 +177,16 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-sync-token-freshness",
+    proves:
+      "flags a web HTTP sync adapter regressed back to a static `authToken` (no `credentialSource`) — the exact 2026-06-15 staleness bug where a polling adapter handed a single 5-min JWT 403'd every relay request past minute 5. The fixture constructs `new HttpConversationSyncAdapter({ … authToken })` in apps/web/src, which the gate scans textually (no typecheck needed).",
+    perturb: () =>
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}stale_sync.ts`,
+        'const x = new HttpConversationSyncAdapter({ baseUrl: "u", motebitId: "m", authToken: t });\nvoid x;\n',
+      ),
+  },
+  {
     script: "check-multihop-depth-single-site",
     proves:
       "flags a re-inlined settlement depth-limit comparison outside the canonical multihop-depth.ts (the recursion-safety invariant: the depth bound lives in exactly one place)",

@@ -3703,7 +3703,11 @@ export class UnbootedWebApp {
       const httpPlanAdapter = new HttpPlanSyncAdapter({
         baseUrl: relayUrl,
         motebitId: this._motebitId,
-        authToken: token ?? undefined,
+        // Fresh-token source, NOT the static 5-min `token`: PlanSyncEngine
+        // polls every 30s, so a session open >5 min reused an expired JWT and
+        // the relay 403'd. Same staleness fix the event-store/WS adapters got
+        // (see syncCredentialSource above) — this sibling had been missed.
+        credentialSource: syncCredentialSource,
       });
       this._planSyncEngine.connectRemote(
         new EncryptedPlanSyncAdapter({ inner: httpPlanAdapter, key: encKey }),
@@ -3723,7 +3727,10 @@ export class UnbootedWebApp {
       const httpConvAdapter = new HttpConversationSyncAdapter({
         baseUrl: relayUrl,
         motebitId: this._motebitId,
-        authToken: token ?? undefined,
+        // Fresh-token source, NOT the static 5-min `token`: ConversationSyncEngine
+        // polls via .start(), so after 5 min it 403'd on /sync/:id/conversations
+        // (the observed failure). Same staleness fix as the sibling sync adapters.
+        credentialSource: syncCredentialSource,
       });
       this._conversationSyncEngine.connectRemote(
         new EncryptedConversationSyncAdapter({ inner: httpConvAdapter, key: encKey }),

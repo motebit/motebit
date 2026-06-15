@@ -242,6 +242,38 @@ describe("HttpPlanSyncAdapter", () => {
     expect(credentialSource.getCredential).toHaveBeenCalledWith({ serverUrl: BASE_URL });
   });
 
+  it("re-resolves credentialSource per request — a fresh token each call (staleness defense)", async () => {
+    // PlanSyncEngine polls every 30s; with a rotating 5-min web JWT it must
+    // obtain a fresh token EVERY request. Regression for the 2026-06-15 incident
+    // (latent here, observed on the conversation sibling): a static authToken
+    // expired mid-session and the relay 403'd. A credentialSource returning a
+    // new token per call proves per-request consultation, not a single capture.
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn
+      .mockResolvedValueOnce(new Response(JSON.stringify({ plans: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ plans: [] }), { status: 200 }));
+
+    let n = 0;
+    const credentialSource: CredentialSource = {
+      getCredential: vi.fn().mockImplementation(async () => `tok-${++n}`),
+    };
+
+    const adapter = new HttpPlanSyncAdapter({
+      baseUrl: BASE_URL,
+      motebitId: MOTEBIT,
+      credentialSource,
+    });
+
+    await adapter.pullPlans(MOTEBIT, 0);
+    await adapter.pullPlans(MOTEBIT, 0);
+
+    expect(credentialSource.getCredential).toHaveBeenCalledTimes(2);
+    const [, opt1] = mockFn.mock.calls[0]!;
+    const [, opt2] = mockFn.mock.calls[1]!;
+    expect(opt1.headers["Authorization"]).toBe("Bearer tok-1");
+    expect(opt2.headers["Authorization"]).toBe("Bearer tok-2");
+  });
+
   it("credentialSource takes precedence over authToken", async () => {
     const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
     mockFn.mockResolvedValueOnce(new Response(JSON.stringify({ plans: [] }), { status: 200 }));
