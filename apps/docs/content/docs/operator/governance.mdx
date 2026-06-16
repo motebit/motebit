@@ -47,7 +47,7 @@ When a `motebit.md` identity file declares governance thresholds, the PolicyGate
 
 The constraint `max_risk_auto <= require_approval_above <= deny_above` must hold. If any threshold is missing or the constraint is violated, the daemon refuses to start (fail-closed).
 
-In practice with the defaults: read and draft tools flow automatically, write and execute tools require approval, and financial tools are hard-denied.
+In practice with the defaults: read and draft tools (≤ `R1_DRAFT`) flow automatically; write, execute, and financial tools (`R2`–`R4_MONEY`) require approval. Because `deny_above` sits at the top of the scale (`R4_MONEY`), nothing is hard-denied by default — set `deny_above` lower to unconditionally block a risk class. (An `R4_MONEY` call can only ever *auto*-execute when the turn carries a cryptographically verified standing-delegation grant; absent that, it always routes to approval — see the governance doctrine.)
 
 ## Operator mode
 

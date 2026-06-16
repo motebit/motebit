@@ -452,12 +452,12 @@ Retrieved memories are ranked by a combination of relevance, confidence, and rec
 
 ## Half-life decay
 
-Memories don't persist at full strength forever. Each memory has a half-life — the time it takes for its confidence to drop by half. The default is 7 days.
+Memories don't persist at full strength forever. Each memory has a half-life — the time it takes for its confidence to drop by half. The default depends on the kind: **3 days for episodic memories** (observations, transient context) and **30 days for semantic memories** (durable facts).
 
-A memory stored at 90% confidence:
-- After 7 days: 45%
-- After 14 days: 22%
-- After 28 days: 5%
+A semantic memory stored at 90% confidence (30-day half-life):
+- After 30 days: 45%
+- After 60 days: 22%
+- After 90 days: 11%
 
 Trivia fades. Important things stick — because they get reinforced. When a memory is accessed or confirmed, its confidence resets. Memories that matter keep coming back; memories that don't, gracefully disappear.
 
@@ -4224,7 +4224,7 @@ Each relay has a persistent cryptographic identity, independent of the agents it
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | Algorithm  | Ed25519                                                                                                                         |
 | Key size   | 32-byte public key, 64-byte private key                                                                                         |
-| Storage    | AES-256-GCM encrypted at rest (PBKDF2, 100k iterations) when `MOTEBIT_RELAY_KEY_PASSPHRASE` is set. Plaintext hex for dev mode. |
+| Storage    | AES-256-GCM encrypted at rest (PBKDF2, 600k iterations) when `MOTEBIT_RELAY_KEY_PASSPHRASE` is set. Plaintext hex for dev mode. |
 | Identifier | `motebit_id` (UUID v7), distinct from any agent's identity                                                                      |
 
 The relay's identity is generated on first startup and persists across restarts. The public key and `motebit_id` are published to peers during the peering handshake.
@@ -5806,7 +5806,7 @@ When voice is active, the creature responds to sound:
 | RMS (overall) | Breathing amplitude scales up |
 | Low (bass) | Interior glow intensifies |
 | Mid (melody) | Drift/swaying increases |
-| High (transients) | Glass iridescence shimmers |
+| High (transients) | Surface iridescence shimmers |
 
 These modulations layer on top of behavior cues — they don't replace them.
 
@@ -6110,7 +6110,7 @@ Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencie
 
 ## Permissive / BSL boundary
 
-11 packages sit on the permissive floor — Apache-2.0, with an explicit patent grant and litigation-termination clause. `check-deps.ts` enforces that permissive-floor packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
+10 packages sit on the permissive floor — Apache-2.0, with an explicit patent grant and litigation-termination clause. `check-deps.ts` enforces that permissive-floor packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
 
 | Package                                         | Answers                                                            | Layer |
 | ----------------------------------------------- | ------------------------------------------------------------------ | ----- |
@@ -6167,7 +6167,7 @@ Every structured-data module registers its kind via `registerSpatialDataModule<K
 
 ## Services
 
-Eight services in four roles. All are reference implementations of the protocol specs — swappable by anyone running a compliant alternative.
+Nine services in four roles. All are reference implementations of the protocol specs — swappable by anyone running a compliant alternative.
 
 | Role          | Services                                                       | Pattern                                                                                                                                                            |
 | ------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -6180,7 +6180,7 @@ Every task settles through the relay or directly peer-to-peer. Relay-mediated: b
 
 ## Specifications
 
-All twenty-six specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
+All twenty-nine specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
 
 The `motebit.md` identity file is the most-used entry point: any tool can verify one with `@motebit/crypto`, with or without the motebit runtime.
 
@@ -6601,7 +6601,7 @@ When a `motebit.md` identity file declares governance thresholds, the PolicyGate
 
 The constraint `max_risk_auto <= require_approval_above <= deny_above` must hold. If any threshold is missing or the constraint is violated, the daemon refuses to start (fail-closed).
 
-In practice with the defaults: read and draft tools flow automatically, write and execute tools require approval, and financial tools are hard-denied.
+In practice with the defaults: read and draft tools (≤ `R1_DRAFT`) flow automatically; write, execute, and financial tools (`R2`–`R4_MONEY`) require approval. Because `deny_above` sits at the top of the scale (`R4_MONEY`), nothing is hard-denied by default — set `deny_above` lower to unconditionally block a risk class. (An `R4_MONEY` call can only ever *auto*-execute when the turn carries a cryptographically verified standing-delegation grant; absent that, it always routes to approval — see the governance doctrine.)
 
 ## Operator mode
 

@@ -171,7 +171,7 @@ Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencie
 
 ## Permissive / BSL boundary
 
-11 packages sit on the permissive floor — Apache-2.0, with an explicit patent grant and litigation-termination clause. `check-deps.ts` enforces that permissive-floor packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
+10 packages sit on the permissive floor — Apache-2.0, with an explicit patent grant and litigation-termination clause. `check-deps.ts` enforces that permissive-floor packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
 
 | Package                                         | Answers                                                            | Layer |
 | ----------------------------------------------- | ------------------------------------------------------------------ | ----- |
@@ -228,7 +228,7 @@ Every structured-data module registers its kind via `registerSpatialDataModule<K
 
 ## Services
 
-Eight services in four roles. All are reference implementations of the protocol specs — swappable by anyone running a compliant alternative.
+Nine services in four roles. All are reference implementations of the protocol specs — swappable by anyone running a compliant alternative.
 
 | Role          | Services                                                       | Pattern                                                                                                                                                            |
 | ------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -241,7 +241,7 @@ Every task settles through the relay or directly peer-to-peer. Relay-mediated: b
 
 ## Specifications
 
-All twenty-six specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
+All twenty-nine specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
 
 The `motebit.md` identity file is the most-used entry point: any tool can verify one with `@motebit/crypto`, with or without the motebit runtime.
 

@@ -25,7 +25,7 @@ Each relay has a persistent cryptographic identity, independent of the agents it
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | Algorithm  | Ed25519                                                                                                                         |
 | Key size   | 32-byte public key, 64-byte private key                                                                                         |
-| Storage    | AES-256-GCM encrypted at rest (PBKDF2, 100k iterations) when `MOTEBIT_RELAY_KEY_PASSPHRASE` is set. Plaintext hex for dev mode. |
+| Storage    | AES-256-GCM encrypted at rest (PBKDF2, 600k iterations) when `MOTEBIT_RELAY_KEY_PASSPHRASE` is set. Plaintext hex for dev mode. |
 | Identifier | `motebit_id` (UUID v7), distinct from any agent's identity                                                                      |
 
 The relay's identity is generated on first startup and persists across restarts. The public key and `motebit_id` are published to peers during the peering handshake.

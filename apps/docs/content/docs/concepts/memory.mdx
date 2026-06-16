@@ -19,12 +19,12 @@ Retrieved memories are ranked by a combination of relevance, confidence, and rec
 
 ## Half-life decay
 
-Memories don't persist at full strength forever. Each memory has a half-life — the time it takes for its confidence to drop by half. The default is 7 days.
+Memories don't persist at full strength forever. Each memory has a half-life — the time it takes for its confidence to drop by half. The default depends on the kind: **3 days for episodic memories** (observations, transient context) and **30 days for semantic memories** (durable facts).
 
-A memory stored at 90% confidence:
-- After 7 days: 45%
-- After 14 days: 22%
-- After 28 days: 5%
+A semantic memory stored at 90% confidence (30-day half-life):
+- After 30 days: 45%
+- After 60 days: 22%
+- After 90 days: 11%
 
 Trivia fades. Important things stick — because they get reinforced. When a memory is accessed or confirmed, its confidence resets. Memories that matter keep coming back; memories that don't, gracefully disappear.
 
