@@ -70,7 +70,7 @@
     "@peculiar/webcrypto": "^1.7.1",
     "@types/node": "^22.0.0",
     "fast-check": "^4.8.0",
-    "typescript": "^5.6.0",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   },
   "engines": {

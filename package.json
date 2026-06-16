@@ -175,8 +175,8 @@
     "@motebit/wallet-solana": "workspace:*",
     "@solana/spl-token": "^0.4.9",
     "@solana/web3.js": "^1.95.0",
-    "@typescript-eslint/eslint-plugin": "^8.58.0",
-    "@typescript-eslint/parser": "^8.58.0",
+    "@typescript-eslint/eslint-plugin": "^8.61.1",
+    "@typescript-eslint/parser": "^8.61.1",
     "@vitest/coverage-v8": "^4.1.8",
     "eslint": "^8.57.1",
     "eslint-import-resolver-typescript": "^4.4.5",
@@ -188,7 +188,7 @@
     "publint": "^0.3.21",
     "tsx": "^4.22.4",
     "turbo": "^2.9.16",
-    "typescript": "^5.9.0",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   },
   "pnpm": {
