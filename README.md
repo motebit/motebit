@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/motebit/motebit/actions/workflows/ci.yml"><img src="https://github.com/motebit/motebit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://docs.motebit.com"><img src="https://img.shields.io/badge/docs-docs.motebit.com-0369a1" alt="Documentation"></a>
   <a href="https://www.npmjs.com/package/motebit"><img src="https://img.shields.io/npm/v/motebit?label=motebit" alt="motebit"></a>
   <a href="https://www.npmjs.com/package/create-motebit"><img src="https://img.shields.io/npm/v/create-motebit?label=create-motebit" alt="create-motebit"></a>
   <a href="https://github.com/motebit/motebit/pkgs/container/relay"><img src="https://img.shields.io/badge/ghcr.io%2Fmotebit%2Frelay-1.0.1-blue?logo=docker&logoColor=white" alt="ghcr.io/motebit/relay"></a>
