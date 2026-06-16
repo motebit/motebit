@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef } from "react";
-import { motion, useScroll, useTransform } from "framer-motion";
+import { motion, useScroll, useTransform, useReducedMotion } from "framer-motion";
 import type { ReactNode } from "react";
 
 export function Reveal({
@@ -13,6 +13,7 @@ export function Reveal({
   hold?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const reduceMotion = useReducedMotion();
 
   const { scrollYProgress } = useScroll({
     target: ref,
@@ -29,6 +30,13 @@ export function Reveal({
     hold ? [0, 0.3] : [0, 0.25, 0.75, 1],
     hold ? [40, 0] : [40, 0, 0, -20],
   );
+
+  // Reduced motion: render statically, fully visible — no scroll-linked fade
+  // (the in/out opacity is a vestibular trigger, WCAG 2.3.3).
+  if (reduceMotion) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- framer-motion types incompatible with React 19 ReactNode
+    return <div ref={ref}>{children as any}</div>;
+  }
 
   return (
     <motion.div ref={ref} style={{ opacity, y }}>

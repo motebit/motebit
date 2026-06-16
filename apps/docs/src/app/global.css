@@ -61,16 +61,30 @@ html {
  * Scroll-linked animations still use framer-motion useTransform (works fine).
  */
 @keyframes hero-enter {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 @keyframes hero-enter-buttons {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 @keyframes creature-enter {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .hero-enter {
@@ -98,4 +112,43 @@ html {
 
 .dark #nd-sidebar {
   --color-fd-background: #14121a;
+}
+
+/*
+ * Accessibility floor.
+ *
+ * Keyboard focus: a visible ring on every focusable element. The home surface
+ * sits over warm/dark gradients where the browser default outline disappears.
+ */
+:focus-visible {
+  outline: 2px solid var(--color-fd-ring);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/*
+ * Reduced motion: honor prefers-reduced-motion (WCAG 2.3.3). The hero/creature
+ * intro keyframes and the scroll-linked Reveal fades are vestibular triggers;
+ * neutralize them. The framer-motion scroll opacity is gated in JS via
+ * useReducedMotion() in reveal.tsx / hero-section.tsx — this is the CSS half.
+ */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .hero-enter,
+  .hero-enter-buttons,
+  .creature-enter {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

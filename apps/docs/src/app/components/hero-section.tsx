@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { motion, useScroll, useTransform } from "framer-motion";
+import { motion, useScroll, useTransform, useReducedMotion } from "framer-motion";
 
 export function HeroSection() {
   const { scrollY } = useScroll();
+  const reduceMotion = useReducedMotion();
 
   const textOpacity = useTransform(scrollY, [0, 400], [1, 0]);
   const textY = useTransform(scrollY, [0, 400], [0, 60]);
@@ -21,7 +22,7 @@ export function HeroSection() {
 
       {/* Hero copy — left-aligned on desktop, centered below on mobile */}
       <motion.div
-        style={{ opacity: textOpacity, y: textY }}
+        style={{ opacity: reduceMotion ? 1 : textOpacity, y: reduceMotion ? 0 : textY }}
         className="relative md:absolute inset-0 z-[2] flex items-center pointer-events-none"
       >
         <div className="w-full px-6 md:px-12 lg:px-20 pointer-events-auto">

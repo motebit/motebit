@@ -4,11 +4,11 @@ export function Footer() {
   return (
     <footer className="relative z-10 border-t border-black/[0.04] dark:border-white/[0.06] bg-fd-background py-10">
       <div className="mx-auto max-w-5xl px-6 flex items-center justify-between">
-        <p className="text-[13px] text-zinc-600 dark:text-zinc-400">Motebit</p>
+        <p className="text-[13px] text-fd-muted-foreground">Motebit</p>
         <div className="flex items-center gap-5">
           <Link
             href="/docs/introduction"
-            className="text-[13px] text-zinc-600 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
+            className="text-[13px] text-fd-muted-foreground hover:text-fd-foreground transition-colors"
           >
             Docs
           </Link>
@@ -16,7 +16,7 @@ export function Footer() {
             href="https://github.com/motebit"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[13px] text-zinc-600 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
+            className="text-[13px] text-fd-muted-foreground hover:text-fd-foreground transition-colors"
           >
             GitHub
           </a>
