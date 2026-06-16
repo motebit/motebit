@@ -1667,6 +1667,11 @@ export async function handleServe(config: CliConfig): Promise<void> {
             const result = await cmdSelfTest(runtimeRef.current, {
               relay: { relayUrl: syncUrl, authToken: masterToken ?? "", motebitId },
               mintToken,
+              // This runs inside the `regResp.ok` serve block: the daemon has
+              // registered as a worker, so it WILL execute the self-delegated
+              // task. Serving → the completion poll is meaningful (the live-
+              // participant check), not a guaranteed timeout.
+              serving: true,
             });
             log(`[self-test] ${result.summary}`);
           } catch (err: unknown) {

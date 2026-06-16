@@ -541,12 +541,20 @@ export class SyncController {
       const result = await cmdSelfTest(runtime, {
         relay: { relayUrl: syncUrl, authToken: token, motebitId: this.deps.getMotebitId() },
         mintToken: async () => this.deps.createSyncToken(privateKeyHex, "task:submit"),
+        // Serving is opt-in; at onboarding the agent is not a worker, so the
+        // completion poll could only time out. `auth_verified` (the security
+        // pass) terminates immediately and sets the done-flag below.
+        serving: this._serving,
         timeoutMs: 30_000,
       });
 
       // eslint-disable-next-line no-console
       console.log("[self-test]", result.summary);
-      if (result.data?.status === "passed" || result.data?.status === "skipped") {
+      if (
+        result.data?.status === "passed" ||
+        result.data?.status === "auth_verified" ||
+        result.data?.status === "skipped"
+      ) {
         localStorage.setItem(FLAG, "true");
       }
     } catch (err: unknown) {

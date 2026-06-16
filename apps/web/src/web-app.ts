@@ -3843,12 +3843,22 @@ export class UnbootedWebApp {
           const t = await this.createSyncToken(audience);
           return t ?? "";
         },
+        // Web serving is opt-in (/serve); at onboarding the agent is not a
+        // worker, so the completion poll could only time out. Passing the real
+        // serving state lets cmdSelfTest return `auth_verified` immediately —
+        // the security assertions pass, and we don't run down a 30s doomed poll
+        // (and never re-run it: auth_verified sets the done-flag below).
+        serving: this._serving,
         timeoutMs: 30_000,
       });
 
       // eslint-disable-next-line no-console
       console.log("[self-test]", result.summary);
-      if (result.data?.status === "passed" || result.data?.status === "skipped") {
+      if (
+        result.data?.status === "passed" ||
+        result.data?.status === "auth_verified" ||
+        result.data?.status === "skipped"
+      ) {
         localStorage.setItem(FLAG, "true");
       }
     } catch (err: unknown) {
@@ -3866,7 +3876,7 @@ export class UnbootedWebApp {
    * the sovereignty-visible trifecta complete on the surface.
    */
   async runSelfTestNow(): Promise<{
-    status: "passed" | "failed" | "task_failed" | "timeout" | "skipped";
+    status: "passed" | "auth_verified" | "failed" | "task_failed" | "timeout" | "skipped";
     summary: string;
     hint?: string;
     httpStatus?: number;
@@ -3886,11 +3896,12 @@ export class UnbootedWebApp {
     const result = await cmdSelfTest(this.runtime, {
       relay: { relayUrl, authToken: token, motebitId: this._motebitId },
       mintToken: async (audience: string) => (await this.createSyncToken(audience)) ?? "",
+      serving: this._serving,
       timeoutMs: 30_000,
     });
     const data = result.data as
       | {
-          status?: "passed" | "failed" | "task_failed" | "timeout" | "skipped";
+          status?: "passed" | "auth_verified" | "failed" | "task_failed" | "timeout" | "skipped";
           hint?: string;
           httpStatus?: number;
           taskId?: string;

@@ -30,6 +30,16 @@ export interface SelfTestConfig {
   timeoutMs?: number;
   /** Polling interval in ms. Default: 2_000. */
   pollIntervalMs?: number;
+  /**
+   * Whether this surface is registered as a SERVING worker (i.e. it will
+   * execute tasks delegated to it). The completion poll only resolves when the
+   * agent serves — a non-serving surface has no executor for its own
+   * self-delegation, so the poll can ONLY time out. When false (the default),
+   * the probe terminates at a successful submission with `auth_verified`:
+   * device auth + sybil defenses are proven (the security purpose of the
+   * probe), and execution liveness is simply out of scope. Default: false.
+   */
+  serving?: boolean;
 }
 
 /**
@@ -38,14 +48,19 @@ export interface SelfTestConfig {
  * 1. Selects a tool from the registry as the required capability
  * 2. Mints audience-scoped tokens for task:submit and task:query
  * 3. Submits a self-delegation task to the relay
- * 4. Polls for completion within the timeout
- * 5. Returns structured result with status and any diagnostic hints
+ * 4. If NOT serving: returns `auth_verified` — a successful submission already
+ *    proves device auth (the relay accepted our minted token) and the sybil
+ *    defenses (the relay skips self→self trust conferral). With no worker to
+ *    execute the task, the completion poll could only time out, so it is the
+ *    terminal success state for a non-serving surface.
+ * 5. If serving: polls for completion within the timeout (the live-network-
+ *    participant check) and returns passed / task_failed / timeout.
  */
 export async function cmdSelfTest(
   runtime: MotebitRuntime,
   config: SelfTestConfig,
 ): Promise<CommandResult> {
-  const { relay, mintToken, timeoutMs = 30_000, pollIntervalMs = 2_000 } = config;
+  const { relay, mintToken, timeoutMs = 30_000, pollIntervalMs = 2_000, serving = false } = config;
 
   // Select a tool for required_capabilities — prefer externally loaded tools
   // (registered after builtins) since they're more representative of real work.
@@ -112,7 +127,19 @@ export async function cmdSelfTest(
     };
   }
 
-  // Poll for completion
+  // Security-critical assertions are now PROVEN: the relay accepted the
+  // self-delegation with our minted task:submit token (device auth works) and
+  // handles self→self without minting trust (sybil defense). On a non-serving
+  // surface nothing will execute the task, so the completion poll below could
+  // only run down its full timeout. Terminate at the honest auth pass instead.
+  if (!serving) {
+    return {
+      summary: "Self-test passed — device auth and sybil defenses verified.",
+      data: { status: "auth_verified", taskId, served: false },
+    };
+  }
+
+  // Serving: poll for completion — the live-network-participant check.
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, pollIntervalMs));

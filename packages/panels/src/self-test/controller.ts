@@ -40,6 +40,7 @@
 
 export type SelfTestStatus =
   | "passed" // probe completed; relay accepted, task ran, security boundary held
+  | "auth_verified" // relay accepted the self-delegation (device auth + sybil defenses proven); not serving, so task execution was not checked
   | "failed" // relay rejected (auth/network/protocol error)
   | "task_failed" // probe submitted but task failed in execution
   | "timeout" // relay accepted but didn't return within deadline
@@ -192,6 +193,8 @@ export function selfTestBadgeLabel(status: SelfTestRunStatus): string {
       return "running";
     case "passed":
       return "passed";
+    case "auth_verified":
+      return "verified";
     case "failed":
       return "failed";
     case "task_failed":

@@ -2098,7 +2098,7 @@ export class MobileApp {
    * production agents run, just on demand.
    */
   async runSelfTestNow(): Promise<{
-    status: "passed" | "failed" | "task_failed" | "timeout" | "skipped";
+    status: "passed" | "auth_verified" | "failed" | "task_failed" | "timeout" | "skipped";
     summary: string;
     hint?: string;
     httpStatus?: number;
@@ -2118,11 +2118,12 @@ export class MobileApp {
     const result = await cmdSelfTest(this.runtime, {
       relay: { relayUrl: syncUrl, authToken: token, motebitId: this.motebitId },
       mintToken: async (audience: string) => this.createSyncToken(audience),
+      serving: this.sync.isServing(),
       timeoutMs: 30_000,
     });
     const data = result.data as
       | {
-          status?: "passed" | "failed" | "task_failed" | "timeout" | "skipped";
+          status?: "passed" | "auth_verified" | "failed" | "task_failed" | "timeout" | "skipped";
           hint?: string;
           httpStatus?: number;
           taskId?: string;
