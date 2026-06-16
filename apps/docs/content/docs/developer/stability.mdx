@@ -1,0 +1,50 @@
+---
+title: Stability & going to production
+description: What you can build on, how motebit guarantees it (CI gates that break the build on an unannounced API change), and the checklist before you ship.
+---
+
+Before you bet a product on motebit, two questions matter: **what can I rely on not breaking, and how is that promise enforced?** This page answers both, then gives a short checklist for shipping.
+
+## Versioning is a promise
+
+A version number is a claim about what changed. Motebit's published packages version **independently** — no lockstep — so a number only moves when *that package* changed. A **major** bump means a real break, and it is the *only* thing that may break a published API. Pin to a major and you will not be surprised by a patch.
+
+## What you can build on
+
+| Surface | Line | What's stable |
+|---|---|---|
+| `@motebit/crypto` | `3.x` | Signing + verification primitives |
+| `@motebit/verifier` | `1.x` | `verifyArtifact` / `verifyFile` / `formatHuman` |
+| `@motebit/verify` (`motebit-verify` CLI) | `1.x` | CLI flags, output, exit codes |
+| `@motebit/protocol` | `3.x` | Types, registries, routing primitives |
+| `@motebit/sdk` | `2.x` | Developer contract — types + adapter interfaces |
+| `@motebit/crypto-{appattest,android-keystore,tpm,webauthn}` | `1.x` | Platform attestation verifiers |
+| `create-motebit` | `1.x` | Project scaffolder |
+| `motebit` (CLI bundle) | `1.x` | Operator surface: subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes |
+| `@motebit/state-export-client` | `0.x` | **Pre-1.0 — the API may still change. Pin the exact version.** |
+| workspace-private (`0.0.0-private`) | — | **No public contract.** Bundled into `motebit`; internals can change between any two releases. Don't `npm install` or depend on them. |
+
+The full published list and the protocol/package boundary live in [Public surface](/docs/concepts/public-surface). Current version numbers are on each package's npm page.
+
+## How the promise is enforced
+
+You don't have to take motebit's word for it — the stability is mechanical:
+
+- **`check-api-surface`** pins the exported type surface of `protocol`, `sdk`, `crypto`, `verifier`, and `verify` to committed api-extractor baselines (`packages/*/etc/*.api.md`). Any change to an exported signature **fails CI** unless a `major` changeset ships with it. A breaking change *cannot* be released as a patch.
+- **`check-cli-surface`** locks the `motebit` CLI's subcommands, flags, exit codes, `~/.motebit/` layout, and relay routes the same way.
+
+These are drift gates that break the build — the same discipline that keeps the docs honest keeps the API honest.
+
+## Surface maturity
+
+- **Shipped & supported:** CLI, desktop, mobile, web.
+- **Prototype:** [spatial](/docs/apps/spatial) — the AR-glasses companion is deliberately exploratory; its patterns may change.
+
+## Going to production — checklist
+
+1. **Pin.** Pin to a major (`@motebit/crypto@3`); pin *exact* for pre-1.0 surfaces (`@motebit/state-export-client`).
+2. **Sign server-side.** The private key never reaches a browser bundle — mint receipts in a backend or CLI with the key in a secret manager. Verifying is safe anywhere. See [Produce a receipt](/docs/developer/produce-a-receipt).
+3. **Choose your verify surface deliberately** — library vs CLI vs browser, offline vs anchored. See [Choosing a verify surface](/docs/developer/choosing-a-verify-surface).
+4. **Respect the trust boundary.** `valid` / `sovereign` prove the signer computed *this* result for *this* work — they do not vouch for the agent's inputs, and `sovereign` does not tell you *whose* identity it is. To trust a *specific* agent, pin its `motebit_id` to an identity you already know; attest external-data provenance inside the signed `result`. See the [Quickstart](/docs/developer/quickstart).
+5. **Fail closed.** Treat `valid: false` as untrusted, full stop — surface the reason, never silently proceed.
+6. **Track releases.** Watch the [changelog](/docs/changelog) for the packages you depend on; a major there is the only thing that should make you read release notes.

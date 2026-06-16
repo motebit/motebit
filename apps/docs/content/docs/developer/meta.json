@@ -3,6 +3,7 @@
   "pages": [
     "quickstart",
     "first-service-agent",
+    "stability",
     "local-testing",
     "identity-standard",
     "identity-crypto",

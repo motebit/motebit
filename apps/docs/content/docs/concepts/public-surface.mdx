@@ -47,7 +47,7 @@ This isn't laziness about API design. It's the inverse: every package promoted t
 
 Three paths, in order of how much motebit you take with you:
 
-1. **Implement the spec.** Twenty-one open specs in [`spec/`](https://github.com/motebit/motebit/tree/main/spec). Build a runtime in any language; motebit's reference relay will federate with it if your handshake verifies. The Python reference verifier under [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier) is the load-bearing demonstration that the spec is sufficient — written against the spec alone, no motebit TypeScript consumed.
+1. **Implement the spec.** Twenty-nine open specs in [`spec/`](https://github.com/motebit/motebit/tree/main/spec). Build a runtime in any language; motebit's reference relay will federate with it if your handshake verifies. The Python reference verifier under [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier) is the load-bearing demonstration that the spec is sufficient — written against the spec alone, no motebit TypeScript consumed.
 
 2. **Build against the Apache-2.0 floor.** Import `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto` directly from npm. Verify identity files, parse receipts, compose semirings, compute optimal paths. The full type surface is fixed by the api-extractor baselines at [`packages/{protocol,sdk,crypto,verifier,verify}/etc/*.api.md`](https://github.com/motebit/motebit/tree/main/packages) — every break requires a `major` changeset.
 
