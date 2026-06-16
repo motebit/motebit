@@ -3359,7 +3359,25 @@ curl -s https://raw.githubusercontent.com/motebit/motebit/main/examples/python-r
 npx @motebit/verify receipt.json    # binary is `motebit-verify`
 ```
 
-The sovereign fixture reports `sovereign · motebit_id commits to the key (offline, no operator)`; flip one character of any field and it reports an invalid signature. That break-it-yourself round-trip is the proof — and the two fixtures show the two rungs the result can report (see [`valid` is not the same as identity proven](#valid-is-not-the-same-as-identity-proven) below).
+```text
+VALID (receipt)
+  task:    019dc500-0000-7000-a000-000000000001
+  motebit: 65b60673-d6ed-884b-b01c-2c222d82ada0
+  signer:  79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664
+  binding: sovereign · motebit_id commits to the key (offline, no operator)
+```
+
+The `binding:` line is the whole point — `sovereign` means the `motebit_id` is itself the commitment to the signing key, provable offline with no operator. The integrity-only fixture verifies the same way but reports the honest weaker rung:
+
+```text
+VALID (receipt)
+  task:    019dc3f3-6035-7519-ad58-9dfce31f1f15
+  motebit: 019dc3f3-6027-73ca-b877-0cf9141c0b72
+  signer:  cd7f51b9c11761ebde6e99d7ab095a5c86ebd4c0787a24d2c5f6bc797d4924aa
+  binding: integrity-only · signature valid; identity not bound
+```
+
+Flip one character of any field and the verdict becomes `INVALID (receipt)` with a signature error — that break-it-yourself round-trip is the proof. The two fixtures show the two rungs the result can report (see [`valid` is not the same as identity proven](#valid-is-not-the-same-as-identity-proven) below).
 
 ## JavaScript / TypeScript
 
