@@ -287,7 +287,11 @@ export class MobileSyncController {
 
       const result = await cmdSelfTest(runtime, {
         relay: { relayUrl: syncUrl, authToken: token, motebitId: this.deps.getMotebitId() },
-        mintToken: async () => this.deps.createSyncToken("task:submit"),
+        // Honor the requested audience (task:submit to submit, task:query to
+        // poll) — the relay enforces aud binding (auth-token-v1 §5). Minting a
+        // task:submit token for the /task/:id poll would 403 (audience
+        // mismatch) if this surface ever served at onboarding. Matches web.
+        mintToken: async (audience: string) => this.deps.createSyncToken(audience),
         // Serving is opt-in; at onboarding the agent is not a worker, so the
         // completion poll could only time out. `auth_verified` (the security
         // pass) terminates immediately and sets the done-flag below.
