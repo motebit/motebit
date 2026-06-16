@@ -42,18 +42,21 @@ export function HeroSection() {
             <p className="mt-2 text-[clamp(0.85rem,1.4vw,1rem)] text-zinc-600 leading-relaxed [text-shadow:0_1px_12px_rgb(255_255_255/0.45)]">
               You own the identity. The intelligence is pluggable. The body is yours.
             </p>
+            {/* Two labeled doors — the consumer path (get an agent) and the
+                build path (sign & verify a receipt). One golden path each,
+                consistent with the intro + Next steps cards. */}
             <div className="mt-8 flex gap-3 hero-enter-buttons">
               <Link
                 href="/docs/get-your-agent"
                 className="px-6 py-2.5 rounded-full bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition-colors"
               >
-                Get Started
+                Get Your Agent
               </Link>
               <Link
-                href="/docs/introduction"
+                href="/docs/developer/quickstart"
                 className="px-6 py-2.5 rounded-full border border-zinc-400/80 text-zinc-700 text-sm hover:border-zinc-600 hover:text-zinc-900 transition-all"
               >
-                Documentation
+                Developer Quickstart
               </Link>
             </div>
           </div>

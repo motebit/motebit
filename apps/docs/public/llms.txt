@@ -15,6 +15,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 
 - [Introduction](https://docs.motebit.com/docs/introduction): What is motebit, and why does it exist.
 - [Get Your Agent](https://docs.motebit.com/docs/get-your-agent): Download the desktop app, create an identity, and meet your motebit.
+- [Security](https://docs.motebit.com/docs/security): Motebit's security model — responsible disclosure, data sensitivity, key management, the policy gate, and the threat model. Sovereign by construction, fail-closed, verifiable.
 
 ## Concepts
 

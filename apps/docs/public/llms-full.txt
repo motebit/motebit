@@ -28,6 +28,8 @@ Every AI today owns the intelligence and rents you a session. When the session e
 
 **It connects to everything.** Through MCP (Model Context Protocol), your motebit can reach any tool ecosystem — file systems, APIs, databases, services — while its policy layer gates what crosses the boundary.
 
+**It proves what it's done.** Every action can be signed into a verifiable receipt — an `ExecutionReceipt` anyone can check offline, without trusting motebit or contacting a server. Identity, memory, and governance are claims; receipts are the proof. [Verify one yourself](/docs/developer/quickstart) — two packages, ~25 lines, no account.
+
 ## Where it lives
 
 Your motebit lives on your desktop — a liquescent droplet hovering over your screen, responding to your voice, glowing when it processes, breathing at 0.3 Hz. It runs on your phone with full parity — the same identity, memory, and governance. It also runs as a command-line agent for developers.
@@ -349,6 +351,73 @@ npm create motebit
 ```
 
 The old identity is abandoned. Memories do not migrate between identities — each identity has its own isolated memory graph. Hardware-backed storage (OS keychain on desktop and mobile) makes compromise unlikely in practice.
+
+---
+
+# Security
+Source: https://docs.motebit.com/docs/security
+
+> Motebit's security model — responsible disclosure, data sensitivity, key management, the policy gate, and the threat model. Sovereign by construction, fail-closed, verifiable.
+
+Motebit's security posture is not a feature bolted on — it is the architecture. Identity is a cryptographic boundary, governance is enforced at the surface, and every claim the system makes is independently verifiable. This page is the consolidated reference: how to report a vulnerability, how sensitive data is handled, how keys are managed, and the threats the design defends against.
+
+## Responsible disclosure
+
+If you discover a security vulnerability, email **security@motebit.com**. Please include reproduction steps and the affected surface (CLI, desktop, mobile, relay, or a specific package). Do not open a public issue for a security report.
+
+We aim to acknowledge reports promptly and to coordinate disclosure. Motebit is built in the open — the protocol specs and reference implementations are public — so a vulnerability in the reference code is verifiable by anyone, and a fix is verifiable in the same way.
+
+## Data sensitivity & privacy
+
+Every piece of stored state carries a **sensitivity level**, and the level governs where the data is allowed to travel:
+
+| Level | Examples | Reaches an external AI provider? |
+|---|---|---|
+| `none` | Public facts, general context | Yes |
+| `personal` | Name, preferences, schedule | Yes |
+| `medical` | Health information | **Never** |
+| `financial` | Account details, balances | **Never** |
+| `secret` | Credentials, keys | **Never** |
+
+`medical`, `financial`, and `secret` data never leave the device for a cloud model. The boundary is **fail-closed**: on any classification error, the system denies rather than leaks. Sensitivity is enforced at every boundary — storage, retrieval, sync, and the context assembled for the model — not at a single chokepoint.
+
+Retention is governed too. Deleted data produces a signed **deletion certificate**, and sensitivity ceilings on what may persist (or sync to a relay) are interoperability law, not a configuration preference. See [Governance](/docs/concepts/governance) for the enforcement model.
+
+## Keys & identity
+
+Your motebit's identity is an **Ed25519 keypair**. The public key (and the `motebit_id` derived from it) is shareable; the private key is the root of all authority.
+
+- **At rest.** The private key lives in the OS keyring on desktop and mobile. On the CLI it is encrypted with your passphrase using PBKDF2 (600,000 iterations, SHA-256) and AES-256-GCM — never written in plaintext.
+- **Recovery.** A recovery seed re-derives a sovereign identity. A sovereign `motebit_id` is a cryptographic commitment to its genesis key, so the binding between an id and its key is checkable offline by anyone.
+- **Rotation & succession.** Keys can be rotated; a signed succession chain (old and new keys both sign) preserves continuity, so a rotated key does not orphan past receipts.
+- **Hardware attestation is additive.** Secure Enclave / TPM / StrongBox attestations *raise* an identity's assurance score — they never replace the Ed25519 key, and their absence never blocks a software identity. Software identity is the floor.
+
+See [Identity & crypto](/docs/developer/identity-crypto) for the full key lifecycle.
+
+## Governance & the policy gate
+
+Every risky action is gated against the owner's signed policy before it runs. Tools are classified into risk bands (`R0_READ` … `R4_MONEY`), and two thresholds decide the outcome:
+
+- **`max_risk_auto`** — the ceiling for actions that run automatically.
+- **`deny_above`** — the ceiling above which actions are blocked unconditionally.
+
+Between them lies the **approval band**: the agent may reason about the action but cannot execute it without explicit operator approval. If a threshold is missing or the ordering constraint is violated, the daemon refuses to start — **fail-closed by default**.
+
+Money is the strongest case. An `R4_MONEY` tool call can only ever *auto*-execute when the turn carries a cryptographically verified standing-delegation grant — a signed artifact, never a configuration flag, a trust level, or anything the model recalls or claims. Absent that grant, money always routes to approval. There is no switch that disables this branch. See [Governance](/docs/operator/governance) and [Daemon & approvals](/docs/operator/daemon-approvals).
+
+## Threat model
+
+Motebit's design defends against three classes of attack a sovereign agent network must withstand:
+
+- **Sybil resistance.** Trust is **first-person and bilateral** — keyed to a specific pair of identities, accumulated from signed receipts — never a global reputation score that mass-minted identities could inflate. Minting an identity is free; earning trust with a specific counterparty is not.
+- **Prompt injection.** Memory carries machine-assigned **provenance** (user-stated, agent-inferred, tool-derived, peer-agent) — never model- or peer-authored — so a recalled fact cannot smuggle in authority it never had. Memory may inform; only signed artifacts authorize.
+- **Token binding.** Bearer tokens are **audience-bound**: a token minted for one endpoint is rejected by another. A token scoped to submit a task cannot be replayed against the endpoint that reads its result.
+
+## Verifiability
+
+Every claim motebit makes about itself is checkable without trusting motebit. An execution receipt verifies offline against the producer's public key; an identity binding is provable from the `motebit_id` alone; the operator's transparency posture is published and signed.
+
+The shortest demonstration is the [Developer Quickstart](/docs/developer/quickstart) — sign a receipt and verify it in one file, no relay and no account. That is the security model in miniature: the proof travels with the artifact.
 
 ---
 

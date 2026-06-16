@@ -130,6 +130,12 @@ export default function HomePage() {
                 Verifiable credentials. Signed execution ledgers. Budget settlement on delegation
                 receipts. Trust that compounds with evidence.
               </p>
+              <a
+                href="/docs/developer/quickstart"
+                className="mt-6 inline-block text-sm font-medium text-fd-foreground underline decoration-fd-muted-foreground/40 underline-offset-4 hover:decoration-fd-foreground transition-colors"
+              >
+                Verify a receipt yourself — offline, in one file →
+              </a>
             </div>
           </Reveal>
         </section>
