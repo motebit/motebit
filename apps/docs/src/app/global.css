@@ -4,6 +4,8 @@
 
 html {
   scroll-behavior: smooth;
+  /* Hash targets (and the skip-link #main) clear the fixed h-12 nav. */
+  scroll-padding-top: 3.5rem;
 }
 
 /*

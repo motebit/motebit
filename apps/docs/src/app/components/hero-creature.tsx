@@ -91,6 +91,7 @@ export function HeroCreature() {
     <div className="w-full h-full">
       <canvas
         ref={canvasRef}
+        aria-hidden="true"
         className="w-full h-full"
         style={{
           opacity: loaded ? 1 : 0,
