@@ -16,6 +16,15 @@ export function Nav() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
+  // Unscrolled, the nav floats over the creature's LIGHT 3D hero (always light,
+  // both themes — hero-creature.tsx). So at the top, force a light-mode look
+  // (dark text + the dark mark) regardless of theme; once scrolled, the nav
+  // gains its own `bg-fd-background` backdrop and goes theme-aware.
+  const overHero = !scrolled;
+  const linkCls = overHero
+    ? "text-zinc-700 hover:text-zinc-900"
+    : "text-fd-muted-foreground hover:text-fd-foreground";
+
   return (
     <nav
       className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ${
@@ -27,37 +36,46 @@ export function Nav() {
       <div className="mx-auto max-w-5xl px-6 h-12 flex items-center justify-between">
         <Link
           href="/"
-          className="flex items-center gap-2 text-zinc-900/90 dark:text-zinc-100/90 text-[13px] font-medium tracking-tight"
+          className={`flex items-center gap-2 text-[13px] font-medium tracking-tight transition-colors ${
+            overHero ? "text-zinc-900" : "text-fd-foreground/90"
+          }`}
         >
-          <img src="/motebit-mark.svg" alt="" width={20} height={20} className="dark:hidden" />
-          <img
-            src="/motebit-mark-dark.svg"
-            alt=""
-            width={20}
-            height={20}
-            className="hidden dark:block"
-          />
+          {overHero ? (
+            // Over the light hero, always the dark mark (the dark-mode/light
+            // mark would vanish on the light gradient).
+            <img src="/motebit-mark.svg" alt="" width={20} height={20} />
+          ) : (
+            <>
+              <img src="/motebit-mark.svg" alt="" width={20} height={20} className="dark:hidden" />
+              <img
+                src="/motebit-mark-dark.svg"
+                alt=""
+                width={20}
+                height={20}
+                className="hidden dark:block"
+              />
+            </>
+          )}
           Motebit
         </Link>
         <div className="flex items-center gap-5">
-          <Link
-            href="/docs/introduction"
-            className="text-[13px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
-          >
+          <Link href="/docs/introduction" className={`text-[13px] transition-colors ${linkCls}`}>
             Docs
           </Link>
           <a
             href="https://github.com/motebit"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[13px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
+            className={`text-[13px] transition-colors ${linkCls}`}
           >
             GitHub
           </a>
           {mounted && (
             <button
               onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
-              className="w-7 h-7 flex items-center justify-center rounded-full text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+              className={`w-7 h-7 flex items-center justify-center rounded-full transition-colors ${linkCls} ${
+                overHero ? "hover:bg-black/5" : "hover:bg-fd-accent"
+              }`}
               aria-label="Toggle theme"
             >
               {resolvedTheme === "dark" ? (
