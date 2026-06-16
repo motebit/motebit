@@ -14,7 +14,6 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 - `motebit/identity@1.0` is the open specification (Apache-2.0 licensed)
 
 - [Introduction](https://docs.motebit.com/docs/introduction): What is motebit, and why does it exist.
-- [How I Built This](https://docs.motebit.com/docs/how-we-built-this): One founder, one AI pair programmer, 47 days. The full story of building Motebit from commit one.
 - [Get Your Agent](https://docs.motebit.com/docs/get-your-agent): Download the desktop app, create an identity, and meet your motebit.
 
 ## Concepts

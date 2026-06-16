@@ -60,6 +60,11 @@ infra/secrets/
 # Strategy docs stay local — competitive posture, not operational doctrine.
 docs/strategy/
 
+# Private/archived docs — pulled from the published site, kept locally only.
+# e.g. how-we-built-this.mdx (the founder build narrative) was unpublished from
+# docs.motebit.com and archived here.
+docs/private/
+
 # docs/ops/RUNBOOK.md is intentionally public (operator-transparency doctrine —
 # the runbook is the procedural half of what /.well-known/motebit-transparency.json
 # declares; see docs/doctrine/operator-transparency.md). docs/ops/SECRETS.md is
