@@ -6250,7 +6250,7 @@ Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencie
 
 ## Permissive / BSL boundary
 
-10 packages sit on the permissive floor — Apache-2.0, with an explicit patent grant and litigation-termination clause. `check-deps.ts` enforces that permissive-floor packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
+11 packages sit on the permissive floor — Apache-2.0, with an explicit patent grant and litigation-termination clause. `check-deps.ts` enforces that permissive-floor packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
 
 | Package                                         | Answers                                                            | Layer |
 | ----------------------------------------------- | ------------------------------------------------------------------ | ----- |
@@ -6263,6 +6263,7 @@ Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencie
 | `@motebit/crypto-webauthn`                      | How is a WebAuthn packed attestation verified?                     | L2    |
 | `@motebit/verifier`                             | How does a third party compose offline verification?               | L6    |
 | `@motebit/verify`                               | How does a one-install CLI verify any motebit artifact end-to-end? | L6    |
+| `@motebit/state-export-client`                  | How does a browser consumer verify a relay's signed state export?  | L6    |
 | `create-motebit`                                | How does a third party scaffold against the protocol?              | L6    |
 
 The four canonical `crypto-*` platform leaves (`crypto-appattest`, `crypto-android-keystore`, `crypto-tpm`, `crypto-webauthn`) verify against each platform's published public trust anchor (Apple App Attest root, Google Hardware Attestation roots, TPM vendor roots, FIDO roots) — no motebit-specific judgment. `@motebit/verify` aggregates them with motebit-canonical defaults (bundle IDs, RP ID) into one install, but the defaults are overridable flags, not proprietary judgment — the permissive-floor line stays at the aggregator. The BSL line holds at `motebit` (the operator console) and everything below it: daemon, MCP server, delegation routing, market integration, federation wiring — the actual reference-implementation judgment.
