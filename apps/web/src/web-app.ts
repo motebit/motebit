@@ -2193,11 +2193,19 @@ export class UnbootedWebApp {
    */
   async announceMotebit(): Promise<AnnounceMotebitResult> {
     if (!this._motebitId || !this._publicKeyHex) {
-      return { ok: false, code: "unknown", message: "Identity not bootstrapped" };
+      return {
+        status: "failed",
+        code: "unknown",
+        message: "Identity not bootstrapped",
+      };
     }
     const privateKeyHex = await this.keyStore.loadPrivateKey();
     if (privateKeyHex == null || privateKeyHex === "") {
-      return { ok: false, code: "unknown", message: "No signing key available" };
+      return {
+        status: "failed",
+        code: "unknown",
+        message: "No signing key available",
+      };
     }
     const privKeyBytes = new Uint8Array(privateKeyHex.length / 2);
     for (let i = 0; i < privateKeyHex.length; i += 2) {
@@ -2210,7 +2218,11 @@ export class UnbootedWebApp {
       surface: "web",
       relayUrl: DEFAULT_RELAY_URL,
     });
-    if (result.ok) markAnnounced();
+    // Mark announced ONLY on a real relay-recorded announcement. A `skipped`
+    // (legacy/unbound id) is terminal but NOT announced — left unmarked so a
+    // later sovereign re-mint re-attempts; the preflight makes that cheap (no
+    // network, no console 400) instead of a doomed round-trip every launch.
+    if (result.status === "announced") markAnnounced();
     return result;
   }
 

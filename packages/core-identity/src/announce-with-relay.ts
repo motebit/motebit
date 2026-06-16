@@ -22,21 +22,45 @@
  */
 
 import { signMotebitAnnouncement, type AnnouncementSurface } from "@motebit/encryption";
+import { verifySovereignBinding } from "@motebit/crypto";
 
 /**
- * Closed-union result codes. A user-facing layer SHOULD map each to its own
- * copy without parsing the human-readable `message`. Mirrors the discipline
- * of `RegisterWithRelayResult`.
+ * Terminal-status result. Three outcomes, deliberately NOT a boolean `ok`: a
+ * `skipped` announcement is benign and terminal (the identity cannot bind, so
+ * there is nothing to retry), and must not flow through the `ok: false`
+ * retry/error telemetry path. A user-facing layer SHOULD map each to its own
+ * copy without parsing the human-readable `message`.
  */
 export type AnnounceMotebitResult =
   | {
-      ok: true;
+      status: "announced";
       /** True if the relay recorded a *new* intake row in this request (first announce). */
       first_seen: boolean;
       /** Relay's wall-clock at the time intake was recorded. */
       announced_at: number;
     }
-  | { ok: false; code: AnnounceMotebitErrorCode; message: string; status?: number };
+  | {
+      /**
+       * Terminal + benign: the `motebit_id` is NOT the sovereign commitment to
+       * its signing key (a legacy UUIDv7, or an unrelated UUIDv8), so the relay's
+       * sovereign-only intake (`verifySovereignBinding`) rejects it with a 400
+       * every time. The client skips the round-trip entirely. This is not a
+       * failure: no network request is made, nothing is retried, the identity is
+       * NOT marked announced, and the identity is NEVER replaced or migrated
+       * (succession is a separate, consequential decision). A later sovereign
+       * re-mint makes the binding pass and announce proceeds — so a caller must
+       * NOT cache this as permanent.
+       */
+      status: "skipped";
+      reason: "identity_not_sovereign_bound";
+    }
+  | {
+      status: "failed";
+      code: AnnounceMotebitErrorCode;
+      message: string;
+      /** HTTP status when the failure came from a relay response. */
+      httpStatus?: number;
+    };
 
 export type AnnounceMotebitErrorCode =
   /** `fetch` rejected — DNS, TLS, offline. Relay unreachable. */
@@ -79,6 +103,20 @@ const ANNOUNCE_PATH = "/api/v1/motebits/announce";
 export async function announceMotebit(
   params: AnnounceMotebitParams,
 ): Promise<AnnounceMotebitResult> {
+  // Step 0 — sovereign-binding preflight, exact server parity. The relay's
+  // intake is sovereign-only: it 400s any `motebit_id` that is not the UUIDv8
+  // commitment to the signing key (`verifySovereignBinding`). A legacy UUIDv7
+  // or an unrelated v8 can NEVER bind, so announcing is a guaranteed-doomed
+  // round-trip that the browser logs as a console 400 on every launch. Skip it
+  // here — terminal and benign — using the SAME primitive the relay uses, so
+  // the client never weakens the relay's authoritative check (the relay still
+  // verifies independently); it only avoids futile traffic. Checking the UUID
+  // version nibble alone would be wrong — an unrelated v8 passes that but still
+  // 400s; binding is the exact condition.
+  if (!(await verifySovereignBinding(params.motebitId, params.publicKey))) {
+    return { status: "skipped", reason: "identity_not_sovereign_bound" };
+  }
+
   // Step 1 — discover the target relay's sovereign id to bind `audience` to.
   let relayId: string;
   try {
@@ -88,16 +126,16 @@ export async function announceMotebit(
     });
     if (!descResp.ok) {
       return {
-        ok: false,
+        status: "failed",
         code: "relay_identity_unavailable",
         message: `Relay descriptor returned ${descResp.status}`,
-        status: descResp.status,
+        httpStatus: descResp.status,
       };
     }
     const desc = (await descResp.json()) as { relay_id?: unknown };
     if (typeof desc.relay_id !== "string" || desc.relay_id.length === 0) {
       return {
-        ok: false,
+        status: "failed",
         code: "relay_identity_unavailable",
         message: "Relay descriptor is missing relay_id",
       };
@@ -105,7 +143,7 @@ export async function announceMotebit(
     relayId = desc.relay_id;
   } catch (err: unknown) {
     return {
-      ok: false,
+      status: "failed",
       code: "network_unreachable",
       message: err instanceof Error ? err.message : String(err),
     };
@@ -134,7 +172,7 @@ export async function announceMotebit(
     });
   } catch (err: unknown) {
     return {
-      ok: false,
+      status: "failed",
       code: "network_unreachable",
       message: err instanceof Error ? err.message : String(err),
     };
@@ -146,13 +184,17 @@ export async function announceMotebit(
       parsed = (await resp.json()) as typeof parsed;
     } catch {
       return {
-        ok: false,
+        status: "failed",
         code: "unknown",
         message: "Relay returned success status with non-JSON body",
-        status: resp.status,
+        httpStatus: resp.status,
       };
     }
-    return { ok: true, first_seen: parsed.first_seen, announced_at: parsed.announced_at };
+    return {
+      status: "announced",
+      first_seen: parsed.first_seen,
+      announced_at: parsed.announced_at,
+    };
   }
 
   // Failure — read the body once, classify by status.
@@ -166,10 +208,10 @@ export async function announceMotebit(
   const message = parsedErr?.error ?? parsedErr?.reason ?? text.slice(0, 256);
 
   if (resp.status === 429) {
-    return { ok: false, code: "rate_limited", message, status: 429 };
+    return { status: "failed", code: "rate_limited", message, httpStatus: 429 };
   }
   if (resp.status === 400) {
-    return { ok: false, code: "rejected", message, status: 400 };
+    return { status: "failed", code: "rejected", message, httpStatus: 400 };
   }
-  return { ok: false, code: "unknown", message, status: resp.status };
+  return { status: "failed", code: "unknown", message, httpStatus: resp.status };
 }

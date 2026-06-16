@@ -871,3 +871,51 @@ describe("Persisted cookies (Phase 3 — /cookies status + revoke)", () => {
     app.stop();
   });
 });
+
+describe("WebApp.announceMotebit — sovereign-binding skip is terminal, not cached", () => {
+  // The exact shape of the 2026-06-15 legacy production account (version
+  // nibble 7) — never the sovereign commitment to any key.
+  const LEGACY_V7_ID = "019e2aa5-7649-7fa3-ab27-2e4d9d4f0ffb";
+
+  it("an unbound id skips (no fetch, isAnnounced stays false); a later BOUND id announces", async () => {
+    const app = new WebApp();
+    await app.bootstrap(); // mints a sovereign-bound id + a loadable signing key
+    const boundId = app.motebitId;
+    expect(localStorage.getItem("motebit-announced")).toBeNull();
+
+    // Force the legacy/unbound case: keep the real key, swap in a non-committing
+    // id. verifySovereignBinding(v7, realKey) is false → the preflight skips.
+    (app as unknown as { _motebitId: string })._motebitId = LEGACY_V7_ID;
+    const skipFetch = vi.fn();
+    vi.stubGlobal("fetch", skipFetch);
+
+    const skipped = await app.announceMotebit();
+    expect(skipped.status).toBe("skipped");
+    // Terminal + benign: no descriptor GET, no announce POST...
+    expect(skipFetch).not.toHaveBeenCalled();
+    // ...and markAnnounced was NOT called, so the state is not cached as done.
+    expect(localStorage.getItem("motebit-announced")).toBeNull();
+
+    // Restore the genuinely sovereign-bound identity → a later attempt is no
+    // longer skipped; it announces and only THEN marks announced.
+    (app as unknown as { _motebitId: string })._motebitId = boundId;
+    const okFetch = vi.fn(async (url: string) => {
+      if (url.endsWith("/.well-known/motebit.json")) {
+        return new Response(JSON.stringify({ relay_id: "relay-x" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(
+        JSON.stringify({ ok: true, announced_at: 1_700_000_000_000, first_seen: true }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", okFetch);
+
+    const announced = await app.announceMotebit();
+    expect(announced.status).toBe("announced");
+    expect(okFetch).toHaveBeenCalled();
+    expect(localStorage.getItem("motebit-announced")).toBe("1");
+  });
+});
