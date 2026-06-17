@@ -468,6 +468,28 @@ export interface MotebitLoopDependencies {
   onPixelOmissionEmitted?: (reason: import("@motebit/sdk").PixelOmittedReason) => void;
 }
 
+/**
+ * Per-turn latency breakdown, all in milliseconds. OBSERVATION ONLY — entirely
+ * content-free (durations, no message or memory text), safe to log and aggregate.
+ *
+ * The headline is `ttft_ms` (turn entry → first streamed text token). It splits
+ * into `context_pipeline_ms` (motebit's pre-model overhead: event query + embed +
+ * memory retrieval + context assembly) and `provider_ttft_ms` (first model call →
+ * first streamed text). For a normal no-tool chat turn `provider_ttft_ms` is the
+ * model's own first-token time; on a tool-first turn it includes the tool
+ * round-trips that preceded text (and `ttft_ms` still reflects the true wait).
+ * Present only on a turn that streamed text (first iteration).
+ */
+export interface TurnLatency {
+  ttft_ms: number;
+  context_pipeline_ms: number;
+  provider_ttft_ms: number;
+  event_query_ms: number;
+  embed_ms: number;
+  pinned_ms: number;
+  memory_retrieve_ms: number;
+}
+
 export interface TurnResult {
   response: string;
   memoriesFormed: MemoryNode[];
@@ -476,6 +498,8 @@ export interface TurnResult {
   cues: BehaviorCues;
   /** Total token usage across all LLM calls in this turn, if available. */
   totalTokens?: number;
+  /** Per-turn latency breakdown. Absent on legacy literals / text-free turns. */
+  latency?: TurnLatency;
   /** Number of agentic loop iterations used in this turn. */
   iterations: number;
   /** Number of tool calls that executed successfully. */
@@ -786,6 +810,19 @@ export async function* runTurnStreaming(
 ): AsyncGenerator<AgenticChunk> {
   const { motebitId, eventStore, memoryGraph, stateEngine, behaviorEngine, provider } = deps;
 
+  // TTFT instrumentation — content-free wall-clock stamps. `turnStart` anchors
+  // every delta; per-stage durations come from `withStageTimeout`'s sink (one
+  // source); `providerCallStart`/`firstTokenAt` bracket the model segment. See
+  // `TurnLatency`. Observation only — never affects control flow.
+  const turnStart = Date.now();
+  let eventQueryMs = 0;
+  let embedMs = 0;
+  let pinnedMs = 0;
+  let memoryRetrieveMs = 0;
+  let providerCallStart: number | undefined;
+  let contextPipelineMs: number | undefined;
+  let firstTokenAt: number | undefined;
+
   // 1. Query recent events, embed user message, and fetch pinned memories in parallel.
   // These are independent — no reason to await sequentially.
   //
@@ -800,16 +837,25 @@ export async function* runTurnStreaming(
       "event_query",
       STAGE_TIMEOUTS_MS.event_query,
       eventStore.query({ motebit_id: motebitId, limit: 10 }),
+      (ms) => {
+        eventQueryMs = ms;
+      },
     ),
     withStageTimeout(
       "embed_user_message",
       STAGE_TIMEOUTS_MS.embed_user_message,
       embedText(userMessage),
+      (ms) => {
+        embedMs = ms;
+      },
     ),
     withStageTimeout(
       "pinned_memories",
       STAGE_TIMEOUTS_MS.pinned_memories,
       memoryGraph.getPinnedMemories(),
+      (ms) => {
+        pinnedMs = ms;
+      },
     ),
   ]);
 
@@ -825,6 +871,9 @@ export async function* runTurnStreaming(
       strengthenCoRetrieved: true,
       sensitivityFilter: CONTEXT_SAFE_SENSITIVITY,
     }),
+    (ms) => {
+      memoryRetrieveMs = ms;
+    },
   );
 
   // Merge: pinned first (cap 5), then similarity (deduplicated)
@@ -947,8 +996,15 @@ export async function* runTurnStreaming(
     // original prompt would waste context and confuse turn structure.
 
     let aiResponse;
+    // TTFT: the first model call ends the context pipeline; the first streamed
+    // text token (anywhere in the turn) is time-to-first-token.
+    if (iteration === 1) {
+      providerCallStart = Date.now();
+      contextPipelineMs = providerCallStart - turnStart;
+    }
     for await (const chunk of provider.generateStream(contextPack)) {
       if (chunk.type === "text") {
+        if (firstTokenAt === undefined) firstTokenAt = Date.now();
         yield { type: "text", text: chunk.text };
       } else {
         aiResponse = chunk.response;
@@ -1708,6 +1764,21 @@ export async function* runTurnStreaming(
   const stateAfter = stateEngine.getState();
   const cues = behaviorEngine.compute(stateAfter);
 
+  // TTFT: only when the turn actually streamed text (both stamps set). A
+  // text-free turn (tool-only / empty) has no honest time-to-first-token.
+  const latency: TurnLatency | undefined =
+    firstTokenAt !== undefined && providerCallStart !== undefined
+      ? {
+          ttft_ms: firstTokenAt - turnStart,
+          context_pipeline_ms: contextPipelineMs ?? providerCallStart - turnStart,
+          provider_ttft_ms: firstTokenAt - providerCallStart,
+          event_query_ms: eventQueryMs,
+          embed_ms: embedMs,
+          pinned_ms: pinnedMs,
+          memory_retrieve_ms: memoryRetrieveMs,
+        }
+      : undefined;
+
   yield {
     type: "result",
     result: {
@@ -1722,6 +1793,7 @@ export async function* runTurnStreaming(
       toolCallsDenied,
       toolCallsFailed,
       ...(turnCtx && turnCtx.costAccumulated > 0 ? { totalTokens: turnCtx.costAccumulated } : {}),
+      ...(latency ? { latency } : {}),
     },
   };
 }

@@ -891,6 +891,17 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
               costEl.textContent = `${chunk.result.totalTokens.toLocaleString()} tokens`;
               bubble.appendChild(costEl);
             }
+            // TTFT instrumentation: one content-free latency line per turn —
+            // where the "feels weak" wait actually goes (context pipeline vs model).
+            // Console-only (no UI), but emitted in every environment on purpose so
+            // the breakdown is readable from a live session. See @motebit/ai-core
+            // TurnLatency. A dashboard/aggregate is a deliberate later step.
+            if (chunk.result.latency) {
+              const l = chunk.result.latency;
+              console.debug(
+                `[ttft] ${l.ttft_ms}ms (pipeline ${l.context_pipeline_ms}ms · provider ${l.provider_ttft_ms}ms · embed ${l.embed_ms} · retrieve ${l.memory_retrieve_ms} · events ${l.event_query_ms} · pinned ${l.pinned_ms})`,
+              );
+            }
             break;
           }
         }

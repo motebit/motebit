@@ -15,6 +15,7 @@ export { runTurn, runTurnStreaming, projectProviderClearance } from "./loop.js";
 export type {
   MotebitLoopDependencies,
   TurnResult,
+  TurnLatency,
   TurnOptions,
   AgenticChunk,
   LoopMemoryGovernor,

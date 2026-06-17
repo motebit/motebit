@@ -7,6 +7,7 @@ vi.mock("@motebit/memory-graph", async () => {
 });
 
 import { runTurn, runTurnStreaming } from "../loop";
+import { withStageTimeout } from "../core";
 import type { MotebitLoopDependencies, AgenticChunk, LoopMemoryGovernor } from "../loop";
 import type { SensitivityCleared } from "@motebit/sdk";
 import { AnthropicProvider } from "../index";
@@ -126,6 +127,24 @@ describe("runTurn", () => {
     expect(result.stateAfter).toBeDefined();
     expect(result.cues).toBeDefined();
     expect(result.cues.hover_distance).toBeGreaterThan(0);
+  });
+
+  it("attaches a content-free TTFT latency breakdown to the result", async () => {
+    mockFetchSuccess("A plain streamed reply.");
+
+    const deps = makeDeps();
+    const result = await runTurn(deps, "hello there");
+
+    expect(result.latency).toBeDefined();
+    const l = result.latency!;
+    // Every field is a non-negative duration (ms).
+    for (const v of Object.values(l)) {
+      expect(typeof v).toBe("number");
+      expect(v).toBeGreaterThanOrEqual(0);
+    }
+    // The split is exact by construction: ttft = pipeline + provider segment.
+    expect(l.ttft_ms).toBe(l.context_pipeline_ms + l.provider_ttft_ms);
+    expect(l.ttft_ms).toBeGreaterThanOrEqual(l.context_pipeline_ms);
   });
 
   it("handles API error gracefully", async () => {
@@ -1908,5 +1927,24 @@ describe("synthesizeClosingFallback — runtime guarantee of visible closing tex
       expect(out.length).toBeGreaterThan(0);
       expect(out.trim()).not.toBe("");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// withStageTimeout — duration sink (TTFT instrumentation primitive)
+// ---------------------------------------------------------------------------
+
+describe("withStageTimeout — onDuration", () => {
+  it("reports a non-negative elapsed time on the success path", async () => {
+    let recorded = -1;
+    const value = await withStageTimeout("test_stage", 1000, Promise.resolve("ok"), (ms) => {
+      recorded = ms;
+    });
+    expect(value).toBe("ok");
+    expect(recorded).toBeGreaterThanOrEqual(0);
+  });
+
+  it("still resolves normally when no sink is provided (back-compat)", async () => {
+    await expect(withStageTimeout("test_stage", 1000, Promise.resolve(42))).resolves.toBe(42);
   });
 });
