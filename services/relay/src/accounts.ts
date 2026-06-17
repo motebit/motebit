@@ -179,6 +179,15 @@ export function hasTransactionWithReference(
   return sqliteAccountStoreFor(db).hasDepositWithReference(motebitId, referenceId);
 }
 
+/** True when a `fee` debit with this reference already exists (proxy-debit idempotency). */
+export function hasFeeWithReference(
+  db: DatabaseDriver,
+  motebitId: string,
+  referenceId: string,
+): boolean {
+  return sqliteAccountStoreFor(db).hasFeeWithReference(motebitId, referenceId);
+}
+
 export function getAllocationHoldRemaining(db: DatabaseDriver, referenceId: string): number {
   return sqliteAccountStoreFor(db).getAllocationHoldRemaining(referenceId);
 }
