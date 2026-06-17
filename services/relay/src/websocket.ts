@@ -17,6 +17,7 @@ import type { EventLogEntry, SyncConversation, SyncConversationMessage } from "@
 import { AgentTaskStatus, asMotebitId } from "@motebit/sdk";
 import type { FixedWindowLimiter } from "./rate-limiter.js";
 import { upsertSyncConversation, upsertSyncMessage } from "./data-sync.js";
+import { floorSyncConversation, floorSyncMessage } from "./data-sync-redaction.js";
 import { redactSensitiveEvents } from "./redaction.js";
 import { propagateDeletionForEvent } from "./deletion-propagation.js";
 import type { TaskQueueEntry } from "./tasks.js";
@@ -428,7 +429,10 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               const peers = connections.get(motebitId);
               if (peers) {
                 for (const conv of msg.conversations) {
-                  const payload = JSON.stringify({ type: "conversation", conversation: conv });
+                  const payload = JSON.stringify({
+                    type: "conversation",
+                    conversation: floorSyncConversation(conv),
+                  });
                   for (const peer of peers) {
                     if (peer.ws !== ws && peer.ws.readyState === 1) {
                       peer.ws.send(payload);
@@ -448,7 +452,10 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               const peers = connections.get(motebitId);
               if (peers) {
                 for (const m of msg.messages) {
-                  const payload = JSON.stringify({ type: "conversation_message", message: m });
+                  const payload = JSON.stringify({
+                    type: "conversation_message",
+                    message: floorSyncMessage(m),
+                  });
                   for (const peer of peers) {
                     if (peer.ws !== ws && peer.ws.readyState === 1) {
                       peer.ws.send(payload);

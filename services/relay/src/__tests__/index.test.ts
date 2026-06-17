@@ -779,7 +779,10 @@ describe("Sync Relay — admin API endpoints", () => {
             motebit_id: MOTEBIT_ID,
             started_at: 1000,
             last_active_at: 2000,
-            title: "Test Chat",
+            // Production always encrypts conversation fields before push; the
+            // relay floor redacts any PLAINTEXT title. Use a ciphertext-shaped
+            // value (\0ENC: marker) so it passes the floor through byte-identical.
+            title: "\0ENC:Test Chat",
             summary: null,
             message_count: 5,
           },
@@ -799,7 +802,7 @@ describe("Sync Relay — admin API endpoints", () => {
     expect(body.motebit_id).toBe(MOTEBIT_ID);
     expect(body.conversations).toHaveLength(1);
     expect(body.conversations[0]!.conversation_id).toBe("conv-1");
-    expect(body.conversations[0]!.title).toBe("Test Chat");
+    expect(body.conversations[0]!.title).toBe("\0ENC:Test Chat");
   });
 
   it("GET /api/v1/conversations/:motebitId/:id/messages returns messages", async () => {
@@ -1594,7 +1597,8 @@ describe("Sync Relay — agent protocol", () => {
       plan_id: "plan-sync-1",
       goal_id: "goal-1",
       motebit_id: MOTEBIT_ID,
-      title: "Test plan",
+      // Encrypted-shaped (\0ENC: marker) — the relay floor redacts plaintext.
+      title: "\0ENC:Test plan",
       status: "active",
       created_at: 1000,
       updated_at: 5000,
@@ -1619,7 +1623,7 @@ describe("Sync Relay — agent protocol", () => {
     const pullBody = (await pullRes.json()) as { plans: Array<{ plan_id: string; title: string }> };
     expect(pullBody.plans).toHaveLength(1);
     expect(pullBody.plans[0]!.plan_id).toBe("plan-sync-1");
-    expect(pullBody.plans[0]!.title).toBe("Test plan");
+    expect(pullBody.plans[0]!.title).toBe("\0ENC:Test plan");
   });
 
   it("POST/GET /sync/:id/plan-steps pushes and pulls steps", async () => {
@@ -1628,14 +1632,15 @@ describe("Sync Relay — agent protocol", () => {
       plan_id: "plan-sync-1",
       motebit_id: MOTEBIT_ID,
       ordinal: 0,
-      description: "Test step",
-      prompt: "Do the thing",
+      // Encrypted-shaped free-text (\0ENC: marker) — the relay floor redacts plaintext.
+      description: "\0ENC:Test step",
+      prompt: "\0ENC:Do the thing",
       depends_on: "[]",
       optional: false,
       status: "completed",
       required_capabilities: null,
       delegation_task_id: null,
-      result_summary: "Done!",
+      result_summary: "\0ENC:Done!",
       error_message: null,
       tool_calls_made: 2,
       started_at: 2000,
@@ -1662,7 +1667,7 @@ describe("Sync Relay — agent protocol", () => {
     expect(pullBody.steps).toHaveLength(1);
     expect(pullBody.steps[0]!.step_id).toBe("step-sync-1");
     expect(pullBody.steps[0]!.status).toBe("completed");
-    expect(pullBody.steps[0]!.result_summary).toBe("Done!");
+    expect(pullBody.steps[0]!.result_summary).toBe("\0ENC:Done!");
   });
 
   it("plan sync enforces step status monotonicity on relay", async () => {

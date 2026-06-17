@@ -7,6 +7,7 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
+import { isEncryptedField } from "@motebit/encryption";
 import { createLogger } from "./logger.js";
 import {
   redactMemoryFormedPayload,
@@ -1632,6 +1633,128 @@ export const relayMigrations: Migration[] = [
       scrub("memory_consolidated", redactMemoryConsolidatedPayload);
       if (scrubbed > 0) {
         logger.info("migration.scrub_unredacted_memory_audit_consolidated", { scrubbed });
+      }
+    },
+  },
+  {
+    // v36 (memory_audit / memory_consolidated scrub) lands just above; this is
+    // v37, so runMigrations — which skips version <= MAX(applied) — applies them
+    // in order on every relay.
+    version: 37,
+    name: "scrub_unredacted_conversation_sync_content",
+    up: (db) => {
+      // Sibling of the v34 memory_formed scrub, for the conversation / message /
+      // plan sync tables. Before the data-sync ingress floor
+      // (data-sync-redaction.ts) landed, the sync push paths persisted these
+      // free-text fields verbatim — a client that pushed plaintext (no
+      // field-level encryption) left it live at the relay, contradicting the
+      // E2E-encrypted-content posture. Rewrite historical rows to the shape the
+      // floor now produces: any plaintext value (non-empty, not marked with
+      // ENCRYPTED_FIELD_PREFIX) becomes [REDACTED]; ciphertext is left untouched.
+      // Driver-agnostic; idempotent (an already-[REDACTED] value re-scrubs to the
+      // same [REDACTED]). The sync_* tables are created at boot
+      // (createDataSyncTables) before relay migrations run; guard for harnesses
+      // running relayMigrations on a bare driver.
+      const REDACTED = "[REDACTED]";
+      const scrubField = (value: unknown): string | undefined => {
+        // undefined ⇒ keep column as-is; string ⇒ the replacement to write.
+        if (typeof value !== "string" || value === "") return undefined; // NULL / empty
+        if (isEncryptedField(value)) return undefined; // opaque ciphertext — keep
+        return REDACTED; // plaintext (incl. a prior [REDACTED]) — floor it
+      };
+      const tableExists = (name: string): boolean =>
+        (db
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+          .get(name) as { name: string } | undefined) != null;
+      let scrubbed = 0;
+
+      if (tableExists("sync_conversations")) {
+        const rows = db
+          .prepare("SELECT conversation_id, title, summary FROM sync_conversations")
+          .all() as { conversation_id: string; title: string | null; summary: string | null }[];
+        const update = db.prepare(
+          "UPDATE sync_conversations SET title = ?, summary = ? WHERE conversation_id = ?",
+        );
+        for (const r of rows) {
+          const t = scrubField(r.title);
+          const s = scrubField(r.summary);
+          if (t === undefined && s === undefined) continue;
+          update.run(t ?? r.title, s ?? r.summary, r.conversation_id);
+          scrubbed++;
+        }
+      }
+
+      if (tableExists("sync_conversation_messages")) {
+        const rows = db
+          .prepare("SELECT message_id, content, tool_calls FROM sync_conversation_messages")
+          .all() as { message_id: string; content: string | null; tool_calls: string | null }[];
+        const update = db.prepare(
+          "UPDATE sync_conversation_messages SET content = ?, tool_calls = ? WHERE message_id = ?",
+        );
+        for (const r of rows) {
+          const content = scrubField(r.content);
+          const toolCalls = scrubField(r.tool_calls);
+          if (content === undefined && toolCalls === undefined) continue;
+          update.run(content ?? r.content, toolCalls ?? r.tool_calls, r.message_id);
+          scrubbed++;
+        }
+      }
+
+      if (tableExists("sync_plans")) {
+        const rows = db.prepare("SELECT plan_id, title FROM sync_plans").all() as {
+          plan_id: string;
+          title: string | null;
+        }[];
+        const update = db.prepare("UPDATE sync_plans SET title = ? WHERE plan_id = ?");
+        for (const r of rows) {
+          const t = scrubField(r.title);
+          if (t === undefined) continue;
+          update.run(t, r.plan_id);
+          scrubbed++;
+        }
+      }
+
+      if (tableExists("sync_plan_steps")) {
+        const rows = db
+          .prepare(
+            "SELECT step_id, description, prompt, result_summary, error_message FROM sync_plan_steps",
+          )
+          .all() as {
+          step_id: string;
+          description: string | null;
+          prompt: string | null;
+          result_summary: string | null;
+          error_message: string | null;
+        }[];
+        const update = db.prepare(
+          "UPDATE sync_plan_steps SET description = ?, prompt = ?, result_summary = ?, error_message = ? WHERE step_id = ?",
+        );
+        for (const r of rows) {
+          const description = scrubField(r.description);
+          const prompt = scrubField(r.prompt);
+          const resultSummary = scrubField(r.result_summary);
+          const errorMessage = scrubField(r.error_message);
+          if (
+            description === undefined &&
+            prompt === undefined &&
+            resultSummary === undefined &&
+            errorMessage === undefined
+          ) {
+            continue;
+          }
+          update.run(
+            description ?? r.description,
+            prompt ?? r.prompt,
+            resultSummary ?? r.result_summary,
+            errorMessage ?? r.error_message,
+            r.step_id,
+          );
+          scrubbed++;
+        }
+      }
+
+      if (scrubbed > 0) {
+        logger.info("migration.scrub_unredacted_conversation_sync_content", { scrubbed });
       }
     },
   },
