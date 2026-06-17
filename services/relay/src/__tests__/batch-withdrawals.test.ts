@@ -424,6 +424,49 @@ describe("evaluateAndFireRail — batch-capable rail", () => {
       .get() as { n: number };
     expect(fired.n).toBe(2);
   });
+
+  it("falls back to serial when two motebits share an idempotency_key (no mis-attribution)", async () => {
+    const db = await openRelay();
+    const rail = new BatchableFakeRail({ name: "fake-batch-collide" });
+    await fundAgent(db, "agent-k", 50 * $1);
+    await fundAgent(db, "agent-l", 50 * $1);
+    // The same CLIENT idempotency_key across DIFFERENT motebits — permitted by
+    // the (motebit_id, idempotency_key) UNIQUE index, so both rows land in one
+    // cross-motebit batch. In a single keyed lookup map they'd collide and one
+    // row's outcome would be mis-attributed; the guard must fall back to serial.
+    enqueuePendingWithdrawal(db, {
+      motebitId: "agent-k",
+      amountMicro: 3 * $1,
+      destination: "dst-k",
+      rail: rail.name,
+      source: "sweep",
+      idempotencyKey: "shared-key",
+    });
+    enqueuePendingWithdrawal(db, {
+      motebitId: "agent-l",
+      amountMicro: 4 * $1,
+      destination: "dst-l",
+      rail: rail.name,
+      source: "sweep",
+      idempotencyKey: "shared-key",
+    });
+
+    await evaluateAndFireRail(db, rail, {});
+
+    // Collision detected → batch NOT used; each row fired individually.
+    expect(rail.batchCalls).toHaveLength(0);
+    expect(rail.calls).toHaveLength(2);
+
+    // Both rows fired + recorded — neither dropped nor mis-attributed.
+    const fired = db
+      .prepare("SELECT COUNT(*) AS n FROM relay_pending_withdrawals WHERE status = 'fired'")
+      .get() as { n: number };
+    expect(fired.n).toBe(2);
+    const withdrawals = db.prepare("SELECT COUNT(*) AS n FROM relay_withdrawals").get() as {
+      n: number;
+    };
+    expect(withdrawals.n).toBe(2);
+  });
 });
 
 describe("getPendingWithdrawalsSummary", () => {

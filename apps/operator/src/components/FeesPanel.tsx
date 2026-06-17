@@ -45,21 +45,17 @@ export function FeesPanel(): React.ReactElement {
   }
 
   if (data == null) {
+    // The endpoint is live, so a successful load always sets `data`; reaching
+    // here means the fetch failed. Show the error honestly (no "pending" copy).
     return React.createElement(
       "div",
       { className: "panel" },
       React.createElement("h2", null, "Fees"),
-      error != null
-        ? React.createElement(
-            "p",
-            { className: "empty", style: { color: "var(--red)" } },
-            `Error: ${error}`,
-          )
-        : React.createElement(
-            "p",
-            { className: "empty" },
-            "Endpoint not yet available (/api/v1/admin/fees ships in a follow-up commit). Aggregation panel will render once it's live.",
-          ),
+      React.createElement(
+        "p",
+        { className: "empty", style: { color: "var(--red)" } },
+        error != null ? `Error: ${error}` : "Could not load fees.",
+      ),
     );
   }
 

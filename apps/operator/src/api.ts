@@ -206,11 +206,12 @@ export interface FeesResponse {
   sample_window_days: number;
 }
 
-export function fetchFees(signal?: AbortSignal): Promise<FeesResponse | null> {
-  return apiFetch<FeesResponse>(`/api/v1/admin/fees`, { signal }).catch((err) => {
-    if (err instanceof ApiError && err.status === 404) return null;
-    throw err;
-  });
+export function fetchFees(signal?: AbortSignal): Promise<FeesResponse> {
+  // `/api/v1/admin/fees` is live (relay `index.ts`). It previously caught a 404
+  // and returned `null` to render a "ships in a follow-up" placeholder; now a
+  // 404 means a misconfigured or out-of-date relay and surfaces as an honest
+  // error like any other failure, not a permanent "pending" state.
+  return apiFetch<FeesResponse>(`/api/v1/admin/fees`, { signal });
 }
 
 // === Credential anchoring ===
