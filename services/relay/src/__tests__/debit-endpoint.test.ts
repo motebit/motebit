@@ -196,4 +196,79 @@ describe("POST /api/v1/agents/:motebitId/debit", () => {
     expect(b3.success).toBe(false);
     expect(b3.balance).toBe(0);
   });
+
+  // ── Idempotency on reference_id ──────────────────────────────────────────
+  // The proxy debits fire-and-forget after serving the response and retries a
+  // failed debit with the SAME reference_id. The endpoint must apply it once.
+
+  it("is idempotent on reference_id — a retried debit does not double-charge", async () => {
+    await deposit(relay, motebitId, 0.1); // 100,000 micro
+
+    const first = await debitRequest(
+      relay,
+      motebitId,
+      { amount: 30_000, reference_id: "ref-retry" },
+      RELAY_SECRET,
+    );
+    const b1 = (await first.json()) as { success: boolean; balance: number; idempotent?: boolean };
+    expect(b1.success).toBe(true);
+    expect(b1.balance).toBe(70_000);
+    expect(b1.idempotent).toBeUndefined();
+
+    // Same reference_id again (a retry) — must NOT debit a second time.
+    const retry = await debitRequest(
+      relay,
+      motebitId,
+      { amount: 30_000, reference_id: "ref-retry" },
+      RELAY_SECRET,
+    );
+    expect(retry.status).toBe(200);
+    const b2 = (await retry.json()) as { success: boolean; balance: number; idempotent?: boolean };
+    expect(b2.success).toBe(true);
+    expect(b2.idempotent).toBe(true);
+    expect(b2.balance).toBe(70_000); // unchanged — no second charge
+  });
+
+  it("idempotent replay reports success even if the balance later dropped to zero", async () => {
+    await deposit(relay, motebitId, 0.05); // 50,000 micro
+    // Original debit recorded under ref-A.
+    await debitRequest(relay, motebitId, { amount: 30_000, reference_id: "ref-A" }, RELAY_SECRET);
+    // A different request spends the rest.
+    await debitRequest(relay, motebitId, { amount: 20_000, reference_id: "ref-B" }, RELAY_SECRET);
+
+    // Retry of ref-A: already recorded, so a no-op replay — success, no debit,
+    // not the insufficient-balance path even though spendable is now 0.
+    const retry = await debitRequest(
+      relay,
+      motebitId,
+      { amount: 30_000, reference_id: "ref-A" },
+      RELAY_SECRET,
+    );
+    const body = (await retry.json()) as {
+      success: boolean;
+      balance: number;
+      idempotent?: boolean;
+    };
+    expect(body.success).toBe(true);
+    expect(body.idempotent).toBe(true);
+    expect(body.balance).toBe(0);
+  });
+
+  it("distinct reference_ids both apply (idempotency does not over-dedupe)", async () => {
+    await deposit(relay, motebitId, 0.1); // 100,000 micro
+    const r1 = await debitRequest(
+      relay,
+      motebitId,
+      { amount: 10_000, reference_id: "ref-x" },
+      RELAY_SECRET,
+    );
+    expect(((await r1.json()) as { balance: number }).balance).toBe(90_000);
+    const r2 = await debitRequest(
+      relay,
+      motebitId,
+      { amount: 10_000, reference_id: "ref-y" },
+      RELAY_SECRET,
+    );
+    expect(((await r2.json()) as { balance: number }).balance).toBe(80_000);
+  });
 });

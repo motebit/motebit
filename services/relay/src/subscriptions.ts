@@ -22,6 +22,7 @@ import {
   getOrCreateAccount,
   creditAccount,
   debitSpendableAccount,
+  hasFeeWithReference,
   toMicro,
   fromMicro,
 } from "./accounts.js";
@@ -203,6 +204,26 @@ export function registerProxyTokenRoutes(
 
     if (typeof body.amount !== "number" || body.amount <= 0) {
       return c.json({ error: "amount must be a positive number (micro-units)" }, 400);
+    }
+
+    // Idempotency. The proxy debits AFTER serving the response (fire-and-forget)
+    // and retries a failed debit with the SAME reference_id — it cannot tell a
+    // dropped request from a lost 200. Re-applying would double-charge the user,
+    // so a debit whose reference_id already recorded a `fee` is a no-op replay:
+    // return success with the current balance. No `await` between this check and
+    // the debit below, so the read+write stays atomic within this process (the
+    // relay is single-instance; better-sqlite3 is synchronous).
+    if (
+      typeof body.reference_id === "string" &&
+      body.reference_id !== "" &&
+      hasFeeWithReference(db, motebitId, body.reference_id)
+    ) {
+      const balance = getAccountBalance(db, motebitId)?.balance ?? 0;
+      logger.info("proxy-debit.idempotent_replay", {
+        motebitId,
+        referenceId: body.reference_id,
+      });
+      return c.json({ success: true, balance, idempotent: true });
     }
 
     // Spend-side debit: a worker's recent/disputed settlement earnings are
