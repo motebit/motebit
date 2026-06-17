@@ -93,7 +93,14 @@ export async function withStageTimeout<T>(
   stage: string,
   ms: number,
   promise: Promise<T>,
+  /**
+   * Optional duration sink — called with the wall-clock ms the stage took,
+   * on both the success and timeout paths. Used for TTFT instrumentation
+   * (single source for per-stage timing); never affects control flow.
+   */
+  onDuration?: (elapsedMs: number) => void,
 ): Promise<T> {
+  const start = Date.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new StageTimeoutError(stage, ms)), ms);
@@ -102,6 +109,7 @@ export async function withStageTimeout<T>(
     return await Promise.race([promise, timeout]);
   } finally {
     if (timer) clearTimeout(timer);
+    if (onDuration) onDuration(Date.now() - start);
   }
 }
 
