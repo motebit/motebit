@@ -151,10 +151,9 @@ describe("fetchDisputes", () => {
 });
 
 describe("fetchFees", () => {
-  it("returns null when /api/v1/admin/fees is 404 (endpoint pending)", async () => {
+  it("throws ApiError on 404 (endpoint is live — a 404 means a misconfigured relay)", async () => {
     mockFetch({ error: "not_found" }, 404);
-    const result = await fetchFees();
-    expect(result).toBeNull();
+    await expect(fetchFees()).rejects.toThrow(ApiError);
   });
 
   it("returns body when endpoint is live", async () => {
@@ -167,9 +166,8 @@ describe("fetchFees", () => {
       sample_window_days: 30,
     });
     const result = await fetchFees();
-    expect(result).not.toBeNull();
-    expect(result!.total_collected_micro).toBe(12500000);
-    expect(result!.fee_rate).toBe(0.05);
+    expect(result.total_collected_micro).toBe(12500000);
+    expect(result.fee_rate).toBe(0.05);
   });
 });
 

@@ -346,10 +346,30 @@ async function fireBatch(
   rail: BatchableGuestRail,
   rows: PendingRow[],
 ): Promise<void> {
-  // Map idempotency_key → row for O(1) lookup of per-item outcomes.
-  // toBatchItem mints the idempotency_key deterministically from
-  // pending_id, so the key is unique per row by construction.
   const items = rows.map((r) => toBatchItem(r));
+
+  // We attribute each per-item batch result back to its pending row by
+  // idempotency_key. `toBatchItem` uses the row's CLIENT-SUPPLIED
+  // idempotency_key when present (only falling back to a pending_id-derived key
+  // when absent), and client keys are not guaranteed unique across motebits — so
+  // a batch CAN contain two rows sharing a key. That would collapse them in the
+  // lookup map and silently mis-attribute one row's outcome (record the wrong
+  // withdrawal, drop the other). Detect the collision and fall back to serial
+  // firing, which records each row by pending_id with no key lookup. (Latent
+  // today — no rail is batchable yet; this keeps the trap from biting whenever
+  // one ships. `BatchableGuestRail` is a `WithdrawableGuestRail`, so it can fire
+  // serially.)
+  const keys = items.map((i) => i.idempotency_key);
+  if (new Set(keys).size !== keys.length) {
+    logger.warn("batch.idempotency_key_collision", {
+      rail: rail.name,
+      count: rows.length,
+      reason: "duplicate idempotency_key in batch — firing serially to avoid mis-attribution",
+    });
+    await fireSerial(db, rail, rows);
+    return;
+  }
+
   const byKey = new Map<string, PendingRow>(rows.map((r, i) => [items[i]!.idempotency_key, r]));
 
   let result;

@@ -4,12 +4,17 @@
  * injection, scroll. One tool; the `action` argument is a nested
  * discriminated variant per the `spec/computer-use-v1.md` wire format.
  *
- * Today this handler is a structured stub: every call returns a typed
- * failure reason until the desktop Tauri bridge (Rust screen-capture +
- * input injection + OS accessibility APIs) lands. The tool definition and
- * wire-format parity are finalized so the Rust backend can drop in behind
- * a stable contract without touching any of the signed-receipt,
- * governance, or UI wiring.
+ * This handler is backend-agnostic: it dispatches each action to an injected
+ * backend and shapes the result — or a typed failure `reason` — into a
+ * `ToolResult`. A real dispatcher is wired wherever the OS/world is reachable:
+ * the `desktop_drive` mode on desktop, and the cloud-browser dispatcher for
+ * `virtual_browser` (`packages/runtime/src/cloud-browser-dispatcher.ts`, live).
+ * When NO dispatcher is injected the handler returns a typed failure reason, so
+ * a surface that cannot reach the OS degrades honestly (defense-in-depth). The
+ * tool definition and wire-format parity (`spec/computer-use-v1.md`) are stable,
+ * so a new backend (e.g. the desktop Tauri Rust screen-capture / input-injection
+ * bridge) drops in behind the contract without touching any of the
+ * signed-receipt, governance, or UI wiring.
  *
  * Surface support (`docs/doctrine/motebit-computer.md` § "Embodiment
  * modes"): the `desktop_drive` mode registers this tool on desktop with a
