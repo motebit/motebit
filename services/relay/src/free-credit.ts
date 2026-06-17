@@ -110,7 +110,16 @@ export function grantFreeCreditIfEligible(
       .get(day) as { grants: number } | undefined;
     const spent = (grantsRow?.grants ?? 0) * cfg.amountMicro;
     if (spent + cfg.amountMicro > cfg.dailyBudgetMicro) {
-      logger.warn("free-credit.daily_budget_reached", { spent, day });
+      // Activation signal: a NEW motebit got zero credit because the global
+      // give-away budget is drained — it hits the setup wall on message one.
+      logger.warn("free_credit.grant_decision", {
+        schemaVersion: 1,
+        outcome: "denied",
+        reason: "daily_budget",
+        motebitId,
+        spent,
+        day,
+      });
       return { granted: false, reason: "daily_budget" };
     }
 
@@ -119,6 +128,15 @@ export function grantFreeCreditIfEligible(
       .prepare("SELECT count FROM relay_free_grants WHERE ip = ? AND day = ?")
       .get(ip, day) as { count: number } | undefined;
     if ((ipRow?.count ?? 0) >= cfg.ipDailyCap) {
+      // Activation signal: shared/NAT IPs exhausting the per-IP grant cap.
+      // Previously silent — now the cap is observable.
+      logger.warn("free_credit.grant_decision", {
+        schemaVersion: 1,
+        outcome: "denied",
+        reason: "ip_cap",
+        motebitId,
+        day,
+      });
       return { granted: false, reason: "ip_cap" };
     }
 
@@ -137,13 +155,32 @@ export function grantFreeCreditIfEligible(
        ON CONFLICT(ip, day) DO UPDATE SET count = count + 1`,
     ).run(ip, day);
 
-    logger.info("free-credit.granted", { motebitId, amountMicro: cfg.amountMicro, ip, day });
+    // `motebitId` is the in-service join key (relay is identity's home; consistent
+    // with `account.debit`). Raw `ip` is deliberately NOT logged — the per-IP cap
+    // counter lives in `relay_free_grants`; activation telemetry doesn't need the
+    // network identifier.
+    logger.info("free_credit.grant_decision", {
+      schemaVersion: 1,
+      outcome: "granted",
+      reason: "granted",
+      motebitId,
+      grantedMicro: cfg.amountMicro,
+      day,
+    });
     return { granted: true, amountMicro: cfg.amountMicro };
   } catch (err) {
-    logger.warn("free-credit.error", {
+    logger.warn("free_credit.grant_decision", {
+      schemaVersion: 1,
+      outcome: "error",
+      reason: "internal_error",
       motebitId,
       error: err instanceof Error ? err.message : String(err),
     });
     return { granted: false, reason: "error" };
   }
+  // NOTE: `already_granted` and `disabled` are intentionally NOT logged — they
+  // fire on every returning user's token mint (`subscriptions.ts`), so logging
+  // them would flood the channel and drown the activation signal. The four
+  // decisive outcomes above (granted / daily_budget / ip_cap / internal_error)
+  // are what answer "are new users getting credit, and if not, why".
 }
