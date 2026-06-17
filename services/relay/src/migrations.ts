@@ -8,7 +8,11 @@
 
 import type { DatabaseDriver } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
-import { redactMemoryFormedPayload } from "./redaction.js";
+import {
+  redactMemoryFormedPayload,
+  redactMemoryAuditPayload,
+  redactMemoryConsolidatedPayload,
+} from "./redaction.js";
 
 const logger = createLogger({ service: "migrations" });
 
@@ -1583,6 +1587,51 @@ export const relayMigrations: Migration[] = [
       }
       if (redacted > 0) {
         logger.info("migration.backfill_historical_memory_deletions", { redacted });
+      }
+    },
+  },
+  {
+    version: 36,
+    name: "scrub_unredacted_memory_audit_consolidated",
+    up: (db) => {
+      // Sibling of the version-34 memory_formed scrub: before the redaction.ts
+      // arms for these landed, the sync push paths appended `memory_audit` and
+      // `memory_consolidated` events RAW — `memory_audit` carrying the user's
+      // turn text + missed-pattern excerpts (exactly the content that escaped
+      // sensitivity tagging), `memory_consolidated` carrying free-text `reason`
+      // that may quote memory content. Rewrite historical rows to the shape the
+      // ingress redactor now produces. Driver-agnostic JS parse; same guards as
+      // version 34 (events table created at boot before relay migrations run).
+      const hasEvents = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+        .get() as { name: string } | undefined;
+      if (!hasEvents) return;
+      const update = db.prepare("UPDATE events SET payload = ? WHERE event_id = ?");
+      let scrubbed = 0;
+      const scrub = (
+        eventType: string,
+        redact: (p: Record<string, unknown>) => Record<string, unknown> | null,
+      ): void => {
+        const rows = db
+          .prepare("SELECT event_id, payload FROM events WHERE event_type = ?")
+          .all(eventType) as { event_id: string; payload: string }[];
+        for (const row of rows) {
+          let payload: Record<string, unknown>;
+          try {
+            payload = JSON.parse(row.payload) as Record<string, unknown>;
+          } catch {
+            continue; // unparseable — leave untouched rather than destroy
+          }
+          const redacted = redact(payload);
+          if (!redacted) continue;
+          update.run(JSON.stringify(redacted), row.event_id);
+          scrubbed++;
+        }
+      };
+      scrub("memory_audit", redactMemoryAuditPayload);
+      scrub("memory_consolidated", redactMemoryConsolidatedPayload);
+      if (scrubbed > 0) {
+        logger.info("migration.scrub_unredacted_memory_audit_consolidated", { scrubbed });
       }
     },
   },
