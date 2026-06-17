@@ -258,6 +258,14 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="small" color={colors.accent} />
           </View>
+        ) : state.error !== null ? (
+          // A fetch failure (relay unreachable / non-2xx) must NOT look like
+          // "you have no agents" — the controller sets `error`, so surface it
+          // distinctly from the honest-empty states below.
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>Couldn't reach the relay.</Text>
+            <Text style={styles.emptySubtext}>{state.error}</Text>
+          </View>
         ) : state.activeTab === "known" ? (
           <FlatList
             data={state.known}
