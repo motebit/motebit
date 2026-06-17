@@ -9,6 +9,19 @@ import { EventStore, InMemoryEventStore } from "@motebit/event-log";
 import { SensitivityLevel, RelationType, EventType } from "@motebit/sdk";
 import type { AttributedMemoryCandidate } from "@motebit/sdk";
 
+// `supersedeMemoryByNodeId` is the one path here that calls `embedText`, which
+// lazy-loads the @xenova/transformers ONNX model on first use. That first load
+// is heavy and variable under parallel CI load and intermittently blew the
+// default 5s test timeout — the sole cause of this suite flaking (it blocked
+// PRs in the 2026-06-17 audit-merge round). Force `embedText` to its own
+// deterministic offline hash fallback so the test never loads a model. The
+// other exports (and other test files that exercise the real embedText) are
+// untouched — this mock is scoped to this file's module registry.
+vi.mock("../embeddings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../embeddings.js")>();
+  return { ...actual, embedText: (text: string) => Promise.resolve(actual.embedTextHash(text)) };
+});
+
 // ---------------------------------------------------------------------------
 // computeDecayedConfidence()
 // ---------------------------------------------------------------------------
