@@ -839,7 +839,14 @@ describe("Dispute: fund execution integrity", () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
     await registerAgent(relay, "del-fund");
     await registerAgent(relay, "wrk-fund");
-    createAllocation(relay, "alloc-fund", "task-fund", "del-fund");
+    // The allocation's motebit_id IS the worker (it's the agent the escrow pays
+    // out to). So `wrk-fund` owns the allocation; `del-fund` is the delegator,
+    // and a dispute it files is `filer_role=delegator`. (Pre-fix this fixture
+    // assigned the allocation to `del-fund`, inverting the roles — which only
+    // passed because executeFundAction's Case A inverted them a SECOND time via
+    // filed_by/respondent; the two cancelled. The fix removes that inversion, so
+    // the fixture now has to name roles honestly.)
+    createAllocation(relay, "alloc-fund", "task-fund", "wrk-fund");
   });
 
   afterEach(async () => {
@@ -939,7 +946,7 @@ describe("Dispute: fund execution integrity", () => {
     expect(delTxn?.amount).toBe(30000);
   });
 
-  it("release_to_worker credits the respondent", async () => {
+  it("release_to_worker credits the worker (= the allocation owner, not the filer)", async () => {
     const openRes = await openDispute(relay, "alloc-fund", "del-fund", "wrk-fund", "task-fund");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
 

@@ -422,7 +422,11 @@ describe("Federation appeal: round-1 resolved → /appeal → round-2 → final"
     expect(resolutionRows[1]).toEqual({ round: 2, resolution: "overturned" });
 
     // §7.1 + §7.3 + §8.4: fund_action executes on transition to `final`.
-    // round-2 verdict was `overturned` → split_ratio = 0.0 (delegator wins).
+    // `del-fa` OWNS the allocation, so it is the worker and (having filed) the
+    // worker-filer; the relay is the respondent = delegator. Round-2 `overturned`
+    // means the worker-filer LOSES on appeal → mapFundAction(overturned, worker)
+    // = refund_to_delegator, split_ratio 0.0 → the full escrow refunds the
+    // delegator (the relay here), NOT the losing filer.
     const stateFinal = relay.moteDb.db
       .prepare("SELECT state, resolution, split_ratio FROM relay_disputes WHERE dispute_id = ?")
       .get(disputeId) as { state: string; resolution: string; split_ratio: number };
@@ -430,13 +434,22 @@ describe("Federation appeal: round-1 resolved → /appeal → round-2 → final"
     expect(stateFinal.resolution).toBe("overturned");
     expect(stateFinal.split_ratio).toBe(0.0);
 
-    // Delegator received the refund (split_ratio=0 → all to delegator)
-    const delTxn = relay.moteDb.db
+    // The delegator (= respondent = relay) received the refund; the worker-filer
+    // who lost the appeal received nothing. (Pre-fix, Case A credited `filed_by`
+    // — the losing filer — paying the escrow to exactly the wrong party.)
+    const refundTxn = relay.moteDb.db
+      .prepare(
+        "SELECT amount FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit' AND reference_id = ?",
+      )
+      .get(relayMotebitId, disputeId) as { amount: number } | undefined;
+    expect(refundTxn?.amount).toBe(100000);
+
+    const loserTxn = relay.moteDb.db
       .prepare(
         "SELECT amount FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit' AND reference_id = ?",
       )
       .get("del-fa", disputeId) as { amount: number } | undefined;
-    expect(delTxn?.amount).toBe(100000);
+    expect(loserTxn).toBeUndefined();
   });
 });
 
