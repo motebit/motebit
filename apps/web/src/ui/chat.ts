@@ -475,7 +475,7 @@ const SETTINGS_LINK = `<a href="#" class="chat-action-link" data-action="open-se
 const RELOAD_LINK = `<a href="#" class="chat-action-link" data-action="reload">`;
 const IDENTITY_LINK = `<a href="#" class="chat-action-link" data-action="open-identity">`;
 
-function formatErrorMessage(msg: string): string {
+export function formatErrorMessage(msg: string): string {
   // Rate limit — distinguish proxy free-tier from API rate limit
   if (msg.includes("rate_limited") || msg.includes("429")) {
     if (msg.includes("free") || msg.includes("daily")) {
@@ -487,8 +487,19 @@ function formatErrorMessage(msg: string): string {
   if (msg.includes("401") || msg.includes("authentication_error")) {
     return `Invalid API key. ${SETTINGS_LINK}Check your key in Settings</a>.`;
   }
-  // No credits / billing
-  if (msg.includes("402") || msg.includes("billing") || msg.includes("insufficient")) {
+  // Motebit-cloud balance exhausted — the proxy's OWN 402 (`insufficient_balance`),
+  // matched BEFORE the generic provider-billing 402 below. A cloud user has no
+  // Anthropic console account, so "add credits at console.anthropic.com" is the
+  // wrong instruction for them — they bring their own key (kept on-device) or
+  // fund the droplet. The proxy can't distinguish free-preview-exhausted from
+  // funded-then-drained (no balance history), so the copy is neutral truth that
+  // serves both populations. See docs/doctrine — PR2 of the inference-reliability arc.
+  if (msg.includes("insufficient_balance")) {
+    return `Motebit Cloud has no balance available. ${SETTINGS_LINK}Add your own model key</a> — kept on this device — or fund your droplet to continue.`;
+  }
+  // No credits / billing — a BYOK provider's own account is out (e.g. Anthropic
+  // console). Distinct from the motebit-cloud balance wall handled just above.
+  if (msg.includes("402") || msg.includes("billing")) {
     return `No API credits. Add credits at <a href="https://console.anthropic.com" target="_blank" rel="noopener" class="chat-action-link">console.anthropic.com</a>, or ${SETTINGS_LINK}use a different key</a>.`;
   }
   // Overloaded

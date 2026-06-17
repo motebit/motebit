@@ -66,10 +66,43 @@ beforeAll(() => {
 
 // Dynamic import so the stubs are in place first
 let renderMarkdown: (raw: string) => string;
+let formatErrorMessage: (msg: string) => string;
 
 beforeAll(async () => {
   const mod = await import("../ui/chat");
   renderMarkdown = mod.renderMarkdown;
+  formatErrorMessage = mod.formatErrorMessage;
+});
+
+// ─── formatErrorMessage — the cloud-inference failure wall ─────────────
+
+describe("formatErrorMessage", () => {
+  // The bounced-user bug: a motebit-cloud user hitting the proxy's own 402
+  // (`insufficient_balance`) must NOT be told to add credits at an Anthropic
+  // console account they don't have.
+  it("cloud balance wall (insufficient_balance) → fund/BYOK, NOT console.anthropic.com", () => {
+    const out = formatErrorMessage('Anthropic API error 402: {"error":"insufficient_balance"}');
+    expect(out).toContain("Motebit Cloud has no balance");
+    expect(out).toContain("fund your droplet");
+    expect(out).not.toContain("console.anthropic.com");
+  });
+
+  it("BYOK provider billing 402 still points at console.anthropic.com", () => {
+    const out = formatErrorMessage('Anthropic API error 402: {"error":{"type":"billing_error"}}');
+    expect(out).toContain("console.anthropic.com");
+    expect(out).not.toContain("Motebit Cloud has no balance");
+  });
+
+  it("cloud-balance case wins even though the string also contains 402", () => {
+    // The thrown string contains both "402" and "insufficient_balance"; the
+    // cloud case is matched first so the wrong console copy never shows.
+    const out = formatErrorMessage('Anthropic API error 402: {"error":"insufficient_balance"}');
+    expect(out).not.toContain("No API credits");
+  });
+
+  it("unrelated errors fall through to the generic message", () => {
+    expect(formatErrorMessage("boom")).toContain("Something went wrong");
+  });
 });
 
 // ─── stripInternalTags (exercised through renderMarkdown) ─────────────
