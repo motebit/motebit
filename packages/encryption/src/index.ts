@@ -186,6 +186,38 @@ export interface EncryptedPayload {
 }
 
 /**
+ * Marker prefix for a FIELD-LEVEL encrypted string on the sync wire.
+ *
+ * The conversation/plan sync adapters (`@motebit/sync-engine`) encrypt
+ * individual free-text fields (message `content`, conversation `title`/
+ * `summary`, plan `title`, step `description`/`prompt`/`result_summary`/
+ * `error_message`, `tool_calls`) in place: the value becomes
+ * `"\0ENC:" + base64-packed {c,n,t}`. A leading NUL keeps the marker out of
+ * any legitimate human text. This differs from the event-store envelope
+ * (`{_encrypted: true, _data}`) — sync encryption is per-field so the relay
+ * can still index by id/timestamp without the key.
+ *
+ * This is a **cross-package wire sentinel**: the client side (encrypt/decrypt
+ * adapters) and the relay side (the ingress sensitivity floor in
+ * `services/relay/src/data-sync-redaction.ts`, which passes ciphertext through
+ * and fail-closed redacts plaintext) must agree on it byte-for-byte. It lives
+ * here, in the package that owns the encryption envelope, so both sides import
+ * one source of truth rather than each re-declaring it (they used to, and it
+ * was already drifting toward two private copies).
+ */
+export const ENCRYPTED_FIELD_PREFIX = "\0ENC:";
+
+/**
+ * True when `value` is a field-level encrypted string (carries
+ * `ENCRYPTED_FIELD_PREFIX`). Opaque ciphertext the holder of the sync key
+ * guards — the relay must pass it through untouched. A plaintext string
+ * (no prefix) is, at the relay boundary, unprotected content.
+ */
+export function isEncryptedField(value: unknown): value is string {
+  return typeof value === "string" && value.startsWith(ENCRYPTED_FIELD_PREFIX);
+}
+
+/**
  * Legacy unsigned deletion certificate. Pre-dates the
  * `DeletionCertificate` discriminated union in `@motebit/protocol`,
  * which carries `kind`, `suite`, and signatures (subject / operator /

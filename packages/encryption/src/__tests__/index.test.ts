@@ -35,6 +35,8 @@ import {
   publicKeyToDidKey,
   hexPublicKeyToDidKey,
   bytesToHex,
+  ENCRYPTED_FIELD_PREFIX,
+  isEncryptedField,
 } from "../index";
 
 // ---------------------------------------------------------------------------
@@ -1452,5 +1454,36 @@ describe("canonicalJson", () => {
     expect(canonicalJson("hello")).toBe('"hello"');
     expect(canonicalJson(42)).toBe("42");
     expect(canonicalJson(true)).toBe("true");
+  });
+});
+
+describe("field-level encryption marker", () => {
+  it("the canonical prefix is the field adapters' marker (NUL-led, not human text)", () => {
+    expect(ENCRYPTED_FIELD_PREFIX).toBe("\0ENC:");
+  });
+
+  it("isEncryptedField detects prefixed ciphertext, rejects plaintext/null/non-strings", () => {
+    expect(isEncryptedField(ENCRYPTED_FIELD_PREFIX + "anything")).toBe(true);
+    expect(isEncryptedField("plaintext")).toBe(false);
+    expect(isEncryptedField("[REDACTED]")).toBe(false);
+    expect(isEncryptedField("")).toBe(false);
+    expect(isEncryptedField(null)).toBe(false);
+    expect(isEncryptedField(undefined)).toBe(false);
+    expect(isEncryptedField(42)).toBe(false);
+  });
+
+  it("round-trips: a value the field encryptor produces is detected as encrypted", async () => {
+    // Mirrors the adapters' encryptString packing so the marker contract is
+    // pinned at the source, not just asserted as a literal.
+    const key = generateKey();
+    const e = await encrypt(new TextEncoder().encode("secret"), key);
+    const packed =
+      ENCRYPTED_FIELD_PREFIX +
+      JSON.stringify({
+        c: bytesToHex(e.ciphertext),
+        n: bytesToHex(e.nonce),
+        t: bytesToHex(e.tag),
+      });
+    expect(isEncryptedField(packed)).toBe(true);
   });
 });

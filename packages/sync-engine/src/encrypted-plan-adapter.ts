@@ -8,7 +8,12 @@
  */
 
 import type { SyncPlan, SyncPlanStep } from "@motebit/sdk";
-import { encrypt, decrypt, type EncryptedPayload } from "@motebit/encryption";
+import {
+  encrypt,
+  decrypt,
+  type EncryptedPayload,
+  ENCRYPTED_FIELD_PREFIX as ENCRYPTED_PREFIX,
+} from "@motebit/encryption";
 import type { PlanSyncRemoteAdapter } from "./plan-sync.js";
 
 export interface EncryptedPlanAdapterConfig {
@@ -41,9 +46,6 @@ function fromBase64(str: string): Uint8Array {
   }
   return bytes;
 }
-
-/** Marker prefix for encrypted strings — allows graceful handling of mixed encrypted/plaintext data. */
-const ENCRYPTED_PREFIX = "\0ENC:";
 
 async function encryptString(value: string | null, key: Uint8Array): Promise<string | null> {
   if (value == null || value === "") return value;

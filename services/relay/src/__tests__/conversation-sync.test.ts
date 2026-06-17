@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { SyncRelay } from "../index.js";
 import type { SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
@@ -6,6 +6,13 @@ import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 // === Helpers ===
 
 const MOTEBIT_ID = "test-mote";
+
+// Field-level encryption marker (canonical: @motebit/encryption ENCRYPTED_FIELD_PREFIX).
+// The relay floor passes prefixed values through opaquely — production ALWAYS
+// encrypts conversation/message content before push, so these mechanics tests
+// use encrypted-shaped sentinels for any field they round-trip.
+const ENC = "\0ENC:";
+const enc = (s: string): string => ENC + s;
 
 function makeConversation(
   motebitId: string,
@@ -189,8 +196,8 @@ describe("Conversation Sync Endpoints", () => {
   it("GET /sync/:id/messages filters by since timestamp", async () => {
     const convId = "conv-filter-test";
     const messages = [
-      makeMessage(convId, MOTEBIT_ID, { content: "Old", created_at: 1000 }),
-      makeMessage(convId, MOTEBIT_ID, { content: "New", created_at: 5000 }),
+      makeMessage(convId, MOTEBIT_ID, { content: enc("Old"), created_at: 1000 }),
+      makeMessage(convId, MOTEBIT_ID, { content: enc("New"), created_at: 5000 }),
     ];
     await relay.app.request(`/sync/${MOTEBIT_ID}/messages`, {
       method: "POST",
@@ -206,7 +213,8 @@ describe("Conversation Sync Endpoints", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { messages: SyncConversationMessage[] };
     expect(body.messages).toHaveLength(1);
-    expect(body.messages[0]!.content).toBe("New");
+    // Encrypted content passes the floor through byte-identical.
+    expect(body.messages[0]!.content).toBe(enc("New"));
   });
 
   it("GET /sync/:id/messages returns 400 when conversation_id missing", async () => {
@@ -244,15 +252,15 @@ describe("Conversation Sync Endpoints", () => {
     const old = makeConversation(MOTEBIT_ID, {
       conversation_id: convId,
       last_active_at: 1000,
-      title: "Old title",
-      summary: "Old summary",
+      title: enc("Old title"),
+      summary: enc("Old summary"),
       message_count: 5,
     });
     const newer = makeConversation(MOTEBIT_ID, {
       conversation_id: convId,
       last_active_at: 2000,
-      title: "New title",
-      summary: "New summary",
+      title: enc("New title"),
+      summary: enc("New summary"),
       message_count: 3, // lower — but MAX should keep 5
     });
 
@@ -275,8 +283,8 @@ describe("Conversation Sync Endpoints", () => {
     const body = (await res.json()) as { conversations: SyncConversation[] };
     const conv = body.conversations.find((c) => c.conversation_id === convId);
     expect(conv).toBeDefined();
-    expect(conv!.title).toBe("New title");
-    expect(conv!.summary).toBe("New summary");
+    expect(conv!.title).toBe(enc("New title"));
+    expect(conv!.summary).toBe(enc("New summary"));
     expect(conv!.message_count).toBe(5); // MAX of 5 and 3
   });
 
@@ -352,5 +360,111 @@ describe("Conversation Sync Endpoints", () => {
       body: JSON.stringify({}),
     });
     expect(res.status).toBe(400);
+  });
+});
+
+// === Sensitivity floor (fail-closed: plaintext content never persists) ===
+
+describe("Conversation sync sensitivity floor", () => {
+  let relay: SyncRelay;
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
+  });
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  async function pushConversations(convs: SyncConversation[], deviceId = "device-a") {
+    return relay.app.request(`/sync/${MOTEBIT_ID}/conversations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-device-id": deviceId, ...AUTH_HEADER },
+      body: JSON.stringify({ conversations: convs }),
+    });
+  }
+  async function pushMessages(msgs: SyncConversationMessage[], deviceId = "device-a") {
+    return relay.app.request(`/sync/${MOTEBIT_ID}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-device-id": deviceId, ...AUTH_HEADER },
+      body: JSON.stringify({ messages: msgs }),
+    });
+  }
+  function pulledConversation(id: string): SyncConversation | undefined {
+    const row = relay.moteDb.db
+      .prepare("SELECT * FROM sync_conversations WHERE conversation_id = ?")
+      .get(id) as SyncConversation | undefined;
+    return row;
+  }
+  function pulledMessage(id: string): SyncConversationMessage | undefined {
+    return relay.moteDb.db
+      .prepare("SELECT * FROM sync_conversation_messages WHERE message_id = ?")
+      .get(id) as SyncConversationMessage | undefined;
+  }
+
+  it("redacts plaintext conversation title + summary at ingress", async () => {
+    const conv = makeConversation(MOTEBIT_ID, {
+      title: "Dinner with Dr. Reyes about the diagnosis",
+      summary: "discussed the MRI results",
+    });
+    await pushConversations([conv]);
+    const stored = pulledConversation(conv.conversation_id)!;
+    expect(stored.title).toBe("[REDACTED]");
+    expect(stored.summary).toBe("[REDACTED]");
+  });
+
+  it("passes encrypted conversation fields through byte-identical", async () => {
+    const conv = makeConversation(MOTEBIT_ID, {
+      title: enc("ciphertext-title"),
+      summary: enc("ciphertext-summary"),
+    });
+    await pushConversations([conv]);
+    const stored = pulledConversation(conv.conversation_id)!;
+    expect(stored.title).toBe(enc("ciphertext-title"));
+    expect(stored.summary).toBe(enc("ciphertext-summary"));
+  });
+
+  it("leaves null/empty conversation fields untouched", async () => {
+    const conv = makeConversation(MOTEBIT_ID, { title: null, summary: "" });
+    await pushConversations([conv]);
+    const stored = pulledConversation(conv.conversation_id)!;
+    expect(stored.title).toBeNull();
+    expect(stored.summary).toBe("");
+  });
+
+  it("redacts plaintext message content + tool_calls at ingress", async () => {
+    const msg = makeMessage("conv-floor", MOTEBIT_ID, {
+      content: "my account number is 1234567890",
+      tool_calls: '[{"name":"transfer","args":{"to":"acct-x"}}]',
+    });
+    await pushMessages([msg]);
+    const stored = pulledMessage(msg.message_id)!;
+    expect(stored.content).toBe("[REDACTED]");
+    expect(stored.tool_calls).toBe("[REDACTED]");
+  });
+
+  it("passes encrypted message content through byte-identical", async () => {
+    const msg = makeMessage("conv-floor-enc", MOTEBIT_ID, {
+      content: enc("ciphertext-body"),
+      tool_calls: null,
+    });
+    await pushMessages([msg]);
+    const stored = pulledMessage(msg.message_id)!;
+    expect(stored.content).toBe(enc("ciphertext-body"));
+    expect(stored.tool_calls).toBeNull();
+  });
+
+  it("floors plaintext message content in the fan-out frame to peers", async () => {
+    const peerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(MOTEBIT_ID, [{ ws: peerWs as never, deviceId: "device-b" }]);
+
+    const msg = makeMessage("conv-fanout", MOTEBIT_ID, { content: "leaked secret to peer" });
+    await pushMessages([msg], "device-a");
+
+    expect(peerWs.send).toHaveBeenCalledTimes(1);
+    const frame = JSON.parse(peerWs.send.mock.calls[0]![0] as string) as {
+      type: string;
+      message: SyncConversationMessage;
+    };
+    expect(frame.type).toBe("conversation_message");
+    expect(frame.message.content).toBe("[REDACTED]");
   });
 });

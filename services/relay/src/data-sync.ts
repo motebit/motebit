@@ -14,6 +14,12 @@ import type {
 import { asMotebitId } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { ConnectedDevice } from "./index.js";
+import {
+  floorSyncConversation,
+  floorSyncMessage,
+  floorSyncPlan,
+  floorSyncPlanStep,
+} from "./data-sync-redaction.js";
 
 export interface DataSyncDeps {
   db: DatabaseDriver;
@@ -117,7 +123,10 @@ export function createDataSyncTables(db: DatabaseDriver): void {
 
 // === Conversation Sync Helpers ===
 
-export function upsertSyncConversation(db: DatabaseDriver, conv: SyncConversation): void {
+export function upsertSyncConversation(db: DatabaseDriver, raw: SyncConversation): void {
+  // Fail-closed floor: plaintext free-text fields never persist (the client
+  // encrypts them; see data-sync-redaction.ts). Storage is safe for any caller.
+  const conv = floorSyncConversation(raw);
   db.prepare(
     `INSERT INTO sync_conversations (conversation_id, motebit_id, started_at, last_active_at, title, summary, message_count)
        VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -137,7 +146,8 @@ export function upsertSyncConversation(db: DatabaseDriver, conv: SyncConversatio
   );
 }
 
-export function upsertSyncMessage(db: DatabaseDriver, msg: SyncConversationMessage): void {
+export function upsertSyncMessage(db: DatabaseDriver, raw: SyncConversationMessage): void {
+  const msg = floorSyncMessage(raw);
   db.prepare(
     `INSERT OR IGNORE INTO sync_conversation_messages
        (message_id, conversation_id, motebit_id, role, content, tool_calls, tool_call_id, created_at, token_estimate)
@@ -166,7 +176,8 @@ const STEP_STATUS_ORDER: Record<string, number> = {
   skipped: 2,
 };
 
-function upsertSyncPlan(db: DatabaseDriver, plan: SyncPlan): void {
+function upsertSyncPlan(db: DatabaseDriver, raw: SyncPlan): void {
+  const plan = floorSyncPlan(raw);
   db.prepare(
     `INSERT INTO sync_plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -193,7 +204,8 @@ function upsertSyncPlan(db: DatabaseDriver, plan: SyncPlan): void {
   );
 }
 
-function upsertSyncPlanStep(db: DatabaseDriver, step: SyncPlanStep): void {
+function upsertSyncPlanStep(db: DatabaseDriver, raw: SyncPlanStep): void {
+  const step = floorSyncPlanStep(raw);
   // Check existing status for monotonicity
   const existing = db
     .prepare(`SELECT status, updated_at FROM sync_plan_steps WHERE step_id = ?`)
@@ -262,7 +274,10 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
     const peers = connections.get(motebitId);
     if (peers) {
       for (const conv of body.conversations) {
-        const payload = JSON.stringify({ type: "conversation", conversation: conv });
+        const payload = JSON.stringify({
+          type: "conversation",
+          conversation: floorSyncConversation(conv),
+        });
         for (const peer of peers) {
           if (peer.deviceId !== senderDeviceId) {
             peer.ws.send(payload);
@@ -306,7 +321,10 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
     const peers = connections.get(motebitId);
     if (peers) {
       for (const msg of body.messages) {
-        const payload = JSON.stringify({ type: "conversation_message", message: msg });
+        const payload = JSON.stringify({
+          type: "conversation_message",
+          message: floorSyncMessage(msg),
+        });
         for (const peer of peers) {
           if (peer.deviceId !== senderDeviceId) {
             peer.ws.send(payload);
@@ -357,7 +375,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
     const peers = connections.get(motebitId);
     if (peers) {
       for (const plan of body.plans) {
-        const payload = JSON.stringify({ type: "plan", plan });
+        const payload = JSON.stringify({ type: "plan", plan: floorSyncPlan(plan) });
         for (const peer of peers) {
           if (peer.deviceId !== senderDeviceId) {
             peer.ws.send(payload);
@@ -399,7 +417,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
     const peers = connections.get(motebitId);
     if (peers) {
       for (const step of body.steps) {
-        const payload = JSON.stringify({ type: "plan_step", step });
+        const payload = JSON.stringify({ type: "plan_step", step: floorSyncPlanStep(step) });
         for (const peer of peers) {
           if (peer.deviceId !== senderDeviceId) {
             peer.ws.send(payload);

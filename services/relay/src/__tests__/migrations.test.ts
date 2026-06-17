@@ -5,7 +5,12 @@
  * partial failure rollback, duplicate version detection.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { SqlJsDriver, type DatabaseDriver } from "@motebit/persistence";
+import {
+  SqlJsDriver,
+  createMotebitDatabase,
+  type DatabaseDriver,
+  type MotebitDatabase,
+} from "@motebit/persistence";
 import { runMigrations, getSchemaVersion, relayMigrations, type Migration } from "../migrations.js";
 
 let db: DatabaseDriver;
@@ -372,5 +377,131 @@ describe("migration 35 — backfill_historical_memory_deletions", () => {
 
   it("is a no-op (no throw) when the events table doesn't exist yet", () => {
     expect(() => m35.up(db)).not.toThrow();
+  });
+});
+
+describe("migration 37 — scrub_unredacted_conversation_sync_content", () => {
+  const m37 = relayMigrations.find((m) => m.version === 37)!;
+  const ENC = "\0ENC:"; // ENCRYPTED_FIELD_PREFIX
+
+  // Encrypted field markers begin with a NUL byte. sql.js (the other describes'
+  // driver) truncates TEXT at an embedded NUL on insert, so it cannot store a
+  // ciphertext sentinel faithfully; production runs on the native better-sqlite3
+  // driver (CLAUDE.md rule 13), which preserves it. Use the native driver here so
+  // the "ciphertext preserved" assertions reflect production storage.
+  let ndb: MotebitDatabase;
+  let db: DatabaseDriver;
+  beforeEach(() => {
+    ndb = createMotebitDatabase(":memory:");
+    db = ndb.db;
+  });
+  afterEach(() => {
+    db.close();
+  });
+
+  function createSyncTables() {
+    db.exec(`CREATE TABLE sync_conversations (
+      conversation_id TEXT PRIMARY KEY, motebit_id TEXT, started_at INTEGER,
+      last_active_at INTEGER, title TEXT, summary TEXT, message_count INTEGER
+    )`);
+    db.exec(`CREATE TABLE sync_conversation_messages (
+      message_id TEXT PRIMARY KEY, conversation_id TEXT, motebit_id TEXT, role TEXT,
+      content TEXT, tool_calls TEXT, tool_call_id TEXT, created_at INTEGER, token_estimate INTEGER
+    )`);
+    db.exec(`CREATE TABLE sync_plans (
+      plan_id TEXT PRIMARY KEY, goal_id TEXT, motebit_id TEXT, title TEXT, status TEXT,
+      created_at INTEGER, updated_at INTEGER, current_step_index INTEGER, total_steps INTEGER
+    )`);
+    db.exec(`CREATE TABLE sync_plan_steps (
+      step_id TEXT PRIMARY KEY, plan_id TEXT, motebit_id TEXT, ordinal INTEGER,
+      description TEXT, prompt TEXT, depends_on TEXT, optional INTEGER, status TEXT,
+      required_capabilities TEXT, delegation_task_id TEXT, result_summary TEXT,
+      error_message TEXT, tool_calls_made INTEGER, started_at INTEGER, completed_at INTEGER,
+      retry_count INTEGER, updated_at INTEGER
+    )`);
+  }
+
+  it("redacts plaintext free-text across all four sync tables, keeping ciphertext + structure", () => {
+    createSyncTables();
+    db.prepare(
+      "INSERT INTO sync_conversations (conversation_id, title, summary, message_count) VALUES (?, ?, ?, ?)",
+    ).run("c-plain", "secret title", "secret summary", 9);
+    db.prepare(
+      "INSERT INTO sync_conversations (conversation_id, title, summary) VALUES (?, ?, ?)",
+    ).run("c-enc", ENC + "ct-title", null);
+    db.prepare(
+      "INSERT INTO sync_conversation_messages (message_id, content, tool_calls) VALUES (?, ?, ?)",
+    ).run("m-plain", "my SSN is 123", '{"args":1}');
+    db.prepare(
+      "INSERT INTO sync_conversation_messages (message_id, content, tool_calls) VALUES (?, ?, ?)",
+    ).run("m-enc", ENC + "ct-body", null);
+    db.prepare("INSERT INTO sync_plans (plan_id, title) VALUES (?, ?)").run(
+      "p-plain",
+      "plan secret",
+    );
+    db.prepare(
+      "INSERT INTO sync_plan_steps (step_id, description, prompt, result_summary, error_message) VALUES (?, ?, ?, ?, ?)",
+    ).run("s-plain", "desc", "prompt", "result", "error");
+
+    m37.up(db);
+
+    const conv = db
+      .prepare(
+        "SELECT title, summary, message_count FROM sync_conversations WHERE conversation_id = ?",
+      )
+      .get("c-plain") as {
+      title: string;
+      summary: string;
+      message_count: number;
+    };
+    expect(conv.title).toBe("[REDACTED]");
+    expect(conv.summary).toBe("[REDACTED]");
+    expect(conv.message_count).toBe(9); // structural field untouched
+
+    const convEnc = db
+      .prepare("SELECT title, summary FROM sync_conversations WHERE conversation_id = ?")
+      .get("c-enc") as {
+      title: string;
+      summary: string | null;
+    };
+    expect(convEnc.title).toBe(ENC + "ct-title"); // ciphertext preserved
+    expect(convEnc.summary).toBeNull();
+
+    const msg = db
+      .prepare("SELECT content, tool_calls FROM sync_conversation_messages WHERE message_id = ?")
+      .get("m-plain") as {
+      content: string;
+      tool_calls: string;
+    };
+    expect(msg.content).toBe("[REDACTED]");
+    expect(msg.tool_calls).toBe("[REDACTED]");
+    const msgEnc = db
+      .prepare("SELECT content FROM sync_conversation_messages WHERE message_id = ?")
+      .get("m-enc") as {
+      content: string;
+    };
+    expect(msgEnc.content).toBe(ENC + "ct-body");
+
+    expect(
+      (
+        db.prepare("SELECT title FROM sync_plans WHERE plan_id = ?").get("p-plain") as {
+          title: string;
+        }
+      ).title,
+    ).toBe("[REDACTED]");
+
+    const step = db
+      .prepare(
+        "SELECT description, prompt, result_summary, error_message FROM sync_plan_steps WHERE step_id = ?",
+      )
+      .get("s-plain") as Record<string, string>;
+    expect(step.description).toBe("[REDACTED]");
+    expect(step.prompt).toBe("[REDACTED]");
+    expect(step.result_summary).toBe("[REDACTED]");
+    expect(step.error_message).toBe("[REDACTED]");
+  });
+
+  it("is a no-op (no throw) when the sync tables don't exist yet", () => {
+    expect(() => m37.up(db)).not.toThrow();
   });
 });
