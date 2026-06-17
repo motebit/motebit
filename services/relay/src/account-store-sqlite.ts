@@ -270,6 +270,21 @@ export class SqliteAccountStore implements AccountStore {
     return row !== undefined;
   }
 
+  /**
+   * True when a `fee` debit with this reference already exists. The cloud proxy
+   * uses the per-request id as `reference_id` and retries a failed debit with
+   * the SAME reference, so the debit endpoint dedupes on this to make retries
+   * idempotent (re-applying would double-charge the user).
+   */
+  hasFeeWithReference(motebitId: string, referenceId: string): boolean {
+    const row = this.db
+      .prepare(
+        "SELECT 1 FROM relay_transactions WHERE motebit_id = ? AND reference_id = ? AND type = 'fee' LIMIT 1",
+      )
+      .get(motebitId, referenceId) as Record<string, unknown> | undefined;
+    return row !== undefined;
+  }
+
   getAllocationHoldRemaining(referenceId: string): number {
     // Ledger amounts are signed (debits negative, credits positive), so the
     // hold-minus-releases net for this reference is -SUM(amount). Floored at

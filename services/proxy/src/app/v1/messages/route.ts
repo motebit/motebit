@@ -94,21 +94,67 @@ Message: ${message.slice(0, 500)}`,
   }
 }
 
-/** Fire-and-forget debit call to the relay. */
-function debitRelay(motebitId: string, amountMicro: number, referenceId: string): void {
+/** @internal — exported only for unit tests. */
+export const DEBIT_MAX_ATTEMPTS = 3;
+
+/**
+ * Debit the relay for actual compute cost.
+ *
+ * Runs AFTER the response stream is returned to the client (in the stream pump's
+ * `finally`), so it never delays the user — but it must NOT silently drop
+ * revenue, which the old `void fetch(...).catch(() => {})` did on any network
+ * error, AND on every non-2xx (a 500/401 resolves the promise, so `.catch` never
+ * fired). The relay debit endpoint is idempotent on `reference_id`, so transient
+ * failures (network blip, relay restart, 5xx) are retried with backoff using the
+ * same reference — a retry after a missed 200 cannot double-charge. A 4xx is a
+ * permanent error (bad secret / bad amount) and is not retried. On exhaustion we
+ * emit a structured `proxy.debit_failed` event so the dropped debit is
+ * reconcilable from logs rather than vanishing.
+ */
+export async function debitRelay(
+  motebitId: string,
+  amountMicro: number,
+  referenceId: string,
+): Promise<void> {
   const relayUrl = process.env.RELAY_API_URL ?? "https://relay.motebit.com";
   const secret = process.env.RELAY_PROXY_SECRET;
   if (!secret || amountMicro <= 0) return;
 
-  void fetch(`${relayUrl}/api/v1/agents/${motebitId}/debit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-relay-secret": secret },
-    body: JSON.stringify({
-      amount: amountMicro,
-      reference_id: referenceId,
-      description: "Cloud AI usage",
+  let lastError = "";
+  for (let attempt = 1; attempt <= DEBIT_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/debit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-relay-secret": secret },
+        body: JSON.stringify({
+          amount: amountMicro,
+          reference_id: referenceId,
+          description: "Cloud AI usage",
+        }),
+      });
+      if (res.ok) return;
+      lastError = `HTTP ${res.status}`;
+      // 4xx won't change on retry (bad secret, malformed amount) — fail fast.
+      if (res.status >= 400 && res.status < 500) break;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+    if (attempt < DEBIT_MAX_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 250));
+    }
+  }
+
+  // Exhausted retries — do NOT swallow. This event is the reconciliation trail
+  // for a debit the relay never recorded (lost revenue if not recovered).
+  console.error(
+    JSON.stringify({
+      event: "proxy.debit_failed",
+      requestId: referenceId,
+      motebitId,
+      amountMicro,
+      error: lastError,
     }),
-  }).catch(() => {});
+  );
 }
 
 // ── Provider API adapters ───────────────────────────────────────────────
@@ -598,7 +644,10 @@ export async function POST(request: Request): Promise<Response> {
             motebitId: mid,
           }),
         );
-        if (cost > 0) debitRelay(mid, cost, requestId);
+        // Awaited so retries complete before the pump task ends; the client
+        // already holds the full response (writer.close() above), so this never
+        // delays the user.
+        if (cost > 0) await debitRelay(mid, cost, requestId);
       }
     })();
 

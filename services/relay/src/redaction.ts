@@ -63,9 +63,51 @@ export function stripConsolidationManifest(
 }
 
 /**
- * Map a batch of events, redacting `memory_formed` content above the
- * sync-safe ceiling and stripping the owner-local consolidation mutation
- * manifest. Other events pass through byte-identical.
+ * Strip the raw user text from a `memory_audit` payload. This event fires
+ * precisely when the model FAILED to tag a memory-worthy pattern, so its
+ * `turn_message` (up to 200 chars of the raw user message) and `missed_patterns`
+ * (raw `<label>: "<excerpt>"` slices of that same text) are disproportionately
+ * likely to be exactly the medical/financial/secret content that escaped
+ * classification — and the payload carries NO `sensitivity` field to gate on.
+ * The event is a LOCAL reflection signal (revisit missed tagging on-device); no
+ * peer or device consumes the excerpts at the relay. So both fields are stripped
+ * at ingress, fail-closed. Returns the stripped payload, or `null` when there is
+ * nothing to strip.
+ */
+export function redactMemoryAuditPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (payload._encrypted === true) return null;
+  if (payload.redacted === true) return null;
+  if (!("turn_message" in payload) && !("missed_patterns" in payload)) return null;
+  const { turn_message: _t, missed_patterns: _m, ...rest } = payload;
+  return { ...rest, redacted: true };
+}
+
+/**
+ * Redact the free-text `reason` from a `memory_consolidated` payload. The
+ * rationale is decider-authored free text that MAY quote or derive memory
+ * content of any sensitivity, with no `sensitivity` field to gate on. The
+ * structural fields (`action`, `existing_node_id`, `new_node_id`,
+ * `superseded_valid_until`) are what a peer device needs to apply the
+ * consolidation, so they are preserved; only `reason` is stripped. Returns the
+ * redacted payload, or `null` when there is nothing to do.
+ */
+export function redactMemoryConsolidatedPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (payload._encrypted === true) return null;
+  if (payload.redacted === true) return null;
+  if (!("reason" in payload)) return null;
+  return { ...payload, reason: "[REDACTED]", redacted: true };
+}
+
+/**
+ * Map a batch of events, redacting memory content above the sync-safe ceiling
+ * (`memory_formed`), stripping the owner-local consolidation mutation manifest
+ * (`consolidation_receipt_signed`), and stripping the raw user text carried by
+ * `memory_audit` / `memory_consolidated` (free text with no `sensitivity` field
+ * and no relay-side consumer). Other events pass through byte-identical.
  */
 export function redactSensitiveEvents(events: EventLogEntry[]): EventLogEntry[] {
   return events.map((e) => {
@@ -78,6 +120,14 @@ export function redactSensitiveEvents(events: EventLogEntry[]): EventLogEntry[] 
     if (e.event_type === EventType.ConsolidationReceiptSigned) {
       const stripped = stripConsolidationManifest(payload);
       return stripped ? { ...e, payload: stripped } : e;
+    }
+    if (e.event_type === EventType.MemoryAudit) {
+      const redacted = redactMemoryAuditPayload(payload);
+      return redacted ? { ...e, payload: redacted } : e;
+    }
+    if (e.event_type === EventType.MemoryConsolidated) {
+      const redacted = redactMemoryConsolidatedPayload(payload);
+      return redacted ? { ...e, payload: redacted } : e;
     }
     return e;
   });
