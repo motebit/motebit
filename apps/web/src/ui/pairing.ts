@@ -12,6 +12,10 @@ import type { WebContext } from "../types";
 import { loadSyncUrl, DEFAULT_RELAY_URL, normalizeRelayUrl } from "../storage";
 
 const POLL_INTERVAL_MS = 2000;
+// Consecutive poll failures before we tell the user the connection dropped.
+// One transient blip shouldn't flash a scary message; ~6s of silence should.
+// We keep polling either way (recoverable), so it auto-clears on reconnect.
+const POLL_FAILURE_THRESHOLD = 3;
 
 // DOM elements
 const backdrop = document.getElementById("pairing-backdrop") as HTMLDivElement;
@@ -108,13 +112,20 @@ export function startLinkDevice(ctx: WebContext): void {
         codeDisplay.textContent = pairingCode;
         codeDisplay.style.display = "block";
         connectBtn.remove();
-        setStatus("Show this code on the other device");
+        const linkWaitingText = "Show this code on the other device";
+        setStatus(linkWaitingText);
 
         // Poll for claim
+        let pollFailures = 0;
         pollTimer = setInterval(() => {
           void (async () => {
             try {
               const session = await ctx.app.getPairingSession(url, pairingId);
+              // Relay answered — clear any prior connection-lost notice.
+              if (pollFailures > 0) {
+                pollFailures = 0;
+                if (status.textContent?.startsWith("Connection lost")) setStatus(linkWaitingText);
+              }
               if (session.status === "claimed") {
                 if (pollTimer) {
                   clearInterval(pollTimer);
@@ -169,7 +180,13 @@ export function startLinkDevice(ctx: WebContext): void {
                 });
               }
             } catch {
-              // Poll error — keep trying
+              // Poll error — keep polling (recoverable), but after a sustained
+              // run of failures tell the user instead of leaving them on a
+              // "show this code" screen that will never advance.
+              pollFailures++;
+              if (pollFailures >= POLL_FAILURE_THRESHOLD) {
+                setStatus("Connection lost — retrying…");
+              }
             }
           })();
         }, POLL_INTERVAL_MS);
@@ -218,13 +235,20 @@ export function startClaimDevice(ctx: WebContext): void {
         inputRow.style.display = "none";
         urlRow.style.display = "none";
         submitBtn.remove();
-        setStatus("Waiting for approval from the other device...");
+        const claimWaitingText = "Waiting for approval from the other device...";
+        setStatus(claimWaitingText);
 
         // Poll for approval
+        let pollFailures = 0;
         pollTimer = setInterval(() => {
           void (async () => {
             try {
               const result = await ctx.app.pollPairingStatus(url, pairingId);
+              // Relay answered — clear any prior connection-lost notice.
+              if (pollFailures > 0) {
+                pollFailures = 0;
+                if (status.textContent?.startsWith("Connection lost")) setStatus(claimWaitingText);
+              }
               if (result.status === "approved" && result.device_id && result.motebit_id) {
                 if (pollTimer) {
                   clearInterval(pollTimer);
@@ -264,7 +288,13 @@ export function startClaimDevice(ctx: WebContext): void {
                 setStatus("Pairing was denied by the other device");
               }
             } catch {
-              // Poll error — keep trying
+              // Poll error — keep polling (recoverable), but after a sustained
+              // run of failures surface it instead of leaving the user on a
+              // "waiting for approval" screen that will never resolve.
+              pollFailures++;
+              if (pollFailures >= POLL_FAILURE_THRESHOLD) {
+                setStatus("Connection lost — retrying…");
+              }
             }
           })();
         }, POLL_INTERVAL_MS);

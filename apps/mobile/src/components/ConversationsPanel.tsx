@@ -39,10 +39,19 @@ export function ConversationsPanel({
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    const list = app.listConversations(50);
-    setConversations(list);
+    // A load failure (e.g. local store error) must not surface as the
+    // honest-empty "No conversations yet" — distinguish it, and never let the
+    // exception escape the panel.
+    try {
+      const list = app.listConversations(50);
+      setConversations(list);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }, [app]);
 
   useEffect(() => {
@@ -75,7 +84,11 @@ export function ConversationsPanel({
         </View>
 
         {/* List */}
-        {conversations.length === 0 ? (
+        {error !== null ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>Couldn't load conversations.</Text>
+          </View>
+        ) : conversations.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>No conversations yet.</Text>
           </View>
