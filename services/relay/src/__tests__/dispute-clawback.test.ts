@@ -180,3 +180,149 @@ describe("Dispute claw-back (post-settlement, no mint)", () => {
     expect(bal(relay, DELEGATOR)).toBe(0);
   });
 });
+
+/**
+ * Pre-settlement distribution — the worker-filed inversion fix.
+ *
+ * A dispute filed BEFORE any relay settlement has no settlement row, so
+ * `executeFundAction` takes Case A: it distributes the still-held escrow
+ * (`amount_locked`) with no claw-back. Worker/delegator are NOT in the ledger,
+ * so they must be recovered from the dispute parties + the `filer_role` captured
+ * at filing. Before the 2026-06 fix, Case A credited `filed_by`/`respondent`
+ * directly — correct only when the DELEGATOR filed. On a WORKER-filed dispute
+ * `filed_by` = worker and `respondent` = delegator, so `release_to_worker` paid
+ * the delegator and `refund_to_delegator` paid the worker — escrow to the LOSING
+ * party every time. (`reconcileLedger` cannot catch this; it's a routing bug,
+ * not a conservation bug — the right total reaches the wrong account.)
+ *
+ * These tests seed a resolved pre-settlement dispute past the appeal window,
+ * vary the filer, and assert the escrow lands in the correct account.
+ */
+const ESCROW = 1_000_000;
+
+interface PreSeedOpts {
+  fundAction: "refund_to_delegator" | "release_to_worker" | "split";
+  splitRatio: number;
+  resolution: "upheld" | "overturned" | "split";
+  filerRole: "worker" | "delegator";
+  taskId: string;
+  disputeId: string;
+}
+
+function seedPreSettlementDispute(relay: SyncRelay, o: PreSeedOpts): void {
+  const db = relay.moteDb.db;
+  const now = Date.now();
+
+  // filed_by is whoever filed; respondent is the counterparty. NO settlement
+  // row → executeFundAction takes the pre-settlement escrow path.
+  const filedBy = o.filerRole === "worker" ? WORKER : DELEGATOR;
+  const respondent = o.filerRole === "worker" ? DELEGATOR : WORKER;
+
+  db.prepare(
+    `INSERT INTO relay_disputes
+     (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline, resolved_at, filer_role)
+     VALUES (?, ?, ?, ?, ?, 'quality', 'dispute', 'resolved', ?, 0, ?, ?, ?, ?)`,
+  ).run(
+    o.disputeId,
+    o.taskId,
+    `alloc-${o.taskId}`,
+    filedBy,
+    respondent,
+    ESCROW,
+    now - 26 * 3600_000,
+    now - 25 * 3600_000,
+    now - 25 * 3600_000,
+    o.filerRole,
+  );
+
+  db.prepare(
+    `INSERT INTO relay_dispute_resolutions
+     (resolution_id, dispute_id, round, resolution, rationale, fund_action, split_ratio, adjudicator, resolved_at, signature)
+     VALUES (?, ?, 1, ?, 'r', ?, ?, 'op', ?, 'sig')`,
+  ).run(
+    `res-${o.disputeId}`,
+    o.disputeId,
+    o.resolution,
+    o.fundAction,
+    o.splitRatio,
+    now - 25 * 3600_000,
+  );
+}
+
+describe("Dispute pre-settlement distribution (worker-filed inversion fix)", () => {
+  let relay: SyncRelay;
+  beforeEach(async () => {
+    relay = await createTestRelay();
+  });
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  it("worker-filed + upheld pays the WORKER (was paying the delegator pre-fix)", async () => {
+    // Worker files, wins (upheld) → release_to_worker. The escrow must reach
+    // the worker (= filed_by here), NOT the respondent.
+    seedPreSettlementDispute(relay, {
+      fundAction: "release_to_worker",
+      splitRatio: 1.0,
+      resolution: "upheld",
+      filerRole: "worker",
+      taskId: "task-pre-wf-up",
+      disputeId: "dsp-pre-wf-up",
+    });
+    await finalize(relay, "dsp-pre-wf-up");
+
+    expect(bal(relay, WORKER)).toBe(ESCROW);
+    expect(bal(relay, DELEGATOR)).toBe(0);
+  });
+
+  it("worker-filed + overturned refunds the DELEGATOR (was paying the worker pre-fix)", async () => {
+    // Worker files, loses (overturned) → refund_to_delegator. The escrow must
+    // reach the delegator (= respondent here), NOT the filer.
+    seedPreSettlementDispute(relay, {
+      fundAction: "refund_to_delegator",
+      splitRatio: 0.0,
+      resolution: "overturned",
+      filerRole: "worker",
+      taskId: "task-pre-wf-ov",
+      disputeId: "dsp-pre-wf-ov",
+    });
+    await finalize(relay, "dsp-pre-wf-ov");
+
+    expect(bal(relay, DELEGATOR)).toBe(ESCROW);
+    expect(bal(relay, WORKER)).toBe(0);
+  });
+
+  it("delegator-filed + upheld refunds the DELEGATOR — common path unchanged", async () => {
+    // The pre-existing (and majority) case: delegator files and wins. Behavior
+    // must be byte-identical to before the fix — escrow back to the delegator.
+    seedPreSettlementDispute(relay, {
+      fundAction: "refund_to_delegator",
+      splitRatio: 0.0,
+      resolution: "upheld",
+      filerRole: "delegator",
+      taskId: "task-pre-df-up",
+      disputeId: "dsp-pre-df-up",
+    });
+    await finalize(relay, "dsp-pre-df-up");
+
+    expect(bal(relay, DELEGATOR)).toBe(ESCROW);
+    expect(bal(relay, WORKER)).toBe(0);
+  });
+
+  it("worker-filed + split divides escrow worker/delegator by ratio, not filer/respondent", async () => {
+    seedPreSettlementDispute(relay, {
+      fundAction: "split",
+      splitRatio: 0.5,
+      resolution: "split",
+      filerRole: "worker",
+      taskId: "task-pre-wf-sp",
+      disputeId: "dsp-pre-wf-sp",
+    });
+    await finalize(relay, "dsp-pre-wf-sp");
+
+    const workerShare = Math.floor(ESCROW * 0.5);
+    expect(bal(relay, WORKER)).toBe(workerShare);
+    expect(bal(relay, DELEGATOR)).toBe(ESCROW - workerShare);
+    expect(bal(relay, WORKER) + bal(relay, DELEGATOR)).toBe(ESCROW);
+  });
+});

@@ -1962,61 +1962,59 @@ function executeFundAction(
     return;
   }
 
-  // ── Case A: PRE-SETTLEMENT. Escrow (amount_locked) still held; release it. ──
+  // ── Case A: PRE-SETTLEMENT. Escrow (amount_locked) still held; distribute it. ──
   // The delegator was debited amount_locked at submission and the worker was
   // never paid (no settlement row), so the funds sit in escrow — distribute
-  // them per fund_action with no claw-back. Uses the dispute parties; the
-  // (resolution, filer_role) → fund_action mapping already encodes direction.
+  // them with no claw-back.
+  //
+  // No settlement row means worker/delegator are NOT in the ledger and must be
+  // recovered from the dispute parties. `filed_by`/`respondent` are filer and
+  // counterparty — they map to delegator/worker ONLY when the delegator filed;
+  // a worker-filed dispute INVERTS them. (This is the exact hazard Case B's
+  // comment warns about; pre-fix this path credited `filed_by`/`respondent`
+  // directly and so paid escrow to the losing party on every worker-filed
+  // dispute.) So resolve the roles explicitly from the filer_role captured at
+  // filing, then divide by split_ratio exactly as Case B divides the net:
+  // refund→0.0, release→1.0, split→0.5. filer_role NULL (pre-migration-21
+  // disputes, always emitted as the v1 `split` shape) falls back to the v1
+  // assumption filer=delegator / respondent=worker, which the ternary preserves
+  // (worker = respondent whenever the role is not "worker").
   const filedBy = dispute.filed_by as string;
   const respondent = dispute.respondent as string;
+  const filerRole = (dispute.filer_role as FilerRole | null) ?? null;
+  const worker = filerRole === "worker" ? filedBy : respondent;
+  const delegator = filerRole === "worker" ? respondent : filedBy;
+  const workerShare = Math.floor(amountLocked * splitRatio);
+  const delegatorShare = amountLocked - workerShare;
 
-  switch (fundAction) {
-    case "refund_to_delegator": {
-      creditAccountCanonical(
-        db,
-        filedBy,
-        amountLocked,
-        "settlement_credit",
-        disputeId,
-        `Dispute refund: ${disputeId}`,
-      );
-      break;
-    }
-    case "release_to_worker": {
-      creditAccountCanonical(
-        db,
-        respondent,
-        amountLocked,
-        "settlement_credit",
-        disputeId,
-        `Dispute release: ${disputeId}`,
-      );
-      break;
-    }
-    case "split": {
-      const workerAmount = Math.floor(amountLocked * splitRatio);
-      const delegatorAmount = amountLocked - workerAmount;
-      if (workerAmount > 0) {
-        creditAccountCanonical(
-          db,
-          respondent,
-          workerAmount,
-          "settlement_credit",
-          disputeId,
-          `Dispute split (worker): ${disputeId}`,
-        );
-      }
-      if (delegatorAmount > 0) {
-        creditAccountCanonical(
-          db,
-          filedBy,
-          delegatorAmount,
-          "settlement_credit",
-          disputeId,
-          `Dispute split (delegator): ${disputeId}`,
-        );
-      }
-      break;
-    }
+  if (workerShare > 0) {
+    creditAccountCanonical(
+      db,
+      worker,
+      workerShare,
+      "settlement_credit",
+      disputeId,
+      `Dispute release (${fundAction}): ${disputeId}`,
+    );
   }
+  if (delegatorShare > 0) {
+    creditAccountCanonical(
+      db,
+      delegator,
+      delegatorShare,
+      "settlement_credit",
+      disputeId,
+      `Dispute refund (${fundAction}): ${disputeId}`,
+    );
+  }
+  logger.info("dispute.fund_action.pre_settlement", {
+    disputeId,
+    fundAction,
+    filerRole,
+    worker,
+    delegator,
+    amountLocked,
+    workerShare,
+    delegatorShare,
+  });
 }
