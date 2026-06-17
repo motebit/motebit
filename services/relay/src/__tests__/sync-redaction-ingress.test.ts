@@ -13,7 +13,12 @@ import type { SyncRelay } from "../index.js";
 import type { EventLogEntry } from "@motebit/sdk";
 import { EventType } from "@motebit/sdk";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
-import { redactSensitiveEvents, redactMemoryFormedPayload } from "../redaction.js";
+import {
+  redactSensitiveEvents,
+  redactMemoryFormedPayload,
+  redactMemoryAuditPayload,
+  redactMemoryConsolidatedPayload,
+} from "../redaction.js";
 
 const MOTEBIT_ID = "redaction-test-mote";
 
@@ -143,6 +148,43 @@ describe("sync ingress redaction (HTTP push)", () => {
     expect(frame.event.payload.redacted).toBe(true);
   });
 
+  it("strips raw user text from a memory_audit event at ingress", async () => {
+    // memory_audit fires when the model MISSED tagging a pattern — so its raw
+    // fields are disproportionately the sensitive content that escaped tagging.
+    const event = makeMemoryFormedEvent(
+      {
+        turn_message: "my SSN is 123-45-6789 and I take lisinopril",
+        missed_patterns: ['personal_fact: "SSN is 123-45-6789"'],
+      },
+      { event_type: EventType.MemoryAudit },
+    );
+    await pushEvents(relay, [event]);
+    const stored = storedPayload(relay, event.event_id);
+    expect(stored.turn_message).toBeUndefined();
+    expect(stored.missed_patterns).toBeUndefined();
+    expect(stored.redacted).toBe(true);
+  });
+
+  it("redacts the free-text reason from memory_consolidated, keeping structure", async () => {
+    const event = makeMemoryFormedEvent(
+      {
+        action: "merge",
+        existing_node_id: "n-1",
+        new_node_id: "n-2",
+        reason: "user said their diagnosis is X",
+        superseded_valid_until: 5000,
+      },
+      { event_type: EventType.MemoryConsolidated },
+    );
+    await pushEvents(relay, [event]);
+    const stored = storedPayload(relay, event.event_id);
+    expect(stored.reason).toBe("[REDACTED]");
+    expect(stored.action).toBe("merge");
+    expect(stored.existing_node_id).toBe("n-1");
+    expect(stored.new_node_id).toBe("n-2");
+    expect(stored.superseded_valid_until).toBe(5000);
+  });
+
   it("receipt idempotency survives redaction (duplicate receipt still detected)", async () => {
     const receipt = { receipt_id: "r-1", signature: "sig-abc" };
     const first = makeMemoryFormedEvent({
@@ -192,6 +234,34 @@ describe("redactMemoryFormedPayload unit", () => {
     const [m, o] = redactSensitiveEvents([memory, other]);
     expect(m!.payload.content).toBe("[REDACTED]");
     expect(o!.payload).toEqual(other.payload);
+  });
+
+  it("redactMemoryAuditPayload strips both raw fields, is idempotent, passes encrypted", () => {
+    const out = redactMemoryAuditPayload({
+      turn_message: "raw user text",
+      missed_patterns: ['goal: "x"'],
+    });
+    expect(out).not.toBeNull();
+    expect(out!.turn_message).toBeUndefined();
+    expect(out!.missed_patterns).toBeUndefined();
+    expect(out!.redacted).toBe(true);
+    expect(redactMemoryAuditPayload(out!)).toBeNull(); // idempotent
+    expect(redactMemoryAuditPayload({ _encrypted: true, _data: "ct" })).toBeNull();
+    expect(redactMemoryAuditPayload({})).toBeNull(); // nothing to strip
+  });
+
+  it("redactMemoryConsolidatedPayload redacts reason, preserves structure, idempotent", () => {
+    const out = redactMemoryConsolidatedPayload({
+      action: "supersede",
+      existing_node_id: "n1",
+      new_node_id: null,
+      reason: "sensitive rationale",
+    });
+    expect(out!.reason).toBe("[REDACTED]");
+    expect(out!.action).toBe("supersede");
+    expect(out!.existing_node_id).toBe("n1");
+    expect(redactMemoryConsolidatedPayload(out!)).toBeNull(); // idempotent (redacted flag)
+    expect(redactMemoryConsolidatedPayload({ action: "reject" })).toBeNull(); // no reason
   });
 
   it("strips the owner-local mutation_manifest from a synced consolidation receipt", () => {
