@@ -281,6 +281,39 @@ describe("MemoryGraph", () => {
     graph = new MemoryGraph(storage, eventStore, motebitId);
   });
 
+  describe("hasAnyMemory (emptiness probe)", () => {
+    it("returns false on an empty graph", async () => {
+      expect(await graph.hasAnyMemory()).toBe(false);
+    });
+
+    it("returns true once a memory exists", async () => {
+      await graph.formMemory(
+        {
+          content: "first fact",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
+        [1, 0],
+      );
+      expect(await graph.hasAnyMemory()).toBe(true);
+    });
+
+    it("ignores tombstoned-only graphs (no live memory)", async () => {
+      const node = await graph.formMemory(
+        {
+          content: "to delete",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
+        [1, 0],
+      );
+      await storage.tombstoneNode(node.node_id);
+      expect(await graph.hasAnyMemory()).toBe(false);
+    });
+  });
+
   describe("getNode (delegate to storage)", () => {
     it("returns a stored node by id", async () => {
       const node = await graph.formMemory(

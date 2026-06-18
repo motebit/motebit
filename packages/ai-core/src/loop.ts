@@ -832,6 +832,21 @@ export async function* runTurnStreaming(
   // `STAGE_TIMEOUTS_MS` in core.ts for deadlines (single source of truth).
   const CONTEXT_SAFE_SENSITIVITY = [SensitivityLevel.None, SensitivityLevel.Personal];
 
+  // Emptiness probe BEFORE the context batch. A brand-new / anonymous motebit
+  // has no memory, so embedding the user message (~450ms remote call — the
+  // dominant pipeline cost) AND similarity retrieval are pure waste: there's
+  // nothing to retrieve against. The probe is a `limit: 1` query (pushed LIMIT
+  // on the SQL adapters), negligible for returning users, and gating on it lets
+  // us skip the embed entirely, not just the retrieval. Memory FORMATION (the
+  // write path, post-turn) is unaffected, so the first turn still records memory
+  // and turn 2+ takes the full path. Empty pinned/embed/retrieve degrade to the
+  // same context as before — the agent simply gets no `relevant_memories`.
+  const hasMemory = await withStageTimeout(
+    "memory_probe",
+    STAGE_TIMEOUTS_MS.memory_probe,
+    memoryGraph.hasAnyMemory(),
+  );
+
   const [recentEvents, queryEmbedding, pinnedMemoriesRaw] = await Promise.all([
     withStageTimeout(
       "event_query",
@@ -841,40 +856,47 @@ export async function* runTurnStreaming(
         eventQueryMs = ms;
       },
     ),
-    withStageTimeout(
-      "embed_user_message",
-      STAGE_TIMEOUTS_MS.embed_user_message,
-      embedText(userMessage),
-      (ms) => {
-        embedMs = ms;
-      },
-    ),
-    withStageTimeout(
-      "pinned_memories",
-      STAGE_TIMEOUTS_MS.pinned_memories,
-      memoryGraph.getPinnedMemories(),
-      (ms) => {
-        pinnedMs = ms;
-      },
-    ),
+    hasMemory
+      ? withStageTimeout(
+          "embed_user_message",
+          STAGE_TIMEOUTS_MS.embed_user_message,
+          embedText(userMessage),
+          (ms) => {
+            embedMs = ms;
+          },
+        )
+      : Promise.resolve<number[]>([]),
+    hasMemory
+      ? withStageTimeout(
+          "pinned_memories",
+          STAGE_TIMEOUTS_MS.pinned_memories,
+          memoryGraph.getPinnedMemories(),
+          (ms) => {
+            pinnedMs = ms;
+          },
+        )
+      : Promise.resolve<MemoryNode[]>([]),
   ]);
 
-  // 2. Similarity retrieval depends on the embedding — runs after parallel batch
+  // 2. Similarity retrieval depends on the embedding — runs after parallel batch.
+  // Skipped entirely on an empty graph (no embedding was computed).
   const pinnedMemories = pinnedMemoriesRaw.filter((m) =>
     CONTEXT_SAFE_SENSITIVITY.includes(m.sensitivity),
   );
-  const similarityMemories = await withStageTimeout(
-    "memory_retrieve",
-    STAGE_TIMEOUTS_MS.memory_retrieve,
-    memoryGraph.recallRelevant(queryEmbedding, {
-      limit: 5,
-      strengthenCoRetrieved: true,
-      sensitivityFilter: CONTEXT_SAFE_SENSITIVITY,
-    }),
-    (ms) => {
-      memoryRetrieveMs = ms;
-    },
-  );
+  const similarityMemories = hasMemory
+    ? await withStageTimeout(
+        "memory_retrieve",
+        STAGE_TIMEOUTS_MS.memory_retrieve,
+        memoryGraph.recallRelevant(queryEmbedding, {
+          limit: 5,
+          strengthenCoRetrieved: true,
+          sensitivityFilter: CONTEXT_SAFE_SENSITIVITY,
+        }),
+        (ms) => {
+          memoryRetrieveMs = ms;
+        },
+      )
+    : [];
 
   // Merge: pinned first (cap 5), then similarity (deduplicated)
   const pinnedIds = new Set(pinnedMemories.map((m) => m.node_id));

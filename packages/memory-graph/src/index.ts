@@ -1180,6 +1180,26 @@ export class MemoryGraph {
   }
 
   /**
+   * Cheap "does this motebit have any live memory?" probe.
+   *
+   * Uses a `limit: 1` query against the existing storage contract (no adapter
+   * change). On the SQL adapters this pushes `LIMIT 1`; everywhere it returns an
+   * empty array immediately for an empty graph. The hot-path turn pipeline uses
+   * this to skip embedding the user message + similarity retrieval entirely for
+   * a brand-new / anonymous motebit (empty graph) — embedding is the dominant
+   * TTFT cost (~450ms remote call) and is pure waste when there's nothing to
+   * retrieve against. Returns false on an empty graph.
+   */
+  async hasAnyMemory(): Promise<boolean> {
+    const nodes = await this.storage.queryNodes({
+      motebit_id: this.motebitId,
+      limit: 1,
+      include_tombstoned: false,
+    });
+    return nodes.length > 0;
+  }
+
+  /**
    * Get a single memory node.
    */
   async getMemory(nodeId: string): Promise<MemoryNode | null> {

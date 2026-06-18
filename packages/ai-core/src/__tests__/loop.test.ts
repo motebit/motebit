@@ -1199,6 +1199,39 @@ describe("runTurnStreaming (agentic loop)", () => {
     expect(result2.result.memoriesRetrieved[0]!.content).toBe("User likes cats");
   });
 
+  it("skips similarity retrieval on an empty memory graph, runs it once non-empty (TTFT win)", async () => {
+    const deps = makeDepsWithProvider(
+      makeMockProvider([
+        {
+          text: 'Noted <memory confidence="0.9" sensitivity="none">User likes dogs</memory>',
+          confidence: 0.8,
+          memory_candidates: [
+            { content: "User likes dogs", confidence: 0.9, sensitivity: SensitivityLevel.None },
+          ],
+          state_updates: {},
+        },
+      ]),
+    );
+    const recallSpy = vi.spyOn(deps.memoryGraph, "recallRelevant");
+
+    // Turn 1: empty graph → the emptiness probe skips embed + similarity
+    // retrieval entirely (the ~450ms embed is the dominant TTFT cost and is
+    // pure waste with nothing to retrieve against).
+    const c1: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "I like dogs")) c1.push(chunk);
+    expect(recallSpy).not.toHaveBeenCalled();
+
+    // Turn 1 formed a memory → the graph is now non-empty.
+    (deps as { provider: StreamingProvider }).provider = makeMockProvider([
+      { text: "ok", confidence: 0.8, memory_candidates: [], state_updates: {} },
+    ]);
+
+    // Turn 2: non-empty → retrieval runs.
+    const c2: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "what do I like?")) c2.push(chunk);
+    expect(recallSpy).toHaveBeenCalled();
+  });
+
   it("pinned memories appear in memoriesRetrieved", async () => {
     const deps = makeDepsWithProvider(
       makeMockProvider([
@@ -1634,6 +1667,9 @@ describe("runTurnStreaming pipeline stage timeouts", () => {
   it("surfaces a StageTimeoutError when memoryGraph.recallRelevant hangs past its deadline", async () => {
     const { StageTimeoutError, STAGE_TIMEOUTS_MS } = await import("../core");
     const deps = makeDeps();
+    // Force the non-empty path so retrieval actually runs (a fresh in-memory
+    // graph is empty → the emptiness probe would otherwise skip embed+retrieve).
+    vi.spyOn(deps.memoryGraph, "hasAnyMemory").mockResolvedValue(true);
     // Let the Promise.all batch resolve (event/embed/pinned all fast against
     // in-memory stores), then hang the similarity retrieve. Models a
     // corrupted vector index that accepts the call but never returns.
