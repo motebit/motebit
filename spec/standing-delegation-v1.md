@@ -39,6 +39,7 @@ StandingDelegation {
   delegate_public_key:  string   // Ed25519 public key, hex (64 lowercase)
   scope:                string   // Comma-separated capability CEILING, or "*". Per-tick tokens narrow within. Grammar per market-v1 §12.3.
   subject:              string   // Human-meaningful binding (e.g. "research:thesis=acme-q3"). Opaque to verify.
+  subject_binding?:     SubjectBindingV1  // OPTIONAL (@1.1). Digest-binds the resolved subject-scope artifact (§3.2). Part of the signed body. NOT the capability `scope`.
   cadence_ms:           number   // Authorized minimum firing interval (ms). A mint/relay rate limit; NOT a single-token verify rule.
   issued_at:            number   // Unix ms
   not_before:           number | null  // Optional activation delay. Null ⇒ active from issued_at.
@@ -67,6 +68,37 @@ A complete verification has two parts: **intrinsic** validity (checkable from th
 5. The grant is not revoked — no valid `DelegationRevocation` for `grant_id` signed by `delegator_public_key` (see §5 for what makes a revocation authoritative).
 
 `@motebit/crypto` `verifyStandingDelegation` performs items 1–4. It is I/O-free by contract and so **does not fetch the revocation feed**: item 5 is the caller's responsibility, performed by wiring the injected `isRevoked` seam — a `grant_id → boolean` lookup. **A verifier that omits `isRevoked` is incomplete: a revoked grant passes items 1–4 and verifies.** The canonical way to build the lookup is `findGrantRevocation(grant, revocations)`, which does the authoritative binding check (§5) over a revocation set; precompute the revoked set, then provide the sync lookup. The seam mirrors the relay's existing agent-revocation lookup.
+
+### 3.2 — SubjectBinding (resolved subject scope, @1.1)
+
+The grant's `subject` is human intent; the agent acts on RESOLVED identities ("Nvidia" → `sec:cik:1045810`), and an interpreter — not the delegator — does that resolution. An interpreted scope only proves "the agent read the grant thus," never "the delegator authorized THESE identities." `standing-delegation@1.1` closes that gap with an OPTIONAL, generic `subject_binding` that digest-binds a detached, vertically-typed scope artifact. Because `subject_binding` rides in the signed body, the delegator's single signature reaches the resolved scope — the detached artifact needs no second signature (collision resistance binds its bytes to the signed digest; the same move as `SignedRequestEnvelope.payload_digest`).
+
+`subject_binding` is generic by construction — the detached artifact's TYPE lives in `artifact_schema`, so no vertical's identity structures enter the grant, and a future non-monitoring consumer reuses the same primitive. `digest_method` is a HASH method, deliberately **not** a signature `suite` (`SuiteId`).
+
+#### Wire format (foundation law)
+
+```
+SubjectBindingV1 {
+  schema:          "motebit.subject-binding.v1"   // this binding's type tag (in-body domain separation; no raw-byte prefix)
+  artifact_schema: string   // declared type of the detached artifact (e.g. "motebit.monitor-scope.v1")
+  digest_method:   "jcs-sha256-hex"   // hex(SHA-256(canonicalJson(artifact))). A HASH method, NOT a signature suite. New hash ⇒ new literal.
+  digest:          string   // hex(SHA-256(canonicalJson(detached artifact))), 64 lowercase. Recompute from the artifact as received.
+}
+```
+
+The `SubjectBindingV1` type in `@motebit/protocol` is the binding machine-readable form; `StandingDelegationSchema` in `@motebit/wire-schemas` carries it as the optional `subject_binding` and derives the committed JSON Schema. The DETACHED artifact (e.g. `motebit.monitor-scope.v1`) is the consumer's vertical type, not defined here.
+
+#### Verification (foundation law)
+
+`subject_binding`, when present, is signature-covered by §3.1 item 4 (the body canonicalization includes it) — so AUTHORITY over the bound digest needs no extra step. The separate **binding-MATCH** check confirms a presented detached artifact IS the bound scope. A verifier with both the grant and the artifact MUST reject unless ALL hold (`@motebit/crypto` `verifySubjectBinding`):
+
+1. `subject_binding.digest_method == "jcs-sha256-hex"` (fail-closed on any other value).
+2. The presented artifact's own `schema == subject_binding.artifact_schema` — so a different artifact type cannot be substituted under the bound digest.
+3. `hex(SHA-256(canonicalJson(presented artifact))) == subject_binding.digest` (`subjectBindingDigest`).
+
+**Higher-assurance consumers MUST fail closed on absence.** `subject_binding` is optional for backward compatibility (a @1.0 grant verifies intrinsically without it), but a consumer asserting a higher assurance over resolved subjects (e.g. a verified monitor) MUST refuse a grant that lacks a `subject_binding` — an unbound grant carries no delegator-signed resolved scope.
+
+**Authority vs. completeness — a layer boundary.** This binding is AUTHORITY only: it proves which subjects the delegator authorized. It does NOT assert that every authorized subject was _evaluated_. Generic delegation is subset-shaped — an executed act narrows within the authorized ceiling (`executed ⊆ authorized`). A _monitor promise_, by contrast, means "evaluate every named leg," which is equality (`attempted == signed`). That completeness rule is **NOT** a property of this generic binding; it belongs to the monitor receipt profile built on top (the `motebit.monitor-scope.v1` consumer profile), which MUST require every signed subject be attempted before emitting a `revalidated`/`revised` verdict, with per-subject coverage deciding `verified` vs `incomplete`. Keeping completeness out of the generic primitive is what lets a non-monitoring vertical reuse `subject_binding` unchanged.
 
 ## 4. Per-tick tokens
 

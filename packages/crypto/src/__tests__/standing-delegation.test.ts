@@ -10,8 +10,15 @@ import {
   signDelegationRevocation,
   verifyDelegationRevocation,
   findGrantRevocation,
+  subjectBindingDigest,
+  verifySubjectBinding,
 } from "../index.js";
-import type { DelegationToken, StandingDelegation, DelegationRevocation } from "@motebit/protocol";
+import type {
+  DelegationToken,
+  StandingDelegation,
+  DelegationRevocation,
+  SubjectBindingV1,
+} from "@motebit/protocol";
 
 type Kp = { publicKey: Uint8Array; privateKey: Uint8Array };
 
@@ -32,6 +39,7 @@ async function makeGrant(
       delegate_public_key: over.delegate_public_key ?? bytesToHex(delegate.publicKey),
       scope: over.scope ?? "web_search,summarize",
       subject: over.subject ?? "research:thesis=acme",
+      ...(over.subject_binding !== undefined ? { subject_binding: over.subject_binding } : {}),
       cadence_ms: over.cadence_ms ?? 24 * HOUR,
       issued_at: over.issued_at ?? now,
       not_before: over.not_before ?? null,
@@ -391,5 +399,94 @@ describe("findGrantRevocation — the consumer-side check done right", () => {
     );
     const tampered: DelegationRevocation = { ...rev, revoked_at: rev.revoked_at + 1 };
     expect(await findGrantRevocation(grant, [tampered])).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// subject_binding (standing-delegation@1.1) — the delegator's signature reaches
+// the resolved subject scope via a digest-bound detached artifact.
+// ─────────────────────────────────────────────────────────────────────────
+
+// A stand-in for agency's detached `motebit.monitor-scope.v1` artifact. The
+// crypto layer is vertical-neutral; it only needs the `schema` tag + arbitrary
+// content to digest.
+const SCOPE_ARTIFACT = {
+  schema: "motebit.monitor-scope.v1",
+  question: "Monitor Nvidia and Intel earnings",
+  subjects: [
+    { entityId: "sec:cik:1045810", canonicalName: "NVIDIA Corporation", cik: "1045810" },
+    { entityId: "sec:cik:50863", canonicalName: "Intel Corporation", cik: "50863" },
+  ],
+};
+
+async function makeBinding(
+  artifact: { schema: string } = SCOPE_ARTIFACT,
+): Promise<SubjectBindingV1> {
+  return {
+    schema: "motebit.subject-binding.v1",
+    artifact_schema: artifact.schema,
+    digest_method: "jcs-sha256-hex",
+    digest: await subjectBindingDigest(artifact),
+  };
+}
+
+describe("subject_binding (@1.1)", () => {
+  it("a grant carrying subject_binding verifies unchanged", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob, { subject_binding: await makeBinding() });
+    expect(grant.subject_binding?.artifact_schema).toBe("motebit.monitor-scope.v1");
+    expect(await verifyStandingDelegation(grant)).toBe(true);
+  });
+
+  it("tampering the binding breaks the delegator's signature", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob, { subject_binding: await makeBinding() });
+    // Swap the bound digest (e.g. substitute a different resolved scope) post-sign.
+    const tampered: StandingDelegation = {
+      ...grant,
+      subject_binding: { ...grant.subject_binding!, digest: "0".repeat(64) },
+    };
+    expect(await verifyStandingDelegation(tampered)).toBe(false);
+  });
+
+  it("an old grant WITHOUT subject_binding still verifies generically", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob); // no subject_binding
+    expect(grant.subject_binding).toBeUndefined();
+    expect(await verifyStandingDelegation(grant)).toBe(true);
+  });
+
+  it("verifySubjectBinding matches the presented artifact to the signed binding", async () => {
+    const binding = await makeBinding();
+    expect(await verifySubjectBinding(binding, SCOPE_ARTIFACT)).toEqual({ valid: true });
+  });
+
+  it("verifySubjectBinding fails closed on a substituted artifact (digest mismatch)", async () => {
+    const binding = await makeBinding();
+    const substituted = { ...SCOPE_ARTIFACT, subjects: [SCOPE_ARTIFACT.subjects[0]] }; // dropped Intel
+    const r = await verifySubjectBinding(binding, substituted as { schema: string });
+    expect(r.valid).toBe(false);
+    expect(r.error).toContain("digest mismatch");
+  });
+
+  it("verifySubjectBinding fails closed on a wrong artifact_schema (type substitution)", async () => {
+    const binding = await makeBinding();
+    const wrongType = { ...SCOPE_ARTIFACT, schema: "motebit.something-else.v1" };
+    const r = await verifySubjectBinding(binding, wrongType);
+    expect(r.valid).toBe(false);
+    expect(r.error).toContain("artifact_schema");
+  });
+
+  it("verifySubjectBinding fails closed on an unknown digest_method", async () => {
+    const binding = await makeBinding();
+    const r = await verifySubjectBinding(
+      { ...binding, digest_method: "jcs-blake3-hex" as SubjectBindingV1["digest_method"] },
+      SCOPE_ARTIFACT,
+    );
+    expect(r.valid).toBe(false);
+    expect(r.error).toContain("digest_method");
   });
 });

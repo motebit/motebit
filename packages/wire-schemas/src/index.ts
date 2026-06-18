@@ -41,10 +41,13 @@ export {
 export {
   StandingDelegationSchema,
   DelegationRevocationSchema,
+  SubjectBindingV1Schema,
   STANDING_DELEGATION_SCHEMA_ID,
   DELEGATION_REVOCATION_SCHEMA_ID,
+  SUBJECT_BINDING_SCHEMA_ID,
   buildStandingDelegationJsonSchema,
   buildDelegationRevocationJsonSchema,
+  buildSubjectBindingV1JsonSchema,
 } from "./standing-delegation.js";
 export {
   SignedRequestEnvelopeSchema,

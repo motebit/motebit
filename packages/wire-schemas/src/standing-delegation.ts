@@ -28,7 +28,7 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
-import type { StandingDelegation, DelegationRevocation } from "@motebit/protocol";
+import type { StandingDelegation, DelegationRevocation, SubjectBindingV1 } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
@@ -38,8 +38,43 @@ export const STANDING_DELEGATION_SCHEMA_ID =
   "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/standing-delegation-v1.json";
 export const DELEGATION_REVOCATION_SCHEMA_ID =
   "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/delegation-revocation-v1.json";
+export const SUBJECT_BINDING_SCHEMA_ID =
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/subject-binding-v1.json";
 
 const HEX_PUBLIC_KEY_PATTERN = /^[0-9a-f]{64}$/;
+const HEX_SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * Generic subject-scope binding (standing-delegation@1.1). Digest-binds a
+ * detached, vertically-typed scope artifact so the delegator's signature reaches
+ * the EXACT resolved subjects. Unsigned by construction — authority is the
+ * enclosing grant's signature over `digest`. NOT a `suite` (signature scheme);
+ * `digest_method` is a HASH method.
+ */
+export const SubjectBindingV1Schema = z
+  .object({
+    schema: z
+      .literal("motebit.subject-binding.v1")
+      .describe("This binding's own type tag (in-body domain separation)."),
+    artifact_schema: z
+      .string()
+      .min(1)
+      .describe(
+        "Declared type of the detached artifact this digest addresses (e.g. `motebit.monitor-scope.v1`). The verifier MUST check the presented artifact's `schema` equals this, fail-closed.",
+      ),
+    digest_method: z
+      .literal("jcs-sha256-hex")
+      .describe(
+        "How `digest` was computed: `hex(SHA-256(canonicalJson(artifact)))`. A new hash is a new literal here, never a silent change. NOT a signature `suite`.",
+      ),
+    digest: z
+      .string()
+      .regex(HEX_SHA256_PATTERN)
+      .describe(
+        "`hex(SHA-256(canonicalJson(detached artifact)))`, 64 lowercase. Recompute from the artifact as received so JSON whitespace can't break the match.",
+      ),
+  })
+  .strict();
 
 export const StandingDelegationSchema = z
   .object({
@@ -80,6 +115,9 @@ export const StandingDelegationSchema = z
       .describe(
         "Human-meaningful binding (e.g. `research:thesis=acme-q3`). Opaque to verification; carried for receipt-linkage and operator legibility.",
       ),
+    subject_binding: SubjectBindingV1Schema.optional().describe(
+      "Optional (standing-delegation@1.1). Digest-binds the resolved subject-scope artifact this grant's authority reaches; part of the signed body, so the delegator's signature covers the resolved scope. Absent ⇒ a @1.0 grant with no signed resolved scope (higher-assurance consumers MUST fail closed). NOT the capability `scope`.",
+    ),
     cadence_ms: z
       .number()
       .describe(
@@ -148,6 +186,18 @@ export const DelegationRevocationSchema = z
 
 type InferredStanding = z.infer<typeof StandingDelegationSchema>;
 type InferredRevocation = z.infer<typeof DelegationRevocationSchema>;
+type InferredSubjectBinding = z.infer<typeof SubjectBindingV1Schema>;
+
+type _SubjectBindingForward = ParityForward<SubjectBindingV1, InferredSubjectBinding>;
+type _SubjectBindingReverse = ParityReverse<SubjectBindingV1, InferredSubjectBinding>;
+
+export const _SUBJECT_BINDING_TYPE_PARITY: {
+  forward: _SubjectBindingForward;
+  reverse: _SubjectBindingReverse;
+} = {
+  forward: true,
+  reverse: true,
+};
 
 type _StandingForward = ParityForward<StandingDelegation, InferredStanding>;
 type _StandingReverse = ParityReverse<StandingDelegation, InferredStanding>;
@@ -185,6 +235,20 @@ export function buildStandingDelegationJsonSchema(): Record<string, unknown> {
     title: "StandingDelegation (v1)",
     description:
       "Signed, revocable standing grant authorizing minting short-lived per-tick DelegationTokens within a fixed scope ceiling and cadence. Canonicalization: JCS (RFC 8785). Signature: Ed25519 over canonicalJson(body minus signature), base64url. See spec/standing-delegation-v1.md.",
+  });
+}
+
+export function buildSubjectBindingV1JsonSchema(): Record<string, unknown> {
+  const raw = zodToJsonSchema(SubjectBindingV1Schema, {
+    name: "SubjectBindingV1",
+    $refStrategy: "root",
+    target: "jsonSchema7",
+  }) as Record<string, unknown>;
+  return assembleJsonSchemaFor("SubjectBindingV1", raw, {
+    $id: SUBJECT_BINDING_SCHEMA_ID,
+    title: "SubjectBindingV1 (v1)",
+    description:
+      "Generic subject-scope binding (standing-delegation@1.1). Digest-binds a detached, vertically-typed scope artifact so a StandingDelegation's delegator signature reaches the EXACT resolved subjects. Unsigned — authority is the enclosing grant's signature over `digest`. `digest_method` is a HASH method (jcs-sha256-hex), NOT a signature suite. See spec/standing-delegation-v1.md §3.2.",
   });
 }
 

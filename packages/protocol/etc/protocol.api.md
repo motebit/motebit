@@ -3599,6 +3599,7 @@ export interface StandingDelegation {
     scope: string;
     signature: string;
     subject: string;
+    subject_binding?: SubjectBindingV1;
     suite: "motebit-jcs-ed25519-b64-v1";
 }
 
@@ -3638,6 +3639,14 @@ export interface StoredCredential {
     issued_at: number;
     issuer_did: string;
     subject_motebit_id: string;
+}
+
+// @public
+export interface SubjectBindingV1 {
+    artifact_schema: string;
+    digest: string;
+    digest_method: "jcs-sha256-hex";
+    schema: "motebit.subject-binding.v1";
 }
 
 // @public

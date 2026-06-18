@@ -40,6 +40,34 @@
       "type": "string",
       "description": "Human-meaningful binding (e.g. `research:thesis=acme-q3`). Opaque to verification; carried for receipt-linkage and operator legibility."
     },
+    "subject_binding": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "motebit.subject-binding.v1",
+          "description": "This binding's own type tag (in-body domain separation)."
+        },
+        "artifact_schema": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Declared type of the detached artifact this digest addresses (e.g. `motebit.monitor-scope.v1`). The verifier MUST check the presented artifact's `schema` equals this, fail-closed."
+        },
+        "digest_method": {
+          "type": "string",
+          "const": "jcs-sha256-hex",
+          "description": "How `digest` was computed: `hex(SHA-256(canonicalJson(artifact)))`. A new hash is a new literal here, never a silent change. NOT a signature `suite`."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "`hex(SHA-256(canonicalJson(detached artifact)))`, 64 lowercase. Recompute from the artifact as received so JSON whitespace can't break the match."
+        }
+      },
+      "required": ["schema", "artifact_schema", "digest_method", "digest"],
+      "additionalProperties": false,
+      "description": "Optional (standing-delegation@1.1). Digest-binds the resolved subject-scope artifact this grant's authority reaches; part of the signed body, so the delegator's signature covers the resolved scope. Absent ⇒ a @1.0 grant with no signed resolved scope (higher-assurance consumers MUST fail closed). NOT the capability `scope`."
+    },
     "cadence_ms": {
       "type": "number",
       "description": "Authorized minimum firing interval, milliseconds. A per-tick rate limit enforced at mint/relay time — NOT a single-token verification rule."
@@ -125,6 +153,34 @@
         "subject": {
           "type": "string",
           "description": "Human-meaningful binding (e.g. `research:thesis=acme-q3`). Opaque to verification; carried for receipt-linkage and operator legibility."
+        },
+        "subject_binding": {
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "motebit.subject-binding.v1",
+              "description": "This binding's own type tag (in-body domain separation)."
+            },
+            "artifact_schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Declared type of the detached artifact this digest addresses (e.g. `motebit.monitor-scope.v1`). The verifier MUST check the presented artifact's `schema` equals this, fail-closed."
+            },
+            "digest_method": {
+              "type": "string",
+              "const": "jcs-sha256-hex",
+              "description": "How `digest` was computed: `hex(SHA-256(canonicalJson(artifact)))`. A new hash is a new literal here, never a silent change. NOT a signature `suite`."
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "`hex(SHA-256(canonicalJson(detached artifact)))`, 64 lowercase. Recompute from the artifact as received so JSON whitespace can't break the match."
+            }
+          },
+          "required": ["schema", "artifact_schema", "digest_method", "digest"],
+          "additionalProperties": false,
+          "description": "Optional (standing-delegation@1.1). Digest-binds the resolved subject-scope artifact this grant's authority reaches; part of the signed body, so the delegator's signature covers the resolved scope. Absent ⇒ a @1.0 grant with no signed resolved scope (higher-assurance consumers MUST fail closed). NOT the capability `scope`."
         },
         "cadence_ms": {
           "type": "number",

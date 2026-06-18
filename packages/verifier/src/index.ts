@@ -54,12 +54,16 @@ export { verifyApprovalDecision } from "@motebit/crypto";
 //   - verifyTokenAgainstGrant   — a per-tick token IS a valid tick of its grant
 //   - verifyDelegationRevocation — a revocation's signature (caller binds it to the grant)
 //   - findGrantRevocation       — the consumer-side revocation check done right (binds revocation→grant; build `isRevoked` from it)
+//   - subjectBindingDigest      — canonical digest of a detached subject-scope artifact (standing-delegation@1.1)
+//   - verifySubjectBinding      — the presented scope artifact matches the grant's signed `subject_binding`, fail-closed
 export {
   verifyDelegation,
   verifyStandingDelegation,
   verifyTokenAgainstGrant,
   verifyDelegationRevocation,
   findGrantRevocation,
+  subjectBindingDigest,
+  verifySubjectBinding,
 } from "@motebit/crypto";
 // Signed request envelope (signed-request-envelope@1.0). Explicitly re-exported
 // like the delegation family — verified against the identity's REGISTERED key
@@ -75,4 +79,5 @@ export type {
   DelegationToken,
   StandingDelegation,
   DelegationRevocation,
+  SubjectBindingV1,
 } from "@motebit/crypto";
