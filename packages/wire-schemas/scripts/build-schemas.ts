@@ -23,6 +23,7 @@ import { buildDelegationTokenJsonSchema } from "../src/delegation-token.js";
 import {
   buildStandingDelegationJsonSchema,
   buildDelegationRevocationJsonSchema,
+  buildSubjectBindingV1JsonSchema,
 } from "../src/standing-delegation.js";
 import { buildSignedRequestEnvelopeJsonSchema } from "../src/signed-request-envelope.js";
 import { buildSeedEscrowPayloadJsonSchema } from "../src/seed-escrow-payload.js";
@@ -135,6 +136,7 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "delegation-token-v1.json", build: buildDelegationTokenJsonSchema },
   { filename: "standing-delegation-v1.json", build: buildStandingDelegationJsonSchema },
   { filename: "delegation-revocation-v1.json", build: buildDelegationRevocationJsonSchema },
+  { filename: "subject-binding-v1.json", build: buildSubjectBindingV1JsonSchema },
   {
     filename: "signed-request-envelope-v1.json",
     build: buildSignedRequestEnvelopeJsonSchema,

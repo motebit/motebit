@@ -295,6 +295,8 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "signDelegationRevocation",
     "verifyDelegationRevocation",
     "findGrantRevocation",
+    "subjectBindingDigest",
+    "verifySubjectBinding",
     "signKeySuccession",
     "signGuardianRecoverySuccession",
     "verifyKeySuccession",

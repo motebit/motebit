@@ -728,8 +728,13 @@ export async function verifyReceiptSequence(
  * `export type { X } from "..."` is technically type-only by TypeScript
  * semantics, but the drift probe's regex only recognizes `import type`.
  */
-import type { DelegationToken, StandingDelegation, DelegationRevocation } from "@motebit/protocol";
-export type { DelegationToken, StandingDelegation, DelegationRevocation };
+import type {
+  DelegationToken,
+  StandingDelegation,
+  DelegationRevocation,
+  SubjectBindingV1,
+} from "@motebit/protocol";
+export type { DelegationToken, StandingDelegation, DelegationRevocation, SubjectBindingV1 };
 
 /** The one suite DelegationTokens sign under today. */
 export const DELEGATION_TOKEN_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
@@ -906,6 +911,54 @@ export async function verifyStandingDelegation(
   } catch {
     return false;
   }
+}
+
+/**
+ * Compute the canonical digest of a detached subject-scope artifact, for a
+ * a `SubjectBindingV1.digest`. `jcs-sha256-hex`:
+ * `hex(SHA-256(canonicalJson(artifact)))` — the same primitive as
+ * `SignedRequestEnvelope.payload_digest`. The artifact MUST carry its own
+ * `schema` tag; the typed parameter is the blessed-helper guard against
+ * accidentally digesting an arbitrary/wrong-shaped object.
+ */
+export async function subjectBindingDigest(artifact: { schema: string }): Promise<string> {
+  return canonicalSha256(artifact);
+}
+
+/**
+ * Verify a presented detached artifact matches a grant's `subject_binding`,
+ * fail-closed. Checks, in order: (1) `digest_method` is the one supported value;
+ * (2) the artifact's own `schema` equals `binding.artifact_schema` (so a
+ * different artifact type cannot be substituted under the bound digest);
+ * (3) the recomputed digest equals `binding.digest`.
+ *
+ * This is the binding-MATCH check — separate from `verifyStandingDelegation`,
+ * which proves the grant (and therefore the bound digest) is delegator-signed.
+ * Compose both: verify the grant, then verify the artifact matches the signed
+ * digest. AUTHORITY-only: it does NOT enforce subject COMPLETENESS ("every
+ * signed subject was attempted") — that is a monitor receipt-profile rule built
+ * on top, never a property of the generic binding.
+ */
+export async function verifySubjectBinding(
+  binding: SubjectBindingV1,
+  artifact: { schema: string },
+): Promise<{ valid: boolean; error?: string }> {
+  // `digest_method` is typed as the one literal, but the value arrives over the
+  // wire — treat it as untrusted and fail closed on anything else.
+  if ((binding.digest_method as string) !== "jcs-sha256-hex") {
+    return { valid: false, error: `unsupported digest_method: ${String(binding.digest_method)}` };
+  }
+  if (artifact.schema !== binding.artifact_schema) {
+    return {
+      valid: false,
+      error: `artifact schema "${artifact.schema}" != binding artifact_schema "${binding.artifact_schema}"`,
+    };
+  }
+  const recomputed = await subjectBindingDigest(artifact);
+  if (recomputed !== binding.digest) {
+    return { valid: false, error: "digest mismatch — presented artifact is not the bound scope" };
+  }
+  return { valid: true };
 }
 
 /**

@@ -267,6 +267,50 @@ export interface DelegationToken {
 }
 
 /**
+ * Binds a `StandingDelegation` to a detached, content-addressed subject-scope
+ * artifact — the EXACT resolved identities the grant's authority reaches —
+ * without putting any vertical's identity structures inside the generic grant.
+ *
+ * The motivation (standing-delegation@1.1): a monitor's authority cannot be the
+ * delegator-signed free-text `subject` alone, because the agent acts on RESOLVED
+ * identities ("Nvidia" → `sec:cik:1045810`), and an interpreter — not the
+ * delegator — does that resolution. An interpreted scope only proves "the agent
+ * read the grant thus," never "the delegator authorized THESE identities." So the
+ * delegator's signature must reach the resolved set. It does, transitively: the
+ * delegator signs the whole `StandingDelegation` body, which carries this
+ * `SubjectBindingV1`, whose `digest` content-addresses the detached artifact.
+ * One sovereign signature; the detached artifact needs no second signature
+ * (collision-resistance binds its bytes to the signed digest — the same move as
+ * `SignedRequestEnvelope.payload_digest`).
+ *
+ * Generic by construction: the detached artifact's TYPE is named in
+ * `artifact_schema` (e.g. agency's `"motebit.monitor-scope.v1"`), so the grant
+ * stays free of vertical payloads and a future non-monitoring consumer reuses
+ * this same primitive. NOTE: `digest_method` is deliberately NOT a `suite` —
+ * `suite` is reserved for SIGNATURE cryptosuites (`SuiteId`); this is a HASH.
+ */
+export interface SubjectBindingV1 {
+  /** This binding's own type tag. Carried in the signed bytes (in-body domain
+   *  separation, per motebit convention — no raw-byte prefix). */
+  schema: "motebit.subject-binding.v1";
+  /** Declared type of the detached artifact this digest addresses. The verifier
+   *  MUST check the presented artifact's own `schema` equals this, fail-closed —
+   *  so a different artifact type cannot be substituted under the bound digest. */
+  artifact_schema: string;
+  /**
+   * How `digest` was computed, fail-closed: `"jcs-sha256-hex"` =
+   * `hex(SHA-256(canonicalJson(artifact)))` — the same digest primitive as
+   * `SignedRequestEnvelope.payload_digest`. A new hash (PQ) is a new literal
+   * here, never a silent change. NOT a `suite` — a digest method, not a
+   * signature scheme.
+   */
+  digest_method: "jcs-sha256-hex";
+  /** `hex(SHA-256(canonicalJson(detached artifact)))`, 64 lowercase. Recompute
+   *  from the artifact AS RECEIVED so JSON whitespace can't break the match. */
+  digest: string;
+}
+
+/**
  * A standing (open-ended-feeling, cadence-scoped, revocable) delegation grant.
  * Unlike a {@link DelegationToken} — which authorizes ONE act and is short-lived
  * by invariant — a StandingDelegation authorizes its holder to MINT short-lived
@@ -295,6 +339,17 @@ export interface StandingDelegation {
    * verification; carried for receipt-linkage and operator legibility.
    */
   subject: string;
+  /**
+   * Optional (standing-delegation@1.1). Digest-binds the resolved subject-scope
+   * artifact this grant's authority reaches (see {@link SubjectBindingV1}). It is
+   * part of the signed body, so the delegator's signature covers the resolved
+   * scope — closing the "an interpreter, not the delegator, chose these
+   * identities" gap. Absent ⇒ a @1.0 grant with no signed resolved scope;
+   * higher-assurance consumers (e.g. verified monitors) MUST fail closed and
+   * refuse such a grant. NOT a capability `scope` — this names the concrete
+   * SUBJECTS, the `scope` field names the permitted CAPABILITIES.
+   */
+  subject_binding?: SubjectBindingV1;
   /** Authorized minimum firing interval (ms). Enforced at mint/relay time, not by single-token verify. */
   cadence_ms: number;
   issued_at: number;

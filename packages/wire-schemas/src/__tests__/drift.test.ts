@@ -118,8 +118,10 @@ import {
 import {
   STANDING_DELEGATION_SCHEMA_ID,
   DELEGATION_REVOCATION_SCHEMA_ID,
+  SUBJECT_BINDING_SCHEMA_ID,
   buildStandingDelegationJsonSchema,
   buildDelegationRevocationJsonSchema,
+  buildSubjectBindingV1JsonSchema,
 } from "../standing-delegation.js";
 import {
   EXECUTION_RECEIPT_SCHEMA_ID,
@@ -247,6 +249,12 @@ const CASES: SchemaCase[] = [
     filename: "delegation-revocation-v1.json",
     expectedId: DELEGATION_REVOCATION_SCHEMA_ID,
     build: buildDelegationRevocationJsonSchema,
+  },
+  {
+    name: "subject-binding-v1",
+    filename: "subject-binding-v1.json",
+    expectedId: SUBJECT_BINDING_SCHEMA_ID,
+    build: buildSubjectBindingV1JsonSchema,
   },
   {
     name: "signed-request-envelope-v1",

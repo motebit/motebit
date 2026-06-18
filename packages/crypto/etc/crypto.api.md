@@ -40,6 +40,7 @@ import type { SkillEnvelope } from '@motebit/protocol';
 import type { SkillManifest } from '@motebit/protocol';
 import type { SkillSignature } from '@motebit/protocol';
 import type { StandingDelegation } from '@motebit/protocol';
+import type { SubjectBindingV1 } from '@motebit/protocol';
 import type { SuiteId } from '@motebit/protocol';
 import type { WitnessOmissionDispute } from '@motebit/protocol';
 
@@ -1445,6 +1446,13 @@ export interface SovereignPaymentReceiptInput {
 export { StandingDelegation }
 
 // @public
+export function subjectBindingDigest(artifact: {
+    schema: string;
+}): Promise<string>;
+
+export { SubjectBindingV1 }
+
+// @public
 export interface SuccessionChainResult {
     // (undocumented)
     current_public_key: string;
@@ -1807,6 +1815,14 @@ export function verifyStandingDelegation(grant: StandingDelegation, options?: {
     now?: number;
     isRevoked?: (grantId: string) => boolean;
 }): Promise<boolean>;
+
+// @public
+export function verifySubjectBinding(binding: SubjectBindingV1, artifact: {
+    schema: string;
+}): Promise<{
+    valid: boolean;
+    error?: string;
+}>;
 
 // @public
 export function verifySuccessionChain(chain: KeySuccessionRecord[], guardianPublicKeyHex?: string): Promise<SuccessionChainResult>;
