@@ -127,6 +127,8 @@ export const STAGE_TIMEOUTS_MS = {
   embed_user_message: 12_000,
   /** Pinned-memory lookup from the memory graph. */
   pinned_memories: 10_000,
+  /** Cheap "has any memory?" probe (limit:1) that gates embed + retrieval. */
+  memory_probe: 10_000,
   /** Similarity search against the memory graph. */
   memory_retrieve: 10_000,
   /** Runtime-level agent-context assembly (pre-turn hop). */
