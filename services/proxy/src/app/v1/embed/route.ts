@@ -5,7 +5,11 @@ export const runtime = "edge";
 import { type NextRequest, NextResponse } from "next/server";
 
 const EMBED_SERVICE_URL = process.env.EMBED_SERVICE_URL ?? "https://motebit-embed.fly.dev";
-const EMBED_DAILY_LIMIT = 100;
+// One embed per chat turn (memory retrieval), so a single active user easily
+// reaches triple digits/day and shared/NAT IPs far more. 100 was too low and
+// bounced real users; 1000 is generous headroom while still capping abuse. The
+// cost is Fly compute on the embed service, not Anthropic spend.
+const EMBED_DAILY_LIMIT = 1000;
 
 function getClientIP(request: NextRequest): string {
   return (
@@ -19,10 +23,16 @@ function todayDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function checkRateLimit(
+export async function checkRateLimit(
   key: string,
   dailyLimit: number,
 ): Promise<{ allowed: boolean; remaining: number }> {
+  // Local dev: no Vercel KV configured → skip the limit (the origin allowlist
+  // still gates callers). Mirrors fetch/route.ts; the embed route previously
+  // lacked this and so denied ALL embeds under `next dev`.
+  if (!process.env.KV_REST_API_URL) {
+    return { allowed: true, remaining: dailyLimit };
+  }
   try {
     const { kv } = await import("@vercel/kv");
     const count = await kv.incr(key);
@@ -34,8 +44,15 @@ async function checkRateLimit(
       remaining: Math.max(0, dailyLimit - count),
     };
   } catch {
-    // KV unavailable — fail closed, deny the request
-    return { allowed: false, remaining: 0 };
+    // KV configured but unavailable — FAIL OPEN. Embedding is a best-effort
+    // enhancement: the client falls back to a local hash embedding on failure,
+    // and this route is origin-gated. A transient KV outage must not deny
+    // embeddings platform-wide (which silently degrades memory retrieval for
+    // every user). The daily cap is cost-control, not security, so briefly
+    // allowing extra embeds during an outage is the far smaller harm.
+    // (Contrast fetch/route.ts, which fails CLOSED — arbitrary URL fetching is
+    // a higher-risk surface where deny-on-uncertainty is correct.)
+    return { allowed: true, remaining: -1 };
   }
 }
 
