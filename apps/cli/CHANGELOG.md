@@ -1,5 +1,21 @@
 # motebit CLI Changelog
 
+## 1.6.0
+
+### Minor Changes
+
+- cb8ab21: A coordinator daemon now serves its interior to attached frontends — attach-mode parity (daemon-desktop unification, increment 6). The runtime-host protocol (v2) gains two typed frame pairs: `query` reads records (memory export, events, audit rows, trusted agents, state, gradient) and `act` performs the narrow set of typed panel affordances (delete/pin memory, set petname, set session sensitivity) — records vs acts stays typed end-to-end, and the closed kind registries live with the runtime, which refuses unknown kinds and malformed params fail-closed. An attached desktop's panels render the daemon's real interior, its mutation buttons act through the daemon's own choke points (memory deletion still emits the signed certificate), and its data export produces the full bundle over the wire.
+
+  Money-shaped acts are structurally absent from the act registry — R4 stays behind the policy gate and verified standing grants, never behind a panel button on a renderer. Protocol v1↔v2 skew refuses honestly with both versions named.
+
+- 063b4a2: `motebit serve` alongside a running coordinator now attaches instead of refusing — an MCP frontend over the coordinator's interior (daemon-desktop unification, attach-mode parity). Tools are listed pre-filtered by the coordinator's policy gate and execution is re-validated coordinator-side regardless of the frontend's pre-flight; memory writes run the coordinator's governance with `peer_agent` provenance; the synthetic chat tool rides the chat frame. An attached serve opens no database handle, registers nothing with the relay, and runs no worker mode — `motebit_task` is absent because signing authority never proxies over the socket; the coordinator stays the machine's one authority and its one relay presence.
+
+  Desktop slash commands gain the same parity: an attached window's `/state`, `/memories`, `/gradient`, and the rest of the shared command layer execute on the coordinator (validated against the command registry), and `/sensitivity` reads and sets the coordinator's live gate — the tier you see is the tier that actually gates.
+
+### Patch Changes
+
+- 05d1242: Self-test probe gates its completion poll on whether the agent is serving. The shared `cmdSelfTest` submits a self-delegation task; device auth and the sybil defenses are proven the moment it submits and returns a `task_id`. The 30-second completion poll is a secondary "live network participant" check that can only resolve when a worker executes the task, so `cmdSelfTest` now takes a `serving` flag (default false) and returns a terminal `auth_verified` status on non-serving surfaces instead of polling to a guaranteed timeout. The CLI daemon's `--self-test` runs inside its serving registration, so it passes `serving: true` and its behavior is unchanged — it still polls for execution.
+
 ## 1.5.0
 
 ### Minor Changes
