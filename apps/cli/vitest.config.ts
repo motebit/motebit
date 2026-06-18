@@ -8,5 +8,16 @@ import { defineConfig } from "vitest/config";
 // the standard excludes. (Coverage config is intentionally omitted: this
 // package's `test:coverage` collects without per-package thresholds.)
 export default defineConfig({
-  test: { exclude: ["**/node_modules/**", "**/dist/**", "**/coverage/**"] },
+  test: {
+    exclude: ["**/node_modules/**", "**/dist/**", "**/coverage/**"],
+    // 15s, not vitest's default 5s. These are integration-shaped tests — real
+    // in-memory SQLite + a full GoalScheduler `tickOnce()` — that finish in
+    // milliseconds in isolation but get CPU-starved when the Release job runs
+    // every package's `test:coverage` concurrently under turbo. A normally-fast
+    // `scheduler-approvals` tick intermittently blew the 5s default and failed
+    // the publish run (2026-06-18). The work is fast; the budget was too tight
+    // for the contention. A correct test still completes well under this ceiling
+    // — it only delays how long a genuinely hung test takes to surface.
+    testTimeout: 15_000,
+  },
 });
