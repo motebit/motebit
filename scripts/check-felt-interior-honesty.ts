@@ -86,6 +86,13 @@ if (featurePresent) {
 if (findings.length > 0) {
   console.error(`✗ check-felt-interior-honesty: ${findings.length} violation(s):`);
   for (const f of findings) console.error(`    ${f}`);
+  console.error(
+    "\nFix: in packages/panels/src/memory/felt-consolidation.ts, route the `verified` status\n" +
+      "     through verifyFeltCoverage — projectFeltConsolidation must emit only unverified\n" +
+      "     candidates; the `verified` evidence value derives from the cryptographically-checked\n" +
+      "     manifest the verifier returns, never a literal set before the check. Doctrine:\n" +
+      "     docs/doctrine/felt-interior.md.",
+  );
   process.exit(1);
 }
 

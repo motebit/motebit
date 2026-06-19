@@ -65,6 +65,12 @@ try {
     console.error("  Quickstart snippet ran, but its output did not match the documented result.");
     console.error(`  Missing expected line(s): ${missing.join("  |  ")}`);
     console.error("  Actual output:\n" + out.replace(/^/gm, "    "));
+    console.error(
+      "\n  Fix: the published @motebit/crypto + @motebit/verifier are the source of truth.\n" +
+        "       Update the ```typescript block in apps/docs/content/docs/developer/quickstart.mdx\n" +
+        "       so its real output matches the surrounding prose (or correct the prose claim to\n" +
+        "       match the code's actual output) — the page must run unmodified to the documented result.\n",
+    );
     fail("the Quickstart no longer produces the result the page claims");
   }
   console.log(

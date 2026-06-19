@@ -293,7 +293,14 @@ function main(): void {
     console.error(`    ${v.detail}`);
   }
   console.error(
-    `\nDoctrine: a service that deploys must be deployable (workflow exists), bootstrappable (.env.example exists), and honestly documented (no stale env vars).`,
+    "\nFix, by violation kind:\n" +
+      "  • missing workflow — add the named .github/workflows/deploy-<app>.yml (mirror an existing\n" +
+      "    deploy workflow), or rename services/<svc>/fly.toml's `app` to match an existing one.\n" +
+      "  • stale doc — remove the dead var from services/<svc>/.env.example (nothing in src reads it),\n" +
+      "    or restore the source read if it was dropped by mistake.\n" +
+      "  • undocumented read — document the var in services/<svc>/.env.example with its rotation notes,\n" +
+      "    alongside the existing entries.\n" +
+      "\nDoctrine: a service that deploys must be deployable (workflow exists), bootstrappable (.env.example exists), and honestly documented (no stale env vars).",
   );
   process.exit(1);
 }

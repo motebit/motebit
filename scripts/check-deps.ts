@@ -974,6 +974,15 @@ if (violations.length === 0) {
   for (const v of violations) {
     console.error(`  ERROR ${v}`);
   }
-  console.error("");
+  console.error(
+    "\n  Fix: the canonical layer DAG + permissive-floor membership live in the LAYER and\n" +
+      "       PERMISSIVE_PACKAGES tables in scripts/check-deps.ts (mirrored in\n" +
+      "       apps/docs/content/docs/operator/architecture.mdx).\n" +
+      "       • layer/cycle violation — move the offending import down the DAG, or invert the\n" +
+      "         dependency; a workspace dep encodes layer membership, so don't just delete it.\n" +
+      "       • permissive-floor purity — keep judgment/data out of protocol/crypto/sdk, or add\n" +
+      "         the symbol to the gate's allowlist with a reason if it is genuinely floor-pure.\n" +
+      "       • tsconfig references — align the package's tsconfig `references` with its deps.\n",
+  );
   process.exit(1);
 }

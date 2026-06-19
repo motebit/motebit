@@ -180,6 +180,13 @@ function main(): void {
     console.log(`✗ ${f.spec}:${f.line}  [${f.kind}]`);
     console.log(`    ${f.detail}\n`);
   }
+  console.log(
+    "Fix: add a `suite` field to each flagged wire-format block, naming a SuiteId\n" +
+      "     registered in packages/protocol/src/index.ts (the SuiteId union) and\n" +
+      "     packages/crypto/src/crypto-suite.ts (the dispatch table) — e.g.\n" +
+      '     `suite: "motebit-jcs-ed25519-b64-v1"`. For `unknown-suite-value`, either\n' +
+      "     correct the typo or register the new SuiteId in both files (cryptosuite agility).",
+  );
   process.exit(1);
 }
 

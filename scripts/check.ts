@@ -971,8 +971,20 @@ async function main(): Promise<void> {
   }
 
   if (failed) {
-    const failures = results.filter((r) => !r.ok).map((r) => r.gate.name);
-    process.stderr.write(`\nFailed: ${failures.join(", ")}\n`);
+    const failures = results.filter((r) => !r.ok);
+    process.stderr.write(`\n─── ${failures.length} drift defense(s) failed ───\n`);
+    for (const { gate } of failures) {
+      // Print the intent (defends) the JSDoc promised is "shown when the gate
+      // fails" — it wasn't, until now. The repair instruction (canonical source
+      // + the exact fix) is in the gate's own output flushed above; every gate
+      // is held to emitting one by check-gates-effective's repair-instruction
+      // contract (scripts/lib/gate-report.ts).
+      process.stderr.write(`\n  ✗ ${gate.name}\n    defends: ${gate.defends}\n`);
+    }
+    process.stderr.write(
+      `\nEach failing gate printed a repair instruction above — the canonical source and the ` +
+        `exact fix. Scroll up to that gate's own ✗ output.\n`,
+    );
     process.exit(1);
   }
 

@@ -161,6 +161,18 @@ async function main(): Promise<void> {
   if (failures.length > 0) {
     console.error(`\n✗ check-receipt-conformance: ${failures.length} failure(s):`);
     for (const f of failures) console.error(`  - ${f}`);
+    console.error(
+      "\nFix: all four surfaces verify the SAME canonical recipe (JCS → SHA-256 → Ed25519 →\n" +
+        "     suite-dispatch); a per-fixture disagreement means one wrapper drifted from it.\n" +
+        "     The `verifier=`/`crypto=`/`sec=`/`python=` flags name which surface dissented —\n" +
+        "     the odd one out is the drifted implementation:\n" +
+        "       • verifier  → packages/verifier/src/index.ts\n" +
+        "       • crypto    → packages/crypto/src/artifacts.ts (verifyExecutionReceipt / verifySovereignBinding)\n" +
+        "       • sec       → packages/state-export-client/src/receipt-document.ts\n" +
+        "       • python    → python/ reference verifier\n" +
+        "     Re-align the dissenting surface to @motebit/crypto's canonical primitive; never\n" +
+        "     loosen a fixture to make a tamper-NOT-rejected failure pass.",
+    );
     process.exit(1);
   }
   console.log(

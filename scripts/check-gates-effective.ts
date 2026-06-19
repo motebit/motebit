@@ -45,6 +45,8 @@ import { writeFileSync, unlinkSync, existsSync, readFileSync, readdirSync } from
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { hasRepairInstruction } from "./lib/gate-report.js";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 
@@ -2255,10 +2257,30 @@ function scanChangesetsForMajor(pkgName: string): { skip: boolean; reason: strin
   return { skip: false, reason: "" };
 }
 
+/**
+ * Gates exempt from the repair-instruction contract, each with a reason.
+ *
+ * The contract (see scripts/lib/gate-report.ts) asserts that when a gate bites
+ * it emits a repair instruction — a canonical-source pointer + an actionable
+ * directive. A gate belongs here ONLY if its failure genuinely cannot point at
+ * a canonical source or name a concrete edit (rare). Empty by intent: adding an
+ * entry is a deliberate admission that a gate's failure is not self-serviceable,
+ * which should almost always be fixed in the gate, not waived here.
+ */
+const REPAIR_CONTRACT_ALLOWLIST: Record<string, string> = {};
+
 interface ProbeResult {
   probe: Probe;
   gateExitCode: number | null;
+  /** The gate bit — exited non-zero on the perturbation. */
   ok: boolean;
+  /**
+   * The gate's failure output carried a repair instruction (undefined when the
+   * gate didn't bite, was skipped, or is allowlisted out of the contract).
+   */
+  repairOk?: boolean;
+  /** Present when the gate bit but its output failed the repair contract. */
+  repairReason?: string;
   error?: string;
   skipped?: { reason: string };
 }
@@ -2448,6 +2470,8 @@ function main(): void {
     let cleanup: (() => void) | null = null;
     let gateExitCode: number | null = null;
     let ok = false;
+    let repairOk: boolean | undefined;
+    let repairReason: string | undefined;
     let error: string | undefined;
     try {
       cleanup = probe.perturb();
@@ -2469,6 +2493,21 @@ function main(): void {
       if (!ok) {
         const clobbered = findClobberedPerturbations();
         if (clobbered.length > 0) concurrentModification = clobbered;
+      } else {
+        // The gate bit. Now assert it told the reader HOW to fix it — the
+        // repair-instruction contract. A gate that catches a violation but
+        // emits only "N problem(s)" makes the reader the parser; the contract
+        // requires a canonical-source pointer + an actionable directive. Run
+        // against the gate's REAL, probe-induced failure output, so this
+        // enforces the outcome (what's emitted) without dictating mechanism.
+        if (REPAIR_CONTRACT_ALLOWLIST[probe.script]) {
+          repairOk = true;
+        } else {
+          const captured = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+          const verdict = hasRepairInstruction(captured);
+          repairOk = verdict.ok;
+          repairReason = verdict.reason;
+        }
       }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
@@ -2482,7 +2521,7 @@ function main(): void {
       }
       activeCleanup = null;
     }
-    results.push({ probe, gateExitCode, ok, error });
+    results.push({ probe, gateExitCode, ok, repairOk, repairReason, error });
     if (concurrentModification) break; // tree is unstable — remaining probes are unreliable too
   }
 
@@ -2499,34 +2538,60 @@ function main(): void {
 
   // Summary
   process.stderr.write("\n─── Gate effectiveness summary ───\n");
-  let anyFailed = false;
+  let didNotBite = false;
+  let noRepair = false;
   let skippedCount = 0;
-  for (const { probe, gateExitCode, ok, error, skipped } of results) {
+  const noRepairGates: string[] = [];
+  for (const { probe, gateExitCode, ok, repairOk, repairReason, error, skipped } of results) {
     if (skipped) {
       process.stderr.write(`  ⚠ ${probe.script.padEnd(32)} skipped — ${skipped.reason}\n`);
       skippedCount++;
       continue;
     }
-    const status = ok ? "✓" : "✗";
+    // Two independent requirements: the gate must BITE (exit non-zero), and
+    // when it bites it must emit a REPAIR INSTRUCTION. A gate that bites but
+    // can't tell the reader how to fix it is still a failure of this meta-gate.
+    const passed = ok && repairOk !== false;
+    const status = passed ? "✓" : "✗";
     const detail = error
       ? `error: ${error}`
-      : ok
-        ? `gate exited ${gateExitCode} (non-zero) as expected`
-        : `gate exited ${gateExitCode} — did NOT catch the perturbation`;
+      : !ok
+        ? `gate exited ${gateExitCode} — did NOT catch the perturbation`
+        : repairOk === false
+          ? `caught it, but emitted NO repair instruction — ${repairReason}`
+          : `gate exited ${gateExitCode} (non-zero) + emitted a repair instruction`;
     process.stderr.write(`  ${status} ${probe.script.padEnd(32)} ${detail}\n`);
-    if (!ok) anyFailed = true;
+    if (!ok) didNotBite = true;
+    else if (repairOk === false) {
+      noRepair = true;
+      noRepairGates.push(probe.script);
+    }
   }
 
-  if (anyFailed) {
+  if (didNotBite) {
     process.stderr.write(
       `\nOne or more gates failed to catch a known violation. Either the gate is wrong, the probe is wrong, or the gate is decoration masquerading as defense.\n`,
     );
     process.exit(1);
   }
 
+  if (noRepair) {
+    process.stderr.write(
+      `\nOne or more gates caught the violation but did not emit a repair instruction:\n` +
+        noRepairGates.map((g) => `    - ${g}`).join("\n") +
+        `\n\nEvery gate failure must name the canonical source AND the concrete fix, so an agent or human ` +
+        `can close the loop from the failure text alone (the agentic-era invariant). Fix the gate's failure ` +
+        `output — the easiest path is to route it through \`failWithRepair({ invariant, canonical, fix })\` ` +
+        `from scripts/lib/gate-report.ts. Contract + doctrine: docs/doctrine/gate-repair-instructions.md.\n`,
+    );
+    process.exit(1);
+  }
+
   const provenCount = PROBES.length - skippedCount;
   const skipNote = skippedCount > 0 ? ` (${skippedCount} skipped — see ⚠ above)` : "";
-  process.stderr.write(`\n${provenCount} of ${PROBES.length} gates proven effective${skipNote}.\n`);
+  process.stderr.write(
+    `\n${provenCount} of ${PROBES.length} gates proven effective — each bites AND emits a repair instruction${skipNote}.\n`,
+  );
 }
 
 // Run only when invoked directly (pnpm check-gates-effective / tsx). Guarded so

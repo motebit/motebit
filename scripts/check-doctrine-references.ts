@@ -169,6 +169,10 @@ const BACKTICK_IDENT = /`([A-Za-z_][A-Za-z0-9_]*)`/g;
  * should be fixed in the doctrine, not waived here.
  */
 const IDENTIFIER_ALLOWLIST: Record<string, string> = {
+  // ----- Real symbols living in a corpus-excluded file -----
+  REPAIR_CONTRACT_ALLOWLIST:
+    "real constant — defined in scripts/check-gates-effective.ts, which is excluded from this gate's source-token corpus (its probe payloads would otherwise pollute the corpus, see EXCLUDE_FILES). `gate-repair-instructions.md` names it as the escape hatch for a gate whose failure genuinely can't be self-serviceable. Not stale — just unreachable by the corpus scan by design.",
+
   // ----- Anticipated future symbols -----
   // (DerivedFrom landed 2026-05-24 as the 8th RelationType member + reflection
   // provenance wiring — allowlist entry removed; it now resolves to a real

@@ -143,6 +143,12 @@ function main(): void {
   }
 
   for (const e of errors) console.log(`  ✗ ${e}`);
+  console.log(
+    "\nFix: the canonical registry is MONEY_IDENTITY_PATH in scripts/money-identity-path.ts.\n" +
+      "     • stale entry — remove the member from MONEY_IDENTITY_PATH (it names no real workspace package), or rename it to the real package.\n" +
+      "     • missing member — add the trigger-dependent package to MONEY_IDENTITY_PATH (a package that value-imports a MEMBERSHIP_TRIGGER must be a registry member).\n" +
+      "     Keep the registry and the trigger set in scripts/money-identity-path.ts in the same edit.",
+  );
   process.exit(1);
 }
 

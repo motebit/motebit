@@ -283,6 +283,12 @@ function main(): void {
   for (const f of findings) {
     process.stderr.write(`  ${f.loc}\n    ${f.message}\n\n`);
   }
+  process.stderr.write(
+    "Fix: the code is the source of truth — update each flagged README.md line to match\n" +
+      "     the named code value (tool names from create-motebit's agent template, PORT and\n" +
+      "     DEFAULT_SYNC_URL from apps/cli/src/runtime-factory.ts). If the code value changed\n" +
+      "     intentionally, edit the README 'What you see:' block to match it; never the reverse.\n\n",
+  );
   process.exit(1);
 }
 
