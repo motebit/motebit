@@ -25,7 +25,12 @@
 import type { MerkleTreeVersion } from "@motebit/protocol";
 import { verifyBySuite } from "./suite-dispatch.js";
 import { verifyMerkleInclusion, canonicalLeaf, resolveTreeHashVersion } from "./merkle.js";
-import { verifyToolInvocationReceipt, type SignableToolInvocationReceipt } from "./artifacts.js";
+import {
+  verifyToolInvocationReceipt,
+  verifyExecutionReceipt,
+  type SignableToolInvocationReceipt,
+  type SignableReceipt,
+} from "./artifacts.js";
 import { hash } from "./signing.js";
 // The @noble/ed25519 SHA-512 binding is performed in suite-dispatch.ts
 // as a side effect of module load. Importing verifyBySuite here is
@@ -412,9 +417,18 @@ export type TemporalBasis = "clockless" | "local_clock" | "ledger_anchored";
  * revocation set's wall-clock timestamp AND, when available, its deterministic
  * chain anchor (slot/height) — branch on the anchor, since chain time is
  * ordering, not wall-clock.
+ *
+ * `basis` is an evidence-grade ladder, weakest to strongest: `asserted` <
+ * `stapled` < `ledger`. `asserted` = holder-asserted freshness with NO external
+ * anchor ("we hold this set, refreshed at T, on our own say-so") — a consumer
+ * SHOULD down-weight it relative to a `stapled` signed freshness proof or a
+ * `ledger` chain root. The verdict carries the basis; it does NOT assign a
+ * weight — the consumer holds the tolerance and sets where its acceptance line
+ * falls. When `basis` is `asserted` the `asOf.anchor` is absent and the
+ * `asOf.timestamp_ms` is a holder-asserted bound, not an orderable anchor.
  */
 export interface RevocationFreshness {
-  basis: "ledger" | "stapled";
+  basis: "asserted" | "stapled" | "ledger";
   asOf: {
     /** Wall-clock ms the revocation set was current as of, when known. */
     timestamp_ms?: number;
@@ -1638,6 +1652,128 @@ export async function verifyReceipt(
     ...(delegations.length > 0 ? { delegations } : {}),
     ...(errors.length > 0 ? { errors } : {}),
   };
+}
+
+// ===========================================================================
+// Structured verification verdicts (the VerificationVerdict arc) — producers
+//
+// Phase A.2.1: the receipt-path verdict. Composes the existing primitives
+// (`verifyExecutionReceipt` + `verifySovereignBinding`) into the structured
+// verdict whose axes cannot silently collapse to `true`. The
+// token/grant/revocation verdict path (authority + a real revocation basis)
+// ships in the next increment; here authority is `unknown` and revocation is
+// `unchecked`, reported honestly rather than manufactured into a pass.
+// Doctrine: docs/doctrine/verify-family-fail-closed.md § "The VerificationVerdict arc".
+// ===========================================================================
+
+/**
+ * Structured verdict for a signed `ExecutionReceipt`. Unlike `verifyReceipt`
+ * (which returns a bare `valid` boolean), every axis here states what was
+ * ESTABLISHED and what remains UNKNOWN — so an `unverified` binding or an
+ * `unchecked` revocation cannot read as a pass. A bare receipt carries no
+ * authority/revocation context and is not a temporal claim; those axes report
+ * "not established," never a manufactured pass.
+ *
+ * `identityBinding` is `sovereign` when the `motebit_id` commits to the embedded
+ * key (offline-derivable) and `unverified` otherwise — `pinned`/`anchored`
+ * require an external anchor (known-keys map / identity file / transparency
+ * proof) not present on the bare offline path; that input lands with the next
+ * increment.
+ */
+export async function verifyReceiptVerdict(receipt: SignableReceipt): Promise<VerificationVerdict> {
+  const evidenceBasis: EvidenceRef[] = [];
+
+  // Resolve the embedded key (same rule as `verifyReceipt`).
+  let publicKey: Uint8Array | null = null;
+  if (receipt.public_key) {
+    try {
+      const b = hexToBytes(receipt.public_key);
+      if (b.length === 32) publicKey = b;
+    } catch {
+      publicKey = null;
+    }
+    evidenceBasis.push({ kind: "public_key", ref: receipt.public_key });
+  }
+  evidenceBasis.push({ kind: "receipt", ref: receipt.result_hash });
+
+  // integrity — the one clockless, always-establishable axis.
+  const integrity: IntegrityVerdict =
+    publicKey && (await verifyExecutionReceipt(receipt, publicKey)) ? "verified" : "invalid";
+
+  // identityBinding — sovereign is offline-derivable; pinned/anchored need an
+  // external anchor not present here, so the rung is sovereign-or-unverified.
+  let identityBinding: IdentityBindingVerdict = "unverified";
+  if (publicKey && receipt.public_key && receipt.motebit_id) {
+    identityBinding = (await verifySovereignBinding(receipt.motebit_id, receipt.public_key))
+      ? "sovereign"
+      : "unverified";
+  }
+
+  // A bare receipt has no authority/revocation context and makes no temporal
+  // claim — report "not established," never a manufactured pass.
+  const authority: AuthorityVerdict = "unknown";
+  const revocation: RevocationVerdict = { status: "unchecked" };
+  const temporalBasis: TemporalBasis = "clockless";
+
+  // repair — present on any failing axis; integrity is the more fundamental.
+  let repair: RepairInstruction | undefined;
+  if (integrity === "invalid") {
+    repair = {
+      code: "integrity.signature_invalid",
+      axis: "integrity",
+      summary: publicKey
+        ? "Ed25519 signature did not verify over the receipt's canonical bytes."
+        : "Receipt has no usable embedded public_key to verify against.",
+      canonical: "docs/doctrine/verify-family-fail-closed.md",
+      fix: publicKey
+        ? "The receipt was tampered or signed by a different key — re-fetch the authentic receipt; do not trust this copy."
+        : "Obtain the receipt with its embedded `public_key` (hex), or supply the signer's key out of band.",
+    };
+  } else if (identityBinding === "unverified") {
+    repair = {
+      code: "identity.binding_unverified",
+      axis: "identityBinding",
+      summary:
+        "Signature verifies, but the key-to-motebit_id binding is NOT established (integrity only).",
+      canonical: "docs/doctrine/identity-binding-verification.md",
+      fix: "The motebit_id does not commit to this key (not sovereign). Establish a higher rung — supply an identity file / known-keys map (pinned) or a transparency-log inclusion proof (anchored) — before treating this as identity-verified.",
+    };
+  }
+
+  return {
+    type: "receipt",
+    integrity,
+    identityBinding,
+    authority,
+    revocation,
+    temporalBasis,
+    evidenceBasis,
+    ...(repair ? { repair } : {}),
+  };
+}
+
+/**
+ * Fail-closed collapse of a verdict to a single boolean — the back-compat
+ * adapter shape (consumer #2's constraint). Returns `true` ONLY when every
+ * load-bearing axis is in its passing state: integrity verified, identity bound
+ * (sovereign/anchored/pinned), authority valid, revocation fresh. `unchecked` /
+ * `stale` / `unknown` / `unverified` / `revoked` all derive `false`, never a
+ * silent `true`.
+ *
+ * STRICTER than the legacy per-function booleans by design — a bare receipt
+ * with no authority/revocation context returns `false` here. If you only need
+ * "a real signed receipt from someone," branch on `integrity` + `identityBinding`
+ * directly rather than this collapse.
+ */
+export function isFullyVerified(verdict: VerificationVerdict): boolean {
+  return (
+    verdict.integrity === "verified" &&
+    (verdict.identityBinding === "sovereign" ||
+      verdict.identityBinding === "anchored" ||
+      verdict.identityBinding === "pinned") &&
+    verdict.authority === "valid" &&
+    verdict.revocation.status === "fresh"
+  );
 }
 
 /**

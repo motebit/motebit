@@ -87,6 +87,8 @@ const vc = await issueReputationCredential(
 - **`verify(artifact, options?)`** — Verify any artifact. Detects type automatically. Returns discriminated union.
 - **`verifyIdentityFile(content)`** — _(deprecated)_ Legacy identity verification. Use `verify()` instead.
 - **`parse(content)`** — Parse a `motebit.md` without verifying.
+- **`verifyReceiptVerdict(receipt)`** — Structured `VerificationVerdict` for a signed receipt: independent axes (integrity, identityBinding, authority, revocation, temporalBasis, evidenceBasis) + a first-class `repair`, with no top-level `valid` boolean to over-read. See [`docs/doctrine/verify-family-fail-closed.md`](../../docs/doctrine/verify-family-fail-closed.md).
+- **`isFullyVerified(verdict)`** — Fail-closed collapse of a verdict to a boolean: `true` only when every load-bearing axis passes (integrity verified, identity bound, authority valid, revocation fresh). Stricter than the legacy per-function booleans by design.
 
 ### Signing
 

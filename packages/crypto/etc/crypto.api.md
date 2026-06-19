@@ -740,6 +740,9 @@ export type IntegrityVerdict = "verified" | "invalid";
 export function isAnnouncementSurface(s: unknown): s is AnnouncementSurface;
 
 // @public
+export function isFullyVerified(verdict: VerificationVerdict): boolean;
+
+// @public
 export function isScopeNarrowed(parentScope: string, childScope: string): boolean;
 
 // @public (undocumented)
@@ -1060,7 +1063,7 @@ export interface RevocationFreshness {
         };
     };
     // (undocumented)
-    basis: "ledger" | "stapled";
+    basis: "asserted" | "stapled" | "ledger";
 }
 
 // @public
@@ -1828,6 +1831,9 @@ export function verifyReceiptSequence(chain: ReceiptChainEntry[]): Promise<{
     error?: string;
     index?: number;
 }>;
+
+// @public
+export function verifyReceiptVerdict(receipt: SignableReceipt): Promise<VerificationVerdict>;
 
 // @public
 export function verifyRelayMetadata(metadata: RelayMetadata, publicKey: Uint8Array): Promise<boolean>;

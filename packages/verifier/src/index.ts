@@ -99,3 +99,9 @@ export type {
   EvidenceRef,
   RepairInstruction,
 } from "@motebit/crypto";
+// The receipt-path verdict producer (Phase A.2.1) and the fail-closed collapse.
+// `verifyReceiptVerdict` returns the structured verdict for a signed receipt;
+// `isFullyVerified` collapses any verdict to the fail-closed boolean (true only
+// when every load-bearing axis passes — stricter than the legacy booleans by
+// design). The token/grant/revocation verdict path ships in the next increment.
+export { verifyReceiptVerdict, isFullyVerified } from "@motebit/crypto";
