@@ -133,6 +133,9 @@ export type ArtifactType = VerifyResult["type"];
 export type AttestationPlatform = HardwareAttestationClaim["platform"];
 
 // @public
+export type AuthorityVerdict = "valid" | "expired" | "insufficient" | "unknown";
+
+// @public
 export const BALANCE_WAIVER_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 export { BalanceWaiver }
@@ -444,6 +447,12 @@ export function ed25519Verify(signature: Uint8Array, message: Uint8Array, public
 export function encodeSecureEnclaveReceiptForTest(bodyBytes: Uint8Array, sigBytes: Uint8Array): string;
 
 // @public
+export interface EvidenceRef {
+    kind: string;
+    ref: string;
+}
+
+// @public
 export const EXECUTION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public (undocumented)
@@ -692,6 +701,9 @@ export function hexPublicKeyToDidKey(hexPublicKey: string): string;
 export function hexToBytes(hex: string): Uint8Array;
 
 // @public
+export type IdentityBindingVerdict = "sovereign" | "anchored" | "pinned" | "unverified" | "invalid";
+
+// @public
 export interface IdentityLogInclusionProof {
     readonly anchoredRoot: string;
     readonly index: number;
@@ -720,6 +732,9 @@ export interface IdentityVerifyResult extends BaseResult {
     // (undocumented)
     type: "identity";
 }
+
+// @public
+export type IntegrityVerdict = "verified" | "invalid";
 
 // @public
 export function isAnnouncementSurface(s: unknown): s is AnnouncementSurface;
@@ -966,6 +981,15 @@ export interface ReceiptVerifyResult extends BaseResult {
     type: "receipt";
 }
 
+// @public
+export interface RepairInstruction {
+    axis: "integrity" | "identityBinding" | "authority" | "revocation";
+    canonical?: string;
+    code: string;
+    fix: string;
+    summary: string;
+}
+
 // @public (undocumented)
 export interface ReputationCredentialSubject {
     // (undocumented)
@@ -1022,6 +1046,31 @@ export interface RevocationAnchorVerifyResult {
         chain_verified: boolean | null;
     };
     valid: boolean;
+}
+
+// @public
+export interface RevocationFreshness {
+    // (undocumented)
+    asOf: {
+        timestamp_ms?: number;
+        anchor?: {
+            chain: string;
+            slot?: number;
+            height?: number;
+        };
+    };
+    // (undocumented)
+    basis: "ledger" | "stapled";
+}
+
+// @public
+export type RevocationStatus = "fresh" | "stale" | "unchecked" | "revoked";
+
+// @public (undocumented)
+export interface RevocationVerdict {
+    freshness?: RevocationFreshness;
+    // (undocumented)
+    status: RevocationStatus;
 }
 
 // @public
@@ -1488,6 +1537,9 @@ export interface SuccessionRecord {
     timestamp: number;
 }
 
+// @public
+export type TemporalBasis = "clockless" | "local_clock" | "ledger_anchored";
+
 // @public (undocumented)
 export function toBase64Url(data: Uint8Array): string;
 
@@ -1579,6 +1631,24 @@ export interface VerificationError {
     message: string;
     // (undocumented)
     path?: string;
+}
+
+// @public
+export interface VerificationVerdict {
+    // (undocumented)
+    authority: AuthorityVerdict;
+    // (undocumented)
+    evidenceBasis: readonly EvidenceRef[];
+    // (undocumented)
+    identityBinding: IdentityBindingVerdict;
+    // (undocumented)
+    integrity: IntegrityVerdict;
+    repair?: RepairInstruction;
+    // (undocumented)
+    revocation: RevocationVerdict;
+    // (undocumented)
+    temporalBasis: TemporalBasis;
+    type: ArtifactType;
 }
 
 // @public

@@ -81,3 +81,21 @@ export type {
   DelegationRevocation,
   SubjectBindingV1,
 } from "@motebit/crypto";
+// The structured verification verdict (the VerificationVerdict arc — see
+// docs/doctrine/verify-family-fail-closed.md § "The VerificationVerdict arc").
+// Landing additive-first as the API contract a consumer types its integration
+// against; the verify functions that RETURN it ship in the next increment.
+// Re-exported so a consumer pinning @motebit/verifier reads the verdict shape
+// from the same surface it already consumes.
+export type {
+  VerificationVerdict,
+  IntegrityVerdict,
+  IdentityBindingVerdict,
+  AuthorityVerdict,
+  RevocationStatus,
+  RevocationVerdict,
+  RevocationFreshness,
+  TemporalBasis,
+  EvidenceRef,
+  RepairInstruction,
+} from "@motebit/crypto";

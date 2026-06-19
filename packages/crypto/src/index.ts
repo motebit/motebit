@@ -357,6 +357,128 @@ export type VerifyResult =
 
 export type ArtifactType = VerifyResult["type"];
 
+// ===========================================================================
+// Types — Structured Verification Verdict (the VerificationVerdict arc)
+//
+// The reshape named in docs/doctrine/verify-family-fail-closed.md § "The
+// VerificationVerdict arc": the verify family's bare booleans become one
+// structured verdict whose every axis states what was ESTABLISHED and what
+// remains UNKNOWN. The governing rule — no unknown / unchecked / stale /
+// integrity-only result may silently read `true` — is enforced by the SHAPE:
+// there is DELIBERATELY no top-level `valid` boolean to over-read; a consumer
+// branches on the axis it depends on.
+//
+// Landing additive-first, ahead of the coordinated major: this type is the API
+// contract consumer #2 (agency.computer) codes against now; the verify
+// functions that RETURN it, and the fail-closed back-compat adapter that
+// derives the old boolean, ship in the next increment. Until then the
+// boolean-returning verifiers remain authoritative. Co-designed with consumer
+// #2 — revocation as a freshness BASIS (not a bare label), `repair` first-class.
+// ===========================================================================
+
+/** Did the signature verify over canonical bytes? The one clockless, always-establishable axis. */
+export type IntegrityVerdict = "verified" | "invalid";
+
+/**
+ * The identity-binding rung (docs/doctrine/identity-binding-verification.md):
+ * how strongly the signing key is bound to the claimed `motebit_id`. `sovereign`
+ * = the id commits to the genesis key (offline, no operator); `anchored` =
+ * transparency-log inclusion confirmed on-chain; `pinned` = time-valid in the
+ * operator's succession chain; `unverified` = integrity only, key→id NOT
+ * established (the embedded-key footgun, named honestly); `invalid` = a binding
+ * was claimed and failed.
+ */
+export type IdentityBindingVerdict = "sovereign" | "anchored" | "pinned" | "unverified" | "invalid";
+
+/** Whether the authority (delegation grant / token scope) covering the action holds. */
+export type AuthorityVerdict = "valid" | "expired" | "insufficient" | "unknown";
+
+/** Revocation status. `unchecked` NEVER reads as "not revoked" — it is its own axis value. */
+export type RevocationStatus = "fresh" | "stale" | "unchecked" | "revoked";
+
+/**
+ * The temporal basis a time-dependent axis was evaluated against. `clockless` =
+ * no clock needed; `local_clock` = the verifier's own clock (first-person time,
+ * self-borne risk); `ledger_anchored` = a chain slot/height — ORDERING, not
+ * wall-clock (see docs/doctrine/verify-family-fail-closed.md).
+ */
+export type TemporalBasis = "clockless" | "local_clock" | "ledger_anchored";
+
+/**
+ * How a `RevocationStatus` was established, so an OFFLINE/P2P verifier can dial
+ * its OWN staleness tolerance rather than accept a bare "stale" (co-designed
+ * with consumer #2). `basis` is an agility axis — append a new value when a
+ * consumer needs one (docs/doctrine/agility-as-role.md). `asOf` carries the
+ * revocation set's wall-clock timestamp AND, when available, its deterministic
+ * chain anchor (slot/height) — branch on the anchor, since chain time is
+ * ordering, not wall-clock.
+ */
+export interface RevocationFreshness {
+  basis: "ledger" | "stapled";
+  asOf: {
+    /** Wall-clock ms the revocation set was current as of, when known. */
+    timestamp_ms?: number;
+    /** Deterministic chain anchor the set was current as of, when known. */
+    anchor?: { chain: string; slot?: number; height?: number };
+  };
+}
+
+export interface RevocationVerdict {
+  status: RevocationStatus;
+  /** Present when `status` derives from a freshness basis (a stapled proof or a ledger root). */
+  freshness?: RevocationFreshness;
+}
+
+/** A reference to the evidence an axis was established from (a receipt hash, a key id, a revocation root). */
+export interface EvidenceRef {
+  /** e.g. "receipt", "public_key", "revocation_root", "anchor". */
+  kind: string;
+  /** The evidence value or locator (hash, hex key, root, slot). */
+  ref: string;
+}
+
+/**
+ * Machine-readable repair instruction for a failing axis — first-class, not
+ * optional-if-time (consumer #2). `code` is for programmatic branching; `fix` +
+ * `canonical` are the legibility-on-contact pair ("learn the one axis you hit,"
+ * not the whole verifier). Same shape-of-intent as the gate-repair contract
+ * (scripts/lib/gate-report.ts), applied to verification.
+ */
+export interface RepairInstruction {
+  /** Stable, machine-readable reason code (e.g. "revocation.unchecked", "identity.embedded_key_only"). */
+  code: string;
+  /** Which axis failed. */
+  axis: "integrity" | "identityBinding" | "authority" | "revocation";
+  /** One-line human summary of what's wrong. */
+  summary: string;
+  /** The canonical source of truth to consult or fix, when applicable. */
+  canonical?: string;
+  /** The concrete next step to establish the axis. */
+  fix: string;
+}
+
+/**
+ * The structured verification verdict. DELIBERATELY carries no top-level `valid`
+ * boolean: a consumer MUST branch on the axis it depends on, so an `unchecked` /
+ * `stale` / `unverified` / `unknown` result cannot silently read as a pass.
+ * `repair` is present whenever any axis is not in its passing state
+ * (`integrity: "verified"`, `identityBinding` of sovereign/anchored/pinned,
+ * `authority: "valid"`, `revocation.status: "fresh"`); its presence-on-failure
+ * is enforced by the conformance corpus, not left to the implementer.
+ */
+export interface VerificationVerdict {
+  /** What the verdict is about — mirrors the artifact-type discriminants. */
+  type: ArtifactType;
+  integrity: IntegrityVerdict;
+  identityBinding: IdentityBindingVerdict;
+  authority: AuthorityVerdict;
+  revocation: RevocationVerdict;
+  temporalBasis: TemporalBasis;
+  evidenceBasis: readonly EvidenceRef[];
+  /** Present whenever any axis is not passing; absent only on a clean pass. */
+  repair?: RepairInstruction;
+}
+
 export interface VerifyOptions {
   expectedType?: ArtifactType;
   /** Clock skew tolerance in seconds for credential expiry checks. Default: 60. */
