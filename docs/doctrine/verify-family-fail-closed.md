@@ -50,6 +50,20 @@ Ship the verify-family reshape when **any one** of the following holds:
 
 Until a trigger fires, the verify family stays as-is: boolean returns, loud JSDoc, honest labels, internal money path fail-closed and gated.
 
+## The VerificationVerdict arc
+
+When a trigger fires, this is the shape of the reshape — recorded now so it ships as a coordinated arc, not a scramble. It is the executable-legibility build named in [`agentic-era-engineering.md`](agentic-era-engineering.md): the moat explaining itself through a verdict instead of a boolean.
+
+**Step zero is coordination, not code.** The verify family is a pinned API an external consumer (agency.computer) builds against under the `check-api-surface` guarantee ([`agency-proof-integration.md`](agency-proof-integration.md)). The reshape is a breaking major; the first move is to coordinate the break with consumer #1 — which is itself trigger #2 firing. A unilateral ship would violate the reciprocal obligation the whole verify family rests on.
+
+**The verdict.** Bare booleans become one structured `VerificationVerdict`, canonical across `@motebit/verifier`, the `motebit-verify` CLI, receipt.computer, relay verification, and external consumers. It states what was _established_ and what remains _unknown_, on independent axes — integrity, identity-binding, authority, revocation-freshness, temporal-basis (clockless / local-clock / ledger-anchored), evidence-basis — plus an optional repair instruction. The governing rule: **no unknown, unchecked, stale, or integrity-only result may silently collapse into `true`.** The revocation-freshness and temporal-basis axes are the structured home for the two seams sharpened above (self-mint-under-stale-grant; chain-ordering-not-wall-clock).
+
+**The hostile conformance corpus.** The arc ships with adversarial fixtures, not only happy paths: expired grants, stale revocation roots, embedded-key-only receipts, wrong identities, replay, clock-rollback, decomposed low-value sequences (the cumulative blast-radius trap), and revoke-then-self-mint-offline (the shrink-limit trap). A verdict that survives the corpus is one a stranger can trust without the author present.
+
+**The migration and the gate.** Boolean forms follow the four-field `@deprecated` contract ([`deprecation-lifecycle.md`](deprecation-lifecycle.md)); a backward-compatible adapter carries existing consumers across the major. A new drift gate requires every authority-sensitive call site to confront the verdict axes it depends on — the structural analog of `check-money-authority`, widened from the money path to all of verification.
+
+**The proof it's legible.** The arc is done when one independent consumer completes verification end-to-end with no repository-specific tribal knowledge. That is the executable-legibility test: a stranger consumes the guarantee correctly without the founder translating.
+
 ## Cross-cuts
 
 - [`identity-binding-verification.md`](identity-binding-verification.md) — the integrity-vs-binding split that makes the embedded-key fallback legible.
