@@ -284,6 +284,7 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "verifyExecutionReceipt",
     "verifyReceipt",
     "verifyReceiptVerdict",
+    "verifyDelegationTokenVerdict",
     "isFullyVerified",
     "signSovereignPaymentReceipt",
     "verifyReceiptChain",

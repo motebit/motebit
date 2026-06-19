@@ -88,6 +88,7 @@ const vc = await issueReputationCredential(
 - **`verifyIdentityFile(content)`** — _(deprecated)_ Legacy identity verification. Use `verify()` instead.
 - **`parse(content)`** — Parse a `motebit.md` without verifying.
 - **`verifyReceiptVerdict(receipt)`** — Structured `VerificationVerdict` for a signed receipt: independent axes (integrity, identityBinding, authority, revocation, temporalBasis, evidenceBasis) + a first-class `repair`, with no top-level `valid` boolean to over-read. See [`docs/doctrine/verify-family-fail-closed.md`](../../docs/doctrine/verify-family-fail-closed.md).
+- **`verifyDelegationTokenVerdict(token, grant, options?)`** — Structured `VerificationVerdict` for a per-tick token against its standing grant. Keeps `authority` and `revocation` orthogonal (a revoked grant reads `authority: "valid"` + `revocation: "revoked"`); `temporalMode: "wall_clock" | "ordering"` selects `temporalBasis` (`local_clock` vs `clockless`) so a clock-rollback is load-bearing in one and irrelevant in the other.
 - **`isFullyVerified(verdict)`** — Fail-closed collapse of a verdict to a boolean: `true` only when every load-bearing axis passes (integrity verified, identity bound, authority valid, revocation fresh). Stricter than the legacy per-function booleans by design.
 
 ### Signing

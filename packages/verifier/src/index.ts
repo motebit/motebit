@@ -83,12 +83,12 @@ export type {
 } from "@motebit/crypto";
 // The structured verification verdict (the VerificationVerdict arc — see
 // docs/doctrine/verify-family-fail-closed.md § "The VerificationVerdict arc").
-// Landing additive-first as the API contract a consumer types its integration
-// against; the verify functions that RETURN it ship in the next increment.
-// Re-exported so a consumer pinning @motebit/verifier reads the verdict shape
-// from the same surface it already consumes.
+// The verdict shape a consumer types its integration against, re-exported so a
+// consumer pinning @motebit/verifier reads it from the same surface it already
+// consumes.
 export type {
   VerificationVerdict,
+  VerdictSubject,
   IntegrityVerdict,
   IdentityBindingVerdict,
   AuthorityVerdict,
@@ -99,9 +99,15 @@ export type {
   EvidenceRef,
   RepairInstruction,
 } from "@motebit/crypto";
-// The receipt-path verdict producer (Phase A.2.1) and the fail-closed collapse.
-// `verifyReceiptVerdict` returns the structured verdict for a signed receipt;
-// `isFullyVerified` collapses any verdict to the fail-closed boolean (true only
-// when every load-bearing axis passes — stricter than the legacy booleans by
-// design). The token/grant/revocation verdict path ships in the next increment.
-export { verifyReceiptVerdict, isFullyVerified } from "@motebit/crypto";
+// The verdict producers and the fail-closed collapse. `verifyReceiptVerdict`
+// (A.2.1) returns the structured verdict for a signed receipt;
+// `verifyDelegationTokenVerdict` (A.2.2) does so for a per-tick token against
+// its standing grant (authority + revocation orthogonal; temporalMode selects
+// the temporal basis); `isFullyVerified` collapses any verdict to the
+// fail-closed boolean (true only when every load-bearing axis passes — stricter
+// than the legacy booleans by design).
+export {
+  verifyReceiptVerdict,
+  verifyDelegationTokenVerdict,
+  isFullyVerified,
+} from "@motebit/crypto";

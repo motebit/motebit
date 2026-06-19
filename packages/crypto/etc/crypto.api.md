@@ -133,7 +133,7 @@ export type ArtifactType = VerifyResult["type"];
 export type AttestationPlatform = HardwareAttestationClaim["platform"];
 
 // @public
-export type AuthorityVerdict = "valid" | "expired" | "insufficient" | "unknown";
+export type AuthorityVerdict = "valid" | "expired" | "not_yet_valid" | "insufficient" | "unknown";
 
 // @public
 export const BALANCE_WAIVER_SUITE: "motebit-jcs-ed25519-b64-v1";
@@ -1589,6 +1589,9 @@ export interface UnknownVerifyResult extends BaseResult {
     valid: false;
 }
 
+// @public
+export type VerdictSubject = ArtifactType | "delegation_token";
+
 // @public (undocumented)
 export interface VerifiableCredential<T = Record<string, unknown>> {
     // (undocumented)
@@ -1636,7 +1639,7 @@ export interface VerificationError {
     path?: string;
 }
 
-// @public
+// @public (undocumented)
 export interface VerificationVerdict {
     // (undocumented)
     authority: AuthorityVerdict;
@@ -1651,7 +1654,7 @@ export interface VerificationVerdict {
     revocation: RevocationVerdict;
     // (undocumented)
     temporalBasis: TemporalBasis;
-    type: ArtifactType;
+    type: VerdictSubject;
 }
 
 // @public
@@ -1730,6 +1733,14 @@ export function verifyDelegationChain(chain: DelegationToken[]): Promise<{
 
 // @public
 export function verifyDelegationRevocation(revocation: DelegationRevocation): Promise<boolean>;
+
+// @public
+export function verifyDelegationTokenVerdict(token: DelegationToken, grant: StandingDelegation, options?: {
+    revocations?: readonly DelegationRevocation[];
+    revocationFreshness?: RevocationFreshness;
+    now?: number;
+    temporalMode?: "wall_clock" | "ordering";
+}): Promise<VerificationVerdict>;
 
 // @public
 export function verifyDeletionCertificate(cert: DeletionCertificate, ctx: DeletionCertificateVerifyContext): Promise<DeletionCertificateVerifyResult>;

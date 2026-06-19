@@ -28,10 +28,14 @@ import { verifyMerkleInclusion, canonicalLeaf, resolveTreeHashVersion } from "./
 import {
   verifyToolInvocationReceipt,
   verifyExecutionReceipt,
+  verifyDelegation,
+  verifyStandingDelegation,
+  findGrantRevocation,
   type SignableToolInvocationReceipt,
   type SignableReceipt,
 } from "./artifacts.js";
-import { hash } from "./signing.js";
+import type { DelegationToken, StandingDelegation, DelegationRevocation } from "@motebit/protocol";
+import { hash, isScopeNarrowed } from "./signing.js";
 // The @noble/ed25519 SHA-512 binding is performed in suite-dispatch.ts
 // as a side effect of module load. Importing verifyBySuite here is
 // enough to guarantee that the primitive is ready before any verify
@@ -395,8 +399,14 @@ export type IntegrityVerdict = "verified" | "invalid";
  */
 export type IdentityBindingVerdict = "sovereign" | "anchored" | "pinned" | "unverified" | "invalid";
 
-/** Whether the authority (delegation grant / token scope) covering the action holds. */
-export type AuthorityVerdict = "valid" | "expired" | "insufficient" | "unknown";
+/**
+ * Whether the authority (delegation grant / token scope) covering the action
+ * holds. `valid` = a check ran and held; `expired` / `not_yet_valid` = outside
+ * the validity window (past / future) under the verdict's `temporalBasis`;
+ * `insufficient` = scope/structure does not confer it; `unknown` = no authority
+ * context to evaluate (a bare receipt) — never a manufactured pass.
+ */
+export type AuthorityVerdict = "valid" | "expired" | "not_yet_valid" | "insufficient" | "unknown";
 
 /** Revocation status. `unchecked` NEVER reads as "not revoked" — it is its own axis value. */
 export type RevocationStatus = "fresh" | "stale" | "unchecked" | "revoked";
@@ -480,9 +490,17 @@ export interface RepairInstruction {
  * `authority: "valid"`, `revocation.status: "fresh"`); its presence-on-failure
  * is enforced by the conformance corpus, not left to the implementer.
  */
+/**
+ * What a `VerificationVerdict` is about. A superset of `ArtifactType` — adds
+ * `delegation_token` for the per-tick token/grant path (which is not a
+ * top-level auto-detected artifact). Widening is additive: existing values are
+ * unchanged.
+ */
+export type VerdictSubject = ArtifactType | "delegation_token";
+
 export interface VerificationVerdict {
-  /** What the verdict is about — mirrors the artifact-type discriminants. */
-  type: ArtifactType;
+  /** What the verdict is about. */
+  type: VerdictSubject;
   integrity: IntegrityVerdict;
   identityBinding: IdentityBindingVerdict;
   authority: AuthorityVerdict;
@@ -1774,6 +1792,200 @@ export function isFullyVerified(verdict: VerificationVerdict): boolean {
     verdict.authority === "valid" &&
     verdict.revocation.status === "fresh"
   );
+}
+
+/**
+ * Authority for a per-tick token against its grant — WITHOUT the revocation
+ * check (that is its own axis). Structural fit first (a tick of THIS grant,
+ * scope narrowed, TTL bounded, grant signed), then the temporal window per the
+ * mode. In `ordering` mode the wall-clock window is NOT consulted: validity
+ * rests on the signature + grant structure at the token's own slot, so a
+ * rolled-back verifier clock is irrelevant. In `wall_clock` mode the token's
+ * `not_before`/`expires_at` are judged against `now` — a rolled-back clock can
+ * read a valid token as `not_yet_valid`.
+ */
+async function computeTokenAuthority(
+  token: DelegationToken,
+  grant: StandingDelegation,
+  now: number,
+  mode: "wall_clock" | "ordering",
+): Promise<AuthorityVerdict> {
+  if (token.grant_id !== grant.grant_id) return "insufficient";
+  if (
+    token.delegator_id !== grant.delegator_id ||
+    token.delegator_public_key !== grant.delegator_public_key ||
+    token.delegate_id !== grant.delegate_id ||
+    token.delegate_public_key !== grant.delegate_public_key
+  ) {
+    return "insufficient";
+  }
+  if (!isScopeNarrowed(grant.scope, token.scope)) return "insufficient";
+  if (token.expires_at - token.issued_at > grant.max_token_ttl_ms) return "insufficient";
+
+  // The grant's own validity (signature + lifetime), at the temporal reference —
+  // the verifier's `now` (wall_clock) or the token's own slot (ordering). NOT the
+  // revocation check: that is the orthogonal `revocation` axis.
+  const ref = mode === "ordering" ? (token.not_before ?? token.issued_at) : now;
+  if (!(await verifyStandingDelegation(grant, { checkExpiry: true, now: ref }))) {
+    return "insufficient";
+  }
+
+  if (mode === "ordering") return "valid"; // ordering decides; wall-clock window not consulted
+
+  if (token.not_before !== undefined && now < token.not_before) return "not_yet_valid";
+  if (token.expires_at < now) return "expired";
+  return "valid";
+}
+
+function buildVerdictRepair(
+  integrity: IntegrityVerdict,
+  identityBinding: IdentityBindingVerdict,
+  authority: AuthorityVerdict,
+  revocation: RevocationVerdict,
+): RepairInstruction | undefined {
+  if (integrity === "invalid") {
+    return {
+      code: "integrity.signature_invalid",
+      axis: "integrity",
+      summary: "Ed25519 signature did not verify over the artifact's canonical bytes.",
+      canonical: "docs/doctrine/verify-family-fail-closed.md",
+      fix: "Re-fetch the authentic artifact; do not trust this copy.",
+    };
+  }
+  if (identityBinding === "unverified" || identityBinding === "invalid") {
+    return {
+      code: "identity.binding_unverified",
+      axis: "identityBinding",
+      summary: "Signature verifies, but the key-to-motebit_id binding is NOT established.",
+      canonical: "docs/doctrine/identity-binding-verification.md",
+      fix: "Establish a higher rung — supply an identity file / known-keys map (pinned) or a transparency-log inclusion proof (anchored) — before treating this as identity-verified.",
+    };
+  }
+  if (authority !== "valid") {
+    return {
+      code: `authority.${authority}`,
+      axis: "authority",
+      summary: `Authority is "${authority}", not "valid" — the token does not currently confer the authority it claims.`,
+      canonical: "spec/standing-delegation-v1.md",
+      fix:
+        authority === "not_yet_valid"
+          ? "The token's activation window has not started under this temporal basis — do not act until its slot; if you judge validity by ordering, set temporalMode: 'ordering'."
+          : authority === "expired"
+            ? "The token's validity window has passed — mint a fresh tick under the grant."
+            : "The token is not a valid tick of this grant (scope/parties/TTL/grant). Re-mint within the grant's ceiling.",
+    };
+  }
+  if (revocation.status !== "fresh") {
+    return {
+      code: `revocation.${revocation.status}`,
+      axis: "revocation",
+      summary:
+        revocation.status === "revoked"
+          ? "The standing grant behind this token is REVOKED — every tick minted under it is dead authority."
+          : revocation.status === "unchecked"
+            ? "Revocation was not checked — no revocation set was supplied."
+            : "The revocation set is stale beyond the accepted tolerance.",
+      canonical: "docs/doctrine/verify-family-fail-closed.md",
+      fix:
+        revocation.status === "revoked"
+          ? "Reject this token and every token minted under the grant; the only safe action is to stop."
+          : revocation.status === "unchecked"
+            ? "Supply the revocation set (build the isRevoked seam via findGrantRevocation) and re-verify."
+            : "Obtain a fresher revocation set (a newer ledger root or stapled freshness proof) and re-verify.",
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Structured verdict for a per-tick `DelegationToken` evaluated against its
+ * `StandingDelegation` (Phase A.2.2). The token/grant/revocation path — where
+ * the axes most need to stay orthogonal: a token can be perfectly in-TTL and
+ * well-formed (`authority: "valid"`) while the grant behind it is revoked
+ * (`revocation: "revoked"`), and a bare boolean would read a pass. The verdict
+ * keeps them separate so no consumer composes a pass over a dead grant.
+ *
+ * `temporalMode` selects how the token's validity window is judged, reported as
+ * `temporalBasis`:
+ *   - `"wall_clock"` (default): `not_before`/`expires_at` checked against `now`
+ *     — `temporalBasis: "local_clock"`. A rolled-back clock can flip a valid
+ *     token to `authority: "not_yet_valid"` (the live behavior of a wall-clock
+ *     monitor today).
+ *   - `"ordering"`: the wall-clock window is NOT consulted; validity rests on
+ *     the signature + grant structure at the token's slot — `temporalBasis:
+ *     "clockless"`, so a wall-clock rollback is irrelevant.
+ *
+ * Revocation is ORTHOGONAL to authority, checked over the caller's `revocations`
+ * set: `revoked` when a binding revocation is found, `fresh` when the set was
+ * consulted and the grant is absent, `unchecked` when no set was supplied.
+ * `revocationFreshness` (basis + asOf) describes the set the caller holds — for
+ * a self-hosted offline set, `{ basis: "asserted", … }`, which the consumer
+ * down-weights.
+ */
+export async function verifyDelegationTokenVerdict(
+  token: DelegationToken,
+  grant: StandingDelegation,
+  options?: {
+    revocations?: readonly DelegationRevocation[];
+    revocationFreshness?: RevocationFreshness;
+    now?: number;
+    temporalMode?: "wall_clock" | "ordering";
+  },
+): Promise<VerificationVerdict> {
+  const now = options?.now ?? Date.now();
+  const temporalMode = options?.temporalMode ?? "wall_clock";
+  const evidenceBasis: EvidenceRef[] = [
+    { kind: "delegation_token", ref: token.signature },
+    { kind: "grant", ref: grant.grant_id },
+    { kind: "public_key", ref: token.delegator_public_key },
+  ];
+
+  // integrity — the token's signature, clockless (the window is the authority axis).
+  const integrity: IntegrityVerdict = (await verifyDelegation(token, { checkExpiry: false }))
+    ? "verified"
+    : "invalid";
+
+  // identityBinding — sovereign binding of the token's signer (the delegator).
+  const identityBinding: IdentityBindingVerdict = (await verifySovereignBinding(
+    token.delegator_id,
+    token.delegator_public_key,
+  ))
+    ? "sovereign"
+    : "unverified";
+
+  const authority = await computeTokenAuthority(token, grant, now, temporalMode);
+
+  // revocation — orthogonal to authority; consulted over the caller's set.
+  let revocation: RevocationVerdict;
+  if (!options?.revocations) {
+    revocation = { status: "unchecked" };
+  } else {
+    const rev = await findGrantRevocation(grant, options.revocations);
+    const freshness: RevocationFreshness = options.revocationFreshness ?? {
+      basis: "asserted",
+      asOf: {},
+    };
+    if (rev) {
+      revocation = { status: "revoked", freshness };
+      evidenceBasis.push({ kind: "revocation", ref: rev.signature });
+    } else {
+      revocation = { status: "fresh", freshness };
+    }
+  }
+
+  const temporalBasis: TemporalBasis = temporalMode === "ordering" ? "clockless" : "local_clock";
+  const repair = buildVerdictRepair(integrity, identityBinding, authority, revocation);
+
+  return {
+    type: "delegation_token",
+    integrity,
+    identityBinding,
+    authority,
+    revocation,
+    temporalBasis,
+    evidenceBasis,
+    ...(repair ? { repair } : {}),
+  };
 }
 
 /**
