@@ -24,6 +24,22 @@ The exposure is **external consumers** calling `verifyStandingDelegation(grant)`
 
 When the trigger fires, the verify family's bare booleans become structured verdicts. A verify function returns what it actually established — signature validity, revocation-checked-or-not, key-source — and the type system forces the consumer to confront each axis. `isRevoked` stays an injected seam (the I/O-free contract holds); what changes is that _not wiring it_ becomes visible in the return type instead of silently collapsing into `true`. Existing boolean forms follow the four-field `@deprecated` contract per [`deprecation-lifecycle.md`](deprecation-lifecycle.md).
 
+## Offline revocation freshness — the pure-P2P case
+
+The `verifyStandingDelegation` seam above is "inject `isRevoked`, or a revoked grant reads `true`." That presumes the caller _can_ build `isRevoked`. The harder case surfaced in the cold-start / pure-P2P thread (June 2026, agency.computer discussion): a worker holding a long-lived standing delegation, **offline**, with no path to the revocation feed. How does an offline party prove a negative — that a grant has _not_ been revoked — without a real-time freshness oracle?
+
+It can't. The strong form is information-theoretically unclosable: you cannot prove a real-time negative without touching reality, and any scheme that claims to has hidden an oracle somewhere. So the doctrine does not try to _close_ it — it shrinks, converts, and bounds it:
+
+1. **Shrink (shipped).** The long-lived grant never _acts_; it only authorizes minting short-TTL per-tick tokens (`max_token_ttl_ms`). The authority that touches an action self-expires fast, so a fully-dark agent's exposure is bounded to one token TTL — a window the _delegator_ chooses when setting the ceiling. The zombie-credential window is a dial someone set, not an unbounded hole.
+
+2. **Convert the negative into a positive (designed).** The practical case closes OCSP-stapling-style: the _delegate_ — the party that wants to be trusted — carries a recent signed "grant not revoked as of `T`" staple and presents it with the token. The offline verifier never proves a negative; it checks a recent signed _positive_ against its own clock and its own max-staleness tolerance (first-person freshness — the same shape as first-person time and first-person trust). The freshness burden sits on whoever was last online and wants the trust, not on the offline verifier. The relay is the freshness oracle here — **coordination, not custody**, in-grain with the economic model. It is the move the whole system makes: you don't prove global trustworthiness, you carry signed receipts; you don't prove not-revoked, you carry a recent signed still-valid.
+
+3. **Bound the blast radius (partly shipped).** Freshness _required_ scales with what's crossing the boundary. Stale-but-signed authority clears low-value, low-sensitivity actions; anything high-value, or crossing a high-sensitivity metabolic membrane, demands a fresh staple or a live check — which is exactly the R4 fail-closed rule already shipped (`verifyGrantForTurn` against the held revocation set; no config disables it, per [`memory-never-confers-authority.md`](memory-never-confers-authority.md)). Pure-offline P2P serves the low-stakes majority unbothered; the high-stakes minority is precisely the set where a coordination touch is already acceptable.
+
+The endgame of move 2 is epoch-root revocation accumulators — periodic signed revocation-set roots with non-membership proofs — over the existing Merkle / transparency-log infrastructure ([`merkle-tree-hash-versioning.md`](merkle-tree-hash-versioning.md)); freshness then equals how recent a root the verifier holds. Heavier than the staple; deferred until the staple proves insufficient.
+
+**Shipped:** the token-TTL bound plus the R4 fail-closed gate. **Designed, deferred-with-triggers:** the signed freshness staple and the epoch-accumulator endgame. The trigger is a specialization of trigger #2 below — **a second external consumer that needs high-value, pure-P2P, offline revocation**. Internally there is no exposure (R4 is gated); the seam bites only a hypothetical offline high-value external path, and the consumer who needs it forces the staple's shape exactly when they arrive — the consumer-forces-need / producer-forces-shape pattern. We keep it on the books as an open seam with a named trigger rather than ship a freshness oracle that would quietly become the gatekeeper this family exists to refuse.
+
 ## Named triggers for the major
 
 Ship the verify-family reshape when **any one** of the following holds:
@@ -37,6 +53,7 @@ Until a trigger fires, the verify family stays as-is: boolean returns, loud JSDo
 ## Cross-cuts
 
 - [`identity-binding-verification.md`](identity-binding-verification.md) — the integrity-vs-binding split that makes the embedded-key fallback legible.
+- [`merkle-tree-hash-versioning.md`](merkle-tree-hash-versioning.md) — the Merkle / transparency-log infrastructure the epoch-accumulator endgame of offline revocation freshness would build on.
 - [`memory-never-confers-authority.md`](memory-never-confers-authority.md) — why the internal R4 path is already structurally fail-closed.
 - [`agency-proof-integration.md`](agency-proof-integration.md) — the reciprocal API obligation that makes a unilateral break a doctrine violation.
 - [`release-versioning.md`](release-versioning.md) — majors are promises; the reshape rides a deliberate major.
