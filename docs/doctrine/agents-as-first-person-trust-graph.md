@@ -35,11 +35,20 @@ but the runtime treats it as a **discovery hint, never an override** of
 first-person trust — the same posture as additive hardware-attestation scoring
 (see [`hardware-attestation.md`](hardware-attestation.md)): a signal, never a gate.
 
-This is the moat, made structural. A global reputation score is sybil-bait — a
-number to farm, buy, or game. A first-person trust graph has nothing to game: each
-motebit earns its own edges from receipts it holds, and there is no portable score
-to inflate. Sovereignty and sybil-resistance are the _same property_ here, and
-both follow from refusing the global score. See
+This is the moat, made structural — but state it precisely, because refusing the
+global score is _necessary, not sufficient_. A global reputation score is
+sybil-bait: a single number to farm, buy, or game, where one compromised primitive
+becomes universal authority. Refusing it removes that vector entirely — there is no
+portable score to inflate. What makes the refusal _resist_ sybils, rather than
+merely deny them a leaderboard, is the rest of the shape: each motebit earns its
+own edges from receipts it holds, so a minted identity starts at zero and must pay
+real bilateral-interaction cost to earn trust from anyone; and because first-person
+trust is non-transitive, two sybils vouching for each other gains nothing — A's
+trust in B never transits to C. So the moat is a conjunction: refusing the global
+score defeats score-inflation (necessary); costly, non-transitive, pairwise-earned
+edges defeat mint-and-collude (the rest of sufficient). Sovereignty and
+sybil-resistance are tightly coupled here — both lean on refusing the global score
+— but sybil-resistance is that conjunction, not the single move. See
 [`security-boundaries.md`](security-boundaries.md).
 
 The graph the semiring ranks
