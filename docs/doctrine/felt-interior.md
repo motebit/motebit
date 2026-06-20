@@ -141,7 +141,8 @@ across the flat surfaces ([`panels-pattern.md`](panels-pattern.md)):
 - **Trust** — `AgentTrustRecord` first-person edges, the derived face
   (`deriveAgentSigil`), the human-comparable `wordFingerprint`, and the signed
   money-history projection (`AgentEconomicSummary`) are shipped; the felt move is
-  the owner glancing at _their_ graph deepening, not a stranger reading a roster.
+  the owner glancing at _their_ graph deepening, not a stranger reading a roster
+  (specced in §6).
 - **Memory** — the index and decay are real; felt is the owner sensing the graph
   hold and shed, calmly, without reading rows (specced in §5).
 
@@ -201,6 +202,59 @@ count is the most natural vanity metric of the three. Not a memory-count score, 
 or growth chart — a rising number is the gameable aggregate §1 refuses, turned inward,
 and the likeliest place to manufacture performance anxiety. The record is the graph's
 _shape and its quiet hold-and-shed_, honest on its still days, never a number that goes up.
+
+## 6. The trust record — the relationship register
+
+The third interior axis is **trust**: not what the interior _holds_ (memory, §5) or what
+it _changed_ (consolidation, §2), but **whom it has come to know**. Memory and
+consolidation are the self-axis in two registers; trust is the **relational** register —
+the first-person bilateral edges of
+[`agents-as-first-person-trust-graph.md`](agents-as-first-person-trust-graph.md), the
+peers this motebit has actually transacted with. The felt move (§4) is the owner feeling
+their graph _deepen_ — not reading a roster, not watching a score.
+
+The substance is shipped: the `AgentTrustRecord` first-person edges (the **Known** tab —
+proven _from receipts_, as against **Discover**, the relay's as-yet-unproven claim), the
+key-derived sigil, the human-comparable `wordFingerprint`, and the receipt-derived
+`AgentEconomicSummary`. The elevation is a calm resting summary built in the shared agents
+controller as `resolveFeltTrust` → `FeltTrustRecord`, the relational analogue of
+`resolveFeltMemory`, rendered on the flat surfaces where the Agents panel's Known tab
+already lives (desktop, web, mobile). Spatial defers to its own register — peers as
+satellites and attractors around the creature, never a panel
+([`spatial-as-endgame.md`](spatial-as-endgame.md)).
+
+**The honesty model is the third distinct floor, and it is the moat turned inward.**
+Consolidation shows detail _because it is signed_ (§2); memory shows shape _because it is
+unsigned-local_ (§5); trust shows **depth because it is proven, and refuses the aggregate
+because the aggregate is the very thing the trust graph exists to refuse.**
+
+- **Proven-only.** The record is built from **Known** edges alone — the peers proven from
+  receipts. A **Discover** row is a relay claim, never an earned edge, and must not enter
+  the felt mass: §2's "detail ⟺ verified" reappears on the relational axis as "felt ⟺
+  proven-from-receipts." A `blocked` edge is not trust _held_ and is excluded from the
+  deepening mass, exactly as a tombstoned memory is excluded from the resting mass (§5).
+- **No inward global score, ever.** `FeltTrustRecord` carries no reputation, rank, or
+  aggregate-quality field — claiming one is unrepresentable by the _type_
+  ([`runtime-invariants-over-prompt-rules.md`](runtime-invariants-over-prompt-rules.md)).
+  Refusing the global reputation score is the **necessary core of sybil-resistance** (§1;
+  [`agents-as-first-person-trust-graph.md`](agents-as-first-person-trust-graph.md)); minting
+  that score _for the owner, about the owner's own graph_ would re-introduce the exact
+  gameable aggregate, simply pointed inward — the §1 sybil-bait in its purest form. The
+  record is **first-person counts at rest** (peers held, tiers earned, hardware-rooted peers
+  present, peers settled-with), never a number that ranks the graph or that climbs over time.
+- **Present shape, not trend.** "Deepening" is a felt _quality of the standing graph_ — that
+  it has taken shape, that some edges have climbed the ladder — rendered as the present tier
+  distribution, never a delta, streak, or growth chart (the §"What not to build" bound, which
+  bites hard here: a peer count is as natural a vanity metric as a memory count).
+- **Money is counts-only here.** The felt trust record may say _that_ the owner has settled
+  work with N peers (a count — safe to glance, safe if shoulder-surfed, §"Gotchas"); the
+  per-peer signed net stays in the existing per-row `formatPeerEconomics` projection, never
+  aggregated into the resting headline. Counts-not-content holds for the relational axis as
+  for the others.
+
+Locked by `check-felt-interior-honesty` (invariant 4): `FeltTrustRecord` declares no
+`score`/`reputation`/`rank`/`ranking`/`aggregate` field — the inward global-score refusal
+made structural, the same way invariant 3 locks the memory record content-free.
 
 ## What not to build
 
