@@ -166,8 +166,14 @@ graph's shape and what is fading. The elevation is a calm resting summary — th
 sensing the graph hold and shed, **without reading rows** — built in the shared memory
 controller as `resolveFeltMemory` → `FeltMemoryRecord`, the parallel to consolidation's
 `resolveFeltConsolidation`, rendered on the flat surfaces where the Memory panel already
-lives (desktop, web, mobile). Spatial defers to its own register — a creature-ambient
-depth cue, a Presentation primitive, never a panel ([`panels-pattern.md`](panels-pattern.md)).
+lives (desktop, web, mobile). Spatial takes its own register — the standing mass becomes
+the **Environment** primitive ([`spatial-as-endgame.md`](spatial-as-endgame.md)): a faint
+ambient mote haze surrounding the creature, density saturating with the held mass and tone
+carrying the present hold/shed balance, never a panel and never a number. The §5 honesty
+survives there structurally — the haze reads only the content-free `{ held, fading }`
+counts, and the saturating density is the guard that the most natural vanity metric (a
+rising memory count) cannot become a climbing score; locked by `check-felt-interior-honesty`
+invariant 5 (`EnvironmentExpression` carries no raw count/score field).
 
 **The honesty model differs from consolidation's, and the difference is the spec.**
 Consolidation's record is honest-by-construction-via-_signing_: a signed manifest gives

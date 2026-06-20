@@ -896,6 +896,37 @@ export class SpatialApp {
     };
   }
 
+  /**
+   * Content-free memory-mass summary for the ambient memory environment
+   * (`docs/doctrine/felt-interior.md` §5, spatial register). Returns only two
+   * counts — never memory content, never sensitivity. `held` is the live
+   * (non-tombstoned) mass; `fading` mirrors `auditMemoryGraph`'s near-death
+   * definition (decayed below the threshold, not pinned), computed UNCAPPED here
+   * (the audit caps its list at 10; a coarse haze needs the true fraction). The
+   * decay formula is inlined per the <10-line layer-boundary util rule — the
+   * canonical form is `computeDecayedConfidence` in `@motebit/memory-graph`,
+   * which spatial does not depend on.
+   */
+  async memoryEnvironmentSummary(): Promise<{ held: number; fading: number }> {
+    if (!this.runtime) return { held: 0, fading: 0 };
+    const NEAR_DEATH = 0.15;
+    const { nodes } = await this.runtime.memory.exportAll();
+    const now = Date.now();
+    let held = 0;
+    let fading = 0;
+    for (const n of nodes) {
+      if (n.tombstoned) continue;
+      held++;
+      if (n.pinned) continue;
+      const decayed =
+        n.half_life <= 0
+          ? n.confidence
+          : n.confidence * Math.pow(0.5, (now - n.created_at) / n.half_life);
+      if (decayed > 0 && decayed < NEAR_DEATH) fading++;
+    }
+    return { held, fading };
+  }
+
   // === Goals (one-shot) ===
 
   async *executeGoal(goalId: string, prompt: string): AsyncGenerator<PlanChunk> {

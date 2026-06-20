@@ -4,6 +4,7 @@ export * from "./adapter.js";
 export * from "./expression.js";
 export * from "./credential-satellites.js";
 export * from "./trust-satellites.js";
+export * from "./memory-environment.js";
 export * from "./receipt-summary.js";
 export { buildReceiptArtifact } from "./receipt-artifact.js";
 export { buildComputerSessionReceiptArtifact } from "./computer-session-receipt-artifact.js";

@@ -20,7 +20,10 @@ import { SpatialVoicePipeline } from "./voice-pipeline";
 import type { OpenAITTSVoice } from "@motebit/voice";
 import { bindHud, type ConnectionState } from "./hud";
 import { ReceiptSatelliteCoordinator } from "./receipt-satellites";
-import { TrustConstellationCoordinator } from "@motebit/render-engine";
+import {
+  TrustConstellationCoordinator,
+  MemoryEnvironmentCoordinator,
+} from "@motebit/render-engine";
 
 // === DOM elements ===
 
@@ -157,6 +160,33 @@ async function refreshTrustConstellation(): Promise<void> {
 }
 // Slow ambient refresh — the graph deepens over a session, not per frame.
 setInterval(() => void refreshTrustConstellation(), 30_000);
+
+// Memory environment — the standing memory mass as the ambient mote haze
+// surrounding the creature (felt-interior §5, spatial register). Pulled like the
+// trust constellation: refreshed on AI-ready and on a slow interval (the mass
+// holds and sheds slowly). The outer ambient shell, beyond the receipt ring.
+const memoryEnvironment = new MemoryEnvironmentCoordinator();
+let memoryEnvironmentAttached = false;
+function ensureMemoryEnvironment(): MemoryEnvironmentCoordinator {
+  if (memoryEnvironmentAttached) return memoryEnvironment;
+  const group = app.adapter.getCreatureGroup();
+  if (group) {
+    memoryEnvironment.attach(group);
+    memoryEnvironmentAttached = true;
+  }
+  return memoryEnvironment;
+}
+async function refreshMemoryEnvironment(): Promise<void> {
+  if (!app.getRuntime()) return;
+  try {
+    const summary = await app.memoryEnvironmentSummary();
+    ensureMemoryEnvironment().setMemory(summary);
+  } catch {
+    // Fail-soft: the haze is an ambient record. A memory-store read hiccup
+    // leaves the prior field in place rather than disturbing the scene.
+  }
+}
+setInterval(() => void refreshMemoryEnvironment(), 45_000);
 
 // Gaze attention state
 let lastGazeHit = false;
@@ -494,9 +524,12 @@ async function tryInitAI(settings: SpatialSettings): Promise<boolean> {
   // Configure heartbeat
   app.heartbeat.updateConfig({ enabled: settings.proactiveEnabled });
 
-  // First paint of the trust constellation now that the runtime (and its trust
-  // store) exists; the interval keeps it fresh thereafter.
-  if (ok) void refreshTrustConstellation();
+  // First paint of the trust constellation and memory haze now that the runtime
+  // (and its stores) exist; the intervals keep them fresh thereafter.
+  if (ok) {
+    void refreshTrustConstellation();
+    void refreshMemoryEnvironment();
+  }
 
   return ok;
 }
@@ -848,6 +881,7 @@ function startFlatPreview(): void {
 
     receiptSatellites.tick(now);
     trustConstellation.tick(now);
+    memoryEnvironment.tick(now);
     app.renderFrame(dt, time);
     requestAnimationFrame(loop);
   }
@@ -920,6 +954,7 @@ async function startAR(): Promise<void> {
 
     receiptSatellites.tick(now);
     trustConstellation.tick(now);
+    memoryEnvironment.tick(now);
 
     // Render with behavior cues from runtime (or idle cues)
     app.renderFrame(dt, t);

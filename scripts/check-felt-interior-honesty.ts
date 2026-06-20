@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * check-felt-interior-honesty — locks the four structural honesty invariants
+ * check-felt-interior-honesty — locks the five structural honesty invariants
  * of the felt-interior binding (`docs/doctrine/felt-interior.md`,
  * `spec/consolidation-mutation-manifest-v1.md`). The doctrine + the code +
  * the wire schema exist; this is the third artifact (legibility ratio,
@@ -13,8 +13,11 @@
  * record (the relational register, felt-interior.md §6), whose honesty is the
  * moat turned inward: it shows depth because it is proven, but must carry no
  * global reputation/rank/aggregate score — minting that score for the owner about
- * the owner's own graph re-introduces the §1 sybil-bait pointed inward. All
- * locked structurally below.
+ * the owner's own graph re-introduces the §1 sybil-bait pointed inward. Invariant
+ * 5 covers the MEMORY ENVIRONMENT (the §5 record in the spatial register, an
+ * ambient haze): the memory mass becomes a bounded ambient scalar, never a raw
+ * count or climbing score — the §"What not to build" vanity refusal at the type.
+ * All locked structurally below.
  *
  * Invariant 1 — coverage is never faked. The felt projection
  * (`@motebit/panels`) must never hard-code `mutationsCoveredBySignature: true`.
@@ -163,6 +166,40 @@ if (feltTrust) {
   ) {
     findings.push(
       `${FELT_TRUST}: FeltTrustRecord declares a forbidden field (score/reputation/rank/ranking/aggregate/global) — remove it; the trust record makes NO global-reputation claim, it is first-person counts at rest. Refusing the global score is the core of sybil-resistance (felt-interior.md §6; agents-as-first-person-trust-graph.md §1) — minting it inward, about the owner's own graph, re-introduces the gameable aggregate.`,
+    );
+  }
+}
+
+// ── Invariant 5: the memory environment exposes no raw count or score ──────
+// felt-interior.md §5, spatial register: the memory mass becomes an ambient haze
+// (the Environment primitive), and the §"What not to build" bound bites hardest
+// here — a memory count is the most natural vanity metric. The honesty rests on
+// `EnvironmentExpression` being a bounded ambient scalar (`density`) plus a
+// present-state `tone`, NEVER a raw held/total count or a score the haze could
+// surface as a climbing number. A future edit adding such a field is the drift
+// this invariant locks — the inward-vanity refusal at the type, the §5 analogue
+// of invariant 4's global-score refusal. (The saturating density mapping and the
+// content-free `{ held, fading }` summary are enforced by the memory-environment
+// test suite in @motebit/render-engine.)
+const EXPRESSION = "packages/render-engine/src/expression.ts";
+const expression = read(EXPRESSION);
+if (expression) {
+  const envBody = (() => {
+    const i = expression.indexOf("interface EnvironmentExpression {");
+    if (i < 0) return "";
+    const start = expression.indexOf("{", i);
+    let depth = 0;
+    for (let j = start; j < expression.length; j++) {
+      if (expression[j] === "{") depth++;
+      else if (expression[j] === "}" && --depth === 0) return expression.slice(start, j + 1);
+    }
+    return "";
+  })();
+  if (
+    /\b(count|total|held|fading|score|rank|trend|delta|growth|memories)\s*\??\s*:/.test(envBody)
+  ) {
+    findings.push(
+      `${EXPRESSION}: EnvironmentExpression declares a forbidden field (count/total/held/fading/score/rank/trend/delta/growth/memories) — remove it; the memory environment is a bounded ambient scalar (density) + present tone, NEVER a raw count or climbing score. A memory count is the §5 vanity metric turned inward (felt-interior.md §5 "What not to build"); the haze shows the mass as texture, never a number.`,
     );
   }
 }
