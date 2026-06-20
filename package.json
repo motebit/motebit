@@ -130,6 +130,7 @@
     "check-credential-input-autofill": "npx tsx scripts/check-credential-input-autofill.ts",
     "check-felt-interior-honesty": "npx tsx scripts/check-felt-interior-honesty.ts",
     "check-sync-token-freshness": "npx tsx scripts/check-sync-token-freshness.ts",
+    "check-browser-surface-buffer-polyfill": "npx tsx scripts/check-browser-surface-buffer-polyfill.ts",
     "check-docs-cli-claims": "npx tsx scripts/check-docs-cli-claims.ts",
     "check-docs-slash-claims": "npx tsx scripts/check-docs-slash-claims.ts",
     "check-docs-default-models": "npx tsx scripts/check-docs-default-models.ts",

@@ -189,6 +189,15 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-browser-surface-buffer-polyfill",
+    proves:
+      "flags a Vite browser surface reaching @motebit/wallet-solana that lost the Buffer polyfill — the exact 2026-06-20 silent drift where apps/spatial shipped no polyfill and crashed at load in every browser. The fixture removes the `buffer` dependency from apps/spatial/package.json (one of the three required parts), which the gate detects by parsing the manifest.",
+    perturb: () =>
+      mutateFile("apps/spatial/package.json", (src) =>
+        src.replace(/\s*"buffer":\s*"\^6\.0\.3",/, ""),
+      ),
+  },
+  {
     script: "check-multihop-depth-single-site",
     proves:
       "flags a re-inlined settlement depth-limit comparison outside the canonical multihop-depth.ts (the recursion-safety invariant: the depth bound lives in exactly one place)",
