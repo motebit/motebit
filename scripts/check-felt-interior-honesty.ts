@@ -1,10 +1,15 @@
 #!/usr/bin/env tsx
 /**
- * check-felt-interior-honesty — locks the two structural honesty invariants
+ * check-felt-interior-honesty — locks the three structural honesty invariants
  * of the felt-interior binding (`docs/doctrine/felt-interior.md`,
  * `spec/consolidation-mutation-manifest-v1.md`). The doctrine + the code +
  * the wire schema exist; this is the third artifact (legibility ratio,
  * `feedback_legibility_ratio`) that makes the commitment self-healing.
+ *
+ * Invariants 1–2 cover the CONSOLIDATION record (the signed act-trail); invariant
+ * 3 covers the MEMORY record (the unsigned standing record, felt-interior.md §5),
+ * whose honesty is the inverse: it shows shape because it is NOT signed, so it
+ * must claim no assurance and carry no content — both locked structurally below.
  *
  * Invariant 1 — coverage is never faked. The felt projection
  * (`@motebit/panels`) must never hard-code `mutationsCoveredBySignature: true`.
@@ -79,6 +84,46 @@ if (featurePresent) {
   if (!stripsManifest) {
     findings.push(
       `${REDACTION}: ConsolidationMutationManifest exists but the relay does not strip \`mutation_manifest\` from \`consolidation_receipt_signed\` events on sync ingress. SyncEngine.pushEvents syncs ALL events — the owner-local manifest (per-node content digests + sensitivity tiers) would leak to the relay. Add a strip branch to redactSensitiveEvents. (feedback_synced_event_payload_redaction; spec/consolidation-mutation-manifest-v1.md §2)`,
+    );
+  }
+}
+
+// ── Invariant 3: the memory record is shape-only (unsigned-local honesty) ──
+// felt-interior.md §5: the memory graph's standing state is unsigned-and-local,
+// so the felt memory record's honesty is structural and the INVERSE of
+// consolidation's — it makes NO assurance claim (no verified/attested field) and
+// carries NO content (the input slice is content-free, so content cannot enter
+// the projection). A future edit enriching the record with content or an
+// assurance claim is the drift this invariant locks.
+const FELT_MEMORY = "packages/panels/src/memory/felt-memory.ts";
+const feltMemory = read(FELT_MEMORY);
+if (feltMemory) {
+  // Extract a top-level interface body by brace-matching from its `{`.
+  const interfaceBody = (name: string): string => {
+    const i = feltMemory.indexOf(`interface ${name} {`);
+    if (i < 0) return "";
+    const start = feltMemory.indexOf("{", i);
+    let depth = 0;
+    for (let j = start; j < feltMemory.length; j++) {
+      if (feltMemory[j] === "{") depth++;
+      else if (feltMemory[j] === "}" && --depth === 0) return feltMemory.slice(start, j + 1);
+    }
+    return "";
+  };
+  // The input slice must stay content-free, so memory content cannot enter the record.
+  if (/\bcontent\s*\??\s*:/.test(interfaceBody("FeltMemoryNode"))) {
+    findings.push(
+      `${FELT_MEMORY}: FeltMemoryNode declares a \`content\` field — remove it; the felt memory slice MUST be content-free so memory content cannot enter the record (felt-interior.md §5).`,
+    );
+  }
+  // The record must claim no assurance and carry no content — shape + presence only.
+  if (
+    /\b(content|verified|assurance|status|mutations|manifest)\s*\??\s*:/.test(
+      interfaceBody("FeltMemoryRecord"),
+    )
+  ) {
+    findings.push(
+      `${FELT_MEMORY}: FeltMemoryRecord declares a forbidden field (content/verified/assurance/status/mutations/manifest) — remove it; the memory record makes NO assurance claim and carries NO content, it is shape + presence only, the inverse of consolidation's signed honesty (felt-interior.md §5).`,
     );
   }
 }

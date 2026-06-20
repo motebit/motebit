@@ -86,6 +86,16 @@ export {
   type FeltRedactionPolicy,
   type FeltCoverageAdapter,
 } from "./memory/felt-consolidation";
+export {
+  // The memory resting record (felt-interior.md §5) — the RECORD to
+  // consolidation's ACTS. Content-free and assurance-free by construction
+  // (unsigned-local honesty); surfaces call resolveFeltMemory and render the
+  // returned FeltMemoryRecord. Locked by check-felt-interior-honesty (inv. 3).
+  resolveFeltMemory,
+  type FeltMemoryNode,
+  type FeltMemoryShapeEntry,
+  type FeltMemoryRecord,
+} from "./memory/felt-memory";
 
 export {
   createActivityController,
