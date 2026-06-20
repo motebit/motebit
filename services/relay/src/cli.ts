@@ -19,7 +19,8 @@
  * See services/relay/RUNBOOK-key-recovery.md for the full procedure.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { createMotebitDatabase } from "@motebit/persistence";
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -201,8 +202,24 @@ export async function runRelayKeyCli(
   }
 }
 
-// Entrypoint guard — only runs when invoked directly, not when imported by tests.
-if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
+// Entrypoint guard — runs only when this file is the process entry, not when
+// imported by tests. Robust to the `relay-key` bin being a symlink (npm's .bin,
+// a global install): `process.argv[1]` is then the LINK and `import.meta.url`
+// the realpath, so compare REALPATHS. A raw `import.meta.url === file://${argv[1]}`
+// compare silently no-op'd the bin (same class as the @motebit/verify 1.7.7
+// sev-1) — and a silent `relay-key export` is dangerous: it looks like a
+// successful key backup while writing nothing. Fail-soft to not-entry on any
+// resolution error.
+function isCliEntry(): boolean {
+  if (process.argv[1] === undefined) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
+
+if (isCliEntry()) {
   runRelayKeyCli(process.argv.slice(2))
     .then((code) => process.exit(code))
     .catch((err: unknown) => {
