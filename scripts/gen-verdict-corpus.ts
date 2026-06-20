@@ -28,6 +28,7 @@ import {
   signDelegationRevocation,
   deriveSovereignMotebitId,
   bytesToHex,
+  hash,
   verifyReceiptVerdict,
   verifyDelegationTokenVerdict,
   type SignableReceipt,
@@ -107,8 +108,9 @@ async function main() {
   const del = await fixedKp(1);
   const sovereignId = await deriveSovereignMotebitId(del.hex);
 
+  const realResultHash = await hash(new TextEncoder().encode(makeReceipt().result));
   const r2 = await signExecutionReceipt(
-    makeReceipt({ motebit_id: sovereignId }),
+    makeReceipt({ motebit_id: sovereignId, result_hash: realResultHash }),
     del.priv,
     del.pub,
   );
@@ -140,8 +142,25 @@ async function main() {
     expected: vT,
   });
 
+  // A VALID signature over a receipt whose result_hash does NOT bind `result`.
+  const rHashInconsistent = await signExecutionReceipt(
+    { ...makeReceipt({ motebit_id: sovereignId }), result_hash: "d".repeat(64) },
+    del.priv,
+    del.pub,
+  );
+  const vHI = await verifyReceiptVerdict(rHashInconsistent);
+  assertInvariant("receipt-signed-hash-inconsistent", vHI, { integrity: "invalid" });
+  cases.push({
+    name: "receipt-signed-hash-inconsistent",
+    kind: "receipt",
+    description:
+      "A VALID Ed25519 signature over a receipt whose result_hash does NOT bind result (hex(SHA-256(result)) != result_hash). integrity 'invalid' with a hash_inconsistent repair — DISTINCT from a bad signature. A valid signature over a self-inconsistent body is the silent-true integrity must catch.",
+    input: { receipt: rHashInconsistent },
+    expected: vHI,
+  });
+
   const rEmbedded = await signExecutionReceipt(
-    makeReceipt({ motebit_id: "mote-not-sovereign" }),
+    makeReceipt({ motebit_id: "mote-not-sovereign", result_hash: realResultHash }),
     del.priv,
     del.pub,
   );

@@ -1714,9 +1714,47 @@ export async function verifyReceiptVerdict(receipt: SignableReceipt): Promise<Ve
   }
   evidenceBasis.push({ kind: "receipt", ref: receipt.result_hash });
 
-  // integrity — the one clockless, always-establishable axis.
-  const integrity: IntegrityVerdict =
-    publicKey && (await verifyExecutionReceipt(receipt, publicKey)) ? "verified" : "invalid";
+  // integrity — Ed25519 signature AND STRICT hash binding. A valid signature is
+  // NOT sufficient: a receipt whose `result_hash` does not recompute to
+  // hex(SHA-256(result)) is a valid signature over a self-inconsistent body —
+  // the digest claims to address `result` but commits to different bytes. That
+  // is exactly the silent-true this reshape exists to kill (the
+  // sovereign-check-was-theater failure mode). `verified` IFF the signature
+  // verifies AND `result_hash` binds `result`. The three invalid sub-causes
+  // carry distinct repair codes.
+  let integrity: IntegrityVerdict;
+  let integrityRepair: RepairInstruction | undefined;
+  if (!publicKey) {
+    integrity = "invalid";
+    integrityRepair = {
+      code: "integrity.no_key",
+      axis: "integrity",
+      summary: "Receipt has no usable embedded public_key to verify against.",
+      canonical: "docs/doctrine/verify-family-fail-closed.md",
+      fix: "Obtain the receipt with its embedded `public_key` (hex), or supply the signer's key out of band.",
+    };
+  } else if (!(await verifyExecutionReceipt(receipt, publicKey))) {
+    integrity = "invalid";
+    integrityRepair = {
+      code: "integrity.signature_invalid",
+      axis: "integrity",
+      summary: "Ed25519 signature did not verify over the receipt's canonical bytes.",
+      canonical: "docs/doctrine/verify-family-fail-closed.md",
+      fix: "The receipt was tampered or signed by a different key — re-fetch the authentic receipt; do not trust this copy.",
+    };
+  } else if ((await hash(new TextEncoder().encode(receipt.result))) !== receipt.result_hash) {
+    integrity = "invalid";
+    integrityRepair = {
+      code: "integrity.hash_inconsistent",
+      axis: "integrity",
+      summary:
+        "Signature verifies, but result_hash != hex(SHA-256(result)) — a valid signature over a self-inconsistent receipt; the digest does not bind the result.",
+      canonical: "the receipt's result_hash field (recompute hex(SHA-256(result)))",
+      fix: "result_hash MUST equal hex(SHA-256(result)). The signer committed an inconsistent digest — reject the receipt; never trust result_hash as a content address for the result.",
+    };
+  } else {
+    integrity = "verified";
+  }
 
   // identityBinding — sovereign is offline-derivable; pinned/anchored need an
   // external anchor not present here, so the rung is sovereign-or-unverified.
@@ -1733,21 +1771,9 @@ export async function verifyReceiptVerdict(receipt: SignableReceipt): Promise<Ve
   const revocation: RevocationVerdict = { status: "unchecked" };
   const temporalBasis: TemporalBasis = "clockless";
 
-  // repair — present on any failing axis; integrity is the more fundamental.
-  let repair: RepairInstruction | undefined;
-  if (integrity === "invalid") {
-    repair = {
-      code: "integrity.signature_invalid",
-      axis: "integrity",
-      summary: publicKey
-        ? "Ed25519 signature did not verify over the receipt's canonical bytes."
-        : "Receipt has no usable embedded public_key to verify against.",
-      canonical: "docs/doctrine/verify-family-fail-closed.md",
-      fix: publicKey
-        ? "The receipt was tampered or signed by a different key — re-fetch the authentic receipt; do not trust this copy."
-        : "Obtain the receipt with its embedded `public_key` (hex), or supply the signer's key out of band.",
-    };
-  } else if (identityBinding === "unverified") {
+  // repair — integrity is the more fundamental; then identity.
+  let repair: RepairInstruction | undefined = integrityRepair;
+  if (!repair && identityBinding === "unverified") {
     repair = {
       code: "identity.binding_unverified",
       axis: "identityBinding",

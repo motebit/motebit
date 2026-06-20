@@ -21,10 +21,10 @@
           ],
           "memories_formed": 1,
           "prompt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "result_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "result_hash": "2a92bbd48e2aae02e70c6528d3d6a6c205746236e06a41d268cd78d8f0f970f8",
           "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "rFG3xDcyr6ZmyWcQ3gZJ3lgvcrgtT99DPpLaHmAKxT5c5Qn4R3OxjJNnZhJHYkbmSCkYSAJNqFk2i4SAo9tuCQ"
+          "signature": "AcLS7qbWoq5nAd4MLr3uA6LQupEedDT6rXebJGO5S_2cywmts0SAatmXkCxnmyyTS5B0fMSVQPdZWnEIR7R3AA"
         }
       },
       "expected": {
@@ -43,7 +43,7 @@
           },
           {
             "kind": "receipt",
-            "ref": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            "ref": "2a92bbd48e2aae02e70c6528d3d6a6c205746236e06a41d268cd78d8f0f970f8"
           }
         ]
       }
@@ -69,7 +69,7 @@
           "result_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "rFG3xDcyr6ZmyWcQ3gZJ3lgvcrgtT99DPpLaHmAKxT5c5Qn4R3OxjJNnZhJHYkbmSCkYSAJNqFk2i4SAo9tuCQ"
+          "signature": "AcLS7qbWoq5nAd4MLr3uA6LQupEedDT6rXebJGO5S_2cywmts0SAatmXkCxnmyyTS5B0fMSVQPdZWnEIR7R3AA"
         }
       },
       "expected": {
@@ -101,6 +101,58 @@
       }
     },
     {
+      "name": "receipt-signed-hash-inconsistent",
+      "kind": "receipt",
+      "description": "A VALID Ed25519 signature over a receipt whose result_hash does NOT bind result (hex(SHA-256(result)) != result_hash). integrity 'invalid' with a hash_inconsistent repair — DISTINCT from a bad signature. A valid signature over a self-inconsistent body is the silent-true integrity must catch.",
+      "input": {
+        "receipt": {
+          "task_id": "task-001",
+          "motebit_id": "34750f98-bd59-8cfc-946d-a45aaabe933b",
+          "device_id": "device-001",
+          "submitted_at": 1700000000000,
+          "completed_at": 1700000060000,
+          "status": "completed",
+          "result": "Task completed successfully",
+          "tools_used": [
+            "web_search"
+          ],
+          "memories_formed": 1,
+          "prompt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "result_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "VQR3Oeiy_bqO_Cl3h_qB_130lEKrKJnESTySMWzbDds-QkBKH_GYwrpSNEWgj-UWcLmDmQ9B1DTLqYV9oVqFDg"
+        }
+      },
+      "expected": {
+        "type": "receipt",
+        "integrity": "invalid",
+        "identityBinding": "sovereign",
+        "authority": "unknown",
+        "revocation": {
+          "status": "unchecked"
+        },
+        "temporalBasis": "clockless",
+        "evidenceBasis": [
+          {
+            "kind": "public_key",
+            "ref": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+          },
+          {
+            "kind": "receipt",
+            "ref": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          }
+        ],
+        "repair": {
+          "code": "integrity.hash_inconsistent",
+          "axis": "integrity",
+          "summary": "Signature verifies, but result_hash != hex(SHA-256(result)) — a valid signature over a self-inconsistent receipt; the digest does not bind the result.",
+          "canonical": "the receipt's result_hash field (recompute hex(SHA-256(result)))",
+          "fix": "result_hash MUST equal hex(SHA-256(result)). The signer committed an inconsistent digest — reject the receipt; never trust result_hash as a content address for the result."
+        }
+      }
+    },
+    {
       "name": "receipt-embedded-key-only",
       "kind": "receipt",
       "description": "Signature verifies but the motebit_id does NOT commit to the embedded key → integrity verified, identityBinding unverified (the embedded-key footgun, named) + repair.",
@@ -118,10 +170,10 @@
           ],
           "memories_formed": 1,
           "prompt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "result_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "result_hash": "2a92bbd48e2aae02e70c6528d3d6a6c205746236e06a41d268cd78d8f0f970f8",
           "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "iS1jzAqe4vPDoYVvoLBTOQ7FP8z1OaEiQ6bEBYe0RkgUM1gfK77DhleRKHqP11gxo4-87eYYrCPMrazyKbKXDA"
+          "signature": "s7uUva_d8OmT_-kqdzSKCh8dh8GRORq3LquGp3FIF_XPt8XauNzA3lsDlTIPjq-hZ_XYbKr416JgkmU3PmnoCA"
         }
       },
       "expected": {
@@ -140,7 +192,7 @@
           },
           {
             "kind": "receipt",
-            "ref": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            "ref": "2a92bbd48e2aae02e70c6528d3d6a6c205746236e06a41d268cd78d8f0f970f8"
           }
         ],
         "repair": {
