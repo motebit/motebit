@@ -16,7 +16,9 @@
           "completed_at": 1700000060000,
           "status": "completed",
           "result": "Task completed successfully",
-          "tools_used": ["web_search"],
+          "tools_used": [
+            "web_search"
+          ],
           "memories_formed": 1,
           "prompt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "result_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -59,7 +61,9 @@
           "completed_at": 1700000060000,
           "status": "completed",
           "result": "Task completed successfully",
-          "tools_used": ["web_search"],
+          "tools_used": [
+            "web_search"
+          ],
           "memories_formed": 1,
           "prompt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "result_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -109,7 +113,9 @@
           "completed_at": 1700000060000,
           "status": "completed",
           "result": "Task completed successfully",
-          "tools_used": ["web_search"],
+          "tools_used": [
+            "web_search"
+          ],
           "memories_formed": 1,
           "prompt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "result_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

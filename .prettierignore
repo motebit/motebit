@@ -62,3 +62,8 @@ apps/desktop/src-tauri/gen
 # locally, prettier-ignored explicitly here.
 apps/*/test-results
 apps/*/playwright-report
+
+# Generated, byte-deterministic conformance corpus — scripts/gen-verdict-corpus.ts
+# is its sole formatter, so prettier must not re-normalize it (else regeneration
+# produces a cosmetic diff). The conformance test parses it, so whitespace is moot.
+spec/conformance/verification-verdict/corpus.json
