@@ -16,6 +16,8 @@ import { useTheme, type ThemeColors } from "../theme";
 import {
   createMemoryController,
   classifyCertainty,
+  resolveFeltMemory,
+  type FeltMemoryNode,
   type MemoryFetchAdapter,
   type MemoryState,
 } from "@motebit/panels";
@@ -81,6 +83,20 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
 
   const filtered = ctrlRef.current?.filteredView() ?? state.memories;
 
+  // The memory resting record (felt-interior §5) — derived from the WHOLE graph
+  // (state.memories), not the filtered search view: "what the interior holds, at
+  // rest." A calm summary, never a chart or score.
+  const feltMemory =
+    state.memories.length > 0
+      ? resolveFeltMemory(state.memories as unknown as FeltMemoryNode[])
+      : null;
+  const feltShapeLine = feltMemory
+    ? [
+        ...feltMemory.shape.map((s) => `${s.count} ${s.kind}`),
+        ...(feltMemory.fading > 0 ? [`${feltMemory.fading} fading`] : []),
+      ].join(" · ")
+    : "";
+
   const handleDelete = (nodeId: string): void => {
     Alert.alert("Delete Memory", "This memory will be permanently removed.", [
       { text: "Cancel", style: "cancel" },
@@ -117,6 +133,15 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
             autoCorrect={false}
           />
         </View>
+
+        {feltMemory != null ? (
+          <View style={styles.feltMemory}>
+            <Text style={styles.feltMemoryHeadline}>{feltMemory.headline}</Text>
+            {feltShapeLine !== "" ? (
+              <Text style={styles.feltMemoryShape}>{feltShapeLine}</Text>
+            ) : null}
+          </View>
+        ) : null}
 
         {filtered.length === 0 ? (
           <View style={styles.emptyContainer}>
@@ -185,6 +210,15 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
 function createStyles(c: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: c.bgPrimary },
+    feltMemory: {
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderPrimary,
+      gap: 4,
+    },
+    feltMemoryHeadline: { color: c.textPrimary, fontSize: 14, lineHeight: 19 },
+    feltMemoryShape: { color: c.textMuted, fontSize: 12 },
     header: {
       flexDirection: "row",
       justifyContent: "space-between",

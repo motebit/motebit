@@ -36,6 +36,7 @@ import {
   formatCountdownUntil,
   formatTokens,
   resolveFeltConsolidation,
+  resolveFeltMemory,
   type AgentsState,
   type DiscoveredAgent,
   type MemoryFetchAdapter,
@@ -43,6 +44,7 @@ import {
   type PricingEntry,
   type ScheduledGoal,
   type FeltCoverageAdapter,
+  type FeltMemoryNode,
 } from "@motebit/panels";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import { deriveAgentSigil } from "@motebit/sdk";
@@ -176,6 +178,31 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
       }
       memoryList.appendChild(empty);
       return;
+    }
+
+    // The memory resting record (felt-interior §5) — the standing record at the
+    // top of the list, derived from the WHOLE graph (state.memories), not the
+    // filtered view. A calm summary, never a chart or score.
+    if (state.memories.length > 0) {
+      const felt = resolveFeltMemory(state.memories as unknown as FeltMemoryNode[]);
+      const wrap = document.createElement("div");
+      wrap.style.cssText =
+        "padding:10px 14px;display:flex;flex-direction:column;gap:3px;border-bottom:1px solid rgba(127,127,127,0.16);";
+      const headline = document.createElement("div");
+      headline.style.cssText = "font-size:13px;opacity:0.9;";
+      headline.textContent = felt.headline;
+      wrap.appendChild(headline);
+      const shapeLine = [
+        ...felt.shape.map((s) => `${s.count} ${s.kind}`),
+        ...(felt.fading > 0 ? [`${felt.fading} fading`] : []),
+      ].join(" · ");
+      if (shapeLine !== "") {
+        const shape = document.createElement("div");
+        shape.style.cssText = "font-size:11px;opacity:0.55;";
+        shape.textContent = shapeLine;
+        wrap.appendChild(shape);
+      }
+      memoryList.appendChild(wrap);
     }
 
     for (const node of view) {
