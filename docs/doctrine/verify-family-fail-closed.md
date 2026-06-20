@@ -72,6 +72,14 @@ so the `revoke-then-self-mint-offline` case reads stale-by-how-much-against-what
 
 **The proof it's legible.** The arc is done when one independent consumer completes verification end-to-end with no repository-specific tribal knowledge. That is the executable-legibility test: a stranger consumes the guarantee correctly without the founder translating.
 
+**Why the verdict — three folds, proven in the field.** Consumer #2's parity run (an independent stranger verifier against the committed corpus, June 2026) converged 6/7 and, in the process, demonstrated the reshape's whole value on real vectors rather than in argument. Each axis the verdict keeps separate is a fold its consumer's boolean surface _structurally cannot_ make:
+
+- **authority vs revocation** (revoked-self-mint vector) — the consumer's monitor-tick verifier collapses both into one boolean; the verdict reads `authority: "valid"` + `revocation: "revoked"`, so a dead grant can't ride a well-formed tick to a pass.
+- **the authority sub-state** (clock-rollback / wall-clock vector) — the installed primitive returns a generic "signature or expiry invalid" string; the verdict distinguishes `not_yet_valid` / `expired` / `valid`, a distinction the old surface can't emit.
+- **identityBinding vs integrity** (the integrity-failed receipts) — `verifyArtifact` reports the key→`motebit_id` binding _only_ when the whole artifact verifies (`sovereign` is absent once `valid` is false); the verdict runs `verifySovereignBinding` independent of the signature, so it reads `identityBinding: "sovereign"` even on a tampered or hash-inconsistent receipt ("the binding is real, the bytes just aren't").
+
+Three axes, three folds, each a partial-gate silent-true (a check read as more than it established) caught by separating what the boolean fused. The corpus didn't just check parity — it proved the thesis on the bytes.
+
 ## Cross-cuts
 
 - [`identity-binding-verification.md`](identity-binding-verification.md) — the integrity-vs-binding split that makes the embedded-key fallback legible.
