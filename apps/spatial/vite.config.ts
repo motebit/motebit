@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { resolve } from "node:path";
 
 /**
  * Manual chunk strategy — see apps/web/vite.config.ts for the full
@@ -66,6 +67,24 @@ function manualChunks(id: string): string | undefined {
 }
 
 export default defineConfig({
+  // @solana/web3.js and @solana/spl-token (pulled in via @motebit/wallet-solana)
+  // reference Node's Buffer at module-eval time. Vite externalizes Node built-ins
+  // for browser compat, so without this block the spl-token import throws
+  // `Buffer is not defined` at load, kills the module graph, and spatial boots to
+  // a blank canvas. Mirrors apps/web + apps/desktop — sibling-boundary rule: same
+  // fix, same shape, every browser surface. (The runtime `globalThis.Buffer = Buffer`
+  // assignment lives in src/buffer-polyfill.ts, imported first in app.ts.)
+  define: {
+    global: "globalThis",
+  },
+  resolve: {
+    alias: {
+      // Point the Node "buffer" import at the npm buffer polyfill. Must resolve to
+      // the actual file path — a bare "buffer" string makes Rollup treat it as a
+      // Node built-in and externalize it.
+      buffer: resolve("node_modules/buffer/"),
+    },
+  },
   server: {
     port: 5175,
     // WebXR requires HTTPS (except localhost)
@@ -110,6 +129,13 @@ export default defineConfig({
   optimizeDeps: {
     // ONNX Runtime WASM used by @ricky0123/vad-web — let Vite pre-bundle it
     exclude: ["onnxruntime-web"],
+    esbuildOptions: {
+      // Make `global` available during dev-time dependency pre-bundling (esbuild
+      // pass). Without this, @solana/spl-token crashes during Vite's pre-bundle.
+      define: {
+        global: "globalThis",
+      },
+    },
   },
   test: {
     environment: "node",

@@ -11,6 +11,10 @@
  * Goals execute one-shot via PlanEngine.
  */
 
+// MUST be first: installs globalThis.Buffer before any Solana-touching module
+// (spatial-app → @motebit/wallet-solana → @solana/spl-token) evaluates. See
+// buffer-polyfill.ts; mirrors apps/web + apps/desktop (sibling-boundary rule).
+import "./buffer-polyfill";
 import { SpatialApp, COLOR_PRESETS, deriveInteriorColor } from "./spatial-app";
 import type { SpatialAIConfig } from "./spatial-app";
 import type { UnifiedProviderConfig, OnDeviceBackend } from "@motebit/sdk";

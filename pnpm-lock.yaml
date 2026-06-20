@@ -831,6 +831,9 @@ importers:
       '@ricky0123/vad-web':
         specifier: ^0.0.30
         version: 0.0.30
+      buffer:
+        specifier: ^6.0.3
+        version: 6.0.3
       three:
         specifier: ^0.184.0
         version: 0.184.0
