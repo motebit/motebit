@@ -1,5 +1,18 @@
 # @motebit/verify
 
+## 1.8.1
+
+### Patch Changes
+
+- Updated dependencies [f460df1]
+  - @motebit/crypto@3.12.0
+  - @motebit/crypto-android-keystore@1.1.19
+  - @motebit/crypto-appattest@1.0.21
+  - @motebit/crypto-tpm@1.1.20
+  - @motebit/crypto-webauthn@1.0.21
+  - @motebit/state-export-client@0.5.11
+  - @motebit/verifier@1.8.1
+
 ## 1.8.0
 
 ### Minor Changes
