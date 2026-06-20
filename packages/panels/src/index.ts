@@ -51,6 +51,17 @@ export {
 } from "./agents/controller";
 
 export {
+  // The trust resting record (felt-interior.md §6) — the RELATIONAL register,
+  // "whom the interior has come to know." Proven-only (Known edges), score-free
+  // by construction (the global-score refusal turned inward); surfaces call
+  // resolveFeltTrust and render the returned FeltTrustRecord. Locked by
+  // check-felt-interior-honesty (invariant 4).
+  resolveFeltTrust,
+  type FeltTrustRecord,
+  type FeltTrustShapeEntry,
+} from "./agents/felt-trust";
+
+export {
   createMemoryController,
   filterMemoriesView,
   classifyCertainty,

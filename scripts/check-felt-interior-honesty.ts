@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * check-felt-interior-honesty — locks the three structural honesty invariants
+ * check-felt-interior-honesty — locks the four structural honesty invariants
  * of the felt-interior binding (`docs/doctrine/felt-interior.md`,
  * `spec/consolidation-mutation-manifest-v1.md`). The doctrine + the code +
  * the wire schema exist; this is the third artifact (legibility ratio,
@@ -9,7 +9,12 @@
  * Invariants 1–2 cover the CONSOLIDATION record (the signed act-trail); invariant
  * 3 covers the MEMORY record (the unsigned standing record, felt-interior.md §5),
  * whose honesty is the inverse: it shows shape because it is NOT signed, so it
- * must claim no assurance and carry no content — both locked structurally below.
+ * must claim no assurance and carry no content. Invariant 4 covers the TRUST
+ * record (the relational register, felt-interior.md §6), whose honesty is the
+ * moat turned inward: it shows depth because it is proven, but must carry no
+ * global reputation/rank/aggregate score — minting that score for the owner about
+ * the owner's own graph re-introduces the §1 sybil-bait pointed inward. All
+ * locked structurally below.
  *
  * Invariant 1 — coverage is never faked. The felt projection
  * (`@motebit/panels`) must never hard-code `mutationsCoveredBySignature: true`.
@@ -124,6 +129,40 @@ if (feltMemory) {
   ) {
     findings.push(
       `${FELT_MEMORY}: FeltMemoryRecord declares a forbidden field (content/verified/assurance/status/mutations/manifest) — remove it; the memory record makes NO assurance claim and carries NO content, it is shape + presence only, the inverse of consolidation's signed honesty (felt-interior.md §5).`,
+    );
+  }
+}
+
+// ── Invariant 4: the trust record carries no inward global score ───────────
+// felt-interior.md §6: trust shows DEPTH because it is proven (Known-only), but
+// refusing the global reputation score is the necessary core of sybil-resistance
+// (§1; agents-as-first-person-trust-graph.md). Minting that score for the owner,
+// about the owner's own graph, re-introduces the exact gameable aggregate pointed
+// inward. So `FeltTrustRecord` must declare no reputation/rank/aggregate/score
+// field — a future edit adding one is the drift this invariant locks. (The
+// proven-only floor is type-enforced: the projection takes the Known `AgentRecord`
+// slice, and a relay-claimed `DiscoveredAgent` is a different type.)
+const FELT_TRUST = "packages/panels/src/agents/felt-trust.ts";
+const feltTrust = read(FELT_TRUST);
+if (feltTrust) {
+  const trustInterfaceBody = (name: string): string => {
+    const i = feltTrust.indexOf(`interface ${name} {`);
+    if (i < 0) return "";
+    const start = feltTrust.indexOf("{", i);
+    let depth = 0;
+    for (let j = start; j < feltTrust.length; j++) {
+      if (feltTrust[j] === "{") depth++;
+      else if (feltTrust[j] === "}" && --depth === 0) return feltTrust.slice(start, j + 1);
+    }
+    return "";
+  };
+  if (
+    /\b(score|reputation|rank|ranking|aggregate|global)\s*\??\s*:/.test(
+      trustInterfaceBody("FeltTrustRecord"),
+    )
+  ) {
+    findings.push(
+      `${FELT_TRUST}: FeltTrustRecord declares a forbidden field (score/reputation/rank/ranking/aggregate/global) — remove it; the trust record makes NO global-reputation claim, it is first-person counts at rest. Refusing the global score is the core of sybil-resistance (felt-interior.md §6; agents-as-first-person-trust-graph.md §1) — minting it inward, about the owner's own graph, re-introduces the gameable aggregate.`,
     );
   }
 }
