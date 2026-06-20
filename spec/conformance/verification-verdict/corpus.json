@@ -1,0 +1,406 @@
+{
+  "schema": "motebit.verification-verdict-corpus.v1",
+  "description": "Conformance vectors for the VerificationVerdict arc. Each case: run the named producer over `input`, assert the result deep-equals `expected`. See ./README.md.",
+  "generator": "scripts/gen-verdict-corpus.ts",
+  "cases": [
+    {
+      "name": "receipt-sovereign-not-pinned",
+      "kind": "receipt",
+      "description": "A real signed receipt whose motebit_id commits to its embedded key (sovereign) but is NOT a pinned agent. integrity verified, binding sovereign (< pinned); authority/revocation are 'not established', never manufactured.",
+      "input": {
+        "receipt": {
+          "task_id": "task-001",
+          "motebit_id": "34750f98-bd59-8cfc-946d-a45aaabe933b",
+          "device_id": "device-001",
+          "submitted_at": 1700000000000,
+          "completed_at": 1700000060000,
+          "status": "completed",
+          "result": "Task completed successfully",
+          "tools_used": ["web_search"],
+          "memories_formed": 1,
+          "prompt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "result_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "rFG3xDcyr6ZmyWcQ3gZJ3lgvcrgtT99DPpLaHmAKxT5c5Qn4R3OxjJNnZhJHYkbmSCkYSAJNqFk2i4SAo9tuCQ"
+        }
+      },
+      "expected": {
+        "type": "receipt",
+        "integrity": "verified",
+        "identityBinding": "sovereign",
+        "authority": "unknown",
+        "revocation": {
+          "status": "unchecked"
+        },
+        "temporalBasis": "clockless",
+        "evidenceBasis": [
+          {
+            "kind": "public_key",
+            "ref": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+          },
+          {
+            "kind": "receipt",
+            "ref": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ]
+      }
+    },
+    {
+      "name": "receipt-tampered",
+      "kind": "receipt",
+      "description": "result_hash tampered after signing → integrity invalid + integrity repair.",
+      "input": {
+        "receipt": {
+          "task_id": "task-001",
+          "motebit_id": "34750f98-bd59-8cfc-946d-a45aaabe933b",
+          "device_id": "device-001",
+          "submitted_at": 1700000000000,
+          "completed_at": 1700000060000,
+          "status": "completed",
+          "result": "Task completed successfully",
+          "tools_used": ["web_search"],
+          "memories_formed": 1,
+          "prompt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "result_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "rFG3xDcyr6ZmyWcQ3gZJ3lgvcrgtT99DPpLaHmAKxT5c5Qn4R3OxjJNnZhJHYkbmSCkYSAJNqFk2i4SAo9tuCQ"
+        }
+      },
+      "expected": {
+        "type": "receipt",
+        "integrity": "invalid",
+        "identityBinding": "sovereign",
+        "authority": "unknown",
+        "revocation": {
+          "status": "unchecked"
+        },
+        "temporalBasis": "clockless",
+        "evidenceBasis": [
+          {
+            "kind": "public_key",
+            "ref": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+          },
+          {
+            "kind": "receipt",
+            "ref": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "repair": {
+          "code": "integrity.signature_invalid",
+          "axis": "integrity",
+          "summary": "Ed25519 signature did not verify over the receipt's canonical bytes.",
+          "canonical": "docs/doctrine/verify-family-fail-closed.md",
+          "fix": "The receipt was tampered or signed by a different key — re-fetch the authentic receipt; do not trust this copy."
+        }
+      }
+    },
+    {
+      "name": "receipt-embedded-key-only",
+      "kind": "receipt",
+      "description": "Signature verifies but the motebit_id does NOT commit to the embedded key → integrity verified, identityBinding unverified (the embedded-key footgun, named) + repair.",
+      "input": {
+        "receipt": {
+          "task_id": "task-001",
+          "motebit_id": "mote-not-sovereign",
+          "device_id": "device-001",
+          "submitted_at": 1700000000000,
+          "completed_at": 1700000060000,
+          "status": "completed",
+          "result": "Task completed successfully",
+          "tools_used": ["web_search"],
+          "memories_formed": 1,
+          "prompt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "result_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "iS1jzAqe4vPDoYVvoLBTOQ7FP8z1OaEiQ6bEBYe0RkgUM1gfK77DhleRKHqP11gxo4-87eYYrCPMrazyKbKXDA"
+        }
+      },
+      "expected": {
+        "type": "receipt",
+        "integrity": "verified",
+        "identityBinding": "unverified",
+        "authority": "unknown",
+        "revocation": {
+          "status": "unchecked"
+        },
+        "temporalBasis": "clockless",
+        "evidenceBasis": [
+          {
+            "kind": "public_key",
+            "ref": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+          },
+          {
+            "kind": "receipt",
+            "ref": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "repair": {
+          "code": "identity.binding_unverified",
+          "axis": "identityBinding",
+          "summary": "Signature verifies, but the key-to-motebit_id binding is NOT established (integrity only).",
+          "canonical": "docs/doctrine/identity-binding-verification.md",
+          "fix": "The motebit_id does not commit to this key (not sovereign). Establish a higher rung — supply an identity file / known-keys map (pinned) or a transparency-log inclusion proof (anchored) — before treating this as identity-verified."
+        }
+      }
+    },
+    {
+      "name": "token-revoked-grant-self-mint",
+      "kind": "delegation_token",
+      "description": "A revoked grant's tick that is itself well-formed and in-TTL. Every axis a consumer might compose a pass over LOOKS like a pass — except revocation, which is its own load-bearing axis. The bare boolean lies; the verdict can't.",
+      "input": {
+        "token": {
+          "delegator_id": "34750f98-bd59-8cfc-946d-a45aaabe933b",
+          "delegator_public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "delegate_id": "mote-delegate",
+          "delegate_public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+          "scope": "web.search",
+          "grant_id": "grant-1",
+          "issued_at": 1700000000000,
+          "expires_at": 1700003600000,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "dxCqW6u-IHcdWkPITj6MODj-UIIm9lyXv_A2FysmJ0cisSg7QDOkQlM0UihVKeuzi8oklDTKPj0knDGLNtnSAA"
+        },
+        "grant": {
+          "grant_id": "grant-1",
+          "delegator_id": "34750f98-bd59-8cfc-946d-a45aaabe933b",
+          "delegator_public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "delegate_id": "mote-delegate",
+          "delegate_public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+          "scope": "web.search,brief.compose",
+          "subject": "research:thesis=x",
+          "cadence_ms": 86400000,
+          "issued_at": 1699999999000,
+          "not_before": null,
+          "expires_at": 1702592000000,
+          "max_token_ttl_ms": 3600000,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "DONLGC5ogVRNu3OSn-k6cd9Scxpth9J_cTHa3Bjm-3XZdxFG8tlVPJZJRxDpX2pRBXg9Gp07FuUzsw9T0vUBCg"
+        },
+        "options": {
+          "revocations": [
+            {
+              "grant_id": "grant-1",
+              "delegator_id": "34750f98-bd59-8cfc-946d-a45aaabe933b",
+              "delegator_public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+              "revoked_at": 1699999999500,
+              "suite": "motebit-jcs-ed25519-b64-v1",
+              "signature": "9nZae_GZzfokIdCmuFgeYxAZ_Ve6Z6qmceRxARJJldS-nsktZVvAVHVC1iKMOPZo-VEPI4_nBkCcQ4ra3xpPBg"
+            }
+          ],
+          "revocationFreshness": {
+            "basis": "asserted",
+            "asOf": {
+              "timestamp_ms": 1700000000000
+            }
+          },
+          "now": 1700000000000
+        }
+      },
+      "expected": {
+        "type": "delegation_token",
+        "integrity": "verified",
+        "identityBinding": "sovereign",
+        "authority": "valid",
+        "revocation": {
+          "status": "revoked",
+          "freshness": {
+            "basis": "asserted",
+            "asOf": {
+              "timestamp_ms": 1700000000000
+            }
+          }
+        },
+        "temporalBasis": "local_clock",
+        "evidenceBasis": [
+          {
+            "kind": "delegation_token",
+            "ref": "dxCqW6u-IHcdWkPITj6MODj-UIIm9lyXv_A2FysmJ0cisSg7QDOkQlM0UihVKeuzi8oklDTKPj0knDGLNtnSAA"
+          },
+          {
+            "kind": "grant",
+            "ref": "grant-1"
+          },
+          {
+            "kind": "public_key",
+            "ref": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+          },
+          {
+            "kind": "revocation",
+            "ref": "9nZae_GZzfokIdCmuFgeYxAZ_Ve6Z6qmceRxARJJldS-nsktZVvAVHVC1iKMOPZo-VEPI4_nBkCcQ4ra3xpPBg"
+          }
+        ],
+        "repair": {
+          "code": "revocation.revoked",
+          "axis": "revocation",
+          "summary": "The standing grant behind this token is REVOKED — every tick minted under it is dead authority.",
+          "canonical": "docs/doctrine/verify-family-fail-closed.md",
+          "fix": "Reject this token and every token minted under the grant; the only safe action is to stop."
+        }
+      }
+    },
+    {
+      "name": "token-clock-rollback-ordering",
+      "kind": "delegation_token",
+      "description": "Pre-minted future-slot token, verifier clock rolled BACK before the slot, judged by ORDERING. The wall-clock window is not consulted → authority valid, temporalBasis clockless. The rollback is irrelevant.",
+      "input": {
+        "token": {
+          "delegator_id": "34750f98-bd59-8cfc-946d-a45aaabe933b",
+          "delegator_public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "delegate_id": "mote-delegate",
+          "delegate_public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+          "scope": "web.search",
+          "grant_id": "grant-1",
+          "issued_at": 1700864000000,
+          "not_before": 1700864000000,
+          "expires_at": 1700867600000,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "eWm1JaAEkpEe4yISJiWHzVLDD4GJ4BU-RIOMXJcVif9YLIIT3jxEeM3Pd-nwHbrBsQd7fNNiCJP9LwKtDHzzBg"
+        },
+        "grant": {
+          "grant_id": "grant-1",
+          "delegator_id": "34750f98-bd59-8cfc-946d-a45aaabe933b",
+          "delegator_public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "delegate_id": "mote-delegate",
+          "delegate_public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+          "scope": "web.search,brief.compose",
+          "subject": "research:thesis=x",
+          "cadence_ms": 86400000,
+          "issued_at": 1699999999000,
+          "not_before": null,
+          "expires_at": 1702592000000,
+          "max_token_ttl_ms": 3600000,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "DONLGC5ogVRNu3OSn-k6cd9Scxpth9J_cTHa3Bjm-3XZdxFG8tlVPJZJRxDpX2pRBXg9Gp07FuUzsw9T0vUBCg"
+        },
+        "options": {
+          "now": 1700000000000,
+          "temporalMode": "ordering",
+          "revocations": [],
+          "revocationFreshness": {
+            "basis": "asserted",
+            "asOf": {
+              "timestamp_ms": 1700000000000
+            }
+          }
+        }
+      },
+      "expected": {
+        "type": "delegation_token",
+        "integrity": "verified",
+        "identityBinding": "sovereign",
+        "authority": "valid",
+        "revocation": {
+          "status": "fresh",
+          "freshness": {
+            "basis": "asserted",
+            "asOf": {
+              "timestamp_ms": 1700000000000
+            }
+          }
+        },
+        "temporalBasis": "clockless",
+        "evidenceBasis": [
+          {
+            "kind": "delegation_token",
+            "ref": "eWm1JaAEkpEe4yISJiWHzVLDD4GJ4BU-RIOMXJcVif9YLIIT3jxEeM3Pd-nwHbrBsQd7fNNiCJP9LwKtDHzzBg"
+          },
+          {
+            "kind": "grant",
+            "ref": "grant-1"
+          },
+          {
+            "kind": "public_key",
+            "ref": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+          }
+        ]
+      }
+    },
+    {
+      "name": "token-clock-rollback-wall-clock",
+      "kind": "delegation_token",
+      "description": "The SAME token as token-clock-rollback-ordering, judged by WALL-CLOCK with the rolled-back clock → authority not_yet_valid, temporalBasis local_clock. The pair proves a consumer MUST branch on temporalBasis, never assume wall-clock.",
+      "input": {
+        "token": {
+          "delegator_id": "34750f98-bd59-8cfc-946d-a45aaabe933b",
+          "delegator_public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "delegate_id": "mote-delegate",
+          "delegate_public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+          "scope": "web.search",
+          "grant_id": "grant-1",
+          "issued_at": 1700864000000,
+          "not_before": 1700864000000,
+          "expires_at": 1700867600000,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "eWm1JaAEkpEe4yISJiWHzVLDD4GJ4BU-RIOMXJcVif9YLIIT3jxEeM3Pd-nwHbrBsQd7fNNiCJP9LwKtDHzzBg"
+        },
+        "grant": {
+          "grant_id": "grant-1",
+          "delegator_id": "34750f98-bd59-8cfc-946d-a45aaabe933b",
+          "delegator_public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "delegate_id": "mote-delegate",
+          "delegate_public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+          "scope": "web.search,brief.compose",
+          "subject": "research:thesis=x",
+          "cadence_ms": 86400000,
+          "issued_at": 1699999999000,
+          "not_before": null,
+          "expires_at": 1702592000000,
+          "max_token_ttl_ms": 3600000,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "DONLGC5ogVRNu3OSn-k6cd9Scxpth9J_cTHa3Bjm-3XZdxFG8tlVPJZJRxDpX2pRBXg9Gp07FuUzsw9T0vUBCg"
+        },
+        "options": {
+          "now": 1700000000000,
+          "temporalMode": "wall_clock",
+          "revocations": [],
+          "revocationFreshness": {
+            "basis": "asserted",
+            "asOf": {
+              "timestamp_ms": 1700000000000
+            }
+          }
+        }
+      },
+      "expected": {
+        "type": "delegation_token",
+        "integrity": "verified",
+        "identityBinding": "sovereign",
+        "authority": "not_yet_valid",
+        "revocation": {
+          "status": "fresh",
+          "freshness": {
+            "basis": "asserted",
+            "asOf": {
+              "timestamp_ms": 1700000000000
+            }
+          }
+        },
+        "temporalBasis": "local_clock",
+        "evidenceBasis": [
+          {
+            "kind": "delegation_token",
+            "ref": "eWm1JaAEkpEe4yISJiWHzVLDD4GJ4BU-RIOMXJcVif9YLIIT3jxEeM3Pd-nwHbrBsQd7fNNiCJP9LwKtDHzzBg"
+          },
+          {
+            "kind": "grant",
+            "ref": "grant-1"
+          },
+          {
+            "kind": "public_key",
+            "ref": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+          }
+        ],
+        "repair": {
+          "code": "authority.not_yet_valid",
+          "axis": "authority",
+          "summary": "Authority is \"not_yet_valid\", not \"valid\" — the token does not currently confer the authority it claims.",
+          "canonical": "spec/standing-delegation-v1.md",
+          "fix": "The token's activation window has not started under this temporal basis — do not act until its slot; if you judge validity by ordering, set temporalMode: 'ordering'."
+        }
+      }
+    }
+  ]
+}
