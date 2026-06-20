@@ -212,13 +212,19 @@ describe("create-motebit", () => {
     expect(pkg.devDependencies["@types/node"]).toBeTruthy();
   });
 
-  it("agent scaffold's entrypoint guards module-level side effects with isMainModule", () => {
+  it("agent scaffold's entrypoint guards module-level side effects with a symlink-robust isMainModule", () => {
     // `motebit serve --tools dist/index.js` re-imports the agent's own
     // entrypoint to discover its tool definitions. Without a main-module
     // guard, that re-import re-fires the spawn block and recursively
     // spawns another `motebit serve`, which re-imports, recursive,
     // forever. The guard makes the spawn block fire only when the file
     // is executed directly.
+    //
+    // The guard MUST compare realpaths, not raw strings. Launched through a
+    // symlink (a global bin / npx), `process.argv[1]` is the link while
+    // `import.meta.url` is the realpath — the old `argv[1] === fileURLToPath(
+    // import.meta.url)` compare misses that and the agent silently never
+    // starts (same class as the @motebit/verify 1.7.7 / relay-key sev-1s).
     const subDir = "agent-guard-test";
     const { exitCode } = run([subDir, "--agent", "--yes"], testDir, {
       MOTEBIT_PASSPHRASE: "test-pass-guard",
@@ -229,7 +235,11 @@ describe("create-motebit", () => {
     const indexTs = readFileSync(join(testDir, subDir, "src", "index.ts"), "utf-8");
     expect(indexTs).toContain('import { fileURLToPath } from "node:url";');
     expect(indexTs).toContain("isMainModule");
-    expect(indexTs).toMatch(/process\.argv\[1\]\s*===\s*fileURLToPath\(import\.meta\.url\)/);
+    // Realpath-robust compare present; the fragile direct compare gone.
+    expect(indexTs).toMatch(
+      /realpathSync\(fileURLToPath\(import\.meta\.url\)\)\s*===\s*realpathSync\(process\.argv\[1\]\)/,
+    );
+    expect(indexTs).not.toMatch(/process\.argv\[1\]\s*===\s*fileURLToPath\(import\.meta\.url\)/);
     // The execFileSync block must be inside the guard, not at top level.
     const guardIdx = indexTs.indexOf("if (isMainModule)");
     const spawnIdx = indexTs.indexOf("execFileSync");

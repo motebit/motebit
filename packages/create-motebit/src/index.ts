@@ -470,7 +470,7 @@ function makeAgentEntrypoint(name: string): string {
  *   npm run self-test    # Start + run self-delegation test
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import tools from "./tools.js";
@@ -501,10 +501,22 @@ export default toolDefs;
 // \`motebit serve --tools <path>\` re-imports this same file to discover
 // the tool definitions. Without this guard, that re-import re-executes
 // the spawn block below and recursively spawns another \`motebit serve\`,
-// which re-imports again, forever. The guard makes module-level side
-// effects fire only when this file is executed directly (npm run dev,
-// node dist/index.js).
-const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
+// which re-imports again, forever. So the spawn fires only when this file
+// is the process entry point. Compare REALPATHS, not raw strings: launched
+// through a symlink (a global bin / npx), process.argv[1] is the link while
+// import.meta.url is the realpath — a direct === misses that and the agent
+// silently never starts. When motebit serve re-imports this for --tools,
+// argv[1] is the motebit binary (a different realpath), so the guard is
+// false and recursion is still prevented.
+function isEntrypoint(): boolean {
+  if (process.argv[1] === undefined) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
+const isMainModule = isEntrypoint();
 
 if (isMainModule) {
   const args = process.argv.slice(2);
