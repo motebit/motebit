@@ -213,6 +213,14 @@ jobs:
       - name: Prove every gate in GATES actually fires
         run: pnpm check-gates-effective
 
+      - name: Run gate self-tests (scripts/__tests__)
+        # The gate-script unit tests (fixture round-trips that assert each gate
+        # both bites on violations AND stays silent on correct code) are not a
+        # workspace package, so `turbo run test` skips them. Run them here, in
+        # the same scripts/-scoped job — without this they never execute in CI,
+        # and a check that never runs can't protect you.
+        run: pnpm test:gates
+
   sibling-audit:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

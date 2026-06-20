@@ -1,0 +1,7 @@
+{
+  "name": "fixture-no-solana",
+  "private": true,
+  "dependencies": {
+    "three": "^0.184.0"
+  }
+}

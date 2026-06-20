@@ -1,0 +1,9 @@
+{
+  "name": "fixture-web-style",
+  "private": true,
+  "dependencies": {
+    "@motebit/wallet-solana": "0.0.0",
+    "buffer": "^6.0.3",
+    "three": "^0.184.0"
+  }
+}

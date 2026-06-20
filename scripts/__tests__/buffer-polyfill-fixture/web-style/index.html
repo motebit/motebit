@@ -1,0 +1,12 @@
+<!doctype html>
+<!-- Fixture: the runtime assignment lives in index.html, like the real apps/web.
+     This is the regression guard — a gate that scans only src/ false-flags this. -->
+<html>
+  <head>
+    <script type="module">
+      import { Buffer } from "buffer";
+      globalThis.Buffer = Buffer;
+    </script>
+  </head>
+  <body></body>
+</html>

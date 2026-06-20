@@ -80,59 +80,82 @@ function hasSrcAssignment(dir: string): boolean {
   return false;
 }
 
-const findings: string[] = [];
-
-let apps: string[] = [];
-try {
-  apps = readdirSync(APPS).filter((n) => {
-    try {
-      return statSync(join(APPS, n)).isDirectory();
-    } catch {
-      return false;
-    }
-  });
-} catch {
-  apps = [];
+interface Finding {
+  readonly app: string;
+  readonly missing: string[];
 }
 
-for (const app of apps) {
-  const appDir = join(APPS, app);
-  const viteConfig = join(appDir, "vite.config.ts");
-  const pkgPath = join(appDir, "package.json");
-  // Trigger: a Vite browser surface (has vite.config.ts) reaching wallet-solana.
-  if (!existsSync(viteConfig) || !existsSync(pkgPath)) continue;
-  const pkg = read(pkgPath);
-  let deps: Record<string, string> = {};
+/**
+ * Scan a directory of app folders (real `apps/` or a fixture root) and return
+ * one finding per triggered-but-non-compliant surface. Pure of process exit —
+ * the caller decides how to report, so the same logic backs both the gate and
+ * the fixture round-trip test.
+ */
+function scan(rootDir: string): Finding[] {
+  let appNames: string[] = [];
   try {
-    deps = (JSON.parse(pkg).dependencies ?? {}) as Record<string, string>;
+    appNames = readdirSync(rootDir).filter((n) => {
+      try {
+        return statSync(join(rootDir, n)).isDirectory();
+      } catch {
+        return false;
+      }
+    });
   } catch {
-    continue;
+    return [];
   }
-  if (!("@motebit/wallet-solana" in deps)) continue;
 
-  const missing: string[] = [];
-  if (!("buffer" in deps)) {
-    missing.push("the `buffer` npm dependency in package.json");
+  const findings: Finding[] = [];
+  for (const app of appNames) {
+    const appDir = join(rootDir, app);
+    const viteConfig = join(appDir, "vite.config.ts");
+    const pkgPath = join(appDir, "package.json");
+    // Trigger: a Vite browser surface (has vite.config.ts) reaching wallet-solana.
+    if (!existsSync(viteConfig) || !existsSync(pkgPath)) continue;
+    let deps: Record<string, string> = {};
+    try {
+      deps = (JSON.parse(read(pkgPath)).dependencies ?? {}) as Record<string, string>;
+    } catch {
+      continue;
+    }
+    if (!("@motebit/wallet-solana" in deps)) continue;
+
+    const missing: string[] = [];
+    if (!("buffer" in deps)) {
+      missing.push("the `buffer` npm dependency in package.json");
+    }
+    const vite = read(viteConfig);
+    const hasGlobalDefine = /global:\s*["']globalThis["']/.test(vite);
+    const hasBufferAlias = /buffer:\s*resolve\(/.test(vite);
+    if (!hasGlobalDefine || !hasBufferAlias) {
+      missing.push(
+        'the vite.config.ts polyfill block (`define: { global: "globalThis" }` + a `buffer:` resolve alias)',
+      );
+    }
+    if (!hasRuntimeAssignment(appDir)) {
+      missing.push(
+        "a runtime `globalThis.Buffer = Buffer` assignment (in index.html or a src/ module imported first)",
+      );
+    }
+    if (missing.length > 0) findings.push({ app, missing });
   }
-  const vite = read(viteConfig);
-  const hasGlobalDefine = /global:\s*["']globalThis["']/.test(vite);
-  const hasBufferAlias = /buffer:\s*resolve\(/.test(vite);
-  if (!hasGlobalDefine || !hasBufferAlias) {
-    missing.push(
-      'the vite.config.ts polyfill block (`define: { global: "globalThis" }` + a `buffer:` resolve alias)',
-    );
-  }
-  if (!hasRuntimeAssignment(appDir)) {
-    missing.push(
-      "a runtime `globalThis.Buffer = Buffer` assignment (in index.html or a src/ module imported first)",
-    );
-  }
-  if (missing.length > 0) {
-    findings.push(
-      `apps/${app} reaches @motebit/wallet-solana but is missing: ${missing.join("; ")}.`,
-    );
-  }
+  return findings;
 }
+
+// `--fixture` mode: scan the test fixture tree, print machine-readable JSON, and
+// always exit 0. Lets the round-trip test assert BOTH axes — that the violation
+// fixtures are flagged (the gate bites) AND that each canonical-correct fixture
+// is NOT flagged (no false positive — the exact axis the first cut got wrong,
+// which `check-gates-effective` does not cover). Mirrors check-affordance-routing.
+if (process.argv.includes("--fixture")) {
+  const fixtureRoot = resolve(__dirname, "__tests__", "buffer-polyfill-fixture");
+  console.log(JSON.stringify({ flagged: scan(fixtureRoot) }));
+  process.exit(0);
+}
+
+const findings = scan(APPS).map(
+  (f) => `apps/${f.app} reaches @motebit/wallet-solana but is missing: ${f.missing.join("; ")}.`,
+);
 
 if (findings.length > 0) {
   failWithRepair({
