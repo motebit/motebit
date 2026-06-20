@@ -9,6 +9,7 @@ import {
   trustAuraClass,
   economicForPeer,
   formatPeerEconomics,
+  resolveFeltTrust,
   type AgentEconomicSummary,
   type AgentHardwareAttestation,
   type AgentLatencyStats,
@@ -327,6 +328,31 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
       return;
     }
     agentsEmpty.style.display = "none";
+
+    // The trust resting record (felt-interior §6) — the relational register at
+    // the top of the Known tab, from the proven graph (state.known) + the
+    // verified economic summary. A calm summary, never a score. Desktop CSS is
+    // inline-in-HTML, so styles are set inline here.
+    const felt = resolveFeltTrust(state.known, state.economic);
+    const wrap = document.createElement("div");
+    wrap.style.cssText =
+      "padding:10px 14px;display:flex;flex-direction:column;gap:3px;border-bottom:1px solid rgba(127,127,127,0.16);";
+    const headline = document.createElement("div");
+    headline.style.cssText = "font-size:13px;opacity:0.9;";
+    headline.textContent = felt.headline;
+    wrap.appendChild(headline);
+    const shapeLine = [
+      ...felt.shape.map((s) => `${s.count} ${s.kind.replace(/_/g, " ")}`),
+      ...(felt.hardwareBacked > 0 ? [`${felt.hardwareBacked} hardware-backed`] : []),
+      ...(felt.settledWith > 0 ? [`settled with ${felt.settledWith}`] : []),
+    ].join(" · ");
+    if (shapeLine !== "") {
+      const shape = document.createElement("div");
+      shape.style.cssText = "font-size:11px;opacity:0.55;";
+      shape.textContent = shapeLine;
+      wrap.appendChild(shape);
+    }
+    agentsList.appendChild(wrap);
 
     for (const agent of state.known) {
       const item = document.createElement("div");

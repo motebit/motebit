@@ -18,6 +18,7 @@ import {
   formatLatency,
   economicForPeer,
   formatPeerEconomics,
+  resolveFeltTrust,
   type AgentEconomicSummary,
   type AgentFreshness,
   type AgentHardwareAttestation,
@@ -187,9 +188,9 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
     capabilityFilter: "",
     loading: false,
     error: null,
-    // Mobile doesn't render the money line yet (the contained follow-on); it
-    // still constructs valid panel state. `economic` stays null until mobile
-    // wires `listSettlementSummary` + the per-peer render.
+    // Initial value only — populated by `refreshEconomic` (the adapter wires
+    // `listSettlementSummary`); the per-peer money line + the felt-trust
+    // `settledWith` count render from it.
     economic: null,
   }));
 
@@ -272,6 +273,33 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
             keyExtractor={(item) => item.remote_motebit_id}
             style={styles.list}
             contentContainerStyle={styles.listContent}
+            ListHeaderComponent={
+              // The trust resting record (felt-interior §6) — the relational
+              // register at the top of the Known tab, from the proven graph
+              // (state.known) + the verified economic summary (refreshEconomic, above).
+              // Mobile's FIRST felt-trust surface. Guarded so it never sits above the
+              // empty state.
+              state.known.length > 0
+                ? (() => {
+                    const felt = resolveFeltTrust(state.known, state.economic);
+                    const shapeLine = [
+                      ...felt.shape.map((s) => `${s.count} ${s.kind.replace(/_/g, " ")}`),
+                      ...(felt.hardwareBacked > 0
+                        ? [`${felt.hardwareBacked} hardware-backed`]
+                        : []),
+                      ...(felt.settledWith > 0 ? [`settled with ${felt.settledWith}`] : []),
+                    ].join(" · ");
+                    return (
+                      <View style={styles.feltTrust}>
+                        <Text style={styles.feltTrustHeadline}>{felt.headline}</Text>
+                        {shapeLine !== "" ? (
+                          <Text style={styles.feltTrustShape}>{shapeLine}</Text>
+                        ) : null}
+                      </View>
+                    );
+                  })()
+                : null
+            }
             renderItem={({ item }) => {
               const trustColor = TRUST_COLORS[item.trust_level] ?? "#616161";
               const succeeded = item.successful_tasks ?? 0;
@@ -422,6 +450,15 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
 function createStyles(c: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: c.bgPrimary },
+    feltTrust: {
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderPrimary,
+      gap: 4,
+    },
+    feltTrustHeadline: { color: c.textPrimary, fontSize: 14, lineHeight: 19 },
+    feltTrustShape: { color: c.textMuted, fontSize: 12 },
     header: {
       flexDirection: "row",
       justifyContent: "space-between",
