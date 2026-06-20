@@ -1,5 +1,54 @@
 # @motebit/verifier
 
+## 1.8.0
+
+### Minor Changes
+
+- 6ae637f: VerificationVerdict: `verifyReceiptVerdict` integrity now folds STRICT hash binding, not just the Ed25519 signature. Surfaced by consumer #2's parity run against the conformance corpus (their verifier enforces strict binding as load-bearing doctrine).
+
+  `integrity: "verified"` now requires BOTH a valid signature AND `result_hash == hex(SHA-256(result))`. A valid signature over a receipt whose `result_hash` does not bind `result` is a self-inconsistent receipt — a valid signature over a lie — exactly the silent-true this reshape exists to kill (the sovereign-check-was-theater failure mode). It now reads `integrity: "invalid"` with a distinct `integrity.hash_inconsistent` repair, separate from `integrity.signature_invalid` (a bad/altered signature) and `integrity.no_key` (no usable embedded key).
+
+  This refines the unreleased receipt-path producer (Phase A.2.1); the boolean verifiers are untouched (`verifyReceipt`'s strict hash binding stays opt-in via `strictHashBinding`). The conformance corpus is regenerated: valid cases carry real digests, and a new `receipt-signed-hash-inconsistent` vector exercises the hash-inconsistent-but-validly-signed case alongside the bad-signature case.
+
+- ba4a654: VerificationVerdict arc, Phase A.2.1 — the receipt-path verdict producer (additive).
+
+  Adds `verifyReceiptVerdict(receipt)`, which returns the structured `VerificationVerdict` for a signed `ExecutionReceipt`, and `isFullyVerified(verdict)`, the fail-closed collapse to a single boolean. Both are re-exported from `@motebit/verifier`. The existing boolean-returning verifiers are untouched and remain authoritative.
+
+  `verifyReceiptVerdict` composes the existing primitives (`verifyExecutionReceipt` + `verifySovereignBinding`) into axes that cannot silently read as a pass: integrity (verified/invalid), identityBinding (sovereign when the motebit_id commits to the embedded key, else unverified — the embedded-key footgun named honestly), authority (`unknown` — a bare receipt has no authority dimension; not manufactured "valid"), revocation (`unchecked` — no grant context; not manufactured "fresh"), temporalBasis (`clockless`), evidenceBasis, and a first-class `repair` instruction on any failing axis.
+
+  `isFullyVerified` returns `true` ONLY when every load-bearing axis passes (integrity verified, identity bound, authority valid, revocation fresh) — STRICTER than the legacy per-function booleans by design; `unchecked`/`stale`/`unknown`/`unverified`/`revoked` all derive `false`, never a silent `true`.
+
+  Also adds `asserted` to the `RevocationFreshness.basis` enum (the evidence-grade ladder is now `asserted` < `stapled` < `ledger`): holder-asserted freshness with no external anchor, which a consumer should down-weight.
+
+  Ships with an executable conformance test for the receipt path (sovereign-but-not-pinned, tampered, embedded-key-only, no-key, malformed-key, and the fail-closed collapse). The token/grant/revocation verdict path (authority + a real revocation basis) and the versioned `spec/` corpus land in the next increment.
+
+- 695ba00: VerificationVerdict arc, Phase A.2.2 — the token/grant/revocation verdict path, built against consumer #2's three contributed fixtures (additive).
+
+  Adds `verifyDelegationTokenVerdict(token, grant, options?)`, the structured verdict for a per-tick `DelegationToken` evaluated against its `StandingDelegation`. Re-exported from `@motebit/verifier`. The boolean verifiers (`verifyDelegation`, `verifyTokenAgainstGrant`, `verifyStandingDelegation`) are untouched and authoritative.
+
+  The path is built so the axes stay orthogonal — the heart of the reshape:
+  - A revoked-grant tick that is itself well-formed and in-TTL reads `authority: "valid"` + `revocation: "revoked"` (not `authority: "insufficient"`): the token genuinely was a valid tick, the only lie is the dead grant. A bare boolean would read a pass; the verdict makes that impossible.
+  - `temporalMode: "wall_clock" | "ordering"` selects `temporalBasis` (`local_clock` vs `clockless`). The SAME pre-minted future-slot token reads `authority: "valid"` under ordering (the wall-clock window is not consulted) and `authority: "not_yet_valid"` under wall-clock with a rolled-back clock — proving a consumer must branch on `temporalBasis`, never assume wall-clock.
+  - Revocation is checked over the caller's set via `findGrantRevocation`: `revoked` / `fresh` / `unchecked`, with the freshness `basis` (asserted/stapled/ledger) the consumer down-weights; no set supplied reads `unchecked`, never a silent `fresh`.
+
+  Adds `not_yet_valid` to the `AuthorityVerdict` enum and `VerdictSubject` (`ArtifactType | "delegation_token"`) as the verdict's `type` (both additive widenings). Ships with an executable conformance test: agency's three fixtures (revoked-tick-self-mint; clock-rollback ordering; clock-rollback wall-clock anti) plus supporting axis coverage (clean tick, unchecked, expired, scope-widened, unverified-identity, tampered).
+
+  `verifyDelegationTokenVerdict` added to PERMISSIVE_ALLOWED_FUNCTIONS and documented in both READMEs. The versioned `spec/` corpus and the call-site drift gate are the next increment.
+
+- 6654297: Add the `VerificationVerdict` structured-verdict type family (additive, no runtime change). This is Phase A of the VerificationVerdict arc (docs/doctrine/verify-family-fail-closed.md): the API contract that the verify family's bare booleans will eventually become, landing ahead of the coordinated major so a consumer can type its integration against it now.
+
+  The verdict carries independent axes — `integrity`, `identityBinding` (the sovereign/anchored/pinned rung), `authority`, `revocation` (a freshness _basis_ object, not a bare label), `temporalBasis`, `evidenceBasis`, and a first-class `repair` instruction — and deliberately has **no top-level `valid` boolean**, so no unknown/unchecked/stale/integrity-only result can silently read as a pass. Co-designed with consumer #2 (agency.computer): revocation freshness carries `asOf` (wall-clock + deterministic chain anchor) and `basis`; `repair` is machine-readable (code + canonical + fix).
+
+  Types exported from `@motebit/crypto` and re-exported from `@motebit/verifier`. The verify functions that return the verdict, and the fail-closed back-compat adapter, ship in the next increment; the existing boolean-returning verifiers remain authoritative until then.
+
+### Patch Changes
+
+- Updated dependencies [6ae637f]
+- Updated dependencies [ba4a654]
+- Updated dependencies [695ba00]
+- Updated dependencies [6654297]
+  - @motebit/crypto@3.11.0
+
 ## 1.7.0
 
 ### Minor Changes
