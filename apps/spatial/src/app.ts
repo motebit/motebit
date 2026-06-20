@@ -20,6 +20,7 @@ import { SpatialVoicePipeline } from "./voice-pipeline";
 import type { OpenAITTSVoice } from "@motebit/voice";
 import { bindHud, type ConnectionState } from "./hud";
 import { ReceiptSatelliteCoordinator } from "./receipt-satellites";
+import { TrustConstellationCoordinator } from "@motebit/render-engine";
 
 // === DOM elements ===
 
@@ -126,6 +127,36 @@ function ensureReceiptSatellites(): ReceiptSatelliteCoordinator {
 app.onReceipt((receipt) => {
   ensureReceiptSatellites().addReceipt(receipt);
 });
+
+// Trust constellation — the first-person trust graph as an inner ring of orbs
+// (felt-interior §6). Pulled from the local Known trust edges, unlike receipts
+// which are pushed; refreshed on AI-ready and on a slow interval (relationships
+// change slowly). Buffers like the receipt coordinator: peers set before the
+// creature group mounts flush on first attach.
+const trustConstellation = new TrustConstellationCoordinator();
+let trustConstellationAttached = false;
+function ensureTrustConstellation(): TrustConstellationCoordinator {
+  if (trustConstellationAttached) return trustConstellation;
+  const group = app.adapter.getCreatureGroup();
+  if (group) {
+    trustConstellation.attach(group);
+    trustConstellationAttached = true;
+  }
+  return trustConstellation;
+}
+async function refreshTrustConstellation(): Promise<void> {
+  const runtime = app.getRuntime();
+  if (!runtime) return;
+  try {
+    const peers = await runtime.listTrustedAgents();
+    ensureTrustConstellation().setPeers(peers);
+  } catch {
+    // Fail-soft: the constellation is an ambient record. A trust-store read
+    // hiccup leaves the prior orbs in place rather than disturbing the scene.
+  }
+}
+// Slow ambient refresh — the graph deepens over a session, not per frame.
+setInterval(() => void refreshTrustConstellation(), 30_000);
 
 // Gaze attention state
 let lastGazeHit = false;
@@ -462,6 +493,10 @@ async function tryInitAI(settings: SpatialSettings): Promise<boolean> {
 
   // Configure heartbeat
   app.heartbeat.updateConfig({ enabled: settings.proactiveEnabled });
+
+  // First paint of the trust constellation now that the runtime (and its trust
+  // store) exists; the interval keeps it fresh thereafter.
+  if (ok) void refreshTrustConstellation();
 
   return ok;
 }
@@ -812,6 +847,7 @@ function startFlatPreview(): void {
     const time = now / 1000;
 
     receiptSatellites.tick(now);
+    trustConstellation.tick(now);
     app.renderFrame(dt, time);
     requestAnimationFrame(loop);
   }
@@ -883,6 +919,7 @@ async function startAR(): Promise<void> {
     }
 
     receiptSatellites.tick(now);
+    trustConstellation.tick(now);
 
     // Render with behavior cues from runtime (or idle cues)
     app.renderFrame(dt, t);
